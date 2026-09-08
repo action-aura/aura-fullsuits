@@ -363,7 +363,25 @@ check('ThemeEngine writes no inline styles and nothing sets data-app-theme', () 
 });
 
 // ── 6. every theme is reachable, through the engine, in the sanctioned order ─
-check('the picker offers exactly the five sanctioned themes, in THEME_NAMES order, and toggleTheme delegates', () => {
+//
+// UPDATED 2026-09-08 (owner brief): the picker used to offer all five themes
+// as one flat list, in THEME_NAMES order. It now shows three PRIMARY themes
+// (Day, Calm, Sand) with Night and Dusk moved behind an "Advanced"
+// disclosure -- a PRESENTATION change only. THEME_NAMES, `_sanitize()`, and
+// `ThemeEngine.themes` (the backing label/dot/edge definition for all five
+// palettes) are untouched, so the first half of this check is unchanged: the
+// themes object must still carry the exact five, in the exact order. What
+// changed is the assertion this used to make about the PICKER -- "flat list
+// of five" is no longer true, and weakening it to "at least five appear
+// somewhere" would stop catching a theme silently dropped from the picker
+// entirely. So this now asserts the stronger, equivalent claim for the new
+// shape: PRIMARY_THEMES + ADVANCED_THEMES together are EXACTLY the five
+// sanctioned themes, with no overlap and no omission, ADVANCED_THEMES is
+// exactly {night, dusk}, and openPicker() actually renders the disclosure
+// AND opens it when the active theme is one of the two behind it (so a shop
+// already on Night/Dusk lands on a picker showing what it's on, not a
+// collapsed section hiding its own current choice).
+check('the picker offers all five sanctioned themes -- three primary, two under an Advanced disclosure that opens for a shop already on one -- and toggleTheme delegates', () => {
   const themesBlock = /themes:\s*\{([\s\S]*?)\n  \}/.exec(appShell);
   assert(themesBlock, 'ThemeEngine.themes not found');
   const keys = [...themesBlock[1].matchAll(/^\s{4}(\w+):/gm)].map((m) => m[1]);
@@ -371,6 +389,45 @@ check('the picker offers exactly the five sanctioned themes, in THEME_NAMES orde
     `ThemeEngine.themes offers [${keys.join(', ')}] in that order; expected exactly ` +
     `[${THEME_NAMES.join(', ')}] in that order. A mismatched set or order means the ` +
     'allowlists have drifted, or the old accent-palette picker is growing back.');
+
+  const parseNames = (s) => s.split(',').map((x) => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  const primaryMatch = /PRIMARY_THEMES:\s*Object\.freeze\(\s*\[([^\]]*)\]\s*\)/.exec(appShell);
+  const advancedMatch = /ADVANCED_THEMES:\s*Object\.freeze\(\s*\[([^\]]*)\]\s*\)/.exec(appShell);
+  assert(primaryMatch,
+    'ThemeEngine.PRIMARY_THEMES not found -- the picker no longer declares which themes are primary');
+  assert(advancedMatch,
+    'ThemeEngine.ADVANCED_THEMES not found -- the picker no longer declares which themes sit under Advanced');
+  const primary = parseNames(primaryMatch[1]);
+  const advanced = parseNames(advancedMatch[1]);
+
+  assert(primary.length === 3,
+    `PRIMARY_THEMES has ${primary.length} entries [${primary.join(', ')}]; the owner brief asks for ` +
+    'exactly three primary choices (Day, Calm, Sand).');
+  assert(advanced.length === 2,
+    `ADVANCED_THEMES has ${advanced.length} entries [${advanced.join(', ')}]; Night and Dusk are the ` +
+    'only two that should move behind Advanced.');
+  assert(!primary.some((n) => advanced.includes(n)),
+    `a theme name appears in BOTH PRIMARY_THEMES [${primary.join(', ')}] and ` +
+    `ADVANCED_THEMES [${advanced.join(', ')}] -- it would render twice in the picker.`);
+  const combined = [...primary, ...advanced].sort();
+  const expected = [...THEME_NAMES].sort();
+  assert(JSON.stringify(combined) === JSON.stringify(expected),
+    `PRIMARY_THEMES + ADVANCED_THEMES = [${combined.join(', ')}] does not cover exactly the five ` +
+    `sanctioned themes [${expected.join(', ')}] -- a theme has gone missing from the picker entirely.`);
+  assert(advanced.includes('night') && advanced.includes('dusk'),
+    `ADVANCED_THEMES must be exactly night and dusk; found [${advanced.join(', ')}].`);
+
+  // openPicker() must actually build the disclosure, and must open it when
+  // the active theme is one of the advanced two -- the requirement that a
+  // shop already on Night or Dusk can still see, and change, what it is on.
+  const js = blankJsComments(appShell);
+  assert(/createElement\(\s*['"]details['"]\s*\)/.test(js),
+    'openPicker() no longer builds a <details> disclosure for the advanced themes.');
+  assert(/ADVANCED_THEMES\.includes\(\s*this\.current\s*\)/.test(js),
+    "openPicker() does not gate the Advanced disclosure's open state on whether the active theme is " +
+    'one of the advanced two -- a shop on Night or Dusk would land on a COLLAPSED picker showing ' +
+    'neither their own theme nor which one is active.');
+
   assert(/toggleTheme\(\)\s*\{\s*ThemeEngine\.toggle\(\);\s*\}/.test(appShell),
     'SubsystemApp.toggleTheme no longer delegates to ThemeEngine -- a second ' +
     'write path is a second place validation can be forgotten');

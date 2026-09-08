@@ -59,6 +59,44 @@ const ThemeEngine = {
     dusk:  { label: 'Dusk',  dot: '#13111c', edge: '#b9a6ff' },
   },
 
+  // Owner brief (2026-09-08): simplify the everyday choice to three primary
+  // themes (Day, Calm, Sand), with Night and Dusk moved behind an
+  // "Advanced" disclosure in the SAME picker -- presentation only. Night
+  // and Dusk are not deleted and never touch THEME_NAMES, `themes` above,
+  // or `_sanitize()`: three guards (this file's theme-safety test, the
+  // contrast test, and Android's DesktopTokenParityContractTest) pin all
+  // five palettes forever, a shop already on Night/Dusk must keep working,
+  // and the token blocks cost nothing to leave in main.css. PRIMARY_THEMES
+  // + ADVANCED_THEMES must together cover exactly THEME_NAMES with no
+  // overlap -- retail_design_theme_safety_test.js's check (6) pins that.
+  PRIMARY_THEMES: Object.freeze(['light', 'dark', 'sand']),
+  ADVANCED_THEMES: Object.freeze(['night', 'dusk']),
+
+  // Builds one swatch <button> for either grid (primary or advanced) --
+  // factored out of openPicker() so both grids render identically instead
+  // of two copies of the same createElement/addEventListener block drifting
+  // apart.
+  _renderThemeSwatch(key, def) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'theme-swatch' + (this.current === key ? ' active' : '');
+    swatch.dataset.theme = key;
+    swatch.addEventListener('click', () => this.apply(key));
+
+    const dot = document.createElement('div');
+    dot.className = 'theme-swatch-dot';
+    dot.style.background = def.dot;
+    dot.style.borderColor = def.edge;
+
+    const name = document.createElement('div');
+    name.className = 'theme-swatch-name';
+    name.textContent = t(def.label);
+
+    swatch.appendChild(dot);
+    swatch.appendChild(name);
+    return swatch;
+  },
+
   // THE one sanitizer. Every path that turns a stored/argument value into a
   // data-theme write goes through here, so "anything outside the allowlist is
   // light" is a property of the engine, not of each caller's care.
@@ -121,32 +159,48 @@ const ThemeEngine = {
     label.textContent = '🎨 ' + t('Theme');
     panel.appendChild(label);
 
+    // A <button>, not the old click-wired <div>: Enter/Space and focus come
+    // free, and .theme-swatch:focus-visible in main.css already draws the
+    // ring for it. _renderThemeSwatch() builds one; this grid gets only the
+    // three PRIMARY themes now (see PRIMARY_THEMES' own comment above).
     const grid = document.createElement('div');
     grid.className = 'theme-grid';
-    Object.entries(this.themes).forEach(([key, def]) => {
-      // A <button>, not the old click-wired <div>: Enter/Space and focus come
-      // free, and .theme-swatch:focus-visible in main.css already draws the
-      // ring for it.
-      const swatch = document.createElement('button');
-      swatch.type = 'button';
-      swatch.className = 'theme-swatch' + (this.current === key ? ' active' : '');
-      swatch.dataset.theme = key;
-      swatch.addEventListener('click', () => this.apply(key));
-
-      const dot = document.createElement('div');
-      dot.className = 'theme-swatch-dot';
-      dot.style.background = def.dot;
-      dot.style.borderColor = def.edge;
-
-      const name = document.createElement('div');
-      name.className = 'theme-swatch-name';
-      name.textContent = t(def.label);
-
-      swatch.appendChild(dot);
-      swatch.appendChild(name);
-      grid.appendChild(swatch);
+    this.PRIMARY_THEMES.forEach((key) => {
+      grid.appendChild(this._renderThemeSwatch(key, this.themes[key]));
     });
     panel.appendChild(grid);
+
+    // Night and Dusk live behind this disclosure. A <details> element, not a
+    // second hand-rolled expand/collapse: keyboard and screen-reader
+    // semantics come free, same reasoning as the swatch <button> above. It
+    // starts OPEN when the active theme is one of the two behind it -- a
+    // shop already on Night or Dusk must land on a picker that already
+    // shows what it is on, not a collapsed section hiding its own choice.
+    const advanced = document.createElement('details');
+    advanced.className = 'theme-advanced';
+    advanced.style.marginTop = '10px';
+    if (this.ADVANCED_THEMES.includes(this.current)) advanced.open = true;
+
+    const summary = document.createElement('summary');
+    summary.className = 'theme-advanced-summary';
+    // Matches .theme-picker-label's own look (css/main.css) so the section
+    // reads as part of the same panel rather than a foreign control -- set
+    // here rather than in main.css because .theme-advanced-summary is a new
+    // class with no rule yet and this file may not add one (css/main.css is
+    // owned elsewhere); token-driven, so it still follows every theme.
+    summary.style.cssText = 'cursor:pointer;font-size:10px;font-weight:800;' +
+      'letter-spacing:2px;text-transform:uppercase;color:var(--text-tertiary);' +
+      'margin-bottom:10px;';
+    summary.textContent = t('Advanced');
+    advanced.appendChild(summary);
+
+    const advancedGrid = document.createElement('div');
+    advancedGrid.className = 'theme-grid theme-grid-advanced';
+    this.ADVANCED_THEMES.forEach((key) => {
+      advancedGrid.appendChild(this._renderThemeSwatch(key, this.themes[key]));
+    });
+    advanced.appendChild(advancedGrid);
+    panel.appendChild(advanced);
 
     document.body.appendChild(panel);
   },
@@ -1567,7 +1621,111 @@ const SubsystemApp = {
       // Fail open, same as every other best-effort licensing check in this
       // file: fall through to the ordinary setup modal below.
     }
+    // Owner instruction (2026-09-08): the brand intro plays here and ONLY
+    // here -- a device that just JOINED a shop took the early return above
+    // and never reaches this line, and neither does a returning login
+    // (showReloginModal, an entirely separate path this function never
+    // calls). See _maybeShowFirstRunIntro()'s own comment for the full
+    // reasoning, including why it is fired WITHOUT an await.
+    this._maybeShowFirstRunIntro();
     this.showSetupModal();
+  },
+
+  // ── First-run brand intro (brand/intro.html) ────────────────────────────
+  // Plays AT MOST ONCE, EVER, immediately ahead of the create-admin wizard
+  // above -- never on a cold boot, never on the sign-in screen
+  // (showReloginModal), never after a logout (logout() always routes back
+  // through showReloginModal, never through here). Gating it in
+  // _openFirstRun() rather than inside showSetupModal() itself is what keeps
+  // it off every OTHER caller of showSetupModal(): _toggleJoinMode()'s
+  // "Set up a new shop instead" reversal and the join-flow's own fallback
+  // link both call showSetupModal() directly, and must not replay this.
+  //
+  // Deliberately NOT awaited from _openFirstRun(): the create-admin screen
+  // must render immediately regardless of what the intro does, so the
+  // overlay this builds simply sits on top of the already-rendering setup
+  // screen until it is skipped or times out -- indistinguishable on a real
+  // screen from a sequential "intro, then setup", but it means nothing here
+  // can ever delay reaching the form (and, concretely, does not saddle
+  // every existing first-run test with a multi-second real wait).
+  _INTRO_PLAYED_KEY: 'aura_intro_played_v1',
+
+  _maybeShowFirstRunIntro() {
+    try {
+      if (localStorage.getItem(this._INTRO_PLAYED_KEY) === '1') return;
+      // Committed the INSTANT the decision to show it is made, not after it
+      // finishes -- "at most once ever" must hold even if the window is
+      // closed mid-animation, not only on a clean dismissal.
+      localStorage.setItem(this._INTRO_PLAYED_KEY, '1');
+    } catch (e) {
+      // No localStorage (private mode, or a WebView build that disabled it)
+      // -- fail OPEN toward showing it, the same convention every other
+      // best-effort storage read in this file follows. Worst case here is
+      // one extra six-second overlay; the alternative (fail closed) risks
+      // "never plays anywhere localStorage is unavailable", which is worse.
+    }
+    try {
+      this._playIntroOverlay();
+    } catch (e) {
+      // Never let a broken/missing intro asset strand the user here -- the
+      // setup screen underneath is already rendering regardless (see the
+      // caller, and _playIntroOverlay's own guards for the same contract
+      // applied a second time, closer to the DOM work that can actually
+      // throw).
+    }
+  },
+
+  // Builds a full-screen overlay over brand/intro.html and tears itself down
+  // on the FIRST of: a click/tap anywhere on it, any keypress, or a timeout
+  // (the real ~6s clip length, or ~1.2s under prefers-reduced-motion --
+  // intro.html's OWN `@media (prefers-reduced-motion: reduce)` block already
+  // swaps the drawing animation for its static final frame; this only
+  // decides how long that frame, or the full clip, stays on screen before
+  // being torn down). Every step that could throw (matchMedia, DOM
+  // construction, timers) is wrapped so this can never strand the caller --
+  // see _maybeShowFirstRunIntro()'s contract, which this exists to uphold.
+  _playIntroOverlay() {
+    let overlay;
+    let timer;
+    const finish = () => {
+      try { clearTimeout(timer); } catch (e) {}
+      try { window.removeEventListener('keydown', finish); } catch (e) {}
+      try { overlay && overlay.remove(); } catch (e) {}
+    };
+    try {
+      const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+      overlay = document.createElement('div');
+      overlay.id = 'aura-intro-overlay';
+      overlay.setAttribute('role', 'button');
+      overlay.setAttribute('aria-label', t('Skip intro'));
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#070b12;cursor:pointer';
+
+      const frame = document.createElement('iframe');
+      frame.src = 'brand/intro.html';
+      frame.title = 'Aura';
+      frame.setAttribute('tabindex', '-1');
+      // Pointer events pass through to the overlay behind it: intro.html has
+      // no interactive content of its own, and this keeps "click anywhere"
+      // a single listener instead of also needing one inside the iframe's
+      // (same-origin, but separate) document.
+      frame.style.cssText = 'width:100%;height:100%;border:0;display:block;pointer-events:none';
+      frame.onerror = finish;
+      overlay.appendChild(frame);
+
+      overlay.addEventListener('click', finish);
+      overlay.addEventListener('touchstart', finish, { passive: true });
+      window.addEventListener('keydown', finish);
+      document.body.appendChild(overlay);
+
+      timer = setTimeout(finish, reducedMotion ? 1200 : 6500);
+      // Node test harnesses only (a browser's setTimeout id has no
+      // .unref()): stops a standalone test process from sitting around for
+      // the full duration just because this fired during it.
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    } catch (e) {
+      finish();
+    }
   },
 
   // ── JOIN AN EXISTING SHOP (second device / phone) ──────────────────────────
@@ -3286,10 +3444,40 @@ const SubsystemApp = {
     el._chartInstance = new Chart(el.getContext('2d'), config);
   },
 
+  // Tokenised 2026-09-08: this used to build inline styles from hardcoded
+  // hex (#34d399 success green, #f87171 error red, a #1e1e2e background,
+  // plain white text) -- literals that cannot move when the palette moves.
+  // The toast is the one surface shown over EVERY screen, so an untokenised
+  // one was the single most visible thing left ignoring the theme after the
+  // 2026-09-08 re-grounding. Each state now resolves through the SAME
+  // --state-*-surface/-border/-text triad the .btn-mini.approve/.reject
+  // notification chrome already uses (css/main.css), rather than inventing
+  // a new mapping: surface+border+text together, not just the border, so
+  // success/error/info are correct AND already contrast-proven (DESIGN.md
+  // §4.4: every state-*-text is solved to >=4.5:1 against its OWN
+  // state-*-surface) in all five themes, not just the two dark/light shapes
+  // the old literals happened to assume. `info` moves off the old
+  // `var(--sub-accent)` reference on purpose: the accent is a per-subsystem
+  // runtime value (re-hued or absent depending which section is active),
+  // while --state-info-* is DELIBERATELY decoupled from the accent (see its
+  // comment in css/main.css) so "informational" reads the same everywhere,
+  // not differently per subsystem.
   showToast(msg, type = 'info') {
-    const colors = { success: '#34d399', error: '#f87171', info: 'var(--sub-accent)' };
+    const STATE_TOKENS = {
+      success: { surface: '--state-success-surface', border: '--state-success-border', text: '--state-success-text' },
+      error:   { surface: '--state-danger-surface',  border: '--state-danger-border',  text: '--state-danger-text' },
+      info:    { surface: '--state-info-surface',    border: '--state-info-border',    text: '--state-info-text' },
+    };
+    const tok = STATE_TOKENS[type] || STATE_TOKENS.info;
     const toast = document.createElement('div');
-    toast.style.cssText = `position:fixed;bottom:var(--overlay-inset-block-end,24px);right:24px;background:#1e1e2e;border:1px solid ${colors[type]};color:white;padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
+    // inset-inline-end, never `right`: this toast appears over every screen,
+    // and in Arabic the whole shell mirrors, so a physical `right` would pin
+    // it to the wrong corner. retail_design_rtl_test.js ratchets physical
+    // properties in the STYLESHEETS and cannot see an inline style built in
+    // JavaScript, which is exactly how a `right:24px` got in here while the
+    // colours were being moved onto tokens -- so the toast test below now
+    // watches this line instead.
+    toast.style.cssText = `position:fixed;bottom:var(--overlay-inset-block-end,24px);inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
     toast.textContent = msg;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);

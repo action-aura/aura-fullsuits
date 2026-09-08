@@ -407,6 +407,138 @@ function testMarkStrokesCurrentColorAndUsesUniqueGradientIds() {
   console.log('PASS: AuraIcons.mark() strokes currentColor on the A/beacon and never reuses a gradient id across calls');
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 8 — the first-run brand intro (brand/intro.html): plays at most once, only
+//     immediately ahead of the create-admin wizard, never on sign-in
+//     [MUTATION-PROVED below]
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Owner instruction (2026-09-08): never on a cash-register cold start or a
+// login, restricted to the first-time setup wizard. _openFirstRun() is the
+// one seam both init() and checkAuthAndSetup() funnel through for a genuine
+// first run (see that method's own comment) and the ONLY caller of
+// _maybeShowFirstRunIntro(); a joined device takes the early
+// _waitForShopAccount() return above it and never reaches the intro, and
+// showReloginModal() (the sign-in screen, and the target of every logout) is
+// an entirely separate function that never calls it either. These cases
+// drive SubsystemApp._openFirstRun()/.showReloginModal() directly against a
+// small live-enough sandbox (same shape as retail_join_shop_modal_test.js's
+// vm-loaded real app-shell.js, extended here with a mutable localStorage
+// store and an instrumented document.createElement/body so the intro's own
+// side effects -- the <iframe> it builds, the flag it persists -- are
+// directly observable, not inferred from source text).
+
+function makeIntroSandbox(shellSrc, opts) {
+  const o = opts || {};
+  const sandbox = loadShell(shellSrc);
+  const store = Object.assign({}, o.store);
+  sandbox.localStorage = {
+    getItem: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+  };
+  // window.addEventListener -- loadShell()'s base sandbox has no window-level
+  // listener API at all (only document's, which is a no-op stub); adding one
+  // here lets _playIntroOverlay()'s real keydown-to-skip wiring run to
+  // completion instead of throwing before it ever appends the overlay, which
+  // would make "was an overlay actually appended" unobservable below.
+  sandbox.addEventListener = () => {};
+  sandbox.removeEventListener = () => {};
+  const createdTags = [];
+  sandbox.document.createElement = (tag) => {
+    createdTags.push(tag);
+    if (o.createElementThrowsFor && tag === o.createElementThrowsFor) {
+      throw new Error('simulated createElement(' + tag + ') failure');
+    }
+    return makeElementStub();
+  };
+  const appended = [];
+  sandbox.document.body = Object.assign(makeElementStub(), {
+    appendChild(el) { appended.push(el); return el; },
+  });
+  // _isJoinedDevice() reads lic.installation_id; {} is falsy for it, so this
+  // default fixture is always "not a joined device" -- a genuine first run.
+  sandbox.fetch = o.fetch || (() => Promise.resolve({ json: () => Promise.resolve({}) }));
+  return { sandbox, App: sandbox.SubsystemApp, store, createdTags, appended };
+}
+
+async function testIntroPlaysOnGenuineFirstRunWithFlagUnset() {
+  const { App, store, createdTags, appended } = makeIntroSandbox();
+  const introKey = App._INTRO_PLAYED_KEY;
+  assert.ok(introKey, 'SubsystemApp._INTRO_PLAYED_KEY is not set -- the intro has no persistence key.');
+  let setupCalled = false;
+  App.showSetupModal = async () => { setupCalled = true; };
+  await App._openFirstRun();
+  assert.ok(createdTags.includes('iframe'),
+    'A genuine first run with the intro flag unset did not create an <iframe> -- the intro never played.');
+  assert.ok(appended.some((el) => el && el.id === 'aura-intro-overlay'),
+    'No #aura-intro-overlay was appended to document.body on a genuine first run.');
+  assert.strictEqual(store[introKey], '1',
+    'The intro-played flag was not persisted to localStorage after a genuine first run.');
+  assert.ok(setupCalled, 'showSetupModal() was not still called after the intro was triggered.');
+  console.log('PASS: the intro plays on a genuine first run with the flag unset, and setup still renders');
+}
+
+async function testIntroDoesNotReplayWhenFlagAlreadySet() {
+  const probe = makeIntroSandbox();
+  const introKey = probe.App._INTRO_PLAYED_KEY;
+  const { App, createdTags } = makeIntroSandbox(undefined, { store: { [introKey]: '1' } });
+  let setupCalled = false;
+  App.showSetupModal = async () => { setupCalled = true; };
+  await App._openFirstRun();
+  assert.ok(!createdTags.includes('iframe'),
+    "The intro replayed even though its played-flag was already '1' -- a re-install onto an " +
+    'existing data directory would see it a second time.');
+  assert.ok(setupCalled, 'showSetupModal() was not called when the intro was correctly skipped.');
+  console.log('PASS: the intro does not replay once its flag is set');
+}
+
+async function testSetupStillRendersWhenIntroThrows() {
+  const { App } = makeIntroSandbox(undefined, { createElementThrowsFor: 'iframe' });
+  let setupCalled = false;
+  App.showSetupModal = async () => { setupCalled = true; };
+  await App._openFirstRun();
+  assert.ok(setupCalled,
+    'A throw while building the intro overlay (createElement("iframe")) stranded the user -- ' +
+    'showSetupModal() never ran.');
+  console.log('PASS: the setup screen still renders even when building the intro overlay throws');
+}
+
+// Shared by the plain case and its mutation proof below, so both exercise
+// the exact same assertions against whichever app-shell.js source is passed.
+async function assertIntroNeverShownOnSignIn(shellSrc) {
+  const { App, createdTags, store } = makeIntroSandbox(shellSrc);
+  const introKey = App._INTRO_PLAYED_KEY;
+  App.showReloginModal('Sign in to your store');
+  assert.ok(!createdTags.includes('iframe'),
+    'showReloginModal() (the sign-in path) created an <iframe> -- the first-run intro must never ' +
+    'appear on sign-in.');
+  assert.strictEqual(store[introKey], undefined,
+    'showReloginModal() touched the intro-played flag -- the sign-in path must never even look at it.');
+}
+
+async function testIntroNeverShownOnSignInPath() {
+  await assertIntroNeverShownOnSignIn();
+  console.log('PASS: the first-run intro never appears on the sign-in screen');
+}
+
+async function testIntroNotOnSignInMutationIsCaught() {
+  const mutated = mutate(SHELL_SRC, [[
+    `  showReloginModal(msg = 'Your session has expired. Please log in again.') {
+    document.getElementById('aura-relogin-modal')?.remove();
+    this._authModalOpen = true;`,
+    `  showReloginModal(msg = 'Your session has expired. Please log in again.') {
+    document.getElementById('aura-relogin-modal')?.remove();
+    this._authModalOpen = true;
+    this._maybeShowFirstRunIntro();`,
+  ]]);
+  const msg = await provesMutation(
+    'the "intro never shown on sign-in" check survived a mutant that plays the intro from showReloginModal',
+    () => assertIntroNeverShownOnSignIn(mutated)
+  );
+  console.log('PASS: ' + msg);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CASES = [
@@ -419,6 +551,11 @@ const CASES = [
   testHeaderTitleShowsCurrentSection,
   testFaviconPointsAtBrandIcon,
   testMarkStrokesCurrentColorAndUsesUniqueGradientIds,
+  testIntroPlaysOnGenuineFirstRunWithFlagUnset,
+  testIntroDoesNotReplayWhenFlagAlreadySet,
+  testSetupStillRendersWhenIntroThrows,
+  testIntroNeverShownOnSignInPath,
+  testIntroNotOnSignInMutationIsCaught,
 ];
 
 async function main() {
