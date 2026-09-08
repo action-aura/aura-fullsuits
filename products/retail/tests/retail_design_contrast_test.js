@@ -34,7 +34,7 @@
  * state that hid the bug -- and a token block is a scope that can never see an
  * injected literal, no matter how many tokens get added to it.
  *
- * WHAT IT ASSERTS NOW — SIX PROPERTIES, DELIBERATELY DIFFERENT ONES
+ * WHAT IT ASSERTS NOW — EIGHT PROPERTIES, DELIBERATELY DIFFERENT ONES
  *
  *  1. THE PALETTE (unchanged, still a cross product over the token names):
  *       every --text-* x every solid --surface-*  >= 4.5:1 (AA)
@@ -99,6 +99,14 @@
  *     of the light values (or, for Sand -- a light theme -- a paste of a dark
  *     one). The first dark theme died of a failure no token scan could see;
  *     these per-theme rendered tiers are the check that would have caught it.
+ *
+ *  8. THE FIVE THEMES MUST BE DISTINGUISHABLE FROM EACH OTHER, not merely
+ *     individually contrast-compliant. Properties 1-7 all measure a theme
+ *     against ITSELF; none of them can catch two themes converging on each
+ *     other, which is exactly what happened when Night's accent moved off
+ *     teal to a lapis/indigo that landed 7.02 ΔE76 from Dusk's lavender --
+ *     every AA/AAA guard above stayed green throughout. See
+ *     testThemeAccentsAreDistinguishable() for the ΔE76 threshold and why.
  *
  * ANTI-VACUITY
  * Every assertion here is a loop. A loop over nothing passes. So the palette
@@ -367,6 +375,35 @@ function contrastRatio(hexA, hexB) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/* ── Colour maths (CIE Lab / ΔE76) ─────────────────────────────────────────
+   WCAG contrast answers "can text be READ on this surface"; it says nothing
+   about whether two SIBLING colours look alike, because two hues at the same
+   relative luminance are equally (il)legible against a third colour while
+   being visually indistinguishable from each other. §8 below needs the
+   second question, so it converts sRGB to CIE L*a*b* (D65 reference white,
+   the same illuminant WCAG's formula implicitly assumes) and measures the
+   plain Euclidean distance in that space -- CIE76 ΔE, the simplest of the
+   standard ΔE formulas and sufficient here because this is a coarse
+   "obviously the same colour or not" gate, not a colour-matching tolerance.
+   Reuses channelLuminance() above for the linearisation step; sRGB-to-linear
+   is the same transform WCAG's relative luminance already needed. */
+function toLab(hex) {
+  const [r, g, b] = parseHex(hex).map(channelLuminance);
+  const X = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+  const Y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
+  const Z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+  const Xn = 0.95047, Yn = 1.0, Zn = 1.08883;
+  const f = (t) => (t > Math.pow(6 / 29, 3) ? Math.cbrt(t) : t / (3 * Math.pow(6 / 29, 2)) + 4 / 29);
+  const fx = f(X / Xn), fy = f(Y / Yn), fz = f(Z / Zn);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
+function deltaE76(hexA, hexB) {
+  const [L1, a1, b1] = toLab(hexA);
+  const [L2, a2, b2] = toLab(hexB);
+  return Math.sqrt((L1 - L2) ** 2 + (a1 - a2) ** 2 + (b1 - b2) ** 2);
+}
+
 /* ── Grouping ──────────────────────────────────────────────────────────────
    Derived from naming, so the palette cannot grow an untested member.
    Non-colour tokens that share the --text- prefix (--text-size-*,
@@ -599,6 +636,78 @@ function testMoneyNegativeIsNotColourAlone() {
     'decoration, or an accounting-parenthesis ::before/::after).'
   );
   console.log(`PASS: .money--negative carries ${found.length} non-colour cue(s) alongside its colour`);
+}
+
+/* ── TIER 8 — the five themes must be DISTINGUISHABLE from each other ───────
+ *
+ * Every check above measures a theme against ITSELF: its own text on its own
+ * surfaces. None of them can catch two themes converging on EACH OTHER --
+ * that is a different question with a different failure shape, and this file
+ * shipped it once already. Night's accent moved off an aurora-teal to a
+ * light lapis/indigo (#a29efe) that cleared every AA/AAA guard in this file
+ * with margin to spare, while landing only 7.02 ΔE76 from Dusk's lavender
+ * (#b9a6ff) -- two of five theme-picker entries rendering as the same
+ * colour, found only by looking at both themes side by side, not by any
+ * number this file computed.
+ *
+ * THRESHOLD: ΔE76 (CIE 1976, plain Euclidean distance in CIE L*a*b*) >= 12.
+ * Chosen from the standard rule-of-thumb bands for this metric: 0-1
+ * imperceptible, 1-2 perceptible only on close side-by-side inspection, 2-10
+ * perceptible at a glance but still reads as "the same colour, slightly
+ * off", 11-49 "more similar than opposite". 12 sits just past where two
+ * colours stop reading as variations of one hue, and is calibrated against
+ * this file's own history rather than picked in the abstract: the BROKEN
+ * Night/Dusk pair measured 7.02 (below the floor, as it must), the
+ * CORRECTED pair measures ~29 and Night-vs-Calm (the next closest pair,
+ * both being members of the same lapis/indigo family) measures ~15 (both
+ * comfortably above), and two pairs that were never in question -- the old
+ * aurora-teal vs the old lavender, and the ink-blue Day accent vs the
+ * sienna Sand accent -- measure 78 and >=90 respectively. A floor of 12
+ * therefore fails the exact bug that motivated it and passes everything
+ * that was never broken.
+ *
+ * ONLY --accent-action is compared: it is the one colour every theme picker
+ * preview and every "primary action" surface shows regardless of what
+ * screen happens to be open, so it is the pairing a shop owner's eye
+ * actually uses to tell two themes apart.
+ */
+function testThemeAccentsAreDistinguishable(lightTokens, themeMerged) {
+  const DELTA_E_FLOOR = 12;
+  const accents = { light: lightTokens.get('--accent-action') };
+  for (const [name, merged] of Object.entries(themeMerged)) {
+    accents[name] = merged.get('--accent-action');
+  }
+  for (const [name, value] of Object.entries(accents)) {
+    assert.ok(value && parseHex(value), `${name}'s --accent-action is missing or not hex ("${value}")`);
+  }
+
+  const names = Object.keys(accents);
+  assert.ok(names.length >= 5, `Expected 5 themes' worth of --accent-action, got ${names.length}.`);
+
+  const report = [];
+  const failures = [];
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const a = names[i], b = names[j];
+      const de = deltaE76(accents[a], accents[b]);
+      report.push(`${a}/${b}=${de.toFixed(1)}`);
+      if (de < DELTA_E_FLOOR) {
+        failures.push(
+          `${a} (${accents[a]}) vs ${b} (${accents[b]}): ΔE76 ${de.toFixed(2)} — below the ${DELTA_E_FLOOR} floor`
+        );
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} theme pair(s) have --accent-action values too close to tell apart:\n  ` +
+    failures.join('\n  ') +
+    `\n\nAll pairwise separations (ΔE76): ${report.join(', ')}\n\n` +
+    'Five themes only earn their maintenance cost if a shop owner can tell them ' +
+    'apart in the picker. Move the closer theme\'s accent to a genuinely different ' +
+    'hue or lightness -- never lower this floor to let a converged pair pass.'
+  );
+  console.log(`PASS: all ${report.length} theme-pair --accent-action separations clear ΔE76 >= ${DELTA_E_FLOOR} (${report.join(', ')})`);
 }
 
 /* ── TIER 2 — the pairings the app actually renders ────────────────────────── */
@@ -1270,9 +1379,10 @@ const BLOCK_THEMES = ['dark', 'night', 'dusk', 'sand'];
    failures and the file exits 0 having compared not one colour. Every other
    guard in this file has an anti-vacuity floor; so does the runner.
 
-   5 (light TIER 1) + 4 themes x 5 (per-theme TIER 1) + 6 (light TIER 2-5
-   rendered) + 4 themes x 3 (per-theme TIER 2 rendered) = 43. */
-const EXPECTED_CHECKS = 43;
+   5 (light TIER 1) + 4 themes x 5 (per-theme TIER 1) + 1 (TIER 8 cross-theme
+   distinguishability) + 6 (light TIER 2-5 rendered) + 4 themes x 3
+   (per-theme TIER 2 rendered) = 44. */
+const EXPECTED_CHECKS = 44;
 
 async function main() {
   const checks = [];
@@ -1344,6 +1454,19 @@ async function main() {
         );
       }
     }
+  }
+
+  // TIER 8 — cross-theme: are the five --accent-action values actually
+  // distinguishable from each other? Needs the light tokens plus all four
+  // theme overlays, so it can only run once every one of those parsed.
+  if (tokens && BLOCK_THEMES.every((n) => themeMerged[n])) {
+    checks.push(
+      ['theme --accent-action values are pairwise distinguishable (ΔE76)',
+        () => testThemeAccentsAreDistinguishable(tokens, themeMerged)],
+    );
+  } else {
+    setupFailed('theme accent distinguishability (1 check could not run)',
+      new Error('the light token map or one of the four theme overlays failed to parse'));
   }
 
   // TIER 2-5 setup: the rendered corpus.

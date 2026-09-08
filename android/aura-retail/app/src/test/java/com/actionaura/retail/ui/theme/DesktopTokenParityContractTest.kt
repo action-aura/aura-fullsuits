@@ -163,6 +163,7 @@ class DesktopTokenParityContractTest {
         TokenPair("accent-action", "accentAction", p.accentAction),
         TokenPair("text-on-accent", "onAccent", p.onAccent),
         TokenPair("surface-accent-soft", "accentSoft", p.accentSoft),
+        TokenPair("accent-highlight", "accentHighlight", p.accentHighlight),
         TokenPair("border-default", "borderDefault", p.borderDefault),
         TokenPair("border-hairline", "borderHairline", p.borderHairline),
         TokenPair("state-success-text", "success", p.success),
@@ -229,6 +230,7 @@ class DesktopTokenParityContractTest {
             TokenPair("accent-action", "AccentAction", p.accentAction),
             TokenPair("text-on-accent", "OnAccent", p.onAccent),
             TokenPair("surface-accent-soft", "AccentSoft", p.accentSoft),
+            TokenPair("accent-highlight", "AccentHighlight", p.accentHighlight),
         )
         assertThat(mismatches(desktop, pairs)).isEmpty()
     }

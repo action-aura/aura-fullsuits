@@ -91,7 +91,17 @@
 
   /* ── SEMANTIC STATE ───────────────────────────────────────────────────────
      One meaning per colour. These are the *text* variants (AA on every
-     surface); the -surface/-border variants below are their quiet backdrops. */
+     surface); the -surface/-border variants below are their quiet backdrops.
+
+     --state-info-* is DELIBERATELY UNCHANGED by the 2026-09-08 accent
+     re-grounding below: it happened to numerically match the old
+     --accent-action/--surface-accent-soft (both were #1745a9/#e8eefb) only
+     because Day's original accent WAS plain blue, not because "info" is
+     defined as "the accent colour" -- every other theme already carries its
+     own independent info-blue, distinct from that theme's accent. Info is
+     re-verified against the new palette (still >=4.5:1 on its own surface)
+     and left as the same conventional informational blue, now decoupled
+     from the accent that has moved on to lapis/indigo. */
   --state-success-text:   #0a5832;
   --state-warning-text:   #6e4300;
   --state-danger-text:    #98170f;
@@ -107,10 +117,26 @@
 
   /* ── ACCENT ───────────────────────────────────────────────────────────────
      ONE accent, used to mean "this is the action you take", not to decorate.
-     If it appears somewhere that is not actionable, that is a bug. */
-  --accent-action:        #1745a9;
-  --accent-action-hover:  #123a8e;
-  --accent-action-active: #0e2f74;
+     If it appears somewhere that is not actionable, that is a bug.
+
+     RE-GROUNDED 2026-09-08 (owner brief): moved off the plain corporate blue
+     toward a deeper lapis/indigo -- see DESIGN.md §4.3's "why the accent
+     moved" note. FIRST PASS (#2F47E1) read as MORE saturated and electric
+     than the original, not deeper -- a generic SaaS-primary blue, the exact
+     register the brief was trying to leave, caught only by looking at the
+     rendered "Open the till" button, not by any contrast number. Corrected
+     to sit genuinely deeper (owner's named band, #1E3A8A-#24409B): darker
+     ink makes BOTH binding constraints easier, not harder, so every margin
+     below is LARGER than the original #1745A9 ever had, not merely passing.
+     --text-on-accent clears AA on all three fills (6.27 - 12.09:1, vs the
+     original #1745A9's 8.53 - 12.52:1) and, because the accent is also used
+     as plain text/icon colour in the shell (nav labels, links), each fill
+     independently clears AA against every solid surface in this palette,
+     worst case (--surface-active) 8.23:1 -- not merely against white, and
+     comfortably above the original's 7.07:1 on the same surface. */
+  --accent-action:        #213c90;
+  --accent-action-hover:  #1a3073;
+  --accent-action-active: #142559;
   /* NOTE: named --surface-*, not --accent-*, and that distinction is load
      bearing. This is a 8%-ish wash of the accent used as a BACKDROP behind
      dark text (selected nav row, active tab) -- it is a surface that happens
@@ -118,8 +144,18 @@
      the original --accent-action-soft name by pairing it with
      --text-on-accent and getting 1.16:1: the name promised a fill, so the
      test believed it. A token named for the wrong job produces exactly this
-     class of bug. */
-  --surface-accent-soft:  #e8eefb;
+     class of bug. Re-hued with the accent, luminance held within 0.2% of the
+     prior value so every --text-*/--text-money* pairing that already cleared
+     AA/AAA against it keeps the same ratio. */
+  --surface-accent-soft:  #eaedf9;
+  /* Secondary warm accent (owner brief, 2026-09-08): the amber half of
+     "lapis/indigo paired with a warm amber". Named for its job -- emphasis/
+     highlight -- not its hue, per the naming rule above. Nothing consumes it
+     yet; it exists so later work has a sanctioned warm accent instead of
+     inventing a one-off literal. Same amber hue (42) in every theme; Sand's
+     --accent-action is deliberately a deep ink shade of this SAME hue (see
+     that theme's block) rather than an unrelated burnt orange. */
+  --accent-highlight:     #c69010;
 
   /* ── BORDERS ──────────────────────────────────────────────────────────────
      Named by weight of separation, not by opacity. The old file expressed
@@ -136,7 +172,7 @@
      operators, so the ring is high-contrast and, crucially, has an outer
      halo so it stays visible against BOTH the light chrome and the accent
      button it may be sitting on. */
-  --focus-ring-color:   #1745a9;
+  --focus-ring-color:   #213c90;
   --focus-ring-width:   3px;
   --focus-ring-offset:  2px;
   --focus-ring-halo:    #ffffff;
@@ -362,7 +398,9 @@ html[data-theme="dark"] {
   --text-primary:       #edf2f8;
   --text-secondary:     #c3cddb;
   --text-tertiary:      #9fadc0;
-  --text-on-accent:     #0d1b2e;  /* accent fills are LIGHT here, see above */
+  --text-on-accent:     #0f1834;  /* accent fills are LIGHT here, see above --
+                                     re-hued indigo ink, 2026-09-08 (was
+                                     #0d1b2e, matched to the old sky-blue) */
 
   /* ── MONEY — AAA on every surface, worst case 7.67:1 on --surface-active.
      Colour stays the redundant cue: .money--negative keeps its literal minus
@@ -388,11 +426,20 @@ html[data-theme="dark"] {
   --state-danger-border:   #66261f;
   --state-info-border:     #24406b;
 
-  /* ── ACCENT — light fill, dark label (strategy flip documented above) ─── */
-  --accent-action:        #6ea8ff;
-  --accent-action-hover:  #85b7ff;
-  --accent-action-active: #5b9bf8;
-  --surface-accent-soft:  #1c2a44;
+  /* ── ACCENT — light fill, dark label (strategy flip documented above) ───
+     RE-GROUNDED 2026-09-08 alongside the light palette: same lapis/indigo
+     family (hue 226, vs the light theme's 232), lightened for a dark
+     ground. Each fill independently clears AA against --text-on-accent
+     (6.95 - 8.89:1) AND against every solid surface here, worst case
+     --surface-active at 5.21:1 -- the accent is also used as plain text/
+     icon colour in the shell, not only as a button fill. */
+  --accent-action:        #98adf4;
+  --accent-action-hover:  #a4b7f5;
+  --accent-action-active: #87a0f2;
+  --surface-accent-soft:  #202947;
+  /* Secondary warm accent -- see the light palette's note. Same amber hue
+     (42) as every other theme, lightened to pop on this dark ground. */
+  --accent-highlight:     #f0bf4c;
 
   /* ── BORDERS — grey-blue steps that are visible over DARK surfaces; the
      light theme's greys vanish here exactly the way its comment says white-
@@ -401,10 +448,10 @@ html[data-theme="dark"] {
   --border-default:     #2e3947;
   --border-strong:      #47566a;
 
-  /* ── FOCUS — ring rides the accent (6.07:1 on the darkest chrome it sits
+  /* ── FOCUS — ring rides the accent (>=5.21:1 on the darkest chrome it sits
      over); the white halo is unchanged because its one job is the pre-login
      canvas, which stays dark in both themes. ── */
-  --focus-ring-color:   #6ea8ff;
+  --focus-ring-color:   #98adf4;
 
   /* ── ELEVATION — deeper, wider shadows: on dark ground a 6% black shadow
      is invisible, so depth has to be stated louder to exist at all. ── */
@@ -417,7 +464,7 @@ html[data-theme="dark"] {
 
   /* The rgb triplet several rules build rgba(var(--sub-accent-rgb), a) tints
      from; must track the accent flip or every tint stays ink-blue. */
-  --sub-accent-rgb: 110, 168, 255;
+  --sub-accent-rgb: 152, 173, 244;
 }
 /*                                                     [design-tokens-dark:end] */
 
@@ -425,14 +472,35 @@ html[data-theme="dark"] {
    OPERATIONAL CALM — NIGHT PALETTE                  [design-tokens-night:begin]
    ───────────────────────────────────────────────────────────────────────────
    Third sanctioned theme (owner request, 2026-09): a deeper ink ground than
-   Dark with an aurora-teal accent, for shops that want the calm-dark family
-   at its coldest. The dark block's whole safety argument applies here
-   verbatim -- TOKEN VALUES ONLY, no theme-scoped paint rule anywhere, pinned
-   by retail_design_theme_safety_test.js's per-theme checks.
+   Dark, for shops that want the calm-dark family at its coldest. The dark
+   block's whole safety argument applies here verbatim -- TOKEN VALUES ONLY,
+   no theme-scoped paint rule anywhere, pinned by
+   retail_design_theme_safety_test.js's per-theme checks.
+
+   ACCENT RE-GROUNDED 2026-09-08 (owner brief): this theme originally carried
+   an aurora-teal accent (#5fe3d0). The owner's judgement, verbatim, was that
+   the blue-into-teal spread across Day/Calm/Night read as a developer tool
+   rather than a Levantine retail product -- see DESIGN.md §4.3.
+
+   FIRST PASS put Night at hue 243 (#a29efe) -- inside the lapis/indigo
+   family, and every contrast guard passed -- but at that hue and lightness
+   it landed only 7.02 ΔE76 from Dusk's lavender (#b9a6ff), i.e. two of five
+   themes rendered as the same colour in the picker: a real defect no
+   contrast ratio can see, caught only by looking at both themes side by
+   side. CORRECTED to hue 208, a genuinely BLUER indigo (Calm and Day sit
+   around hue 225; Dusk is the violet counterpart at hue 253; Night is now
+   the coldest, bluest member, clearly on the opposite side of Calm from
+   Dusk) -- 29.33 ΔE76 from Dusk, 15.04 from Calm, both pinned by
+   retail_design_contrast_test.js's testThemeAccentsAreDistinguishable (§8).
+   --text-on-accent was re-solved alongside it (was #04201d, a teal-tinted
+   near-black; #151341 in the first pass; now #0c1b28, a blue-tinted one).
 
    CONTRAST IS COMPUTED, NOT EYEBALLED: every text-on-surface pairing here
    clears WCAG AA (4.5:1) and --text-primary clears well past AAA, verified by
-   retail_design_contrast_test.js's per-theme dark-family tier.
+   retail_design_contrast_test.js's per-theme dark-family tier. The accent
+   fills each independently clear AA against --text-on-accent (6.36 - 8.13:1)
+   and against every solid surface here, worst case --surface-active at
+   5.21:1 -- the accent is also used as plain text/icon colour in the shell.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="night"] {
   color-scheme: dark;
@@ -446,10 +514,13 @@ html[data-theme="night"] {
   --text-primary: #e9f1fb;
   --text-secondary: #bfcbdb;
   --text-tertiary: #9aaabd;
-  --text-on-accent: #04201d;
+  --text-on-accent: #0c1b28;
   --text-money: #e9f1fb;
   --text-money-positive: #8fe8bd;
   --text-money-negative: #ffb0a6;
+  /* --state-info-* is unchanged -- see the light palette's note: it was
+     already an independent info-blue in this theme, never tied to the old
+     teal accent, so the accent's move off teal leaves it untouched. */
   --state-success-text: #7fdfa9;
   --state-warning-text: #e9c97e;
   --state-danger-text: #ff9b92;
@@ -462,21 +533,24 @@ html[data-theme="night"] {
   --state-warning-border: #544119;
   --state-danger-border: #63241e;
   --state-info-border: #233f6a;
-  --accent-action: #5fe3d0;
-  --accent-action-hover: #7cebdb;
-  --accent-action-active: #49d2bf;
-  --surface-accent-soft: #0f2a30;
+  --accent-action: #59aef8;
+  --accent-action-hover: #6cb7f9;
+  --accent-action-active: #3fa1f7;
+  --surface-accent-soft: #13283a;
+  /* Secondary warm accent -- see the light palette's note. Same amber hue
+     (42) as every other theme, lightened to pop on this darkest ground. */
+  --accent-highlight: #f1c255;
   --border-hairline: #1a2432;
   --border-default: #26344a;
   --border-strong: #3f5271;
-  --focus-ring-color: #5fe3d0;
+  --focus-ring-color: #59aef8;
   --surface-scrim: rgba(1, 4, 9, 0.74);
   --focus-ring-halo: #000000;
   --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
   --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
   --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
   --sheet-scrim: rgba(0, 0, 0, 0.62);
-  --sub-accent-rgb: 95, 227, 208;
+  --sub-accent-rgb: 89, 174, 248;
 }
 /*                                                    [design-tokens-night:end] */
 
@@ -492,6 +566,13 @@ html[data-theme="night"] {
    CONTRAST IS COMPUTED, NOT EYEBALLED: every text-on-surface pairing here
    clears WCAG AA (4.5:1) and --text-primary clears well past AAA, verified by
    retail_design_contrast_test.js's per-theme dark-family tier.
+
+   NOT RE-ACCENTED in the 2026-09-08 lapis/indigo pass (DESIGN.md §4.3): this
+   theme's accent was never the rejected teal/cyan -- lavender already sits
+   in the same blue-violet register the brief asked Day/Calm/Night to move
+   toward, so --accent-action and friends are left exactly as they were.
+   Only --accent-highlight (the new secondary warm token, see the light
+   palette's note) is added here.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="dusk"] {
   color-scheme: dark;
@@ -525,6 +606,9 @@ html[data-theme="dusk"] {
   --accent-action-hover: #c9baff;
   --accent-action-active: #a793f6;
   --surface-accent-soft: #2a2350;
+  /* Secondary warm accent -- see the light palette's note. Same amber hue
+     (42) as every other theme, lightened to pop on this dark ground. */
+  --accent-highlight: #f1c150;
   --border-hairline: #26223a;
   --border-default: #34304c;
   --border-strong: #4d4870;
@@ -554,6 +638,22 @@ html[data-theme="dusk"] {
    retail_design_contrast_test.js's per-theme tier (checked for LIGHT
    polarity, not dark, since Sand's working surface must stay brighter than
    its own text -- see testSandPaletteIsActuallyLight).
+
+   ACCENT REVIEWED 2026-09-08 (owner brief), KEPT: Sand is being promoted to
+   the brand's public face, so its accent got a first pass toward the new
+   --accent-highlight amber's hue (42) -- and rendered as a MUDDY OLIVE on
+   the "Open the till" button, reading like a disabled control on the most
+   important theme in the product. Caught only by looking at the real
+   button, not by any contrast number (both the olive and the original
+   sienna clear every guard below by comfortable margins). Reverted to the
+   original warm terracotta/sienna (#9a4f12, hue ~27) at or near its
+   pre-existing value, per the owner's direction: the deliberate relationship
+   to warmth the brief asked for is now carried by --accent-highlight (same
+   hue-42 amber as every other theme) rather than by dragging Sand's own
+   accent toward that hue. Each fill independently clears AA against
+   --text-on-accent (6.00 - 9.62:1) and against every solid surface here,
+   worst case --surface-active at 4.58:1 (accent), 5.79:1 (hover), 7.34:1
+   (active) -- unchanged from what shipped before this file's first pass.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="sand"] {
   --surface-app: #efe8dc;
@@ -592,6 +692,12 @@ html[data-theme="sand"] {
   --accent-action-hover: #84420d;
   --accent-action-active: #6d3609;
   --surface-accent-soft: #f6e7d3;
+  /* Secondary warm accent -- see the light palette's note. NOT the same hue
+     as --accent-action above on purpose (see the header comment): the
+     accent stays the original terracotta/sienna the shop keeps as its
+     identity, and this new amber token is what deliberately relates Sand to
+     the rest of the system's warmth. */
+  --accent-highlight: #e6a819;
   --border-hairline: #e4dccf;
   --border-default: #d4cabb;
   --border-strong: #b7ab99;

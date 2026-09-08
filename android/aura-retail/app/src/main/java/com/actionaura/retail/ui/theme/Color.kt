@@ -72,6 +72,11 @@ class AuraColors(
     val accentAction: Color,
     val onAccent: Color,
     val accentSoft: Color,
+    /** Secondary warm accent (owner brief, 2026-09-08): the amber half of
+     *  "lapis/indigo paired with a warm amber" -- see main.css's
+     *  --accent-highlight note. Named for its job (emphasis), not its hue.
+     *  Nothing consumes it yet on either client. */
+    val accentHighlight: Color,
     // ── BORDERS — named by weight of separation ───────────────────────────────
     val borderDefault: Color,
     val borderHairline: Color,
@@ -102,9 +107,10 @@ object AuraPalette {
         textPrimary = Color(0xFFEDF2F8),
         textSecondary = Color(0xFFC3CDDB),
         textTertiary = Color(0xFF9FADC0),
-        accentAction = Color(0xFF6EA8FF),
-        onAccent = Color(0xFF0D1B2E),
-        accentSoft = Color(0xFF1C2A44),
+        accentAction = Color(0xFF98ADF4),
+        onAccent = Color(0xFF0F1834),
+        accentSoft = Color(0xFF202947),
+        accentHighlight = Color(0xFFF0BF4C),
         borderDefault = Color(0xFF2E3947),
         borderHairline = Color(0xFF232B37),
         success = Color(0xFF7BD9A2),
@@ -130,9 +136,15 @@ object AuraPalette {
         textPrimary = Color(0xFF141A24),
         textSecondary = Color(0xFF3D4859),
         textTertiary = Color(0xFF566071),
-        accentAction = Color(0xFF1745A9),
+        // #2F47E1 was this file's first re-grounding pass: MORE saturated
+        // than the original, not deeper -- a generic SaaS-primary blue, the
+        // exact register the owner's brief was leaving. Corrected into the
+        // owner's named band (#1E3A8A-#24409B); a darker ink clears every
+        // guard with MORE margin than the original #1745A9 ever had.
+        accentAction = Color(0xFF213C90),
         onAccent = Color(0xFFFFFFFF),
-        accentSoft = Color(0xFFE8EEFB),
+        accentSoft = Color(0xFFEAEDF9),
+        accentHighlight = Color(0xFFC69010),
         borderDefault = Color(0xFFD3DAE3),
         borderHairline = Color(0xFFE3E8EF),
         success = Color(0xFF0A5832),
@@ -143,8 +155,18 @@ object AuraPalette {
         dangerContainer = Color(0xFFFDECEA),
     )
 
-    // Night — desktop `html[data-theme="night"]`: deeper ink ground than Calm,
-    // aurora-teal accent.
+    // Night — desktop `html[data-theme="night"]`: deeper ink ground than Calm.
+    // Carried an aurora-teal accent until the 2026-09-08 re-grounding (owner
+    // brief: move off developer-tool cyan/teal). A first pass landed at hue
+    // 243 (#A29EFE) -- inside the lapis/indigo family, every contrast guard
+    // green -- but only 7.02 ΔE76 from Dusk's lavender (#B9A6FF, hue 253):
+    // two of five theme-picker entries reading as the same colour, caught
+    // by looking at both themes side by side, not by any ratio. Corrected
+    // to hue 208 (#59AEF8), a genuinely BLUER indigo -- Calm and Day sit
+    // around hue 225, Dusk is the violet counterpart at 253, Night is now
+    // the coldest/bluest member -- 29.33 ΔE76 from Dusk, 15.04 from Calm,
+    // both pinned by retail_design_contrast_test.js's
+    // testThemeAccentsAreDistinguishable.
     val NIGHT = AuraColors(
         name = "night",
         isDark = true,
@@ -158,9 +180,10 @@ object AuraPalette {
         textPrimary = Color(0xFFE9F1FB),
         textSecondary = Color(0xFFBFCBDB),
         textTertiary = Color(0xFF9AAABD),
-        accentAction = Color(0xFF5FE3D0),
-        onAccent = Color(0xFF04201D),
-        accentSoft = Color(0xFF0F2A30),
+        accentAction = Color(0xFF59AEF8),
+        onAccent = Color(0xFF0C1B28),
+        accentSoft = Color(0xFF13283A),
+        accentHighlight = Color(0xFFF1C255),
         borderDefault = Color(0xFF26344A),
         borderHairline = Color(0xFF1A2432),
         success = Color(0xFF7FDFA9),
@@ -189,6 +212,7 @@ object AuraPalette {
         accentAction = Color(0xFFB9A6FF),
         onAccent = Color(0xFF150F2E),
         accentSoft = Color(0xFF2A2350),
+        accentHighlight = Color(0xFFF1C150),
         borderDefault = Color(0xFF34304C),
         borderHairline = Color(0xFF26223A),
         success = Color(0xFF86DFA8),
@@ -199,8 +223,15 @@ object AuraPalette {
         dangerContainer = Color(0xFF3E1717),
     )
 
-    // Sand — desktop `html[data-theme="sand"]`: warm paper ground, amber ink.
-    // A LIGHT theme, not a member of the dark family.
+    // Sand — desktop `html[data-theme="sand"]`: warm paper ground, terracotta/
+    // sienna ink. A LIGHT theme, not a member of the dark family. A first
+    // 2026-09-08 pass moved the accent toward the new --accent-highlight
+    // amber's hue to "relate" the two -- and rendered as a muddy OLIVE on
+    // the "Open the till" button, reading like a disabled control on the
+    // theme being promoted to the brand's public face. Reverted to the
+    // ORIGINAL sienna (#9A4F12, unchanged): the relationship to warmth the
+    // brief asked for is carried by accentHighlight, not by dragging this
+    // theme's own accent toward it.
     val SAND = AuraColors(
         name = "sand",
         isDark = false,
@@ -217,6 +248,7 @@ object AuraPalette {
         accentAction = Color(0xFF9A4F12),
         onAccent = Color(0xFFFFFFFF),
         accentSoft = Color(0xFFF6E7D3),
+        accentHighlight = Color(0xFFE6A819),
         borderDefault = Color(0xFFD4CABB),
         borderHairline = Color(0xFFE4DCCF),
         success = Color(0xFF1D5A34),
@@ -256,6 +288,7 @@ val TextTertiary: Color get() = AuraPalette.current.textTertiary
 val AccentAction: Color get() = AuraPalette.current.accentAction
 val OnAccent: Color get() = AuraPalette.current.onAccent
 val AccentSoft: Color get() = AuraPalette.current.accentSoft
+val AccentHighlight: Color get() = AuraPalette.current.accentHighlight
 
 val BorderDefault: Color get() = AuraPalette.current.borderDefault
 val BorderHairline: Color get() = AuraPalette.current.borderHairline
@@ -313,23 +346,28 @@ val CategoryPalette: List<Color> = listOf(
 )
 
 // ── Brand: fixed, NOT theme tokens ───────────────────────────────────────
-// The Aura mark's own colours (DESIGN.md §3): the ring's gradient and the
-// spark. They never move with the theme -- a Day till and a Night till show
-// the same ring, the same values as products/retail/frontend/brand/
-// aura-mark.svg -- which is exactly why they are in no AuraColors palette
-// above. They are named HERE rather than in ui/brand/AuraMark.kt because
+// The Aura mark's own colours (DESIGN.md §3): the ring's gradient. They
+// never move with the theme -- a Day till and a Night till show the same
+// ring, the same values as products/retail/frontend/brand/aura-mark.svg --
+// which is exactly why they are in no AuraColors palette above. They are
+// named HERE rather than in ui/brand/AuraMark.kt because
 // ColorTokenContractTest allows no colour literal outside this file and
 // deliberately has no allowlist to widen; AuraMark.kt is their only
 // consumer. The letter A is deliberately absent: it takes the current text
 // colour (TextPrimary by default) so it stays visible on every ground, the
 // way the desktop's inline mark uses currentColor.
+//
+// SparkHalo/SparkFade (the old soft radial-gradient spark's glow + core)
+// were removed 2026-09-08: the mark evolution pass replaced that spark with
+// a flat geometric diamond ("beacon") drawn in the same ink as the A --
+// AuraMark.kt's only consumer of either constant -- so neither has a
+// reader anywhere in the app any more (confirmed by search before
+// deletion). See BrandMarkWiringContractTest's
+// aura_mark_beacon_is_a_flat_diamond_following_ink_not_a_gradient_spark.
 object AuraBrand {
     val RingStart: Color = Color(0xFF1745A9)
     val RingMid: Color = Color(0xFF3F7BE6)
     val RingEnd: Color = Color(0xFF5FE3D0)
-    val SparkHalo: Color = Color(0xFFBFF7EE)
-    /** The halo's outer edge: the ring's end colour, fully transparent. */
-    val SparkFade: Color = RingEnd.copy(alpha = 0f)
 
     /**
      * Second pass on the sign-in redesign (2026-09-08): the button's fill

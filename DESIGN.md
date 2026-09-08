@@ -81,19 +81,39 @@ keep:
 under the wordmark: RETAIL, CLINIC, OWNER.
 
 **The mark.** A ring that has just been lit, open at the top-right where a
-spark sits, around an upward A with a short bar. The ring is the aura and
-the sync loop; the gap and the spark make it "switched on" rather than a
-badge; the A is plain ink so it survives one-colour printing and a 16 px
+beacon sits, around a bold upward A with a short bar. The ring is the aura
+and the sync loop; the gap and the beacon make it "switched on" rather than
+a badge; the A is plain ink so it survives one-colour printing and a 16 px
 favicon. Geometry, in a 256 × 256 viewBox:
 
 - ring: circle centre (128,128), r 94, stroke 15, round caps,
   `stroke-dasharray 492 99`, `stroke-dashoffset -32`, rotated −90°
-- spark: centre (196,60), white core r 6.5, radial glow r 20–26
-- A: `M 80 178 L 128 76 L 176 178` stroke 19; bar `M 106 142 L 150 142`
-  stroke 15; round joins and caps
+- beacon: a flat diamond at the ring's opening, `M 196 45 L 211 60 L 196 75
+  L 181 60 Z`, filled in the SAME ink as the A (not a fixed colour, not a
+  gradient)
+- A: `M 84 178 L 128 70 L 172 178` stroke 26; bar `M 108 142 L 148 142`
+  stroke 20; round joins and caps
 - ring gradient (light surfaces): `#1745A9` → `#3F7BE6` → `#5FE3D0`
   (bottom-left to top-right); on dark surfaces `#3F7BE6` → `#6EA8FF` →
-  `#5FE3D0`; A ink `#0F1319` on light, `#EDF2F8` on dark
+  `#5FE3D0`; A/beacon ink `#0F1319` on light, `#EDF2F8` on dark
+
+**2026-09-08 revision.** The owner read the first cut as a generic tech/
+crypto token rather than a retail tool. Two changes, applied identically to
+every reproduction of this geometry (the brand SVGs below, `AuraIcons.mark()`
+in `icons.js`, `AuraMark` in `AuraMark.kt`, and the launcher vector): the A's
+stroke weights were raised (peak 19→26, bar 15→20) and its apex narrowed and
+raised (base 80/176→84/172, apex y 76→70) so the A, not the ring, is the
+thing you see first; and the old soft radial-gradient spark (a blurred glow
+plus a white dot) was replaced by the flat, hard-edged beacon diamond above.
+The ring is unchanged. Proven, not asserted: rendering the OLD mark to a
+canvas and thresholding it to pure black/white at 50% vanished roughly a
+third of the ring's own 300° sweep (the gradient's teal end crosses the
+threshold before the sweep ends) — which is why `aura-mark-1bit.svg` (one
+flat ink, no gradients anywhere) now exists for that print path; the same
+threshold test on it stays fully intact except the ring's own intentional
+gap. `products/retail/frontend/brand/intro.html` still draws the pre-revision
+A (thinner, base 80/176, apex 76) — a known, tracked drift, not silently
+missed; it needs the same update the next time that file is touched.
 
 **Brand colours** (not to be confused with product tokens, §4):
 
@@ -119,18 +139,24 @@ frame. It is one self-contained HTML file.
 
 **Rules.** Clear space of one ring-stroke width on every side. Minimum
 size: mark 16 px, lockup 120 px wide. One-colour use: ink on light, off-white
-on dark; the gradient is optional, the gap and the spark are not. Never close
-the ring, move the spark, rotate the mark, or put text inside it.
+on dark; the gradient is optional, the gap and the beacon are not. Never
+close the ring, move the beacon, rotate the mark, or put text inside it.
 
 **Files:** `products/retail/frontend/brand/` — `aura-mark.svg`,
-`aura-mark-on-dark.svg`, `aura-app-icon.svg` (512, rounded square),
+`aura-mark-on-dark.svg`, `aura-mark-1bit.svg` (one flat ink, no gradients —
+one-bit thermal-print path), `aura-app-icon.svg` (512, rounded square),
 `aura-lockup.svg`, `aura-lockup-on-dark.svg`, `intro.html`, `README.md`.
 Tools: `scripts/brand/lockup_to_paths.py` (wordmark → outlines),
 `scripts/brand/theme_palettes.py` (palette solver, §4).
 
-**Status:** first cut, 2026-09-07, published for the owner's review. Not yet
-wired into any screen: the sign-in screens still show an older bolt glyph
-and the desktop shell a bag icon.
+**Status:** first cut 2026-09-07, revised 2026-09-08 (see above). Wired into
+both clients as of 2026-09-08 and verified by test: the desktop shell's
+brand slot and sign-in overlay render `AuraIcons.mark()`
+(`retail_shell_chrome_test.js`), and the phone's sign-in screen and
+first-run/loading header render `AuraMark()`/`AuraWordmark()`
+(`BrandMarkWiringContractTest`) — the older bolt glyph and bag icon this
+line used to describe are gone. `intro.html` is the one file still on the
+pre-revision A geometry (tracked above, in "2026-09-08 revision").
 
 ## 4. Colour: the token system and the five themes
 
@@ -175,17 +201,18 @@ Dusk were added that day. "Calm" is the phone's original and default look.
 | `--surface-sunken` | `#F2F5F8` | `#F4EEE4` | `#0B0F15` | `#04070C` | `#0E0C16` |
 | `--surface-hover` | `#EEF2F7` | `#F1EADF` | `#212936` | `#172233` | `#29253D` |
 | `--surface-active` | `#E6EAF0` | `#E8E0D2` | `#273140` | `#1D2B3F` | `#312C49` |
-| `--surface-accent-soft` | `#E8EEFB` | `#F6E7D3` | `#1C2A44` | `#0F2A30` | `#2A2350` |
+| `--surface-accent-soft` | `#EAEDF9` | `#F6E7D3` | `#202947` | `#13283A` | `#2A2350` |
 | `--text-primary` | `#141A24` | `#2A2119` | `#EDF2F8` | `#E9F1FB` | `#F0EDF9` |
 | `--text-secondary` | `#3D4859` | `#4D4034` | `#C3CDDB` | `#BFCBDB` | `#C9C3DC` |
 | `--text-tertiary` | `#566071` | `#63564A` | `#9FADC0` | `#9AAABD` | `#A49DBD` |
-| `--text-on-accent` | `#FFFFFF` | `#FFFFFF` | `#0D1B2E` | `#04201D` | `#150F2E` |
+| `--text-on-accent` | `#FFFFFF` | `#FFFFFF` | `#0F1834` | `#0C1B28` | `#150F2E` |
 | `--text-money` | `#141A24` | `#2A2119` | `#EDF2F8` | `#E9F1FB` | `#F0EDF9` |
 | `--text-money-positive` | `#0A5832` | `#1A502E` | `#8FE6B3` | `#8FE8BD` | `#95E6B6` |
 | `--text-money-negative` | `#98170F` | `#891B12` | `#FFB3A8` | `#FFB0A6` | `#FFB0A6` |
-| `--accent-action` | `#1745A9` | `#9A4F12` | `#6EA8FF` | `#5FE3D0` | `#B9A6FF` |
-| `--accent-action-hover` | `#123A8E` | `#84420D` | `#85B7FF` | `#7CEBDB` | `#C9BAFF` |
-| `--accent-action-active` | `#0E2F74` | `#6D3609` | `#5B9BF8` | `#49D2BF` | `#A793F6` |
+| `--accent-action` | `#213C90` | `#9A4F12` | `#98ADF4` | `#59AEF8` | `#B9A6FF` |
+| `--accent-action-hover` | `#1A3073` | `#84420D` | `#A4B7F5` | `#6CB7F9` | `#C9BAFF` |
+| `--accent-action-active` | `#142559` | `#6D3609` | `#87A0F2` | `#3FA1F7` | `#A793F6` |
+| `--accent-highlight` | `#C69010` | `#E6A819` | `#F0BF4C` | `#F1C255` | `#F1C150` |
 | `--state-success-text` | `#0A5832` | `#1D5A34` | `#7BD9A2` | `#7FDFA9` | `#86DFA8` |
 | `--state-success-surface` | `#E7F4ED` | `#E5F1E6` | `#12301F` | `#0F2D1F` | `#132D22` |
 | `--state-success-border` | `#B6DCC7` | `#B3D6BB` | `#1E4D33` | `#1C4A33` | `#1F4A36` |
@@ -201,19 +228,79 @@ Dusk were added that day. "Calm" is the phone's original and default look.
 | `--border-hairline` | `#E3E8EF` | `#E4DCCF` | `#232B37` | `#1A2432` | `#26223A` |
 | `--border-default` | `#D3DAE3` | `#D4CABB` | `#2E3947` | `#26344A` | `#34304C` |
 | `--border-strong` | `#B3BFCD` | `#B7AB99` | `#47566A` | `#3F5271` | `#4D4870` |
-| `--focus-ring-color` | `#1745A9` | `#9A4F12` | `#6EA8FF` | `#5FE3D0` | `#B9A6FF` |
+| `--focus-ring-color` | `#213C90` | `#9A4F12` | `#98ADF4` | `#59AEF8` | `#B9A6FF` |
 
 Character of each theme, for choosing and for extending:
 
-- **Day** — the default. Cool grey shell, white till, ink-blue action.
-- **Sand** — warm paper for shops that find cool grey clinical; amber-brown
-  ink as the action colour; the same structure as Day.
+- **Day** — the default. Cool grey shell, white till, deep lapis/indigo
+  action.
+- **Sand** — warm paper for shops that find cool grey clinical; the ORIGINAL
+  terracotta/sienna ink as the action colour, kept rather than re-hued (see
+  below); the same structure as Day.
 - **Calm** — the phone's original dark and the desktop's dark: blue-grey
-  ground, light-blue action, off-white text. "Same product, lights off."
-- **Night** — deep ink with the brand's aurora teal as the action colour;
-  the elevation lightens more steeply so cards read on a very dark ground.
-- **Dusk** — violet charcoal with a lavender action colour; the warm
-  counterpart to Night.
+  ground, light lapis/indigo action, off-white text. "Same product, lights
+  off."
+- **Night** — deep ink with a light, genuinely BLUE indigo action colour
+  (aurora teal until 2026-09-08, retired for cause — see below); the
+  elevation lightens more steeply so cards read on a very dark ground.
+- **Dusk** — violet charcoal with a lavender action colour, already in the
+  blue-violet register the 2026-09-08 pass asked for, so it was not
+  re-accented; the warm counterpart to Night.
+
+**Why the accent moved (2026-09-08).** The owner's judgement, verbatim: the
+blue-into-teal spread across Day, Calm and Night — plain corporate blue
+lightening theme by theme until it became Night's aurora teal — read as a
+developer tool, not a Levantine retail product. Cyan/teal accents are the
+house colour of dashboards and CLIs; a till that rings up cash sales needs to
+feel like it belongs to the shop, not to the tool that built it. Day, Calm
+and Night now share one deep lapis/indigo family, and a new secondary token,
+`--accent-highlight`, exists in every theme as the warm amber half of
+"lapis/indigo paired with a warm amber" — named for its job, not its colour,
+per §4.1's rule, and not yet consumed by anything, so later work has a
+sanctioned warm accent instead of inventing a one-off literal.
+
+**Two rounds, both real, because contrast maths cannot see either mistake.**
+The first pass cleared every AA/AAA guard and still shipped two visible
+defects a render caught and a ratio could not:
+
+1. Day's first accent (`#2F47E1`) was MORE saturated than the original, not
+   deeper — a generic SaaS-primary blue, the exact register the brief was
+   leaving. Corrected into the owner's named band (`#1E3A8A`-`#24409B`) at
+   `#213C90`: a darker ink makes both binding constraints easier, not
+   harder, so every margin is now LARGER than the original `#1745A9` ever
+   had (worst-case-vs-surface 8.23:1 vs the original's 7.07:1).
+2. Sand's first accent (`#6F510C`) chased the same hue as the new
+   `--accent-highlight` amber to "relate" the two, and rendered as a muddy
+   OLIVE on the "Open the till" button — reading like a disabled control on
+   the theme being promoted to the brand's public face. Reverted to the
+   ORIGINAL terracotta/sienna (`#9A4F12`, unchanged) precisely because a
+   burnt-orange ink and a golden-amber highlight are not required to share a
+   hue to read as related; `--accent-highlight` now carries that
+   relationship on its own, as intended.
+3. Night's first accent (`#A29EFE`, hue 243) cleared every contrast floor
+   and still landed only 7.02 ΔE76 (CIE76 Lab distance) from Dusk's lavender
+   (`#B9A6FF`, hue 253) — two of five theme-picker entries reading as the
+   same colour. Corrected to hue 208 (`#59AEF8`), a genuinely bluer indigo:
+   29.33 ΔE76 from Dusk, 15.04 from Calm. `retail_design_contrast_test.js`
+   gained an eighth check for exactly this,
+   `testThemeAccentsAreDistinguishable` (ΔE76 >= 12 between every pair of
+   themes' `--accent-action`), mutation-proven by setting Night's accent
+   equal to Dusk's and confirming it is the only one of 44 checks to fail.
+
+`--state-info-*` was reviewed everywhere across both rounds and left
+unchanged: it was already an independent informational blue in every theme
+(Day's coincidentally matched the old accent only because Day's old accent
+happened to be plain blue), not a teal/cyan token the brief was asking to
+retire, so decoupling it from the new accent is correct rather than an
+oversight. Every value — both rounds — was solved, not eyeballed, with
+`scripts/brand/theme_palettes.py`'s WCAG maths: because the accent is also
+used as plain text/icon colour in the shell (nav labels, links,
+`.ret-tab.active`), each `--accent-action` step is verified against every
+solid surface in its own theme, not only against `--text-on-accent`. But
+WCAG contrast answers "can this be read", never "does this look like a
+different theme" or "does this look inviting rather than disabled" — both
+defects above passed every number in this file and were found only by
+rendering the till and looking.
 
 The phone holds the same five as `AuraColors` palettes and its parity test
 compares every value to the desktop block of the same name; a one-digit
@@ -283,6 +370,21 @@ Icons are the **AuraIcons** set (`products/retail/frontend/icons.js`), a
 curated port of Lucide: 2 px strokes, round joins, monochrome, tinted by the
 current text or accent token. A few emoji remain in older chrome and are
 being replaced. There is no illustration style yet (see §9).
+
+**Unmapped icons fail loudly, never silently as an emoji.** `render(val)`
+resolves a known emoji or Lucide-style name to its signature `<svg>`; a
+value it cannot resolve renders the neutral `circle-help` placeholder and
+`console.warn`s the unresolved value **by name** — it never renders the raw
+character. Before 2026-09-08 an unresolved value fell through to itself
+unchanged, which is how eleven sections all shipped a mapped-looking icon
+that was actually a raw emoji glyph (💾, 📧, and the ☰ tab icon, none in the
+`EMOJI` map) without anyone noticing: an unmapped icon looked exactly as
+"fine" as a mapped one. Adding an icon is still two steps — a Lucide name in
+`ICONS` (geometry fetched verbatim from
+`https://unpkg.com/lucide-static@<version>/icons/<name>.svg`, never hand-
+drawn) and, if it stands in for an emoji already used in the app, an entry
+in `EMOJI` pointing at it — but now a missed one is a console warning on
+first render, not an invisible gap.
 
 ## 8. The tests that hold the design, and what they can and cannot see
 
