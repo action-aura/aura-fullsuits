@@ -180,8 +180,39 @@ until killed at 180s; present, it exits 0 in 4.6s.
 What that does NOT establish: this removed the dev ENVIRONMENT from the
 picture, not the dev MACHINE. It still ran on the build laptop, which has
 WebView2, VC++ runtimes and a display stack a customer's machine may not. So
-the sentence above — "not a dev box" — is still owed, and steps 3 to 10 have
-never been run anywhere. Expect step 4 to be the first thing that breaks.
+the sentence above — "not a dev box" — is still owed.
+
+**Step 3 is also closed, and step 5's warning above is now measured rather
+than reasoned.** First-run setup was driven against the packaged binary on a
+data directory that had never existed. `needs_setup` came back `true`, the
+owner account was created, sign-in returned a session carrying eight
+capabilities, and the licence resolved to `NOT_CONFIGURED`. Then, with no
+licence activated:
+
+    GET  /api/sub/retail/products           200   {"data":[],"status":"success"}
+    POST /api/sub/retail/cash-sessions/open 403
+    POST /api/sub/retail/sales              403
+    POST /api/sub/retail/products           403
+    POST /api/sub/retail/returns            400
+
+That last line is the one worth reading twice. A guard that refuses everything
+would also produce three 403s, so three 403s prove nothing on their own. The
+returns route is on `RETAIL_RESTRICTED_ALLOWLIST`; it answered **400**, meaning
+it passed the licence gate and then failed on the deliberately invalid payload
+the probe sent. Deny and allow are therefore both demonstrated, which is what
+makes this a measurement of the gate rather than of a blanket refusal.
+
+Two corrections for anyone repeating this. The routes are under
+`/api/sub/retail/...`; CLAUDE.md's shorthand omits that prefix, and probing the
+short paths returns 404, which reads like a broken build. And on a genuinely
+fresh install every business route answers **401** before the licence gate is
+ever consulted, because no account exists yet — so a probe that stops there has
+measured authentication, not licensing.
+
+Still owed: step 4 (activation) needs a running Owner Control Center, and there
+is none — the DigitalOcean account is locked and `doctl compute droplet list`
+returns nothing. Steps 5 to 10, everything from pinning the branch through a
+two-device sale, have never been run anywhere.
 
 1. **Install** from the installer. Not from source.
 2. **Launch.** It should open its own window (pywebview, falling back to
