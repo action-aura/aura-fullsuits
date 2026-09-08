@@ -186,6 +186,18 @@ Accent: `--accent-action`, `-hover`, `-active`. States, each with `-text`,
 `--border-hairline` (row rules), `--border-default`, `--border-strong`.
 Focus: `--focus-ring-color`, `--focus-ring-halo`.
 
+`--focus-ring-halo` is the one token in this list that does **not** follow the
+theme, and it is absent from §4.3's table for that reason. Its only consumer is
+the re-point onto `.ws-overlay`, `#page-landing` and `#page-login` — the
+pre-login surfaces, which paint a hardcoded `#080808` in *every* theme. So it
+is white in all five. It is not "the ring colour for dark themes", and reading
+it that way is not hypothetical: on 2026-09-08 Night and Dusk were given
+`#000000`, by pattern-match off the `--surface-scrim` and `--elevation-*` lines
+it sits between, which genuinely do darken per theme. That put a black ring on
+a near-black canvas at 1.07:1 — an invisible keyboard focus ring in exactly the
+two themes the value was written for, and no guard caught it. If the pre-login
+canvas ever stops being fixed, this token has to move into §4.3's table.
+
 ### 4.3 The five themes, exact values
 
 Keys are what the apps persist (`aura_theme_v2` on the desktop, `app_theme`
