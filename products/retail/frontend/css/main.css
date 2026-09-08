@@ -2615,14 +2615,20 @@ html[data-theme="light"] {
    mark's own ring/spark-vs-A weighting uses. */
 .aura-wordmark, .aura-product { font-size: 15px; color: var(--text-primary); }
 .aura-wordmark { font-weight: 700; }
-/* Physical margin-left, and the lockup pinned to LTR below, ON PURPOSE. This
-   is a BRAND NAME, not sentence text: it is always the Latin "Aura Retail" in
-   that order, in Arabic as in English. With margin-inline-start the gap
-   flipped to the other side under body.rtl and the two words rendered as
-   "AuraRetail" with the space stranded next to the mark -- measured in the
-   real till on 2026-09-08 by switching the shell to Arabic. */
-.aura-product { font-weight: 300; margin-left: 5px; }
+/* The lockup is pinned to LTR because it is a BRAND NAME, not sentence text:
+   it is always the Latin "Aura Retail" in that order, in Arabic as in
+   English. Under body.rtl the gap had flipped to the far side of the mark and
+   the sidebar read "AuraRetail" -- measured in the real till on 2026-09-08 by
+   switching the shell to Arabic and screenshotting the slot.
+   margin-inline-start, NOT a physical margin-left: a logical property
+   resolves against the ELEMENT'S OWN direction, and this element inherits
+   `direction: ltr` from .aura-lockup, so inline-start is already left in both
+   page directions. The first fix here reached for margin-left and
+   retail_design_rtl_test.js's physical-property ratchet caught it in CI --
+   correctly, because a physical property would have been one more thing for
+   the next RTL sweep to unpick, and it buys nothing over this. */
 .aura-lockup { direction: ltr; unicode-bidi: isolate; }
+.aura-product { font-weight: 300; margin-inline-start: 5px; }
 .sub-system-name {
   /* The configured business name, when one is set -- now the ONLY second
      line in the brand slot (the old bold/accent product-name styling this
