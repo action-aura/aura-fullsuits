@@ -11,8 +11,15 @@ standing so the divergence is visible rather than quietly resolved.** The
 interface palette was re-grounded away from the cyan/teal family that day:
 Night's accent is now `#59AEF8`, and no theme declares `#5FE3D0` any more — the
 value survives in `main.css` only inside the comment recording its retirement.
-So the mark and `intro.html` are the last teal in the product, and the brand no
-longer matches the interface it sits in.
+
+The teal did not leave the product, though. It moved into the brand layer and
+stayed there: `aura-mark.svg`, `intro.html`, and `AuraBrand.RingEnd` in
+Android's `Color.kt`, which the phone's **Sign In button** paints itself with
+(`LoginScreen.kt:387`, a `RingMid → RingEnd` gradient). Seen on a real Mi Note
+10 on 2026-09-09: the first screen of the phone app is a teal-to-blue gradient
+button under a teal-tipped ring, in a product whose five themes no longer
+contain that hue anywhere. So the brand no longer matches the interface it
+sits in, and the mismatch is on the most-seen screen there is.
 
 Not corrected here, because it is a design decision rather than a typo: either
 the mark moves to the new accents, or the teal is kept deliberately as a brand
