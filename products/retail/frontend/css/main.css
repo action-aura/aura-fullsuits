@@ -145,8 +145,19 @@
      --text-on-accent and getting 1.16:1: the name promised a fill, so the
      test believed it. A token named for the wrong job produces exactly this
      class of bug. Re-hued with the accent, luminance held within 0.2% of the
-     prior value so every --text-*/--text-money* pairing that already cleared
-     AA/AAA against it keeps the same ratio. */
+     prior value so every text and money pairing that already cleared AA/AAA
+     against it keeps the same ratio.
+
+     Never write a token wildcard as a star immediately followed by a slash
+     inside a comment: that two-character sequence ends the comment on the
+     spot, wherever it appears. Not hypothetical. This sentence used to read
+     "every --text-STAR-SLASH--text-money-STAR pairing", which closed the
+     comment four lines early and handed the rest of the prose to the CSS
+     parser, which swallowed the --surface-accent-soft declaration below it as
+     part of one invalid declaration. Measured in a real browser: that single
+     typo, plus its twin in the legacy-alias block near line 300, left 22 of
+     this file's 126 tokens undefined while every text-scanning guard in the
+     suite stayed green. See retail_design_css_parse_test.js. */
   --surface-accent-soft:  #eaedf9;
   /* Secondary warm accent (owner brief, 2026-09-08): the amber half of
      "lapis/indigo paired with a warm amber". Named for its job -- emphasis/
@@ -296,7 +307,10 @@
    in new CSS -- they are named for a dark theme that no longer exists
    (`--bg-dark` now resolves to a near-WHITE surface, which is exactly the
    kind of lying name the naming rule above exists to prevent). New rules take
-   the --surface-*/--text-* tokens directly, and this block shrinks over time.
+   the surface and text tokens directly, and this block shrinks over time.
+   (Deliberately not written with a star-then-slash wildcard. That two-character
+   sequence ends a comment, and until 2026-09-08 it ended this one here, taking
+   the entire :root block below out of the stylesheet with it.)
    ═══════════════════════════════════════════════════════════════════════════ */
 :root {
   --bg-dark:     var(--surface-app);
