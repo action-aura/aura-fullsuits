@@ -798,6 +798,112 @@ const RetailSystem = {
     ));
   },
 
+  // Guarded AuraIcons.render(), the same shape app-shell.js uses at every one
+  // of its call sites (`window.AuraIcons ? AuraIcons.render(...) : '🎨'`) and
+  // this file's own _exqIcon already uses for the Exceptions screen: some
+  // standalone test harnesses for this file load subsystem-retail.js without
+  // icons.js (see _exqIcon's comment, and retail_exceptions_screen_test.js),
+  // so a bare AuraIcons.render(...) call would throw ReferenceError instead
+  // of degrading. `fallback` is the emoji glyph the icon replaces.
+  _icon(name, size, fallback, opts) {
+    return window.AuraIcons ? AuraIcons.render(name, size, opts) : (fallback || '');
+  },
+
+  // ══ CONFIRM DIALOG (replaces native confirm()) ═══════════════════════════
+  // Native confirm() cannot be themed, cannot be mirrored for Arabic, and its
+  // text never passes through t() -- so every destructive action in this file
+  // used to show a hardcoded-English browser dialog no shop running Arabic
+  // could read. This renders on the SAME .ret-modal / .ret-modal-overlay
+  // pattern roughly 30 other call sites in this file already use (see
+  // _showScanNotFound, _holdSale, _openHeldSalesModal, ...), so a
+  // confirmation looks, mirrors and reads exactly like the rest of the till
+  // instead of inventing a second modal language.
+  //
+  // Returns a Promise<boolean> -- true on Confirm (click or Enter), false on
+  // Cancel, Escape, or a click on the overlay itself (outside the card).
+  //
+  // opts: { title, message, confirmLabel, cancelLabel, danger }
+  //   title/message   caller-composed, already run through t() at the call
+  //                    site for their static text (matching the existing
+  //                    `${t('Delete')} "${name}"?` pattern this file already
+  //                    used at 8 of the 12 confirm() sites this replaces) --
+  //                    escaped here before going into innerHTML, since most
+  //                    callers interpolate a shop-typed name into the message.
+  //   confirmLabel/
+  //   cancelLabel     default to t('Confirm') / t('Cancel') so a caller that
+  //                    omits them still gets a translated chip, never a raw
+  //                    English fallback baked into THIS file.
+  //   danger          true paints the confirm button with the danger tokens
+  //                    (ret-btn-danger) for an irreversible/destructive
+  //                    action; false (default) uses ret-btn-primary.
+  //
+  // KEYDOWN IS CAPTURE-PHASE, deliberately mirroring _onScannerKey's own
+  // registration (see that method's comment on why capture always runs
+  // before bubble for the same dispatch): _onPOSShortcut is a bubble-phase
+  // document listener that treats a bare Enter as "charge the sale" and
+  // Escape as "cancel the pending qty multiplier". Without capture + a
+  // stopPropagation() here, pressing Enter to confirm THIS dialog while a
+  // non-empty cart sits behind it would also reach _onPOSShortcut and charge
+  // the sale the dialog has not even resolved yet.
+  _confirm(opts) {
+    const o = opts || {};
+    const danger = !!o.danger;
+    const title = o.title || '';
+    const message = o.message || '';
+    const confirmLabel = o.confirmLabel || t('Confirm');
+    const cancelLabel = o.cancelLabel || t('Cancel');
+    // The element focused when _confirm() was called -- almost always the
+    // button that triggered it (a Delete/Discard/... row action) -- so focus
+    // can be handed back to it on close instead of being dropped on <body>.
+    const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
+
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.innerHTML = `
+        <div class="ret-modal" style="width:420px" role="alertdialog" aria-modal="true">
+          <h3>${this._esc(title)}</h3>
+          <p style="color:var(--text-muted);margin:0 0 22px;font-size:13px;line-height:1.5">${this._esc(message)}</p>
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-ghost" id="ret-confirm-cancel">${this._esc(cancelLabel)}</button>
+            <button class="ret-btn ${danger ? 'ret-btn-danger' : 'ret-btn-primary'}" id="ret-confirm-ok">${this._esc(confirmLabel)}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;      // Enter/click/overlay-click can race; resolve once only
+        settled = true;
+        document.removeEventListener('keydown', onKeydown, true);
+        overlay.remove();
+        if (trigger && typeof trigger.focus === 'function') {
+          // The trigger can legitimately be gone by now (e.g. its row was
+          // removed by an unrelated re-render while the dialog was open) --
+          // focus() on a detached/removed element is a silent no-op in every
+          // real browser, so no try/catch is needed to make this safe.
+          trigger.focus();
+        }
+        resolve(result);
+      };
+
+      const onKeydown = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+      };
+      document.addEventListener('keydown', onKeydown, true);
+
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      const cancelBtn = document.getElementById('ret-confirm-cancel');
+      const okBtn = document.getElementById('ret-confirm-ok');
+      if (cancelBtn) cancelBtn.addEventListener('click', () => finish(false));
+      if (okBtn) okBtn.addEventListener('click', () => finish(true));
+      // Focus moves INTO the dialog on open, onto the confirm action --
+      // matching where a keyboard user's very next Enter should land.
+      if (okBtn) okBtn.focus();
+    });
+  },
+
   // ── ATTRIBUTION RENDERING (schema v13) ────────────────────────────────────
   //
   // v13 (_migrate_add_identity_and_attribution_columns, backend/database/
@@ -1982,14 +2088,36 @@ const RetailSystem = {
 
         /* ── Tender + charge ─────────────────────────────────────────────── */
         .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-block-end:12px; }
-        .pos-pay-btn { min-block-size:var(--touch-target-comfortable, 48px);padding-block:6px;padding-inline:4px;border-radius:10px;font-size:13px;font-weight:600;
+        /* button.pos-pay-btn (element-qualified), not bare .pos-pay-btn: this
+           mirrors css/main.css's own "TOUCH, SECOND AXIS" rule (that file's
+           comment on button.pos-cat-btn/button.pos-pay-btn/... explains why
+           the element qualifier is required to win a specificity tie at all)
+           and lets min-inline-size:48px stated explicitly HERE, rather than
+           relying on the shared 44px cross-screen floor, guarantee this one
+           control's hit target regardless of label length or locale. */
+        button.pos-pay-btn { min-inline-size:48px;min-block-size:var(--touch-target-comfortable, 48px);padding-block:6px;padding-inline:4px;border-radius:10px;font-size:13px;font-weight:600;
           cursor:pointer;border:1px solid var(--border-mid);background:var(--surface-soft);color:var(--text-dim);
           display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:inherit;
           transition:background .15s ease, color .15s ease, border-color .15s ease; }
         .pos-pay-btn:hover, .pos-pay-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
         .pos-pay-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);
           color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
-        .pos-pay-icon { font-size:15px;line-height:1; }
+        /* The icon is an inline AuraIcons SVG now (stroke="currentColor"), not
+           an emoji text glyph -- it inherits the button's own colour (dim at
+           rest, --text-on-accent when active) automatically, so no colour is
+           restated here. */
+        .pos-pay-icon { display:inline-flex;line-height:1; }
+        .pos-pay-label { line-height:1.15; }
+        /* F1-F6 accelerator badge (see _renderPayButtons/_onPOSShortcut). A
+           SELF-CONTAINED chip -- its own opaque surface under its own text
+           token, the same construction .ret-badge uses -- so it reads
+           correctly whether the button under it is resting (--surface-soft)
+           or active (--sub-accent fill); an alpha-tinted chip would not, see
+           the .ret-badge AUDIT comment in _injectStyles for the reasoning. */
+        .pos-pay-kbd { display:inline-block;min-inline-size:18px;padding-block:0;padding-inline:4px;
+          border-radius:4px;background:var(--surface-panel);color:var(--text-secondary);
+          border:1px solid var(--border-strong);font-size:9px;font-weight:700;line-height:1.5;
+          font-family:inherit;letter-spacing:.02em; }
         /* Charge is money coming IN, so it carries the money-in token rather
            than a decorative gradient -- colour that means something. */
         .pos-checkout-btn { inline-size:100%;min-block-size:var(--touch-target-comfortable, 52px);padding-block:14px;padding-inline:18px;
@@ -2050,7 +2178,7 @@ const RetailSystem = {
           <div class="pos-pane-hdr" onmousedown="RetailSystem._keepScanFocus(event)">
             <h3 class="pos-pane-title">${t('Products')}</h3>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
-              title="${this._esc(t("Browse and resume sales you've held"))}"><span aria-hidden="true">📋</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>)</button>
+              title="${this._esc(t("Browse and resume sales you've held"))}"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>)</button>
           </div>
           <div class="pos-cat-bar" id="pos-cats" onmousedown="RetailSystem._keepScanFocus(event)">
             <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
@@ -2071,7 +2199,7 @@ const RetailSystem = {
             </div>
           </div>
           <div class="pos-cart-items" id="pos-cart" onmousedown="RetailSystem._keepScanFocus(event)">
-            <div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">🛒</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>
+            <div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">${this._icon('shopping-cart', 32, '🛒')}</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>
           </div>
           <!-- Void: a destructive control, given its own bar so it is neither
                a sibling nor a neighbour of Hold (above) or Charge (below). -->
@@ -2105,14 +2233,7 @@ const RetailSystem = {
             <div class="pos-sum-row pos-change-row" id="pos-change-row" style="display:none">
               <span>${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
             </div>
-            <div class="pos-pay-btns" id="pos-pay-btns">
-              <button class="pos-pay-btn active" data-method="cash"     onclick="RetailSystem._setPayment('cash',this)"><span class="pos-pay-icon" aria-hidden="true">💵</span><span>${t('Cash')}</span></button>
-              <button class="pos-pay-btn"         data-method="card"     onclick="RetailSystem._setPayment('card',this)"><span class="pos-pay-icon" aria-hidden="true">💳</span><span>${t('Card')}</span></button>
-              <button class="pos-pay-btn"         data-method="mobile"   onclick="RetailSystem._setPayment('mobile',this)"><span class="pos-pay-icon" aria-hidden="true">📱</span><span>${t('Mobile')}</span></button>
-              <button class="pos-pay-btn"         data-method="transfer" onclick="RetailSystem._setPayment('transfer',this)"><span class="pos-pay-icon" aria-hidden="true">🏦</span><span>${t('Transfer')}</span></button>
-              <button class="pos-pay-btn"         data-method="credit"   onclick="RetailSystem._setPayment('credit',this)"><span class="pos-pay-icon" aria-hidden="true">📋</span><span>${t('Credit')}</span></button>
-              <button class="pos-pay-btn"         data-method="voucher"  onclick="RetailSystem._setPayment('voucher',this)"><span class="pos-pay-icon" aria-hidden="true">🎟</span><span>${t('Voucher')}</span></button>
-            </div>
+            <div class="pos-pay-btns" id="pos-pay-btns">${this._renderPayButtons()}</div>
             <button class="pos-checkout-btn" id="pos-checkout-btn" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
           </div>
         </div>
@@ -2764,7 +2885,7 @@ const RetailSystem = {
     overlay.id = 'ret-held-modal';
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide">
-        <h3>📋 Held Sales</h3>
+        <h3>${this._icon('clipboard-list', 18, '📋')} ${t('Held Sales')}</h3>
         <div id="held-list" style="max-height:50vh;overflow-y:auto">
           <div style="text-align:center;color:var(--text-muted);padding:30px">Loading…</div>
         </div>
@@ -2828,7 +2949,12 @@ const RetailSystem = {
   },
 
   async _resumeHeldSale(id) {
-    if (this._cart.length && !confirm('Your current cart is not empty. Resuming will replace it with the held sale. Continue?')) return;
+    if (this._cart.length && !(await this._confirm({
+      title: t('Resume Held Sale'),
+      message: t('Your current cart is not empty. Resuming will replace it with the held sale. Continue?'),
+      confirmLabel: t('Resume'),
+      danger: true,
+    }))) return;
     try {
       const data = await this._post(`/api/sub/retail/held-sales/${id}/resume`, {});
       if (data.status !== 'success') { SubsystemApp.showToast(data.message || 'Could not resume sale', 'error'); return; }
@@ -2853,7 +2979,12 @@ const RetailSystem = {
   },
 
   async _discardHeldSale(id) {
-    if (!confirm('Discard this held sale? This cannot be undone.')) return;
+    if (!(await this._confirm({
+      title: t('Discard Held Sale'),
+      message: t('Discard this held sale? This cannot be undone.'),
+      confirmLabel: t('Discard'),
+      danger: true,
+    }))) return;
     try {
       const data = await this._del(`/api/sub/retail/held-sales/${id}`);
       if (data.status === 'success') {
@@ -2886,7 +3017,7 @@ const RetailSystem = {
     const container = document.getElementById('pos-cart');
     if (!container) return;
     if (!this._cart.length) {
-      container.innerHTML = `<div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">🛒</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>`;
+      container.innerHTML = `<div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">${this._icon('shopping-cart', 32, '🛒')}</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>`;
       this._recalc();
       this._refocusScan();
       return;
@@ -2921,7 +3052,7 @@ const RetailSystem = {
       // product or category name elsewhere in this file, so it is escaped,
       // never passed through t().
       const promoTagHTML = promo
-        ? `<div class="pos-promo-tag" title="${this._esc(promo.name)}"><span aria-hidden="true">🏷️</span><span>${this._esc(t('Promo'))}: ${this._esc(promo.name)}</span></div>`
+        ? `<div class="pos-promo-tag" title="${this._esc(promo.name)}"><span aria-hidden="true">${this._icon('tag', 14, '🏷️')}</span><span>${this._esc(t('Promo'))}: ${this._esc(promo.name)}</span></div>`
         : '';
       return `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
@@ -3079,6 +3210,40 @@ const RetailSystem = {
     } else {
       if (changeRow) changeRow.style.display = 'none';
     }
+  },
+
+  // ══ TENDER GRID ═══════════════════════════════════════════════════════════
+  // Owner brief, 2026-09-08: "the single control a cashier touches on every
+  // sale" carried six raw emoji glyphs (💵💳📱🏦📋🎟) with no keyboard path
+  // at all -- a first-draft look on the busiest control in the product.
+  // POS_PAYMENT_METHODS is the ONE list that drives both the rendered grid
+  // below and the F1-F6 accelerator in _onPOSShortcut, so the two can never
+  // drift out of grid-order sync with each other. 3-column x 2-row, in the
+  // order the owner specified: Cash / Card / Mobile-CliQ, then Transfer /
+  // Credit / Voucher -- unchanged from before this pass, only now backed by
+  // a real icon and a real key instead of a glyph and nothing.
+  POS_PAYMENT_METHODS: [
+    { method: 'cash',     icon: 'banknote',     emoji: '💵', label: 'Cash',          fkey: 'F1' },
+    { method: 'card',     icon: 'credit-card',  emoji: '💳', label: 'Card',          fkey: 'F2' },
+    { method: 'mobile',   icon: 'smartphone',   emoji: '📱', label: 'Mobile / CliQ', fkey: 'F3' },
+    { method: 'transfer', icon: 'landmark',     emoji: '🏦', label: 'Transfer',      fkey: 'F4' },
+    { method: 'credit',   icon: 'receipt',      emoji: '📋', label: 'Credit',        fkey: 'F5' },
+    { method: 'voucher',  icon: 'ticket',       emoji: '🎟', label: 'Voucher',       fkey: 'F6' },
+  ],
+
+  // Cash is the default tender (see _renderPOS's this._paymentMethod = 'cash'
+  // reset) and shows it via the same '.pos-pay-btn.active' class every click
+  // through _setPayment already toggles -- this render just seeds the state
+  // the mount always starts in, it does not change which method is selected
+  // by default or any payment logic.
+  _renderPayButtons() {
+    return this.POS_PAYMENT_METHODS.map(({ method, icon, emoji, label, fkey }) => `
+      <button class="pos-pay-btn${method === 'cash' ? ' active' : ''}" data-method="${method}"
+        onclick="RetailSystem._setPayment('${method}',this)">
+        <span class="pos-pay-icon" aria-hidden="true">${this._icon(icon, 18, emoji)}</span>
+        <span class="pos-pay-label">${t(label)}</span>
+        <span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>
+      </button>`).join('');
   },
 
   _setPayment(method, btn) {
@@ -3332,13 +3497,13 @@ const RetailSystem = {
     overlay.id = 'ret-scan-nf';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:380px;text-align:center">
-        <div style="font-size:46px;margin-bottom:10px">🔍</div>
+        <div style="font-size:46px;margin-bottom:10px">${this._icon('search', 40, '🔍')}</div>
         <h3 style="margin:0 0 6px">Product not found</h3>
         <p style="color:var(--text-muted);margin:0 0 22px">No item matches barcode
           <span style="font-family:monospace;color:var(--text-primary)">${code}</span></p>
         <div style="display:flex;flex-direction:column;gap:10px">
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._addProductFromScan('${String(code).replace(/'/g,"\\'")}')">➕ Add New Product</button>
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">🔁 Scan Again</button>
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">${this._icon('repeat', 16, '🔁')} Scan Again</button>
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">Cancel</button>
         </div>
       </div>`;
@@ -3506,6 +3671,26 @@ const RetailSystem = {
     // charge whatever is already sitting in the cart. Every shortcut below
     // shares this one guard.
     if (inTextField) return;
+
+    // F1-F6 select a tender method in grid order (see POS_PAYMENT_METHODS /
+    // _renderPayButtons, the one list both the badges printed on the tender
+    // grid and this lookup are driven from, so they cannot drift apart). A
+    // printed badge that does not actually fire would be worse than no badge
+    // at all -- see retail_payment_grid_test.js's mutation proof of this
+    // branch. Reuses _setPayment exactly as a click would, including its own
+    // _refocusScan() call, so an F-key press hands the keyboard straight
+    // back to the scanner the same way clicking a tender button already does.
+    const fMatch = /^F([1-6])$/.exec(e.key);
+    if (fMatch) {
+      e.preventDefault();
+      const entry = this.POS_PAYMENT_METHODS[Number(fMatch[1]) - 1];
+      let btn = null;
+      document.querySelectorAll('.pos-pay-btn').forEach(b => {
+        if (b.dataset && b.dataset.method === entry.method) btn = b;
+      });
+      if (btn) this._setPayment(entry.method, btn);
+      return;
+    }
 
     if (e.key === 'Enter') {
       if (!this._cart.length) return;
@@ -3698,7 +3883,7 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:380px;text-align:center">
-        <div style="font-size:52px;margin-bottom:12px">✅</div>
+        <div style="font-size:52px;margin-bottom:12px">${this._icon('circle-check-big', 52, '✅', { animate: 'pop' })}</div>
         <h3 style="margin:0 0 6px">Sale Complete!</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Receipt #${saleData.sale_number}</p>
         <div style="background:var(--surface-sunken);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
@@ -3716,7 +3901,7 @@ const RetailSystem = {
           </div>
         </div>
         <div style="display:flex;gap:10px">
-          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)">🖨️ Print</button>
+          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)">${this._icon('printer', 16, '🖨️')} Print</button>
           <button class="ret-btn ret-btn-primary" style="flex:1" onclick="this.closest('.ret-modal-overlay').remove()">New Sale</button>
         </div>
       </div>`;
@@ -4168,7 +4353,12 @@ const RetailSystem = {
   },
 
   async _deleteProduct(pid, name) {
-    if (!confirm(`Delete "${name}"? (The product will be deactivated, not permanently removed)`)) return;
+    if (!(await this._confirm({
+      title: t('Delete Product'),
+      message: `${t('Delete')} "${name}"? ${t('(The product will be deactivated, not permanently removed)')}`,
+      confirmLabel: t('Delete'),
+      danger: true,
+    }))) return;
     try {
       const d = await this._del(`/api/sub/retail/products/${pid}`);
       SubsystemApp.showToast(d.message||'Done', d.status==='success'?'success':'error');
@@ -4285,7 +4475,12 @@ const RetailSystem = {
   async _deleteCategory(catId) {
     const cat = (this._categories || []).find(x => String(x.id) === String(catId));
     const name = (cat && cat.name) || '';
-    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    if (!(await this._confirm({
+      title: t('Delete Category'),
+      message: `${t('Delete')} "${name}"?`,
+      confirmLabel: t('Delete'),
+      danger: true,
+    }))) return;
     try {
       const d = await this._del(`/api/sub/retail/categories/${catId}`);
       if (d && d.status === 'success') {
@@ -4421,7 +4616,12 @@ const RetailSystem = {
   async _deleteCustomer(custId) {
     const cu = (this._customers || []).find(x => String(x.id) === String(custId));
     const name = (cu && cu.name) || '';
-    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    if (!(await this._confirm({
+      title: t('Delete Customer'),
+      message: `${t('Delete')} "${name}"?`,
+      confirmLabel: t('Delete'),
+      danger: true,
+    }))) return;
     try {
       const d = await this._del(`/api/sub/retail/customers/${custId}`);
       if (d && d.status === 'success') {
@@ -4724,7 +4924,12 @@ const RetailSystem = {
   async _deletePromotion(pid) {
     const promo = (this._promotionsList || []).find(x => String(x.id) === String(pid));
     const name = (promo && promo.name) || '';
-    if (!confirm(`${t('Deactivate')} "${name}"?`)) return;
+    if (!(await this._confirm({
+      title: t('Deactivate Promotion'),
+      message: `${t('Deactivate')} "${name}"?`,
+      confirmLabel: t('Deactivate'),
+      danger: true,
+    }))) return;
     try {
       const d = await this._del(`/api/sub/retail/promotions/${pid}`);
       if (d && d.status === 'success') {
@@ -4992,7 +5197,12 @@ const RetailSystem = {
   // a failed delete must be VISIBLE, not a silent no-op (same reasoning as
   // _deleteCategory/_deleteCustomer/_deleteSupplier).
   async _deleteSupplierContact(sid, contactId, name) {
-    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    if (!(await this._confirm({
+      title: t('Delete Contact'),
+      message: `${t('Delete')} "${name}"?`,
+      confirmLabel: t('Delete'),
+      danger: true,
+    }))) return;
     try {
       const d = await this._del(`/api/sub/retail/suppliers/${sid}/contacts/${contactId}`);
       if (d && d.status === 'success') {
@@ -5030,7 +5240,12 @@ const RetailSystem = {
   // Mirrors _deleteCategory/_deleteCustomer exactly (see _deleteCategory's
   // comment for why: a failed delete must be VISIBLE, not a silent no-op).
   async _deleteSupplier(supId, name) {
-    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    if (!(await this._confirm({
+      title: t('Delete Supplier'),
+      message: `${t('Delete')} "${name}"?`,
+      confirmLabel: t('Delete'),
+      danger: true,
+    }))) return;
     try {
       const d = await this._del(`/api/sub/retail/suppliers/${supId}`);
       if (d && d.status === 'success') {
@@ -5360,7 +5575,12 @@ const RetailSystem = {
   },
 
   async _receivePO(poId, poNumber) {
-    if (!confirm(`Mark PO ${poNumber} as received? This will add the items to inventory.`)) return;
+    if (!(await this._confirm({
+      title: t('Receive Purchase Order'),
+      message: `${t('Mark PO')} ${poNumber} ${t('as received? This will add the items to inventory.')}`,
+      confirmLabel: t('Receive'),
+      danger: false,
+    }))) return;
     try {
       const d = await this._post(`/api/sub/retail/purchase-orders/${poId}/receive`, {});
       if (d.status==='success') {
@@ -5907,7 +6127,12 @@ const RetailSystem = {
   },
 
   async _removeBrandingLogo() {
-    if (!confirm(t('Remove the receipt logo?'))) return;
+    if (!(await this._confirm({
+      title: t('Remove Logo'),
+      message: t('Remove the receipt logo?'),
+      confirmLabel: t('Remove'),
+      danger: true,
+    }))) return;
     try {
       const resp = await this._del('/api/sub/retail/settings/branding/logo');
       if (resp && resp.status === 'success') {
@@ -5954,7 +6179,12 @@ const RetailSystem = {
   },
 
   async _acceptReorderRequest(rid) {
-    if (!confirm(t('Accept this request and draft a local purchase order?'))) return;
+    if (!(await this._confirm({
+      title: t('Accept Reorder Request'),
+      message: t('Accept this request and draft a local purchase order?'),
+      confirmLabel: t('Accept'),
+      danger: false,
+    }))) return;
     try {
       const d = await this._post(`/api/sub/retail/reorder-requests/${rid}/accept`, {});
       if (d && d.status === 'success') {
@@ -5970,7 +6200,12 @@ const RetailSystem = {
   },
 
   async _declineReorderRequest(rid) {
-    if (!confirm(t('Decline this reorder request?'))) return;
+    if (!(await this._confirm({
+      title: t('Decline Reorder Request'),
+      message: t('Decline this reorder request?'),
+      confirmLabel: t('Decline'),
+      danger: false,
+    }))) return;
     try {
       const d = await this._post(`/api/sub/retail/reorder-requests/${rid}/decline`, {});
       if (d && d.status === 'success') {
