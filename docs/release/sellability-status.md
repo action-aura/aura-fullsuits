@@ -248,6 +248,39 @@ that nothing product-side remained. Ranked fix order and the market
 evidence behind these three are in the published launch assessment
 (artifact `c71c4f52-d29a-43a8-a62a-1d6f7a975fe4`).
 
+**UPDATE, 2026-09-08 later the same day: the first two are FIXED. Read them
+above as history.** They are left standing rather than deleted, because this
+file's whole failure mode has been claims outliving the code, in both
+directions — a "still broken" that quietly got fixed sends the next reader to
+rebuild something that ships, which is the more expensive of the two.
+
+- **The drawer opens.** `core/retail/escpos_receipt.py` and
+  `escpos_transport.py` write ESC/POS bytes — the `ESC p` kick and a `GS ( k`
+  QR — to the Windows RAW spooler through ctypes/winspool, bypassing the HTML
+  path entirely. Reachable from routes in `retail_api.py` and from a Settings
+  section on the till.
+- **E-invoicing defaults ON.** `DEFAULTS['enabled'] = '1'` in
+  `commercial_runtime/einvoicing/settings.py`. A shipped install runs
+  `UnconfiguredProvider`, which queues every sale and transmits nothing, so a
+  shop that registers with ISTD later has its history rather than a gap, and no
+  receipt ever claims clearance for a document no authority saw.
+  `AURA_EINVOICING_DISABLED=1` remains the hard off switch. The guard that
+  stops an unconfigured install from transmitting is mutation-proved: disable
+  it and the worker claims an outbox row it must never touch.
+
+**The third stands and is now the top product blocker: the Android app still
+cannot print.**
+
+One item this section did not list has also moved. The Windows installer was
+built and, on 2026-09-08, actually run: installed silently, launched with the
+dev environment stripped, served its UI, migrated its database from empty to
+schema 26 with the integrity-checked backup taken first, and uninstalled
+without touching business data. First-run setup was completed against the
+packaged binary and the licence gate measured on it in both directions — writes
+refused at 403 while an allowlisted route cleared the gate and failed on its
+payload instead. What remains owed there is a second machine, and activation,
+which needs an Owner Control Center that does not currently exist.
+
 ---
 
 **Not yet sellable to a paying customer — but no longer for product
