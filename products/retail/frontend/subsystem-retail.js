@@ -8938,6 +8938,29 @@ const RetailSystem = {
             <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._savePrinterSettings()">Save</button>
             <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._testPrint()">Test Print</button>
           </div>
+
+          <!-- Hardware (ESC/POS) printer -- Wave 1B follow-up, escpos_receipt.py
+               /escpos_transport.py (commit f606739). Separate from the Paper
+               Width field and both buttons above: those drive the EXISTING
+               HTML/spooler receipt a real sale prints. This sub-section is the
+               only thing that can reach a cash-drawer kick, and it never
+               touches the sale path. -->
+          <div style="border-top:1px solid var(--border-default);margin-top:16px;padding-top:14px">
+            <div class="ret-field">
+              <label>${this._esc(t('Printer Device'))}</label>
+              <select id="pr-device">
+                <option value="">${this._esc(t('Not set (test to a file)'))}</option>
+              </select>
+            </div>
+            <p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">
+              ${this._esc(t('Optional -- for a thermal printer that understands ESC/POS commands directly. This is what opens a cash drawer. Leave unset to save a test file instead of printing.'))}
+            </p>
+            <div id="pr-device-note" style="display:none;margin-top:8px;background:var(--state-warning-surface,var(--state-info-surface));border:1px solid var(--state-warning-border,var(--state-info-border));border-radius:8px;padding:8px 10px;color:var(--text-secondary);font-size:11px"></div>
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="ret-btn ret-btn-ghost" style="flex:1" id="pr-hw-test-btn" onclick="RetailSystem._testEscPosPrint(false)">${this._esc(t('Test Hardware Print'))}</button>
+              <button class="ret-btn ret-btn-primary" style="flex:1" id="pr-hw-kick-btn" onclick="RetailSystem._testEscPosPrint(true)">${this._esc(t('Open Cash Drawer'))}</button>
+            </div>
+          </div>
         </div>
       </div>`;
 
@@ -8948,6 +8971,9 @@ const RetailSystem = {
       if (!document.getElementById('sc-status-text')) { clearInterval(this._scStatusTimer); return; }
       this._refreshScannerStatus();
     }, 1000);
+    // One-shot: the printer list doesn't change while this screen is open,
+    // unlike scanner status above, which polls a live capture.
+    this._loadPrinterDevices();
   },
 
   _refreshScannerStatus() {
@@ -9015,7 +9041,13 @@ const RetailSystem = {
 
   _savePrinterSettings() {
     const width = document.getElementById('pr-width')?.value === '58mm' ? '58mm' : '80mm';
-    this.savePrinterCfg({ paperWidth: width });
+    // Preserve the hardware printer selection alongside paper width --
+    // savePrinterCfg REPLACES the whole aura_printer_cfg object (it has no
+    // merge semantics of its own), so every field this screen owns has to
+    // be included explicitly here or a save from this button would erase
+    // whatever _testEscPosPrint's device select had already remembered.
+    const device = document.getElementById('pr-device')?.value || '';
+    this.savePrinterCfg({ paperWidth: width, printer: device });
     SubsystemApp.showToast('Printer settings saved', 'success');
   },
 
@@ -9029,6 +9061,84 @@ const RetailSystem = {
       lines: [{ name: 'Test Product (sample)', quantity: 1, line_total: 10 }],
       subtotal: 10, discount_amount: 0, tax_amount: 0, total: 10, amount_paid: 10, change: 0,
     });
+  },
+
+  // ── Hardware (ESC/POS) printer -- Wave 1B follow-up ─────────────────────────
+  // Populates #pr-device from GET /printer/devices and shows/hides the
+  // non-Windows note. Printer names come from the OS, not from this
+  // codebase, so every one is escaped with `_esc` before it reaches
+  // innerHTML -- see that helper's own docstring on why an externally-
+  // sourced string is never trusted into markup raw.
+  async _loadPrinterDevices() {
+    const sel  = document.getElementById('pr-device');
+    const note = document.getElementById('pr-device-note');
+    const testBtn = document.getElementById('pr-hw-test-btn');
+    const kickBtn = document.getElementById('pr-hw-kick-btn');
+    if (!sel) return; // screen navigated away before this resolved
+    let printers = [];
+    let reason = null;
+    try {
+      const resp = await this._get('/api/sub/retail/printer/devices');
+      const data = (resp && resp.status === 'success') ? (resp.data || {}) : {};
+      printers = data.printers || [];
+      reason = data.reason || null;
+    } catch (e) {
+      reason = t('Could not load the printer list.');
+    }
+    const current = this._printerCfg().printer || '';
+    sel.innerHTML = `<option value="">${this._esc(t('Not set (test to a file)'))}</option>` +
+      printers.map(name => `<option value="${this._esc(name)}" ${name === current ? 'selected' : ''}>${this._esc(name)}</option>`).join('');
+    if (note) {
+      if (reason) { note.textContent = reason; note.style.display = ''; }
+      else { note.textContent = ''; note.style.display = 'none'; }
+    }
+    // A reason (non-Windows, or the OS printer-enumeration call itself
+    // failed) means neither hardware button can do anything useful --
+    // disabled rather than left to fail on click.
+    if (testBtn) testBtn.disabled = !!reason;
+    if (kickBtn) kickBtn.disabled = !!reason;
+  },
+
+  // `kick`: true for "Open Cash Drawer", false for "Test Hardware Print" --
+  // forwarded verbatim to POST /printer/test, which forwards it verbatim to
+  // render_receipt(kick=...). Never inferred or defaulted here: see that
+  // function's own docstring on why a drawer kick must always be one
+  // explicit request.
+  async _testEscPosPrint(kick) {
+    const btn = document.getElementById(kick ? 'pr-hw-kick-btn' : 'pr-hw-test-btn');
+    if (btn) btn.disabled = true;
+    try {
+      const printerName = document.getElementById('pr-device')?.value || '';
+      const paperWidth = document.getElementById('pr-width')?.value === '58mm' ? 32 : 42;
+      const resp = await this._post('/api/sub/retail/printer/test', {
+        printer: printerName || null,
+        kick: !!kick,
+        paper_width: paperWidth,
+      });
+      if (resp && resp.status === 'success') {
+        const d = resp.data || {};
+        if (d.sent) {
+          SubsystemApp.showToast(
+            kick ? t('Drawer kick sent to the printer') : t('Test receipt sent to the printer'),
+            'success',
+          );
+        } else {
+          // No printer selected -- a file was written instead. This is the
+          // pipeline working as designed for a shop with no printer
+          // attached yet, so it reads as success, not an error.
+          SubsystemApp.showToast(
+            `${t('No printer selected -- wrote a test file instead')} (${d.bytes || 0} ${t('bytes')})`,
+            'success',
+          );
+        }
+      } else {
+        SubsystemApp.showToast((resp && resp.message) || t('Printer test failed'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Printer test failed'), 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   },
 };
 

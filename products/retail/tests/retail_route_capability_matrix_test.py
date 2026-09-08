@@ -219,6 +219,13 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'branding_settings_set': CAP_EMPLOYEES,
     'branding_logo_set': CAP_EMPLOYEES,
     'branding_logo_delete': CAP_EMPLOYEES,
+    # Wave 1B follow-up (escpos_receipt.py/escpos_transport.py, commit
+    # f606739): testing or firing the hardware receipt printer from the
+    # Settings screen. Same authority as its settings siblings above --
+    # picking/testing hardware for the shop is owner administration, not a
+    # till operation. The SALE path (_printReceipt's HTML/spooler route) is
+    # untouched and carries no route of its own to gate.
+    'printer_test': CAP_EMPLOYEES,
     'payment_methods_add': CAP_EMPLOYEES,
     'supplier_payment': CAP_EMPLOYEES,
     'pay_purchase_order': CAP_EMPLOYEES,
@@ -393,6 +400,16 @@ EXPECTED_READ_CAPABILITIES = {
     # load a product's modifiers to ring a configured item (matches
     # list_active_promotions' identical reasoning above).
     'get_product_modifier_groups': CAP_SELL,
+
+    # ── Receipt printer hardware, Wave 1B follow-up (commit f606739) ─────────
+    # `printer_devices` (GET /printer/devices) lists this machine's Windows
+    # printers for the Settings screen's picker. CAP_EMPLOYEES, matching
+    # printer_test's identical reasoning immediately below it in
+    # EXPECTED_MUTATION_CAPABILITIES: choosing hardware for the shop is
+    # owner administration, unlike credit_settings_get/tax_settings_get
+    # right next to it in retail_api.py, which are plain reads and carry no
+    # capability at all.
+    'printer_devices': CAP_EMPLOYEES,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

@@ -8792,6 +8792,162 @@ def tax_settings_set():
                       'RETAIL_TAX_MODE_CHANGED')
     return jsonify({'status': 'success', 'data': {'tax_calculation_mode': mode}})
 
+# ── Settings (receipt printer hardware) ───────────────────────────────────────
+# `core/retail/escpos_receipt.py` and `escpos_transport.py` (commit f606739)
+# render a sale to ESC/POS bytes and can send them to a Windows printer
+# through the print spooler in RAW mode -- the only path that gets the
+# cash-drawer kick byte sequence to real hardware (the existing
+# `_printReceipt` HTML/spooler route cannot; see escpos_receipt.py's own
+# module docstring for why). Nothing called either module until these two
+# routes. The SALE PATH stays exactly as it is: these two routes only let a
+# shopkeeper pick a printer and prove the pipeline from the Settings screen
+# -- changing how a real sale prints, untested against real hardware, is a
+# separate, deliberate change, not this one.
+@retail_bp.route('/printer/devices', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_EMPLOYEES)
+def printer_devices():
+    """Lists this machine's Windows printers for the Settings screen's
+    picker. CAP_EMPLOYEES, matching credit_settings_set/tax_settings_set/
+    set_device_branch below: choosing hardware for the shop is the same
+    administrative tier as every other settings write in this file, not a
+    till or reporting read -- so, unlike credit_settings_get/tax_settings_
+    get immediately above (plain reads, no capability at all), this read is
+    gated too.
+
+    `escpos_transport` is imported INSIDE this function, never at module
+    scope, and only once this route already knows it is on Windows -- see
+    that module's own "WHY IMPORT MUST NEVER TOUCH ctypes.windll" docstring
+    section: CI imports this file on Linux during test collection, where
+    `ctypes.windll`/`ctypes.WinDLL` do not exist and merely ACCESSING them
+    raises. A module-level import here would break every test that imports
+    retail_api.py on every platform except Windows.
+    """
+    import sys
+    if sys.platform != 'win32':
+        return jsonify({'status': 'success', 'data': {
+            'printers': [],
+            'platform': 'other',
+            'reason': (
+                f"Hardware receipt printing needs the Windows print spooler; "
+                f"this install is running on {sys.platform!r}."
+            ),
+        }})
+    from core.retail import escpos_transport
+    try:
+        printers = escpos_transport.list_printers()
+    except escpos_transport.EscPosTransportError as exc:
+        # Still a 200: this is a read the Settings screen renders either way
+        # (an empty list plus a reason), never a hard failure of the page.
+        return jsonify({'status': 'success', 'data': {
+            'printers': [], 'platform': 'win32', 'reason': str(exc),
+        }})
+    return jsonify({'status': 'success', 'data': {
+        'printers': printers, 'platform': 'win32', 'reason': None,
+    }})
+
+
+@retail_bp.route('/printer/test', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.printer.test", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def printer_test():
+    """Renders a fixed sample receipt and either sends it to a real printer
+    in RAW ESC/POS mode, or -- with no printer named -- writes the same
+    bytes to `<app-data>/receipt-test.bin`, which is how a shopkeeper with
+    no printer attached still proves the byte pipeline end to end.
+
+    CAP_EMPLOYEES, matching credit_settings_set/tax_settings_set/
+    set_device_branch above: testing or firing hardware from the Settings
+    screen is the same administrative tier as every other settings write
+    in this file.
+
+    `kick` is read straight off the request body and passed straight
+    through to `render_receipt(kick=...)` -- see that function's own
+    docstring for why a receipt render must never open the drawer as a
+    side effect of anything else; a drawer-kick test must be one explicit
+    request, never implied by a plain test print.
+
+    Both `escpos_receipt` and `escpos_transport` are imported INSIDE this
+    function -- `escpos_transport` for the same ctypes.windll reason
+    `printer_devices` above imports it locally, and `escpos_receipt`
+    alongside it so this task's entire change to this file is exactly the
+    two new routes, not an edit to the module-level import block.
+    """
+    from core.retail import escpos_receipt
+    from core.retail import escpos_transport
+
+    data = request.json or {}
+    printer_name = (data.get('printer') or '').strip()
+    kick = bool(data.get('kick'))
+    width_chars = 32 if data.get('paper_width') == 32 else 42
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        s = _settings(conn, cid)
+    finally:
+        conn.close()
+    currency = s.get('base_currency') or tax_engine.DEFAULT_BASE_CURRENCY
+    shop_name = (s.get('branding_business_name') or '').strip()
+    shop = {
+        'name': shop_name,
+        'address': s.get('branding_address') or '',
+        'phone': s.get('branding_phone') or '',
+    } if shop_name else None
+
+    # Clearly-marked synthetic data (never a real sale) -- matches
+    # `_testPrint()`'s identical convention on the frontend for the
+    # existing HTML/spooler test print, so a shop never mistakes this for
+    # a real transaction on the paper it produces.
+    sample_sale = {
+        'sale_number': 'TEST-0000',
+        'created_at': now_utc_iso(),
+        'lines': [
+            {'name': 'Sample Item A', 'quantity': 1, 'line_total': 5},
+            {'name': 'Sample Item B', 'quantity': 2, 'line_total': 8},
+        ],
+        'subtotal': 13, 'discount_amount': 0, 'tax_amount': 0,
+        'total': 13, 'amount_paid': 13, 'change': 0,
+    }
+
+    try:
+        payload = escpos_receipt.render_receipt(
+            sample_sale, width_chars=width_chars, currency=currency, shop=shop, kick=kick,
+        )
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': f'Could not render the test receipt: {exc}'}), 400
+
+    if printer_name:
+        try:
+            escpos_transport.send_raw(printer_name, payload)
+        except escpos_transport.EscPosTransportError as exc:
+            return jsonify({'status': 'error', 'message': str(exc)}), 400
+        except Exception as exc:
+            return jsonify({'status': 'error', 'message': f'Unexpected printer error: {exc}'}), 500
+        return jsonify({'status': 'success', 'data': {
+            'sent': True, 'bytes': len(payload), 'printer': printer_name,
+        }})
+
+    # No printer named -- write the same bytes to this install's app-data
+    # directory instead of failing. `os.path.dirname(DATABASE_DIR)` is this
+    # file's own existing "app-data root" resolution (see
+    # `require_license_capability = make_capability_guard(os.path.dirname(
+    # DATABASE_DIR))` near the top of this file) -- reused rather than a
+    # second AURA_APP_DATA read, so this route and the licensing guard it
+    # sits behind always agree on which install they are talking about.
+    out_path = os.path.join(os.path.dirname(DATABASE_DIR), 'receipt-test.bin')
+    try:
+        escpos_transport.send_to_file(out_path, payload)
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': f'Could not write test file: {exc}'}), 500
+    return jsonify({'status': 'success', 'data': {
+        'sent': False, 'bytes': len(payload), 'file': out_path,
+    }})
+
 # ── Settings (this device's branch pin) ────────────────────────────────────────
 # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the multi-branch
 # capture defect" entry; docs/launch-readiness/seats-and-chain-design.md

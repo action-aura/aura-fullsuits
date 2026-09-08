@@ -779,5 +779,16 @@
   "Confirm password": "تأكيد كلمة المرور",
   "Your password is set": "تم تعيين كلمة المرور",
   "Sign in with your email and this password, on this device or the phone.": "سجّل الدخول ببريدك الإلكتروني وكلمة المرور هذه، على هذا الجهاز أو على الهاتف.",
-  "This setup link is invalid or has expired. Ask your admin for a new one.": "رابط الإعداد هذا غير صالح أو منتهي الصلاحية. اطلب رابطاً جديداً من المسؤول."
+  "This setup link is invalid or has expired. Ask your admin for a new one.": "رابط الإعداد هذا غير صالح أو منتهي الصلاحية. اطلب رابطاً جديداً من المسؤول.",
+  "Printer Device": "جهاز الطابعة",
+  "Not set (test to a file)": "غير محدد (اختبار إلى ملف)",
+  "Optional -- for a thermal printer that understands ESC/POS commands directly. This is what opens a cash drawer. Leave unset to save a test file instead of printing.": "اختياري -- لطابعة حرارية تفهم أوامر ESC/POS مباشرة. هذا ما يفتح درج النقود. اتركه غير محدد لحفظ ملف اختبار بدلاً من الطباعة.",
+  "Test Hardware Print": "اختبار طباعة الجهاز",
+  "Open Cash Drawer": "فتح درج النقود",
+  "Could not load the printer list.": "تعذّر تحميل قائمة الطابعات.",
+  "Drawer kick sent to the printer": "تم إرسال أمر فتح الدرج إلى الطابعة",
+  "Test receipt sent to the printer": "تم إرسال إيصال الاختبار إلى الطابعة",
+  "No printer selected -- wrote a test file instead": "لم يتم اختيار طابعة -- تمت كتابة ملف اختبار بدلاً من ذلك",
+  "bytes": "بايت",
+  "Printer test failed": "فشل اختبار الطابعة"
 }

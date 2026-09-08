@@ -779,5 +779,16 @@
   "Confirm password": "Confirm password",
   "Your password is set": "Your password is set",
   "Sign in with your email and this password, on this device or the phone.": "Sign in with your email and this password, on this device or the phone.",
-  "This setup link is invalid or has expired. Ask your admin for a new one.": "This setup link is invalid or has expired. Ask your admin for a new one."
+  "This setup link is invalid or has expired. Ask your admin for a new one.": "This setup link is invalid or has expired. Ask your admin for a new one.",
+  "Printer Device": "Printer Device",
+  "Not set (test to a file)": "Not set (test to a file)",
+  "Optional -- for a thermal printer that understands ESC/POS commands directly. This is what opens a cash drawer. Leave unset to save a test file instead of printing.": "Optional -- for a thermal printer that understands ESC/POS commands directly. This is what opens a cash drawer. Leave unset to save a test file instead of printing.",
+  "Test Hardware Print": "Test Hardware Print",
+  "Open Cash Drawer": "Open Cash Drawer",
+  "Could not load the printer list.": "Could not load the printer list.",
+  "Drawer kick sent to the printer": "Drawer kick sent to the printer",
+  "Test receipt sent to the printer": "Test receipt sent to the printer",
+  "No printer selected -- wrote a test file instead": "No printer selected -- wrote a test file instead",
+  "bytes": "bytes",
+  "Printer test failed": "Printer test failed"
 }
