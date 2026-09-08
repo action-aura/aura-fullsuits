@@ -104,6 +104,19 @@ def make_einvoicing_blueprint(
                 'data': {
                     'enabled': enabled,
                     'provider': provider_name,
+                    # 'provider' above is the SETTING -- what the shop chose
+                    # (settings.py's default is the string 'mock'). The two
+                    # keys below describe the OBJECT actually wired into this
+                    # blueprint via make_einvoicing_blueprint(..., provider=...)
+                    # -- the two can disagree (e.g. e-invoicing on by default
+                    # in Jordan, but this install was never registered with
+                    # JoFotara). Only the live object can tell a shopkeeper
+                    # whether their invoices are actually going anywhere.
+                    # getattr(..., None/True) so a None provider, or a
+                    # provider object that predates 'is_configured' being
+                    # added to the base class, can never 500 this endpoint.
+                    'provider_in_use': getattr(provider, 'name', None),
+                    'provider_configured': bool(getattr(provider, 'is_configured', True)),
                     'killswitch': {'disabled': ks.disabled, 'reason': ks.reason},
                     'counts_by_state': counts,
                     'oldest_pending_created_at': oldest_row[0] if oldest_row else None,
@@ -153,7 +166,27 @@ def make_einvoicing_blueprint(
                 conn.commit()
 
             if get_worker is not None:
-                if now_enabled and not was_enabled:
+                # AUDIT: e-invoicing now defaults ON (settings.py
+                # DEFAULTS['enabled']='1'), so a company enabled purely by
+                # that default already has was_enabled=True on the very
+                # FIRST /settings POST it ever makes -- the old "only on a
+                # False->True transition" check below could then never
+                # fire for such a company, and its worker would never start
+                # at all: documents would queue in einvoice_outbox forever,
+                # even after real JoFotara credentials get wired in later.
+                # Start whenever the RESOLVED state after this write is
+                # enabled, not only on a transition. Safe to call on every
+                # enabled write (repeated settings saves included) because
+                # this product's worker registry hands back an idempotent
+                # handle -- see products/retail|clinic/backend/app.py's
+                # _IdempotentEinvoicingWorkerHandle: OutboxWorker.start()
+                # itself, deliberately mirroring
+                # licensing_contracts/checkin_scheduler.py's
+                # LicenseCheckInScheduler, is NOT idempotent on its own (a
+                # second call does not cancel the first Timer chain, it
+                # just leaks a second one alongside it) -- so the guard
+                # belongs at the call site, not in OutboxWorker itself.
+                if now_enabled:
                     get_worker(cid).start(interval_seconds=int(settings.get_setting(conn, cid, 'submit_interval_seconds')))
                 elif was_enabled and not now_enabled:
                     get_worker(cid).stop()

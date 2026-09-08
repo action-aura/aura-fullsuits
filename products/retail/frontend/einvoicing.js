@@ -31,6 +31,7 @@
 
   const PROVIDER_LABELS = {
     mock: 'Test mode — no live submissions',
+    unconfigured: 'Not connected',
   };
 
   function clearChildren(node) {
@@ -109,9 +110,31 @@
       statusContent.appendChild(stateBadge({ text: 'Paused: ' + data.killswitch.reason, cls: 'state-warning' }));
     }
 
+    // data.provider_configured describes the live provider OBJECT
+    // (routes.py), not the 'provider' setting below -- a shop can have
+    // e-invoicing switched on (the new default in Jordan) while never
+    // having registered on the JoFotara portal, which is exactly the case
+    // this notice exists for: without it, the card would show "Enabled" +
+    // a growing Queued count and nothing telling the shop owner why
+    // nothing is clearing. Missing on an older backend (undefined) reads
+    // as "configured" -- only an explicit false trips this.
+    const notConnected = data.provider_configured === false;
+    if (notConnected) {
+      statusContent.appendChild(el('div', {
+        className: 'state-warning',
+        text: 'E-invoicing is on and every sale is being recorded, but nothing has been sent to the tax authority yet ' +
+          'because this installation is not connected to JoFotara. To connect, register the business on the JoFotara ' +
+          'portal and enter the Client-ID, Secret-Key and activity number it issues.',
+      }));
+    }
+
     const dl = el('dl');
     dl.appendChild(el('dt', { text: 'Provider' }));
-    dl.appendChild(el('dd', { text: PROVIDER_LABELS[data.provider] || data.provider }));
+    // provider_in_use is the object actually running; fall back to the
+    // older 'provider' setting key when a backend hasn't shipped the new
+    // field yet (undefined/null), so this card renders correctly either way.
+    const providerKey = data.provider_in_use != null ? data.provider_in_use : data.provider;
+    dl.appendChild(el('dd', { text: PROVIDER_LABELS[providerKey] || providerKey }));
     const counts = data.counts_by_state || {};
     dl.appendChild(el('dt', { text: 'Queued' }));
     dl.appendChild(el('dd', { text: String(counts.QUEUED || 0) }));
@@ -125,6 +148,13 @@
 
     const row = el('div', { className: 'row' });
     const runBtn = el('button', { className: 'secondary', text: 'Submit queue now' });
+    if (notConnected) {
+      // A button that cannot work is how a shopkeeper concludes the
+      // software itself is broken -- disable it and say why, right here,
+      // rather than letting them press it and get a cryptic failure.
+      runBtn.disabled = true;
+      runBtn.title = 'Connect this installation to JoFotara (see the credentials below) before submitting the queue.';
+    }
     runBtn.addEventListener('click', () => onRunOnceClicked(runBtn));
     row.appendChild(runBtn);
 

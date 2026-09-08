@@ -50,6 +50,14 @@
   }
   button:hover { background: #1d4ed8; }
   button:disabled { background: #93a3c0; cursor: not-allowed; }
+  /* .secondary/.danger set their own background and so WIN over the plain
+     :disabled rule above at equal specificity, which left "Submit queue now"
+     looking perfectly clickable while it was genuinely disabled -- measured on
+     the running till 2026-09-08. A control that ignores a click without
+     looking like it will is how a shopkeeper decides the software is broken. */
+  button.secondary:disabled, button.danger:disabled {
+    background: transparent; color: #93a3c0; border-color: #cbd5e1; cursor: not-allowed;
+  }
   button.secondary { background: transparent; color: #2563eb; border: 1px solid #2563eb; }
   button.danger { background: transparent; color: #c0231f; border: 1px solid #c0231f; }
   button.small { padding: 4px 10px; font-size: 0.78rem; }
@@ -80,7 +88,10 @@
 <body>
   <a class="back-link" href="/">&larr; Back to Aura Retail</a>
   <h1>Jordan E-Invoicing (JoFotara)</h1>
-  <div class="subtitle">Government e-invoicing status and settings for this installation. Off by default.</div>
+  <!-- "Off by default" was true until 2026-09-08 and is now the opposite of
+       the truth: Jordan has mandated e-invoicing since 2024, so the feature
+       ships enabled and every sale is recorded from the first one. -->
+  <div class="subtitle">Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.</div>
 
   <div id="message-area"></div>
 

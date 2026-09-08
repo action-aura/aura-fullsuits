@@ -69,9 +69,32 @@ def teardown_module(module):
 # still only conditionally adds its own 'einvoice' key; that claim is
 # unaffected.
 
+# AUDIT (2026-09-08): e-invoicing now defaults ON (settings.py
+# DEFAULTS['enabled']='1' -- the Jordanian mandate means a fresh company
+# records the obligation without anyone touching a toggle). A sale response
+# now carries an additional 'einvoice' key ({'invoice_ref':..., 'status':
+# 'queued'}) whenever the enqueue succeeds -- see retail_api.py::create_sale's
+# own comment on that block. This is a deliberate, reviewed shape change,
+# not a regression to "fix" back to the old list: verified the three actual
+# consumers of this response tolerate an unknown extra key before updating
+# this frozen literal --
+#   1. Desktop (products/retail/frontend/subsystem-retail.js): _showReceipt/
+#      _einvoiceReceiptBlock already access saleData.einvoice by name and
+#      explicitly no-op when it's absent -- built for exactly this
+#      conditional-key shape, never a strict destructure or key-set check.
+#   2. Android (android/aura-retail/.../net/Models.kt's SaleResult data
+#      class + ApiClient.kt's Retrofit GsonConverterFactory): Gson silently
+#      ignores JSON fields with no matching property -- SaleResult has no
+#      `einvoice` field, so it is dropped on parse, not an error. (The
+#      "non-lenient GsonConverterFactory throws" comment elsewhere in
+#      Models.kt is about TYPE MISMATCHES, e.g. a UUID string into an Int
+#      field -- unrelated to an extra, unmapped key.)
+#   3. commercial_runtime/sync/: replicates DB ROWS (sync_outbox/sync_cursor
+#      against `sales` etc.), never this HTTP response body -- unaffected
+#      by any change to what POST /sales returns.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
@@ -247,16 +270,31 @@ def test_no_alter_ran_on_existing_tables():
     conn.close()
 
 
-def test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle():
-    """With the feature at its default (OFF, nothing has enabled it), a full
-    sale + return cycle must not enqueue anything -- proves the eventual
-    enqueue hook (Step 13) is correctly gated and cannot fire before the
-    feature is wired at all, let alone before it's turned on."""
+def test_einvoice_outbox_gets_exactly_one_row_for_the_sale_not_the_return():
+    """AUDIT (2026-09-08): renamed from
+    test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle.
+    That claim described the OLD default (OFF) and is now false by design
+    -- e-invoicing defaults ON, so the sale in this same cycle DOES enqueue.
+    What's still true, and still worth a regression test: a return never
+    enqueues anything of its own -- Retail has no credit-note/e-invoice
+    handling for returns at all (grep core/retail/einvoice_adapter.py and
+    retail_api.py's create_return: neither references an enqueue call), so
+    exactly ONE outbox row -- the sale's -- must exist after a sale+return
+    cycle, not two and not zero.
+
+    Scoped to THIS test's own company_id: einvoice_outbox has no company
+    filter of its own, and other tests in this same module share one
+    physical db across the whole process -- with the feature defaulting ON,
+    every other test's own sale also adds a row to this same table, so an
+    unscoped COUNT(*) here would assert on cross-test leakage, not on this
+    test's own behavior (it happened to read 3 before this fix, which was
+    never a stable number)."""
     client, cid, pid, bid = _make_admin_and_product(stock=10)
     sale = client.post('/api/sub/retail/sales', json={
         'items': [{'product_id': pid, 'quantity': 2}],
         'amount_paid': 999999, 'payment_method': 'cash', 'idempotency_key': str(uuid.uuid4()),
     }).get_json()['data']
+    assert 'einvoice' in sale, "the sale itself must have enqueued -- e-invoicing defaults ON"
     client.post('/api/sub/retail/returns', json={
         'sale_id': sale['id'],
         'items': [{'product_id': pid, 'quantity': 1}],
@@ -264,9 +302,12 @@ def test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle():
         'idempotency_key': str(uuid.uuid4()),
     })
     conn = get_retail_conn()
-    count = conn.execute("SELECT COUNT(*) FROM einvoice_outbox").fetchone()[0]
+    rows = conn.execute(
+        "SELECT source_type, source_id FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchall()
     conn.close()
-    assert count == 0
+    assert len(rows) == 1, "a return must never enqueue its own e-invoice/credit-note row (not implemented in Phase 1)"
+    assert rows[0][0] == 'sale' and rows[0][1] == sale['id'], "the one row must be the sale itself, not the return"
 
 
 def test_no_background_thread_exists_when_feature_never_enabled():

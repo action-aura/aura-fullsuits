@@ -160,6 +160,7 @@ from commercial_runtime.identity.device_routes import device_bp
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.worker import OutboxWorker
 from commercial_runtime.einvoicing.providers.mock import MockProvider
+from commercial_runtime.einvoicing.providers.unconfigured import UnconfiguredProvider
 from commercial_runtime.einvoicing import settings as _einvoicing_settings
 from core.retail import einvoice_adapter as _einvoice_adapter
 from commercial_runtime.notifications.routes import make_notifications_blueprint
@@ -186,20 +187,74 @@ app.register_blueprint(device_bp)
 # Workers are created lazily, one per company, the first time that
 # company's settings are touched or its background job is resumed at boot.
 _EINVOICING_APP_DATA_DIR = str(Path(DATABASE_DIR).parent)
-_einvoicing_provider = MockProvider()  # Phase 1 default -- see providers/direct_istd.py
+# E-invoicing now defaults ENABLED (settings.py DEFAULTS['enabled'] -- the
+# Jordanian mandate means a shop cannot ship with the obligation off by
+# default). That makes the LIVE provider choice a compliance decision, not
+# a convenience one: MockProvider reports CLEARED -- with a QR and a
+# provider_uuid -- without ever contacting JoFotara, so wiring it in as the
+# default would put a false "e-invoice cleared" claim on a real receipt no
+# tax authority ever saw. DirectISTDProvider is the real provider but
+# deliberately raises NotImplementedError until Phase 2 (see
+# providers/direct_istd.py), and worker.py's OutboxWorker will not submit
+# through any provider whose is_configured is False anyway. So the shipped
+# default here is UnconfiguredProvider: documents enqueue and wait, nothing
+# submits, nothing claims clearance. AURA_EINVOICING_ALLOW_MOCK=1 opts back
+# into MockProvider for development/tests that need a real round trip.
+_einvoicing_provider = (
+    MockProvider() if os.environ.get('AURA_EINVOICING_ALLOW_MOCK') == '1' else UnconfiguredProvider()
+)
 _einvoicing_workers = {}
+
+
+class _IdempotentEinvoicingWorkerHandle:
+    """Wraps one company's OutboxWorker so `.start()` is safe to call more
+    than once. OutboxWorker.start()/_schedule_next() deliberately mirrors
+    licensing_contracts/checkin_scheduler.py's LicenseCheckInScheduler, and
+    neither guards against a second start(): calling start() again does
+    NOT cancel the first Timer -- it only overwrites the handle to it, so
+    the first Timer chain keeps firing forever, alongside the new one. That
+    non-idempotency never mattered while the only caller was the boot-time
+    resume sweep below (called at most once per company, ever). It matters
+    now: commercial_runtime/einvoicing/routes.py's _post_settings() calls
+    .start() on EVERY settings write that resolves to enabled=True (not
+    only on a False->True transition -- see that function's comment for
+    why the transition-only check breaks for a default-enabled company),
+    so a company saving its e-invoicing settings twice while already
+    enabled must not spawn a second parallel timer family. Guarding here,
+    at the call site both this sweep and routes.py share (both ultimately
+    go through _get_or_create_einvoicing_worker), keeps OutboxWorker's own
+    scheduling code identical to the LicenseCheckInScheduler pattern it was
+    deliberately written to mirror -- see worker.py's module docstring.
+    """
+
+    def __init__(self, worker):
+        self._worker = worker
+        self._running = False
+
+    def start(self, interval_seconds):
+        if self._running:
+            return
+        self._worker.start(interval_seconds=interval_seconds)
+        self._running = True
+
+    def stop(self):
+        self._worker.stop()
+        self._running = False
+
+    def run_once(self):
+        return self._worker.run_once()
 
 
 def _get_or_create_einvoicing_worker(company_id):
     if company_id not in _einvoicing_workers:
-        _einvoicing_workers[company_id] = OutboxWorker(
+        _einvoicing_workers[company_id] = _IdempotentEinvoicingWorkerHandle(OutboxWorker(
             conn_factory=get_retail_conn,
             app_data_dir=_EINVOICING_APP_DATA_DIR,
             company_id=company_id,
             provider=_einvoicing_provider,
             document_builder=_einvoice_adapter.build_document,
             reconcile_fn=_einvoice_adapter.reconcile_missing_sales,
-        )
+        ))
     return _einvoicing_workers[company_id]
 
 
@@ -899,14 +954,36 @@ def _resume_einvoicing_workers():
     app update) must keep submitting without waiting for a settings write
     to notice -- sweep for companies with the feature already on and
     resume their background workers. A fresh/never-enabled install finds
-    zero rows here and starts zero threads."""
+    zero rows here and starts zero threads.
+
+    AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']=
+    '1'), so a company enabled purely by that default has NO row at all in
+    einvoice_settings -- the old query above (`WHERE skey='enabled' AND
+    svalue='1'`) only ever matched an EXPLICIT row, so it silently missed
+    every default-only-enabled company on every restart, and their workers
+    never resumed: documents would queue in einvoice_outbox forever, even
+    after real JoFotara credentials were configured, because nothing ever
+    ticked the worker again after the process that first enqueued them
+    exited. The set of companies that need a worker is exactly the set
+    with something WAITING for one -- companies with an explicit enabled='1'
+    row, UNIONed with companies that already have einvoice_outbox rows
+    (the default-only-enabled ones, since enqueue_sale/enqueue_invoice run
+    regardless of whether enabled_at was ever stamped) -- each candidate is
+    then filtered through settings.is_enabled() so the killswitch and an
+    explicit '0' still win over an outbox that happens to have old rows in
+    it. One pass, one start() call per company (the idempotent handle
+    above also makes a second call harmless, but this dedupes via UNION
+    and the loop so there's normally never a second call to make)."""
     conn = get_retail_conn()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1'"
+            "SELECT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1' "
+            "UNION SELECT company_id FROM einvoice_outbox"
         ).fetchall()
         for row in rows:
             cid = row[0]
+            if not _einvoicing_settings.is_enabled(conn, _EINVOICING_APP_DATA_DIR, cid):
+                continue
             interval = int(_einvoicing_settings.get_setting(conn, cid, 'submit_interval_seconds'))
             _get_or_create_einvoicing_worker(cid).start(interval_seconds=interval)
     finally:

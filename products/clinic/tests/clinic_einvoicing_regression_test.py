@@ -53,7 +53,19 @@ def teardown_module(module):
 # ─── Frozen literals -- see the retail mirror's docstring for the rule on
 # editing these. ──────────────────────────────────────────────────────────
 
-CREATE_INVOICE_RESPONSE_KEYS = ['id', 'invoice_number', 'total']
+# AUDIT (2026-09-08): e-invoicing now defaults ON -- see the retail mirror's
+# identical comment on SALE_RESPONSE_KEYS for the full rationale and the
+# three consumers verified to tolerate the extra key:
+#   1. Desktop (subsystem-clinic.js): _einvoiceInvoiceBlock fetches the
+#      e-invoice state by invoice id (a separate GET), never by
+#      destructuring the create-invoice response -- unaffected either way.
+#   2. Android (android/aura-clinic/.../net/AuraApi.kt's createInvoice ->
+#      CreatedResponse, Models.kt's CreatedRow, ApiClient.kt's Retrofit
+#      GsonConverterFactory): same Gson behavior as the retail mirror --
+#      unmapped JSON fields are silently dropped on parse, not an error.
+#   3. commercial_runtime/sync/: replicates DB rows, never this HTTP
+#      response body.
+CREATE_INVOICE_RESPONSE_KEYS = ['einvoice', 'id', 'invoice_number', 'total']
 GET_INVOICE_RESPONSE_KEYS = ['invoice', 'items', 'payments']
 RECORD_PAYMENT_RESPONSE_KEYS = [
     'id', 'invoice_id', 'amount', 'total_paid', 'outstanding_balance',
@@ -153,17 +165,32 @@ def test_no_alter_ran_on_existing_tables():
     conn.close()
 
 
-def test_einvoice_outbox_stays_empty_through_a_full_invoice_and_payment_cycle():
+def test_einvoice_outbox_gets_exactly_one_row_for_the_invoice_not_the_payment():
+    """AUDIT (2026-09-08): renamed from
+    test_einvoice_outbox_stays_empty_through_a_full_invoice_and_payment_cycle
+    -- see the retail mirror's identical rewrite for the full rationale.
+    E-invoicing defaults ON, so the invoice creation below DOES enqueue.
+    What's still true: recording a payment never enqueues anything of its
+    own -- only create_invoice calls enqueue_invoice (see
+    core/clinic/einvoice_adapter.py; clinic_api.py's record_payment has no
+    e-invoice/credit-note handling at all), so exactly ONE outbox row must
+    exist after an invoice+payment cycle. Scoped to this test's own
+    company_id for the same cross-test-leakage reason as the retail
+    mirror -- see that file's comment."""
     client, cid, patient_id = _make_admin_and_patient()
     inv = _create_invoice(client, patient_id, unit_price=100.0)
+    assert 'einvoice' in inv, "the invoice itself must have enqueued -- e-invoicing defaults ON"
     client.post('/api/sub/clinic/payments', json={
         'invoice_id': inv['id'], 'amount': inv['total'], 'method': 'cash',
         'idempotency_key': str(uuid.uuid4()),
     })
     conn = get_clinic_conn()
-    count = conn.execute("SELECT COUNT(*) FROM einvoice_outbox").fetchone()[0]
+    rows = conn.execute(
+        "SELECT source_type, source_id FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchall()
     conn.close()
-    assert count == 0
+    assert len(rows) == 1, "a payment must never enqueue its own e-invoice row (not implemented in Phase 1)"
+    assert rows[0][0] == 'clinic_invoice' and rows[0][1] == inv['id'], "the one row must be the invoice itself, not the payment"
 
 
 def test_no_background_thread_exists_when_feature_never_enabled():

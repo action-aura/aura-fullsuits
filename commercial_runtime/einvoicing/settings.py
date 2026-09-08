@@ -9,7 +9,16 @@ ladder):
   1. AURA_EINVOICING_DISABLED=1  -- build/ops hard off, no DB or file I/O.
   2. killswitch.py's DISABLED flag file -- fastest per-install override.
   3. This company's own `enabled` setting in einvoice_settings -- the normal
-     per-company opt-in. Default '0' (OFF).
+     per-company opt-in. Default '1' (ON): Jordan has mandated e-invoicing
+     since 2024-05-31, and a shop that has to go find a toggle is not a
+     shop that's compliant, so a fresh install now records the obligation
+     without anyone touching a setting. "On" here does NOT mean documents
+     get submitted or clearance gets claimed -- with no provider configured
+     (the shipped default; see providers/unconfigured.py), the worker
+     enqueues and holds every document, waiting for the shop to complete
+     JoFotara portal registration. The three disable layers above are
+     unchanged and still each independently sufficient to turn the whole
+     feature off, including this new default.
 
 Settings live in the einvoice_settings table (see
 commercial_runtime/einvoicing/schema.py) -- a dedicated key/value store, not
@@ -26,8 +35,16 @@ from typing import Optional
 from . import killswitch
 
 DEFAULTS = {
-    'enabled': '0',
-    'provider': 'mock',
+    'enabled': '1',
+    # 'unconfigured', not 'mock', since the default flipped to enabled. This
+    # value is never dispatched on -- it is recorded onto each outbox row and
+    # shown on the status screen -- so its only job is to be TRUE. A shipped
+    # install runs UnconfiguredProvider (see either product's app.py), and a
+    # row stamped 'mock' would have said the shop was talking to a fake
+    # JoFotara it is not wired to. Measured on the running till on 2026-09-08:
+    # a real sale queued a row reading provider='mock' while the app was
+    # actually holding UnconfiguredProvider.
+    'provider': 'unconfigured',
     'invoice_family': 'income',           # 'income' | 'general_sales'
     'default_payment_type': 'cash',       # 'cash' | 'credit'
     'seller_tin': '',

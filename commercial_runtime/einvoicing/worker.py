@@ -108,6 +108,49 @@ class OutboxWorker:
             if not settings.is_enabled(conn, self._app_data_dir, self._company_id):
                 return {'ran': False, 'reason': 'disabled'}
 
+            # E-invoicing now defaults ON (settings.py DEFAULTS['enabled'] --
+            # the Jordanian mandate means a shop cannot wait to find a
+            # toggle), but a shipped install's default provider
+            # (UnconfiguredProvider) genuinely cannot reach a tax authority
+            # until the shop completes JoFotara portal registration. This
+            # must be a silent hold, not a raise: submit_invoice/
+            # check_status would raise EInvoiceProviderConfigError, which
+            # _apply_retry cannot tell apart from a transient failure -- it
+            # would count every tick against attempt_count and eventually
+            # walk every real invoice to FAILED_PERMANENT, destroying
+            # documents that are simply waiting for the shop to connect.
+            # Checked BEFORE any row is leased or touched, same as the
+            # settings.is_enabled() check just above.
+            if not getattr(self._provider, "is_configured", True):
+                audit.record(conn, self._app_data_dir, company_id=self._company_id, event='PROVIDER_ERROR',
+                             reason_code='PROVIDER_UNCONFIGURED', provider=self._provider.name)
+                conn.commit()
+                return {'ran': False, 'reason': 'unconfigured'}
+
+            # settings.set_setting() only ever stamps enabled_at when someone
+            # explicitly writes enabled='1' -- a company that is enabled
+            # purely by the new DEFAULT (settings.py DEFAULTS['enabled']='1')
+            # has no row at all, so enabled_at stays '' and
+            # einvoice_adapter.reconcile_missing_sales's own
+            # `if not enabled_at_value: return` guard silently disables the
+            # crash-recovery sweep -- for exactly the shops the mandate-
+            # driven default exists to protect (a missed sale there is a
+            # missing tax invoice). Materialise the default into a real row
+            # the first time a worker tick observes it, by reusing
+            # set_setting('enabled', '1') -- the one existing place that
+            # stamps enabled_at, so there is no second stamping path to keep
+            # in sync with the first. Stamped to NOW, never backdated: the
+            # sweep must never retroactively submit a shop's sales history
+            # to the tax authority, so only sales from this moment forward
+            # are ever reconciled -- exactly the guarantee
+            # reconcile_missing_sales's own docstring already promises. Only
+            # reached when is_enabled() is already True (checked above), so
+            # this can never resurrect a company that explicitly disabled
+            # itself -- that company already returned at the first check.
+            if not settings.enabled_at(conn, self._company_id):
+                settings.set_setting(conn, self._company_id, 'enabled', '1')
+                conn.commit()
+
             if self._reconcile_fn:
                 self._reconcile_fn(conn, self._company_id, settings.enabled_at(conn, self._company_id))
                 conn.commit()

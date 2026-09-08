@@ -68,3 +68,85 @@ second binary in this session — it rests on
 which proves the underlying claim (a v1-shaped read path works unmodified
 against a v2 database) without a real second executable. See
 `phase1-residual-risk-register.md`.
+
+## Default flipped to ON (2026-09-08)
+
+`settings.py`'s `DEFAULTS['enabled']` changed from `'0'` to `'1'`: Jordan has
+mandated e-invoicing since 2024-05-31, and a shop that has to find a toggle
+to become compliant is not compliant. A brand-new company, or any existing
+one that has never touched `POST /api/einvoicing/settings`, is now enabled
+from the moment it exists — `settings.is_enabled()` returns `True` with
+zero rows in `einvoice_settings`.
+
+**"Enabled" no longer implies "submits."** `products/retail/backend/app.py`
+and `products/clinic/backend/app.py` used to hard-wire `MockProvider()` as
+the live provider — the one that reports `CLEARED`, with a QR and a
+`provider_uuid`, without ever contacting JoFotara. Turning the DB default on
+while that stayed wired in would have put a false "e-invoice cleared" claim
+on a real receipt no tax authority ever saw, which is worse than the
+feature being off. So the live default provider changed too, to
+`providers/unconfigured.py`'s `UnconfiguredProvider` (`is_configured =
+False`). `worker.py`'s `OutboxWorker.run_once()` checks that flag before
+leasing or touching a single row — see the second early return, right next
+to the `settings.is_enabled()` one — and holds every queued row exactly
+where it is if the provider can't submit, specifically so `_apply_retry`
+can never count an unconfigured install's ticks against a row's retry
+budget and walk a real invoice to `FAILED_PERMANENT`.
+
+**What an operator sees on a freshly shipped, unconfigured install:**
+- Sales/invoices enqueue normally — `einvoice_outbox` fills up with
+  `QUEUED` rows, gapless numbers still get allocated per the configured
+  invoice family.
+- Nothing ever submits. No network call happens, no QR code appears on any
+  receipt, no `CLEARED` status, no clearance is ever claimed to anyone.
+- `POST /api/einvoicing/outbox/run-once` returns
+  `{'ran': False, 'reason': 'unconfigured'}` and leaves every row untouched
+  (same status, same `attempt_count`) — this is the same shape as the
+  killswitch/disabled `{'ran': False, 'reason': 'disabled'}` response, just
+  a different reason.
+- Rows queue indefinitely until a real provider (Phase 2's
+  `DirectISTDProvider`, once ISTD portal credentials exist) is wired in to
+  replace `UnconfiguredProvider` — at which point the worker can drain the
+  backlog.
+
+**Re-enabling `MockProvider` (development/test only, never a shipped
+install):** set `AURA_EINVOICING_ALLOW_MOCK=1` before starting the app.
+Both `app.py` files check this env var when constructing the module-level
+`_einvoicing_provider` — with it unset (the shipped default), the provider
+is `UnconfiguredProvider`; with it set to `'1'`, the provider is
+`MockProvider()`, which genuinely completes a round trip (fake CLEARED
+outcome, fake QR) so existing integration tests exercising the full
+enqueue-to-clear pipeline keep working. **Never set this in production** —
+it is indistinguishable, from the receipt outward, from a real clearance.
+
+**The three disable layers are unchanged and still each independently
+sufficient**, including against this new default:
+1. `AURA_EINVOICING_DISABLED=1` — still build/ops hard off, no DB or file
+   I/O at all.
+2. `killswitch.py`'s `DISABLED` flag file — still the fastest per-install
+   override, unaffected by what the DB default is.
+3. An explicit per-company `enabled='0'` — still beats the new default the
+   same way it always beat `'1'`; the only change is that a company must
+   now be explicitly turned off to stay off, instead of explicitly turned
+   on to turn on.
+
+**Known gap, not fixed by this change:** `products/*/backend/app.py`'s
+`_resume_einvoicing_workers()` and `routes.py`'s `POST /settings` handler
+both decide whether to start a company's background worker thread by
+comparing `was_enabled` (before) to `now_enabled` (after) a settings write,
+or by querying `einvoice_settings WHERE skey='enabled' AND svalue='1'` for
+an explicit row. Neither accounts for a company that is enabled purely by
+the new default with no row ever written: `was_enabled` is already `True`
+before any settings POST, so the enable transition never fires, and the
+boot-time resume sweep's `SELECT ... WHERE svalue='1'` never matches a
+company with no row at all. A company that never explicitly calls
+`POST /api/einvoicing/settings` will have its documents enqueue but will
+never get a recurring worker thread scheduled to drain them — not even
+after a real provider is later configured — until something (a settings
+write that produces a real `False`→`True` transition, or a manual
+`POST /api/einvoicing/outbox/run-once` per tick) triggers it. This is a
+routes.py/app.py concern, out of scope for the settings-default and
+provider-safety change described above; it needs its own fix (e.g. the
+boot-time sweep and the enable-transition check both switching to
+`settings.is_enabled()` against a per-company list rather than a literal
+`svalue='1'` row match).

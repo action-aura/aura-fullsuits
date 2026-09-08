@@ -54,9 +54,21 @@ class EInvoiceProvider(abc.ABC):
                   on UNKNOWN -- the worker holds the row and requires
                   check_status to resolve it, or an explicit operator
                   decision. This is the anti-double-submission guarantee.
+
+    is_configured -- whether this provider can actually reach a tax
+    authority. False means the worker (worker.py's OutboxWorker.run_once)
+    must not submit through it AT ALL: it leaves every queued row exactly
+    where it is rather than calling submit_invoice/check_status. A provider
+    that cannot submit must say so via this flag rather than raising from
+    submit_invoice -- raising is indistinguishable from a transient failure
+    to _apply_retry, which counts it against the row's attempt budget and
+    eventually walks a perfectly good, never-actually-attempted invoice to
+    FAILED_PERMANENT. See providers/unconfigured.py, the concrete provider
+    that sets this False.
     """
 
     name: ClassVar[str]
+    is_configured: ClassVar[bool] = True
 
     @abc.abstractmethod
     def submit_invoice(self, invoice_ref: str, document) -> SubmissionResult:

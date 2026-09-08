@@ -14,9 +14,22 @@ def conn():
     return c
 
 
-def test_default_enabled_is_off(conn):
-    assert settings.get_setting(conn, company_id=1, key='enabled') == '0'
-    assert settings.is_enabled(conn, app_data_dir='/tmp/unused', company_id=1) is False
+def test_default_enabled_is_on(conn):
+    """AUDIT: renamed from test_default_enabled_is_off. Jordan has mandated
+    e-invoicing since 2024-05-31, so DEFAULTS['enabled'] flipped from '0'
+    to '1' -- a fresh company now records the obligation without anyone
+    touching a toggle (see this module's own docstring at the top of
+    settings.py). This test alone can no longer catch an accidental flip
+    BACK to a disabled default -- it must be paired with
+    commercial_runtime/einvoicing/tests/test_default_on_and_unconfigured.py's
+    test_env_var_disable_still_beats_the_new_default,
+    test_killswitch_disable_still_beats_the_new_default and
+    test_explicit_per_company_disable_still_beats_the_new_default, which
+    prove the three disable layers still each independently win over this
+    new default -- that pairing is what a bare "is it on" assertion here
+    cannot provide on its own."""
+    assert settings.get_setting(conn, company_id=1, key='enabled') == '1'
+    assert settings.is_enabled(conn, app_data_dir='/tmp/unused', company_id=1) is True
 
 
 def test_get_all_settings_returns_defaults_when_nothing_stored(conn):
@@ -27,8 +40,14 @@ def test_get_all_settings_returns_defaults_when_nothing_stored(conn):
 def test_set_then_get_setting_round_trips(conn):
     settings.set_setting(conn, 1, 'provider', 'direct_istd')
     assert settings.get_setting(conn, 1, 'provider') == 'direct_istd'
-    # unrelated company unaffected
-    assert settings.get_setting(conn, 2, 'provider') == 'mock'
+    # Unrelated company unaffected -- still resolves to the DEFAULT provider.
+    # Written as the literal rather than settings.DEFAULTS['provider'] on
+    # purpose: comparing the code against itself could no longer catch the
+    # default drifting. It changed from 'mock' to 'unconfigured' on 2026-09-08
+    # when the feature became enabled-by-default, because a shipped install
+    # runs UnconfiguredProvider and a row stamped 'mock' would have claimed a
+    # connection to a fake JoFotara that is not wired in.
+    assert settings.get_setting(conn, 2, 'provider') == 'unconfigured'
 
 
 def test_unknown_setting_key_rejected_on_read(conn):

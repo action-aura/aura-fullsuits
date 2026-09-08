@@ -2604,3 +2604,27 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   hardware — an actual 80 mm printer and drawer, which nothing in this dev
   environment can supply — and (d) the Arabic raster/graphics path, which
   the text-only byte layer explicitly does not attempt.
+- **E-invoicing default-ON: a brand-new shop's very first sale waits until
+  the next app start before it submits (2026-09-08).** Now that e-invoicing
+  defaults ON (`commercial_runtime/einvoicing/settings.py` DEFAULTS
+  ['enabled']='1'), the only two places a company's `OutboxWorker` actually
+  gets `.start()`-ed are `products/retail|clinic/backend/app.py`'s boot-time
+  `_resume_einvoicing_workers()` sweep and
+  `commercial_runtime/einvoicing/routes.py`'s `_post_settings()` (on any
+  settings write that resolves to enabled). A company that has never done
+  either — a fresh install's very first sale, enqueued purely by the new
+  default with nobody ever visiting the e-invoicing settings screen — gets
+  a real `einvoice_outbox` row but no running worker to submit it, until
+  the process is next restarted (which resweeps and picks it up). This is a
+  bounded LATENCY, not a data-loss risk: the row is durable in the outbox,
+  nothing is dropped, and a restart (or any settings write, which now
+  starts the worker regardless of transition — see routes.py's
+  `_post_settings` comment) resolves it. Eventual fix: start the worker
+  event-driven, at the moment of first enqueue
+  (`core/retail/einvoice_adapter.py`'s `enqueue_sale` /
+  `core/clinic/einvoice_adapter.py`'s `enqueue_invoice`), instead of only at
+  boot or on a settings write — needs the enqueue path to reach the same
+  per-company worker registry `app.py` owns, which it currently doesn't
+  import (deliberately, to avoid a layering inversion — see
+  `build_document`'s comment on why `core/retail` doesn't import
+  `api.retail_api`).

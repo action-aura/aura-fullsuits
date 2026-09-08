@@ -157,16 +157,36 @@ def test_outbox_retry_requires_admin(app_and_db):
     assert r.status_code == 403
 
 
-# ─── disabled-by-default ────────────────────────────────────────────────
+# ─── enabled-by-default ─────────────────────────────────────────────────
+#
+# AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']='1'
+# -- the Jordanian mandate means a fresh company records the obligation
+# without anyone touching a toggle). This test used to be named
+# test_status_shows_disabled_by_default and assert False here -- that
+# described the OLD default and is not what this endpoint does anymore, so
+# renaming and flipping the assertion is fixing a stale test, not
+# weakening one. This test alone can no longer catch an accidental flip
+# BACK to a disabled default (or any other regression that makes a fresh
+# company come up disabled) -- pair it with
+# test_default_on_and_unconfigured.py's
+# test_company_with_no_settings_row_is_enabled_by_default (same claim,
+# against settings.py directly) and its three
+# ..._still_beats_the_new_default tests (the three disable layers each
+# still winning over this default), which together cover what this single
+# route-level assertion no longer can.
 
-def test_status_shows_disabled_by_default(app_and_db):
+def test_status_shows_enabled_by_default(app_and_db):
     client = _client(app_and_db)
     _login(client)
     r = client.get('/api/einvoicing/status')
     assert r.status_code == 200
     data = r.get_json()['data']
-    assert data['enabled'] is False
-    assert data['provider'] == 'mock'
+    assert data['enabled'] is True
+    # The DEFAULT provider setting, which became 'unconfigured' on 2026-09-08
+    # alongside the enabled-by-default flip -- see settings.DEFAULTS' comment.
+    # This asserts the SETTING (what the shop chose); the live provider object
+    # is reported separately as 'provider_in_use'/'provider_configured'.
+    assert data['provider'] == 'unconfigured'
     assert data['counts_by_state']['QUEUED'] == 0
 
 
