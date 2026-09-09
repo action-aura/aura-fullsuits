@@ -4001,7 +4001,7 @@ const RetailSystem = {
               <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700">${this._fmt(saleData.total)}</span>
             </div>
             ${saleData.change > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
-              <span style="color:var(--text-secondary)">Change</span><span style="color:var(--text-money-positive);font-weight:700">${this._fmt(saleData.change)}</span>
+              <span style="color:var(--text-secondary)">${t('Change due')}</span><span style="color:var(--text-money-positive);font-weight:700">${this._fmt(saleData.change)}</span>
             </div>` : ''}
           </div>
         </div>
@@ -4117,7 +4117,26 @@ const RetailSystem = {
     const brandingBlock = this._brandingReceiptBlock(branding, logoDataUri);
     const footerLine = branding.branding_receipt_footer
       ? `<div class="rcpt-center" style="font-size:11px">${this._esc(branding.branding_receipt_footer)}</div>` : '';
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${saleData.sale_number}</title>
+    // EVERY LABEL BELOW MUST BE WRAPPED IN t() BY HAND, and that is not the
+    // usual rule in this file. AuraI18n.apply() translates by sweeping the
+    // TEXT NODES of `document.body` and re-sweeping additions through a
+    // MutationObserver, which is why most rendered strings come out Arabic
+    // without anyone wrapping them. This document is written into a print
+    // IFRAME with doc.write(), so it is a different document object entirely:
+    // the sweep never sees it and the observer is not watching it.
+    //
+    // Measured 2026-09-09 before this change, on a till already running in
+    // Arabic (dir="rtl", sidebar reading "لوحة التحكم"): the printed receipt
+    // came out "Subtotal / Tax / Total / Paid / Change / Thank you", entirely
+    // in English. Only the currency was Arabic, because that comes from the
+    // money formatter rather than from the sweep. So a Jordanian shop running
+    // its whole till in Arabic handed every customer an English receipt --
+    // the most customer-visible thing this product prints.
+    //
+    // The i18n and receipt guards both existed and neither caught it: the
+    // i18n tests cover the UI surface, the receipt tests cover branding, and
+    // this sat in the seam between them.
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${t('Receipt')} ${saleData.sale_number}</title>
       <style>
         @page { size: ${widthMm}mm auto; margin: 2mm; }
         body { font-family: 'Courier New', monospace; width: ${widthMm}mm; margin: 0; font-size: 12px; }
@@ -4127,19 +4146,19 @@ const RetailSystem = {
         .rcpt-bold { font-weight: bold; }
       </style></head><body>
       ${brandingBlock}
-      <div class="rcpt-center">Receipt #${saleData.sale_number}</div>
+      <div class="rcpt-center">${t('Receipt')} #${saleData.sale_number}</div>
       <div class="rcpt-center">${saleData.created_at || new Date().toLocaleString()}</div>
       <div class="rcpt-hr"></div>
       ${lines}
       <div class="rcpt-hr"></div>
-      <div class="rcpt-line"><span>Subtotal</span><span>${this._fmt(saleData.subtotal)}</span></div>
-      ${saleData.discount_amount > 0 ? `<div class="rcpt-line"><span>Discount</span><span>-${this._fmt(saleData.discount_amount)}</span></div>` : ''}
-      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>Tax</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
-      <div class="rcpt-line rcpt-bold"><span>Total</span><span>${this._fmt(saleData.total)}</span></div>
-      <div class="rcpt-line"><span>Paid</span><span>${this._fmt(saleData.amount_paid)}</span></div>
-      ${saleData.change > 0 ? `<div class="rcpt-line"><span>Change</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
+      <div class="rcpt-line"><span>${t('Subtotal')}</span><span>${this._fmt(saleData.subtotal)}</span></div>
+      ${saleData.discount_amount > 0 ? `<div class="rcpt-line"><span>${t('Discount')}</span><span>-${this._fmt(saleData.discount_amount)}</span></div>` : ''}
+      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${t('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
+      <div class="rcpt-line rcpt-bold"><span>${t('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
+      <div class="rcpt-line"><span>${t('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>
+      ${saleData.change > 0 ? `<div class="rcpt-line"><span>${t('Change due')}</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
-      <div class="rcpt-center">Thank you</div>
+      <div class="rcpt-center">${t('Thank you')}</div>
       ${footerLine}
       ${einvoiceBlock}
       </body></html>`;
@@ -7303,7 +7322,7 @@ const RetailSystem = {
               ${sale.tax_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Tax</span><span style="color:var(--text-money)">${this._fmt(sale.tax_amount)}</span></div>`:''}
               <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1px dashed var(--border-default);padding-top:8px;margin-top:4px"><span style="color:var(--text-primary)">Total</span><span style="color:var(--text-money)">${this._fmt(sale.total)}</span></div>
               <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">Paid</span><span style="color:var(--text-money)">${this._fmt(sale.amount_paid)}</span></div>
-              ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Change</span><span style="color:var(--text-money-positive)">${this._fmt(sale.change_amount)}</span></div>`:''}
+              ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">${t('Change due')}</span><span style="color:var(--text-money-positive)">${this._fmt(sale.change_amount)}</span></div>`:''}
               ${sale.due_date?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Due date</span><span style="color:var(--state-warning-text)">${sale.due_date}</span></div>`:''}
             </div>
           </div>
