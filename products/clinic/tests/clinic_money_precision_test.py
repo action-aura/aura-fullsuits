@@ -78,7 +78,7 @@ def teardown_module(module):
 
 def _make_admin_client():
     email = f'money-{uuid.uuid4().hex[:10]}@test.local'
-    password = 'MoneyPW1'
+    password = 'MoneyPW1'  # pragma: allowlist secret -- throwaway fixture for a local SQLite account created by this test
     company_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
     conn = registry_conn()

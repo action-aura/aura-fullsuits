@@ -80,7 +80,7 @@ def teardown_module(module):
 
 def _make_admin_and_patient():
     email = f"fam-{uuid.uuid4().hex[:10]}@test.local"
-    password = "FamilyPW1"
+    password = "FamilyPW1"  # pragma: allowlist secret -- throwaway fixture for a local SQLite account created by this test
     company_id = str(uuid.uuid4())
     conn = registry_conn()
     conn.execute(
