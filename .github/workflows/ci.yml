@@ -107,7 +107,20 @@ jobs:
       # pg_wrapper to pick the right major version off PATH.
       - name: PostgreSQL 17 client tools
         run: |
-          sudo apt-get update -qq
+          # A third-party repo we never install from must not decide whether
+          # PostgreSQL gets installed. On 2026-09-09 this step failed with
+          # "Failed to fetch .../chrome-stable/... Hash Sum mismatch" -- Google's
+          # mirror served a Packages.gz that did not match its own Release file,
+          # apt exited 100, and a green branch went red for a reason that had
+          # nothing to do with the code. The runner image carries that repo; no
+          # job in this workflow installs a browser.
+          #
+          # What this no longer catches: a stale index at UPDATE time. That is
+          # still caught one line later -- every apt-get install below is strict,
+          # so an index that genuinely failed to refresh fails this step at the
+          # install, naming the package it could not find.
+          sudo apt-get update -qq -o Acquire::Retries=3 \
+            || echo "apt-get update reported errors; the strict installs below still gate this step"
           sudo apt-get install -y -qq postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y -qq postgresql-client-17
