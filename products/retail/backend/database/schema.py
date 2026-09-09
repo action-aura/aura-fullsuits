@@ -6061,6 +6061,27 @@ def _init_retail(conn):
     # function.
     _v16_rebind_orphaned_open_drawers(conn)
 
+    # THE SEEDED ROWS ARE INVISIBLE TO EVERY ACCOUNT A HUMAN CAN LOG INTO.
+    # Measured 2026-09-09 on a fresh source run (unfrozen, AURA_STANDALONE
+    # unset): this seeds 12 products, 5 categories and 3 branches under
+    # company_id = 1, because `_seed_retail`'s default says so. Onboarding then
+    # creates a company whose id is an md5 hex string
+    # (onboarding_routes.py's `hashlib.md5(email...).hexdigest()`), and the POS
+    # filters by the signed-in user's company. So the till reports "No products
+    # found" over a database holding 12 active products, which reads as a broken
+    # product rather than as demo data addressed to a company that never existed.
+    #
+    # It cannot be fixed by passing a better company_id here: this runs at
+    # process boot, synchronously, BEFORE any request and therefore before
+    # onboarding has created a company at all. There is nothing correct to pass.
+    #
+    # Not changed, because the behaviour is dev-only and the right mechanism
+    # already exists. Customers never reach it -- the frozen .exe sets
+    # sys.frozen and Android sets AURA_STANDALONE=1, so `_is_standalone()` is
+    # True in every shipped path and this branch never runs. A developer who
+    # wants demo data should use api/retail_api.py::demo_seed, which calls
+    # `_seed_retail(company_id=_cid())` and is therefore scoped to whoever is
+    # signed in. No test depends on this seeding or on company_id = 1.
     if cur.execute("SELECT COUNT(*) FROM branches").fetchone()[0] == 0 and not _is_standalone():
         _seed_retail(conn, cur)
     # No conn.close() here -- init_retail()'s finally owns that now, so it
