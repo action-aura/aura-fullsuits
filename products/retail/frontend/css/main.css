@@ -4930,6 +4930,48 @@ input.pos-mini-input, select.pos-cust-select {
   min-block-size: var(--touch-target-min);
 }
 
+/* THE SHELL'S OWN CHROME WAS BELOW THIS FLOOR, and nothing noticed, because
+   retail_design_focus_test.js walks the RETAIL corpus and the shell is not in
+   it. Measured in a real browser at 1366x768 on 2026-09-09: five controls sat
+   under 44px -- the two sidebar buttons at 40px tall, and the header's icon
+   buttons at 36x36, one of which is the Arabic/English toggle. On a
+   Jordanian till that is a frequently used control at roughly two thirds the
+   area a thumb needs.
+
+   The two are fixed differently on purpose.
+
+   The sidebar buttons simply take the floor: they are already 219px wide and
+   growing them on the block axis moves nothing else on the page.
+
+   The header buttons do NOT take it, because they DRIVE the header's height:
+   raising them to 44 grew the header 77px -> 85px and pushed the till's
+   product grid from 407px down to 415px of a 768px screen -- on the exact
+   screen whose vertical budget is already the tightest thing in this product.
+   So the VISUAL size stays 36px and only the HIT AREA grows, through a
+   pseudo-element inset by 4px on each side (36 + 4 + 4 = 44). A pointer
+   anywhere in that 44x44 box hits the button; the layout is unchanged; the
+   header stays 77px. Logical insets, never top/right/bottom/left, so this
+   mirrors with the rest of the shell in Arabic.
+
+   Note this deliberately satisfies the POINTER target and not a static
+   min-block-size check -- an element-size assertion would not see it. That is
+   the right trade here and it is written down rather than left to be
+   rediscovered by whoever extends the focus corpus to cover the shell. */
+button.sub-ai-btn, button.sub-exit-btn {
+  min-block-size: var(--touch-target-min);
+}
+button.sub-header-btn { position: relative; }
+button.sub-header-btn::after {
+  content: "";
+  position: absolute;
+  inset-block: -4px;
+  inset-inline: -4px;
+  /* Purely a hit area: it must never paint, and must never sit above the
+     button's own content or a sibling control. */
+  background: transparent;
+  pointer-events: auto;
+}
+
 /* ── THE SHARED RETAIL CHROME ─────────────────────────────────────────────────
    `RetailSystem._injectStyles()` (subsystem-retail.js) builds a stylesheet at
    runtime and appends it to <head>. It predates the token layer by two
