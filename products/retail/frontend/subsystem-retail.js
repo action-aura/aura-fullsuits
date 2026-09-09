@@ -373,8 +373,20 @@ const RetailSystem = {
       .ret-field-row3 { display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px; }
       .ret-modal-footer { display:flex;gap:10px;justify-content:flex-end;margin-top:22px; }
       .ret-btn { padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px;cursor:pointer;border:none;transition:all .2s; }
+      /* Touchscreen press feedback (retail-hardware-viewports): every variant
+         below is always used WITH this base class (never bare), so one rule
+         here covers all of them, and each variant only overrides where its
+         own resting treatment needs a different fallback (see .ret-btn-primary
+         and .ret-btn-danger below). Source order matters: this has to stay
+         ABOVE the variants so a same-specificity variant :active rule wins. */
+      .ret-btn:active { transform:scale(0.97); }
       .ret-btn-primary { background:var(--sub-accent);color:var(--text-on-accent); }
       .ret-btn-primary:hover { opacity:.88;transform:translateY(-1px); }
+      /* translateY(-1px) is the hover lift; scale(0.97) is the press. Pressing
+         must not also cancel the lift's own offset, so this resets it to 0
+         explicitly rather than leaving the two transforms to fight -- same
+         recipe as main.css's .sub-btn-primary:active. */
+      .ret-btn-primary:active { transform:translateY(0) scale(0.97); }
       .ret-btn-primary:disabled { opacity:.5;cursor:not-allowed;transform:none; }
       /* css/main.css owns this control at button.ret-btn.ret-btn-ghost (0,2,1),
          which is what fixed the 1.48:1 POS "Held" button. The literals it was
@@ -383,6 +395,7 @@ const RetailSystem = {
          served #cbd5e1 on a 5% white tint. */
       .ret-btn-ghost { background:var(--surface-sunken);color:var(--text-secondary);border:1px solid var(--border-default); }
       .ret-btn-ghost:hover { background:var(--surface-hover); }
+      .ret-btn-ghost:active { transform:scale(0.97); }
       /* AUDIT -- #ef4444 on a 12% tint of itself: 2.70:1 on the Delete/Discard/
          Process Refund buttons. Same self-tint construction as the badges above
          and the same fix: an opaque --state-danger-surface under
@@ -401,7 +414,9 @@ const RetailSystem = {
          control in the product with no hover feedback. */
       .ret-btn-danger { background:var(--state-danger-surface);color:var(--state-danger-text);border:1px solid var(--state-danger-border); }
       .ret-btn-danger:hover { background:var(--state-danger-border); }
+      .ret-btn-danger:active { transform:scale(0.97); }
       .ret-btn-sm { padding:4px 12px;font-size:12px; }
+      .ret-btn-sm:active { transform:scale(0.97); }
       /* AUDIT -- #fff on rgba(255,255,255,0.05): 1.00:1. Not faint, INVISIBLE,
          and it is the search box on Products, Customers and Sales History, so a
          cashier filtering a product list could not see what they had typed. The
@@ -524,6 +539,19 @@ const RetailSystem = {
          it takes the warning family's text weight rather than its hairline
          border tint, which at 1px on a raised surface reads as no flag at all. */
       .ret-po-split-unassigned { border-color:var(--state-warning-text); }
+
+      /* retail-hardware-viewports: a reduced-motion cashier still has to see a
+         tap register, they just must not get the animated scale. Swap to a
+         static token surface instead of "nothing" for the neutral/ghost
+         variant, the family's own hover-darken step for danger (same move
+         .ret-btn-danger:hover already makes), and the opacity dip the
+         checkout button's own :hover already uses for the accent-filled
+         primary variant -- three existing techniques, no new one invented. */
+      @media (prefers-reduced-motion: reduce) {
+        .ret-btn:active, .ret-btn-ghost:active, .ret-btn-sm:active { transform:none;background:var(--surface-active); }
+        .ret-btn-danger:active { transform:none;background:var(--state-danger-border); }
+        .ret-btn-primary:active { transform:none;opacity:.8; }
+      }
     `;
     document.head.appendChild(s);
   },
@@ -1411,6 +1439,13 @@ const RetailSystem = {
         .rdash-attention.is-calm .rdash-attention-action { display:none; }
         .rdash-attention.is-calm .rdash-attention-calm { display:inline; }
         .rdash-attention-alert { display:flex;align-items:baseline;gap:8px;flex-wrap:wrap; }
+        /* This button is always rendered with classes ret-btn ret-btn-ghost
+           rdash-attention-action (no backtick in this comment on purpose --
+           the whole sheet is a JS template literal), so _injectStyles()'s
+           global .ret-btn-ghost:active already presses it -- this is named
+           explicitly anyway so the CTA that opens "Review stock" carries its
+           own rule rather than depending on a class it happens to also wear. */
+        .rdash-attention-action:active { transform:scale(0.97); }
 
         /* ── 3. Context strip: no cards, hierarchy by scale alone ─────────── */
         .rdash-context { display:flex;gap:40px;flex-wrap:wrap;padding-block:16px 20px;
@@ -1454,7 +1489,10 @@ const RetailSystem = {
           min-block-size:40px;transition:background .15s ease, color .15s ease; }
         .rdash .ret-btn-ghost:hover { background:var(--surface-hover);color:var(--text); }
         .rdash :focus-visible { outline:var(--focus-ring-width, 3px) solid var(--focus-ring-color, var(--sub-accent));outline-offset:var(--focus-ring-offset, 2px); }
-        @media (prefers-reduced-motion: reduce) { .rdash * { transition:none; } }
+        @media (prefers-reduced-motion: reduce) {
+          .rdash * { transition:none; }
+          .rdash-attention-action:active { transform:none;background:var(--surface-active); }
+        }
       </style>
       <div class="rdash">
       <div class="ret-hdr">
@@ -1900,6 +1938,7 @@ const RetailSystem = {
            testEveryPosHoverAffordanceHasAFocusCounterpart closes that gap;
            it is what found these four rules hover-only. */
         .pos-cat-btn:hover, .pos-cat-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
+        .pos-cat-btn:active { transform:scale(0.97); }
         /* Selected is a solid fill; hovered is a tint. They must never look
            the same -- a cashier scanning the rail has to see what is ON. */
         .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
@@ -1923,6 +1962,16 @@ const RetailSystem = {
            is the ONLY state feedback a touchscreen operator gets at all. */
         .pos-card:hover, .pos-card:focus-visible { border-color:var(--border-mid);background:var(--surface-hover); }
         .pos-card:active { transform:scale(0.98); }
+        /* retail-hardware-viewports investigation: this rule was reported as
+           dead -- pressing a product tile on the live till produced no
+           computed-style change at all. Verified with Playwright (real
+           mousedown, CDP-forced :active, and a neutralised _keepScanFocus)
+           that the rule fires correctly and _keepScanFocus()'s preventDefault
+           does NOT suppress :active. The actual cause: every tile in the
+           measured catalogue was out of stock, and .pos-card-outofstock:active
+           below deliberately overrides transform to none -- correct behaviour
+           for an unsellable tile, mistaken for a broken rule because the demo
+           data has no in-stock product to press instead. */
         /* AUDIT -- this rule was "opacity:.45", and opacity is a GROUP
            operation: it renders the tile, its text, its border AND its focus
            outline into one buffer and composites the whole buffer at 45%. It
@@ -2062,10 +2111,12 @@ const RetailSystem = {
         .pos-clear-btn:hover, .pos-clear-btn:focus-visible {
           color:var(--state-danger-text, var(--text));border-color:var(--state-danger-border, var(--border-mid));
           background:var(--state-danger-surface, var(--surface-hover)); }
+        .pos-clear-btn:active { transform:scale(0.97); }
         .pos-hold-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:16px;border-radius:10px;border:1px solid var(--border-mid);
           background:var(--surface-soft);color:var(--text-dim);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
           transition:background .12s ease, color .12s ease; }
         .pos-hold-btn:hover, .pos-hold-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
+        .pos-hold-btn:active { transform:scale(0.97); }
         .pos-cust-select { min-block-size:var(--touch-target-min, 44px);background:var(--input-bg);border:1px solid var(--border-mid);
           border-radius:10px;color:var(--text);padding-inline:12px;font-size:13px;font-family:inherit;outline:none;
           max-inline-size:190px;transition:border-color .15s ease; }
@@ -2105,6 +2156,12 @@ const RetailSystem = {
           display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:inherit;
           transition:background .15s ease, color .15s ease, border-color .15s ease; }
         .pos-pay-btn:hover, .pos-pay-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
+        /* Element-qualified for the same reason the base rule is (see the
+           comment above it) -- keeps this at the same specificity family so
+           it cannot be silently outranked later by another button.pos-pay-btn
+           rule. Presses regardless of whether this method is the selected one
+           (.active below is a persistent selection, not a transient press). */
+        button.pos-pay-btn:active { transform:scale(0.97); }
         .pos-pay-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);
           color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
         /* The icon is an inline AuraIcons SVG now (stroke="currentColor"), not
@@ -2151,6 +2208,29 @@ const RetailSystem = {
         @media (prefers-reduced-motion: reduce) {
           .pos-row-new { animation:none; }
           .pos-wrap * { transition:none; }
+          /* transition:none above (no backtick in this comment on purpose --
+             this whole sheet is a JS template literal) only removes the
+             ANIMATION -- the scale itself would still apply, just as an
+             instant snap, which is still a size change and not the
+             non-motion cue reduced-motion users asked for. So :active is
+             retargeted here to the same static
+             --surface-active token .pos-card-outofstock:active already uses
+             for "pressed, not moving", except .pos-clear-btn, which keeps
+             its own danger family and darkens with the same token its :hover
+             already does. */
+          .pos-card:active, .pos-cat-btn:active, .pos-hold-btn:active, button.pos-pay-btn:active {
+            transform:none;background:var(--surface-active); }
+          .pos-clear-btn:active { transform:none;background:var(--state-danger-border, var(--surface-active)); }
+          /* The SELECTED category pill and SELECTED payment method are a
+             solid --sub-accent fill (.pos-cat-btn.active / .pos-pay-btn.active
+             above), same specificity as the generic swap just above, declared
+             earlier -- so without this the swap would win the tie and flash a
+             selected control to plain grey on press. No darker accent token
+             exists to deepen into, so this dips opacity instead, the same
+             non-transform technique .pos-checkout-btn:hover already uses on
+             its own accent fill. */
+          .pos-cat-btn.active:active, button.pos-pay-btn.active:active {
+            transform:none;background:var(--sub-accent);opacity:.85; }
         }
       </style>
       <div class="pos-wrap">

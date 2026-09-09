@@ -1534,6 +1534,9 @@ body {
    token, and that file is outside this change. */
 .btn-primary { background: var(--accent-action); color: var(--text-on-accent); border: none; padding: 8px 16px; border-radius: var(--btn-rad); font-size: 13px; font-weight: 600; cursor: pointer; transition: background var(--trans-fast); display: flex; align-items:center; gap:6px;}
 .btn-primary:hover { background: var(--accent-action-hover); }
+/* retail-hardware-viewports: touchscreen press feedback -- no hover exists
+   on a till, so :active is the only confirmation a tap registered. */
+.btn-primary:active { transform: scale(0.97); }
 .btn-secondary { background: var(--surface-sunken); color: var(--text-primary); border: 1px solid var(--glass-border); padding: 8px 16px; border-radius: var(--btn-rad); font-size: 13px; cursor: pointer; transition: all var(--trans-fast); display: flex; align-items:center; gap:6px;}
 .btn-secondary:hover { background: var(--surface-hover); }
 
@@ -2866,6 +2869,10 @@ html[data-theme="light"] {
   transition: all 0.2s ease; user-select: none;
 }
 .sub-nav-item:hover { background: var(--surface-sunken); color: var(--text-primary); }
+/* retail-hardware-viewports: a full-width row, so a small scale rather than
+   the tighter value smaller controls below get -- shrinking a full-width bar
+   noticeably would read as a layout glitch, not a press. */
+.sub-nav-item:active { transform: scale(0.99); }
 .sub-nav-item.active {
   background: rgba(var(--sub-accent-rgb),0.12);
   color: var(--text-primary); border-left-color: var(--sub-accent);
@@ -2932,6 +2939,7 @@ html[data-theme="light"] {
   cursor: pointer; transition: all 0.2s; position: relative;
 }
 .sub-ai-btn:hover { background: rgba(var(--sub-accent-rgb),0.16); }
+.sub-ai-btn:active { transform: scale(0.97); }
 .sub-exit-btn {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; width: 100%;
   background: var(--surface-raised); border: 1px solid var(--border-default);
@@ -2939,6 +2947,7 @@ html[data-theme="light"] {
   cursor: pointer; transition: all 0.2s;
 }
 .sub-exit-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+.sub-exit-btn:active { transform: scale(0.97); }
 
 /* Subsystem Main Area */
 .sub-main { 
@@ -2987,6 +2996,10 @@ html[data-theme="light"] {
   transition: background 0.2s;
 }
 .sub-header-btn:hover { background: var(--surface-hover); }
+/* Smallest control in this set (36x36) -- the tighter end of the 0.96-0.99
+   range reads as a real press at this size where 0.97-0.99 would barely
+   register. */
+.sub-header-btn:active { transform: scale(0.96); }
 
 .sub-content {
   flex: 1; 
@@ -5333,6 +5346,36 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
   .sub-nav-item .aura-ic, .sub-nav-item.active .aura-ic {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+  }
+  /* retail-hardware-viewports: transition-duration:0.01ms above still lets
+     the :active scale apply, just without an animated approach to it -- an
+     instant size change is still motion, not the non-transform cue a
+     reduced-motion user asked for. Retarget press feedback to a static
+     token surface instead, reusing --surface-active the way
+     .pos-card-outofstock:active already does for "pressed, not moving". */
+  .sub-nav-item:active, .sub-header-btn:active, .sub-ai-btn:active, .sub-exit-btn:active {
+    transform: none;
+    background: var(--surface-active);
+  }
+  /* The SELECTED nav row already carries its own accent tint
+     (.sub-nav-item.active, a few lines up in the un-media'd rules) and that
+     tint must survive a press the same way it already survives :hover --
+     .active is declared after :hover today for exactly that reason. This
+     media query is even later in the file, so without this override the
+     generic swap above would win the specificity tie and flash a selected
+     row to plain grey. Deepen the SAME accent tint instead of replacing it. */
+  .sub-nav-item.active:active {
+    background: rgba(var(--sub-accent-rgb), 0.22);
+  }
+  /* .btn-primary is filled with the accent token, not a neutral surface, so
+     swapping it to --surface-active here would read as the button losing
+     its own colour rather than being pressed. Opacity is the non-transform
+     cue this file already uses for a filled control's own state changes
+     (see .btn-primary's sibling .btn-primary:hover a few lines up, and
+     subsystem-retail.js's .pos-checkout-btn:hover). */
+  .btn-primary:active {
+    transform: none;
+    opacity: .8;
   }
 }
 /*                                                        [operational-calm:end] */
