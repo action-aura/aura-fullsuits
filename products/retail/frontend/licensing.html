@@ -69,6 +69,20 @@
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff;
     border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* Confirm dialog (replaces native confirm() -- see licensing.js's
+     confirmDialog for why: this page is standalone and has no design-token
+     stylesheet to draw from, so it uses the same literal-colour + dark-media-
+     query convention as every other rule above, not css/main.css tokens. */
+  .confirm-overlay {
+    position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center; padding-inline: 20px;
+  }
+  @media (prefers-color-scheme: dark) { .confirm-overlay { background: rgba(0,0,0,0.7); } }
+  .confirm-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; max-width: 420px; width: 100%; }
+  @media (prefers-color-scheme: dark) { .confirm-card { background: #1e2127; border-color: #333; } }
+  .confirm-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
+  .confirm-message { margin: 0 0 18px; font-size: 0.9rem; color: #444; line-height: 1.5; }
+  @media (prefers-color-scheme: dark) { .confirm-message { color: #ccc; } }
 </style>
 </head>
 <body>

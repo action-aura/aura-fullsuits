@@ -5160,6 +5160,44 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
 .ai-panel, .comm-active-call-bar, .report-paper {
   box-shadow: var(--elevation-panel);
 }
+
+/* ── SHARED CONFIRM DIALOG (SubsystemApp.confirm, app-shell.js) ──────────────
+   The in-app replacement for native confirm() at the sites that cannot reach
+   RetailSystem._confirm (subsystem-retail.js): RetailSystem is a separate
+   object, and that method's dialog is painted by RetailSystem._injectStyles()
+   -- CSS injected into <head> from JS at runtime, never present in this file
+   -- so a caller outside subsystem-retail.js has nothing to reach. Deliberately
+   its OWN class family (sub-confirm-*, not a reuse of the pre-existing but
+   never-consumed .sub-modal-overlay/.sub-modal-card above): those sit at
+   z-index 9000, BELOW subsystem-retail.js's own .ret-modal-overlay (9999) and
+   employees.js's identical modals built on the same pattern, and this dialog
+   must be able to open ON TOP of one of those (e.g. confirming a PIN removal
+   from inside an already-open employee modal) -- see z-index below. */
+.sub-confirm-overlay {
+  position: fixed; inset: 0; z-index: 10500;
+  background: var(--surface-scrim); backdrop-filter: blur(5px);
+  display: flex; align-items: center; justify-content: center;
+  padding-inline: 20px;
+}
+.sub-confirm-card {
+  background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: 16px; padding: 28px 32px; width: 100%; max-width: 420px;
+  max-height: 88vh; overflow-y: auto; box-shadow: var(--elevation-modal);
+}
+.sub-confirm-card h3 { margin: 0 0 12px; font-size: 18px; font-weight: 700; color: var(--text-primary); }
+.sub-confirm-message { margin: 0 0 22px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.sub-confirm-footer { display: flex; gap: 10px; justify-content: flex-end; }
+/* .sub-btn-primary/.sub-btn-secondary already exist above; danger is the one
+   variant that family was missing, so this confirm dialog is what adds it --
+   same recipe as subsystem-retail.js's own .ret-btn-danger (an opaque
+   state-danger-* triad, already contrast-proven in every theme). */
+.sub-btn-danger {
+  padding: 9px 18px; background: var(--state-danger-surface); color: var(--state-danger-text);
+  border: 1px solid var(--state-danger-border); border-radius: 8px; font-size: 13px; font-weight: 700;
+  cursor: pointer; transition: background 0.2s;
+}
+.sub-btn-danger:hover { background: var(--state-danger-border); }
+.sub-btn-danger:focus-visible { outline: 2px solid var(--state-danger-border); outline-offset: 2px; }
 .toast, .inter-card:hover, .action-card:hover {
   box-shadow: var(--elevation-card);
 }
@@ -5247,7 +5285,7 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
    Respect the OS setting. A till that animates through a queue is wasting
    everyone's time, and vestibular triggers do not belong in a workplace tool. */
 @media (prefers-reduced-motion: reduce) {
-  .money, .btn-primary, .btn-secondary, .sub-btn-primary, .sub-btn-secondary,
+  .money, .btn-primary, .btn-secondary, .sub-btn-primary, .sub-btn-secondary, .sub-btn-danger,
   .nav-item, .sub-nav-item, .kpi-card, .sub-kpi-card,
   .aura-ic-pop, .aura-ic-flip,
   .sub-nav-item .aura-ic, .sub-nav-item.active .aura-ic {

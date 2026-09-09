@@ -488,7 +488,7 @@ const RetailEmployees = {
     const question = grant
       ? t('Allow this branch manager to create and manage cashiers at their own branch?')
       : t('Revoke this manager ability to create and manage staff at their branch?');
-    if (!confirm(question)) return;
+    if (!await SubsystemApp.confirm({ title: question })) return;
     try {
       const res = await this._post(`/api/admin/employees/${id}/permissions`, {
         subsystem: 'retail.employees', access_level: grant ? 'full' : 'none',
@@ -890,7 +890,10 @@ const RetailEmployees = {
   },
 
   async _clearPin(id) {
-    if (!confirm(t('Remove the PIN from this account? They can still sign in with their password.'))) return;
+    if (!await SubsystemApp.confirm({
+      title: t('Remove the PIN from this account? They can still sign in with their password.'),
+      danger: true,
+    })) return;
     try {
       const res = await this._del(`/api/admin/employees/${id}/pin`);
       if (res && res.success) {
@@ -920,7 +923,7 @@ const RetailEmployees = {
     const question = status === 'disabled'
       ? t('Deactivate this account? They will not be able to sign in until you reactivate it.')
       : t('Reactivate this account?');
-    if (!confirm(question)) return;
+    if (!await SubsystemApp.confirm({ title: question })) return;
     try {
       const res = await this._put(`/api/admin/employees/${id}/status`, { status });
       if (res && res.success) {

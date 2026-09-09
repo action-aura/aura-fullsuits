@@ -55,6 +55,54 @@
     return node;
   }
 
+  // ── Confirm dialog (replaces native confirm()) ──────────────────────────
+  // Mirrors licensing.js's confirmDialog exactly (same rationale: no shared
+  // SubsystemApp shell exists to plug into -- see the file header, and
+  // RetailSystem._confirm in subsystem-retail.js for the full rationale
+  // behind replacing native confirm() at all). Built with el()/textContent
+  // only, matching this file's no-innerHTML policy. No i18n exists on this
+  // page either, so opts stay plain English.
+  function confirmDialog(opts) {
+    const o = opts || {};
+    const danger = !!o.danger;
+    const trigger = document.activeElement;
+
+    const cancelBtn = el('button', { className: 'secondary', text: o.cancelLabel || 'Cancel' });
+    const okBtn = el('button', { className: danger ? 'danger' : '', text: o.confirmLabel || 'Confirm' });
+    const cardChildren = [el('h3', { text: o.title || '' })];
+    if (o.message) cardChildren.push(el('p', { className: 'confirm-message', text: o.message }));
+    cardChildren.push(el('div', { className: 'row' }, [cancelBtn, okBtn]));
+    const card = el('div', { className: 'confirm-card' }, cardChildren);
+    card.setAttribute('role', 'alertdialog');
+    card.setAttribute('aria-modal', 'true');
+    const overlay = el('div', { className: 'confirm-overlay' }, [card]);
+
+    return new Promise((resolve) => {
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;   // Enter/click/overlay-click can race; resolve once only
+        settled = true;
+        document.removeEventListener('keydown', onKeydown, true);
+        overlay.remove();
+        if (trigger && typeof trigger.focus === 'function') trigger.focus();
+        resolve(result);
+      };
+
+      const onKeydown = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+      };
+      document.addEventListener('keydown', onKeydown, true);
+
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      cancelBtn.addEventListener('click', () => finish(false));
+      okBtn.addEventListener('click', () => finish(true));
+      okBtn.focus();
+    });
+  }
+
   function showMessage(text, kind) {
     clearChildren(messageArea);
     messageArea.appendChild(el('div', { className: 'message message-' + kind, text: text }));
@@ -191,7 +239,12 @@
     clearMessage();
     try {
       if (pause) {
-        if (!window.confirm('Pause e-invoicing submission immediately? Existing queued invoices stay queued until resumed.')) return;
+        const ok = await confirmDialog({
+          title: 'Pause e-invoicing submission immediately?',
+          message: 'Existing queued invoices stay queued until resumed.',
+          confirmLabel: 'Pause',
+        });
+        if (!ok) return;
         await apiPost('/api/einvoicing/killswitch', { reason: 'manual' });
         showMessage('E-invoicing paused.', 'info');
       } else {
@@ -350,7 +403,12 @@
   }
 
   async function onWipeCredentialsClicked() {
-    if (!window.confirm('Remove the stored JoFotara credentials from this installation?')) return;
+    const ok = await confirmDialog({
+      title: 'Remove the stored JoFotara credentials from this installation?',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
     clearMessage();
     try {
       const { status, body } = await apiDelete('/api/einvoicing/credentials');

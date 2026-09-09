@@ -3451,7 +3451,12 @@ const SubsystemApp = {
   },
 
   async wipeDemoData() {
-    if (!confirm('Are you sure you want to permanently wipe all data in this subsystem?')) return;
+    const ok = await this.confirm({
+      title: t('Are you sure you want to permanently wipe all data in this subsystem?'),
+      confirmLabel: t('Wipe Data'),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`/api/sub/${this.active}/demo-wipe`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -3530,6 +3535,132 @@ const SubsystemApp = {
   // while --state-info-* is DELIBERATELY decoupled from the accent (see its
   // comment in css/main.css) so "informational" reads the same everywhere,
   // not differently per subsystem.
+  // ══ CONFIRM DIALOG (shared shell-level replacement for native confirm()) ══
+  // Mirrors RetailSystem._confirm (subsystem-retail.js:853) in behaviour and
+  // signature exactly -- see that method's comment for the full rationale
+  // (native confirm() cannot be themed, cannot be mirrored for Arabic, and
+  // its text never passes through t()). This is a SEPARATE implementation
+  // rather than a delegate to it because RetailSystem is a different object
+  // and its dialog is painted by RetailSystem._injectStyles(), a <style> tag
+  // that method injects into <head> from JS -- never present in css/main.css
+  // -- so nothing outside subsystem-retail.js has anything to call into. Any
+  // file loaded in index.html (employees.js, this file) reaches SubsystemApp
+  // as window.SubsystemApp instead, so this renders on the shell's own
+  // .sub-confirm-* classes (css/main.css) rather than duplicating that
+  // injected stylesheet.
+  //
+  // NOT reachable from licensing.js / whatsapp.js / einvoicing.js: those
+  // three are standalone documents that never load app-shell.js at all (see
+  // each file's own header comment -- "no shared SubsystemApp shell exists
+  // to plug into"), so window.SubsystemApp is undefined there. Each of those
+  // files carries its own small local confirm dialog instead.
+  //
+  // Returns a Promise<boolean> -- true on Confirm (click or Enter), false on
+  // Cancel, Escape, or a click on the overlay itself (outside the card).
+  //
+  // opts: { title, message, confirmLabel, cancelLabel, danger } -- same shape
+  // as RetailSystem._confirm's opts. title/message are caller-composed
+  // (already run through t() at the call site for their static text, same
+  // convention as every RetailSystem._confirm call site); confirmLabel/
+  // cancelLabel default to t('Confirm')/t('Cancel'); danger paints the
+  // confirm button with the danger tokens (sub-btn-danger) instead of the
+  // primary accent (sub-btn-primary).
+  //
+  // KEYDOWN IS CAPTURE-PHASE, same reasoning as RetailSystem._confirm: a
+  // bubble-phase document listener elsewhere could otherwise treat the same
+  // Enter/Escape as input for whatever screen sits behind this dialog before
+  // it has even resolved.
+  confirm(opts) {
+    const o = opts || {};
+    const danger = !!o.danger;
+    const title = o.title || '';
+    const message = o.message || '';
+    const confirmLabel = o.confirmLabel || t('Confirm');
+    const cancelLabel = o.cancelLabel || t('Cancel');
+    // The element focused when confirm() was called -- almost always the
+    // button that triggered it -- so focus can be handed back to it on close
+    // instead of being dropped on <body>.
+    const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
+
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'sub-confirm-overlay';
+
+      const card = document.createElement('div');
+      card.className = 'sub-confirm-card';
+      card.setAttribute('role', 'alertdialog');
+      card.setAttribute('aria-modal', 'true');
+
+      const h3 = document.createElement('h3');
+      h3.textContent = title;
+      card.appendChild(h3);
+
+      // textContent throughout -- title/message can carry a shop-typed value
+      // (e.g. an employee name), so there is no innerHTML/escaping step to
+      // get wrong here at all.
+      if (message) {
+        const p = document.createElement('p');
+        p.className = 'sub-confirm-message';
+        p.textContent = message;
+        card.appendChild(p);
+      }
+
+      const footer = document.createElement('div');
+      footer.className = 'sub-confirm-footer';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'sub-btn-secondary';
+      cancelBtn.textContent = cancelLabel;
+      const okBtn = document.createElement('button');
+      okBtn.className = danger ? 'sub-btn-danger' : 'sub-btn-primary';
+      okBtn.textContent = confirmLabel;
+      footer.appendChild(cancelBtn);
+      footer.appendChild(okBtn);
+      card.appendChild(footer);
+
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;   // Enter/click/overlay-click can race; resolve once only
+        settled = true;
+        document.removeEventListener('keydown', onKeydown, true);
+        overlay.remove();
+        if (trigger && typeof trigger.focus === 'function') {
+          // The trigger can legitimately be gone by now (its row/modal was
+          // removed by an unrelated re-render while this was open) -- focus()
+          // on a detached/removed element is a silent no-op in every real
+          // browser, so no try/catch is needed to make this safe.
+          trigger.focus();
+        }
+        resolve(result);
+      };
+
+      const onKeydown = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+        // Enter confirms ONLY on a non-destructive dialog. On a danger one it
+        // is deliberately not bound: focus starts on Cancel below, so Enter
+        // activates that button natively and resolves false. Binding Enter to
+        // "yes" here would mean a shop owner who hits Enter out of habit --
+        // the same key that submits every other form in this product --
+        // permanently wipes their data with no further prompt.
+        if (e.key === 'Enter' && !danger) {
+          e.preventDefault(); e.stopPropagation(); finish(true);
+        }
+      };
+      document.addEventListener('keydown', onKeydown, true);
+
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      cancelBtn.addEventListener('click', () => finish(false));
+      okBtn.addEventListener('click', () => finish(true));
+      // Focus moves INTO the dialog on open. On an ordinary confirm that is
+      // the confirm action, where a keyboard user's next Enter should land.
+      // On a destructive one it is Cancel, so the safe answer is the default
+      // and destroying something always takes a deliberate second action.
+      (danger ? cancelBtn : okBtn).focus();
+    });
+  },
+
   showToast(msg, type = 'info') {
     const STATE_TOKENS = {
       success: { surface: '--state-success-surface', border: '--state-success-border', text: '--state-success-text' },
