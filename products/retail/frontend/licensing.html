@@ -83,6 +83,12 @@
   .confirm-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
   .confirm-message { margin: 0 0 18px; font-size: 0.9rem; color: #444; line-height: 1.5; }
   @media (prefers-color-scheme: dark) { .confirm-message { color: #ccc; } }
+  /* i18n/RTL (2026-09-09): this page has no design-token stylesheet to draw
+     from (see the confirm-dialog comment above), so the back-arrow glyph is
+     mirrored here directly rather than via css/rtl.css's data-aura-dir
+     convention, which this standalone document does not load. i18n.js sets
+     dir="rtl" on <html> when Arabic is active -- see its apply(). */
+  [dir="rtl"] .i18n-arrow { display: inline-block; transform: scaleX(-1); }
 </style>
 </head>
 <body>
@@ -91,17 +97,18 @@
        shell -- there was no nav entry into it and no link back out of it.
        This anchor closes the loop: index.html's root route ('/') re-renders
        the authenticated shell from the existing session cookie. -->
-  <a class="back-link" href="/">&larr; Back to Aura Retail</a>
-  <h1>Aura Retail Licensing</h1>
-  <div class="subtitle">Activation and license status for this installation.</div>
+  <a class="back-link" href="/"><span class="i18n-arrow">&larr;</span> <span data-i18n="Back to Aura Retail">Back to Aura Retail</span></a>
+  <h1 data-i18n="Aura Retail Licensing">Aura Retail Licensing</h1>
+  <div class="subtitle" data-i18n="Activation and license status for this installation.">Activation and license status for this installation.</div>
 
   <div id="message-area"></div>
-  <div id="content" class="card">Loading…</div>
+  <div id="content" class="card" data-i18n="Loading…">Loading…</div>
 
-  <div class="support">
+  <div class="support" data-i18n="Need help? Contact Action Aura support with your installation status shown above.">
     Need help? Contact Action Aura support with your installation status shown above.
   </div>
 
+  <script src="i18n.js"></script>
   <script src="licensing.js"></script>
 </body>
 </html>

@@ -13,6 +13,16 @@
 (function () {
   'use strict';
 
+  // i18n.js (loaded before this script in einvoicing.html) defines the
+  // global t()/AuraI18n. Falling back to identity when it's absent keeps
+  // this file loadable standalone -- e.g. retail's own test harnesses run
+  // product frontend files through a bare vm sandbox with no i18n.js in it,
+  // and this file worked standalone before i18n was wired in, so it still
+  // should (see retail_einvoicing_status_test.js's sandbox loader).
+  const t = (typeof window !== 'undefined' && typeof window.t === 'function')
+    ? window.t
+    : function (s) { return s; };
+
   const messageArea = document.getElementById('message-area');
   const statusContent = document.getElementById('status-content');
   const settingsContent = document.getElementById('settings-content');
@@ -60,15 +70,16 @@
   // SubsystemApp shell exists to plug into -- see the file header, and
   // RetailSystem._confirm in subsystem-retail.js for the full rationale
   // behind replacing native confirm() at all). Built with el()/textContent
-  // only, matching this file's no-innerHTML policy. No i18n exists on this
-  // page either, so opts stay plain English.
+  // only, matching this file's no-innerHTML policy. This page loads i18n.js
+  // directly (see the file header), so opts route through t() like the rest
+  // of this file.
   function confirmDialog(opts) {
     const o = opts || {};
     const danger = !!o.danger;
     const trigger = document.activeElement;
 
-    const cancelBtn = el('button', { className: 'secondary', text: o.cancelLabel || 'Cancel' });
-    const okBtn = el('button', { className: danger ? 'danger' : '', text: o.confirmLabel || 'Confirm' });
+    const cancelBtn = el('button', { className: 'secondary', text: o.cancelLabel || t('Cancel') });
+    const okBtn = el('button', { className: danger ? 'danger' : '', text: o.confirmLabel || t('Confirm') });
     const cardChildren = [el('h3', { text: o.title || '' })];
     if (o.message) cardChildren.push(el('p', { className: 'confirm-message', text: o.message }));
     cardChildren.push(el('div', { className: 'row' }, [cancelBtn, okBtn]));
@@ -133,7 +144,7 @@
   }
 
   function stateBadge(label) {
-    return el('span', { className: 'state-badge ' + label.cls, text: label.text });
+    return el('span', { className: 'state-badge ' + label.cls, text: t(label.text) });
   }
 
   // ─── status card ────────────────────────────────────────────────────
@@ -142,7 +153,7 @@
     const { status, body } = await apiGet('/api/einvoicing/status');
     if (status !== 200) {
       clearChildren(statusContent);
-      statusContent.appendChild(el('p', { text: 'Could not load status.' }));
+      statusContent.appendChild(el('p', { text: t('Could not load status.') }));
       return;
     }
     renderStatus(body.data);
@@ -155,7 +166,7 @@
       : stateBadge({ text: 'Disabled', cls: 'state-neutral' });
     statusContent.appendChild(badge);
     if (data.killswitch && data.killswitch.disabled) {
-      statusContent.appendChild(stateBadge({ text: 'Paused: ' + data.killswitch.reason, cls: 'state-warning' }));
+      statusContent.appendChild(stateBadge({ text: t('Paused:') + ' ' + data.killswitch.reason, cls: 'state-warning' }));
     }
 
     // data.provider_configured describes the live provider OBJECT
@@ -170,48 +181,48 @@
     if (notConnected) {
       statusContent.appendChild(el('div', {
         className: 'state-warning',
-        text: 'E-invoicing is on and every sale is being recorded, but nothing has been sent to the tax authority yet ' +
+        text: t('E-invoicing is on and every sale is being recorded, but nothing has been sent to the tax authority yet ' +
           'because this installation is not connected to JoFotara. To connect, register the business on the JoFotara ' +
-          'portal and enter the Client-ID, Secret-Key and activity number it issues.',
+          'portal and enter the Client-ID, Secret-Key and activity number it issues.'),
       }));
     }
 
     const dl = el('dl');
-    dl.appendChild(el('dt', { text: 'Provider' }));
+    dl.appendChild(el('dt', { text: t('Provider') }));
     // provider_in_use is the object actually running; fall back to the
     // older 'provider' setting key when a backend hasn't shipped the new
     // field yet (undefined/null), so this card renders correctly either way.
     const providerKey = data.provider_in_use != null ? data.provider_in_use : data.provider;
-    dl.appendChild(el('dd', { text: PROVIDER_LABELS[providerKey] || providerKey }));
+    dl.appendChild(el('dd', { text: t(PROVIDER_LABELS[providerKey] || providerKey) }));
     const counts = data.counts_by_state || {};
-    dl.appendChild(el('dt', { text: 'Queued' }));
+    dl.appendChild(el('dt', { text: t('Queued') }));
     dl.appendChild(el('dd', { text: String(counts.QUEUED || 0) }));
-    dl.appendChild(el('dt', { text: 'Cleared' }));
+    dl.appendChild(el('dt', { text: t('Cleared') }));
     dl.appendChild(el('dd', { text: String(counts.CLEARED || 0) }));
-    dl.appendChild(el('dt', { text: 'Needs attention' }));
+    dl.appendChild(el('dt', { text: t('Needs attention') }));
     dl.appendChild(el('dd', {
       text: String((counts.FAILED_PERMANENT || 0) + (counts.SUBMITTING_UNKNOWN || 0) + (counts.AWAITING_CLEARANCE || 0)),
     }));
     statusContent.appendChild(dl);
 
     const row = el('div', { className: 'row' });
-    const runBtn = el('button', { className: 'secondary', text: 'Submit queue now' });
+    const runBtn = el('button', { className: 'secondary', text: t('Submit queue now') });
     if (notConnected) {
       // A button that cannot work is how a shopkeeper concludes the
       // software itself is broken -- disable it and say why, right here,
       // rather than letting them press it and get a cryptic failure.
       runBtn.disabled = true;
-      runBtn.title = 'Connect this installation to JoFotara (see the credentials below) before submitting the queue.';
+      runBtn.title = t('Connect this installation to JoFotara (see the credentials below) before submitting the queue.');
     }
     runBtn.addEventListener('click', () => onRunOnceClicked(runBtn));
     row.appendChild(runBtn);
 
     if (data.killswitch && data.killswitch.disabled) {
-      const resumeBtn = el('button', { text: 'Resume' });
+      const resumeBtn = el('button', { text: t('Resume') });
       resumeBtn.addEventListener('click', () => onKillswitchClicked(false));
       row.appendChild(resumeBtn);
     } else {
-      const pauseBtn = el('button', { className: 'danger', text: 'Pause immediately' });
+      const pauseBtn = el('button', { className: 'danger', text: t('Pause immediately') });
       pauseBtn.addEventListener('click', () => onKillswitchClicked(true));
       row.appendChild(pauseBtn);
     }
@@ -224,12 +235,12 @@
     try {
       const { status, body } = await apiPost('/api/einvoicing/outbox/run-once', {});
       if (status === 200) {
-        showMessage('Submission queue processed.', 'info');
+        showMessage(t('Submission queue processed.'), 'info');
       } else {
-        showMessage(body.message || 'Could not process the queue.', 'error');
+        showMessage(body.message || t('Could not process the queue.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await Promise.all([refreshStatus(), refreshOutbox()]);
@@ -240,19 +251,19 @@
     try {
       if (pause) {
         const ok = await confirmDialog({
-          title: 'Pause e-invoicing submission immediately?',
-          message: 'Existing queued invoices stay queued until resumed.',
-          confirmLabel: 'Pause',
+          title: t('Pause e-invoicing submission immediately?'),
+          message: t('Existing queued invoices stay queued until resumed.'),
+          confirmLabel: t('Pause'),
         });
         if (!ok) return;
         await apiPost('/api/einvoicing/killswitch', { reason: 'manual' });
-        showMessage('E-invoicing paused.', 'info');
+        showMessage(t('E-invoicing paused.'), 'info');
       } else {
         await apiDelete('/api/einvoicing/killswitch');
-        showMessage('E-invoicing resumed.', 'info');
+        showMessage(t('E-invoicing resumed.'), 'info');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     await refreshStatus();
   }
@@ -263,7 +274,7 @@
     const { status, body } = await apiGet('/api/einvoicing/settings');
     if (status !== 200) {
       clearChildren(settingsContent);
-      settingsContent.appendChild(el('p', { text: 'Could not load settings.' }));
+      settingsContent.appendChild(el('p', { text: t('Could not load settings.') }));
       return;
     }
     renderSettings(body.data.settings);
@@ -273,7 +284,7 @@
     clearChildren(settingsContent);
 
     const toggleRow = el('div', { className: 'toggle-row' });
-    const toggleLabel = el('label', { text: 'Enable Jordan e-invoicing for this business', htmlFor: 'einv-enabled' });
+    const toggleLabel = el('label', { text: t('Enable Jordan e-invoicing for this business'), htmlFor: 'einv-enabled' });
     toggleLabel.style.margin = '0';
     const toggle = el('input', { id: 'einv-enabled', type: 'checkbox' });
     toggle.checked = settings.enabled === '1';
@@ -281,30 +292,30 @@
     toggleRow.appendChild(toggle);
     settingsContent.appendChild(toggleRow);
     settingsContent.appendChild(el('div', {
-      className: 'hint', text: 'When off, nothing about your existing records or receipts changes.',
+      className: 'hint', text: t('When off, nothing about your existing records or receipts changes.'),
     }));
 
-    settingsContent.appendChild(el('label', { text: 'Invoice type', htmlFor: 'einv-family' }));
+    settingsContent.appendChild(el('label', { text: t('Invoice type'), htmlFor: 'einv-family' }));
     const familySelect = el('select', { id: 'einv-family' });
     [['income', 'Income invoice (not VAT-registered)'], ['general_sales', 'General sales invoice (VAT-registered)']]
       .forEach(([value, label]) => {
-        const opt = el('option', { value: value, text: label });
+        const opt = el('option', { value: value, text: t(label) });
         if (settings.invoice_family === value) opt.selected = true;
         familySelect.appendChild(opt);
       });
     settingsContent.appendChild(familySelect);
 
-    settingsContent.appendChild(el('label', { text: 'Business name (as registered with ISTD)', htmlFor: 'einv-seller-name' }));
+    settingsContent.appendChild(el('label', { text: t('Business name (as registered with ISTD)'), htmlFor: 'einv-seller-name' }));
     settingsContent.appendChild(el('input', { id: 'einv-seller-name', type: 'text', value: settings.seller_name || '' }));
 
-    settingsContent.appendChild(el('label', { text: 'Tax identification number (TIN)', htmlFor: 'einv-seller-tin' }));
+    settingsContent.appendChild(el('label', { text: t('Tax identification number (TIN)'), htmlFor: 'einv-seller-tin' }));
     settingsContent.appendChild(el('input', { id: 'einv-seller-tin', type: 'text', value: settings.seller_tin || '' }));
 
-    settingsContent.appendChild(el('label', { text: 'Currency', htmlFor: 'einv-currency' }));
+    settingsContent.appendChild(el('label', { text: t('Currency'), htmlFor: 'einv-currency' }));
     settingsContent.appendChild(el('input', { id: 'einv-currency', type: 'text', value: settings.currency || 'JOD' }));
 
     const row = el('div', { className: 'row' });
-    const saveBtn = el('button', { text: 'Save settings' });
+    const saveBtn = el('button', { text: t('Save settings') });
     saveBtn.addEventListener('click', () => onSaveSettingsClicked(saveBtn));
     row.appendChild(saveBtn);
     settingsContent.appendChild(row);
@@ -323,12 +334,12 @@
     try {
       const { status, body } = await apiPost('/api/einvoicing/settings', payload);
       if (status === 200) {
-        showMessage('Settings saved.', 'info');
+        showMessage(t('Settings saved.'), 'info');
       } else {
-        showMessage(body.message || 'Could not save settings.', 'error');
+        showMessage(body.message || t('Could not save settings.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await Promise.all([refreshStatus(), refreshSettings()]);
@@ -340,7 +351,7 @@
     const { status, body } = await apiGet('/api/einvoicing/settings');
     if (status !== 200) {
       clearChildren(credentialsContent);
-      credentialsContent.appendChild(el('p', { text: 'Could not load credential status.' }));
+      credentialsContent.appendChild(el('p', { text: t('Could not load credential status.') }));
       return;
     }
     renderCredentials(body.data.credentials);
@@ -350,29 +361,29 @@
     clearChildren(credentialsContent);
 
     if (creds.configured) {
-      const suffix = creds.client_id_last4 ? ' (ending ' + creds.client_id_last4 + ')' : '';
-      credentialsContent.appendChild(el('p', { text: 'JoFotara credentials are configured' + suffix + '.' }));
+      const suffix = creds.client_id_last4 ? ' (' + t('ending') + ' ' + creds.client_id_last4 + ')' : '';
+      credentialsContent.appendChild(el('p', { text: t('JoFotara credentials are configured') + suffix + '.' }));
       if (creds.readable === false) {
         credentialsContent.appendChild(el('div', {
-          className: 'message message-error', text: 'Stored credentials could not be read. Please re-enter them below.',
+          className: 'message message-error', text: t('Stored credentials could not be read. Please re-enter them below.'),
         }));
       }
-      const wipeBtn = el('button', { className: 'danger', text: 'Remove credentials' });
+      const wipeBtn = el('button', { className: 'danger', text: t('Remove credentials') });
       wipeBtn.addEventListener('click', onWipeCredentialsClicked);
       credentialsContent.appendChild(wipeBtn);
-      credentialsContent.appendChild(el('div', { className: 'hint', text: 'Enter new credentials below to replace them.' }));
+      credentialsContent.appendChild(el('div', { className: 'hint', text: t('Enter new credentials below to replace them.') }));
     } else {
-      credentialsContent.appendChild(el('p', { text: 'No JoFotara credentials configured yet.' }));
+      credentialsContent.appendChild(el('p', { text: t('No JoFotara credentials configured yet.') }));
     }
 
-    credentialsContent.appendChild(el('label', { text: 'Client ID', htmlFor: 'einv-client-id' }));
-    credentialsContent.appendChild(el('input', { id: 'einv-client-id', type: 'text', placeholder: 'From the JoFotara portal' }));
+    credentialsContent.appendChild(el('label', { text: t('Client ID'), htmlFor: 'einv-client-id' }));
+    credentialsContent.appendChild(el('input', { id: 'einv-client-id', type: 'text', placeholder: t('From the JoFotara portal') }));
 
-    credentialsContent.appendChild(el('label', { text: 'Client secret', htmlFor: 'einv-client-secret' }));
-    credentialsContent.appendChild(el('input', { id: 'einv-client-secret', type: 'password', placeholder: 'From the JoFotara portal' }));
+    credentialsContent.appendChild(el('label', { text: t('Client secret'), htmlFor: 'einv-client-secret' }));
+    credentialsContent.appendChild(el('input', { id: 'einv-client-secret', type: 'password', placeholder: t('From the JoFotara portal') }));
 
     const row = el('div', { className: 'row' });
-    const saveBtn = el('button', { text: 'Save credentials' });
+    const saveBtn = el('button', { text: t('Save credentials') });
     saveBtn.addEventListener('click', () => onSaveCredentialsClicked(saveBtn));
     row.appendChild(saveBtn);
     credentialsContent.appendChild(row);
@@ -383,7 +394,7 @@
     const clientId = document.getElementById('einv-client-id').value.trim();
     const clientSecret = document.getElementById('einv-client-secret').value.trim();
     if (!clientId || !clientSecret) {
-      showMessage('Enter both the client ID and client secret.', 'error');
+      showMessage(t('Enter both the client ID and client secret.'), 'error');
       return;
     }
     btn.disabled = true;
@@ -391,12 +402,12 @@
       const { status, body } = await apiPost('/api/einvoicing/credentials', { client_id: clientId, client_secret: clientSecret });
       document.getElementById('einv-client-secret').value = '';
       if (status === 200) {
-        showMessage('Credentials saved.', 'info');
+        showMessage(t('Credentials saved.'), 'info');
       } else {
-        showMessage(body.message || 'Could not save credentials.', 'error');
+        showMessage(body.message || t('Could not save credentials.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await refreshCredentials();
@@ -404,8 +415,8 @@
 
   async function onWipeCredentialsClicked() {
     const ok = await confirmDialog({
-      title: 'Remove the stored JoFotara credentials from this installation?',
-      confirmLabel: 'Remove',
+      title: t('Remove the stored JoFotara credentials from this installation?'),
+      confirmLabel: t('Remove'),
       danger: true,
     });
     if (!ok) return;
@@ -413,12 +424,12 @@
     try {
       const { status, body } = await apiDelete('/api/einvoicing/credentials');
       if (status === 200) {
-        showMessage('Credentials removed.', 'info');
+        showMessage(t('Credentials removed.'), 'info');
       } else {
-        showMessage(body.message || 'Could not remove credentials.', 'error');
+        showMessage(body.message || t('Could not remove credentials.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     await refreshCredentials();
   }
@@ -429,7 +440,7 @@
     const { status, body } = await apiGet('/api/einvoicing/outbox?limit=25');
     if (status !== 200) {
       clearChildren(outboxContent);
-      outboxContent.appendChild(el('p', { text: 'Could not load the submission queue.' }));
+      outboxContent.appendChild(el('p', { text: t('Could not load the submission queue.') }));
       return;
     }
     renderOutbox(body.data);
@@ -438,14 +449,14 @@
   function renderOutbox(rows) {
     clearChildren(outboxContent);
     if (!rows.length) {
-      outboxContent.appendChild(el('p', { text: 'No invoices submitted yet.' }));
+      outboxContent.appendChild(el('p', { text: t('No invoices submitted yet.') }));
       return;
     }
 
     const table = el('table');
     const thead = el('thead');
     const headRow = el('tr');
-    ['Invoice #', 'E-invoice #', 'Status', ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
+    [t('Invoice #'), t('E-invoice #'), t('Status'), ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
     thead.appendChild(headRow);
     table.appendChild(thead);
 
@@ -459,7 +470,7 @@
 
       const actionsCell = el('td');
       if (row.status === 'FAILED_PERMANENT') {
-        const retryBtn = el('button', { className: 'small secondary', text: 'Retry' });
+        const retryBtn = el('button', { className: 'small secondary', text: t('Retry') });
         retryBtn.addEventListener('click', () => onRetryClicked(row.invoice_ref, retryBtn));
         actionsCell.appendChild(retryBtn);
       }
@@ -476,17 +487,28 @@
     try {
       const { status, body } = await apiPost('/api/einvoicing/outbox/' + encodeURIComponent(invoiceRef) + '/retry', {});
       if (status === 200) {
-        showMessage('Queued for retry.', 'info');
+        showMessage(t('Queued for retry.'), 'info');
       } else {
-        showMessage(body.message || 'Could not retry this entry.', 'error');
+        showMessage(body.message || t('Could not retry this entry.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     await Promise.all([refreshStatus(), refreshOutbox()]);
   }
 
   // ─── boot ───────────────────────────────────────────────────────────
 
-  Promise.all([refreshStatus(), refreshSettings(), refreshCredentials(), refreshOutbox()]);
+  // Gate the first render on the translation dictionaries the same way
+  // index.html gates SubsystemApp.init() -- see i18n.js's docstring/apply().
+  // Falls back to an immediate render when AuraI18n isn't present (see the
+  // t() fallback above for why that has to be possible).
+  function bootRefresh() {
+    Promise.all([refreshStatus(), refreshSettings(), refreshCredentials(), refreshOutbox()]);
+  }
+  if (typeof window !== 'undefined' && window.AuraI18n) {
+    window.AuraI18n.load().then(bootRefresh);
+  } else {
+    bootRefresh();
+  }
 })();

@@ -21,6 +21,15 @@
 (function () {
   'use strict';
 
+  // i18n.js (loaded before this script in licensing.html) defines the global
+  // t()/AuraI18n. Falling back to identity when it's absent keeps this file
+  // loadable standalone -- e.g. retail's own test harnesses run product
+  // frontend files through a bare vm sandbox with no i18n.js in it, and this
+  // file worked standalone before i18n was wired in, so it still should.
+  const t = (typeof window !== 'undefined' && typeof window.t === 'function')
+    ? window.t
+    : function (s) { return s; };
+
   const messageArea = document.getElementById('message-area');
   const content = document.getElementById('content');
 
@@ -128,10 +137,10 @@
   // fastest route to the cause, and the thing whose absence forced reading it
   // out of a database by hand.
   function localVerificationMessage(reason) {
-    if (CLOCK_FIXABLE_REASON_CODES[reason]) return LOCAL_VERIFICATION_MESSAGE;
-    return 'Action Aura approved this activation, but this computer could not verify the signed licence it '
+    if (CLOCK_FIXABLE_REASON_CODES[reason]) return t(LOCAL_VERIFICATION_MESSAGE);
+    return t('Action Aura approved this activation, but this computer could not verify the signed licence it '
       + 'received, so it has not been applied yet. Your license key is not the problem — do not replace it, and '
-      + 're-entering it cannot help. Please contact support and quote this code: ' + (reason || 'UNKNOWN') + '.';
+      + 're-entering it cannot help. Please contact support and quote this code:') + ' ' + (reason || 'UNKNOWN') + '.';
   }
 
   // One place that decides what a reason_code is allowed to SAY, so the
@@ -139,7 +148,7 @@
   // screen and quietly forgotten on the next.
   function reasonMessage(reason) {
     if (LOCAL_VERIFICATION_REASON_CODES[reason]) return localVerificationMessage(reason);
-    return REASON_MESSAGES[reason] || REASON_MESSAGES.ACTIVATION_REJECTED;
+    return t(REASON_MESSAGES[reason] || REASON_MESSAGES.ACTIVATION_REJECTED);
   }
 
   // Must match SubsystemApp.PENDING_ACTIVATION_KEY in app-shell.js EXACTLY.
@@ -305,16 +314,16 @@
   // overlay itself. Built with el()/textContent only, matching this file's
   // no-innerHTML policy (see header): there is no XSS-sink here either.
   //
-  // This page has no i18n (no shared SubsystemApp shell means no t()
-  // either -- see the file header), so opts are plain English, same as
-  // every other string in this file.
+  // This page has no shared SubsystemApp shell (see the file header), but it
+  // loads i18n.js directly (same t()/[data-i18n] mechanism the shell uses),
+  // so Arabic installs still get a translated, mirrored dialog here.
   function confirmDialog(opts) {
     const o = opts || {};
     const danger = !!o.danger;
     const trigger = document.activeElement;
 
-    const cancelBtn = el('button', { className: 'secondary', text: o.cancelLabel || 'Cancel' });
-    const okBtn = el('button', { className: danger ? 'danger' : '', text: o.confirmLabel || 'Confirm' });
+    const cancelBtn = el('button', { className: 'secondary', text: o.cancelLabel || t('Cancel') });
+    const okBtn = el('button', { className: danger ? 'danger' : '', text: o.confirmLabel || t('Confirm') });
     const cardChildren = [el('h3', { text: o.title || '' })];
     if (o.message) cardChildren.push(el('p', { className: 'confirm-message', text: o.message }));
     cardChildren.push(el('div', { className: 'row' }, [cancelBtn, okBtn]));
@@ -375,7 +384,7 @@
 
   function stateBadge(state) {
     const info = STATE_LABELS[state] || { text: state, cls: 'state-neutral' };
-    return el('span', { className: 'state-badge ' + info.cls, text: info.text });
+    return el('span', { className: 'state-badge ' + info.cls, text: t(info.text) });
   }
 
   async function refresh() {
@@ -390,10 +399,10 @@
   function renderNetworkProblem() {
     stopAwaitingPoll();
     clearChildren(content);
-    const retryBtn = el('button', { text: 'Retry' });
+    const retryBtn = el('button', { text: t('Retry') });
     retryBtn.addEventListener('click', refresh);
     content.appendChild(el('div', {}, [stateBadge('NOT_CONFIGURED')]));
-    content.appendChild(el('p', { text: 'Owner Service Temporarily Unavailable — could not check licensing status.' }));
+    content.appendChild(el('p', { text: t('Owner Service Temporarily Unavailable — could not check licensing status.') }));
     content.appendChild(retryBtn);
   }
 
@@ -505,20 +514,20 @@
 
     content.appendChild(el('div', {}, [stateBadge('ACTIVATING')]));
     content.appendChild(el('p', {
-      text: 'Your license key was received. This activation is waiting for approval '
+      text: t('Your license key was received. This activation is waiting for approval '
         + 'from Action Aura before this installation can be used. You do not need to '
-        + 'enter the key again in this window.',
+        + 'enter the key again in this window.'),
     }));
     content.appendChild(el('p', {
       id: 'awaiting-status',
-      text: 'Checking with the licensing service automatically every 30 seconds…',
+      text: t('Checking with the licensing service automatically every 30 seconds…'),
     }));
 
     const installationId = (status && status.installation_id)
       || (pending && pending.installation_id);
     if (installationId) {
       const dl = el('dl');
-      addStatusRow(dl, 'Installation', installationId);
+      addStatusRow(dl, t('Installation'), installationId);
       content.appendChild(dl);
     }
 
@@ -527,7 +536,7 @@
     // Not 'awaiting-checkin-btn' any more: this button re-submits the
     // activation, it does not check in. The old id named the route that could
     // never resolve this screen -- see the block comment above.
-    const checkNowBtn = el('button', { id: 'awaiting-recheck-btn', className: 'secondary', text: 'Check Now' });
+    const checkNowBtn = el('button', { id: 'awaiting-recheck-btn', className: 'secondary', text: t('Check Now') });
     checkNowBtn.addEventListener('click', () => {
       clearMessage();
       pollActivationApproval(true);
@@ -538,7 +547,7 @@
     // better-looking trap. A customer who mistyped the key, or was issued one
     // Owner is never going to approve, has to be able to get back to the form
     // under their own power -- clearing the marker is all that takes.
-    const differentKeyBtn = el('button', { id: 'use-different-key-btn', className: 'secondary', text: 'Use a different key' });
+    const differentKeyBtn = el('button', { id: 'use-different-key-btn', className: 'secondary', text: t('Use a different key') });
     differentKeyBtn.addEventListener('click', () => {
       stopAwaitingPoll();
       clearActivationPending();
@@ -594,7 +603,7 @@
       result = await apiPost('/api/licensing/activate', { license_key: key });
     } catch (e) {
       if (generation === awaitingPollGeneration && fromButton) {
-        showMessage(REASON_MESSAGES.NETWORK_UNAVAILABLE, 'error');
+        showMessage(t(REASON_MESSAGES.NETWORK_UNAVAILABLE), 'error');
       }
       return;
     }
@@ -608,8 +617,8 @@
       // Owner still hasn't ruled on it. Stay put, say so honestly, tick again.
       const line = document.getElementById('awaiting-status');
       if (line) {
-        line.textContent = 'Still waiting for approval. Last checked at '
-          + new Date().toLocaleTimeString() + '.';
+        line.textContent = t('Still waiting for approval. Last checked at')
+          + ' ' + new Date().toLocaleTimeString() + '.';
       }
       return;
     }
@@ -621,7 +630,7 @@
       // legitimately needs a key.
       stopAwaitingPoll();
       clearActivationPending();
-      showMessage('This installation has been approved and activated.', 'info');
+      showMessage(t('This installation has been approved and activated.'), 'info');
       if (new URLSearchParams(location.search).get('gate') === '1') {
         // Same bounce the SUCCESS path in onActivateClicked() does: the user
         // was sent here by app-shell's boot gate and belongs back in the app.
@@ -635,7 +644,7 @@
     const reason = result.body.reason_code || 'ACTIVATION_REJECTED';
     if (TRANSIENT_REASON_CODES[reason]) {
       if (fromButton) {
-        showMessage(REASON_MESSAGES[reason] || REASON_MESSAGES.SERVICE_TEMPORARILY_UNAVAILABLE, 'error');
+        showMessage(t(REASON_MESSAGES[reason] || REASON_MESSAGES.SERVICE_TEMPORARILY_UNAVAILABLE), 'error');
       }
       return;
     }
@@ -696,8 +705,8 @@
     // real screenshot of the gate feature this message shares).
     const genuinelyUnconfigured = state === 'NOT_CONFIGURED' && !!status.detail;
     const detailText = genuinelyUnconfigured
-      ? 'This installation is not yet connected to a licensing server. Owner licensing is not configured for this build.'
-      : 'Enter your Aura Retail license key to activate this installation.';
+      ? t('This installation is not yet connected to a licensing server. Owner licensing is not configured for this build.')
+      : t('Enter your Aura Retail license key to activate this installation.');
     content.appendChild(el('p', { text: detailText }));
 
     if (pendingWithoutKey && !genuinelyUnconfigured) {
@@ -709,21 +718,21 @@
       // ActivationPending comment) -- and it is also the only action that can
       // move this device forward from here.
       content.appendChild(el('p', {
-        text: 'A license key from this installation is already waiting for approval from '
+        text: t('A license key from this installation is already waiting for approval from '
           + 'Action Aura. This window no longer has a copy of it, so enter the same key '
           + 'again to check whether it has been approved — re-submitting it is safe and '
-          + 'does not create a second request.',
+          + 'does not create a second request.'),
       }));
     }
 
-    content.appendChild(el('label', { htmlFor: 'license-key-input', text: 'License key' }));
+    content.appendChild(el('label', { htmlFor: 'license-key-input', text: t('License key') }));
     const input = el('input', {
       id: 'license-key-input', type: 'text', autocomplete: 'off', spellcheck: false,
       placeholder: 'AURA-RETAIL-XXXX-YYYY-ZZZZ',
     });
     content.appendChild(input);
 
-    const activateBtn = el('button', { id: 'activate-btn', text: 'Activate' });
+    const activateBtn = el('button', { id: 'activate-btn', text: t('Activate') });
     activateBtn.addEventListener('click', () => onActivateClicked(input, activateBtn));
     content.appendChild(activateBtn);
   }
@@ -731,7 +740,7 @@
   async function onActivateClicked(input, btn) {
     const key = input.value.trim();
     if (!key) {
-      showMessage('Please enter a license key.', 'error');
+      showMessage(t('Please enter a license key.'), 'error');
       return;
     }
 
@@ -739,7 +748,7 @@
     btn.disabled = true;
     clearChildren(btn);
     btn.appendChild(el('span', { className: 'spinner' }));
-    btn.appendChild(document.createTextNode(' Activating…'));
+    btn.appendChild(document.createTextNode(' ' + t('Activating…')));
 
     const badge = content.querySelector('.state-badge');
     if (badge) badge.replaceWith(stateBadge('ACTIVATING'));
@@ -752,7 +761,7 @@
         // Fully activated -- retire any marker left behind by an earlier
         // PENDING submission on this device.
         clearActivationPending();
-        showMessage('Activation successful.', 'info');
+        showMessage(t('Activation successful.'), 'info');
         // Reached via app-shell.js's pre-login activation gate (?gate=1) --
         // bounce back to '/' so init() re-runs and, now that this device is
         // activated, proceeds straight to setup/login. The settings-accessed
@@ -801,7 +810,7 @@
         showMessage(reasonMessage(reason), 'error');
       }
     } catch (e) {
-      showMessage(REASON_MESSAGES.NETWORK_UNAVAILABLE, 'error');
+      showMessage(t(REASON_MESSAGES.NETWORK_UNAVAILABLE), 'error');
     }
     await refresh();
   }
@@ -820,30 +829,30 @@
     content.appendChild(el('div', {}, [stateBadge(state)]));
 
     const dl = el('dl');
-    addStatusRow(dl, 'Product', status.product_code || '—');
-    if (status.installation_id) addStatusRow(dl, 'Installation', status.installation_id);
-    if (status.license_status) addStatusRow(dl, 'License status', status.license_status);
-    if (status.last_successful_checkin_at) addStatusRow(dl, 'Last check-in', status.last_successful_checkin_at);
+    addStatusRow(dl, t('Product'), status.product_code || '—');
+    if (status.installation_id) addStatusRow(dl, t('Installation'), status.installation_id);
+    if (status.license_status) addStatusRow(dl, t('License status'), status.license_status);
+    if (status.last_successful_checkin_at) addStatusRow(dl, t('Last check-in'), status.last_successful_checkin_at);
     content.appendChild(dl);
 
     if (state === 'RESTRICTED' || state === 'GRACE_PERIOD' || state === 'WARNING') {
       content.appendChild(el('p', {
-        text: 'Some features are limited in this state. Existing records remain fully viewable, and backup/restore/export remain available.',
+        text: t('Some features are limited in this state. Existing records remain fully viewable, and backup/restore/export remain available.'),
       }));
     }
     if (state === 'SUSPENDED' || state === 'REVOKED' || state === 'EXPIRED') {
       content.appendChild(el('p', {
-        text: 'Commercial features are unavailable. Your existing data is safe and remains viewable; backup, restore, and export remain available.',
+        text: t('Commercial features are unavailable. Your existing data is safe and remains viewable; backup, restore, and export remain available.'),
       }));
     }
 
     const row = el('div', { className: 'row' });
-    const checkinBtn = el('button', { id: 'checkin-btn', className: 'secondary', text: 'Check Now' });
+    const checkinBtn = el('button', { id: 'checkin-btn', className: 'secondary', text: t('Check Now') });
     checkinBtn.addEventListener('click', () => onCheckInClicked(checkinBtn));
     row.appendChild(checkinBtn);
 
     if (canDeactivate) {
-      const deactivateBtn = el('button', { id: 'deactivate-btn', className: 'danger', text: 'Deactivate This Device' });
+      const deactivateBtn = el('button', { id: 'deactivate-btn', className: 'danger', text: t('Deactivate This Device') });
       deactivateBtn.addEventListener('click', onDeactivateClicked);
       row.appendChild(deactivateBtn);
     }
@@ -856,27 +865,27 @@
     try {
       const { status, body } = await apiPost('/api/licensing/check-in', {});
       if (status === 200 && body.last_attempt_reached_owner) {
-        showMessage('Check-in complete.', 'info');
+        showMessage(t('Check-in complete.'), 'info');
       } else if (status === 200) {
         // The route reports current status either way (Part AD: a network
         // blip must not look like an error state) -- but this specific
         // attempt did not actually reach Owner, and the UI should say so
         // honestly rather than claim success.
-        showMessage('Could not reach the licensing service. Your current status is unchanged.', 'error');
+        showMessage(t('Could not reach the licensing service. Your current status is unchanged.'), 'error');
       } else {
-        showMessage(REASON_MESSAGES[body.reason_code] || REASON_MESSAGES.SERVICE_TEMPORARILY_UNAVAILABLE, 'error');
+        showMessage(t(REASON_MESSAGES[body.reason_code] || REASON_MESSAGES.SERVICE_TEMPORARILY_UNAVAILABLE), 'error');
       }
     } catch (e) {
-      showMessage(REASON_MESSAGES.NETWORK_UNAVAILABLE, 'error');
+      showMessage(t(REASON_MESSAGES.NETWORK_UNAVAILABLE), 'error');
     }
     await refresh();
   }
 
   async function onDeactivateClicked() {
     const ok = await confirmDialog({
-      title: 'Deactivate this device?',
-      message: 'You will need to reactivate with a license key to use commercial features again.',
-      confirmLabel: 'Deactivate',
+      title: t('Deactivate this device?'),
+      message: t('You will need to reactivate with a license key to use commercial features again.'),
+      confirmLabel: t('Deactivate'),
       danger: true,
     });
     if (!ok) {
@@ -891,15 +900,26 @@
         // form rather than an awaiting-approval screen for a submission that
         // is no longer relevant to this device.
         clearActivationPending();
-        showMessage('This device has been deactivated.', 'info');
+        showMessage(t('This device has been deactivated.'), 'info');
       } else {
-        showMessage(REASON_MESSAGES[body.reason_code] || REASON_MESSAGES.ACTIVATION_REJECTED, 'error');
+        showMessage(t(REASON_MESSAGES[body.reason_code] || REASON_MESSAGES.ACTIVATION_REJECTED), 'error');
       }
     } catch (e) {
-      showMessage(REASON_MESSAGES.NETWORK_UNAVAILABLE, 'error');
+      showMessage(t(REASON_MESSAGES.NETWORK_UNAVAILABLE), 'error');
     }
     await refresh();
   }
 
-  refresh();
+  // Gate the first render on the translation dictionaries the same way
+  // index.html gates SubsystemApp.init() -- see i18n.js's docstring/apply():
+  // this is what lets the very first paint (STATE_LABELS/REASON_MESSAGES
+  // etc., all resolved through t() above) come out already in the right
+  // language instead of flashing English before the DOM-sweep catches up.
+  // Falls back to an immediate refresh() when AuraI18n isn't present (see
+  // the t() fallback above for why that has to be possible).
+  if (typeof window !== 'undefined' && window.AuraI18n) {
+    window.AuraI18n.load().then(refresh);
+  } else {
+    refresh();
+  }
 })();

@@ -73,7 +73,7 @@
   dt { font-size: 0.78rem; color: #777; margin-top: 10px; }
   dd { margin: 0; font-size: 0.92rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+  th, td { text-align: start; padding: 6px 8px; border-bottom: 1px solid #eee; }
   @media (prefers-color-scheme: dark) { th, td { border-color: #2a2d33; } }
   .hint { font-size: 0.78rem; color: #777; margin-top: 4px; }
   @media (prefers-color-scheme: dark) { .hint { color: #999; } }
@@ -97,38 +97,45 @@
   .confirm-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
   .confirm-message { margin: 0 0 18px; font-size: 0.9rem; color: #444; line-height: 1.5; }
   @media (prefers-color-scheme: dark) { .confirm-message { color: #ccc; } }
+  /* i18n/RTL (2026-09-09): this page has no design-token stylesheet to draw
+     from (see the confirm-dialog comment above), so the back-arrow glyph is
+     mirrored here directly rather than via css/rtl.css's data-aura-dir
+     convention, which this standalone document does not load. i18n.js sets
+     dir="rtl" on <html> when Arabic is active -- see its apply(). */
+  [dir="rtl"] .i18n-arrow { display: inline-block; transform: scaleX(-1); }
 </style>
 </head>
 <body>
-  <a class="back-link" href="/">&larr; Back to Aura Retail</a>
-  <h1>Jordan E-Invoicing (JoFotara)</h1>
+  <a class="back-link" href="/"><span class="i18n-arrow">&larr;</span> <span data-i18n="Back to Aura Retail">Back to Aura Retail</span></a>
+  <h1 data-i18n="Jordan E-Invoicing (JoFotara)">Jordan E-Invoicing (JoFotara)</h1>
   <!-- "Off by default" was true until 2026-09-08 and is now the opposite of
        the truth: Jordan has mandated e-invoicing since 2024, so the feature
        ships enabled and every sale is recorded from the first one. -->
-  <div class="subtitle">Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.</div>
+  <div class="subtitle" data-i18n="Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.">Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.</div>
 
   <div id="message-area"></div>
 
   <div class="card">
-    <h2>Status</h2>
-    <div id="status-content">Loading…</div>
+    <h2 data-i18n="Status">Status</h2>
+    <div id="status-content" data-i18n="Loading…">Loading…</div>
   </div>
 
   <div class="card">
-    <h2>Settings</h2>
-    <div id="settings-content">Loading…</div>
+    <h2 data-i18n="Settings">Settings</h2>
+    <div id="settings-content" data-i18n="Loading…">Loading…</div>
   </div>
 
   <div class="card">
-    <h2>JoFotara account credentials</h2>
-    <div id="credentials-content">Loading…</div>
+    <h2 data-i18n="JoFotara account credentials">JoFotara account credentials</h2>
+    <div id="credentials-content" data-i18n="Loading…">Loading…</div>
   </div>
 
   <div class="card">
-    <h2>Submission queue</h2>
-    <div id="outbox-content">Loading…</div>
+    <h2 data-i18n="Submission queue">Submission queue</h2>
+    <div id="outbox-content" data-i18n="Loading…">Loading…</div>
   </div>
 
+  <script src="i18n.js"></script>
   <script src="einvoicing.js"></script>
 </body>
 </html>
