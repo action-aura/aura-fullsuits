@@ -235,11 +235,22 @@ function testTokensAreNamedForPurposeNotAppearance() {
 
 /* The sanctioned bundled typefaces. A CLOSED list, in the same spirit as this
    file's exemption list and DESIGN.md's frozen THEME_NAMES: adding a face is a
-   visible, reviewable edit here, never something that happens by accident. */
+   visible, reviewable edit here, never something that happens by accident.
+
+   Each entry names the licence file that must ship beside the font. Both faces
+   are under the SIL Open Font License 1.1, which requires the licence and its
+   copyright notice to travel with any distribution of the font -- and this one
+   is distributed inside a commercial installer that a customer pays for. The
+   packaging spec bundles the whole frontend directory, so a licence file placed
+   next to the woff2 reaches every install; one that is missing here is missing
+   there too, silently. Neither licence shipped until 2026-09-09. */
 const SANCTIONED_FAMILIES = [
-  'IBM Plex Sans Arabic',   // Arabic-only subset; carries no Latin on purpose
-  'Plus Jakarta Sans',      // latin subset; the product's Latin face
+  // Arabic-only subset; carries no Latin on purpose.
+  { name: 'IBM Plex Sans Arabic', licence: 'IBMPlexSansArabic-OFL.txt' },
+  // latin subset; the product's Latin face.
+  { name: 'Plus Jakarta Sans', licence: 'PlusJakartaSans-OFL.txt' },
 ];
+const SANCTIONED_FAMILY_NAMES = SANCTIONED_FAMILIES.map((f) => f.name);
 
 function testBundledTypefacesAreSanctionedAndDoNotShareFiles() {
   /* The stylesheet used to declare three families -- Inter, Outfit and Plus
@@ -280,9 +291,9 @@ function testBundledTypefacesAreSanctionedAndDoNotShareFiles() {
   }
 
   assert.deepStrictEqual(
-    [...families].sort(), [...SANCTIONED_FAMILIES].sort(),
+    [...families].sort(), [...SANCTIONED_FAMILY_NAMES].sort(),
     `Bundled @font-face families are ${[...families].sort().join(', ')}, but the ` +
-    `sanctioned set is ${[...SANCTIONED_FAMILIES].sort().join(', ')}. Adding a ` +
+    `sanctioned set is ${[...SANCTIONED_FAMILY_NAMES].sort().join(', ')}. Adding a ` +
     'typeface is a design decision: put it in SANCTIONED_FAMILIES above, with a ' +
     'comment saying what it is for, so the type system stays something that was ' +
     'chosen rather than something that accumulated.'
@@ -297,6 +308,29 @@ function testBundledTypefacesAreSanctionedAndDoNotShareFiles() {
     'exactly the Inter/Outfit/Jakarta drift this test was written for -- three ' +
     'names, one set of files, a type system that looked intentional and was not. ' +
     'Two families must never share a font file.'
+  );
+
+  /* Every bundled face must ship its licence. Both are SIL Open Font License
+     1.1, which requires the licence and its copyright notice to be distributed
+     WITH the font -- and this font is distributed inside an installer a customer
+     pays for. The packaging spec bundles the whole frontend directory, so a
+     licence sitting next to the woff2 reaches every install and a missing one is
+     missing on every install, with nothing to notice it. Neither licence shipped
+     at all until 2026-09-09; this check is why that cannot recur. */
+  const FONT_DIR = path.join(__dirname, '..', 'frontend', 'fonts');
+  const missingLicences = SANCTIONED_FAMILIES
+    .filter((f) => {
+      const p = path.join(FONT_DIR, f.licence);
+      return !fs.existsSync(p) || fs.statSync(p).size < 1000;
+    })
+    .map((f) => `${f.name} -> ${f.licence}`);
+  assert.deepStrictEqual(
+    missingLicences, [],
+    `Bundled typeface(s) shipping without their licence: ${missingLicences.join('; ')}. ` +
+    'The SIL Open Font License requires its text and copyright notice to travel ' +
+    'with the font, including inside a paid installer. Put the real licence file ' +
+    'in frontend/fonts/ -- download the font\'s own OFL.txt, never copy another ' +
+    'font\'s and edit the copyright line.'
   );
 
   const clean = stripComments(css);
