@@ -77,7 +77,7 @@ def app(db_path, tmp_path, monkeypatch):
     )
 
     flask_app = Flask(__name__)
-    flask_app.secret_key = "test-secret"
+    flask_app.secret_key = "test-secret"  # pragma: allowlist secret -- a Flask test secret_key, literally the string 'test-secret'
     flask_app.testing = True
     flask_app.register_blueprint(onboarding_bp)
     return flask_app
@@ -87,7 +87,7 @@ def app(db_path, tmp_path, monkeypatch):
 def admin(app):
     client = app.test_client()
     r = client.post('/api/onboarding/create-admin', json={
-        'name': 'Owner', 'email': 'owner@test.local', 'password': 'OwnerPW11',
+        'name': 'Owner', 'email': 'owner@test.local', 'password': 'OwnerPW11',  # pragma: allowlist secret -- throwaway fixture for an account this test creates
     })
     assert r.status_code == 200, r.get_json()
     return client

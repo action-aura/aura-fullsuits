@@ -70,7 +70,7 @@ def teardown_module(module):
 #: clinical content -- a lab test name alone can reveal a condition -- and
 #: the log has a wider audience and a longer life than the audit table the
 #: value was bound for.
-SECRET_DETAILS = 'patient=Fatima test=HIV-1/2 antibody result=reactive'
+SECRET_DETAILS = 'patient=Fatima test=HIV-1/2 antibody result=reactive'  # pragma: allowlist secret -- synthetic patient detail this test asserts is NEVER logged; the string must stay for the assertion to mean anything
 
 
 @pytest.fixture
@@ -208,7 +208,7 @@ def test_a_patient_is_still_created_when_the_audit_table_is_gone(caplog):
     reg.close()
 
     client = app.test_client()
-    assert client.post('/api/auth/login', json={'email': email, 'password': 'AuditPW1'}).status_code == 200
+    assert client.post('/api/auth/login', json={'email': email, 'password': 'AuditPW1'}).status_code == 200  # pragma: allowlist secret -- throwaway fixture for an account this test creates
 
     conn = get_clinic_conn()
     conn.execute('DROP TABLE clinic_audit_log')
