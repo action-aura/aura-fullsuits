@@ -758,6 +758,47 @@ window.AuraIcons = (function () {
       "<path d=\"M14.12 14.12 16 16\" />"
     ],
     heavy: [0]
+  },
+  // 2026-09-09 -- four names the app was drawing as raw system emoji because
+  // no geometry existed for them. 'plus' and 'camera' are the two the design
+  // brief called out by name; 'pause' and 'info' are here for the same reason
+  // and were found by the same scan (the Hold button and the scanner-settings
+  // note), so they are fixed in the same pass rather than left to be
+  // rediscovered later.
+  'plus': {  // ONE element on purpose: a plus whose two strokes carry
+             // different weights reads as a dagger, so there is no honest
+             // light/heavy split to make here. Both bars live in a single
+             // path with two subpaths, which is one mark at one weight and
+             // keeps the contrast rule about icons that genuinely have parts.
+    el: [
+      "<path d=\"M5 12h14M12 5v14\" />"
+    ],
+    heavy: [0]
+  },
+  'camera': {  // the lens -- the body is just what holds it
+    el: [
+      "<path d=\"M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z\" />",
+      "<circle cx=\"12\" cy=\"13\" r=\"3\" />"
+    ],
+    heavy: [0],
+    accent: [1]
+  },
+  'pause': {  // same reasoning as 'plus': neither bar is the subordinate one,
+              // so one path with two subpaths rather than a fake hierarchy.
+              // Drawn as strokes, not filled rects, so it inherits the two
+              // stroke weights the rest of the set is built on.
+    el: [
+      "<path d=\"M10 4v16M14 4v16\" />"
+    ],
+    heavy: [0]
+  },
+  'info': {  // the stem carries the meaning; the dot is the tell it is not an 'l'
+    el: [
+      "<circle cx=\"12\" cy=\"12\" r=\"10\" />",
+      "<path d=\"M12 16v-4\" />",
+      "<path d=\"M12 8h.01\" />"
+    ],
+    heavy: [1, 2]
   }
   };
 
@@ -834,7 +875,40 @@ window.AuraIcons = (function () {
     "💍": "gem",
     "👟": "footprints",
     "⚽": "dumbbell",
-    "💄": "flower"
+    "💄": "flower",
+    // 2026-09-09 -- the glyphs a codepoint-range scan found still being drawn
+    // raw in rendered markup, mostly in import-wizard.js (which had never
+    // called AuraIcons at all) and in subsystem-retail.js modal headings that
+    // bypass _icon().
+    //
+    // Note the two printer keys. The existing "🖨" above is U+1F5A8 on its
+    // own; every call site actually writes U+1F5A8 U+FE0F, the emoji
+    // presentation form. Those are different strings, so the old key never
+    // matched what the app was passing and render() would have fallen through
+    // to the placeholder. Both spellings are mapped rather than one being
+    // "fixed", because either can legitimately arrive.
+    "➕": "plus",
+    "📷": "camera",
+    "⏸": "pause",
+    "⏸️": "pause",
+    "ℹ️": "info",
+    "✅": "circle-check-big",
+    "⏳": "timer",
+    "📁": "folder",
+    "🗂️": "folder",
+    "⬆": "upload",
+    "⬆️": "upload",
+    "⬇": "download",
+    "⬇️": "download",
+    "🖨️": "printer",
+    "🧹": "sparkles",
+    // Same variation-selector trap as the printer, one row up: "📝" was
+    // mapped, but the edit affordances across this app are written "✏️"
+    // (U+270F U+FE0F), and "⚠" appears both with and without U+FE0F in
+    // warning prefixes. Map every spelling that actually occurs.
+    "✏️": "square-pen",
+    "✏": "square-pen",
+    "⚠": "triangle-alert"
   };
 
   // Every element is one self-closing tag (<path .../>, <circle .../>,

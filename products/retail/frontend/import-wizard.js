@@ -88,7 +88,7 @@ const ImportWizard = {
     this._smartShell(`
       <div class="iw-drop" id="iw-sdrop" onclick="document.getElementById('iw-sfile').click()">
         <input type="file" id="iw-sfile" accept=".csv,.xlsx,.xls,.json,.db,.sqlite,.sqlite3" style="display:none" onchange="ImportWizard._smartOnFile(this.files[0])" />
-        <div style="font-size:46px;margin-bottom:12px">🗂️</div>
+        <div style="margin-bottom:12px">${this._icon('folder', 46, '🗂️')}</div>
         <div id="iw-sdrop-text" style="color:var(--text-primary);font-size:16px;font-weight:600;margin-bottom:6px">${this._t('Drop a file here or click to browse')}</div>
         <div style="color:var(--text-tertiary);font-size:13px">${this._t("CSV, Excel or JSON — combined or single-type, we'll figure it out")}</div>
       </div>
@@ -105,7 +105,17 @@ const ImportWizard = {
   _smartOnFile(file) {
     if (!file) return;
     this._smartFile = file;
-    const t = document.getElementById('iw-sdrop-text'); if (t) t.textContent = '📄 ' + file.name;
+    const t = document.getElementById('iw-sdrop-text');
+    if (t) {
+      // textContent can't hold the icon's SVG markup, and file.name is
+      // user-controlled -- so the icon goes in via innerHTML while the
+      // filename lands through a child textContent, never interpolated
+      // into the HTML string itself.
+      t.innerHTML = this._icon('file-text', 16, '📄') + ' ';
+      const nameEl = document.createElement('span');
+      nameEl.textContent = file.name;
+      t.appendChild(nameEl);
+    }
     const b = document.getElementById('iw-sdetect'); if (b) b.disabled = false;
   },
 
@@ -218,7 +228,7 @@ const ImportWizard = {
           </div>` : ''}
         </div>`).join('');
         el.innerHTML = `<div style="background:var(--state-success-surface);border:1px solid var(--state-success-border);border-radius:10px;padding:14px">
-          <div style="color:var(--text-primary);font-weight:700;margin-bottom:8px">✅ Imported ${data.total_imported} records across ${data.results.length} function(s)</div>${rowsHtml}</div>`;
+          <div style="color:var(--text-primary);font-weight:700;margin-bottom:8px">${this._icon('circle-check-big', 16, '✅')} Imported ${data.total_imported} records across ${data.results.length} function(s)</div>${rowsHtml}</div>`;
         if (btn) { btn.textContent = this._t('Done'); btn.disabled = false; btn.onclick = () => { ImportWizard.close(); try { if (window.SubsystemApp && SubsystemApp.active) SubsystemApp._navigate(SubsystemApp.currentSection); } catch (e) {} }; }
       } else {
         el.innerHTML = `<div style="background:var(--state-danger-surface);border:1px solid var(--state-danger-border);border-radius:10px;padding:14px;color:var(--state-danger-text)">${this._esc(data.error || 'Import failed')}</div>`;
@@ -395,7 +405,7 @@ const ImportWizard = {
     this._shell(1, `
       <div class="iw-drop" id="iw-drop" onclick="document.getElementById('iw-file').click()">
         <input type="file" id="iw-file" accept=".csv,.xlsx,.xls,.json,.db,.sqlite,.sqlite3" style="display:none" onchange="ImportWizard._onFilePicked(this.files[0])" />
-        <div style="font-size:46px;margin-bottom:12px">📁</div>
+        <div style="margin-bottom:12px">${this._icon('folder', 46, '📁')}</div>
         <div id="iw-drop-text" style="color:var(--text-primary);font-size:16px;font-weight:600;margin-bottom:6px">${this._t('Drop your file here or click to browse')}</div>
         <div style="color:var(--text-tertiary);font-size:13px">${this._t('Supports CSV, Excel (.xlsx), JSON, and SQLite (.db)')}</div>
       </div>
@@ -405,7 +415,7 @@ const ImportWizard = {
         </div>
         <div>${fieldList}</div>
         <div style="margin-top:14px">
-          <button class="iw-tmpl-link" onclick="ImportWizard.downloadTemplate()">⬇ ${this._t('Download a blank CSV template')}</button>
+          <button class="iw-tmpl-link" onclick="ImportWizard.downloadTemplate()">${this._icon('download', 16, '⬇')} ${this._t('Download a blank CSV template')}</button>
         </div>
       </div>
     `, `
@@ -426,7 +436,15 @@ const ImportWizard = {
   _onFilePicked(file) {
     if (!file) return;
     this._file = file;
-    document.getElementById('iw-drop-text').textContent = `📄 ${file.name}`;
+    // textContent can't hold the icon's SVG markup, and file.name is
+    // user-controlled -- so the icon goes in via innerHTML while the
+    // filename lands through a child textContent, never interpolated
+    // into the HTML string itself.
+    const dropText = document.getElementById('iw-drop-text');
+    dropText.innerHTML = this._icon('file-text', 16, '📄') + ' ';
+    const nameEl = document.createElement('span');
+    nameEl.textContent = file.name;
+    dropText.appendChild(nameEl);
     document.getElementById('iw-next1').disabled = false;
   },
 
@@ -519,7 +537,7 @@ const ImportWizard = {
     const sugg = this._parsed.entity_suggestions || [];
     const entityBanner = sugg.length ? `
       <div class="iw-entity-banner">
-        ⚠ ${this._t("This file doesn't look like")} <b>${this._esc(this._t(this._schema.label))}</b>. ${this._t('It matches')}
+        ${this._icon('triangle-alert', 16, '⚠')} ${this._t("This file doesn't look like")} <b>${this._esc(this._t(this._schema.label))}</b>. ${this._t('It matches')}
         ${sugg.map(s => `<b>${this._esc(this._t(s.label))}</b>`).join(' ' + this._t('or') + ' ')} ${this._t('better.')}
         <div>${sugg.map(s => `<button onclick="ImportWizard._switchEntity('${s.system}','${s.entity}')">${this._t('Switch to')} ${this._esc(this._t(s.label))}</button>`).join('')}</div>
       </div>` : '';
@@ -528,7 +546,7 @@ const ImportWizard = {
     const unmappedReq = this._schema.fields.filter(f => f.required && !this._mapping[f.key]);
     const lowBanner = (!sugg.length && unmappedReq.length) ? `
       <div class="iw-lowmatch-banner">
-        ⚠ ${unmappedReq.length} ${this._t(unmappedReq.length>1 ? 'required fields' : 'required field')}
+        ${this._icon('triangle-alert', 16, '⚠')} ${unmappedReq.length} ${this._t(unmappedReq.length>1 ? 'required fields' : 'required field')}
         (${unmappedReq.map(f=>this._esc(this._t(f.label))).join(', ')}) ${this._t("couldn't be matched automatically — please pick the right column below.")}
       </div>` : '';
 
@@ -552,7 +570,7 @@ const ImportWizard = {
       <div style="background:var(--surface-accent-soft);border:1px solid var(--border-default);border-radius:10px;padding:12px 16px;margin-bottom:18px;color:var(--accent-action);font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
         <span>✓ ${this._t('Found')} <strong>${this._parsed.total}</strong> ${this._t('rows and')} <strong>${cols.length}</strong> ${this._t('columns.')}
         ${this._t('We auto-matched your columns below — review and adjust if needed.')}</span>
-        <button class="iw-tmpl-link" style="white-space:nowrap" onclick="ImportWizard.downloadTemplate()">⬇ ${this._t('Download matching template')}</button>
+        <button class="iw-tmpl-link" style="white-space:nowrap" onclick="ImportWizard.downloadTemplate()">${this._icon('download', 16, '⬇')} ${this._t('Download matching template')}</button>
       </div>
       ${entitySelector}
       ${entityBanner}
@@ -721,11 +739,11 @@ const ImportWizard = {
         ${badge(this._t('Empty'), cat.empty, catColors.empty)}
       </div>
 
-      <div style="color:var(--text-primary);font-size:13px;font-weight:700;margin:0 0 6px">🧹 ${this._t('Cleaning Audit Log')}</div>
+      <div style="color:var(--text-primary);font-size:13px;font-weight:700;margin:0 0 6px">${this._icon('sparkles', 16, '🧹')} ${this._t('Cleaning Audit Log')}</div>
       <div style="background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:10px;margin-bottom:18px">${logRows}</div>
 
       ${(report.issues && report.issues.length) ? `
-      <div style="color:var(--text-primary);font-size:13px;font-weight:700;margin:0 0 6px">⚠ ${this._t('Removed / Skipped rows')} (${report.issues.length})</div>
+      <div style="color:var(--text-primary);font-size:13px;font-weight:700;margin:0 0 6px">${this._icon('triangle-alert', 16, '⚠')} ${this._t('Removed / Skipped rows')} (${report.issues.length})</div>
       <div style="max-height:180px;overflow-y:auto;background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:10px;margin-bottom:18px">${issuesRows}</div>` : ''}
 
       ${sampleTable ? `<div style="color:var(--text-primary);font-size:13px;font-weight:700;margin:0 0 4px">✓ ${this._t('Cleaned data preview')}</div>${sampleTable}` : ''}
@@ -759,7 +777,7 @@ const ImportWizard = {
           // Nothing actually landed — never show a green success here.
           resultEl.innerHTML = `
             <div style="background:var(--state-danger-surface);border:1px solid var(--state-danger-border);border-radius:10px;padding:16px;text-align:center">
-              <div style="font-size:40px;margin-bottom:8px">⚠️</div>
+              <div style="margin-bottom:8px">${this._icon('triangle-alert', 40, '⚠️')}</div>
               <div style="color:var(--text-primary);font-size:16px;font-weight:700;margin-bottom:4px">${this._t('No records imported')}</div>
               <div style="color:var(--state-danger-text);font-size:14px">${this._esc(data.message || '')}</div>
             </div>`;
@@ -767,7 +785,7 @@ const ImportWizard = {
           const partial = status === 'partial';
           resultEl.innerHTML = `
             <div style="background:var(--state-success-surface);border:1px solid var(--state-success-border);border-radius:10px;padding:16px;text-align:center">
-              <div style="font-size:40px;margin-bottom:8px">${partial ? '⚠️' : '✅'}</div>
+              <div style="margin-bottom:8px">${partial ? this._icon('triangle-alert', 40, '⚠️') : this._icon('circle-check-big', 40, '✅')}</div>
               <div style="color:var(--text-primary);font-size:16px;font-weight:700;margin-bottom:4px">${this._t(partial ? 'Imported with warnings' : 'Import Complete')}</div>
               <div style="color:${partial ? 'var(--state-warning-text)' : 'var(--accent-action)'};font-size:14px">${this._esc(data.message || '')}</div>
               ${(data.updated ? `<div style="color:var(--text-muted);font-size:13px;margin-top:4px">${data.updated} ${this._t('existing records updated')}</div>` : '')}
@@ -777,7 +795,7 @@ const ImportWizard = {
         // Actionable warnings (e.g. "import Employees first") — always prominent.
         if (warnings.length) {
           resultEl.innerHTML += `<div style="background:var(--state-warning-surface);border:1px solid var(--state-warning-border);border-radius:10px;padding:12px;margin-top:10px">
-            ${warnings.map(w => `<div style="color:var(--state-warning-text);font-size:13px;margin:2px 0">⚠ ${this._esc(w)}</div>`).join('')}</div>`;
+            ${warnings.map(w => `<div style="color:var(--state-warning-text);font-size:13px;margin:2px 0">${this._icon('triangle-alert', 16, '⚠')} ${this._esc(w)}</div>`).join('')}</div>`;
         }
         // Refused opening-stock declarations. The catalogue half of these
         // rows DID land, so they never appear in row_errors or the skipped
@@ -864,6 +882,14 @@ const ImportWizard = {
 
   _esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  },
+
+  // Same guarded shape subsystem-retail.js's _icon uses at every call site:
+  // standalone test harnesses load this file without icons.js, so a bare
+  // AuraIcons.render(...) call would throw ReferenceError instead of
+  // degrading. `fallback` is the emoji glyph the icon replaces.
+  _icon(name, size, fallback, opts) {
+    return window.AuraIcons ? AuraIcons.render(name, size, opts) : (fallback || '');
   },
 };
 

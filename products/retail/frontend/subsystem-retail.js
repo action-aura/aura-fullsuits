@@ -1463,7 +1463,7 @@ const RetailSystem = {
           <p class="rdash-date" data-intl-date="true">${this._localeDate()}</p>
         </div>
         <div style="display:flex;gap:10px">
-          <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">🛒</span> <span>${t('Open the till')}</span></button>
+          <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">${this._icon('shopping-cart', 16, '🛒')}</span> <span>${t('Open the till')}</span></button>
         </div>
       </div>
 
@@ -1523,7 +1523,7 @@ const RetailSystem = {
         <div class="rdash-panel-hdr">
           <div class="sub-chart-title">${t('Recent Transactions')}</div>
           <div style="display:flex;gap:8px">
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('sales')"><span aria-hidden="true">🧾</span> <span>${t('Sales History')}</span></button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('sales')"><span aria-hidden="true">${this._icon('receipt', 16, '🧾')}</span> <span>${t('Sales History')}</span></button>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('reports')">${t('Full Report')}</button>
           </div>
         </div>
@@ -1729,7 +1729,7 @@ const RetailSystem = {
         </div>
       </div>
       <div class="sub-chart-card" style="text-align:center;padding-block:56px;padding-inline:32px">
-        <div style="font-size:40px;margin-block-end:14px" aria-hidden="true">🛒</div>
+        <div style="margin-block-end:14px" aria-hidden="true">${this._icon('shopping-cart', 40, '🛒')}</div>
         <h3 style="color:var(--text);margin-block:0 10px;font-size:20px;font-weight:700">${t('Ready to sell')}</h3>
         <!-- 2026-08-22: this paragraph used var(--text-muted), the legacy
              un-themed token that is defined once at :root (#9aa0a6) and never
@@ -1766,7 +1766,7 @@ const RetailSystem = {
              sweep a working SAFETY NET rather than a decorative one, and this
              file has now shipped the shared-text-node bug twice. -->
         <button class="sub-btn-primary" style="min-block-size:48px;padding-inline:24px;font-size:15px"
-          onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">🛒</span> <span>${t('Point of Sale')}</span></button>
+          onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">${this._icon('shopping-cart', 16, '🛒')}</span> <span>${t('Point of Sale')}</span></button>
       </div>`;
   },
 
@@ -2200,7 +2200,7 @@ const RetailSystem = {
                 <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
               <button class="pos-hold-btn" onclick="RetailSystem._holdSale()"
-                title="${this._esc(t('Park this sale and start a new one'))}"><span aria-hidden="true">⏸</span> <span>${t('Hold')}</span></button>
+                title="${this._esc(t('Park this sale and start a new one'))}"><span aria-hidden="true">${this._icon('pause', 16, '⏸')}</span> <span>${t('Hold')}</span></button>
             </div>
           </div>
           <div class="pos-cart-items" id="pos-cart" onmousedown="RetailSystem._keepScanFocus(event)">
@@ -2824,7 +2824,7 @@ const RetailSystem = {
     overlay.id = 'ret-hold-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:420px">
-        <h3>⏸ Hold This Sale</h3>
+        <h3>${this._icon('pause', 18, '⏸')} Hold This Sale</h3>
         <p style="color:var(--text-muted);margin:0 0 18px;font-size:13px;line-height:1.5">
           The cart is parked and cleared here so you can start a new sale. Resume it later from "Held Sales".
         </p>
@@ -3519,7 +3519,7 @@ const RetailSystem = {
         <p style="color:var(--text-muted);margin:0 0 22px">No item matches barcode
           <span style="font-family:monospace;color:var(--text-primary)">${code}</span></p>
         <div style="display:flex;flex-direction:column;gap:10px">
-          <button class="ret-btn ret-btn-primary" onclick="RetailSystem._addProductFromScan('${String(code).replace(/'/g,"\\'")}')">➕ Add New Product</button>
+          <button class="ret-btn ret-btn-primary" onclick="RetailSystem._addProductFromScan('${String(code).replace(/'/g,"\\'")}')">${this._icon('plus', 16, '➕')} Add New Product</button>
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">${this._icon('repeat', 16, '🔁')} Scan Again</button>
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">Cancel</button>
         </div>
@@ -3540,16 +3540,16 @@ const RetailSystem = {
   _captureBarcodeField() {
     const btn = document.getElementById('pm-scan-btn');
     const field = document.getElementById('pm-barcode');
-    if (btn) { btn.textContent = '⏳ Waiting…'; btn.disabled = true; }
+    if (btn) { btn.innerHTML = this._icon('timer', 16, '⏳') + ' Waiting…'; btn.disabled = true; }
     if (field) field.focus();
     this.captureNextScan((code) => {
       if (field) field.value = code;
-      if (btn) { btn.textContent = '📷 Scan'; btn.disabled = false; }
+      if (btn) { btn.innerHTML = this._icon('camera', 16, '📷') + ' Scan'; btn.disabled = false; }
       SubsystemApp.showToast('Barcode captured', 'success');
     });
     // If no scan arrives, restore the button so it never gets stuck.
     setTimeout(() => {
-      if (btn && btn.disabled) { btn.textContent = '📷 Scan'; btn.disabled = false; this.cancelCapture(); }
+      if (btn && btn.disabled) { btn.innerHTML = this._icon('camera', 16, '📷') + ' Scan'; btn.disabled = false; this.cancelCapture(); }
     }, 15000);
   },
 
@@ -4085,7 +4085,7 @@ const RetailSystem = {
         <h2 class="ret-title">Products & Inventory</h2>
         <div style="display:flex;gap:10px">
           <input class="ret-search" id="prod-search" data-i18n-ph="Search products…" placeholder="${t('Search products…')}" oninput="RetailSystem._filterProducts()" />
-          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">⬆ Import</button>
+          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">${this._icon('upload', 16, '⬆')} Import</button>
           <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ Add Product</button>
         </div>
       </div>
@@ -4187,7 +4187,7 @@ const RetailSystem = {
              keeps its ⚠ prefix so the severity is not colour-only. Above the
              threshold is unremarkable, so it is simply ordinary text. -->
         <td style="font-weight:600;color:var(--text-money)">${this._fmt(p.sell_price)}</td>
-        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?'⚠ ':''}${p.total_stock} ${p.unit||''}</td>
+        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${p.unit||''}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
         <td onclick="event.stopPropagation()" style="display:flex;gap:6px">
@@ -4237,7 +4237,7 @@ const RetailSystem = {
     overlay.id = 'ret-prod-modal';
     overlay.innerHTML = `
       <div class="ret-modal">
-        <h3>${isEdit ? '✏️ Edit Product' : '➕ Add Product'}</h3>
+        <h3>${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} ${isEdit ? 'Edit Product' : 'Add Product'}</h3>
         <div class="ret-field-row">
           <div class="ret-field"><label>Product Name *</label><input id="pm-name" value="${p.name||''}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
           <div class="ret-field"><label>SKU *</label><input id="pm-sku" value="${p.sku||''}" placeholder="SKU-001" /></div>
@@ -4246,7 +4246,7 @@ const RetailSystem = {
           <div class="ret-field"><label>Barcode</label>
             <div style="display:flex;gap:8px">
               <input id="pm-barcode" value="${p.barcode||''}" data-i18n-ph="Type or scan…" placeholder="${t('Type or scan…')}" style="flex:1" />
-              <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">📷 Scan</button>
+              <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">${this._icon('camera', 16, '📷')} Scan</button>
             </div>
           </div>
           <div class="ret-field"><label>Category</label><select id="pm-cat"><option value="">None</option>${catOpts}</select></div>
@@ -4335,7 +4335,7 @@ const RetailSystem = {
     overlay.id = 'ret-stock-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:380px">
-        <h3>📦 Adjust Stock — ${this._esc(name)}</h3>
+        <h3>${this._icon('package', 18, '📦')} Adjust Stock — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:var(--text-primary)">${currentStock}</strong></p>
         <div class="ret-field"><label>Adjustment Quantity (+ to add, − to deduct)</label>
           <input type="number" id="sa-qty" placeholder="+10 or -5" step="1" /></div>
@@ -4459,7 +4459,7 @@ const RetailSystem = {
     overlay.id = 'ret-cat-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
-        <h3>${isEdit ? '✏️ '+t('Edit Category') : '🏷️ '+t('Add Category')}</h3>
+        <h3>${this._icon(isEdit ? 'square-pen' : 'tag', 18, isEdit ? '✏️' : '🏷️')} ${isEdit ? t('Edit Category') : t('Add Category')}</h3>
         <div class="ret-field"><label>${t('Category Name')} *</label><input id="catm-name" value="${this._esc(cat.name)}" /></div>
         <div class="ret-field"><label>${t('Description')}</label><textarea id="catm-desc" rows="3">${this._esc(cat.description)}</textarea></div>
         <div class="ret-modal-footer">
@@ -4528,7 +4528,7 @@ const RetailSystem = {
         <h2 class="ret-title">Customers</h2>
         <div style="display:flex;gap:10px">
           <input class="ret-search" id="cust-search" data-i18n-ph="Search name, phone, email…" placeholder="${t('Search name, phone, email…')}" oninput="RetailSystem._filterCustomers()" />
-          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','customers',()=>RetailSystem._loadCustomers())">⬆ Import</button>
+          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','customers',()=>RetailSystem._loadCustomers())">${this._icon('upload', 16, '⬆')} Import</button>
           <button class="sub-btn-primary" onclick="RetailSystem._openAddCustomer()">+ Add Customer</button>
         </div>
       </div>
@@ -4599,7 +4599,7 @@ const RetailSystem = {
     overlay.id = 'ret-cust-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
-        <h3>${isEdit?'✏️ Edit Customer':'👤 Add Customer'}</h3>
+        <h3>${this._icon(isEdit ? 'square-pen' : 'user', 18, isEdit ? '✏️' : '👤')} ${isEdit ? 'Edit Customer' : 'Add Customer'}</h3>
         <div class="ret-field"><label>Full Name *</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
         <div class="ret-field-row">
           <div class="ret-field"><label>Phone</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
@@ -4865,7 +4865,7 @@ const RetailSystem = {
     overlay.id = 'ret-prm-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:480px">
-        <h3>${isEdit ? '✏️ '+t('Edit Promotion') : '🎁 '+t('Add Promotion')}</h3>
+        <h3>${this._icon(isEdit ? 'square-pen' : 'gift', 18, isEdit ? '✏️' : '🎁')} ${isEdit ? t('Edit Promotion') : t('Add Promotion')}</h3>
         <div class="ret-field-row">
           <div class="ret-field"><label>${t('Promotion Name')} *</label><input id="prm-name" value="${this._esc(promo.name||'')}" /></div>
           <div class="ret-field"><label>${t('Discount %')} *</label><input type="number" id="prm-disc" value="${promo.discount_pct||0}" min="0" max="100" step="0.1" /></div>
@@ -4976,7 +4976,7 @@ const RetailSystem = {
       <div class="ret-hdr">
         <h2 class="ret-title">Suppliers</h2>
         <div style="display:flex;gap:10px">
-          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','suppliers',()=>RetailSystem._loadSuppliers())">⬆ Import</button>
+          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','suppliers',()=>RetailSystem._loadSuppliers())">${this._icon('upload', 16, '⬆')} Import</button>
           <button class="sub-btn-primary" onclick="RetailSystem._openAddSupplier()">+ Add Supplier</button>
         </div>
       </div>
@@ -5044,7 +5044,7 @@ const RetailSystem = {
     overlay.id = 'ret-sup-modal';
     overlay.innerHTML = `
       <div class="ret-modal ${isEdit ? 'ret-modal-wide' : ''}" ${isEdit ? '' : 'style="width:440px"'}>
-        <h3>${isEdit?'✏️ Edit Supplier':'🏭 Add Supplier'}</h3>
+        <h3>${this._icon(isEdit ? 'square-pen' : 'factory', 18, isEdit ? '✏️' : '🏭')} ${isEdit ? 'Edit Supplier' : 'Add Supplier'}</h3>
         ${isEdit ? `
         <div class="ret-tabs">
           <button type="button" class="ret-tab active" id="sm-tab-details" onclick="RetailSystem._switchSupplierTab('details')">${t('Details')}</button>
@@ -5364,7 +5364,7 @@ const RetailSystem = {
     overlay.id = 'ret-po-modal';
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide">
-        <h3>📋 New Purchase Order${supplierName?' — '+supplierName:''}</h3>
+        <h3>${this._icon('clipboard-list', 18, '📋')} New Purchase Order${supplierName?' — '+supplierName:''}</h3>
 
         <div id="po-step-basket">
           <div style="margin:0 0 8px;color:var(--text-primary);font-weight:600">Order Items</div>
@@ -5547,7 +5547,7 @@ const RetailSystem = {
           </div>
           <div class="ret-po-split-total">${this._fmt(g.total)}</div>
         </div>
-        ${g.below_min_order ? `<div class="ret-po-split-warning">⚠ ${t('Below minimum order value')}: ${this._fmt(g.min_order_value)}</div>` : ''}
+        ${g.below_min_order ? `<div class="ret-po-split-warning">${this._icon('triangle-alert', 16, '⚠')} ${t('Below minimum order value')}: ${this._fmt(g.min_order_value)}</div>` : ''}
         <div class="ret-po-split-contact">
           ${this._badge(t(meta.label), meta.color)}
           <span class="ret-po-split-contact-detail">${contactLine}</span>
@@ -5568,7 +5568,7 @@ const RetailSystem = {
     const unassignedBlock = unassignedLines.length ? `
       <div class="ret-po-split-card ret-po-split-unassigned">
         <div class="ret-po-split-card-hdr">
-          <div class="ret-po-split-supplier">⚠ ${t('Unassigned')}</div>
+          <div class="ret-po-split-supplier">${this._icon('triangle-alert', 16, '⚠')} ${t('Unassigned')}</div>
           <div class="ret-po-split-total">${this._fmt(unassigned.subtotal)}</div>
         </div>
         <table class="ret-table">
@@ -5760,7 +5760,7 @@ const RetailSystem = {
     overlay.id = 'ret-branch-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
-        <h3>${isEdit ? '✏️ ' + t('Edit Branch') : '🏦 ' + t('Add Branch')}</h3>
+        <h3>${this._icon(isEdit ? 'square-pen' : 'landmark', 18, isEdit ? '✏️' : '🏦')} ${isEdit ? t('Edit Branch') : t('Add Branch')}</h3>
         <div class="ret-field"><label>${t('Branch Name')} *</label><input id="brm-name" value="${isEdit ? this._esc(branch.name) : ''}" /></div>
         <div class="ret-field"><label>${t('Address')}</label><input id="brm-address" value="${isEdit ? this._esc(branch.address) : ''}" /></div>
         <div class="ret-field"><label>${t('Phone')}</label><input id="brm-phone" value="${isEdit ? this._esc(branch.phone) : ''}" /></div>
@@ -6802,7 +6802,7 @@ const RetailSystem = {
     overlay.id = 'ret-return-modal';
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide">
-        <h3>↩️ Process Return</h3>
+        <h3>${this._icon('undo-2', 18, '↩️')} Process Return</h3>
         <div class="ret-field-row">
           <div class="ret-field"><label>Sale / Receipt Number *</label>
             <div style="display:flex;gap:8px">
@@ -6974,7 +6974,7 @@ const RetailSystem = {
     const mayBrowse = this._mayBrowseTheSalesBook();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title"><span aria-hidden="true">🧾</span> <span>${t('Sales History')}</span></h2>
+        <h2 class="ret-title"><span aria-hidden="true">${this._icon('receipt', 18, '🧾')}</span> <span>${t('Sales History')}</span></h2>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <input class="ret-search" id="sh-search" placeholder="${t('Search receipt # or customer…')}" oninput="RetailSystem._debounceSalesSearch()" />
           ${mayBrowse ? `
@@ -7229,7 +7229,7 @@ const RetailSystem = {
           </div>
           ${sale.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${sale.notes}</p>`:''}
           <div class="ret-modal-footer">
-            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._reprintSale()">🖨️ Reprint Receipt</button>
+            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._reprintSale()">${this._icon('printer', 16, '🖨️')} Reprint Receipt</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
@@ -9072,7 +9072,7 @@ const RetailSystem = {
     overlay.id = 'ret-restore-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:460px">
-        <h3>⚠️ ${t('Restore This Backup?')}</h3>
+        <h3>${this._icon('triangle-alert', 18, '⚠️')} ${t('Restore This Backup?')}</h3>
         <p style="color:var(--text);font-size:14px;line-height:1.7;margin:0 0 14px">
           ${t('This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.')}
         </p>
@@ -9114,7 +9114,7 @@ const RetailSystem = {
     const desktop = this._isDesktopScanner();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">⚙️ Barcode Scanner</h2>
+        <h2 class="ret-title">${this._icon('settings', 18, '⚙️')} Barcode Scanner</h2>
         <div style="display:flex;gap:10px">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._resetScannerSettings()">Reset</button>
           <button class="sub-btn-primary" onclick="RetailSystem._saveScannerSettings()">Save Settings</button>
@@ -9122,7 +9122,7 @@ const RetailSystem = {
       </div>
 
       ${!desktop ? `<div class="sub-chart-card" style="margin-bottom:18px;border-color:var(--state-warning-text)">
-        <div style="color:var(--state-warning-text)">⚠️ Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.</div>
+        <div style="color:var(--state-warning-text)">${this._icon('triangle-alert', 16, '⚠️')} Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.</div>
       </div>` : ''}
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
@@ -9150,7 +9150,7 @@ const RetailSystem = {
           </div>
 
           <div style="margin-top:18px;background:var(--state-info-surface);border:1px solid var(--state-info-border);border-radius:10px;padding:12px 14px;color:var(--text-secondary);font-size:12px;line-height:1.5">
-            ℹ️ <strong style="color:var(--text-primary)">Note:</strong> USB &amp; Bluetooth HID scanners behave exactly like a keyboard,
+            ${this._icon('info', 16, 'ℹ️')} <strong style="color:var(--text-primary)">Note:</strong> USB &amp; Bluetooth HID scanners behave exactly like a keyboard,
             so the app cannot reliably tell whether one is physically plugged in. Status is based on recent scan activity,
             not a hardware connection. A true connection status will be possible once Serial/COM support is added.
           </div>
@@ -9204,7 +9204,7 @@ const RetailSystem = {
 
         <!-- Receipt Printer (Wave 1B, Part O/P/Q) -->
         <div class="sub-chart-card">
-          <div class="sub-chart-title" style="margin-bottom:14px">🖨️ Receipt Printer</div>
+          <div class="sub-chart-title" style="margin-bottom:14px">${this._icon('printer', 18, '🖨️')} Receipt Printer</div>
           <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px">
             Uses your Windows-installed printer through the normal print dialog — works with a
             thermal receipt printer (via its own Windows driver), a regular printer, or a PDF
