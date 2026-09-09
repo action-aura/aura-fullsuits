@@ -233,20 +233,70 @@ function testTokensAreNamedForPurposeNotAppearance() {
   console.log(`PASS: all ${names.length} tokens are purpose-named, none appearance-named`);
 }
 
-function testOnlyOneFontFamilyIsDeclared() {
+/* The sanctioned bundled typefaces. A CLOSED list, in the same spirit as this
+   file's exemption list and DESIGN.md's frozen THEME_NAMES: adding a face is a
+   visible, reviewable edit here, never something that happens by accident. */
+const SANCTIONED_FAMILIES = [
+  'IBM Plex Sans Arabic',   // Arabic-only subset; carries no Latin on purpose
+  'Plus Jakarta Sans',      // latin subset; the product's Latin face
+];
+
+function testBundledTypefacesAreSanctionedAndDoNotShareFiles() {
   /* The stylesheet used to declare three families -- Inter, Outfit and Plus
      Jakarta Sans -- whose @font-face rules all pointed at the SAME pjs-*.woff2
      files. That is one typeface wearing three names: evidence of an identity
-     that drifted rather than one that was designed. */
+     that drifted rather than one that was designed.
+
+     WIDENED 2026-09-09, and the reasoning matters more than the change. This
+     asserted `families === ['Plus Jakarta Sans']` -- "exactly one" -- which was
+     a PROXY for the real rule, and only a correct proxy while exactly one real
+     typeface was bundled. Adding IBM Plex Sans Arabic (its own files, its own
+     script, no Latin at all) tripped it, even though it is the opposite of the
+     bug the comment above describes.
+
+     So the count check is replaced by the two properties it was standing in
+     for: the families must be the sanctioned set, and no two of them may share
+     a file. The second is the actual anti-aliasing rule and is STRICTER than
+     what it replaces -- the old assertion could only ever notice a second name,
+     never that two names pointed at one woff2, which is precisely what Inter
+     and Outfit did.
+
+     What it can no longer catch: the mere existence of a second family. That is
+     deliberate, and the closed list above is what bounds it -- a third face
+     fails here until someone adds it on purpose. */
   const css = fs.readFileSync(CSS_FILE, 'utf8');
-  const families = new Set(
-    [...css.matchAll(/@font-face\s*\{[^}]*?font-family\s*:\s*['"]([^'"]+)['"]/gi)].map((m) => m[1])
-  );
+  const faces = [...css.matchAll(/@font-face\s*\{([^}]*)\}/gi)].map((m) => m[1]);
+  const families = new Set();
+  const filesByFamily = new Map();
+  for (const body of faces) {
+    const fam = /font-family\s*:\s*['"]([^'"]+)['"]/i.exec(body);
+    if (!fam) continue;
+    families.add(fam[1]);
+    for (const src of body.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/gi)) {
+      const file = src[1].split('/').pop();
+      if (!filesByFamily.has(file)) filesByFamily.set(file, new Set());
+      filesByFamily.get(file).add(fam[1]);
+    }
+  }
+
   assert.deepStrictEqual(
-    [...families].sort(), ['Plus Jakarta Sans'],
-    `Expected exactly one bundled @font-face family, found: ${[...families].join(', ')}. ` +
-    'Aliasing extra families onto the same woff2 makes the type system look ' +
-    'intentional when it is not.'
+    [...families].sort(), [...SANCTIONED_FAMILIES].sort(),
+    `Bundled @font-face families are ${[...families].sort().join(', ')}, but the ` +
+    `sanctioned set is ${[...SANCTIONED_FAMILIES].sort().join(', ')}. Adding a ` +
+    'typeface is a design decision: put it in SANCTIONED_FAMILIES above, with a ' +
+    'comment saying what it is for, so the type system stays something that was ' +
+    'chosen rather than something that accumulated.'
+  );
+
+  const shared = [...filesByFamily.entries()]
+    .filter(([, fams]) => fams.size > 1)
+    .map(([file, fams]) => `${file} is claimed by ${[...fams].join(' and ')}`);
+  assert.deepStrictEqual(
+    shared, [],
+    `One typeface is wearing more than one name: ${shared.join('; ')}. This is ` +
+    'exactly the Inter/Outfit/Jakarta drift this test was written for -- three ' +
+    'names, one set of files, a type system that looked intentional and was not. ' +
+    'Two families must never share a font file.'
   );
 
   const clean = stripComments(css);
@@ -259,7 +309,7 @@ function testOnlyOneFontFamilyIsDeclared() {
     'aliases. With the alias @font-face gone these fall back to a system font, ' +
     'so they must resolve through var(--font-base) instead.'
   );
-  console.log('PASS: exactly one font family is declared, with no orphaned Inter/Outfit references');
+  console.log(`PASS: ${families.size} sanctioned font famil${families.size === 1 ? 'y' : 'ies'}, none sharing a file, no orphaned Inter/Outfit references`);
 }
 
 /* PER-TEST ISOLATION -- see retail_design_money_test.js for the reasoning and
@@ -267,7 +317,7 @@ function testOnlyOneFontFamilyIsDeclared() {
 const CHECKS = [
   ['every exemption carries a reason', testEveryExemptionCarriesAReason],
   ['tokens are named for purpose, not appearance', testTokensAreNamedForPurposeNotAppearance],
-  ['only one font family is declared', testOnlyOneFontFamilyIsDeclared],
+  ['bundled typefaces are sanctioned and do not share files', testBundledTypefacesAreSanctionedAndDoNotShareFiles],
   ['no stray literals in the operational surfaces', testNoStrayLiteralsInOperationalSurfaces],
 ];
 
