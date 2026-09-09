@@ -358,7 +358,7 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_USER: aura_admin
-          POSTGRES_PASSWORD: aura_admin_dev
+          POSTGRES_PASSWORD: aura_admin_dev  # pragma: allowlist secret -- throwaway service-container password, destroyed with the runner
           POSTGRES_DB: aura_owner_test
         ports: ["5432:5432"]
         options: >-
