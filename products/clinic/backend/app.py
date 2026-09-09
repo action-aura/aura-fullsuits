@@ -69,7 +69,15 @@ def _health():
 def _version():
     """Release metadata for the About screen / release-manifest tooling
     (Wave 1B). Separate from /api/health on purpose -- see that route's
-    docstring for why its contract is frozen."""
+    docstring for why its contract is frozen.
+
+    `schema_version` IS NOT THE DATABASE SCHEMA VERSION, despite the name --
+    same trap as Retail's identical endpoint, and the same reasoning applies
+    verbatim. It is `commercial_runtime.backup.service.SCHEMA_VERSION`, the
+    BACKUP ARCHIVE FORMAT version, which is 1 for every install ever shipped.
+    The database's own level is `PRAGMA user_version`, maintained by
+    `ensure_schema_version()`. See products/retail/backend/app.py's `_version`
+    for the measurement and for why this is documented rather than renamed."""
     from config import SCHEMA_VERSION, PRODUCT_CODE
     return jsonify({
         'product_code': PRODUCT_CODE,

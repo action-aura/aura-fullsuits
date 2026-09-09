@@ -108,7 +108,28 @@ def _version():
     """Release metadata for the About screen / release-manifest tooling
     (Wave 1B). Separate from /api/health on purpose -- that route's
     contract is frozen for the launcher's readiness probe (see its
-    docstring); this one is free to grow."""
+    docstring); this one is free to grow.
+
+    `schema_version` IS NOT THE DATABASE SCHEMA VERSION, despite the name.
+    It is `commercial_runtime.backup.service.SCHEMA_VERSION`, the version of
+    the BACKUP ARCHIVE FORMAT -- the number stamped into an .aurabak.zip
+    filename and checked on restore. It is 1, and has been since Wave 0.
+
+    The database's own version is `PRAGMA user_version` on each subsystem db,
+    maintained by `ensure_schema_version()`; retail's is at RETAIL_SCHEMA_VERSION
+    (26 as of 2026-09-08). Measured on a freshly installed build that same day:
+    this endpoint returned `"schema_version": 1` while `retail.db` reported
+    `user_version = 26`.
+
+    Written down rather than renamed. A release-manifest tool that reads this
+    field expecting "which migration is this install on" gets 1 for every
+    install ever shipped and concludes none of them need migrating -- and the
+    name invites exactly that reading. Renaming it would be a wire-contract
+    change for no consumer: both Android clients parse it into a model field
+    (`net/Models.kt`) and neither ever reads the value, so there is nothing to
+    fix on that side and no benefit in breaking the shape. If a caller ever
+    genuinely needs the migration level, add a separate, correctly-named field
+    beside this one; do not repurpose this one."""
     from config import SCHEMA_VERSION, CALCULATION_VERSION, PRODUCT_CODE
     return jsonify({
         'product_code': PRODUCT_CODE,
