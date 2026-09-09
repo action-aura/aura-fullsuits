@@ -323,7 +323,7 @@ jobs:
 
       - name: Dependency scanning
         run: |
-          # Pinned, same rationale as bandit and detect-secrets: an
+          # Pinned, for the same reason bandit and detect-secrets are pinned -- an
           # advisory-database client that changes its exit conventions or
           # its resolver turns this gate red without a commit. 2.10.1 is
           # the version measured in use locally on 2026-09-08.
