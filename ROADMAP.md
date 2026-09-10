@@ -1589,6 +1589,46 @@ and variant-aware purchase ordering.
 Claimed AND committed before dispatch. v24 remains reserved by name for
 inter-branch transfers; v25 shipped variants (bd272ca).
 
+**CLAIMED: retail v27, by `feat/launch-readiness`, for loyalty redemption.**
+One new table, two indexes. Additive only: CREATE TABLE / CREATE INDEX.
+
+    loyalty_ledger  -- immutable +/- entries per customer; earn, redeem, adjust
+
+### Why a ledger and not the column that already exists
+
+`customers.loyalty_points` has been incremented on every sale since v1 and
+NOTHING can spend it: zero redemption routes, zero `redeem` in the backend.
+A shop that switches loyalty on accrues a promise it cannot honour, which is
+worse than not having the feature.
+
+The obvious fix -- a route that decrements that column -- would ship a
+double-spend on any shop with two tills. `total_spent` and `loyalty_points`
+are ACCUMULATORS that sync deliberately never carries (`SYNCED_CUSTOMER_FIELDS`
+is name/phone/email/address/status; see sync_service.py's customer branch and
+create_sale's own comment). They are excluded on purpose: last-write-wins on an
+accumulator loses value, exactly as it would for stock. So points earned on
+till A are invisible to till B, and the same balance could be redeemed on both.
+
+An immutable ledger does not have that problem, and it is the mechanism this
+codebase already uses for the same shape: `inventory_movements` alongside
+`inventory_balances`. A ledger row is written once and never updated, so it
+syncs safely under last-write-wins; the balance is the SUM. Redemption becomes
+"insert a negative row", which cannot double-spend once the rows converge, and
+is auditable in a way a decremented integer never is.
+
+`customers.loyalty_points` stays as the fast read path and keeps its existing
+no-row_version-bump, no-sync-emit rule (mutation-proved by
+`test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`). It becomes
+a cache of the ledger rather than the source of truth. Existing balances are
+backfilled as one opening entry per customer so no shop loses points it has
+already promised.
+
+Design note: earn rate is currently hardcoded `int(total / 10)` in create_sale.
+The ledger records what was actually granted, so changing the rate later cannot
+retroactively rewrite history.
+
+---
+
 **CLAIMED: retail v26, by `feat/launch-readiness`.** Four new tables, one column
 on an existing money table, four indexes. All additive: CREATE TABLE / ADD COLUMN
 / CREATE INDEX only.
