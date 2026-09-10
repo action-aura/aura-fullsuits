@@ -660,7 +660,37 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # `customers.loyalty_points` is UNCHANGED by this migration and stays the
 # fast read path; see _migrate_add_loyalty_ledger below for the full
 # column-by-column reasoning and the backfill shape.
-RETAIL_SCHEMA_VERSION = 27
+#
+# v27 -> v28 (launch-readiness, "inter-branch transfers"; ROADMAP.md's
+# 2026-08-31 "retail schema v28 CLAIMED for inter-branch transfers" entry,
+# cashing in the 2026-08-30 "v24 RESERVED BY NAME (not claimed)" note --
+# v25/v26/v27 shipped in the meantime, so this lands at 28, not the
+# reserved 24; that note's own text says explicitly it does not hold the
+# number hostage).
+#
+# Two new tables, three indexes total -- see _migrate_add_stock_transfers
+# below for the full column-by-column and index-by-index reasoning:
+#
+#   stock_transfers      -- one movement of goods between two branches:
+#                            source, destination, status, and the
+#                            created/sent/received timestamps
+#   stock_transfer_items -- its lines: quantity SENT and quantity RECEIVED
+#                            recorded separately, so "6 sent, 5 arrived" is
+#                            data the shop can see rather than an error to
+#                            suppress
+#
+# A transfer is SENT from one branch and RECEIVED at another as two
+# separate real-world events, not one instant move -- see
+# _migrate_add_stock_transfers's own docstring for why collapsing that back
+# into a single quantity column, or a single-phase write, is the exact bug
+# this migration exists to prevent, and for why this pair's id shape
+# deliberately matches `cash_sessions`/`reorder_requests` (client-generated
+# UUID primary key) rather than the immediately-preceding `loyalty_ledger`/
+# `inventory_movements` shape (autoincrement id + separate `uid` column)
+# despite those being the two nearest precedents in this file -- a stock
+# transfer is a mutable, two-phase record two branches must agree on, not
+# an append-only ledger entry.
+RETAIL_SCHEMA_VERSION = 28
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1630,6 +1660,15 @@ def _migrate_retail_schema(conn):
     # reasoning, the backfill shape, and why the new column ALSO gets a
     # second, independent guard in retail_api.py's `_ensure_credit_schema`.
     _migrate_add_loyalty_ledger(conn)
+    # v27 -> v28 (launch-readiness, "inter-branch transfers"): appended
+    # LAST, same convention as every step above. Two new, self-contained
+    # tables and three indexes -- no existing table is ALTERed, read, or
+    # written, so ordering relative to the steps above it does not matter
+    # functionally. See the RETAIL_SCHEMA_VERSION v28 comment above and
+    # _migrate_add_stock_transfers's own docstring for the full reasoning,
+    # including why this pair's id shape deliberately does NOT match
+    # `_migrate_add_loyalty_ledger`'s immediately above it.
+    _migrate_add_stock_transfers(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -5615,6 +5654,255 @@ def _migrate_add_loyalty_ledger(conn):
             "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type) "
             "VALUES (?,?,?,?,'opening')",
             (str(_uuid.uuid4()), company_id, cust_id, points),
+        )
+
+
+def _migrate_add_stock_transfers(conn):
+    """One-time migration (schema v27 -> v28): launch-readiness "inter-branch
+    transfers" (ROADMAP.md's 2026-08-31 "retail schema v28 CLAIMED for
+    inter-branch transfers" entry, cashing in the 2026-08-30 "v24 RESERVED BY
+    NAME" note -- v25/v26/v27 shipped in between, so this lands at 28, not
+    the reserved 24). Two new, self-contained tables plus three indexes --
+    additive only (CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS),
+    no existing table is ALTERed, read, or written, so ordering relative to
+    every migration above it does not matter functionally.
+
+        stock_transfers      -- one movement of goods between two branches
+        stock_transfer_items -- what was sent, and what actually arrived
+
+    TWO PHASES, BECAUSE GOODS TAKE TIME TO ARRIVE (ROADMAP.md's own
+    reasoning, repeated here because it is the design decision most tempting
+    to "simplify" later): a transfer is SENT from one branch and RECEIVED at
+    another, as two separate events with a real-world gap between them. The
+    one-phase alternative -- move the stock instantly in a single write -- is
+    simpler and wrong for a chain: it makes goods sitting in a van invisible
+    (in transit, the stock belongs to neither branch, which is the honest
+    answer to "where is it", not a convenient lie in favour of one end), and
+    it has nowhere to put "six cartons were sent and five arrived" except as
+    an error to reject, when it is actually data the shop needs to see and
+    act on (shrinkage, breakage, a miscount at either end). `quantity_sent`
+    and `quantity_received` are therefore separate columns on the same line,
+    not one quantity plus a status flag -- collapsing them back into one
+    column is the exact bug this table exists to prevent. Both ends of an
+    actual move are expected to write through `inventory_movements` (the
+    ledger that already owns every stock change -- see
+    _migrate_add_loyalty_ledger's own docstring, immediately above, for why
+    an append-only ledger rather than a decremented/incremented column is
+    this codebase's answer to "two tills touch the same balance"), so a
+    transfer is auditable the same way a sale or a manual adjustment is;
+    wiring that write is retail_api.py's job, not schema's -- this migration
+    only gives the movement itself somewhere to live.
+
+    THE ID CHOICE, AND WHY THIS PAIR DOES NOT MATCH `loyalty_ledger`'S /
+    `inventory_movements`'S `id INTEGER AUTOINCREMENT` + `uid TEXT` SHAPE
+    despite those being the two most recent precedents in this file:
+
+    Both of those tables are APPEND-ONLY ledgers -- a row is written once and
+    NEVER updated again, which is exactly what makes the autoincrement-id-
+    plus-a-separate-wire-identity-column shape safe for them (see
+    _migrate_add_loyalty_ledger's own docstring, "WHY A LEDGER, NOT A ROUTE
+    THAT DECREMENTS"). `stock_transfers` is the opposite shape: the SAME row
+    is created once and then MUTATED twice more over its lifetime (`status`/
+    `sent_at` at SEND, `status`/`received_at` at RECEIVE), and every one of
+    its `stock_transfer_items` rows gains a `quantity_received` value it did
+    not have at creation -- a mutable, two-phase master record, not a ledger
+    entry. This codebase already has an established, DIFFERENT id convention
+    for exactly that shape: `cash_sessions` (opened, then later closed) and
+    `reorder_requests` (pending, then later accepted/declined) both use
+    `id TEXT PRIMARY KEY`, a client-generated UUID, NOT autoincrement --
+    `_migrate_add_shift_cash_drawer`'s own docstring gives the reason
+    verbatim: "a UUID id means this table COULD be relayed through Owner's
+    sync later without hitting the purchase_orders-style 'entity_id must
+    parse as a UUID' wall, even though it isn't wired into sync_outbox yet."
+    `purchase_orders`/`purchase_order_items` are the cautionary tale on the
+    other side of that same sentence -- still `INTEGER PRIMARY KEY
+    AUTOINCREMENT`, and consequently "deliberately never queued to
+    sync_outbox at all" (reorder_requests's own docstring), because Owner's
+    relay 400-rejects an entire push batch on the first `entity_id` that
+    fails to parse as a UUID. A stock transfer is, by definition, a fact TWO
+    branches must agree on -- more inherently cross-device than a cash
+    session, which never leaves the one terminal that opened it -- so it
+    gets the cash_sessions/reorder_requests id shape, not the loyalty_ledger/
+    inventory_movements one. `stock_transfer_items` matches its parent:
+    `cash_movements` under `cash_sessions` makes the identical choice for the
+    identical reason (a child row of a UUID-keyed mutable parent is itself
+    UUID-keyed), which is also what lets `transfer_id` carry a real, declared
+    FOREIGN KEY with no cross-device remapping risk -- see FOREIGN KEYS
+    below.
+
+    `stock_transfers` COLUMN BY COLUMN:
+      * `id TEXT PRIMARY KEY` -- client-generated UUID; see THE ID CHOICE
+        above.
+      * `company_id INTEGER NOT NULL` -- MANDATORY tenant scope, matching
+        every business table in this file; NOT NULL rather than the legacy
+        `DEFAULT 1` older tables carry, matching the newer convention
+        `loyalty_ledger`/`modifier_groups` (v26/v27) already established for
+        a table nothing should ever be allowed to insert without a tenant.
+      * `source_branch_id INTEGER NOT NULL` / `destination_branch_id INTEGER
+        NOT NULL` -- `branches.id`. NO declared FOREIGN KEY, matching
+        `sales.branch_id` / `inventory_movements.branch_id` / `returns.
+        branch_id` -- none of which declare one either, because
+        `branches.id` was never part of the UUID migration (see the v11
+        `held_sales` comment above: "branch_id stays INTEGER -- branches.id
+        was never in that list") and stays a LOCAL, per-device autoincrement
+        integer even though `branches` itself carries a `uid` for wire
+        identity (RETAIL_UID_TABLES). A transfer between two branches is
+        the single most cross-device fact this schema has ever needed to
+        record -- exactly the case where a declared FK to a local integer
+        must not exist, or a transfer relayed in from the OTHER branch's
+        device (which assigned that branch a different local `id`) would
+        fail to write on a referential technicality. Which column is
+        "source" and which is "destination", and that they differ, is left
+        to the API layer to validate -- no CHECK constraint, the same
+        precedent `entry_type`/`movement_type` already set in this file.
+      * `status TEXT NOT NULL DEFAULT 'pending'` -- see STATUS VALUES below.
+      * `created_by TEXT DEFAULT 'System'` -- matches `inventory_movements`'s
+        own who column exactly (not the later `actor_user_uid`/`terminal_id`
+        triple v13 retrofitted onto RETAIL_ACTOR_TABLES -- adding this new
+        table to that tuple now would fire for no database, the identical
+        reasoning _migrate_add_loyalty_ledger's own docstring already gives
+        for the identical choice).
+      * `created_at` / `sent_at` / `received_at TIMESTAMP` -- three separate
+        instants because they are three separate real-world events that do
+        not happen together: a transfer can be drafted well before the van
+        leaves, and received well after it arrives. `sent_at` / `received_at`
+        are NULL until their event actually happens -- NOT back-filled from
+        `created_at` -- so "has this shipped yet" is a NULL check, not a
+        guess.
+
+    STATUS VALUES, AND WHY EACH EXISTS:
+      * 'pending' -- created, stock still physically at the source; the
+        transfer can still be edited or cancelled and no `inventory_movements`
+        row exists yet for it. The default, so an install that only ever
+        drafts a transfer and reconsiders never has to touch the ledger.
+      * 'in_transit' -- SEND has happened: stock has left the source branch
+        (a real OUT row is expected in `inventory_movements`) but has not
+        yet been credited to the destination. This is the state that makes
+        the one-phase alternative's bug -- goods in a van invisible to both
+        branches -- impossible: the stock is visibly, queryably, neither
+        branch's for as long as this status holds.
+      * 'received' -- RECEIVE has happened at the destination: every line's
+        `quantity_received` has been filled in (0 is a legal, meaningful
+        value -- "sent but none arrived" -- not an unset marker; NULL is the
+        unset marker, see `quantity_received` below) and the corresponding
+        IN row(s) exist in `inventory_movements`. Deliberately the SAME
+        status regardless of whether every line matched its `quantity_sent`
+        exactly: a discrepancy is a fact about the LINE, not a workflow
+        state of the header, so reconciling a mismatched transfer is not
+        blocked on inventing a fifth status for it.
+      * 'cancelled' -- a 'pending' transfer that never left the source.
+        Exists because `created_at` and `sent_at` are already separate
+        columns -- a transfer can be drafted and then not happen -- and
+        because a 'pending' transfer has touched no ledger row yet, so
+        cancelling one is a pure status flip with nothing to unwind.
+      No CHECK constraint on the four values above, matching `movement_type`/
+      `entry_type`'s own precedent in this file: validated at the API layer.
+
+    FOREIGN KEYS, AND WHICH ONES ARE SAFE TO DECLARE:
+      `stock_transfer_items.transfer_id TEXT NOT NULL REFERENCES
+      stock_transfers(id)` IS declared, unlike the branch columns above --
+      because both sides of this relationship are client-generated UUIDs
+      created in the SAME local write (a transfer and its own lines are
+      inserted together, on whichever device owns the write for the phase
+      being recorded), so there is no remapping hazard: the identical
+      reasoning `cash_movements.session_id TEXT NOT NULL REFERENCES
+      cash_sessions(id)` already relies on for its own parent/child pair.
+      `stock_transfer_items.product_id TEXT NOT NULL REFERENCES
+      products(id)` is declared for the same reason `inventory_movements` /
+      `sale_items` / `return_items` / `inventory_balances` all declare it:
+      `products.id` has been a client-generated UUID since
+      `_migrate_products_to_uuid`, identical everywhere it is used, so the
+      FK cannot fail on a device that legitimately knows the product.
+
+      `stock_transfer_items` carries NO `company_id` of its own -- scoped
+      entirely through `transfer_id`, the same shape `cash_movements` uses
+      for `session_id` rather than repeating `company_id`
+      (`_migrate_add_shift_cash_drawer`'s own comment: "a movement has no
+      meaning outside the session it belongs to... same shape as sale_items
+      scoping entirely through sale_id rather than repeating company_id").
+
+      `quantity_sent REAL NOT NULL` / `quantity_received REAL` -- REAL,
+      matching `inventory_movements.quantity`'s own type (this file allows
+      fractional units, e.g. weight-priced stock). `quantity_received` has
+      NO default, so it is NULL -- not 0 -- until the receiving end actually
+      confirms a line, and NULL and 0 must stay distinguishable: 0 is "we
+      checked, and none of this line arrived" (loss, theft, a total
+      substitution), a real, actionable fact, while NULL is "nobody has
+      looked yet". Defaulting it to 0 would erase that distinction the
+      moment the row is inserted, which is precisely the "error to
+      suppress" the ROADMAP design note warns against.
+
+    INDEXES:
+      * `idx_stock_transfers_source ON stock_transfers(company_id,
+        source_branch_id, created_at)` / `idx_stock_transfers_dest ON
+        stock_transfers(company_id, destination_branch_id, created_at)` --
+        the hot read path this table exists to serve, "transfers involving
+        this branch", is really TWO separate questions ("what has this
+        branch sent" / "what is this branch expecting") that a single index
+        cannot answer together: SQLite cannot use one btree efficiently for
+        `WHERE source_branch_id = ? OR destination_branch_id = ?`. Both are
+        tenant-scoped first (`company_id`, matching every business query in
+        this file) then branch, then chronological -- the identical
+        scope-then-order shape `idx_loyalty_ledger_customer` already
+        established.
+      * `idx_stock_transfer_items_transfer ON
+        stock_transfer_items(transfer_id)` -- the other hot path, "the lines
+        of this transfer". No tenant column to scope by first, matching the
+        table's own scoping decision above (through `transfer_id` only,
+        same as `cash_movements`'s `idx_cash_movements_session`).
+
+    Idempotent: every CREATE TABLE / CREATE INDEX above is IF NOT EXISTS, so
+    a second call -- or a fresh install migrating all the way from 0, same
+    as every step above -- is a clean no-op. No data migration, no backfill:
+    this is a genuinely new feature with no existing rows to reconcile,
+    unlike `_migrate_add_loyalty_ledger` immediately above it.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_transfers (
+            id TEXT PRIMARY KEY,                    -- client-generated UUID; Owner-relay-safe, cash_sessions/reorder_requests shape (see docstring)
+            company_id INTEGER NOT NULL,            -- MANDATORY tenant scope
+            source_branch_id INTEGER NOT NULL,      -- branches.id; NO literal FK (see docstring)
+            destination_branch_id INTEGER NOT NULL, -- branches.id; NO literal FK (see docstring)
+            status TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'in_transit' | 'received' | 'cancelled' (see docstring)
+            created_by TEXT DEFAULT 'System',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_at TIMESTAMP,                      -- NULL until SEND
+            received_at TIMESTAMP                   -- NULL until RECEIVE
+        )
+    """)
+    live_tables = live_tables | {'stock_transfers'}
+
+    if 'stock_transfers' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_stock_transfers_source '
+            'ON stock_transfers(company_id, source_branch_id, created_at)'
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_stock_transfers_dest '
+            'ON stock_transfers(company_id, destination_branch_id, created_at)'
+        )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_transfer_items (
+            id TEXT PRIMARY KEY,                    -- client-generated UUID; matches parent (see docstring)
+            transfer_id TEXT NOT NULL REFERENCES stock_transfers(id),
+            product_id TEXT NOT NULL REFERENCES products(id),
+            quantity_sent REAL NOT NULL,             -- what left the source
+            quantity_received REAL                   -- NULL = not yet reconciled; 0 is a real, distinct value (see docstring)
+        )
+    """)
+    live_tables = live_tables | {'stock_transfer_items'}
+
+    if 'stock_transfer_items' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer '
+            'ON stock_transfer_items(transfer_id)'
         )
 
 
