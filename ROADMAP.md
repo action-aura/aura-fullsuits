@@ -1590,9 +1590,42 @@ Claimed AND committed before dispatch. v24 remains reserved by name for
 inter-branch transfers; v25 shipped variants (bd272ca).
 
 **CLAIMED: retail v27, by `feat/launch-readiness`, for loyalty redemption.**
-One new table, two indexes. Additive only: CREATE TABLE / CREATE INDEX.
+One new table, two indexes, one column on `sales`. Additive only:
+CREATE TABLE / CREATE INDEX / ADD COLUMN.
 
     loyalty_ledger  -- immutable +/- entries per customer; earn, redeem, adjust
+    ALTER TABLE sales ADD COLUMN points_redeemed_amount REAL DEFAULT 0
+
+The table shipped first (e6debe0). The column is claimed here BEFORE the API
+work that needs it, rather than being appended to a released version later --
+v27 is not released, so widening the claim is honest; widening it silently
+would not be.
+
+### Redemption is a TENDER, not a discount, and that decides the column
+
+Two models were possible and they are not equivalent.
+
+As a DISCOUNT, points would reduce the taxable base. That under-declares VAT
+and changes what the JoFotara e-invoice reports about a mandated tax document.
+Wrong shape for Jordan.
+
+As a TENDER, the invoice total and its tax stay whole and points simply settle
+part of what is owed, alongside cash. The e-invoice remains an ordinary
+full-value invoice, and the arithmetic in `calculate_line` is untouched -- no
+risk to the per-line pricing every money test already pins.
+
+The tender model then forces the column. `create_sale`'s ledger records the
+amount actually RETAINED, which feeds the daily cash summary and the drawer
+close. If points silently inflated `amount_paid`, the drawer would expect cash
+that was never taken and the till would fail its own Z-report every time a
+customer redeemed. So the redeemed value must be recorded DISTINCTLY from cash
+rather than folded into `amount_paid`.
+
+Note also that `create_sale` ignores every top-level money field a client
+sends -- only per-line `discount_pct` is trusted as commercial intent -- so a
+redemption amount cannot simply be posted. It is authorised server-side
+against the ledger balance, and `CAP_DISCOUNT` is the capability, whose stated
+authority is already "give value away with no matching payment".
 
 ### Why a ledger and not the column that already exists
 
