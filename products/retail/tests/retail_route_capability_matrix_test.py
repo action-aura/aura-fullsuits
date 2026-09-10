@@ -132,6 +132,19 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'accept_reorder_request': CAP_STOCK,
     'decline_reorder_request': CAP_STOCK,
     'repair_inventory_reconciliation': CAP_STOCK,
+    # Retail v28 inter-branch transfers. A transfer is a stock adjustment at
+    # BOTH ends -- send decrements the source, receive increments the
+    # destination -- so it needs the same authority as adjust_stock rather than
+    # a capability of its own. Minting CAP_TRANSFER would have let a shop hand
+    # someone the power to move goods out of a branch without the power to
+    # correct a count, which is the weaker half of the same act.
+    # cancel is here too, not lower: it is only legal while nothing has moved
+    # (status='pending'), but whoever can cancel can strand goods a manager is
+    # waiting on, and the route enforces the same guard either way.
+    'create_stock_transfer': CAP_STOCK,
+    'send_stock_transfer': CAP_STOCK,
+    'receive_stock_transfer': CAP_STOCK,
+    'cancel_stock_transfer': CAP_STOCK,
     # Retiring a customer is master-data maintenance, not selling -- see the
     # comment on the route for why it splits from its create/update siblings.
     'delete_customer': CAP_STOCK,

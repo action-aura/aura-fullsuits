@@ -3722,6 +3722,584 @@ def preview_po_split():
     result = po_split.group_basket_by_supplier(basket, suppliers=suppliers_by_id, contacts=contacts_by_supplier)
     return jsonify({'status': 'success', 'data': result})
 
+# ── Stock Transfers (launch-readiness "inter-branch transfers", schema v28) ────
+# ROADMAP.md's 2026-08-31 "retail v28 CLAIMED for inter-branch transfers" entry;
+# database/schema.py's _migrate_add_stock_transfers docstring carries the full
+# design reasoning (two-phase SEND/RECEIVE, why quantity_sent/quantity_received
+# are separate columns rather than one quantity plus a flag, why the id is a
+# client-style UUID rather than an autoincrement). This block is the half that
+# docstring explicitly deferred: "wiring that write is retail_api.py's job, not
+# schema's -- this migration only gives the movement itself somewhere to live."
+#
+# CAPABILITY: CAP_STOCK_ADJUST on every mutation below, never a new code --
+# moving stock between two branches is a stock adjustment at BOTH ends, the
+# exact authority adjust_stock/receive_purchase_order already require (the
+# migration docstring's own words). The two read routes carry NONE, matching
+# list_purchase_orders/get_purchase_order immediately above: a plain list/get
+# discloses no pricing or margin, the same tier list_purchase_orders is already
+# trusted with.
+#
+# OVERSELLING AT SEND: refused hard, no relaxation -- the SAME posture
+# adjust_stock already takes, not create_sale's. create_sale's stage 7d-iii
+# relaxation exists for a narrow, specific situation: a cashier stands in
+# front of a paying customer whose stock is visibly on the shelf, and the
+# ONLY reason the recorded balance might disagree is that THIS device is
+# behind on a multi-device sync it does not control -- refusing a sale the
+# cashier can see with their own eyes is worse than the oversell it might
+# cause. Sending a transfer has neither ingredient: nobody is being turned
+# away at a register, and a transfer sits in 'pending' -- inspectable,
+# editable by re-creating, cancellable -- right up until the operator
+# presses Send, so a wrong count is fixed by fixing the count before
+# sending, not by shipping stock the source branch does not physically
+# have. adjust_stock already answered this exact question for this exact
+# kind of write (an operator-declared, single-device stock mutation with no
+# "another device already moved it" story) and refuses outright; this route
+# follows that precedent rather than inventing a second one.
+#
+# STOCK MOVEMENT PATH: SEND and RECEIVE write inventory_balances +
+# inventory_movements the IDENTICAL way adjust_stock/receive_purchase_order
+# already do -- same `INSERT OR IGNORE` balance seed, same
+# `UPDATE ... quantity_on_hand = quantity_on_hand +/- ?`, same v13 actor
+# stamp (_stamp()), same _queue_sync_event shape for the movement row. No
+# second code path is invented for "the stock changed" -- see each route's
+# own comment for the line-by-line correspondence to its precedent.
+#
+# `stock_transfers`/`stock_transfer_items` are members of neither
+# RETAIL_UID_TABLES nor RETAIL_ACTOR_TABLES (database/schema.py) -- the
+# header row's own `id` IS its wire identity (matching cash_sessions/
+# reorder_requests), and it carries no v13 actor triple of its own (matching
+# the migration docstring's reasoning for `created_by TEXT DEFAULT
+# 'System'`, the SAME free-text column inventory_movements has always had).
+# Only the `inventory_movements` rows this file writes at SEND/RECEIVE need
+# the actor triple, because THAT table is a RETAIL_ACTOR_TABLES member.
+# Neither table carries row_version/updated_at_utc/deleted_at_utc either
+# (not a RETAIL_ROW_VERSION_TABLES member) -- there is no sync-delta
+# machinery to feed for the header row itself, only for the movement rows,
+# which already have their own (see _queue_sync_event calls below).
+
+@retail_bp.route('/stock-transfers', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_stock_transfers():
+    """Company-scoped list, optionally filtered by `?branch_id=` (either end
+    of the transfer -- "what has this branch sent" and "what is this branch
+    expecting" are both real questions from one branch's point of view, so
+    `branch_id` matches source OR destination rather than requiring the
+    caller to know which) and/or `?status=`. No @mt_require_capability --
+    matching list_purchase_orders above, a plain list of transfers discloses
+    no pricing or margin, the same disclosure tier that route is already
+    trusted with."""
+    cid = _cid()
+    branch_id = request.args.get('branch_id')
+    status = request.args.get('status')
+    conn = get_retail_conn()
+    # Company condition on the JOIN, not the WHERE -- same cross-tenant-leak
+    # discipline list_purchase_orders/get_purchase_order already established
+    # above: this is a LEFT JOIN, and a branch id that somehow does not
+    # resolve (never expected in practice; branches are never deleted) must
+    # still return the transfer row with a blank name, not disappear from
+    # the list entirely.
+    query = """
+        SELECT t.*, sb.name AS source_branch_name, db.name AS destination_branch_name
+        FROM stock_transfers t
+        LEFT JOIN branches sb ON sb.id=t.source_branch_id AND sb.company_id=t.company_id
+        LEFT JOIN branches db ON db.id=t.destination_branch_id AND db.company_id=t.company_id
+        WHERE t.company_id=?
+    """
+    params = [cid]
+    if branch_id:
+        query += " AND (t.source_branch_id=? OR t.destination_branch_id=?)"
+        params.extend([branch_id, branch_id])
+    if status:
+        query += " AND t.status=?"
+        params.append(status)
+    query += " ORDER BY t.created_at DESC LIMIT 200"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+
+@retail_bp.route('/stock-transfers/<string:transfer_id>', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def get_stock_transfer(transfer_id):
+    """One transfer plus its lines -- same shape list_stock_transfers uses
+    for the header, joined with product name/sku for each line (matching
+    get_purchase_order's own items join immediately above in spirit)."""
+    cid = _cid()
+    conn = get_retail_conn()
+    transfer = conn.execute("""
+        SELECT t.*, sb.name AS source_branch_name, db.name AS destination_branch_name
+        FROM stock_transfers t
+        LEFT JOIN branches sb ON sb.id=t.source_branch_id AND sb.company_id=t.company_id
+        LEFT JOIN branches db ON db.id=t.destination_branch_id AND db.company_id=t.company_id
+        WHERE t.id=? AND t.company_id=?
+    """, (transfer_id, cid)).fetchone()
+    if not transfer:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Transfer not found'}), 404
+    items = conn.execute("""
+        SELECT i.*, p.name AS product_name, p.sku
+        FROM stock_transfer_items i LEFT JOIN products p ON p.id=i.product_id
+        WHERE i.transfer_id=?
+    """, (transfer_id,)).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': {'transfer': dict(transfer), 'items': [dict(i) for i in items]}})
+
+
+@retail_bp.route('/stock-transfers', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.transfer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def create_stock_transfer():
+    """CREATE only -- status='pending', no stock moves yet (see the section
+    header above for why the two-phase design puts nothing on the ledger
+    until SEND). Body: `{source_branch_id, destination_branch_id,
+    items: [{product_id, quantity}, ...]}`.
+
+    Both branches are validated to belong to THIS company -- the identical
+    cross-tenant-leak shape create_purchase_order's own supplier_id/branch_id
+    comments already document at length above -- and to differ from each
+    other: a transfer to the branch you are standing in is a bug (nothing
+    would ever leave or arrive anywhere), not a harmless no-op, so it is
+    refused rather than silently accepted as a same-branch adjustment
+    wearing a transfer's clothes.
+
+    Product existence is checked the SAME way create_purchase_order checks
+    its own basket immediately above (`status='active' AND deleted_at_utc IS
+    NULL`) -- a brand-new transfer must not be raised against a product that
+    no longer exists, for the identical reason a brand-new PO must not be.
+    """
+    data = request.json or {}
+    cid  = _cid()
+    items = data.get('items') or []
+    if not items:
+        return jsonify({'status': 'error', 'message': 'At least one item required'}), 400
+
+    conn = get_retail_conn()
+    try:
+        try:
+            source_bid = int(data.get('source_branch_id'))
+            dest_bid = int(data.get('destination_branch_id'))
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error',
+                             'message': 'source_branch_id and destination_branch_id are required.'}), 400
+        if source_bid == dest_bid:
+            return jsonify({'status': 'error',
+                             'message': 'Source and destination branch must be different.'}), 400
+
+        valid_bids = {
+            r['id'] for r in conn.execute(
+                "SELECT id FROM branches WHERE company_id=? AND id IN (?,?)",
+                (cid, source_bid, dest_bid)
+            ).fetchall()
+        }
+        if source_bid not in valid_bids:
+            return jsonify({'status': 'error', 'message': f'Unknown source_branch_id: {source_bid}'}), 400
+        if dest_bid not in valid_bids:
+            return jsonify({'status': 'error', 'message': f'Unknown destination_branch_id: {dest_bid}'}), 400
+
+        parsed_items = []
+        for item in items:
+            pid = item.get('product_id')
+            if not pid:
+                return jsonify({'status': 'error', 'message': 'Every item requires a product_id'}), 400
+            try:
+                qty = float(item.get('quantity'))
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': f'Invalid quantity for product_id {pid}'}), 400
+            if qty <= 0:
+                return jsonify({'status': 'error',
+                                 'message': f'Quantity must be greater than zero for product_id {pid}'}), 400
+            parsed_items.append((pid, qty))
+
+        product_ids = {pid for pid, _ in parsed_items}
+        placeholders = ','.join('?' * len(product_ids))
+        valid_products = {
+            r['id'] for r in conn.execute(
+                f"SELECT id FROM products WHERE company_id=? AND status='active' "
+                f"AND deleted_at_utc IS NULL AND id IN ({placeholders})",
+                [cid, *product_ids]
+            ).fetchall()
+        }
+        missing_ids = product_ids - valid_products
+        if missing_ids:
+            return jsonify({'status': 'error', 'message': f'Unknown product_id: {sorted(missing_ids)[0]}'}), 400
+
+        transfer_id = _new_uid()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO stock_transfers (id,company_id,source_branch_id,destination_branch_id,status,created_by) "
+            "VALUES (?,?,?,?,'pending',?)",
+            (transfer_id, cid, source_bid, dest_bid, _uid())
+        )
+        for pid, qty in parsed_items:
+            cur.execute(
+                "INSERT INTO stock_transfer_items (id,transfer_id,product_id,quantity_sent) VALUES (?,?,?,?)",
+                (_new_uid(), transfer_id, pid, qty)
+            )
+        _audit(conn, 'STOCK_TRANSFER_CREATED', 'stock_transfer', transfer_id,
+               f'{len(parsed_items)} line(s) from branch {source_bid} to {dest_bid}')
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("create_stock_transfer failed on a database constraint: %s", exc)
+        return jsonify({'status': 'error',
+                         'message': 'This transfer could not be created because of a conflicting record.'}), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("create_stock_transfer failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not create this transfer.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {'id': transfer_id}})
+
+
+@retail_bp.route('/stock-transfers/<string:transfer_id>/send', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.transfer.send", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def send_stock_transfer(transfer_id):
+    """pending -> in_transit. Stock LEAVES the source branch here -- the
+    first of the two ledger-touching events this table exists to separate
+    (see the section header above).
+
+    BEGIN IMMEDIATE, same reasoning as receive_purchase_order's own
+    docstring: two requests racing to send the SAME transfer (a
+    double-clicked Send button) must not both walk the item loop and both
+    decrement the source balance. The write lock is taken before the
+    status is even read, and the closing UPDATE additionally carries
+    `AND status='pending'` with its rowcount checked -- belt and braces,
+    exactly like receive_purchase_order's own pair of guards.
+
+    Each line is validated and written in ONE pass, sequentially, on the
+    SAME connection -- not validated in a first pass and written in a
+    second the way create_sale's multi-line demand accumulator has to be
+    (create_sale's validation loop runs before its write loop, so it needs
+    a running total to catch two lines of the same product summing past
+    stock). Here validate-then-write happens per line, so a second line for
+    a product a prior line in this SAME request already decremented reads
+    the balance AFTER that decrement, on this same uncommitted transaction --
+    the correct, already-reduced figure -- with no accumulator required.
+
+    Refuses (400, nothing written) rather than allow the source balance to
+    go negative -- see the section header's "OVERSELLING AT SEND" comment
+    for why this follows adjust_stock's posture rather than create_sale's.
+    """
+    cid  = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        transfer = cur.execute(
+            "SELECT * FROM stock_transfers WHERE id=? AND company_id=?", (transfer_id, cid)
+        ).fetchone()
+        if not transfer:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer not found'}), 404
+        if transfer['status'] != 'pending':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot send a transfer that is {transfer['status']}."}), 409
+
+        items = cur.execute(
+            "SELECT * FROM stock_transfer_items WHERE transfer_id=?", (transfer_id,)
+        ).fetchall()
+
+        source_bid = transfer['source_branch_id']
+        reference = f'XFER-{transfer_id}'
+        actor, terminal, utc_now = _stamp()
+        source_branch_uid = _branch_uid(conn, source_bid)
+        for item in items:
+            pid = item['product_id']
+            qty = float(item['quantity_sent'])
+            # Same seed-then-read-then-update shape as adjust_stock above --
+            # a branch that has never stocked this product yet gets a zero
+            # row rather than a missing one, so the SELECT just below always
+            # finds a row to read.
+            cur.execute(
+                "INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) "
+                "VALUES (?,?,?,0)",
+                (cid, pid, source_bid)
+            )
+            row = cur.execute(
+                "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, pid, source_bid)
+            ).fetchone()
+            on_hand = float(row['quantity_on_hand'] or 0) if row else 0.0
+            # Epsilon tolerance, not a bare `< 0` -- the SAME constant and
+            # the SAME reasoning as adjust_stock's identical guard above:
+            # quantity_on_hand is REAL and accumulated by repeated +/-
+            # UPDATEs, so a fractional-unit product can legitimately sit at
+            # 0.7999999999999999 rather than 0.8.
+            if on_hand - qty < -stock_reconciliation.DEFAULT_TOLERANCE:
+                conn.rollback()
+                return jsonify({'status': 'error',
+                                 'message': f'Cannot send {qty} of product {pid} -- '
+                                            f'only {on_hand} on hand at the source branch.'}), 400
+            cur.execute(
+                "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ? "
+                "WHERE company_id=? AND product_id=? AND branch_id=?",
+                (qty, cid, pid, source_bid)
+            )
+            # v13 stamp + ledger row, identical shape to adjust_stock's own
+            # INSERT above -- 'transfer_out' is a new, self-describing
+            # movement_type; movement_type carries no CHECK constraint in
+            # this schema (validated at the API layer only, same as every
+            # other movement_type/status vocabulary in this file), and
+            # `quantity` itself is signed (-qty), which is what
+            # stock_reconciliation.compute_drift's SUM(quantity) actually
+            # relies on -- the label is documentation, the sign is the math.
+            movement_uid = _new_uid()
+            cur.execute("""
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'transfer_out',?,?,?,?,?,?,?,?)
+            """, (cid, pid, source_bid, -qty, reference,
+                  f'Transfer to branch {transfer["destination_branch_id"]}', _uid(),
+                  movement_uid, actor, terminal, utc_now))
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': pid, 'branch_id': source_bid, 'branch_uid': source_branch_uid,
+                'movement_type': 'transfer_out', 'quantity': -qty, 'unit_cost': 0,
+                'reference': reference, 'notes': f'Transfer to branch {transfer["destination_branch_id"]}',
+                'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
+
+        cur.execute(
+            "UPDATE stock_transfers SET status='in_transit', sent_at=? "
+            "WHERE id=? AND company_id=? AND status='pending'",
+            (utc_now, transfer_id, cid)
+        )
+        if cur.rowcount != 1:
+            # Another request won the race between our own SELECT above and
+            # this UPDATE -- belt and braces, matching receive_purchase_
+            # order's identical double-guard.
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer already sent.'}), 409
+        _audit(conn, 'STOCK_TRANSFER_SENT', 'stock_transfer', transfer_id,
+               f'{len(items)} line(s) from branch {source_bid} to {transfer["destination_branch_id"]}')
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("send_stock_transfer(%s) failed: %s", transfer_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not send this transfer.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/stock-transfers/<string:transfer_id>/receive', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.transfer.receive", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def receive_stock_transfer(transfer_id):
+    """in_transit -> received. Stock ARRIVES at the destination branch here
+    -- the second of the two ledger-touching events (see the section header
+    above).
+
+    Body: `{items: [{id, quantity_received}, ...]}` -- `id` is the
+    stock_transfer_items row id (NOT product_id: a transfer may carry two
+    lines for the same product, and only the item id disambiguates which
+    line a given count belongs to). EVERY line of the transfer must be
+    named exactly once, matching receive_purchase_order's own all-or-
+    nothing receipt (no partial-PO-receiving exists in this file either) --
+    a transfer half-reconciled would leave `status='in_transit'` forever
+    with no way back to 'pending' and no way forward to 'received', so this
+    route asks for every line's count in the one call that flips the status.
+
+    A SHORTAGE (quantity_received < quantity_sent) is NOT an error -- see
+    the migration docstring's STATUS VALUES section: 'received' is the same
+    status regardless of whether every line matched exactly, because a
+    discrepancy is a fact about the LINE, not a workflow state of the
+    header. `quantity_received=0` is itself a real, meaningful value ("sent
+    but none arrived") and writes NO inventory_movements row and moves NO
+    stock, exactly as NULL vs 0 is documented to mean in the migration's own
+    words. The response's `shortages` list surfaces every line that came up
+    short, sourced from the SAME numbers just written, so the shop sees it
+    immediately rather than having to notice on a stock report later.
+
+    BEGIN IMMEDIATE + a conditional `status='in_transit'` UPDATE with its
+    rowcount checked -- the identical double-guard send_stock_transfer's own
+    docstring explains, now protecting against a double-clicked Receive
+    instead of a double-clicked Send.
+    """
+    data = request.json or {}
+    cid  = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        transfer = cur.execute(
+            "SELECT * FROM stock_transfers WHERE id=? AND company_id=?", (transfer_id, cid)
+        ).fetchone()
+        if not transfer:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer not found'}), 404
+        if transfer['status'] != 'in_transit':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot receive a transfer that is {transfer['status']}."}), 409
+
+        items = cur.execute(
+            "SELECT * FROM stock_transfer_items WHERE transfer_id=?", (transfer_id,)
+        ).fetchall()
+
+        received_by_item_id = {}
+        for entry in (data.get('items') or []):
+            item_id = entry.get('id')
+            if not item_id:
+                conn.rollback()
+                return jsonify({'status': 'error', 'message': 'Every received item requires its id.'}), 400
+            try:
+                qty_received = float(entry.get('quantity_received'))
+            except (TypeError, ValueError):
+                conn.rollback()
+                return jsonify({'status': 'error',
+                                 'message': f'Invalid quantity_received for item {item_id}.'}), 400
+            if qty_received < 0:
+                conn.rollback()
+                return jsonify({'status': 'error',
+                                 'message': f'quantity_received cannot be negative for item {item_id}.'}), 400
+            received_by_item_id[item_id] = qty_received
+
+        valid_item_ids = {item['id'] for item in items}
+        unknown_ids = set(received_by_item_id) - valid_item_ids
+        if unknown_ids:
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f'Unknown transfer item id: {sorted(unknown_ids)[0]}'}), 400
+        unreconciled_ids = valid_item_ids - set(received_by_item_id)
+        if unreconciled_ids:
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': 'Every line of this transfer must be reconciled.'}), 400
+
+        dest_bid = transfer['destination_branch_id']
+        reference = f'XFER-{transfer_id}'
+        actor, terminal, utc_now = _stamp()
+        dest_branch_uid = _branch_uid(conn, dest_bid)
+        shortages = []
+        for item in items:
+            pid = item['product_id']
+            qty_sent = float(item['quantity_sent'])
+            qty_received = received_by_item_id[item['id']]
+            cur.execute(
+                "UPDATE stock_transfer_items SET quantity_received=? WHERE id=?",
+                (qty_received, item['id'])
+            )
+            if qty_received > 0:
+                # Same seed-then-update shape as receive_purchase_order's own
+                # item loop above -- a destination branch that has never
+                # stocked this product yet gets a zero row first.
+                cur.execute(
+                    "INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) "
+                    "VALUES (?,?,?,0)",
+                    (cid, pid, dest_bid)
+                )
+                cur.execute(
+                    "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ? "
+                    "WHERE company_id=? AND product_id=? AND branch_id=?",
+                    (qty_received, cid, pid, dest_bid)
+                )
+                movement_uid = _new_uid()
+                cur.execute("""
+                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                                                     uid,actor_user_uid,terminal_id,created_at_utc)
+                    VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?)
+                """, (cid, pid, dest_bid, qty_received, reference,
+                      f'Transfer from branch {transfer["source_branch_id"]}', _uid(),
+                      movement_uid, actor, terminal, utc_now))
+                _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                    'uid': movement_uid, 'product_id': pid, 'branch_id': dest_bid, 'branch_uid': dest_branch_uid,
+                    'movement_type': 'transfer_in', 'quantity': qty_received, 'unit_cost': 0,
+                    'reference': reference, 'notes': f'Transfer from branch {transfer["source_branch_id"]}',
+                    'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                })
+            # qty_received == 0 writes no movement and moves no stock -- see
+            # this route's own docstring: 0 is itself the real, meaningful
+            # fact ("sent but none arrived"), not an absence to special-case.
+            if qty_received < qty_sent - stock_reconciliation.DEFAULT_TOLERANCE:
+                shortages.append({
+                    'product_id': pid, 'quantity_sent': qty_sent, 'quantity_received': qty_received,
+                })
+
+        cur.execute(
+            "UPDATE stock_transfers SET status='received', received_at=? "
+            "WHERE id=? AND company_id=? AND status='in_transit'",
+            (utc_now, transfer_id, cid)
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer already received.'}), 409
+        _audit(conn, 'STOCK_TRANSFER_RECEIVED', 'stock_transfer', transfer_id,
+               f'{len(items)} line(s) at branch {dest_bid}'
+               + (f'; {len(shortages)} short' if shortages else ''))
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("receive_stock_transfer(%s) failed: %s", transfer_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not receive this transfer.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {'shortages': shortages}})
+
+
+@retail_bp.route('/stock-transfers/<string:transfer_id>/cancel', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.transfer.cancel", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def cancel_stock_transfer(transfer_id):
+    """pending -> cancelled. Only while pending -- see the migration
+    docstring's STATUS VALUES section: a 'pending' transfer has touched no
+    ledger row yet, so cancelling one is a pure status flip with nothing to
+    unwind. A transfer already 'in_transit' or 'received' has moved real
+    stock and cannot be cancelled through this route (there is no unwind
+    path here -- reversing an in-flight or completed transfer is a new
+    transfer in the other direction, the same way a shipped sale is reversed
+    through /returns rather than by editing the sale).
+
+    BEGIN IMMEDIATE + a conditional `status='pending'` UPDATE with its
+    rowcount checked, the identical guard shape send/receive already use --
+    this stops a Cancel racing a concurrent Send from both succeeding.
+    """
+    cid  = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        transfer = cur.execute(
+            "SELECT status FROM stock_transfers WHERE id=? AND company_id=?", (transfer_id, cid)
+        ).fetchone()
+        if not transfer:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer not found'}), 404
+        if transfer['status'] != 'pending':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot cancel a transfer that is {transfer['status']}."}), 409
+
+        cur.execute(
+            "UPDATE stock_transfers SET status='cancelled' WHERE id=? AND company_id=? AND status='pending'",
+            (transfer_id, cid)
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer already sent or received.'}), 409
+        _audit(conn, 'STOCK_TRANSFER_CANCELLED', 'stock_transfer', transfer_id)
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("cancel_stock_transfer(%s) failed: %s", transfer_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not cancel this transfer.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success'})
+
+
 # ── Reorder Requests (feat/reorder-automation-foundation) ───────────────────────
 # Foundation only: schema + the post-sale trigger (core/retail/reorder_hook.py,
 # called from create_sale below) + this accept/decline surface for the Admin
