@@ -1127,5 +1127,11 @@
   "Jordan E-Invoicing (JoFotara)": "الفوترة الإلكترونية الأردنية (JoFotara)",
   "Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.": "حالة وإعدادات الفوترة الإلكترونية الحكومية لهذا التثبيت. مفعَّلة افتراضيًا: تُسجَّل كل عملية بيع، وتُرسَل بمجرد اتصال هذا التثبيت بـ JoFotara.",
   "JoFotara account credentials": "بيانات اعتماد حساب JoFotara",
-  "Submission queue": "قائمة انتظار الإرسال"
+  "Submission queue": "قائمة انتظار الإرسال",
+  "Loyalty Balance": "رصيد نقاط الولاء",
+  "Redeem Points": "استبدال النقاط",
+  "Points to redeem": "عدد النقاط المراد استبدالها",
+  "Redeem the maximum available points": "استبدال أقصى عدد متاح من النقاط",
+  "Max": "الأقصى",
+  "Points Redeemed": "النقاط المستبدلة"
 }

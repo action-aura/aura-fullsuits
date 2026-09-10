@@ -118,6 +118,28 @@ const RetailSystem = {
   // _recalc() below before changing either side.
   _taxMode: 'after_discount',
 
+  // ── Loyalty point redemption, POS control (launch-readiness wave 1,
+  // schema v27) ──────────────────────────────────────────────────────────
+  // The money value of ONE point, loaded from GET /settings/credit
+  // alongside the credit-mode fields that endpoint already carries (see
+  // retail_api.py's `_DEFAULT_SETTINGS['loyalty_point_value']` and
+  // credit_settings_set's own "rides this same endpoint" comment). Stays 0
+  // -- redemption DISABLED -- until _loadPOSData() resolves, so a control
+  // that briefly can't tell whether the shop opted in defaults to invisible,
+  // never to a stub that might be wrong.
+  _loyaltyPointValue: 0,
+  // The selected customer's own ledger balance (points), fetched fresh by
+  // _onCustomerChange() every time the customer selector changes -- never
+  // cached across customers, so a stale balance can never be redeemed
+  // against the wrong account. 0 for Walk-in / no customer / a failed fetch.
+  _loyaltyBalance: 0,
+  // The CLAMPED points this sale will actually submit, recomputed by
+  // _recalc() on every pass (cart edit, discount edit, redeem-input edit)
+  // from the raw #pos-loyalty-redeem value -- never read back from the DOM
+  // a second time at checkout, so what the cashier sees on screen and what
+  // _checkout() sends are provably the same number.
+  _loyaltyRedeemPoints: 0,
+
   // ── Currency, resolved by the SERVER ─────────────────────────────────────
   //
   // Loaded from GET /settings/tax alongside the tax mode, in the same round
@@ -784,7 +806,10 @@ const RetailSystem = {
   // make the discount and cash-tendered boxes literally untypeable, because
   // every keystroke fires an oninput -> _recalc()/_calcChange() -> re-render
   // path that would yank the caret away mid-number.
-  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer'],
+  // Loyalty redemption wave 1: 'pos-loyalty-redeem' joins this list for the
+  // identical reason 'pos-disc' is here -- its own oninput -> _recalc() ->
+  // re-render path would otherwise yank the caret away mid-number.
+  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer', 'pos-loyalty-redeem'],
 
   // Returns true only if focus was actually moved, so callers (and the tests)
   // can tell "the guard ran and declined" from "the guard never ran".
@@ -2336,7 +2361,7 @@ const RetailSystem = {
           <div class="pos-pane-hdr">
             <h3 class="pos-pane-title">${t('Current Sale')}</h3>
             <div style="display:flex;gap:8px;align-items:center">
-              <select id="pos-customer" class="pos-cust-select">
+              <select id="pos-customer" class="pos-cust-select" onchange="RetailSystem._onCustomerChange()">
                 <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
               <button class="pos-hold-btn" onclick="RetailSystem._holdSale()"
@@ -2367,6 +2392,46 @@ const RetailSystem = {
             <div class="pos-total-band">
               <span class="pos-grand-label">${t('Total')}</span>
               <span class="pos-grand-value money" id="pos-total">${this._esc(this._moneyDigits(0))}</span>
+            </div>
+            <!-- Loyalty point redemption, launch-readiness wave 1 (schema v27).
+                 Invisible unless the shop opted in AND a real customer is on
+                 the sale (see CLAUDE.md's "invisible unless opted in" rule) --
+                 both rows below start hidden and are only ever shown by
+                 _onCustomerChange(), never by default markup state, matching
+                 #pos-change-row's own display:none convention two rows down.
+                 Reuses the EXACT Discount-input recipe (.pos-mini-input, an
+                 aria-label run through t(), oninput -> _recalc()) and the
+                 Held button's ghost-button recipe (.ret-btn.ret-btn-ghost.
+                 ret-btn-sm) rather than inventing new markup or new CSS --
+                 both classes already clear the 44px touch floor on both axes
+                 (main.css's TOUCH, SECOND AXIS block), so no CSS file needs
+                 to change for this control to be hittable on a touchscreen. -->
+            <div id="pos-loyalty-section" style="display:none">
+              <div class="pos-sum-row">
+                <span>${t('Loyalty Balance')}</span>
+                <span class="pos-sum-val" id="pos-loyalty-balance">0</span>
+              </div>
+              <div class="pos-sum-row">
+                <span>${t('Redeem Points')}</span>
+                <span style="display:flex;gap:6px;align-items:center">
+                  <input type="number" id="pos-loyalty-redeem" value="0" min="0" step="1"
+                    class="pos-mini-input" style="inline-size:64px;padding-inline:10px;font-size:14px"
+                    aria-label="${this._esc(t('Points to redeem'))}"
+                    oninput="RetailSystem._recalc()" />
+                  <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-loyalty-max-btn"
+                    title="${this._esc(t('Redeem the maximum available points'))}"
+                    onclick="RetailSystem._useMaxLoyaltyPoints()">${t('Max')}</button>
+                </span>
+              </div>
+            </div>
+            <!-- Own row, own visibility: shown only once a redemption is
+                 actually applied (loyaltyValue > 0), the same "conditional
+                 money row" shape #pos-change-row already uses just below --
+                 this is the "sale summary" line the cashier reads to see the
+                 customer is paying less cash. -->
+            <div class="pos-sum-row" id="pos-loyalty-value-row" style="display:none">
+              <span>${t('Points Redeemed')}</span>
+              <span class="pos-sum-val money" id="pos-loyalty-value">${this._esc(this._moneyDigits(0))}</span>
             </div>
             <div class="pos-sum-row">
               <span>${t('Cash Tendered')}</span>
@@ -2401,6 +2466,13 @@ const RetailSystem = {
     this._pendingQty = null;
     this._qtyKeyBuffer = '';
     this._qtyKeyLastAt = 0;
+    // Loyalty redemption wave 1: a balance/redemption held over from whoever
+    // this till last served is a stale trap here too -- reset synchronously,
+    // same reasoning as _promotions above. `_loyaltyPointValue` (the SHOP's
+    // own setting, not this customer's) deliberately survives a remount;
+    // _loadPOSData() below refreshes it anyway.
+    this._loyaltyBalance = 0;
+    this._loyaltyRedeemPoints = 0;
     this._loadPOSData();
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
     // Put the caret where the next barcode is going to land, so the very first
@@ -2454,7 +2526,7 @@ const RetailSystem = {
 
   async _loadPOSData() {
     try {
-      const [prods, cats, custs, taxSettings, held, promos] = await Promise.all([
+      const [prods, cats, custs, taxSettings, held, promos, creditSettings] = await Promise.all([
         this._get(`/api/sub/retail/products?limit=${this.POS_GRID_PAGE_SIZE + 1}`),
         this._get('/api/sub/retail/categories'),
         this._get('/api/sub/retail/customers'),
@@ -2470,6 +2542,14 @@ const RetailSystem = {
         // resolves with no branch filter rather than inventing new client
         // state to guess one.
         this._get('/api/sub/retail/promotions/active').catch(() => null),
+        // Loyalty redemption wave 1 (schema v27): `loyalty_point_value` rides
+        // GET /settings/credit (retail_api.py's credit_settings_set comment
+        // explains why it was never given its own route). `.catch(() =>
+        // null)` same as every other best-effort fetch above -- an install
+        // that has never opened this setting, or a request that fails, must
+        // still sell; _onCustomerChange()/_recalc() both already treat a
+        // missing/zero value as "redemption disabled".
+        this._get('/api/sub/retail/settings/credit').catch(() => null),
       ]);
       this._products   = prods.data || [];
       // Defensive Array.isArray, not just `promos.data || []`: a non-2xx/
@@ -2496,6 +2576,11 @@ const RetailSystem = {
       const _ts = (taxSettings && taxSettings.data) || {};
       if (_ts.currency_symbol != null) this._currencySymbol = _ts.currency_symbol;
       if (_ts.currency_decimals != null) this._currencyDecimals = _ts.currency_decimals;
+      // Loyalty redemption wave 1 (schema v27): '0' (the string, straight off
+      // SQLite) means redemption is OFF -- see _DEFAULT_SETTINGS in
+      // retail_api.py. parseFloat('0')=0, parseFloat(undefined)=NaN -> `|| 0`
+      // covers both an unopened setting and a malformed value the same way.
+      this._loyaltyPointValue = parseFloat(creditSettings && creditSettings.data && creditSettings.data.loyalty_point_value) || 0;
       const heldCountEl = document.getElementById('pos-held-count');
       if (heldCountEl) heldCountEl.textContent = (held && held.data || []).length;
 
@@ -2521,6 +2606,13 @@ const RetailSystem = {
         });
       }
       this._renderPOSGrid();
+      // Loyalty redemption wave 1: re-evaluate the control now that
+      // `_loyaltyPointValue` is actually known. Harmless (and cheap) on the
+      // overwhelmingly common case -- Walk-in still selected at mount -- and
+      // the one thing that saves a cashier who managed to pick a customer
+      // before this fetch resolved from being stuck with a hidden control
+      // until they reselect.
+      this._onCustomerChange();
     } catch(e) {
       const grid = document.getElementById('pos-product-grid');
       if (grid) grid.innerHTML = `<div class="pos-card-stock is-out" style="grid-column:1/-1;padding:20px;font-size:14px">${t('Failed to load products.')}</div>`;
@@ -3129,7 +3221,13 @@ const RetailSystem = {
       document.querySelectorAll('.pos-pay-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.method === this._paymentMethod);
       });
-      this._recalc();
+      // Loyalty redemption wave 1: setting `sel.value` above does NOT fire
+      // the select's own `onchange` (that only fires on a real user
+      // interaction), so the redemption control would otherwise keep
+      // whatever visibility/balance the PREVIOUS sale on this screen left it
+      // in -- wrong customer, possibly wrong balance entirely. This call
+      // also runs the trailing _recalc() for us.
+      await this._onCustomerChange();
       this._refreshHeldCount();
       SubsystemApp.showToast(`Resumed ${snap.hold_number}`, 'success');
     } catch (e) { /* _fetch already surfaces auth errors via toast/redirect */ }
@@ -3340,13 +3438,42 @@ const RetailSystem = {
     });
     const discAmt = subtotal * manualFrac + promoExtra;
     const total   = subtotal - discAmt + tax;
-    this._currentTotals = { subtotal, discount: discAmt, tax, total };
+
+    // ── Loyalty point redemption (launch-readiness wave 1, schema v27) ──────
+    // A PREVIEW only -- create_sale (retail_api.py) re-derives the ledger
+    // balance and the point value itself and is the sole financial
+    // authority (see that route's own "CLIENT-SUBMITTED INTENT ONLY"
+    // comment) -- but clamped the SAME three ways it clamps server-side
+    // (never more than requested, never more than the balance, never more
+    // than this sale is worth in points) so what the cashier previews here
+    // never promises more than checkout can actually honour.
+    // `_loyaltyRedeemPoints` is the number _checkout() reads back -- computed
+    // HERE, once, rather than re-parsed from the DOM a second time at
+    // checkout, so the two can never disagree.
+    const loyaltyPoints = this._loyaltyRedemptionPoints(total);
+    const loyaltyValue  = loyaltyPoints > 0 ? Math.min(loyaltyPoints * this._loyaltyPointValue, total) : 0;
+    this._loyaltyRedeemPoints = loyaltyPoints;
+    // THE CASH TRAP, client-side echo of retail_api.py's own heading for
+    // this: points are not cash. `total` (the invoice figure the Total band
+    // shows) is never adjusted for a redemption; `amountDue` is only what
+    // still has to be TENDERED, and is what Cash Tendered/Change/the
+    // default amount_paid below are computed against instead.
+    const amountDue = Math.max(0, total - loyaltyValue);
+
+    this._currentTotals = { subtotal, discount: discAmt, tax, total, loyaltyValue, amountDue };
     // All three spans already carry `.money` in the POS template, so the amount
     // IS the money element -- _setMoney fills it in and marks a negative on
     // that same element rather than leaving the cue to whatever wraps it.
     this._setMoney(document.getElementById('pos-sub'),   subtotal);
     this._setMoney(document.getElementById('pos-tax'),   tax);
     this._setMoney(document.getElementById('pos-total'), total);
+    // "Show the redeemed value in the sale summary" -- own row, own
+    // visibility, the same conditional-money-row shape #pos-change-row
+    // already uses just below.
+    const loyaltyValueRow = document.getElementById('pos-loyalty-value-row');
+    if (loyaltyValueRow) loyaltyValueRow.style.display = loyaltyValue > 0 ? '' : 'none';
+    const loyaltyValueEl = document.getElementById('pos-loyalty-value');
+    if (loyaltyValueEl) this._setMoney(loyaltyValueEl, loyaltyValue);
     const checkoutBtn = document.getElementById('pos-checkout-btn');
     if (checkoutBtn) {
       checkoutBtn.textContent = this._checkoutLabel(total);
@@ -3355,13 +3482,92 @@ const RetailSystem = {
     this._calcChange();
   },
 
+  // Pure calc: how many points the cashier's CURRENT #pos-loyalty-redeem
+  // value actually redeems against `total`, clamped the same three ways
+  // create_sale (retail_api.py) clamps server-side. Reads 0 whenever the
+  // control cannot legitimately be showing at all (no customer selected, or
+  // the shop never turned redemption on), so a value left over in a hidden
+  // input from a previous customer or a since-disabled setting can never
+  // silently ride into a sale.
+  _loyaltyRedemptionPoints(total) {
+    if (!this._loyaltyRedemptionEnabled()) return 0;
+    const customerId = document.getElementById('pos-customer')?.value || null;
+    if (!customerId) return 0;
+    const requested = Math.max(0, Math.floor(parseFloat(document.getElementById('pos-loyalty-redeem')?.value || 0) || 0));
+    if (requested <= 0) return 0;
+    const maxAffordable = Math.floor((total || 0) / this._loyaltyPointValue);
+    const balance = Math.max(0, Math.floor(this._loyaltyBalance || 0));
+    return Math.min(requested, maxAffordable, balance);
+  },
+
+  // '0'/unset means the shop never opened this setting -- see
+  // _DEFAULT_SETTINGS['loyalty_point_value'] in retail_api.py, which this
+  // mirrors exactly (`point_value <= 0` there is the identical refusal).
+  _loyaltyRedemptionEnabled() {
+    return (parseFloat(this._loyaltyPointValue) || 0) > 0;
+  },
+
+  // Fired on every change of the customer selector, INCLUDING back to
+  // Walk-in -- the redemption control is customer-scoped (a different
+  // customer has a different ledger balance), so both the control's
+  // visibility and any pending redemption reset here, not only at mount.
+  // Best-effort: a failed balance fetch hides the control rather than
+  // showing one against an unknown/stale balance -- the till must never
+  // block a sale over this fetch.
+  async _onCustomerChange() {
+    const section = document.getElementById('pos-loyalty-section');
+    const input = document.getElementById('pos-loyalty-redeem');
+    if (input) input.value = '0';
+    const customerId = document.getElementById('pos-customer')?.value || null;
+    if (!customerId || !this._loyaltyRedemptionEnabled()) {
+      this._loyaltyBalance = 0;
+      if (section) section.style.display = 'none';
+      this._recalc();
+      this._refocusScan();
+      return;
+    }
+    try {
+      const resp = await this._get(`/api/sub/retail/customers/${customerId}/loyalty`);
+      this._loyaltyBalance = (resp && resp.data && resp.data.balance) || 0;
+      const balanceEl = document.getElementById('pos-loyalty-balance');
+      if (balanceEl) balanceEl.textContent = String(Math.max(0, Math.floor(this._loyaltyBalance)));
+      if (section) section.style.display = '';
+    } catch (e) {
+      this._loyaltyBalance = 0;
+      if (section) section.style.display = 'none';
+    }
+    this._recalc();
+    this._refocusScan();
+  },
+
+  // "A max affordance is welcome -- the max is min(balance, what the sale is
+  // worth in points)." Sets the INPUT's displayed value (unlike _recalc's own
+  // internal clamp, which never rewrites what the cashier typed) because this
+  // is a direct request for the largest legal number, not a keystroke to
+  // leave alone.
+  _useMaxLoyaltyPoints() {
+    const input = document.getElementById('pos-loyalty-redeem');
+    if (!input || !this._loyaltyRedemptionEnabled()) return;
+    const total = (this._currentTotals && this._currentTotals.total) || 0;
+    const maxAffordable = Math.floor(total / this._loyaltyPointValue);
+    const balance = Math.max(0, Math.floor(this._loyaltyBalance || 0));
+    input.value = String(Math.max(0, Math.min(maxAffordable, balance)));
+    this._recalc();
+  },
+
   _calcChange() {
-    const tendered = parseFloat(document.getElementById('pos-tendered')?.value || 0);
-    const total    = this._currentTotals.total || 0;
+    const tendered   = parseFloat(document.getElementById('pos-tendered')?.value || 0);
+    // Loyalty redemption wave 1: change is owed against what still has to be
+    // TENDERED, not the invoice total -- see _recalc()'s own "THE CASH TRAP"
+    // comment. Falls back to `total` when `amountDue` was never computed
+    // (several existing tests hand-set `_currentTotals` directly with only
+    // subtotal/discount/tax/total), which reproduces the exact pre-existing
+    // behaviour whenever no redemption is in play.
+    const amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : (this._currentTotals.total || 0);
     const changeRow = document.getElementById('pos-change-row');
     const changeEl  = document.getElementById('pos-change');
-    if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= total) {
-      const change = tendered - total;
+    if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= amountDue) {
+      const change = tendered - amountDue;
       if (changeRow) changeRow.style.display = '';
       if (changeEl)  this._setMoney(changeEl, change);
     } else {
@@ -3947,8 +4153,14 @@ const RetailSystem = {
   async _checkout() {
     if (!this._cart.length) { SubsystemApp.showToast('Cart is empty', 'error'); return; }
     const total    = this._currentTotals.total || 0;
+    // Loyalty redemption wave 1: what still has to be TENDERED, not the
+    // invoice total -- see _recalc()'s "THE CASH TRAP" comment. Falls back
+    // to `total` when `amountDue` was never computed (existing tests that
+    // hand-set `_currentTotals` directly), reproducing the exact
+    // pre-existing behaviour whenever no redemption is in play.
+    const amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : total;
     const tendered = parseFloat(document.getElementById('pos-tendered')?.value || 0);
-    if (this._paymentMethod === 'cash' && tendered > 0 && tendered < total) {
+    if (this._paymentMethod === 'cash' && tendered > 0 && tendered < amountDue) {
       SubsystemApp.showToast('Cash tendered is less than total', 'error'); return;
     }
     const customerId = document.getElementById('pos-customer')?.value || null;
@@ -3989,8 +4201,24 @@ const RetailSystem = {
       discount_amount:  this._currentTotals.discount,
       tax_amount:       this._currentTotals.tax,
       total,
-      amount_paid:      this._paymentMethod === 'cash' ? Math.max(tendered, total) : total,
+      // `amountDue`, not `total` -- amount_paid means "what was actually
+      // handed over toward the amount still owed". Sending the full `total`
+      // here while a redemption reduced amountDue would make the server's
+      // own `change = paid - amount_due_after_points` (retail_api.py)
+      // compute a phantom change equal to the redeemed value, which is
+      // "THE CASH TRAP" that comment warns about, wearing a client-payload
+      // shape instead of a server-formula one.
+      amount_paid:      this._paymentMethod === 'cash' ? Math.max(tendered, amountDue) : amountDue,
       payment_method:   this._paymentMethod,
+      // Loyalty redemption wave 1 (schema v27): an integer COUNT of points,
+      // never a money amount -- create_sale (retail_api.py) resolves this
+      // into money itself via the ledger balance and loyalty_point_value,
+      // both read server-side, and ignores what this client thinks it is
+      // worth (see that function's own "CLIENT-SUBMITTED INTENT ONLY"
+      // comment). Always sent, 0 for the overwhelming majority of sales that
+      // never redeem -- the server already treats a missing/zero value the
+      // same way.
+      points_redeemed:  this._loyaltyRedeemPoints || 0,
       items: this._cart.map(i => ({ ...i, discount_pct: discPct })),
     };
     try {
@@ -4076,6 +4304,18 @@ const RetailSystem = {
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
               <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700">${this._fmt(saleData.total)}</span>
             </div>
+            <!-- Loyalty redemption wave 1 (schema v27). saleData's own
+                 points_redeemed_amount field is ALWAYS present on a real
+                 sale response (0 for the overwhelming majority that never
+                 redeem -- retail_api.py's own "always present, not
+                 conditionally added" comment), so this reads straight from
+                 the server's own authoritative figure, never re-derived
+                 client-side. This is the "sale summary" line that shows the
+                 cashier the customer paid less cash, restated at the one
+                 screen a cashier reads after EVERY sale. -->
+            ${saleData.points_redeemed_amount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text-secondary)">${t('Points Redeemed')}</span><span style="color:var(--text-money-positive);font-weight:700">-${this._fmt(saleData.points_redeemed_amount)}</span>
+            </div>` : ''}
             ${saleData.change > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
               <span style="color:var(--text-secondary)">${t('Change due')}</span><span style="color:var(--text-money-positive);font-weight:700">${this._fmt(saleData.change)}</span>
             </div>` : ''}

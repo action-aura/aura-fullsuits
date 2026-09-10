@@ -1127,5 +1127,11 @@
   "Jordan E-Invoicing (JoFotara)": "Jordan E-Invoicing (JoFotara)",
   "Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.": "Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.",
   "JoFotara account credentials": "JoFotara account credentials",
-  "Submission queue": "Submission queue"
+  "Submission queue": "Submission queue",
+  "Loyalty Balance": "Loyalty Balance",
+  "Redeem Points": "Redeem Points",
+  "Points to redeem": "Points to redeem",
+  "Redeem the maximum available points": "Redeem the maximum available points",
+  "Max": "Max",
+  "Points Redeemed": "Points Redeemed"
 }
