@@ -19,10 +19,20 @@
  *      carry the exact key t() is called with).
  *   6. F1-F6 actually select the corresponding tender while the POS screen
  *      is active, through the REAL _onPOSShortcut handler (not a
- *      reimplementation) -- and do NOT fire while a text field has focus,
- *      reusing the exact guard Enter/X/Delete already share. MUTATION-PROVED:
- *      a mutant that removes that guard from ahead of the F-key branch is
- *      required to make this check fail.
+ *      reimplementation) -- specifically WITH THE SCAN BOX FOCUSED, which is
+ *      where this till keeps focus essentially all the time it is open
+ *      (_keepScanFocus, so a barcode wedge always lands somewhere useful).
+ *      Enter and the other TYPED keys still respect the text-field guard.
+ *      MUTATION-PROVED: a mutant that ignores F-keys while an input has
+ *      focus is required to make this check fail.
+ *
+ *      This point used to read the other way round -- that F-keys must NOT
+ *      fire while a text field has focus -- and the suite passed on a
+ *      fixture with "focus nowhere", a state the running till never reaches.
+ *      Six badges were printed on the tender buttons and, measured in a real
+ *      browser on 2026-09-10, one of six worked; that one was F1, which only
+ *      looked right because cash is the default. The tests were describing
+ *      the bug as the specification.
  *
  * Harness shape follows retail_shell_chrome_test.js (vm sandbox, stubbed
  * DOM, the REAL icons.js loaded alongside the REAL subsystem-retail.js) for
@@ -206,23 +216,72 @@ function testEveryLabelResolvesThroughBothCatalogues() {
 //     [MUTATION-PROVED]
 // ═════════════════════════════════════════════════════════════════════════
 
-function testF3SelectsMobile() {
-  const ctx = loadRetailSystem({ activeEl: null }); // focus nowhere -- not a text field
+// The fixture below focuses #pos-search ON PURPOSE, and that is the whole
+// lesson of this pair.
+//
+// This test used to run with `activeEl: null` -- "focus nowhere" -- and its
+// sibling asserted that F3 must NOT fire while an input was focused. Both
+// passed for months. But the till PARKS focus in #pos-search so a barcode
+// wedge always lands somewhere useful (_keepScanFocus), so "an input is
+// focused" is not an edge case here: it is the only state the till is ever
+// in while open. `activeEl: null` was a state the product never reaches.
+//
+// So the suite was simultaneously asserting the shortcuts work (in a state
+// that never happens) and that they are blocked (in the state that always
+// happens), while the tender buttons shipped with "F1".."F6" printed on
+// them. Measured in a real browser 2026-09-10, before the fix: 1 of 6 keys
+// worked, and that one was F1, which only looked correct because cash is
+// already the default tender.
+function testF3SelectsMobileWithTheScanBoxFocused() {
+  // The real, ever-present state of the till: focus sitting in the scan box.
+  const ctx = loadRetailSystem({
+    activeEl: { tagName: 'INPUT', id: 'pos-search', isContentEditable: false },
+  });
   fireKeydown(ctx.RetailSystem, 'F3');
-  assert.strictEqual(ctx.RetailSystem._paymentMethod, 'mobile', 'F3 did not select the Mobile / CliQ tender.');
+  assert.strictEqual(ctx.RetailSystem._paymentMethod, 'mobile',
+    'F3 did not select the Mobile / CliQ tender while focus was in the scan box -- '
+    + 'which is where this till keeps focus essentially all the time, so a badge '
+    + 'printed on the button is a promise the product does not keep.');
   const mobileBtn = ctx.payButtons.find((b) => b.dataset.method === 'mobile');
   assert.ok(mobileBtn.classList.contains('active'), 'F3 selected mobile in state but never marked its button active.');
   const cashBtn = ctx.payButtons.find((b) => b.dataset.method === 'cash');
   assert.ok(!cashBtn.classList.contains('active'), 'F3 left Cash marked active alongside Mobile.');
-  console.log('PASS: F3 selects Mobile / CliQ and updates the active button');
+  console.log('PASS: F3 selects Mobile / CliQ with the scan box focused, and updates the active button');
 }
 
-function testF3DoesNotFireWithATextInputFocused() {
-  const ctx = loadRetailSystem({ activeEl: { tagName: 'INPUT', id: 'pos-tendered', isContentEditable: false } });
-  fireKeydown(ctx.RetailSystem, 'F3');
-  assert.strictEqual(ctx.RetailSystem._paymentMethod, 'cash',
-    'F3 changed the tender even though focus was in a text input (#pos-tendered).');
-  console.log('PASS: F3 does NOT fire while a text input is focused');
+function testEveryFunctionKeyFiresWithTheScanBoxFocused() {
+  // One key working is not the same as the printed grid working. F1 in
+  // particular passes trivially, because cash is the default -- so a check
+  // that only tried F1 would have reported this feature healthy while five
+  // of the six badges were dead.
+  const expected = ['cash', 'card', 'mobile', 'transfer', 'credit', 'voucher'];
+  expected.forEach((method, i) => {
+    const ctx = loadRetailSystem({
+      activeEl: { tagName: 'INPUT', id: 'pos-search', isContentEditable: false },
+    });
+    fireKeydown(ctx.RetailSystem, `F${i + 1}`);
+    assert.strictEqual(ctx.RetailSystem._paymentMethod, method,
+      `F${i + 1} should select '${method}' but selected '${ctx.RetailSystem._paymentMethod}'.`);
+  });
+  console.log('PASS: all six function keys select their printed tender with the scan box focused');
+}
+
+function testTypedKeysStillRespectTheTextFieldGuard() {
+  // The ALLOW half above must not have cost the DENY half. The guard exists
+  // so a cashier typing a search term and hitting Enter out of habit cannot
+  // charge whatever is sitting in the cart. A function key emits no
+  // character and so cannot be part of typing; Enter can, and is still
+  // blocked.
+  const ctx = loadRetailSystem({
+    activeEl: { tagName: 'INPUT', id: 'pos-search', isContentEditable: false },
+  });
+  let charged = 0;
+  ctx.RetailSystem._checkout = () => { charged += 1; };
+  fireKeydown(ctx.RetailSystem, 'Enter');
+  assert.strictEqual(charged, 0,
+    'Enter charged the sale while focus was in a text field -- the guard that '
+    + 'stops a habitual Enter from taking money has been lost.');
+  console.log('PASS: Enter is still ignored while a text field has focus');
 }
 
 // Mutation harness -- same shape as retail_shell_chrome_test.js: re-anchor to
@@ -305,21 +364,36 @@ function loadMutatedRetailSystem(mutatedSource, opts) {
   return { RetailSystem, payButtons };
 }
 
-async function testTextFieldGuardMutationIsCaught() {
+async function testFunctionKeysBeatingTheTextGuardIsProved() {
+  // The mutation this file used to run has been inverted, and deliberately.
+  //
+  // It used to delete the text-field guard sitting AHEAD of the F-key branch
+  // and require the suite to notice. That proved the guard blocked function
+  // keys -- which was the bug, not the feature: the till parks focus in
+  // #pos-search, so the guard blocked all six printed badges in every real
+  // session. The old mutation was faithfully proving the defect was present.
+  //
+  // So the mutant now REINTRODUCES that defect: make the F-key lookup yield
+  // nothing whenever an input has focus, exactly as the old ordering did.
+  // Written as its own condition rather than by moving the guard back,
+  // because `inTextField` is declared below this branch now and re-inserting
+  // it here would throw on the temporal dead zone -- a mutant that fails for
+  // the wrong reason proves nothing.
   const mutated = mutate(SOURCE, [[
-    `    if (inTextField) return;
-
-    // F1-F6 select a tender method in grid order (see POS_PAYMENT_METHODS /`,
-    `    // F1-F6 select a tender method in grid order (see POS_PAYMENT_METHODS /`,
+    `    const fMatch = /^F([1-6])$/.exec(e.key);`,
+    `    const fMatch = (document.activeElement && document.activeElement.tagName === 'INPUT')
+      ? null : /^F([1-6])$/.exec(e.key);`,
   ]]);
 
   const msg = await provesMutation(
-    'the "F3 does not fire while a text input is focused" check survived a mutant that drops the guard ahead of the F-key branch',
+    'the six-function-key check survived a mutant that ignores F-keys while the scan box has focus',
     async () => {
-      const ctx = loadMutatedRetailSystem(mutated, { activeEl: { tagName: 'INPUT', id: 'pos-tendered', isContentEditable: false } });
+      const ctx = loadMutatedRetailSystem(mutated, {
+        activeEl: { tagName: 'INPUT', id: 'pos-search', isContentEditable: false },
+      });
       fireKeydown(ctx.RetailSystem, 'F3');
-      assert.strictEqual(ctx.RetailSystem._paymentMethod, 'cash',
-        'F3 changed the tender even though focus was in a text input (#pos-tendered).');
+      assert.strictEqual(ctx.RetailSystem._paymentMethod, 'mobile',
+        'F3 should select the Mobile / CliQ tender with the scan box focused.');
     }
   );
   console.log('PASS: ' + msg);
@@ -331,9 +405,10 @@ const CASES = [
   testSixButtonsInDocumentedOrderNoEmojiRealSVG,
   testGridIsThreeColumns,
   testEveryLabelResolvesThroughBothCatalogues,
-  testF3SelectsMobile,
-  testF3DoesNotFireWithATextInputFocused,
-  testTextFieldGuardMutationIsCaught,
+  testF3SelectsMobileWithTheScanBoxFocused,
+  testEveryFunctionKeyFiresWithTheScanBoxFocused,
+  testTypedKeysStillRespectTheTextFieldGuard,
+  testFunctionKeysBeatingTheTextGuardIsProved,
 ];
 
 async function main() {

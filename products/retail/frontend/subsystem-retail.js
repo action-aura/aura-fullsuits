@@ -3759,16 +3759,6 @@ const RetailSystem = {
       return;
     }
 
-    const el = document.activeElement;
-    const tag = el ? el.tagName : '';
-    const inTextField = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
-    // Conservative on purpose, with NO exception for #pos-search (unlike
-    // _onScannerKey's isSearchBox carve-out): a cashier who types a manual
-    // search term and hits Enter out of habit must never accidentally
-    // charge whatever is already sitting in the cart. Every shortcut below
-    // shares this one guard.
-    if (inTextField) return;
-
     // F1-F6 select a tender method in grid order (see POS_PAYMENT_METHODS /
     // _renderPayButtons, the one list both the badges printed on the tender
     // grid and this lookup are driven from, so they cannot drift apart). A
@@ -3777,6 +3767,21 @@ const RetailSystem = {
     // branch. Reuses _setPayment exactly as a click would, including its own
     // _refocusScan() call, so an F-key press hands the keyboard straight
     // back to the scanner the same way clicking a tender button already does.
+    //
+    // THIS RUNS BEFORE THE TEXT-FIELD GUARD BELOW, and that ordering is the
+    // whole point. The till deliberately parks focus in #pos-search so a
+    // barcode wedge always lands somewhere useful (_keepScanFocus), so
+    // document.activeElement is an INPUT essentially all the time the till is
+    // open. With the guard first, every one of these badges was dead in
+    // ordinary use: measured 2026-09-10 in a real browser, 1 of 6 worked --
+    // and that one was F1, which only looked right because cash is already
+    // the default. With focus moved off the input, 6 of 6 worked.
+    //
+    // A function key cannot be part of anything a cashier is typing: it emits
+    // no character, so letting it through cannot corrupt a search term or a
+    // tendered amount. The guard below still covers every key that CAN be
+    // typed -- Enter, digits, "x" -- which is what it was actually written to
+    // protect.
     const fMatch = /^F([1-6])$/.exec(e.key);
     if (fMatch) {
       e.preventDefault();
@@ -3788,6 +3793,17 @@ const RetailSystem = {
       if (btn) this._setPayment(entry.method, btn);
       return;
     }
+
+    const el = document.activeElement;
+    const tag = el ? el.tagName : '';
+    const inTextField = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
+    // Conservative on purpose, with NO exception for #pos-search (unlike
+    // _onScannerKey's isSearchBox carve-out): a cashier who types a manual
+    // search term and hits Enter out of habit must never accidentally
+    // charge whatever is already sitting in the cart. Every shortcut BELOW
+    // shares this one guard -- the function keys above deliberately do not,
+    // for the reason given there.
+    if (inTextField) return;
 
     if (e.key === 'Enter') {
       if (!this._cart.length) return;
@@ -7465,7 +7481,7 @@ const RetailSystem = {
           ${t('Sales recorded before this release show no employee or till.')}
         </p>
       </div>
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px">
+      <div class="rep-chart-row-lead">
         <div class="sub-chart-card">
           <div class="sub-chart-title" style="margin-bottom:14px">Daily Revenue Trend</div>
           <div style="height:260px"><canvas id="rep-trend"></canvas></div>
@@ -7475,7 +7491,7 @@ const RetailSystem = {
           <div style="height:260px"><canvas id="rep-pay"></canvas></div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div class="rep-chart-row">
         <div class="sub-chart-card">
           <div class="sub-chart-title" style="margin-bottom:14px">Top Selling Products</div>
           <div style="height:260px"><canvas id="rep-top"></canvas></div>
@@ -9224,7 +9240,7 @@ const RetailSystem = {
         <div style="color:var(--state-warning-text)">${this._icon('triangle-alert', 16, '⚠️')} Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.</div>
       </div>` : ''}
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
+      <div class="sc-config-grid">
         <!-- Status + Test -->
         <div class="sub-chart-card">
           <div class="sub-chart-title" style="margin-bottom:14px">Scanner Status</div>

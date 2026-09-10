@@ -3070,6 +3070,46 @@ html[data-theme="light"] {
 .sub-chart-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 16px; }
 .sub-chart-wrap { width: 100%; height: 220px; position: relative; }
 
+/* ── Reports & Scanner two-column grids ─────────────────────────────────────
+   AUDIT (measured 2026-09-10 at a 360px phone viewport): these three grids
+   were built inline in subsystem-retail.js as bare `1fr` columns. In CSS
+   Grid, `1fr` is shorthand for `minmax(auto, 1fr)`, and `auto` as a MINIMUM
+   resolves to the item's min-content size. A <canvas> has a fixed
+   height/width and cannot shrink below it, so it forced its column wider
+   than the share the layout promised instead of yielding to it: in a 332px
+   content column this produced a 346px column (128px past the right edge in
+   English; the mirror image put it off the LEFT edge in Arabic) on Reports,
+   and a column that started at inline-start 356px -- entirely beyond a
+   360px viewport, with no horizontal scrollbar to reach it -- on Scanner.
+   `minmax(0, 1fr)` lets the column actually shrink to its share of the
+   container; the ≤640px collapse to one column uses the same breakpoint as
+   this file's tab-bar switch above, so a phone never needs two chart/canvas
+   columns to share space narrower than either needs at all. */
+.rep-chart-row-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 20px;
+  margin-block-end: 20px;
+}
+.rep-chart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.sc-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .rep-chart-row-lead,
+  .rep-chart-row,
+  .sc-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* ── Table ── */
 .sub-table-card {
   background: var(--surface-panel);
