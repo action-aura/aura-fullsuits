@@ -1627,6 +1627,38 @@ redemption amount cannot simply be posted. It is authorised server-side
 against the ledger balance, and `CAP_DISCOUNT` is the capability, whose stated
 authority is already "give value away with no matching payment".
 
+### RETURNS AGAINST A SALE THAT USED POINTS -- decided, not yet built
+
+Recording the decision now because the shape of the answer is not obvious and
+an improvised one loses money in one direction or goodwill in the other.
+
+A returned sale has TWO loyalty consequences and both are owed:
+
+  1. Points REDEEMED on that sale must come back. The customer paid with them.
+     Refunding the cash and keeping the points is taking payment twice.
+  2. Points EARNED on that sale must be clawed back. Otherwise a customer can
+     buy, earn, return, and keep the points -- a free points generator that
+     costs the shop real money at the next redemption.
+
+Both are ledger rows, positive and negative respectively, linked to the return
+rather than to the original sale. That is precisely why the ledger exists: the
+same operation against a decremented integer would be an unauditable guess,
+and could drive a balance negative with nothing to explain it.
+
+PARTIAL returns settle proportionally, on the returned VALUE rather than the
+line count -- returning the cheap half of a basket must not refund all of the
+points. A claw-back must be allowed to take the balance below zero rather than
+silently clamping at zero: a shop needs to see that a customer is in deficit,
+and clamping would let the buy-earn-return cycle mint points one unit at a
+time. Whether the till then refuses to sell, warns, or absorbs it is a policy
+question for the owner, not a silent default.
+
+Not built in v27. `create_return` is untouched by the redemption work, so
+today a return of a redeemed sale refunds the money and leaves both the
+redeemed and the earned points as they were. That is a known, written-down
+gap rather than a discovered one, and it is the first thing to build after the
+POS redemption UI.
+
 ### Why a ledger and not the column that already exists
 
 `customers.loyalty_points` has been incremented on every sale since v1 and
