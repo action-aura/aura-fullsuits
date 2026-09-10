@@ -1589,6 +1589,40 @@ and variant-aware purchase ordering.
 Claimed AND committed before dispatch. v24 remains reserved by name for
 inter-branch transfers; v25 shipped variants (bd272ca).
 
+**CLAIMED: retail v28, by `feat/launch-readiness`, for inter-branch transfers.**
+Two new tables, indexes. Additive only: CREATE TABLE / CREATE INDEX.
+
+    stock_transfers       -- one movement of goods between two branches
+    stock_transfer_items  -- what was sent, and what actually arrived
+
+This is the 2026-08-30 "v24 RESERVED BY NAME" note being cashed in. That note
+says explicitly it does not hold the number hostage and that the work takes
+whatever version is free when it is scheduled. v25-v27 have shipped since, and
+a database already at 27 would never run a v24 migration, so 28 it is.
+
+### Two phases, because goods take time to arrive
+
+A transfer is SENT from one branch and RECEIVED at another, and the two are
+separate events with a gap between them. The one-phase alternative -- move the
+stock instantly -- is simpler and wrong for a chain: it makes goods in a van
+invisible, and it has nowhere to put the case where six cartons were sent and
+five arrived.
+
+So stock leaves the source on SEND and appears at the destination on RECEIVE,
+and `quantity_received` is recorded separately from `quantity_sent`. A
+discrepancy is data the shop can see and act on, not an error to suppress. In
+transit, the stock belongs to neither branch, which is the honest answer to
+"where is it" rather than a convenient lie in favour of one end.
+
+Both ends write through `inventory_movements`, the ledger that already owns
+every stock change, so a transfer is auditable the same way a sale or an
+adjustment is and cannot drift from the balances.
+
+Capability is `CAP_STOCK_ADJUST`: moving stock between branches is a stock
+adjustment at both ends, and no new capability is minted for it.
+
+---
+
 **CLAIMED: retail v27, by `feat/launch-readiness`, for loyalty redemption.**
 One new table, two indexes, one column on `sales`. Additive only:
 CREATE TABLE / CREATE INDEX / ADD COLUMN.
