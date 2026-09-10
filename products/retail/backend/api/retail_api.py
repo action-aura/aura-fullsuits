@@ -8447,6 +8447,19 @@ _DEFAULT_SETTINGS = {
     'branding_tax_number': '',
     'branding_receipt_header': '',
     'branding_receipt_footer': '',
+    # Receipt customisation (viewport/hardware wave) -- see the settings
+    # route's own comment below (_BRANDING_TEXT_KEYS) for why these three
+    # ride the exact same key/value pipe as the text fields above even
+    # though none of them is free text. `auto` is the default so an
+    # existing install's printed receipt is byte-for-byte unchanged until
+    # someone deliberately opens this screen and picks 'en' or 'ar' --
+    # see subsystem-retail.js's _receiptTranslator for how a forced
+    # language is resolved WITHOUT touching the till's own live language.
+    # The two booleans default to 'false' (current behaviour: no cashier
+    # or customer line on the receipt at all) for the same reason.
+    'branding_receipt_language': 'auto',        # auto | en | ar
+    'branding_receipt_show_cashier': 'false',   # 'true' | 'false'
+    'branding_receipt_show_customer': 'false',  # 'true' | 'false'
 }
 _DEFAULT_METHODS = [('Cash', 'cash'), ('Card', 'card'), ('Bank Transfer', 'bank'),
                     ('Mobile Wallet', 'wallet'), ('Check', 'check')]
@@ -9225,6 +9238,18 @@ def business_day_settings_set():
 _BRANDING_TEXT_KEYS = (
     'branding_business_name', 'branding_address', 'branding_phone',
     'branding_tax_number', 'branding_receipt_header', 'branding_receipt_footer',
+    # Not free text (an 'auto'|'en'|'ar' enum and two 'true'|'false'
+    # flags), but every one of them is a short, ordinary settings value --
+    # exactly what this key/value pipe is for -- so they ride the SAME
+    # generic get/set loop below rather than a second endpoint. Never
+    # given the _SETTINGS_BLOB_PREFIX prefix: that prefix exists for
+    # values that can grow to hundreds of KB (the logo), and these three
+    # are a handful of characters each. No server-side enum/bool
+    # validation is added here either -- the frontend already treats any
+    # value other than exactly 'en'/'ar' as 'auto' and anything other
+    # than exactly 'true' as false, so a garbage value degrades to the
+    # safe default instead of needing a 400 to stay safe.
+    'branding_receipt_language', 'branding_receipt_show_cashier', 'branding_receipt_show_customer',
 )
 
 @retail_bp.route('/settings/branding', methods=['GET'])

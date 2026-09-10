@@ -4119,6 +4119,58 @@ const RetailSystem = {
     return rows.join('\n      ');
   },
 
+  // Resolves the receipt's OWN language from `branding_receipt_language`
+  // ('auto' | 'en' | 'ar') without ever touching AuraI18n.current -- the
+  // till's live language. Calling AuraI18n.setLang() here and back would
+  // re-render the whole shell (sidebar, header, every open screen) just to
+  // print one receipt, which is visible to whoever is standing at the
+  // till; this instead looks the target catalogue up directly the same
+  // way AuraI18n.t() does internally (see i18n.js: `this.dicts[this.
+  // current]`, `(text in d) ? d[text] : text`) and hands back a
+  // *function*, never a global mutation. 'auto' (the default -- an
+  // existing install that never opens this setting must print exactly
+  // what it always has) reproduces AuraI18n.t()'s own current-language
+  // behaviour byte for byte, including its safe fallback to English when
+  // AuraI18n has not loaded (standalone renders, every test in this
+  // directory) -- see _localeDate()'s identical guard just above in this
+  // file for the same fallback.
+  _receiptTranslator(langSetting) {
+    const uiLang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar' : 'en';
+    const lang = (langSetting === 'en' || langSetting === 'ar') ? langSetting : uiLang;
+    const dict = (lang === 'ar' && window.AuraI18n && AuraI18n.dicts && AuraI18n.dicts.ar) || {};
+    return (text) => {
+      if (text == null || lang === 'en') return text;
+      return (text in dict) ? dict[text] : text;
+    };
+  },
+
+  // Cashier/customer lines are pure customisation ON TOP OF the compliant
+  // core (see this change's own report) -- never a money line, never the
+  // sale number, date or e-invoice block, and each one only ever appears
+  // when BOTH its own setting is on AND `saleData` actually carries the
+  // name. A checkout-time print (`saleData` = POST /sales's response) never
+  // carries either name today, so with both settings on that receipt is
+  // unchanged until the sale is reprinted from Sales History, which
+  // resolves and passes both through (see _reprintSale). `customer_id` is
+  // checked, not just `customer_name`, so an anonymous/walk-in sale (whose
+  // resolved name is the literal fallback string "Walk-in", not a real
+  // customer) never prints a customer line just because that fallback
+  // string is non-empty. `rt` is _printReceipt's own resolved
+  // _receiptTranslator, threaded through explicitly rather than read off
+  // the global `t` -- these labels must obey a forced receipt language
+  // exactly like every other label on the page.
+  _receiptIdentityBlock(branding, saleData, rt) {
+    const b = branding || {};
+    const rows = [];
+    if (b.branding_receipt_show_cashier === 'true' && saleData.employee_name) {
+      rows.push(`<div class="rcpt-center" style="font-size:11px">${rt('Cashier')}: ${this._esc(saleData.employee_name)}</div>`);
+    }
+    if (b.branding_receipt_show_customer === 'true' && saleData.customer_id && saleData.customer_name) {
+      rows.push(`<div class="rcpt-center" style="font-size:11px">${rt('Customer')}: ${this._esc(saleData.customer_name)}</div>`);
+    }
+    return rows.join('\n      ');
+  },
+
   async _printReceipt(saleData) {
     const cfg = this._printerCfg();
     const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
@@ -4133,7 +4185,19 @@ const RetailSystem = {
     const brandingBlock = this._brandingReceiptBlock(branding, logoDataUri);
     const footerLine = branding.branding_receipt_footer
       ? `<div class="rcpt-center" style="font-size:11px">${this._esc(branding.branding_receipt_footer)}</div>` : '';
-    // EVERY LABEL BELOW MUST BE WRAPPED IN t() BY HAND, and that is not the
+    // `rt` (receipt-scoped translator) -- NOT window.t -- resolved from
+    // branding_receipt_language ('auto' | 'en' | 'ar'). See
+    // _receiptTranslator's own comment for the full reasoning; in short,
+    // this looks the target catalogue up directly, the same way
+    // AuraI18n.t() does internally (i18n.js: `this.dicts[this.current]`,
+    // `(text in d) ? d[text] : text`) and hands back a plain function --
+    // it never touches AuraI18n.current, so nothing else on the till (or
+    // this print call itself, once it returns) is affected. 'auto' (the
+    // default) resolves to the till's own current language, so an install
+    // that has never opened this setting prints exactly what it always has.
+    const rt = this._receiptTranslator(branding.branding_receipt_language);
+    const identityBlock = this._receiptIdentityBlock(branding, saleData, rt);
+    // EVERY LABEL BELOW MUST BE WRAPPED IN rt() BY HAND, and that is not the
     // usual rule in this file. AuraI18n.apply() translates by sweeping the
     // TEXT NODES of `document.body` and re-sweeping additions through a
     // MutationObserver, which is why most rendered strings come out Arabic
@@ -4152,7 +4216,13 @@ const RetailSystem = {
     // The i18n and receipt guards both existed and neither caught it: the
     // i18n tests cover the UI surface, the receipt tests cover branding, and
     // this sat in the seam between them.
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${t('Receipt')} ${saleData.sale_number}</title>
+    //
+    // 2026-09-10 (branding_receipt_language): plain t() became rt() here --
+    // a shop can now force this ONE document to a language other than the
+    // till's own, for exactly the reverse case of the bug above: an
+    // English-language till serving an Arabic-speaking customer, who must
+    // still get an Arabic receipt.
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${rt('Receipt')} ${saleData.sale_number}</title>
       <style>
         @page { size: ${widthMm}mm auto; margin: 2mm; }
         body { font-family: 'Courier New', monospace; width: ${widthMm}mm; margin: 0; font-size: 12px; }
@@ -4162,19 +4232,20 @@ const RetailSystem = {
         .rcpt-bold { font-weight: bold; }
       </style></head><body>
       ${brandingBlock}
-      <div class="rcpt-center">${t('Receipt')} #${saleData.sale_number}</div>
+      <div class="rcpt-center">${rt('Receipt')} #${saleData.sale_number}</div>
       <div class="rcpt-center">${saleData.created_at || new Date().toLocaleString()}</div>
+      ${identityBlock}
       <div class="rcpt-hr"></div>
       ${lines}
       <div class="rcpt-hr"></div>
-      <div class="rcpt-line"><span>${t('Subtotal')}</span><span>${this._fmt(saleData.subtotal)}</span></div>
-      ${saleData.discount_amount > 0 ? `<div class="rcpt-line"><span>${t('Discount')}</span><span>-${this._fmt(saleData.discount_amount)}</span></div>` : ''}
-      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${t('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
-      <div class="rcpt-line rcpt-bold"><span>${t('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
-      <div class="rcpt-line"><span>${t('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>
-      ${saleData.change > 0 ? `<div class="rcpt-line"><span>${t('Change due')}</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
+      <div class="rcpt-line"><span>${rt('Subtotal')}</span><span>${this._fmt(saleData.subtotal)}</span></div>
+      ${saleData.discount_amount > 0 ? `<div class="rcpt-line"><span>${rt('Discount')}</span><span>-${this._fmt(saleData.discount_amount)}</span></div>` : ''}
+      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
+      <div class="rcpt-line rcpt-bold"><span>${rt('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
+      <div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>
+      ${saleData.change > 0 ? `<div class="rcpt-line"><span>${rt('Change due')}</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
-      <div class="rcpt-center">${t('Thank you')}</div>
+      <div class="rcpt-center">${rt('Thank you')}</div>
       ${footerLine}
       ${einvoiceBlock}
       </body></html>`;
@@ -5956,6 +6027,22 @@ const RetailSystem = {
           <input type="text" id="brand-header" maxlength="120" /></div>
         <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Footer')}</label>
           <input type="text" id="brand-footer" maxlength="120" /></div>
+        <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Language')}</label>
+          <select id="brand-receipt-lang">
+            <option value="auto">${t('Automatic (follows till language)')}</option>
+            <option value="en">${t('English')}</option>
+            <option value="ar">${t('Arabic')}</option>
+          </select>
+          <p style="color:var(--text-muted);font-size:11px;margin:6px 0 0">${t('Automatic follows whatever language this till is currently set to. Force English or Arabic to always print in that language regardless of the till.')}</p>
+        </div>
+        <div class="ret-field" style="margin-top:12px;display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="brand-show-cashier" style="width:auto" />
+          <label for="brand-show-cashier" style="margin:0;text-transform:none;font-size:14px;color:var(--text)">${t('Show cashier name on receipt')}</label>
+        </div>
+        <div class="ret-field" style="margin-top:12px;display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="brand-show-customer" style="width:auto" />
+          <label for="brand-show-customer" style="margin:0;text-transform:none;font-size:14px;color:var(--text)">${t('Show customer name on receipt')}</label>
+        </div>
         <div class="ret-field" style="margin-top:12px">
           <label>${t('Logo')}</label>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -6062,6 +6149,17 @@ const RetailSystem = {
       setVal('brand-phone', b.branding_phone);
       setVal('brand-header', b.branding_receipt_header);
       setVal('brand-footer', b.branding_receipt_footer);
+      // Any value other than exactly 'en'/'ar' (including missing/garbage)
+      // renders as 'auto' -- matches _receiptTranslator's own fallback so
+      // this dropdown can never show a language the receipt would not
+      // actually honor.
+      const langVal = (b.branding_receipt_language === 'en' || b.branding_receipt_language === 'ar')
+        ? b.branding_receipt_language : 'auto';
+      setVal('brand-receipt-lang', langVal);
+      const showCashierCb = document.getElementById('brand-show-cashier');
+      if (showCashierCb) showCashierCb.checked = b.branding_receipt_show_cashier === 'true';
+      const showCustomerCb = document.getElementById('brand-show-customer');
+      if (showCustomerCb) showCustomerCb.checked = b.branding_receipt_show_customer === 'true';
 
       const preview = document.getElementById('brand-logo-preview');
       const removeBtn = document.getElementById('brand-logo-remove');
@@ -6094,6 +6192,15 @@ const RetailSystem = {
       branding_tax_number: val('brand-tax'),
       branding_receipt_header: val('brand-header'),
       branding_receipt_footer: val('brand-footer'),
+      branding_receipt_language: val('brand-receipt-lang') || 'auto',
+      // Sent as the literal strings 'true'/'false' (not a JS boolean) --
+      // retail_api.py's branding_settings_set stores whatever str() this
+      // survives; String(bool) matches how the language select above and
+      // _receiptTranslator's own comparison both read this back
+      // (`=== 'true'`), whereas a bare Python bool would round-trip as
+      // 'True'/'False' and silently stop matching.
+      branding_receipt_show_cashier: String(!!document.getElementById('brand-show-cashier')?.checked),
+      branding_receipt_show_customer: String(!!document.getElementById('brand-show-customer')?.checked),
     };
     try {
       const resp = await this._post('/api/sub/retail/settings/branding', payload);
@@ -7378,6 +7485,16 @@ const RetailSystem = {
       total:           sale.total,
       amount_paid:     sale.amount_paid,
       change:          sale.change_amount,
+      // employee_name/customer_id/customer_name: GET /sales/<id> already
+      // resolves both (see get_sale's own docstring) -- POST /sales's
+      // immediate checkout response does not, so a receipt printed right
+      // after checkout shows neither even with both settings on; a
+      // receipt reprinted from Sales History does. See
+      // _receiptIdentityBlock's own comment for why customer_id is
+      // threaded through too, not just customer_name.
+      employee_name:   sale.employee_name,
+      customer_id:     sale.customer_id,
+      customer_name:   sale.customer_name,
       lines: items.map(i => ({ name: i.product_name || ('#'+i.product_id), quantity: i.quantity, line_total: i.line_total })),
     };
     await this._printReceipt(saleData);
