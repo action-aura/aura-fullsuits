@@ -632,7 +632,35 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # default. `sale_item_modifiers` carries a `uid` under a partial unique
 # index for the identical reason, the v13 convention every
 # RETAIL_UID_TABLES member already uses.
-RETAIL_SCHEMA_VERSION = 26
+#
+# v26 -> v27 (launch-readiness, "loyalty redemption, wave 1"; ROADMAP.md's
+# 2026-08-31 "retail schema v27 CLAIMED for loyalty redemption" entry).
+# Immediately after modifiers, no gap of its own -- v24 stays the ONLY
+# deliberate gap in this chain, reserved by name for inter-branch transfers.
+#
+# One new table, two indexes, plus a one-time Python-side backfill:
+#
+#   loyalty_ledger -- immutable +/- entries per customer: opening, earn,
+#                     redeem, adjust. The SUM of a customer's rows is their
+#                     balance.
+#
+# WHY A LEDGER AND NOT A ROUTE THAT DECREMENTS `customers.loyalty_points`:
+# that column has been incremented on every sale since v1 and nothing can
+# spend it -- zero redemption routes exist. Decrementing it directly would
+# double-spend on any shop with two tills: `loyalty_points`/`total_spent`
+# are ACCUMULATORS, and `SYNCED_CUSTOMER_FIELDS` (commercial_runtime/sync/
+# sync_service.py) deliberately excludes both from what sync carries,
+# because last-write-wins on an accumulator LOSES VALUE, exactly as it
+# would for stock. Points earned on till A are invisible to till B, so the
+# same balance could be redeemed on both. The fix is the mechanism this
+# codebase already uses for the identical shape: `inventory_movements`
+# beside `inventory_balances` -- a row written once and never updated
+# converges safely under last-write-wins, so redemption becomes "insert a
+# negative row", which cannot double-spend once both tills' rows converge.
+# `customers.loyalty_points` is UNCHANGED by this migration and stays the
+# fast read path; see _migrate_add_loyalty_ledger below for the full
+# column-by-column reasoning and the backfill shape.
+RETAIL_SCHEMA_VERSION = 27
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1589,6 +1617,14 @@ def _migrate_retail_schema(conn):
     # and _migrate_add_modifiers's own docstring for the full reasoning,
     # including the money-path fix this step activates in create_return.
     _migrate_add_modifiers(conn)
+    # v26 -> v27 (launch-readiness, "loyalty redemption, wave 1"): appended
+    # LAST, same convention as every step above. One new, self-contained
+    # table, two indexes, and a one-time backfill INSERT -- no existing
+    # table is ALTERed and `customers.loyalty_points` is only ever READ,
+    # never written, by this step. See the RETAIL_SCHEMA_VERSION v27
+    # comment above and _migrate_add_loyalty_ledger's own docstring for the
+    # full double-spend reasoning and the backfill shape.
+    _migrate_add_loyalty_ledger(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -5297,6 +5333,226 @@ def _migrate_add_modifiers(conn):
         cols = {row[1] for row in conn.execute('PRAGMA table_info(return_items)').fetchall()}
         if 'sale_item_id' not in cols:
             conn.execute('ALTER TABLE return_items ADD COLUMN sale_item_id INTEGER')
+
+
+def _migrate_add_loyalty_ledger(conn):
+    """One-time migration (schema v26 -> v27): launch-readiness "loyalty
+    redemption, wave 1" (ROADMAP.md's 2026-08-31 "retail schema v27 CLAIMED
+    for loyalty redemption" entry). One new table, two indexes, plus a
+    one-time Python-side BACKFILL -- additive only (CREATE TABLE IF NOT
+    EXISTS / CREATE INDEX IF NOT EXISTS / a guarded INSERT). No existing
+    table is ALTERed, and `customers.loyalty_points` is only ever READ by
+    this migration, never written.
+
+        loyalty_ledger -- immutable +/- entries per customer: opening,
+                          earn, redeem, adjust. The SUM of a customer's
+                          rows is their balance; `customers.loyalty_points`
+                          stays the fast cached read path.
+
+    WHY A LEDGER, NOT A ROUTE THAT DECREMENTS THE EXISTING COLUMN --
+    DO NOT SIMPLIFY THIS BACK INTO A COLUMN, that is the exact bug this
+    migration exists to avoid shipping:
+
+    `customers.loyalty_points` has been incremented on every sale since v1
+    (create_sale's `int(total / 10)` accrual) and nothing anywhere can ever
+    spend it -- zero redemption routes exist yet. The obvious fix, a route
+    that subtracts from that column, would ship a double-spend on any shop
+    with two tills: `loyalty_points` and `total_spent` are ACCUMULATORS,
+    and `SYNCED_CUSTOMER_FIELDS` (commercial_runtime/sync/sync_service.py)
+    deliberately excludes both from what sync carries -- name/phone/email/
+    address/status only -- because last-write-wins on an accumulator LOSES
+    VALUE, exactly as it would for stock. Points earned on till A are
+    invisible to till B, so the same balance could be redeemed on both,
+    silently, with no error on either device.
+
+    The fix already exists in this codebase for the identical shape:
+    `inventory_movements` beside `inventory_balances`. A row here is
+    written ONCE and never updated, so it converges safely under
+    last-write-wins -- there is no "last write" to lose, only a union of
+    rows every device eventually holds once they sync. Redemption becomes
+    "insert a negative row", which cannot double-spend once both tills'
+    rows converge, and is auditable in a way a decremented integer never
+    is.
+
+    `customers.loyalty_points` is UNCHANGED by this migration and stays
+    the fast read path, mutation-proved never to bump row_version or emit
+    a sync event by
+    `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`. It
+    becomes a CACHE of this table's sum for a later wave to reconcile, not
+    the source of truth -- but that reconciliation, and every redemption
+    route, is API-layer work, not schema's.
+
+    THE TABLE SHAPE, matched column-for-column against the closest existing
+    analogue rather than invented fresh:
+
+      * `id INTEGER PRIMARY KEY AUTOINCREMENT` + `uid TEXT` -- the v13
+        wire-identity convention every `RETAIL_UID_TABLES` member uses
+        (`inventory_movements` itself included), given to this table
+        INLINE rather than via that retrofit list: the v13 loop
+        (_migrate_add_identity_and_attribution_columns) only ever reaches
+        tables that already existed when it ran, once, years ago on a real
+        device -- adding 'loyalty_ledger' to `RETAIL_UID_TABLES` now would
+        fire for NO database, fresh or upgraded, because this table does
+        not exist yet at the point in the chain where that loop runs
+        either way. `sale_item_modifiers` (v26) made the identical choice
+        for the identical reason -- see its own column comment in
+        _migrate_add_modifiers above.
+      * `company_id INTEGER NOT NULL` -- MANDATORY, matching every
+        business table in this file; NOT NULL rather than the legacy
+        `DEFAULT 1` older tables carry, matching the newer convention
+        `modifier_groups`/`modifier_options` (v26) already established for
+        a table nothing should ever be allowed to insert without a tenant.
+      * NO `branch_id`. `inventory_movements` has one because stock is a
+        PHYSICAL location fact; a customer's loyalty balance is not --
+        `customers` itself carries no `branch_id`, and a shopper earns and
+        redeems against ONE company-wide balance regardless of which
+        branch rang the sale. Scoping this table to a branch would let one
+        branch's view of a redemption diverge from another's, which is the
+        exact class of bug this table exists to prevent.
+      * `customer_id TEXT NOT NULL` -- `customers.id`, TEXT since
+        `_migrate_customers_to_uuid` (schema v4) made it a UUID. NO
+        declared FOREIGN KEY, matching every other column in this file
+        that points at `customers(id)`: "No table has a declared FK to
+        customers(id)" is stated verbatim in that migration's own
+        docstring above, and a sync-relayed ledger row must never fail to
+        apply on a referential technicality.
+      * `points_delta REAL NOT NULL` -- SIGNED (positive = earned, negative
+        = redeemed or clawed back). REAL, matching `customers.
+        loyalty_points`'s own declared type exactly, because the backfill
+        below copies that column's value verbatim into one row per
+        customer -- a narrower type here could silently truncate a balance
+        this migration exists to preserve exactly.
+      * `entry_type TEXT NOT NULL` -- discriminator, matching the
+        `<noun>_type` naming this file already uses
+        (`inventory_movements.movement_type`, `sync_apply_quarantine.
+        entity_type`/`event_type`). Four legal values as of this
+        migration: 'opening' (this migration's own backfill row), 'earn'
+        (create_sale's existing accrual), 'redeem' (the feature this table
+        exists to make possible -- no route emits it yet; that is
+        retail_api.py's job, not schema's), 'adjust' (a manual correction,
+        e.g. a goodwill grant or a clawback tied to a returned sale). No
+        CHECK constraint, matching `movement_type`'s own precedent in this
+        file -- validated at the API layer throughout.
+      * `sale_id INTEGER` -- optional link to the sale that caused this
+        entry (`sales.id`; INTEGER, matching that table's own shape --
+        `sales` stays in `RETAIL_UID_TABLES`, local-autoincrement-plus-uid,
+        unlike `customers`). NULL for the opening backfill row and for a
+        manual `adjust`, which by definition names no sale. NO declared
+        FOREIGN KEY, same reasoning as `customer_id` above and as
+        `return_items.sale_item_id` (v26): a ledger entry must never fail
+        to write, or fail to apply from another device, because the sale
+        side of a join is momentarily -- or, on a redemption made against
+        old history, permanently -- absent from THIS device.
+      * `created_by TEXT DEFAULT 'System'` / `created_at TIMESTAMP DEFAULT
+        CURRENT_TIMESTAMP` -- matches `inventory_movements`'s own who/when
+        pair exactly, NOT the later `actor_user_uid`/`terminal_id`/
+        `created_at_utc` triple v13 retrofitted onto `RETAIL_ACTOR_TABLES`.
+        That triple is a one-time ALTER-TABLE loop keyed off tables that
+        existed when v13 ran; adding 'loyalty_ledger' to that tuple now
+        would fire for no database, for the identical reason `uid` above
+        is inlined rather than retrofitted. `modifier_groups`/`modifier_
+        options` (v26) again made the identical choice.
+
+    TWO INDEXES:
+      * `idx_loyalty_ledger_customer ON (company_id, customer_id,
+        created_at)` -- the hot read path this table exists to serve:
+        "sum/list one customer's entries", always tenant + customer scoped
+        first (every business query in this file scopes by company_id),
+        then chronological. One index covers both a balance SUM and a
+        statement-style list.
+      * `idx_loyalty_ledger_uid ON (uid) WHERE uid IS NOT NULL` -- the same
+        partial-unique wire-identity index every `RETAIL_UID_TABLES`
+        member carries, inlined here for the same reason the `uid` column
+        itself is inlined rather than retrofitted. Partial, not full, for
+        the identical reason _migrate_add_identity_and_attribution_
+        columns's own docstring gives: SQLite treats every NULL as
+        distinct inside a unique index, so a full index would not even
+        need the WHERE to let an un-backfilled row coexist -- kept partial
+        anyway, matching the established convention rather than a
+        "we happen not to need it this time" special case.
+
+    THE BACKFILL: every customer with `loyalty_points > 0` gets exactly ONE
+    'opening' row equal to their current balance, so the ledger's sum
+    matches the accumulator's existing promise on day one -- no shop loses
+    a point it has already told a customer they have. `customers.
+    loyalty_points` is READ ONLY here, never written -- this migration does
+    not touch the column it backfills from.
+
+    Idempotent, in two independent ways: the table/index creation is
+    IF NOT EXISTS as usual, and the backfill loop is guarded on "does this
+    customer already have an 'opening' row" -- not merely on "did this
+    migration step already run" (which `ensure_schema_version`'s
+    version-number gate already covers) -- so a direct, repeated call
+    against an already-migrated database (a test harness doing so
+    deliberately, for instance, the same way
+    retail_v13_additive_only_behavioural_test.py replays migrations against
+    a live schema) still cannot double the backfill.
+
+    Guarded on `customers` existing, the same `live_tables` shape every
+    migration above this one uses for the identical reason
+    (retail_category_delete_fk_sync_test.py's `_build_v2_database` fixture
+    hand-builds a schema with no `customers` table at all).
+    """
+    import uuid as _uuid
+
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS loyalty_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uid TEXT,                      -- wire identity; v13 convention, inlined (see docstring)
+            company_id INTEGER NOT NULL,   -- MANDATORY tenant scope; no branch_id (see docstring)
+            customer_id TEXT NOT NULL,     -- customers.id (UUID); NO literal FK (see docstring)
+            points_delta REAL NOT NULL,    -- signed: + earned, - redeemed/clawed back
+            entry_type TEXT NOT NULL,      -- 'opening' | 'earn' | 'redeem' | 'adjust'
+            sale_id INTEGER,               -- optional sales.id link; NO literal FK (see docstring)
+            created_by TEXT DEFAULT 'System',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    live_tables = live_tables | {'loyalty_ledger'}
+
+    if 'loyalty_ledger' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_customer '
+            'ON loyalty_ledger(company_id, customer_id, created_at)'
+        )
+        conn.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_loyalty_ledger_uid '
+            'ON loyalty_ledger(uid) WHERE uid IS NOT NULL'
+        )
+
+    if 'customers' not in live_tables:
+        return
+
+    # Positional tuple access throughout (row[0]/row[1]/row[2]), not
+    # row["col"]: unlike _migrate_customers_to_uuid above, this function is
+    # not guaranteed to run against a connection whose row_factory is
+    # already sqlite3.Row (see _migrate_bind_cash_drawer_to_terminal above
+    # for a migration that has to save/set/restore row_factory for exactly
+    # this reason) -- positional access is correct regardless of which
+    # factory the caller's connection happens to have.
+    already_opened = {
+        row[0] for row in conn.execute(
+            "SELECT customer_id FROM loyalty_ledger WHERE entry_type = 'opening'"
+        ).fetchall()
+    }
+    pending = conn.execute(
+        "SELECT id, company_id, loyalty_points FROM customers WHERE loyalty_points > 0"
+    ).fetchall()
+    for row in pending:
+        cust_id, company_id, points = row[0], row[1], row[2]
+        if cust_id in already_opened:
+            continue
+        conn.execute(
+            "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type) "
+            "VALUES (?,?,?,?,'opening')",
+            (str(_uuid.uuid4()), company_id, cust_id, points),
+        )
 
 
 def load_sync_freshness(conn) -> dict:
