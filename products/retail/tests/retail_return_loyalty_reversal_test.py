@@ -108,7 +108,11 @@ def _make_user(role, company_id, capabilities=None):
     """A real account with real capability rows -- matches
     retail_loyalty_redemption_test.py's own `_make_user`."""
     email = f"retloy-{role}-{uuid.uuid4().hex[:10]}@test.local"
-    password = "RetLoyaltyPW1"
+    # Same exemption, and same reasoning, as retail_loyalty_redemption_test.py:
+    # a fixture password for a throwaway user this test creates. detect-secrets
+    # flags any `password = "..."`; the pragma keeps the exemption visible in
+    # the file rather than buried in a 221-entry baseline.
+    password = "RetLoyaltyPW1"  # pragma: allowlist secret
     user_id = str(uuid.uuid4())
     conn = registry_conn()
     conn.execute(
