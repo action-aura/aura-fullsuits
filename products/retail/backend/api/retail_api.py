@@ -16,7 +16,7 @@ import logging
 import sqlite3
 import uuid as _uuid
 import requests
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
 from flask import Blueprint, request, jsonify, session, current_app, Response, stream_with_context
 from commercial_runtime.identity.mt_auth import (
     mt_login_required, mt_require_subsystem, mt_require_capability, session_has_capability,
@@ -2669,6 +2669,50 @@ def customer_sales(cust_id):
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
 
+@retail_bp.route('/customers/<string:cust_id>/loyalty', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+# Deliberately UNGATED -- no @mt_require_capability, no
+# @require_license_capability -- same posture as customer_statement below
+# (see that route's own comment) and for the identical reason: this is ONE
+# named customer's own balance, and a cashier deciding whether to offer
+# redemption at the till has to be able to see it before create_sale's own
+# CAP_DISCOUNT gate is ever reached. `retail.records.read` (the read-shaped
+# code already seeded into RETAIL_RESTRICTED_ALLOWLIST) covers exactly this
+# case, but -- like every other GET in this file -- there is no
+# @require_license_capability call to make, because that decorator only
+# ever gates MUTATIONS here (grep the whole file: every call site is on a
+# POST/PUT/PATCH/DELETE route); a plain read the till needs to function is
+# never blocked by licensing state at all, matching list_products/
+# customer_statement's own "licensing-ungated" precedent.
+def customer_loyalty_balance(cust_id):
+    cid = _cid(); conn = get_retail_conn()
+    cust = conn.execute("SELECT id FROM customers WHERE id=? AND company_id=?", (cust_id, cid)).fetchone()
+    if not cust:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
+    # The balance is the LEDGER's SUM, never `customers.loyalty_points` --
+    # see database/schema.py's _migrate_add_loyalty_ledger docstring for the
+    # two-till double-spend a column-based balance would reopen. This is the
+    # SAME query create_sale's own redemption path reads before honouring a
+    # points_redeemed request, so what a cashier sees here is exactly what
+    # the till itself will check.
+    balance = conn.execute(
+        "SELECT COALESCE(SUM(points_delta), 0) FROM loyalty_ledger WHERE company_id=? AND customer_id=?",
+        (cid, cust_id)
+    ).fetchone()[0] or 0
+    entries = conn.execute(
+        "SELECT entry_type, points_delta, sale_id, created_by, created_at FROM loyalty_ledger "
+        "WHERE company_id=? AND customer_id=? ORDER BY created_at DESC, id DESC LIMIT 20",
+        (cid, cust_id)
+    ).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'customer_id': cust_id,
+        'balance': balance,
+        'entries': [dict(e) for e in entries],
+    }})
+
 # ── Suppliers ─────────────────────────────────────────────────────────────────
 
 # launch-readiness Phase 6 stage 6a-i: the exact set of `suppliers` columns
@@ -4395,6 +4439,114 @@ def create_sale():
         tax      = float(tax.quantize(_quant, rounding=ROUND_HALF_UP))
         total    = float(total.quantize(_quant, rounding=ROUND_HALF_UP))
 
+        # `customer_id`/`pm` resolved here, ahead of where they used to be --
+        # the loyalty-redemption block immediately below needs to know
+        # whether this sale names a customer before it can honour a
+        # `points_redeemed` request, and `paid`/`change`/`balance_due`
+        # further down still read both in the same order they always have.
+        customer_id = data.get('customer_id')
+        pm        = data.get('payment_method', 'cash')
+
+        # ── Launch-readiness "loyalty redemption, wave 1" (schema v27,
+        # ROADMAP.md's 2026-08-31 "retail schema v27 CLAIMED for loyalty
+        # redemption" entry). `points_redeemed` is CLIENT-SUBMITTED INTENT
+        # ONLY -- an integer COUNT, never a money amount -- the same
+        # "server is the sole financial authority" contract `discount_pct`
+        # already carries (this function's own docstring). It is resolved
+        # into money ONLY via the ledger balance and the
+        # `loyalty_point_value` setting below, both read server-side; the
+        # client's own money fields are ignored exactly as they always have
+        # been.
+        #
+        # A TENDER, NOT A DISCOUNT: `subtotal`/`discount`/`tax`/`total` are
+        # already final above this point and are NEVER adjusted for a
+        # redemption -- `calculate_line` and every per-line figure stay
+        # exactly what they would be on an all-cash sale, so the invoice
+        # (and what JoFotara reports) is unaffected. What a redemption
+        # changes is only how much of that already-fixed `total` still has
+        # to be TENDERED in cash/card/credit -- see `amount_due_after_points`
+        # below, THE CASH TRAP this design has to avoid.
+        points_redeemed_requested = data.get('points_redeemed') or 0
+        try:
+            points_redeemed_requested = int(points_redeemed_requested)
+        except (TypeError, ValueError):
+            points_redeemed_requested = 0
+        points_redeemed_requested = max(0, points_redeemed_requested)
+
+        points_applied = 0            # points actually consumed from the ledger
+        points_redeemed_amount = 0.0  # its money value; persisted on `sales`
+
+        if points_redeemed_requested > 0:
+            # (a) A walk-in has no ledger row to redeem against.
+            if not customer_id:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error',
+                                'message': 'Loyalty point redemption requires a customer (walk-in not allowed).'}), 400
+            # (b) CAP_DISCOUNT's own documented authority -- "give value
+            # away with no matching payment" (see `wants_discount` above) --
+            # is exactly what a redemption does, so it is the SAME gate,
+            # checked and refused in the same shape as that one.
+            if not session_has_capability(CAP_DISCOUNT):
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+            # (d) OFF by default -- see _DEFAULT_SETTINGS['loyalty_point_value'].
+            # A shop that has never opened this setting must not start
+            # giving cash-equivalent value away the moment this code ships.
+            try:
+                point_value = float(_s.get('loyalty_point_value') or 0)
+            except (TypeError, ValueError):
+                point_value = 0.0
+            if point_value <= 0:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error',
+                                'message': 'Loyalty point redemption is not configured for this shop.'}), 400
+            # (c) The balance is the LEDGER's SUM, never `customers.
+            # loyalty_points` -- see database/schema.py's
+            # _migrate_add_loyalty_ledger docstring for the two-till
+            # double-spend a column-based balance would reopen.
+            ledger_balance = cur.execute(
+                "SELECT COALESCE(SUM(points_delta), 0) FROM loyalty_ledger "
+                "WHERE company_id=? AND customer_id=?", (cid, customer_id)
+            ).fetchone()[0] or 0
+            if points_redeemed_requested > ledger_balance:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': 'Insufficient loyalty point balance.'}), 400
+            # (e) CLAMP so the redeemed value can never exceed the sale
+            # total -- capped on the POINTS side, not the money side, so the
+            # ledger's negative entry and the money actually forgiven always
+            # agree exactly. A customer who asks to redeem more points than
+            # this one sale is worth only SPENDS as many as the sale can
+            # absorb; the remainder stays in their balance instead of being
+            # burned for nothing.
+            max_affordable_points = int(
+                (Decimal(str(total)) / Decimal(str(point_value))).to_integral_value(rounding=ROUND_DOWN)
+            )
+            points_applied = min(points_redeemed_requested, max_affordable_points, int(ledger_balance))
+            if points_applied > 0:
+                # (f) Same currency precision as every other figure in this
+                # sale. The `min(..., total)` is a second, belt-and-braces
+                # clamp against `_money`'s own ROUND_HALF_UP ever nudging
+                # this a hair past `total` after the floor-division above --
+                # THE invariant this feature must never violate.
+                points_redeemed_amount = min(_money(points_applied * point_value, currency), total)
+
+        # THE CASH TRAP (ROADMAP.md's own heading for this design decision):
+        # points are NOT cash. `amount_due_after_points` -- not `total` -- is
+        # what the customer still has to TENDER, so `paid`/`change`/
+        # `balance_due` immediately below, and `net_received` further down
+        # (the figure that actually feeds the daily cash summary and drawer
+        # Z-report), are all computed against it instead of against the
+        # full total. `sales.total` itself (already fixed above) is never
+        # touched, so the invoice stays whole. A sale fully covered by
+        # points therefore reads as `amount_due_after_points=0`,
+        # `balance_due=0`, `is_credit=False` -- no phantom cash expected at
+        # the drawer, and no phantom debt on the customer's account --
+        # rather than either the old `total`-based figure (which would
+        # demand cash the points already covered) or a hidden discount
+        # (which would misstate `is_credit`/AR for a customer who tendered
+        # no further cash at all).
+        amount_due_after_points = _money(total - points_redeemed_amount, currency)
+
         # AUDIT-fix: amount_paid was never floored at 0. A negative value
         # (only reachable via a direct API call, never the POS UI, which
         # always sends Math.max(tendered, total)) inflated balance_due
@@ -4405,11 +4557,9 @@ def create_sale():
         # currency-blind 2dp default here shorted or overpaid a JOD
         # customer by up to 5 fils on their change, the exact defect class
         # `_money`'s own docstring warns about for a drawer count.
-        paid      = max(0.0, _money(data.get('amount_paid', total), currency))
-        change    = max(0.0, _money(paid - total, currency))
-        pm        = data.get('payment_method', 'cash')
-        customer_id = data.get('customer_id')
-        balance_due = _money(total - paid, currency)
+        paid      = max(0.0, _money(data.get('amount_paid', amount_due_after_points), currency))
+        change    = max(0.0, _money(paid - amount_due_after_points, currency))
+        balance_due = _money(amount_due_after_points - paid, currency)
 
         # ── Credit-sale rules (Accounts Receivable) ──────────────────────────
         # A credit sale leaves an unpaid balance owed by a NAMED customer. Walk-ins
@@ -4505,11 +4655,11 @@ def create_sale():
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
-                               change_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
+                               change_amount,points_redeemed_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
                                session_id,uid,actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?)
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
-              subtotal, discount, tax, total, paid, change,
+              subtotal, discount, tax, total, paid, change, points_redeemed_amount,
               pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
               sale_uid, actor, terminal, utc_now))
         sale_id = cur.lastrowid
@@ -4736,11 +4886,42 @@ def create_sale():
         # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`
         # for the mutation proof.
         if customer_id:
-            pts = int(total / 10)  # 1 point per $10
+            pts = int(total / 10)  # 1 point per $10 -- EARNED on the sale's
+            # full total, unaffected by any redemption THIS SAME sale
+            # applied (points_applied below): a customer earns on what they
+            # bought, not on what cash they happened to still owe after
+            # spending points -- unchanged from the pre-redemption formula.
+            #
+            # Loyalty redemption, wave 1 (schema v27): `points_applied`
+            # subtracted in this SAME UPDATE rather than a second one, so
+            # the "MUST NOT bump row_version / MUST NOT queue a sync event"
+            # contract this whole comment block documents stays true of the
+            # ONE write this hot path has always made -- `points_applied`
+            # is 0 for every sale that never redeemed, which reduces this
+            # UPDATE to `loyalty_points=loyalty_points+pts-0`, byte-identical
+            # to the pre-redemption statement.
             cur.execute("""
-                UPDATE customers SET total_spent=total_spent+?, loyalty_points=loyalty_points+?
+                UPDATE customers SET total_spent=total_spent+?, loyalty_points=loyalty_points+?-?
                 WHERE id=? AND company_id=?
-            """, (total, pts, customer_id, cid))
+            """, (total, pts, points_applied, customer_id, cid))
+            # Immutable ledger rows alongside the accumulator UPDATE above --
+            # see database/schema.py's _migrate_add_loyalty_ledger docstring
+            # for why the accumulator alone can never be the source of
+            # truth. `uid` stamped with `_new_uid()` (the v13 wire-identity
+            # convention this table's own migration already carries a
+            # partial-unique index for) even though sync is not turned on
+            # for this table in wave 1, so a later sync wave never has to
+            # backfill identity onto rows this API already wrote.
+            if pts:
+                cur.execute(
+                    "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,sale_id,created_by) "
+                    "VALUES (?,?,?,?,'earn',?,?)",
+                    (_new_uid(), cid, customer_id, pts, sale_id, _uid()))
+            if points_applied:
+                cur.execute(
+                    "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,sale_id,created_by) "
+                    "VALUES (?,?,?,?,'redeem',?,?)",
+                    (_new_uid(), cid, customer_id, -points_applied, sale_id, _uid()))
 
         # Ledger: record the amount actually RETAINED now (feeds the daily
         # cash summary/drawer close), and push any unpaid balance onto the
@@ -4755,13 +4936,21 @@ def create_sale():
         # back as money still in the drawer -- every cash sale with change
         # inflated the expected-cash figure by exactly that change amount,
         # showing a phantom shortage at close. net_received = min(paid,
-        # total) is the correct amount actually retained: unchanged from
-        # `paid` for a partial/credit sale (paid <= total, nothing given
-        # back), reduced to `total` whenever change was given. The `sales`
+        # amount_due_after_points) is the correct amount actually retained:
+        # unchanged from `paid` for a partial/credit sale (paid <=
+        # amount_due_after_points, nothing given back), reduced to
+        # `amount_due_after_points` whenever change was given. The `sales`
         # row itself still stores the full amount_paid/change_amount split
         # untouched -- receipts keep showing the real tendered/change
         # breakdown; only this ledger entry (drawer math) changes.
-        net_received = min(paid, total)
+        #
+        # THE CASH TRAP, restated at the one line that would have reopened
+        # it: `amount_due_after_points`, NOT `total` -- points redeemed on
+        # this sale already reduced what still needed tendering (see that
+        # variable's own comment above), so `total` here would have counted
+        # the customer's OWN points as cash the drawer received, failing
+        # the Z-report by exactly the redeemed amount on every redemption.
+        net_received = min(paid, amount_due_after_points)
         if net_received > 0.005:
             _record_payment(conn, cid, ('customer' if customer_id else None), customer_id, 'in', net_received,
                             method=(pm if pm != 'credit' else 'cash'),
@@ -4789,6 +4978,12 @@ def create_sale():
             # site's own comment).
             'change': change, 'total': total,
             'amount_paid': paid, 'balance_due': balance_due, 'warning': warning,
+            # Loyalty redemption, wave 1 (schema v27) -- always present
+            # (0/0 for the overwhelming majority of sales that never
+            # redeem), matching 'oversold_past_recorded_stock' below's own
+            # "always present, not conditionally added" precedent so a
+            # later UI stage can read these two keys unconditionally.
+            'points_redeemed': points_applied, 'points_redeemed_amount': points_redeemed_amount,
             'lines': resolved_lines, 'calculation_version': tax_engine.CALCULATION_VERSION,
             # Launch-readiness Phase 7 stage 7d-iii: NEVER silent. True only
             # when at least one line was allowed past its recorded on-hand
@@ -8460,6 +8655,19 @@ _DEFAULT_SETTINGS = {
     'branding_receipt_language': 'auto',        # auto | en | ar
     'branding_receipt_show_cashier': 'false',   # 'true' | 'false'
     'branding_receipt_show_customer': 'false',  # 'true' | 'false'
+    # Launch-readiness "loyalty redemption, wave 1" (schema v27, ROADMAP.md's
+    # 2026-08-31 "retail schema v27 CLAIMED for loyalty redemption" entry).
+    # The money value of ONE loyalty point, in the shop's own base_currency.
+    # DEFAULTS TO '0' DELIBERATELY -- '0' means redemption is DISABLED, not
+    # "free". `create_sale`'s redemption path refuses any points_redeemed
+    # request outright while this reads as 0 (see that function's own
+    # comment). A non-zero default would start giving real money away on
+    # every existing shop's very next upgrade, on a feature nobody there
+    # asked for or priced -- the same "invisible unless opted in" contract
+    # e-invoicing and licensing enforcement both already follow (see
+    # CLAUDE.md's "How to give a good suggestion here"). A shop turns this on
+    # by deliberately setting a non-zero value.
+    'loyalty_point_value': '0',
 }
 _DEFAULT_METHODS = [('Cash', 'cash'), ('Card', 'card'), ('Bank Transfer', 'bank'),
                     ('Mobile Wallet', 'wallet'), ('Check', 'check')]
@@ -8565,6 +8773,24 @@ def _ensure_credit_schema(conn):
     addcol('suppliers', 'payment_terms', "TEXT DEFAULT 'none'") # none | net7 | net15 | net30 | custom
     addcol('suppliers', 'credit_balance', "REAL DEFAULT 0")
     addcol('sales', 'due_date', "TEXT")
+    # Launch-readiness "loyalty redemption, wave 1" (schema v27). The
+    # versioned migration (database/schema.py's _migrate_add_loyalty_ledger)
+    # already adds this column additively for a fresh install or any install
+    # jumping from below v27 straight to v27 -- but `ensure_schema_version`'s
+    # whole fast path is "if current_version >= target_version: return", and
+    # v27 is claimed but NOT released (the ledger table alone shipped in
+    # e6debe0), so a local dev checkout or CI fixture that already migrated
+    # against that earlier commit is sitting at user_version=27 FOREVER and
+    # will never re-enter that migration chain to pick up this column. This
+    # `addcol` call is the SAME safety net `due_date` right above it already
+    # relies on, and it runs unconditionally on every request that reaches
+    # create_sale (via that function's own `_ensure_credit_schema(conn)`
+    # call), so it closes the gap regardless of `user_version`. Idempotent
+    # with the versioned migration -- both check column existence first, so
+    # whichever runs first on a given database wins and the other is a
+    # no-op, same "whichever of the two sites runs first" contract this
+    # function's own idx_payments_party comment above already documents.
+    addcol('sales', 'points_redeemed_amount', "REAL DEFAULT 0")
     addcol('purchase_orders', 'amount_paid', "REAL DEFAULT 0")
     addcol('purchase_orders', 'payment_status', "TEXT DEFAULT 'unpaid'")  # paid | partial | unpaid/credit
     addcol('purchase_orders', 'due_date', "TEXT")
@@ -8729,7 +8955,20 @@ def credit_settings_get():
 def credit_settings_set():
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
-    for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit'):
+    # 'loyalty_point_value' rides this same endpoint rather than a new
+    # '/settings/loyalty' route: retail_route_capability_matrix_test.py
+    # freezes EXACT_MUTATION_CAPABILITIES as a closed dict keyed by view
+    # function name, so a brand-new mutating route -- whatever capability it
+    # declared -- would fail that frozen matrix until a human updates the
+    # table deliberately (its own stated purpose). This endpoint is already
+    # the general small-kv "shop money settings" write path (it carries
+    # base_currency alongside the credit fields its name suggests), backed
+    # by the identical retail_settings upsert + _queue_setting_sync_event
+    # every other settings key here already uses -- so a dedicated write
+    # route is a later, additive step, not a blocker for the redemption
+    # logic itself, which only ever READS this key via _settings().
+    for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
+              'loyalty_point_value'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",

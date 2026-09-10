@@ -1619,11 +1619,16 @@ def _migrate_retail_schema(conn):
     _migrate_add_modifiers(conn)
     # v26 -> v27 (launch-readiness, "loyalty redemption, wave 1"): appended
     # LAST, same convention as every step above. One new, self-contained
-    # table, two indexes, and a one-time backfill INSERT -- no existing
-    # table is ALTERed and `customers.loyalty_points` is only ever READ,
-    # never written, by this step. See the RETAIL_SCHEMA_VERSION v27
-    # comment above and _migrate_add_loyalty_ledger's own docstring for the
-    # full double-spend reasoning and the backfill shape.
+    # table, two indexes, a one-time backfill INSERT, and (2026-09-10,
+    # still under v27 -- see _migrate_add_loyalty_ledger's own docstring for
+    # why this widens the same unreleased claim rather than becoming v28) a
+    # column-existence-checked `ALTER TABLE sales ADD COLUMN
+    # points_redeemed_amount` for the redemption path's own money column.
+    # `customers.loyalty_points` is only ever READ, never written, by this
+    # step. See the RETAIL_SCHEMA_VERSION v27 comment above and
+    # _migrate_add_loyalty_ledger's own docstring for the full double-spend
+    # reasoning, the backfill shape, and why the new column ALSO gets a
+    # second, independent guard in retail_api.py's `_ensure_credit_schema`.
     _migrate_add_loyalty_ledger(conn)
 
 
@@ -5340,9 +5345,48 @@ def _migrate_add_loyalty_ledger(conn):
     redemption, wave 1" (ROADMAP.md's 2026-08-31 "retail schema v27 CLAIMED
     for loyalty redemption" entry). One new table, two indexes, plus a
     one-time Python-side BACKFILL -- additive only (CREATE TABLE IF NOT
-    EXISTS / CREATE INDEX IF NOT EXISTS / a guarded INSERT). No existing
-    table is ALTERed, and `customers.loyalty_points` is only ever READ by
-    this migration, never written.
+    EXISTS / CREATE INDEX IF NOT EXISTS / a guarded INSERT). `customers.
+    loyalty_points` is only ever READ by this migration, never written.
+
+    2026-09-10 EXTENSION, still under v27 (v27 is claimed but NOT released --
+    ROADMAP.md's "retail schema v27 CLAIMED for loyalty redemption" entry is
+    explicit that widening an unreleased claim in place is honest, where
+    shipping a v28 for one column would not be): `sales.points_redeemed_amount`
+    (`ALTER TABLE sales ADD COLUMN ... REAL DEFAULT 0`) is added here too, one
+    step below, column-existence-checked exactly like `_migrate_add_modifiers`
+    above already does for `return_items.sale_item_id` -- see that call's own
+    comment for the identical guard shape. This is the ONE column create_sale's
+    redemption path (api/retail_api.py) needs: the design decided redemption is
+    a TENDER, not a discount (see this function's own module-level
+    RETAIL_SCHEMA_VERSION v27 comment above), so the money value redeemed has
+    to be persisted DISTINCTLY from `amount_paid`/`change_amount` rather than
+    folded into either -- otherwise the daily cash summary and drawer Z-report
+    would count points as cash actually taken.
+
+    WHY THIS RUNS A SECOND TIME, IN retail_api.py's `_ensure_credit_schema`,
+    TOO -- NOT a mistake, a second independent guard for a real gap in
+    `ensure_schema_version` itself: that function's whole fast path is `if
+    current_version >= target_version: return` (commercial_runtime/security/
+    migration_safety.py), so a database that already ran THIS function before
+    this column existed -- e6debe0 shipped the table alone, and any local dev
+    checkout or CI fixture that migrated against that commit is already sitting
+    at `user_version = 27` -- will NEVER re-enter this migration chain again;
+    RETAIL_SCHEMA_VERSION is not bumped to 28 for a widening of an unreleased
+    version, so there is no version transition left to trigger it. This
+    function alone would therefore add the column correctly for a FRESH
+    install or any install jumping from below v27 straight to v27, and
+    silently fail to add it for a database that already has the ledger table.
+    `_ensure_credit_schema`'s `addcol('sales', 'points_redeemed_amount', ...)`
+    (retail_api.py) runs on EVERY request that reaches `create_sale`,
+    unconditionally, regardless of `user_version` -- exactly the existing
+    mechanism this codebase already uses to backfill `sales.due_date` the same
+    way (see that function's own `addcol` calls) -- so it is what actually
+    closes the gap this docstring names. Both guards are column-existence
+    checked and therefore idempotent with each other: whichever runs first on
+    a given database wins, and the other is a no-op, the same "whichever of
+    the two sites runs first" contract `_ensure_credit_schema`'s own
+    `idx_payments_party` comment already documents for a different pair of
+    call sites.
 
         loyalty_ledger -- immutable +/- entries per customer: opening,
                           earn, redeem, adjust. The SUM of a customer's
@@ -5525,6 +5569,25 @@ def _migrate_add_loyalty_ledger(conn):
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_loyalty_ledger_uid '
             'ON loyalty_ledger(uid) WHERE uid IS NOT NULL'
         )
+
+    # 2026-09-10 EXTENSION (see this function's own docstring, "WHY THIS RUNS
+    # A SECOND TIME" section, for why `_ensure_credit_schema` in
+    # retail_api.py ALSO guards this same column): column-existence-checked
+    # exactly like `_migrate_add_modifiers`'s `return_items.sale_item_id`
+    # ALTER immediately above this function -- `PRAGMA table_info` first,
+    # `ADD COLUMN` only when missing, so replaying this migration against a
+    # database that already has the column (whether from a prior run of THIS
+    # function or from `_ensure_credit_schema` getting there first) is a
+    # no-op rather than a "duplicate column name" error. Checked independently
+    # of the `customers` guard below -- `sales` and `customers` are unrelated
+    # tables, and a fixture that hand-builds one without the other (the same
+    # shape retail_category_delete_fk_sync_test.py's `_build_v2_database`
+    # uses for `customers`) must not lose this column just because it lacks
+    # the other table.
+    if 'sales' in live_tables:
+        sales_cols = {row[1] for row in conn.execute('PRAGMA table_info(sales)').fetchall()}
+        if 'points_redeemed_amount' not in sales_cols:
+            conn.execute('ALTER TABLE sales ADD COLUMN points_redeemed_amount REAL DEFAULT 0')
 
     if 'customers' not in live_tables:
         return
