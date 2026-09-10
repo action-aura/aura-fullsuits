@@ -73,9 +73,16 @@ def teardown_module(module):
 # retail_einvoicing_regression_test.py was updated with it. If this list
 # ever disagrees with the live response again, check the e-invoicing
 # settings default and that enqueue path FIRST.
+# points_redeemed / points_redeemed_amount joined this set when loyalty
+# redemption shipped (v27). They are always present, zero when nothing was
+# redeemed, so the receipt and the sale-complete modal can show the SERVER's
+# figure rather than re-deriving it client-side. This list stays an EXACT
+# match -- widening it does not loosen the check, and a key disappearing or
+# an unexpected one appearing still fails.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
     'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [

@@ -115,7 +115,11 @@ def _make_user(role, company_id, capabilities=None):
     """A real account with real capability rows -- matches
     retail_promotions_test.py's own `_make_user`."""
     email = f"loyalty-{role}-{uuid.uuid4().hex[:10]}@test.local"
-    password = "LoyaltyTestPW1"
+    # pragma: allowlist secret -- a fixture password for a throwaway user this
+    # test creates and deletes. detect-secrets flags any `password = "..."`;
+    # an inline pragma is used rather than a .secrets.baseline entry because
+    # Python takes comments, so the exemption lives where a reader can see it.
+    password = "LoyaltyTestPW1"  # pragma: allowlist secret
     user_id = str(uuid.uuid4())
     conn = registry_conn()
     conn.execute(

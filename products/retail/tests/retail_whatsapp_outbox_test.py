@@ -296,7 +296,8 @@ def test_sale_response_is_unaffected_by_whatsapp_queueing(client, monkeypatch):
         'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
         'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines',
         'oversold_past_recorded_stock',
-        'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
+        'points_redeemed', 'points_redeemed_amount',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
     ])
 
 

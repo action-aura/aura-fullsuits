@@ -78,9 +78,16 @@ def teardown_module(module):
 # failed or skipped enqueue now shows up here as a reorder-hook key-set
 # failure. The claim this file actually makes is still narrow and still
 # true: the REORDER hook adds no key, whether it fires, no-ops or raises.
+# points_redeemed / points_redeemed_amount joined this set when loyalty
+# redemption shipped (v27). They are always present, zero when nothing was
+# redeemed, so the receipt and the sale-complete modal can show the SERVER's
+# figure rather than re-deriving it client-side. This list stays an EXACT
+# match -- widening it does not loosen the check, and a key disappearing or
+# an unexpected one appearing still fails.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
     'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 

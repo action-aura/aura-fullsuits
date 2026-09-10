@@ -92,9 +92,16 @@ def teardown_module(module):
 #   3. commercial_runtime/sync/: replicates DB ROWS (sync_outbox/sync_cursor
 #      against `sales` etc.), never this HTTP response body -- unaffected
 #      by any change to what POST /sales returns.
+# points_redeemed / points_redeemed_amount joined this set when loyalty
+# redemption shipped (v27). They are always present, zero when nothing was
+# redeemed, so the receipt and the sale-complete modal can show the SERVER's
+# figure rather than re-deriving it client-side. This list stays an EXACT
+# match -- widening it does not loosen the check, and a key disappearing or
+# an unexpected one appearing still fails.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
     'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
@@ -132,6 +139,21 @@ SALES_TABLE_COLUMNS = [
     # `sales` at all; the claim this test makes -- that the E-INVOICING
     # migration (v7) added only new tables -- is untouched by it.
     'uid', 'actor_user_uid', 'terminal_id', 'created_at_utc',
+    # Loyalty redemption (schema v27, claimed in ROADMAP.md before the work
+    # started): sales.points_redeemed_amount, the money value of the points a
+    # customer spent on this sale. Same "real, expected additive shape change"
+    # category as session_id and the v13 identity triple above, and it sits in
+    # the same place for the same reason -- it is applied by the BOOT-TIME
+    # versioned migration, so physically before due_date's lazy
+    # _ensure_credit_schema addcol, whatever the declaration order suggests.
+    # Verified by reading PRAGMA table_info off a freshly migrated database
+    # rather than reasoning about it: index 22, with due_date absent until a
+    # request triggers the lazy path.
+    #
+    # The claim this test actually makes -- that the E-INVOICING migration (v7)
+    # added only new tables -- is untouched by this, exactly as it was by v10
+    # and v13.
+    'points_redeemed_amount',
     'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [
