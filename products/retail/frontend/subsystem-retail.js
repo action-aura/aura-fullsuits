@@ -1916,9 +1916,14 @@ const RetailSystem = {
            all. This strip is the only place they are documented -- quiet,
            always visible (not hover-only, not buried behind a "?"), reusing
            the same faint/dim tokens .pos-empty-hint already uses so it reads
-           as a caption, not another control competing for attention. */
+           as a caption, not another control competing for attention.
+           retail-hardware-viewports: padding-block tightened from 8px/2px
+           to 4px/2px -- 4px of pure whitespace, no content removed -- as
+           part of reclaiming the dead 53% of a 1366x768 till screen that sat
+           above the product grid (see the .pos-cat-row note below for the
+           larger piece of that fix). */
         .pos-kbd-hints { display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;
-          padding-block:8px 2px;padding-inline:16px;color:var(--text-faint);font-size:11px; }
+          padding-block:4px 2px;padding-inline:16px;color:var(--text-faint);font-size:11px; }
         .pos-kbd-item { display:inline-flex;align-items:center;gap:5px;white-space:nowrap; }
         .pos-kbd { display:inline-block;min-inline-size:20px;padding-block:1px;padding-inline:5px;
           border:1px solid var(--border-mid);border-radius:5px;background:var(--surface-soft);
@@ -1926,10 +1931,42 @@ const RetailSystem = {
           text-align:center;line-height:1.5; }
 
         /* ── Category rail ───────────────────────────────────────────────── */
-        .pos-cat-bar { display:flex;gap:8px;padding-block:10px;padding-inline:16px;border-block-end:1px solid var(--border-soft);overflow-x:auto;flex-shrink:0; }
+        /* retail-hardware-viewports (measured: grid started at 407px of a
+           768px till screen -- 53% of the screen spent before a single
+           product tile). The old .pos-pane-hdr row above this bar carried
+           only an inert "Products" label and the "Held" button -- a full
+           69px of chrome for a heading nobody needs (the nav already reads
+           "POS"/"نقطة البيع", and the grid full of products makes its own
+           purpose obvious) plus one relocatable control. Rather than delete
+           the Held button, this merges it into the row that already existed
+           just below: .pos-cat-row is the new outer flex row (border and
+           inline padding live here now), .pos-cat-bar is the scrollable
+           category-pill strip inside it (flex:1, no padding/border of its
+           own so it does not double up with the row's), and the Held button
+           sits after it, flex-shrink:0 so it never gets squeezed by a long
+           category list. Net: one 44px-tall row does the work that used to
+           take a 69px label row PLUS a 65px pill row. The visible "Products"
+           heading is gone; a screen-reader still gets it, because .pos-left
+           now carries aria-label="Products" (see the markup below) -- so the
+           only thing an on-screen user loses is a redundant caption, not the
+           information itself. */
+        .pos-cat-row { display:flex;align-items:center;gap:12px;padding-inline:16px;
+          border-block-end:1px solid var(--border-soft);flex-shrink:0; }
+        .pos-cat-bar { display:flex;gap:8px;padding-block:10px;overflow-x:auto;flex:1;min-inline-size:0; }
+        .pos-held-btn { flex-shrink:0; }
+        /* flex-shrink:0 is load-bearing. These pills are flex items in
+           .pos-cat-bar, so they default to flex-shrink:1 and get squeezed
+           BELOW their own content width -- white-space:nowrap then clips
+           the label rather than wrapping it. Measured at 1366x768 before
+           this rule: "Food & Beverages" rendered 100px wide while needing
+           142px, and four of the six categories were cut off mid-word. A
+           cashier hunting for a category cannot read one that says
+           "Food & Bever". The strip already carries overflow-x:auto, so the
+           right behaviour is for pills to keep their size and the row to
+           scroll -- which is what a category rail is supposed to do. */
         .pos-cat-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:18px;border-radius:var(--radius-pill, 22px);font-size:14px;font-weight:600;
           cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);
-          white-space:nowrap;font-family:inherit;transition:background .15s ease, color .15s ease, border-color .15s ease; }
+          white-space:nowrap;flex-shrink:0;font-family:inherit;transition:background .15s ease, color .15s ease, border-color .15s ease; }
         /* Paired :hover/:focus-visible, here and on every other control in
            this block. The pairing is not cosmetic and it is not covered by
            retail_design_focus_test.js -- that ratchet reads css/main.css,
@@ -2234,7 +2271,7 @@ const RetailSystem = {
         }
       </style>
       <div class="pos-wrap">
-        <div class="pos-left">
+        <div class="pos-left" aria-label="${this._esc(t('Products'))}">
           <!-- mousedown, not click: the browser moves focus to the pressed
                element BEFORE any click handler runs, so preventing the
                default here is the only thing that stops a tap on a product
@@ -2260,13 +2297,36 @@ const RetailSystem = {
             <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Del')}</kbd> ${t('Remove line')}</span>
             <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Esc')}</kbd> ${t('Cancel')}</span>
           </div>
-          <div class="pos-pane-hdr" onmousedown="RetailSystem._keepScanFocus(event)">
-            <h3 class="pos-pane-title">${t('Products')}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
+          <!-- retail-hardware-viewports: the old dedicated "Products" pane
+               header (a pure label, no controls) is gone. The Held button it
+               carried now lives in this same row as the category pills --
+               see the .pos-cat-row comment in _injectStyles() for why that
+               is a safe merge rather than a deletion. The pane's name is
+               still announced to assistive tech via aria-label="Products" on
+               .pos-left above; a sighted cashier already sees a grid full of
+               products, so the redundant heading cost only whitespace. -->
+          <!-- This zero-height marker is NOT decorative leftover -- deleting
+               it breaks a different screen. cash-drawer.js's own mount()
+               anchors on container.querySelector('.pos-pane-hdr') and
+               inserts the cash-drawer status bar right after it (its own
+               comment: "called once from RetailSystem._renderPOS(c), after
+               the POS DOM (including .pos-pane-hdr) already exists"). The
+               right pane below still has a real .pos-pane-hdr ("Current
+               Sale"); without SOME .pos-pane-hdr appearing first in this
+               container, that querySelector silently matches the RIGHT
+               pane's header instead and the drawer bar renders in the wrong
+               column -- caught by measuring this exact change, not by any
+               existing test. cash-drawer.js is owned by another change in
+               this codebase and is out of scope here, so the contract is
+               honoured from this side instead of touching it: keep the
+               anchor, hide it, cost nothing. -->
+          <div class="pos-pane-hdr" style="display:none" aria-hidden="true"></div>
+          <div class="pos-cat-row" onmousedown="RetailSystem._keepScanFocus(event)">
+            <div class="pos-cat-bar" id="pos-cats">
+              <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
+            </div>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm pos-held-btn" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
               title="${this._esc(t("Browse and resume sales you've held"))}"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>)</button>
-          </div>
-          <div class="pos-cat-bar" id="pos-cats" onmousedown="RetailSystem._keepScanFocus(event)">
-            <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
           </div>
           <div class="pos-product-grid" id="pos-product-grid" onmousedown="RetailSystem._keepScanFocus(event)">
             <div style="grid-column:1/-1;text-align:center;padding:50px;color:var(--text-dim)">${t('Loading…')}</div>
