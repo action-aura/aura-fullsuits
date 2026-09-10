@@ -1653,11 +1653,37 @@ and clamping would let the buy-earn-return cycle mint points one unit at a
 time. Whether the till then refuses to sell, warns, or absorbs it is a policy
 question for the owner, not a silent default.
 
-Not built in v27. `create_return` is untouched by the redemption work, so
-today a return of a redeemed sale refunds the money and leaves both the
-redeemed and the earned points as they were. That is a known, written-down
-gap rather than a discovered one, and it is the first thing to build after the
-POS redemption UI.
+BUILT, in `create_return`, inside the same transaction as the refund itself.
+The proportion is taken on the returned VALUE:
+
+    proportion      = min(1, refund / original_sale_total)
+    earn_clawback   = earned_on_sale   * proportion
+    redeem_giveback = redeemed_on_sale * proportion
+
+Both source figures are read fresh from `loyalty_ledger` filtered by the
+original `sale_id`, never from `sales.points_redeemed_amount`, so several
+partial returns against one sale each take their own share of the FULL
+original amounts and sum correctly instead of double-reversing.
+
+Double- and over-returns are already refused upstream by `create_return`'s
+existing remaining-returnable check, so the reversal inherits that guard and
+adds none of its own. A walk-in sale and a pre-feature sale with no ledger
+rows both no-op.
+
+### ONE DEVIATION FROM THE DECISION ABOVE, recorded rather than glossed
+
+The decision said the reversal rows would be "linked to the return rather than
+to the original sale". They are not, quite. `loyalty_ledger` has a `sale_id`
+column and no `return_id`, so both rows are written with `entry_type='adjust'`
+and `sale_id` NULL, and the tie to the return lives only in the audit log
+entry, which now carries the clawback and giveback amounts.
+
+That is a defensible scope call -- adding `return_id` is a schema change and
+v27 was already claimed and shipped -- but it has a real cost: the ledger
+alone cannot answer "which return reversed these points". Anyone auditing a
+disputed balance has to join through the audit log to find out. Adding
+`loyalty_ledger.return_id` is the clean fix and belongs to whichever version
+next opens for a schema change.
 
 ### Why a ledger and not the column that already exists
 

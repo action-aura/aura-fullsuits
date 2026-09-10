@@ -6133,7 +6133,109 @@ def create_return():
                 if ar_credit > 0.005:
                     _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_credit)
 
-        _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}')
+        # ── Loyalty reversal (ROADMAP.md's 2026-08-31 "RETURNS AGAINST A
+        # SALE THAT USED POINTS -- decided, not yet built" entry, now
+        # built) ─────────────────────────────────────────────────────────
+        # A return owes TWO loyalty consequences, and both are owed:
+        #   1. Points REDEEMED on the original sale come back -- the
+        #      customer paid with them, so refunding the cash and keeping
+        #      the points would be taking payment twice.
+        #   2. Points EARNED on the original sale are clawed back --
+        #      otherwise buy/earn/return/keep is a free points generator
+        #      that costs the shop real money at the next redemption.
+        # Both are NEW immutable `loyalty_ledger` rows -- this file's
+        # "never edit/delete, only reverse" policy, same as the AR-credit
+        # block immediately above -- rather than an edit to the original
+        # 'earn'/'redeem' rows. `entry_type='adjust'`: the value
+        # `_migrate_add_loyalty_ledger`'s own docstring names for exactly
+        # this case ("a clawback tied to a returned sale"), and per that
+        # SAME docstring `sale_id` is left NULL on both rows -- "'adjust'
+        # ... by definition names no sale" (its own words). The link to
+        # THIS return (rather than to the original sale) therefore lives
+        # in the audit log below, not in a `loyalty_ledger` column --
+        # `loyalty_ledger` has no return_id column, and adding one is a
+        # schema change outside this route's file (this task's file
+        # restriction is `retail_api.py` only; see ROADMAP.md).
+        #
+        # Settled PROPORTIONALLY on the returned VALUE -- this return's own
+        # tax/discount-correct `refund` (computed above from the per-line
+        # `calc` figures) against the ORIGINAL sale's `total` -- never on
+        # line count or quantity, so returning the cheap half of a basket
+        # can never refund all of the points. A walk-in sale
+        # (`sale['customer_id']` falsy) earned and redeemed nothing, so
+        # this whole block is skipped for it, quietly -- matching
+        # create_sale's own `if customer_id:` guard around its earn/redeem
+        # write. A sale made before this feature shipped has no
+        # 'earn'/'redeem' rows at all: the SELECT below reads back 0/0 via
+        # COALESCE, so nothing is written and nothing crashes.
+        loyalty_audit_note = ''
+        if sale['customer_id']:
+            original_total = float(sale['total'] or 0)
+            # Guards a division by zero for a (degenerate) zero-value
+            # sale; such a sale earns/redeems nothing anyway (create_sale's
+            # own `int(total/10)` floors to 0 and the redemption clamp
+            # would too), so skipping here is exactly correct, not a
+            # shortcut.
+            if original_total > 0:
+                loyalty_row = cur.execute(
+                    "SELECT "
+                    "COALESCE(SUM(CASE WHEN entry_type='earn' THEN points_delta ELSE 0 END), 0) AS earned, "
+                    "COALESCE(SUM(CASE WHEN entry_type='redeem' THEN -points_delta ELSE 0 END), 0) AS redeemed "
+                    "FROM loyalty_ledger WHERE company_id=? AND customer_id=? AND sale_id=?",
+                    (cid, sale['customer_id'], sale_id)
+                ).fetchone()
+                earned_on_sale = float(loyalty_row['earned'] or 0)
+                redeemed_on_sale = float(loyalty_row['redeemed'] or 0)
+                if earned_on_sale or redeemed_on_sale:
+                    # Decimal throughout, exactly like `refund_total` above,
+                    # so several partial returns against the same sale each
+                    # reverse EXACTLY their own share rather than
+                    # accumulating float drift across requests. Capped at 1
+                    # as a second belt-and-braces guard against `refund`
+                    # ever landing a hair above `original_total` through
+                    # independent rounding -- same shape as create_sale's
+                    # own second clamp on `points_redeemed_amount`.
+                    proportion = min(Decimal('1'), Decimal(str(refund)) / Decimal(str(original_total)))
+                    _pts_quant = Decimal('0.0001')
+                    earn_clawback = float(
+                        (Decimal(str(earned_on_sale)) * proportion).quantize(_pts_quant, rounding=ROUND_HALF_UP))
+                    redeem_giveback = float(
+                        (Decimal(str(redeemed_on_sale)) * proportion).quantize(_pts_quant, rounding=ROUND_HALF_UP))
+                    # NOT clamped at zero anywhere below -- ROADMAP.md is
+                    # explicit that a claw-back MAY drive the balance
+                    # negative: a shop needs to see a customer in deficit,
+                    # and clamping would let buy/earn/return/keep mint
+                    # points one unit at a time. Whether the till then
+                    # refuses to sell on a negative balance is a separate,
+                    # undecided policy question -- not this route's call.
+                    if earn_clawback:
+                        cur.execute(
+                            "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by) "
+                            "VALUES (?,?,?,?,'adjust',?)",
+                            (_new_uid(), cid, sale['customer_id'], -earn_clawback, _uid()))
+                    if redeem_giveback:
+                        cur.execute(
+                            "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by) "
+                            "VALUES (?,?,?,?,'adjust',?)",
+                            (_new_uid(), cid, sale['customer_id'], redeem_giveback, _uid()))
+                    if earn_clawback or redeem_giveback:
+                        # `customers.loyalty_points` cache kept in step,
+                        # obeying the SAME rule create_sale's own comment
+                        # sets out at its earn/redeem write: this UPDATE
+                        # must NOT bump row_version and must NOT emit a
+                        # sync event, or a genuine name/phone correction
+                        # made on another device could later be rejected
+                        # as stale -- see
+                        # retail_v17_row_version_bump_test.py's
+                        # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`.
+                        cur.execute(
+                            "UPDATE customers SET loyalty_points = loyalty_points + ? - ? "
+                            "WHERE id=? AND company_id=?",
+                            (redeem_giveback, earn_clawback, sale['customer_id'], cid))
+                        loyalty_audit_note = (
+                            f' loyalty_redeem_giveback={redeem_giveback} loyalty_earn_clawback={earn_clawback}')
+
+        _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}{loyalty_audit_note}')
         conn.commit()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {
