@@ -549,6 +549,8 @@
   "Resolve": "Resolve",
   "Change": "Change",
   "Change due": "Change due",
+  "Wipe Data": "Wipe Data",
+  "Are you sure you want to permanently wipe all data in this subsystem?": "Are you sure you want to permanently wipe all data in this subsystem?",
   "Paid": "Paid",
   "Thank you": "Thank you",
   "Receipt": "Receipt",

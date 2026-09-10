@@ -549,6 +549,8 @@
   "Resolve": "حلّ",
   "Change": "التغيير",
   "Change due": "الباقي",
+  "Wipe Data": "مسح البيانات",
+  "Are you sure you want to permanently wipe all data in this subsystem?": "هل أنت متأكد من مسح جميع البيانات في هذا النظام نهائيًا؟",
   "Paid": "المدفوع",
   "Thank you": "شكراً لكم",
   "Receipt": "إيصال",
