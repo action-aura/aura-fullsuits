@@ -242,6 +242,46 @@ const RetailSystem = {
   _beginRender() { return ++this._renderGeneration; },
   _isStaleRender(token) { return token !== this._renderGeneration; },
 
+  // ── Per-operation reload guard ──────────────────────────────────────────────
+  // retail-hardware-viewports (continuation): the render-generation guard
+  // above answers "did the user navigate to a different SCREEN while this
+  // fetch was in flight" -- it does NOT answer "did this same list get asked
+  // to reload AGAIN, on the SAME still-open screen, before the first
+  // reload's response arrived". The navigation generation never changes in
+  // that second case (the user never left the screen), so _isStaleRender
+  // would report "not stale" even while an OLDER response is about to land
+  // on top of a NEWER one.
+  //
+  // Two measured examples, both silent (no error, no console line):
+  //   - _loadAuditLog: click Next (page 2) then Next again (page 3) before
+  //     page 2's response arrives. If page 2 lands after page 3, the table
+  //     ends up showing page 2's rows while the pager and summary line both
+  //     say "Page 3".
+  //   - _loadSalesHistory: type a filter, change it again before the first
+  //     search settles. An older result set can overwrite a newer one --
+  //     and on this screen those rows are money.
+  //
+  // Same genuine-early-return contract as _isStaleRender (never a
+  // try/catch -- the point is to never reach the write, not to survive it),
+  // but keyed by NAME rather than the one shared render counter, because
+  // these reloads fire independently of any navigation. One small
+  // dictionary of counters (`_opSeq`) rather than a bespoke
+  // `_auditLogSeq` / `_salesHistorySeq` field each, so a third list added
+  // later reuses this instead of reinventing it.
+  //
+  // The two guards are DELIBERATELY independent and must stay that way: a
+  // load can be navigation-current but operation-stale (the two cases
+  // above), and a function that can be re-fired on the same screen AND can
+  // await across a navigation would need both, checked separately -- never
+  // collapse them into one flag. _loadAuditLog and _loadSalesHistory below
+  // only need this one: neither re-queries a DOM element fresh by id after
+  // its await the way _renderDashboard does (see that guard's own comment),
+  // so a cross-navigation stale-paint was never possible for either; a
+  // same-screen reload race was.
+  _opSeq: Object.create(null),
+  _beginOp(name) { return (this._opSeq[name] = (this._opSeq[name] || 0) + 1); },
+  _isStaleOp(name, token) { return token !== this._opSeq[name]; },
+
   // ── Router ────────────────────────────────────────────────────────────────
   render(sectionId) {
     const c = document.getElementById('sub-content');
@@ -7856,6 +7896,12 @@ const RetailSystem = {
   },
 
   async _loadAuditLog() {
+    // Per-operation reload guard -- NOT the navigation generation above.
+    // Clicking "Next" twice in a row never navigates anywhere, so
+    // _isStaleRender could never catch page 2's response landing after page
+    // 3's; see "Per-operation reload guard" above the Router for the full
+    // writeup of why a separate, named counter is needed here.
+    const opToken = this._beginOp('auditLog');
     const s = this._auditLog;
     const qs = new URLSearchParams();
     qs.set('page', s.page);
@@ -7869,6 +7915,12 @@ const RetailSystem = {
     const summary = document.getElementById('aud-summary');
     try {
       const res = await this._get(`/api/sub/retail/audit-log?${qs.toString()}`);
+      // Superseded by a later _loadAuditLog() call (another page/filter
+      // change fired before this one's response arrived)? Genuine early
+      // return, same contract as _isStaleRender: write NOTHING -- not even
+      // the error branch below -- rather than paint an older page's rows or
+      // refusal message over whatever the latest call already wrote.
+      if (this._isStaleOp('auditLog', opToken)) return;
       if (res.status !== 'success') {
         // Reachable if a non-admin device somehow lands on this page directly
         // (URL typed by hand, bookmark, etc) -- the nav entry is hidden, but
@@ -7914,6 +7966,10 @@ const RetailSystem = {
       if (nextBtn) nextBtn.disabled = page >= s.totalPages;
     } catch (e) {
       console.error('Audit log load failed', e);
+      // Same operation-staleness check as the success path above: a 401 or
+      // transport failure from an OLDER call must not blank out a NEWER
+      // call's rows just because it happened to reject last.
+      if (this._isStaleOp('auditLog', opToken)) return;
       if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--state-danger-text);padding:30px">${t('Could not load the audit log.')}</td></tr>`;
     }
   },
@@ -8299,6 +8355,15 @@ const RetailSystem = {
   },
 
   async _loadSalesHistory() {
+    // Per-operation reload guard -- NOT the navigation generation the
+    // dashboard uses. Typing into the search box or changing a date filter
+    // never navigates away from this screen, so _isStaleRender could never
+    // catch an older search's response landing after a newer one's; see
+    // "Per-operation reload guard" above the Router for the full writeup of
+    // why a separate, named counter is needed here. On this screen those
+    // rows are money, so this one matters at least as much as pagination
+    // does on the Audit Log.
+    const opToken = this._beginOp('salesHistory');
     const tbody = document.querySelector('#sh-table tbody');
     if (!tbody) return;
     const countEl = document.getElementById('sh-count');
@@ -8318,6 +8383,13 @@ const RetailSystem = {
     }
     try {
       const res = await this._get(`/api/sub/retail/sales/recent?${params}`);
+      // Superseded by a later _loadSalesHistory() call (the search box or a
+      // date filter changed again before this one's response arrived)?
+      // Genuine early return, same contract as _isStaleRender: write
+      // NOTHING -- not even the error branch below -- rather than let an
+      // older query's result set (or refusal message) land on top of
+      // whatever the latest call already wrote.
+      if (this._isStaleOp('salesHistory', opToken)) return;
       if (!res || res.status !== 'success') {
         // An error envelope is NOT an empty result set, and the difference is
         // the whole defect: this branch used to not exist, `res.data` was
@@ -8381,6 +8453,10 @@ const RetailSystem = {
       // render put in the table stayed there forever: the screen had given up
       // and the only trace was in a console the shopkeeper does not have open.
       console.error('Sales history load failed', e);
+      // Same operation-staleness check as the success path above: a 401 or
+      // transport failure from an OLDER call must not blank out a NEWER
+      // call's rows just because it happened to reject last.
+      if (this._isStaleOp('salesHistory', opToken)) return;
       this._salesHistoryMessage(tbody, t('Could not load sales history.'), true);
       if (countEl) countEl.textContent = '';
     }
