@@ -9832,12 +9832,20 @@ def printer_devices():
     """
     import sys
     if sys.platform != 'win32':
+        # (retail-hardware-viewports) This USED to say hardware printing
+        # needs the Windows spooler outright -- misleading now that
+        # `send_to_network` (escpos_transport.py) exists: a LAN/network
+        # printer works from any platform, including this one. Only the
+        # WINDOWS PRINTER LIST (this route's own job) is unavailable here;
+        # printer_test/printer_kick below both still accept a `host`/`port`
+        # on every platform.
         return jsonify({'status': 'success', 'data': {
             'printers': [],
             'platform': 'other',
             'reason': (
-                f"Hardware receipt printing needs the Windows print spooler; "
-                f"this install is running on {sys.platform!r}."
+                f"The Windows printer list is unavailable on this platform "
+                f"({sys.platform!r}), but a network (host/port) printer can "
+                f"still be used."
             ),
         }})
     from core.retail import escpos_transport
@@ -9865,6 +9873,11 @@ def printer_test():
     bytes to `<app-data>/receipt-test.bin`, which is how a shopkeeper with
     no printer attached still proves the byte pipeline end to end.
 
+    (retail-hardware-viewports) A `host` (optional `port`, default 9100) in
+    the request body selects a LAN/network printer over `send_to_network`
+    instead of the Windows spooler -- see the SELECTION RULE comment at the
+    point this function's body actually branches on it, below.
+
     CAP_EMPLOYEES, matching credit_settings_set/tax_settings_set/
     set_device_branch above: testing or firing hardware from the Settings
     screen is the same administrative tier as every other settings write
@@ -9887,6 +9900,14 @@ def printer_test():
 
     data = request.json or {}
     printer_name = (data.get('printer') or '').strip()
+    # (retail-hardware-viewports) `host`/`port` name a LAN/network printer
+    # instead of a Windows spooler name -- see the SELECTION RULE comment
+    # below, right where the two paths actually diverge, for exactly how
+    # this is chosen.
+    host = (data.get('host') or '').strip()
+    port = data.get('port')
+    if port in (None, ''):
+        port = 9100
     kick = bool(data.get('kick'))
     width_chars = 32 if data.get('paper_width') == 32 else 42
 
@@ -9927,6 +9948,26 @@ def printer_test():
     except Exception as exc:
         return jsonify({'status': 'error', 'message': f'Could not render the test receipt: {exc}'}), 400
 
+    # SELECTION RULE (retail-hardware-viewports), implemented exactly here:
+    # a non-empty `host` wins outright and uses the network transport, on
+    # EVERY platform -- no `sys.platform` check at all, because
+    # `send_to_network` has none (see its own docstring). Only when `host`
+    # is empty does this fall back to the pre-existing Windows-spooler path
+    # below, completely unchanged, including its own implicit platform
+    # check: `send_raw` itself raises `EscPosTransportError` via
+    # `_require_windows()` on a non-Windows host, caught the same way any
+    # other spooler failure is caught right below.
+    if host:
+        try:
+            escpos_transport.send_to_network(host, port, payload)
+        except escpos_transport.EscPosTransportError as exc:
+            return jsonify({'status': 'error', 'message': str(exc)}), 400
+        except Exception as exc:
+            return jsonify({'status': 'error', 'message': f'Unexpected printer error: {exc}'}), 500
+        return jsonify({'status': 'success', 'data': {
+            'sent': True, 'bytes': len(payload), 'printer': f'{host}:{port}',
+        }})
+
     if printer_name:
         try:
             escpos_transport.send_raw(printer_name, payload)
@@ -9938,7 +9979,7 @@ def printer_test():
             'sent': True, 'bytes': len(payload), 'printer': printer_name,
         }})
 
-    # No printer named -- write the same bytes to this install's app-data
+    # Neither a host nor a spooler name -- write the same bytes to this install's app-data
     # directory instead of failing. `os.path.dirname(DATABASE_DIR)` is this
     # file's own existing "app-data root" resolution (see
     # `require_license_capability = make_capability_guard(os.path.dirname(
@@ -10016,12 +10057,25 @@ def printer_kick():
     collection. `escpos_receipt` (a pure byte layer, no ctypes) is imported
     locally too, purely so this task's entire diff to this file stays the
     two new routes, matching `printer_test`'s own stated reasoning.
+
+    (retail-hardware-viewports) A `host` (optional `port`, default 9100) in
+    the request body selects a LAN/network printer over `send_to_network`
+    instead of the Windows spooler, on every platform -- see the SELECTION
+    RULE comment at the point this function's body branches on it, below.
     """
     from core.retail import escpos_receipt
 
     data = request.json or {}
     sale_id = data.get('sale_id')
     printer_name = (data.get('printer') or '').strip()
+    # (retail-hardware-viewports) `host`/`port` name a LAN/network printer
+    # instead of a Windows spooler name -- see the SELECTION RULE comment
+    # below, at the point this function actually branches on it, matching
+    # printer_test's identical pair of fields above.
+    host = (data.get('host') or '').strip()
+    port = data.get('port')
+    if port in (None, ''):
+        port = 9100
 
     cid = _cid()
     conn = get_retail_conn()
@@ -10040,11 +10094,12 @@ def printer_kick():
         if not sale:
             return jsonify({'status': 'error', 'message': 'Sale not found.'}), 404
 
-        if not printer_name:
-            # No ESC/POS printer configured on this device -- the ordinary
-            # case for most installs. Not an error: see this function's own
-            # docstring on why a checkout must never surface a failure toast
-            # for a drawer the shop does not own.
+        if not printer_name and not host:
+            # Neither a Windows spooler name NOR a network host configured
+            # on this device -- the ordinary case for most installs. Not an
+            # error: see this function's own docstring on why a checkout
+            # must never surface a failure toast for a drawer the shop does
+            # not own.
             return jsonify({'status': 'success', 'data': {
                 'kicked': False,
                 'reason': 'No ESC/POS printer is configured on this device.',
@@ -10066,33 +10121,56 @@ def printer_kick():
                 'reason': f"Sale #{sale_id} was paid by {payment_method!r}, not cash -- drawer not opened.",
             }})
 
-        import sys
-        if sys.platform != 'win32':
-            # Mirrors printer_devices' identical check above verbatim -- see
-            # that route's docstring for why this is checked BEFORE
-            # `escpos_transport` is ever imported.
-            return jsonify({'status': 'success', 'data': {
-                'kicked': False,
-                'reason': (
-                    f"Hardware receipt printing needs the Windows print spooler; "
-                    f"this install is running on {sys.platform!r}."
-                ),
-            }})
+        # SELECTION RULE (retail-hardware-viewports), implemented exactly
+        # here, matching printer_test's identical rule above: a non-empty
+        # `host` wins outright and uses the network transport, on EVERY
+        # platform -- no `sys.platform` check at all, because
+        # `send_to_network` has none. Only when `host` is empty does this
+        # fall back to the pre-existing Windows-spooler path, completely
+        # unchanged, `sys.platform` check included.
+        if host:
+            from core.retail import escpos_transport
+            try:
+                # ONLY the drawer pulse -- never `render_receipt`. A kick
+                # must not spit paper; see this function's own docstring and
+                # escpos_receipt.py's module docstring for why the sale
+                # path's receipt is a separate, untouched decision.
+                escpos_transport.send_to_network(host, port, escpos_receipt.drawer_kick())
+            except escpos_transport.EscPosTransportError as exc:
+                # The drawer failing must never look like the sale failing --
+                # same non-error shape as every refusal above.
+                return jsonify({'status': 'success', 'data': {'kicked': False, 'reason': str(exc)}})
+        else:
+            import sys
+            if sys.platform != 'win32':
+                # Mirrors printer_devices' identical check above verbatim --
+                # see that route's docstring for why this is checked BEFORE
+                # `escpos_transport` is ever imported.
+                return jsonify({'status': 'success', 'data': {
+                    'kicked': False,
+                    'reason': (
+                        f"Hardware receipt printing needs the Windows print spooler; "
+                        f"this install is running on {sys.platform!r}."
+                    ),
+                }})
 
-        from core.retail import escpos_transport
-        try:
-            # ONLY the drawer pulse -- never `render_receipt`. A kick must
-            # not spit paper; see this function's own docstring and
-            # escpos_receipt.py's module docstring for why the sale path's
-            # receipt is a separate, untouched decision from this one.
-            escpos_transport.send_raw(printer_name, escpos_receipt.drawer_kick())
-        except escpos_transport.EscPosTransportError as exc:
-            # The drawer failing must never look like the sale failing --
-            # the sale named by `sale_id` is already committed by the time
-            # this route runs. Same non-error shape as every refusal above.
-            return jsonify({'status': 'success', 'data': {'kicked': False, 'reason': str(exc)}})
+            from core.retail import escpos_transport
+            try:
+                # ONLY the drawer pulse -- never `render_receipt`. A kick must
+                # not spit paper; see this function's own docstring and
+                # escpos_receipt.py's module docstring for why the sale path's
+                # receipt is a separate, untouched decision from this one.
+                escpos_transport.send_raw(printer_name, escpos_receipt.drawer_kick())
+            except escpos_transport.EscPosTransportError as exc:
+                # The drawer failing must never look like the sale failing --
+                # the sale named by `sale_id` is already committed by the time
+                # this route runs. Same non-error shape as every refusal above.
+                return jsonify({'status': 'success', 'data': {'kicked': False, 'reason': str(exc)}})
 
-        _audit(conn, 'CASH_DRAWER_KICKED', 'sale', sale_id, f'printer={printer_name!r}')
+        _audit(
+            conn, 'CASH_DRAWER_KICKED', 'sale', sale_id,
+            f'printer={printer_name!r}' if printer_name else f'network={host}:{port}',
+        )
         conn.commit()
         return jsonify({'status': 'success', 'data': {'kicked': True}})
     finally:

@@ -4406,10 +4406,20 @@ const RetailSystem = {
         // source of truth, not this client) -- this call only asks, and only
         // when the shop opted in AND a printer is actually configured, so an
         // install that never touches this setting sends nothing extra at all.
-        if (this._printerCfg().autoKick && this._printerCfg().printer) {
+        // retail-hardware-viewports: a network printer (`host` set) is just
+        // as "configured" as a Windows spooler name -- the server's own
+        // SELECTION RULE (printer_kick's docstring in retail_api.py) treats
+        // `host` as taking priority over `printer` whenever it is present.
+        // So "is a printer configured" here means EITHER field, not
+        // `printer` alone, or a shop that only set up a network printer
+        // would never fire this best-effort kick at all.
+        const _kickCfg = this._printerCfg();
+        if (_kickCfg.autoKick && (_kickCfg.printer || _kickCfg.host)) {
           this._post('/api/sub/retail/printer/kick', {
             sale_id: data.data.id,
-            printer: this._printerCfg().printer,
+            printer: _kickCfg.printer,
+            host: _kickCfg.host,
+            port: _kickCfg.port,
           }).catch(e => console.error('Cash-drawer kick failed:', e));
         }
       } else {
@@ -4511,8 +4521,14 @@ const RetailSystem = {
     // Defaults to `false` -- a new feature costs nothing to an install that
     // never opens this settings screen, matching this codebase's own rule
     // for shipping anything new off by default.
-    try { return Object.assign({ paperWidth: '80mm', autoKick: false }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
-    catch (e) { return { paperWidth: '80mm', autoKick: false }; }
+    // `host`/`port` (retail-hardware-viewports): a LAN/network ESC/POS
+    // printer, which the server prefers over `printer` (the Windows spooler
+    // name) whenever `host` is non-empty -- see printer_test/printer_kick's
+    // own SELECTION RULE docstrings in retail_api.py. `port` defaults to
+    // 9100, the de facto standard nearly every network receipt printer
+    // listens on, matching escpos_transport.send_to_network's own default.
+    try { return Object.assign({ paperWidth: '80mm', autoKick: false, host: '', port: 9100 }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
+    catch (e) { return { paperWidth: '80mm', autoKick: false, host: '', port: 9100 }; }
   },
   savePrinterCfg(cfg) { try { localStorage.setItem('aura_printer_cfg', JSON.stringify(cfg)); } catch (e) {} },
 
@@ -10430,6 +10446,27 @@ const RetailSystem = {
             <p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">
               ${this._esc(t('Optional -- for a thermal printer that understands ESC/POS commands directly. This is what opens a cash drawer. Leave unset to save a test file instead of printing.'))}
             </p>
+            <!-- Network (LAN) ESC/POS printer (retail-hardware-viewports).
+                 The SERVER prefers Host over the Windows Printer Device
+                 above whenever Host is non-empty -- see printer_test/
+                 printer_kick's own SELECTION RULE docstrings in
+                 retail_api.py. This is the entire point of this feature: a
+                 plain network receipt printer has no Windows driver to
+                 install and was previously unreachable from this screen on
+                 any platform. -->
+            <div class="ret-field-row" style="margin-top:10px">
+              <div class="ret-field">
+                <label>${this._esc(t('Network Printer Host'))}</label>
+                <input type="text" id="pr-host" placeholder="192.168.1.50" value="${this._esc(this._printerCfg().host || '')}" />
+              </div>
+              <div class="ret-field">
+                <label>${this._esc(t('Network Printer Port'))}</label>
+                <input type="number" id="pr-port" min="1" max="65535" value="${this._esc(String(this._printerCfg().port || 9100))}" />
+              </div>
+            </div>
+            <p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">
+              ${this._esc(t('A network printer is reached by its IP address on port 9100. Leave Host blank to use the Windows printer picked above instead.'))}
+            </p>
             <div id="pr-device-note" style="display:none;margin-top:8px;background:var(--state-warning-surface,var(--state-info-surface));border:1px solid var(--state-warning-border,var(--state-info-border));border-radius:8px;padding:8px 10px;color:var(--text-secondary);font-size:11px"></div>
             <div style="display:flex;gap:10px;margin-top:10px">
               <button class="ret-btn ret-btn-ghost" style="flex:1" id="pr-hw-test-btn" onclick="RetailSystem._testEscPosPrint(false)">${this._esc(t('Test Hardware Print'))}</button>
@@ -10538,7 +10575,16 @@ const RetailSystem = {
     // this SAME blob (see _printerCfg's own comment) -- same reasoning as
     // `device` above, or a Save here would silently turn it back off.
     const autoKick = !!document.getElementById('pr-auto-kick')?.checked;
-    this.savePrinterCfg({ paperWidth: width, printer: device, autoKick });
+    // retail-hardware-viewports: the network printer host/port live in this
+    // SAME blob (see _printerCfg's own comment) -- same reasoning as
+    // `device`/`autoKick` above, or a Save here would silently erase them.
+    // An out-of-range or non-numeric port falls back to 9100 rather than
+    // saving garbage a later kick/test would just fail on with a confusing
+    // error -- matches escpos_transport.send_to_network's own default.
+    const host = (document.getElementById('pr-host')?.value || '').trim();
+    const portRaw = +(document.getElementById('pr-port')?.value);
+    const port = (Number.isInteger(portRaw) && portRaw >= 1 && portRaw <= 65535) ? portRaw : 9100;
+    this.savePrinterCfg({ paperWidth: width, printer: device, autoKick, host, port });
     SubsystemApp.showToast('Printer settings saved', 'success');
   },
 
@@ -10601,8 +10647,18 @@ const RetailSystem = {
     try {
       const printerName = document.getElementById('pr-device')?.value || '';
       const paperWidth = document.getElementById('pr-width')?.value === '58mm' ? 32 : 42;
+      // retail-hardware-viewports: read straight off the live Host/Port
+      // fields, not the saved cfg, so a value typed but not yet saved can
+      // still be tested before committing it (matches `printerName` above,
+      // which reads the live #pr-device select the same way). The server
+      // prefers a non-empty `host` over `printer` -- see printer_test's own
+      // SELECTION RULE docstring in retail_api.py.
+      const host = (document.getElementById('pr-host')?.value || '').trim();
+      const port = +(document.getElementById('pr-port')?.value) || 9100;
       const resp = await this._post('/api/sub/retail/printer/test', {
         printer: printerName || null,
+        host: host || null,
+        port,
         kick: !!kick,
         paper_width: paperWidth,
       });

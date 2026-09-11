@@ -1,4 +1,28 @@
-"""Aura Retail -- Windows RAW print-spooler transport for ESC/POS bytes.
+"""Aura Retail -- ESC/POS byte transports: Windows RAW print-spooler AND
+LAN/network (TCP "raw"/JetDirect) receipt printing.
+
+TWO TRANSPORTS IN THIS MODULE (retail-hardware-viewports)
+
+  * `send_raw()` / `list_printers()` -- Windows print-spooler RAW mode via
+    ctypes against `winspool.drv`. WINDOWS ONLY, every ctypes access gated
+    behind `_require_windows()` (see below). This is the only way to reach
+    a printer that was installed with its own Windows driver.
+  * `send_to_network()` -- a plain TCP socket to a LAN ESC/POS printer's
+    "raw"/JetDirect port (conventionally 9100). PLATFORM-INDEPENDENT: it
+    carries NO `_require_windows()` guard, because `socket` is stdlib on
+    every platform this backend runs on (the Windows desktop app, and the
+    Android app's own embedded Python backend). This closes a real gap:
+    before this function existed, a plain LAN/network receipt printer --
+    extremely common and cheap, and the exact kind of hardware that has no
+    Windows driver to install -- could not be reached by this backend at
+    all, and `printer_kick`/`printer_test` (retail_api.py) simply reported
+    "kicked: False" / "this install is running on <platform>" on any
+    non-Windows host.
+
+Everything under "WHY CTYPES DIRECT..." through the end of `_winspool()`
+describes ONLY the Windows-spooler half above. `send_to_network()` lives at
+the bottom of this file, after `send_to_file()`, and needs none of that
+ctypes machinery -- see its own docstring for its reasoning.
 
 WHY CTYPES DIRECT AGAINST winspool.drv, NOT A LIBRARY
 
@@ -42,6 +66,17 @@ structures (DOCINFO, PRINTER_INFO_4) are simpler than DATA_BLOB.
 from __future__ import annotations
 
 import sys
+
+# `socket` is stdlib on every platform this backend runs on (Windows,
+# Linux/macOS, and Android's embedded Python backend) -- unlike
+# `ctypes.windll` below, merely IMPORTING it never raises on a non-Windows
+# platform. So, unlike every winspool.drv access in this module, it does
+# NOT need the deferred, function-body-only import treatment this module's
+# docstring describes in "WHY IMPORT MUST NEVER TOUCH ctypes.windll" --
+# there is nothing platform-specific here to guard against. Do not "fix"
+# this into a local import inside `send_to_network()` by pattern-matching
+# this file's other functions.
+import socket
 
 
 class EscPosTransportError(RuntimeError):
@@ -243,3 +278,91 @@ def send_to_file(path, payload: bytes) -> None:
         raise TypeError(f"payload must be bytes, got {type(payload).__name__}")
     with open(path, "wb") as fh:
         fh.write(bytes(payload))
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Network (LAN) transport -- platform-independent, no ctypes at all
+# (retail-hardware-viewports) -- see module docstring's "TWO TRANSPORTS"
+# section for why this half of the file carries no `_require_windows()`.
+# ═════════════════════════════════════════════════════════════════════════
+
+# Named constants, not magic numbers buried in the call below, because WHY
+# each exists matters and needs to survive a future edit:
+#   - CONNECT timeout: a printer that is powered off, wrong-IP'd, or behind
+#     a firewall that silently drops SYNs must not hang this call forever.
+#   - SEND timeout, set via settimeout() AFTER connect succeeds, covers the
+#     other half of the same failure: a printer that ACCEPTS the TCP
+#     connection but then never drains its receive buffer (paper out, cover
+#     open, a jam) would otherwise block `sendall()` forever too. This
+#     function runs synchronously right after a completed sale (see
+#     printer_kick in retail_api.py) -- an unbounded socket call here would
+#     freeze the till, not just the print.
+_NETWORK_CONNECT_TIMEOUT_SECONDS = 5.0
+_NETWORK_SEND_TIMEOUT_SECONDS = 5.0
+_NETWORK_MIN_PORT = 1
+_NETWORK_MAX_PORT = 65535
+
+
+def send_to_network(
+    host: str,
+    port: int,
+    payload: bytes,
+    *,
+    connect_timeout: float = _NETWORK_CONNECT_TIMEOUT_SECONDS,
+) -> None:
+    """Sends `payload` to a LAN ESC/POS printer over a plain TCP "raw" (a.k.a.
+    JetDirect) socket -- the network equivalent of `send_raw` above, and the
+    half of this module that works on every platform, not just Windows with
+    a driver installed. Port 9100 is the de facto standard nearly every
+    network receipt printer listens on for this (the caller supplies it
+    explicitly here; this function has no opinion on the default).
+
+    NO RETRY, ON PURPOSE. A half-written receipt reprinted automatically is
+    worse than a failed one the cashier retries deliberately -- and if
+    `payload` happens to carry drawer-kick bytes (see
+    `escpos_receipt.drawer_kick()`), a silent automatic retry could pop the
+    till twice for one failure. A caller that wants a retry must decide that
+    itself, explicitly.
+
+    Raises `EscPosTransportError` (never a bare `OSError`/`socket.timeout`/
+    `ConnectionRefusedError`) for: an invalid host/port, a connect that times
+    out or is refused, or a send that fails or times out -- naming
+    `host:port` and the underlying error in every case, matching how
+    `send_raw` above reports failure (printer name + GetLastError).
+    """
+    if not isinstance(payload, (bytes, bytearray)):
+        raise TypeError(f"payload must be bytes, got {type(payload).__name__}")
+    payload = bytes(payload)
+
+    # Validate BEFORE ever touching a socket -- a typo'd setting (a blank
+    # host, a port copy-pasted with an extra digit) must fail with a clear,
+    # specific message, not a confusing low-level socket error several
+    # layers removed from the actual mistake.
+    if not isinstance(host, str) or not host.strip():
+        raise EscPosTransportError(
+            f"Network printer host must be a non-empty string, got {host!r}."
+        )
+    if isinstance(port, bool) or not isinstance(port, int):
+        raise EscPosTransportError(
+            f"Network printer port must be an integer, got {type(port).__name__} ({port!r})."
+        )
+    if not (_NETWORK_MIN_PORT <= port <= _NETWORK_MAX_PORT):
+        raise EscPosTransportError(
+            f"Network printer port {port} is out of range "
+            f"({_NETWORK_MIN_PORT}-{_NETWORK_MAX_PORT})."
+        )
+
+    try:
+        # `with` guarantees the socket closes on every exit path, including
+        # a `sendall` failure partway through -- same "never leak the
+        # resource" discipline `send_raw` above applies to its spooler
+        # handle via nested `finally` blocks.
+        with socket.create_connection((host, port), timeout=connect_timeout) as sock:
+            sock.settimeout(_NETWORK_SEND_TIMEOUT_SECONDS)
+            sock.sendall(payload)
+    except OSError as exc:
+        # Covers socket.timeout and ConnectionRefusedError too -- both are
+        # OSError subclasses in this Python version, exactly like `send_raw`
+        # funnels every winspool.drv failure into one named exception type
+        # so a caller never has to guess between exception classes.
+        raise EscPosTransportError(f"Network printer {host}:{port} failed: {exc}") from exc
