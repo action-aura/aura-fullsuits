@@ -221,6 +221,10 @@ const RetailSystem = {
       case 'promotions':return this._renderPromotions(c);
       case 'suppliers': return this._renderSuppliers(c);
       case 'purchases': return this._renderPurchases(c);
+      // Retail schema v28: inter-branch stock transfers. See app-shell.js's
+      // nav entry comment and the STOCK TRANSFERS section below for the
+      // capability reasoning.
+      case 'transfers': return this._renderTransfers(c);
       // ci-hardening-w0.3 continuation ("the doorway"): see app-shell.js's
       // nav entry comment and _renderBranches below for the full story --
       // create_branch (retail_api.py) has been complete and gated since
@@ -768,6 +772,120 @@ const RetailSystem = {
   // failure paths used to build this string independently, which is how the
   // three of them would have drifted the moment any of them was translated.
   _checkoutLabel(total) { return `${t('Charge')} — ${this._fmt(total)}`; },
+
+  // ══ CUSTOMER-FACING DISPLAY (retail-hardware-viewports) ═══════════════════
+  //
+  // A second screen turned toward the shopper (customer-display.html, opened
+  // as its own window on a second monitor). No backend route: the cart
+  // already lives in this document, so state is pushed to that window over a
+  // same-origin BroadcastChannel -- built in, no dependency, no server round
+  // trip per scan.
+  //
+  // MONEY DISCIPLINE: every figure this sends is the STRING this._fmt()
+  // already produced (see the money-helpers block above), never a raw number
+  // and never the currency symbol/decimals themselves. customer-display.js
+  // has no formatter of its own on purpose -- a second implementation is a
+  // second place for a shop's currency (JOD's 3 decimals, or any other) to
+  // drift from what the till is actually about to charge. It only ever
+  // inserts the text this file already computed.
+  _CUSTOMER_DISPLAY_CHANNEL: 'aura_retail_customer_display',
+
+  // Lazy + cached: constructed the first time anything needs it (a cart
+  // recalc, a POS mount, or the "Customer Display" button itself), and
+  // memoised as `null` on failure so a browser with no BroadcastChannel (or
+  // one that throws constructing it) is only probed once, not on every
+  // keystroke. `undefined` (unset) is distinct from `null` (checked, absent)
+  // so the lazy check below only ever runs once.
+  _customerDisplayChannel() {
+    if (this._customerDisplayChannelInstance !== undefined) return this._customerDisplayChannelInstance;
+    let ch = null;
+    try {
+      ch = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel(this._CUSTOMER_DISPLAY_CHANNEL) : null;
+    } catch (e) {
+      ch = null;   // unsupported/hardened browser -- the display's own fallback is the idle screen, not an error here
+    }
+    if (ch) {
+      // The display announces itself on load (and keeps re-announcing until
+      // it hears back -- see customer-display.js) so a window opened BEFORE
+      // or AFTER this cart had activity always ends up in sync: a
+      // BroadcastChannel message posted with no listener yet subscribed is
+      // simply lost, never queued, so the till answering "hello" with the
+      // current state is what actually closes that race.
+      ch.onmessage = (ev) => {
+        if (ev && ev.data && ev.data.type === 'display_ready') this._broadcastDisplayState();
+      };
+    }
+    this._customerDisplayChannelInstance = ch;
+    return ch;
+  },
+
+  _postToCustomerDisplay(msg) {
+    const ch = this._customerDisplayChannel();
+    if (!ch) return;
+    try { ch.postMessage(msg); } catch (e) { /* channel closed (display window gone) -- nothing to report to */ }
+  },
+
+  // Cart -> display payload. See the module comment: every money field below
+  // is this._fmt()'s STRING output, never a number.
+  _customerDisplayCartPayload() {
+    const totals = this._currentTotals || {};
+    return {
+      type: 'cart',
+      items: (this._cart || []).map(i => ({
+        name: i.name,
+        quantity: i.quantity,
+        unitPrice: this._fmt(i.unit_price),
+        lineTotal: this._fmt(i.line_total),
+      })),
+      subtotal: this._fmt(totals.subtotal || 0),
+      // null (not "$0.00") when there is no discount, so the display can hide
+      // the row entirely -- the same "own row, own visibility" shape
+      // #pos-loyalty-value-row and #pos-change-row already use.
+      discount: totals.discount > 0 ? this._fmt(totals.discount) : null,
+      tax: this._fmt(totals.tax || 0),
+      total: this._fmt(totals.total || 0),
+      // THE CASH TRAP, third echo of it (create_sale's heading, _recalc's
+      // comment, now here): points are a TENDER, not a discount. `total` is
+      // the invoice figure and is never reduced by a redemption; `amountDue`
+      // is what still has to be handed over. A customer-facing screen that
+      // shows only `total` while the till charges `amountDue` tells the
+      // shopper the wrong number at the exact moment they are reaching for
+      // their money.
+      loyalty: totals.loyaltyValue > 0 ? this._fmt(totals.loyaltyValue) : null,
+      // null when nothing was redeemed: with no points applied `amountDue`
+      // equals `total`, and a second identical figure under the total band
+      // reads as a second charge. The display hides the band on null, so this
+      // one decision lives here rather than being re-derived over there from
+      // two formatted strings.
+      amountDue: totals.loyaltyValue > 0 ? this._fmt(totals.amountDue || 0) : null,
+    };
+  },
+
+  _broadcastDisplayState() {
+    this._postToCustomerDisplay(this._customerDisplayCartPayload());
+  },
+
+  // Opens the display as its own window (second monitor) and pushes the
+  // current cart immediately, so a freshly opened -- or already-open and
+  // merely refocused -- display is never left showing stale data until the
+  // next scan. `/static/...`, matching how this file and app-shell.js already
+  // navigate to the other standalone pages (licensing.html, whatsapp.html):
+  // this document is served from '/', not '/static/', so a relative URL here
+  // would resolve to the wrong path.
+  //
+  // A NAMED target (not "_blank") so a cashier clicking this twice refocuses
+  // the one display window instead of spawning a second one.
+  _openCustomerDisplay() {
+    try {
+      const win = window.open('/static/customer-display.html', 'auraCustomerDisplay', 'width=1024,height=768');
+      if (win) { try { win.focus(); } catch (e) {} }
+    } catch (e) { /* popup blocked or unsupported -- nothing more to do client-side */ }
+    this._broadcastDisplayState();
+    // This button lives in .pos-cat-row, which already swallows its own
+    // mousedown (see _keepScanFocus below) -- this is belt-and-braces for
+    // whatever focus window.open() itself may have touched.
+    this._refocusScan(true);
+  },
 
   // Today's date, in the language the operator is actually using.
   //
@@ -2352,6 +2470,14 @@ const RetailSystem = {
             </div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm pos-held-btn" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
               title="${this._esc(t("Browse and resume sales you've held"))}"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>)</button>
+            <!-- retail-hardware-viewports: opens customer-display.html on a
+                 second monitor (see _openCustomerDisplay). Lives in THIS row
+                 (not its own toolbar) specifically so it inherits
+                 .pos-cat-row's existing onmousedown="_keepScanFocus(event)" --
+                 the same guard that already keeps the Held button above from
+                 blurring #pos-search, reused rather than re-implemented. -->
+            <button class="ret-btn ret-btn-ghost ret-btn-sm pos-display-btn" id="pos-display-btn" onclick="RetailSystem._openCustomerDisplay()"
+              title="${this._esc(t('Open the customer-facing display'))}"><span aria-hidden="true">${this._icon('laptop', 16, '🖥️')}</span> <span>${t('Customer Display')}</span></button>
           </div>
           <div class="pos-product-grid" id="pos-product-grid" onmousedown="RetailSystem._keepScanFocus(event)">
             <div style="grid-column:1/-1;text-align:center;padding:50px;color:var(--text-dim)">${t('Loading…')}</div>
@@ -2473,6 +2599,13 @@ const RetailSystem = {
     // _loadPOSData() below refreshes it anyway.
     this._loyaltyBalance = 0;
     this._loyaltyRedeemPoints = 0;
+    // A customer display left open across a POS remount (navigating away and
+    // back, or a page reload) must reset to idle with the till rather than
+    // keep showing a previous customer's finished sale -- this both opens the
+    // channel (so the display's "hello" retry, see customer-display.js, is
+    // answered even if the cashier never touches the button below) and pushes
+    // the now-empty cart immediately.
+    this._broadcastDisplayState();
     this._loadPOSData();
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
     // Put the caret where the next barcode is going to land, so the very first
@@ -3480,6 +3613,10 @@ const RetailSystem = {
       checkoutBtn.disabled = false;   // re-enable after a sale so the next receipt can be charged
     }
     this._calcChange();
+    // Every cart/discount/loyalty edit funnels through this one recompute, so
+    // this is the single place that keeps the customer-facing display (if one
+    // is open) in lockstep with the till -- see _broadcastDisplayState above.
+    this._broadcastDisplayState();
   },
 
   // Pure calc: how many points the cashier's CURRENT #pos-loyalty-redeem
@@ -4224,6 +4361,20 @@ const RetailSystem = {
     try {
       const data = await this._post('/api/sub/retail/sales', payload);
       if (data.status === 'success') {
+        // BEFORE _clearCart(): that call's own _renderCart() -> _recalc()
+        // will immediately broadcast an EMPTY 'cart' state, which
+        // customer-display.js deliberately ignores while a 'sale_complete'
+        // screen is showing (see its own comment) -- but only if
+        // 'sale_complete' reaches it FIRST. `change`/`amount_paid` are the
+        // server's own authoritative response fields (see _showReceipt's
+        // docstring on why every figure here reads from `data.data`, never
+        // from `payload` or `this._cart`), formatted the same way as
+        // everywhere else on this screen.
+        this._postToCustomerDisplay({
+          type: 'sale_complete',
+          amountPaid: this._fmt(data.data.amount_paid),
+          change: data.data.change > 0 ? this._fmt(data.data.change) : null,
+        });
         // Reset the cart/button FIRST so the till is ready for the next sale even
         // if the receipt modal hiccups — then show the receipt.
         this._clearCart();
@@ -6135,6 +6286,473 @@ const RetailSystem = {
       document.body.appendChild(overlay);
       overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
     } catch(e) {}
+  },
+
+  // ── STOCK TRANSFERS (launch-readiness "inter-branch transfers", schema v28) ─
+  // retail_api.py's own section header on the six routes below carries the
+  // full design reasoning (two-phase pending -> in_transit -> received,
+  // OVERSELLING AT SEND refused hard like adjust_stock rather than relaxed
+  // like create_sale, NULL vs 0 on quantity_received). This screen is the
+  // doorway app-shell.js's nav entry comment promised: all six routes have
+  // been complete and gated since that migration landed, with nothing in
+  // this file ever calling them until now.
+  //
+  // `capability: 'retail.stock.adjust'` on the nav entry matches
+  // CAP_STOCK_ADJUST on every mutating route below exactly (create/send/
+  // receive/cancel) -- moving stock between two branches is a stock
+  // adjustment at BOTH ends, the same authority adjust_stock already
+  // requires. list/get carry no capability of their own, matching Purchase
+  // Orders' identical list/get pair immediately above.
+  async _renderTransfers(c) {
+    this._injectStyles();
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Stock Transfers')}</h2>
+        <button class="sub-btn-primary" onclick="RetailSystem._openCreateTransfer()">+ ${t('New Transfer')}</button>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="transfer-table">
+            <thead><tr><th>${t('Transfer')}</th><th>${t('From')}</th><th>${t('To')}</th><th>${t('Status')}</th><th>${t('Created')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadTransfers();
+  },
+
+  // Raw database status token -> translated label. Never t(xfer.status)
+  // directly: the token itself ('in_transit') is snake_case storage
+  // vocabulary, not something to show a cashier, the same reasoning
+  // _CONTACT_SOURCE_META above gives for not translating a raw source rung.
+  _TRANSFER_STATUS_LABEL: {
+    pending: 'Pending', in_transit: 'In Transit', received: 'Received', cancelled: 'Cancelled',
+  },
+
+  async _loadTransfers() {
+    try {
+      const data = (await this._get('/api/sub/retail/stock-transfers')).data || [];
+      const tbody = document.querySelector('#transfer-table tbody');
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('No transfers yet.')}</td></tr>`;
+        return;
+      }
+      // DECISION: no Lines column. list_stock_transfers does not join
+      // stock_transfer_items (see that route's own comment on why -- it
+      // matches list_purchase_orders' disclosure tier), so there is no line
+      // count to show here without inventing one the API never returned.
+      // The table is 6 columns, not 7: Transfer / From / To / Status /
+      // Created / Actions.
+      const statusColor = { pending:'yellow', in_transit:'blue', received:'green', cancelled:'red' };
+      tbody.innerHTML = data.map(xfer => {
+        const label = t(this._TRANSFER_STATUS_LABEL[xfer.status] || xfer.status);
+        // Actions differ by status: a transfer that has already shipped has
+        // no Send button left (nothing left to send), and only a still-
+        // pending transfer can be cancelled -- cancel_stock_transfer
+        // refuses once stock has moved, because unwinding an in-flight or
+        // completed transfer needs a new transfer back the other way, not
+        // a status flip.
+        let actions = `<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._viewTransfer('${this._esc(xfer.id)}')">${t('View')}</button>`;
+        if (xfer.status === 'pending') {
+          actions += `<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._sendTransfer('${this._esc(xfer.id)}')">${t('Send')}</button>`;
+          actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelTransfer('${this._esc(xfer.id)}')">${t('Cancel')}</button>`;
+        } else if (xfer.status === 'in_transit') {
+          actions += `<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openReceiveTransfer('${this._esc(xfer.id)}')">${t('Receive')}</button>`;
+        }
+        return `<tr>
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi((xfer.id||'').slice(0,8), xfer.id)}</td>
+          <td style="font-weight:600">${this._esc(xfer.source_branch_name||'—')}</td>
+          <td style="font-weight:600">${this._esc(xfer.destination_branch_name||'—')}</td>
+          <td>${this._badge(label, statusColor[xfer.status]||'blue')}</td>
+          <td style="color:var(--text-muted)">${xfer.created_at||'—'}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }).join('');
+    } catch(e) { console.error(e); }
+  },
+
+  // The full uuid is unreadable in a table -- a shop identifies a transfer
+  // by its branch pair and date, not by key -- so only the first 8
+  // characters are shown, monospace, the same treatment the PO number gets
+  // above. _bdi's second argument keeps the full id as a hover title, so
+  // the real value is one hover away rather than gone.
+  async _openCreateTransfer() {
+    // Same routes/shapes _renderBranches and _openCreatePO already load
+    // from -- see those sections for the response shape.
+    const [brs, prods] = await Promise.all([
+      this._get('/api/sub/retail/branches'),
+      this._get('/api/sub/retail/products'),
+    ]).catch(() => [{data:[]},{data:[]}]);
+    const branches = brs.data || [];
+    const products = prods.data || [];
+    // create_stock_transfer refuses (400) a transfer with fewer than two
+    // distinct branches to move between. Caught here, before the modal even
+    // opens, rather than letting the round trip fail: an empty destination
+    // <select> is a dead end the operator cannot diagnose, and the real fix
+    // (add a second branch) is a different screen entirely.
+    if (branches.length < 2) {
+      SubsystemApp.showToast(
+        t('A transfer needs at least two branches. Add one on the Branches screen first.'), 'error');
+      return;
+    }
+    this._transferItems = [];
+
+    const branchOpts = branches.map(b =>
+      `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
+    const prodOpts = products.map(p =>
+      `<option value="${this._esc(p.id)}">${this._esc(p.name)} (${this._esc(p.sku)}) — ${t('Stock')}: ${this._esc(p.total_stock)}</option>`).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-transfer-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal ret-modal-wide">
+        <h3>${this._icon('repeat', 18, '🔁')} ${t('New Transfer')}</h3>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="ret-field" style="margin:0"><label>${t('From')} *</label>
+            <select id="tr-source"><option value="">${t('Select branch…')}</option>${branchOpts}</select></div>
+          <div class="ret-field" style="margin:0"><label>${t('To')} *</label>
+            <select id="tr-dest"><option value="">${t('Select branch…')}</option>${branchOpts}</select></div>
+        </div>
+        <div style="margin:16px 0 8px;color:var(--text-primary);font-weight:600">${t('Items')}</div>
+        <div id="tr-items"></div>
+        <div style="margin:12px 0">
+          <div class="ret-field-row" style="grid-template-columns:3fr 1fr auto;gap:8px;align-items:end">
+            <div class="ret-field" style="margin:0"><label>${t('Product')}</label>
+              <select id="tr-item-prod"><option value="">${t('Select product…')}</option>${prodOpts}</select></div>
+            <div class="ret-field" style="margin:0"><label>${t('Qty')}</label>
+              <input type="number" id="tr-item-qty" value="1" min="1" /></div>
+            <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addTransferItem()">+ ${t('Add')}</button>
+          </div>
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-transfer-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" onclick="RetailSystem._createTransfer()">${t('Create Transfer')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+  },
+
+  _addTransferItem() {
+    const prodSel  = document.getElementById('tr-item-prod');
+    const prodId   = prodSel?.value;
+    const prodName = prodSel?.options[prodSel.selectedIndex]?.text?.split('(')[0]?.trim();
+    const qty      = +document.getElementById('tr-item-qty')?.value || 0;
+    if (!prodId || qty <= 0) {
+      SubsystemApp.showToast(t('Select a product and a quantity greater than zero'), 'error');
+      return;
+    }
+    // The server accepts duplicate product lines in one transfer -- but two
+    // lines for the same product in a hand-built basket is a user slip
+    // (Add clicked twice, or the same product picked again by mistake), not
+    // a deliberate intent, so a repeat pick MERGES into the existing line
+    // instead of creating a second row.
+    const existing = this._transferItems.findIndex(i => i.product_id === prodId);
+    if (existing >= 0) { this._transferItems[existing].quantity += qty; }
+    else { this._transferItems.push({ product_id: prodId, product_name: prodName, quantity: qty }); }
+    this._renderTransferItems();
+    document.getElementById('tr-item-prod').value = '';
+    document.getElementById('tr-item-qty').value  = 1;
+  },
+
+  // Mirrors _renderPOItems above minus cost and line totals -- a transfer
+  // moves QUANTITY between two branches, never money, so there is nothing
+  // here for a unit cost or a line total to mean.
+  _renderTransferItems() {
+    const container = document.getElementById('tr-items');
+    if (!container) return;
+    if (!this._transferItems.length) { container.innerHTML = ''; return; }
+    container.innerHTML = `<table class="ret-table" style="margin-bottom:10px">
+      <thead><tr><th>${t('Product')}</th><th>${t('Qty')}</th><th></th></tr></thead>
+      <tbody>${this._transferItems.map((item,i) => `<tr>
+        <td>${this._esc(item.product_name)}</td>
+        <td><input type="number" value="${item.quantity}" min="1" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
+          oninput="RetailSystem._transferItems[${i}].quantity=+this.value;RetailSystem._renderTransferItems()" /></td>
+        <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._transferItems.splice(${i},1);RetailSystem._renderTransferItems()">✕</button></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  },
+
+  // ERROR HANDLING: _get/_post below resolve to the PARSED BODY on every
+  // response that completes -- even a 400/409 -- and only THROW when the
+  // request itself never completed (a network drop, or the 401 re-auth path
+  // in _fetch). The purchase-order code above treats that throw path as a
+  // bare `catch(e) {}`, which is exactly why a refused Send used to look
+  // like a dead button: nothing told the operator anything happened. Every
+  // method in this section handles both paths -- a `status !== 'success'`
+  // body toasts d.message, and a genuine throw logs and toasts a translated
+  // generic failure -- starting with this one.
+  async _createTransfer() {
+    // These three guards mirror create_stock_transfer's own 400s exactly
+    // (missing/equal branch ids, an empty basket) -- see that route's
+    // docstring. They exist only so the operator is told before a round
+    // trip, not instead of the server's own validation.
+    const src  = document.getElementById('tr-source')?.value;
+    const dest = document.getElementById('tr-dest')?.value;
+    if (!src || !dest) {
+      SubsystemApp.showToast(t('Choose a source and destination branch'), 'error');
+      return;
+    }
+    if (src === dest) {
+      SubsystemApp.showToast(t('Source and destination branch must be different'), 'error');
+      return;
+    }
+    if (!this._transferItems || !this._transferItems.length) {
+      SubsystemApp.showToast(t('Add at least one item'), 'error');
+      return;
+    }
+    try {
+      const d = await this._post('/api/sub/retail/stock-transfers', {
+        source_branch_id: +src,
+        destination_branch_id: +dest,
+        items: this._transferItems.map(i => ({ product_id: i.product_id, quantity: i.quantity })),
+      });
+      if (d.status === 'success') {
+        document.getElementById('ret-transfer-modal')?.remove();
+        SubsystemApp.showToast(t('Transfer created'), 'success');
+        this._loadTransfers();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _sendTransfer(id) {
+    // Stock leaves the source branch the moment this succeeds -- see
+    // send_stock_transfer's own docstring for why there is no unwind route
+    // from this screen: reversing an in-flight transfer means raising a NEW
+    // transfer back the other way, the same way a shipped sale is reversed
+    // through Returns rather than by editing the sale.
+    if (!(await this._confirm({
+      title: t('Send Transfer'),
+      message: t('This moves stock out of the source branch right now and cannot be undone from this screen. To reverse it, create a new transfer in the opposite direction.'),
+      confirmLabel: t('Send'),
+      danger: false,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/stock-transfers/${id}/send`, {});
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Transfer sent'), 'success');
+        this._loadTransfers();
+      } else {
+        // CRITICAL: this is the one refusal an operator cannot self-diagnose
+        // from a generic message. send_stock_transfer's insufficient-stock
+        // 400 names the exact product id and the quantity actually on hand
+        // (its own f-string) -- surfacing anything less specific here would
+        // leave the Send button looking dead with no way to tell why.
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _openReceiveTransfer(id) {
+    try {
+      const resp = (await this._get(`/api/sub/retail/stock-transfers/${id}`)).data || {};
+      const xfer  = resp.transfer || {};
+      const items = resp.items || [];
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.id = 'ret-receive-modal';
+      overlay.innerHTML = `
+        <div class="ret-modal ret-modal-wide">
+          <h3>${this._icon('inbox', 18, '📭')} ${t('Receive Transfer')}</h3>
+          <table class="ret-table">
+            <thead><tr><th>${t('Product')}</th><th>${t('SKU')}</th><th>${t('Sent')}</th><th>${t('Received')}</th></tr></thead>
+            <tbody>${items.map(i => `<tr>
+              <td>${this._esc(i.product_name||'—')}</td>
+              <td style="font-family:monospace;color:var(--text-muted)">${this._esc(i.sku||'—')}</td>
+              <td>${this._esc(i.quantity_sent)}</td>
+              <td>
+                <!-- PREFILLED with the sent quantity, deliberately: everything
+                     arriving exactly as shipped is the overwhelmingly common
+                     case, so the shop only has to edit the exceptions rather
+                     than retype every count from a blank field. This is never
+                     a silent rubber stamp -- _recalcReceive's amber highlight
+                     and the footer summary below exist specifically so a
+                     changed value (a real shortage or overage) is visible
+                     before Confirm is pressed, not discovered on a stock
+                     report later. data-sent carries the original figure so
+                     _recalcReceive never needs a second lookup. -->
+                <input type="number" min="0" step="any" value="${i.quantity_sent}"
+                  data-item-id="${this._esc(i.id)}" data-sent="${i.quantity_sent}"
+                  style="width:90px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
+                  oninput="RetailSystem._recalcReceive()" />
+              </td>
+            </tr>`).join('')}</tbody>
+          </table>
+          <p id="tr-receive-summary" style="margin:14px 0 0;color:var(--text-muted);font-size:13px"></p>
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-receive-modal').remove()">${t('Cancel')}</button>
+            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._confirmReceiveTransfer('${this._esc(id)}')">${t('Confirm')}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+      this._recalcReceive();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  _recalcReceive() {
+    const inputs = document.querySelectorAll('#ret-receive-modal [data-item-id]');
+    let short = 0, over = 0;
+    inputs.forEach(input => {
+      const sent = +input.dataset.sent;
+      const val  = +input.value;
+      const row  = input.closest('tr');
+      // Amber only when the value actually DIFFERS from what shipped -- the
+      // untouched, prefilled common case must stay neutral, or every line on
+      // every transfer would light up regardless of whether anything is
+      // actually wrong.
+      const differs = input.value !== '' && val !== sent;
+      if (row) row.style.background = differs ? 'var(--state-warning-surface)' : '';
+      if (differs && val < sent) short++;
+      if (differs && val > sent) over++;
+    });
+    const summary = document.getElementById('tr-receive-summary');
+    if (summary) {
+      summary.textContent = (short || over) ? `${short} ${t('Short')} · ${over} ${t('Over')}` : '';
+    }
+  },
+
+  async _confirmReceiveTransfer(id) {
+    // receive_stock_transfer refuses (400) unless EVERY line of the
+    // transfer is reconciled in this one call -- see that route's own
+    // docstring -- so every [data-item-id] input on the modal is read here,
+    // always, never a subset. Each input's id attribute IS the
+    // stock_transfer_items row id (set when the modal was built in
+    // _openReceiveTransfer), which is what this route keys a count by: one
+    // transfer can carry two lines for the same catalog entry, and only the
+    // row id tells them apart.
+    const inputs = document.querySelectorAll('#ret-receive-modal [data-item-id]');
+    const items = [];
+    for (const input of inputs) {
+      const raw = input.value.trim();
+      const qty = Number(raw);
+      // Client-side refusal before the round trip: blank, non-numeric or
+      // negative all fail the server's own guard in receive_stock_transfer,
+      // just told immediately instead of after a POST.
+      if (raw === '' || Number.isNaN(qty) || qty < 0) {
+        SubsystemApp.showToast(t('Enter a received quantity (0 or more) for every line'), 'error');
+        return;
+      }
+      items.push({ id: input.dataset.itemId, quantity_received: qty });
+    }
+    try {
+      const d = await this._post(`/api/sub/retail/stock-transfers/${id}/receive`, { items });
+      if (d.status === 'success') {
+        document.getElementById('ret-receive-modal')?.remove();
+        this._loadTransfers();
+        const shortages = (d.data && d.data.shortages) || [];
+        // A shortage is NOT an error -- see receive_stock_transfer's own
+        // docstring -- but it is the shop's only prompt to go investigate a
+        // discrepancy, so it gets its own toast naming the count rather than
+        // being folded into a plain success message that would bury it.
+        // 'info' rather than 'error', for the same reason: this did not fail.
+        if (shortages.length) {
+          SubsystemApp.showToast(`${shortages.length} ${t('line(s) came up short')}`, 'info');
+        } else {
+          SubsystemApp.showToast(t('Transfer received'), 'success');
+        }
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _cancelTransfer(id) {
+    if (!(await this._confirm({
+      title: t('Cancel Transfer'),
+      message: t('Cancel this transfer? It has not shipped yet, so nothing needs to be undone.'),
+      confirmLabel: t('Cancel Transfer'),
+      danger: true,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/stock-transfers/${id}/cancel`, {});
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Transfer cancelled'), 'success');
+        this._loadTransfers();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _viewTransfer(id) {
+    try {
+      const resp  = (await this._get(`/api/sub/retail/stock-transfers/${id}`)).data || {};
+      const xfer  = resp.transfer || {};
+      const items = resp.items || [];
+      const label = t(this._TRANSFER_STATUS_LABEL[xfer.status] || xfer.status);
+      const statusColor = { pending:'yellow', in_transit:'blue', received:'green', cancelled:'red' };
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.innerHTML = `
+        <div class="ret-modal ret-modal-wide">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+            <h3 style="margin:0">${t('Transfer')}: ${this._bdi((xfer.id||'').slice(0,8), xfer.id)}</h3>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('From')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(xfer.source_branch_name||'—')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('To')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(xfer.destination_branch_name||'—')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(label, statusColor[xfer.status]||'blue')}</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Created')}</div><div style="color:var(--text-muted)">${xfer.created_at||'—'}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Sent')}</div><div style="color:var(--text-muted)">${xfer.sent_at||'—'}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Received')}</div><div style="color:var(--text-muted)">${xfer.received_at||'—'}</div></div>
+          </div>
+          <table class="ret-table">
+            <thead><tr><th>${t('Product')}</th><th>${t('SKU')}</th><th>${t('Sent')}</th><th>${t('Received')}</th></tr></thead>
+            <tbody>${items.map(i => {
+              // NULL and 0 are DIFFERENT FACTS in this schema, not two
+              // spellings of "nothing to show" -- see receive_stock_
+              // transfer's own docstring. NULL means this line has never
+              // been reconciled (the transfer has not reached the
+              // destination yet); 0 means it WAS reconciled and nothing
+              // arrived. Collapsing the two into one dash would hide a
+              // total loss in transit behind the same glyph a transfer
+              // still in flight shows for an unrelated reason.
+              let receivedCell;
+              if (i.quantity_received == null) {
+                receivedCell = `<span style="color:var(--text-muted)">— ${t('Not yet reconciled')}</span>`;
+              } else if (i.quantity_received < i.quantity_sent) {
+                receivedCell = `<span style="color:var(--state-warning-text)">${this._esc(i.quantity_received)}</span>`;
+              } else {
+                receivedCell = `<span style="color:var(--state-success-text)">${this._esc(i.quantity_received)}</span>`;
+              }
+              return `<tr>
+                <td>${this._esc(i.product_name||'—')}</td>
+                <td style="font-family:monospace;color:var(--text-muted)">${this._esc(i.sku||'—')}</td>
+                <td>${this._esc(i.quantity_sent)}</td>
+                <td>${receivedCell}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
   },
 
   // ── BRANCHES (ci-hardening-w0.3 continuation, "the doorway") ────────────────

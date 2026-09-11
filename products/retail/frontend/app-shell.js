@@ -733,6 +733,15 @@ const SubsystemApp = {
         { id: 'promotions', label: 'Promotions',        icon: '🎁', capability: 'retail.discount' },
         { id: 'suppliers',  label: 'Suppliers',         icon: '🏭' },
         { id: 'purchases',  label: 'Purchase Orders',   icon: '📋' },
+        // Retail schema v28 added inter-branch stock transfers (pending ->
+        // in_transit -> received, plus cancel-while-pending). `capability:
+        // 'retail.stock.adjust'` matches CAP_STOCK_ADJUST -- the SAME
+        // decorator create/send/receive/cancel_stock_transfer all carry in
+        // retail_api.py -- exactly, so a cashier is not invited into a
+        // screen whose every button would 403. Same reasoning as the
+        // Promotions and Reports entries above: hiding the nav entry is not
+        // the enforcement, just the invitation not to walk into a dead end.
+        { id: 'transfers',  label: 'Stock Transfers',   icon: '🔁', capability: 'retail.stock.adjust' },
         { id: 'returns',    label: 'Returns',           icon: '↩️' },
         // `capability` is a THIRD axis, alongside `adminOnly` (this device)
         // and `ownerOnly` (this user's role) -- see the note on `employees`

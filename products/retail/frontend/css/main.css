@@ -259,7 +259,25 @@
   /* ── TOUCH ────────────────────────────────────────────────────────────────
      This is a till. Half these installs are touchscreens with no pointer at
      all, so a primary action must be hittable with a thumb, and nothing may
-     be discoverable ONLY on hover. 44px is the floor, not the target. */
+     be discoverable ONLY on hover. 44px is the floor, not the target.
+
+     44, NOT THE 48 DESIGN.md ASKS FOR, and that is a measured decision rather
+     than an oversight. 44px is the WCAG 2.2 AAA target size (2.5.5) and Apple's
+     own HIG minimum, so it clears the accessibility bar outright; 48 is
+     Material's recommendation, which is a comfort target, not a conformance
+     one. The cost of the extra 4px is paid on the tightest screen this product
+     ships to: the 15.6" till at 1366x768, where the POS pane budget was
+     reclaimed 73px at a time (the pane header removal, the kbd-hint padding
+     trim). Raising every control to 48 spends about 20px of that back across
+     the stacked summary rows, which is the difference between the Charge
+     button sitting above the fold and below it -- and a checkout button that
+     needs scrolling to is a worse accessibility outcome than a 44px one that
+     does not.
+
+     So: 44 is a floor that everything must clear, 52
+     (--touch-target-comfortable) is what primary actions actually get, and the
+     POS's own Charge button is larger still. Raising this token is a
+     whole-layout decision on the 1366x768 profile, not a one-line change. */
   --touch-target-min: 44px;
   --touch-target-comfortable: 52px;
 
@@ -325,7 +343,10 @@
    overridden here too, with comments promising "dashboard hero money" and
    "section rhythm tightens one step". Neither happened: collecting every
    var(--token) across products/ shows only --text-size-total (subsystem-
-   retail.js, inside two clamp()s) and --space-roomy (cash-drawer.js, and four
+   retail.js, inside two clamp()s, PLUS a third in customer-display.html's own
+   clamp() as of retail-hardware-viewports -- the customer-facing display
+   reads this same token so its TOTAL and the till's agree on what "biggest
+   thing on screen" means) and --space-roomy (cash-drawer.js, and four
    rules in this file) are read at all. The other three are declared and never
    consumed, so the dashboard hero money and the section rhythm rendered
    identically at 360px and at 1920px while the comments said otherwise -- and

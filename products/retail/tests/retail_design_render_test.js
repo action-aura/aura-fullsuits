@@ -788,6 +788,29 @@ const TABLE_DATA = {
   // list_branches, the same shape testTheCorpusIsClosedAgainstTheRouter
   // requires for every router case -- see the `branches` corpus entry below.
   branches: [{ id: 1, name: 'Main Branch', address: 'Amman', phone: '0790000000', status: 'active' }],
+  // Retail v28 inter-branch transfers. ONE ROW PER STATUS, deliberately:
+  // status decides both the badge colour and which action buttons the row
+  // gets (pending -> View/Send/Cancel, in_transit -> View/Receive, otherwise
+  // View alone), so a fixture with a single status would leave three badge
+  // colours and two buttons as rules this corpus never renders. The branch
+  // names are joined server-side by list_stock_transfers (a LEFT JOIN, hence
+  // the deliberately blank one below: a branch that fails to resolve must
+  // still render its row rather than vanish from the list).
+  stockTransfers: [
+    { id: 'aa11bb22-cc33-4d44-8e55-66f778899000', source_branch_id: 1, destination_branch_id: 2,
+      status: 'pending', created_at: '2026-09-10 09:14:00', sent_at: null, received_at: null,
+      source_branch_name: 'Main Branch', destination_branch_name: 'City Mall' },
+    { id: 'bb22cc33-dd44-4e55-9f66-77a889900111', source_branch_id: 2, destination_branch_id: 1,
+      status: 'in_transit', created_at: '2026-09-09 16:02:00', sent_at: '2026-09-09 17:30:00',
+      received_at: null, source_branch_name: 'City Mall', destination_branch_name: 'Main Branch' },
+    { id: 'cc33dd44-ee55-4f66-a077-88b99aa11222', source_branch_id: 1, destination_branch_id: 2,
+      status: 'received', created_at: '2026-09-08 11:20:00', sent_at: '2026-09-08 12:00:00',
+      received_at: '2026-09-08 15:45:00', source_branch_name: 'Main Branch',
+      destination_branch_name: 'City Mall' },
+    { id: 'dd44ee55-ff66-4077-b188-99caabb22333', source_branch_id: 2, destination_branch_id: 1,
+      status: 'cancelled', created_at: '2026-09-07 08:05:00', sent_at: null, received_at: null,
+      source_branch_name: '', destination_branch_name: 'Main Branch' },
+  ],
   // ci-hardening-w0.3 continuation ("the doorway", third one on this
   // branch): GET /api/backup/list's own shape (commercial_runtime/backup/
   // routes.py's `_list`) -- {status:'ok', backups:[{filename,size,
@@ -898,6 +921,7 @@ function apiResponseFor(url) {
   if (/\/audit-log/.test(u)) return ok(TABLE_DATA.auditLog, { total: 1, page: 1, limit: 50, actions: ['create'], entities: ['sale'] });
   if (/\/held-sales/.test(u)) return ok(TABLE_DATA.heldSales);
   if (/\/purchase-orders/.test(u)) return ok(TABLE_DATA.purchaseOrders);
+  if (/\/stock-transfers/.test(u)) return ok(TABLE_DATA.stockTransfers);
   if (/\/returns/.test(u)) return ok(TABLE_DATA.returns);
   if (/\/products/.test(u)) return ok(TABLE_DATA.products);
   if (/\/categories/.test(u)) return ok(TABLE_DATA.categories);
@@ -1205,6 +1229,11 @@ async function buildCorpus() {
     // deferred-write splice above is what puts its table back where the code
     // put it — same mechanism as every other screen here.
     ['stock-accuracy', (rs, c) => rs._renderStockAccuracy(c)],
+    // Retail v28's inter-branch transfers. Six routes shipped complete and
+    // gated with no client calling them; this screen is their doorway, and
+    // it enters the corpus in the same breath so its contrast is measured
+    // from the start rather than after somebody notices.
+    ['transfers', (rs, c) => rs._renderTransfers(c)],
   ];
   // 'retail.employees' added alongside 'retail.reports' for the `branches`
   // entry above (create_branch's own @mt_require_capability(CAP_EMPLOYEES)
@@ -1365,7 +1394,7 @@ const DECLARED_SCREENS = [
   'dashboard', 'cashier-landing', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
-  'backup-export', 'scanner', 'stock-accuracy',
+  'backup-export', 'scanner', 'stock-accuracy', 'transfers',
   'customer-modal', 'sale-modal', 'held-sales-modal',
 ];
 
@@ -1409,6 +1438,7 @@ const SCREEN_ROUTES = {
   'backup-export': 'backup-export',
   scanner: 'scanner',
   'stock-accuracy': 'stock-accuracy',
+  transfers: 'transfers',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.
