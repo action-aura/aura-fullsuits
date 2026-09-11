@@ -1165,5 +1165,10 @@
   "Cancel this transfer? It has not shipped yet, so nothing needs to be undone.": "Cancel this transfer? It has not shipped yet, so nothing needs to be undone.",
   "Transfer cancelled": "Transfer cancelled",
   "Not yet reconciled": "Not yet reconciled",
-  "Amount Due": "Amount Due"
+  "Amount Due": "Amount Due",
+  "Open the drawer automatically on a cash sale": "Open the drawer automatically on a cash sale",
+  "Sign out with unsynced sales?": "Sign out with unsynced sales?",
+  "This device has": "This device has",
+  "completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.": "completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.",
+  "Sign out anyway": "Sign out anyway"
 }

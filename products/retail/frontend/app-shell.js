@@ -1364,7 +1364,59 @@ const SubsystemApp = {
     location.href = '/static/licensing.html';
   },
 
+  // True when it is OK to go ahead and sign out. See this section's reasoning
+  // in _unsyncedPendingCount below.
+  async _confirmSignOutWhileUnsynced() {
+    const pending = await this._unsyncedPendingCount();
+    if (!pending || pending <= 0) return true;
+
+    const message = t('This device has') + ' ' + String(pending) + ' ' +
+      t('completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.');
+
+    // RetailSystem._confirm is the styled dialog every other destructive
+    // action in this product uses; window.confirm is the fallback for the
+    // pre-login shell, where no subsystem has been loaded yet and the
+    // styled one does not exist. Both default to NOT signing out.
+    if (window.RetailSystem && typeof window.RetailSystem._confirm === 'function') {
+      return !!(await window.RetailSystem._confirm({
+        title: t('Sign out with unsynced sales?'),
+        message,
+        confirmLabel: t('Sign out anyway'),
+        danger: true,
+      }));
+    }
+    try { return !!window.confirm(message); } catch (e) { return true; }
+  },
+
+  // The number of events still waiting to reach the relay, or null when no
+  // honest number can be produced.
+  //
+  // FRESH FIRST: the poll's cached snapshot can be up to SYNC_POLL_MS old and
+  // a stale ZERO is the one answer that silently defeats this guard.
+  // CACHED SECOND, not "allow": the fetch failing usually means the device is
+  // offline, which is exactly when sales are most likely to be queued -- a
+  // guard that fails open in the case it exists for is not a guard.
+  // `configured !== true` means sync was never switched on for this install,
+  // so there is no outbox and nothing can be stranded.
+  async _unsyncedPendingCount() {
+    try {
+      const res = await fetch('/api/sub/retail/sync/health', { credentials: 'include', cache: 'no-store' });
+      if (res.ok) {
+        const live = (await res.json()).data;
+        if (live && live.configured === true && Number.isFinite(live.pending_count)) return live.pending_count;
+        if (live && live.configured !== true) return 0;
+      }
+    } catch (e) { /* fall through to the cached snapshot */ }
+    const cached = window.RetailSystem && window.RetailSystem._syncHealth;
+    if (cached && cached.configured === true && Number.isFinite(cached.pending_count)) return cached.pending_count;
+    return null;
+  },
+
   async logout() {
+    // Asked BEFORE anything is torn down, so answering "stay signed in"
+    // leaves the session exactly as it was -- the sync poll still running,
+    // the session still live. Nothing below this line is reversible.
+    if (!(await this._confirmSignOutWhileUnsynced())) return;
     // Stopped BEFORE the logout fetch, not after: the global auth guard
     // intercepts any /api/ 401 and pops the relogin modal, so a sync-health
     // poll racing this logout would trigger a spurious relogin modal.

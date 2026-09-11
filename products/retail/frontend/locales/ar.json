@@ -1165,5 +1165,10 @@
   "Cancel this transfer? It has not shipped yet, so nothing needs to be undone.": "هل تريد إلغاء هذا التحويل؟ لم يُشحن بعد، لذا لا حاجة للتراجع عن أي شيء.",
   "Transfer cancelled": "تم إلغاء التحويل",
   "Not yet reconciled": "لم تتم التسوية بعد",
-  "Amount Due": "المبلغ المستحق"
+  "Amount Due": "المبلغ المستحق",
+  "Open the drawer automatically on a cash sale": "افتح الدرج تلقائياً عند إتمام بيع نقدي",
+  "Sign out with unsynced sales?": "تسجيل الخروج مع وجود مبيعات غير مزامنة؟",
+  "This device has": "يحتوي هذا الجهاز على",
+  "completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.": "عملية بيع مكتملة لم تصل إلى الخادم بعد. إذا سجلت الخروج الآن فستبقى على هذا الجهاز حتى يسجل أحد الدخول هنا مرة أخرى.",
+  "Sign out anyway": "تسجيل الخروج على أي حال"
 }
