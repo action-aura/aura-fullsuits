@@ -112,6 +112,9 @@ const RetailSystem = {
   _customers: [],
   _branches: [],
   _currentTotals: {},
+  // Bumped by _beginRender(); see the "Render generation guard" section
+  // below (just above the Router) for what this exists to stop.
+  _renderGeneration: 0,
   // 'after_discount' (default) | 'before_discount' — loaded from
   // GET /api/sub/retail/settings/tax by _loadPOSData(). Kept in exact sync
   // with core/retail/pricing.py's two formulas; see the comment above
@@ -202,6 +205,42 @@ const RetailSystem = {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   },
+
+  // ── Render generation guard ─────────────────────────────────────────────────
+  // retail-hardware-viewports: _renderDashboard set #sub-content's markup
+  // SYNCHRONOUSLY, then awaited GET /dashboard/stats and wrote the response
+  // into elements by id with no check that the render it belonged to was
+  // still the current one. Open Dashboard, navigate away before that fetch
+  // settles, and the late response ran into a screen whose r-k-* ids no
+  // longer exist -- measured in a real browser:
+  //   TypeError: Cannot set properties of null   (subsystem-retail.js:1729)
+  // reproduced with an identical stack on 2 of 3 runs, then not on the next
+  // 5 -- timing-dependent, not absent (retail_smoke_e2e.py scenario 10 still
+  // probes it and tolerates either outcome).
+  //
+  // The same gap is worse, and silent, the other way: navigate BACK to
+  // Dashboard before the stale fetch resolves and every r-k-* id exists
+  // again (the fresh render just created them), so the late write does not
+  // throw at all -- it quietly paints the PREVIOUS render's stale revenue
+  // and transaction figures over the screen the user is now looking at. On
+  // this product those figures are money.
+  //
+  // The fix is a monotonically increasing counter, bumped once at the START
+  // of every render that is about to await data. Each such render captures
+  // the value locally, and after its await -- before touching the DOM --
+  // compares its captured value against the live counter. A render another
+  // render has superseded writes NOTHING at all: `_isStaleRender` is a
+  // genuine early return at every call site, never a try/catch. A
+  // try/catch would let the write happen (or silently swallow the
+  // TypeError it throws) -- exactly the stale paint described above. The
+  // point is to never reach the write, not to recover from it.
+  //
+  // One shared idiom for every render that needs it (see _renderDashboard
+  // below, the one call site with a measured failure) rather than a
+  // per-screen flag, so a second guard never reinvents this with a subtly
+  // different check.
+  _beginRender() { return ++this._renderGeneration; },
+  _isStaleRender(token) { return token !== this._renderGeneration; },
 
   // ── Router ────────────────────────────────────────────────────────────────
   render(sectionId) {
@@ -1458,6 +1497,12 @@ const RetailSystem = {
   //      semantic tokens (--text/--surface-card/--border-soft) instead.
   async _renderDashboard(c) {
     this._injectStyles();
+    // See "Render generation guard" above the Router for the measured bug
+    // (subsystem-retail.js:1729's TypeError) this token exists to stop.
+    // Bumped here, at the very start of the render, so a navigation away
+    // from Dashboard -- or a second landing back on it -- always gets a
+    // fresh value the in-flight fetch below cannot share.
+    const renderToken = this._beginRender();
 
     // Cashier landing (a cashier's first screen after login must not be a
     // 403). GET /api/sub/retail/dashboard/stats is gated on `retail.reports`,
@@ -1719,6 +1764,14 @@ const RetailSystem = {
 
     try {
       const d = (await this._get('/api/sub/retail/dashboard/stats')).data || {};
+      // Superseded? Another render -- a different navigation, or the user
+      // landing back on Dashboard before THIS fetch settled -- has started
+      // since renderToken was captured above. A genuine early return, not a
+      // try/catch: the point is to write NOTHING, not to catch the
+      // TypeError an unguarded write into a gone screen would throw, and
+      // not to let a stale figure land on a screen the user is still
+      // looking at. See "Render generation guard" above the Router.
+      if (this._isStaleRender(renderToken)) return;
       // _setMoney, not `textContent = _fmt(...)`: all three of these spans are
       // declared `.money` in the template above, so the negative marking now
       // lands on the VALUE. #r-k-rev is the one that makes this matter — it is
@@ -4977,6 +5030,26 @@ const RetailSystem = {
     document.getElementById('pm-name')?.focus();
   },
 
+  // A Save button that flips to a busy label ("Saving…") before an async
+  // request must be put back exactly as it was on every exit path that is
+  // NOT a successful save -- a server refusal, a thrown request, anything.
+  // Left on its busy label, the button tells the operator the form is still
+  // working when it already isn't -- and on this till, a licence-gate
+  // refusal ("This action is not available in the current licensing
+  // state.") is the NORMAL outcome on an unlicensed install, not a rare
+  // edge, so this restore runs on the ordinary path, not a corner case.
+  // Mirrors the explicit restore _checkout() already does on its own
+  // failure branch (btn.textContent = ...; btn.disabled = false;) -- this
+  // is that same idiom, factored into one place so every Add/Edit modal's
+  // Save button restores to its OWN original label (never a hardcoded
+  // 'Save' that is wrong for every "Add X" button) instead of repeating it,
+  // wrong, at each call site.
+  _restoreSaveButton(btn, label) {
+    if (!btn) return;
+    btn.disabled = false;
+    btn.textContent = label;
+  },
+
   async _saveProduct(pid) {
     const name = document.getElementById('pm-name')?.value.trim();
     const sku  = document.getElementById('pm-sku')?.value.trim();
@@ -5011,9 +5084,9 @@ const RetailSystem = {
         this._renderProducts(document.getElementById('sub-content'));
       } else {
         SubsystemApp.showToast(d.message||'Error','error');
-        if(btn){btn.disabled=false;btn.textContent='Save';}
+        this._restoreSaveButton(btn, pid ? 'Save Changes' : 'Add Product');
       }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent='Save';} }
+    } catch(e) { this._restoreSaveButton(btn, pid ? 'Save Changes' : 'Add Product'); }
   },
 
   _openStockAdjust(pid, name, currentStock) {
@@ -5173,8 +5246,8 @@ const RetailSystem = {
         SubsystemApp.showToast(catId ? t('Category updated') : t('Category added'), 'success');
         document.getElementById('ret-cat-modal')?.remove();
         this._loadCategories();
-      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent=t('Save');} }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent=t('Save');} }
+      } else { SubsystemApp.showToast(d.message||'Error','error'); this._restoreSaveButton(btn, catId ? t('Save') : t('Add Category')); }
+    } catch(e) { this._restoreSaveButton(btn, catId ? t('Save') : t('Add Category')); }
   },
 
   // Final-review Fix 4 (2026-08-07): a failed delete must be VISIBLE. This
@@ -5319,8 +5392,8 @@ const RetailSystem = {
         SubsystemApp.showToast(cid?'Customer updated':'Customer added','success');
         document.getElementById('ret-cust-modal')?.remove();
         this._loadCustomers();
-      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent='Save';} }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent='Save';} }
+      } else { SubsystemApp.showToast(d.message||'Error','error'); this._restoreSaveButton(btn, cid ? 'Save' : 'Add Customer'); }
+    } catch(e) { this._restoreSaveButton(btn, cid ? 'Save' : 'Add Customer'); }
   },
 
   // Mirrors _deleteCategory exactly (see its comment for why: a failed
@@ -5624,9 +5697,9 @@ const RetailSystem = {
         this._loadPromotions();
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
-        if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+        this._restoreSaveButton(btn, pid ? t('Save') : t('Add Promotion'));
       }
-    } catch(e) { if (btn) { btn.disabled = false; btn.textContent = t('Save'); } }
+    } catch(e) { this._restoreSaveButton(btn, pid ? t('Save') : t('Add Promotion')); }
   },
 
   // The frozen contract's DELETE deactivates -- it does not remove the row
@@ -5900,9 +5973,9 @@ const RetailSystem = {
         await this._loadSupplierContacts(sid);
       } else {
         SubsystemApp.showToast(d.message || t('Error'),'error');
-        if (btn) { btn.disabled=false; btn.textContent=t('Save'); }
+        this._restoreSaveButton(btn, contactId ? t('Save') : t('Add Contact'));
       }
-    } catch (e) { if (btn) { btn.disabled=false; btn.textContent=t('Save'); } }
+    } catch (e) { this._restoreSaveButton(btn, contactId ? t('Save') : t('Add Contact')); }
   },
 
   // Mirrors _deleteSupplier's confirm-then-call-then-always-refresh shape --
@@ -5945,8 +6018,8 @@ const RetailSystem = {
         SubsystemApp.showToast(sid?'Updated':'Added','success');
         document.getElementById('ret-sup-modal')?.remove();
         this._loadSuppliers();
-      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent='Save';} }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent='Save';} }
+      } else { SubsystemApp.showToast(d.message||'Error','error'); this._restoreSaveButton(btn, sid ? 'Save' : 'Add Supplier'); }
+    } catch(e) { this._restoreSaveButton(btn, sid ? 'Save' : 'Add Supplier'); }
   },
 
   // Mirrors _deleteCategory/_deleteCustomer exactly (see _deleteCategory's
