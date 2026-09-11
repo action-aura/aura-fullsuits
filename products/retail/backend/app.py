@@ -1085,6 +1085,73 @@ def init_app():
     return app
 
 
+def create_app():
+    """Application factory -- the single correct construction path this
+    module was missing (retail-hardware-viewports Fix 1).
+
+    WHAT "BUILD" ALREADY MEANS HERE: `app = Flask(...)` near the top of
+    this file, and every `app.register_blueprint(...)` call below it, run
+    unconditionally at IMPORT time -- not inside this function, and that is
+    deliberate and UNCHANGED by this fix (see the backward-compatibility
+    note below). The module-level `app` object already exists, fully
+    routed, the moment this module is imported; ~140 existing test files'
+    bootstraps (`import app as _app_module; app = _app_module.init_app()`)
+    and the Android/Chaquopy embedding all depend on exactly that. Moving
+    the `Flask(...)` construction and blueprint registration INTO this
+    function would break every one of those call sites -- a separate,
+    larger migration, not attempted here.
+
+    WHAT THIS FUNCTION ACTUALLY ADDS: the missing call to `init_app()` --
+    schema migrations, the split-state boot guard, background worker/sync
+    startup -- which, before this, only ran from the `if __name__ ==
+    '__main__':` block at the bottom of this file. `_INIT_APP_HAS_RUN`'s
+    own docstring above spells out the exact failure this closes: starting
+    this module any other way (most plausibly `flask --app app run`, which
+    imports the module and stops there) produced a process that bound its
+    port and answered `GET /api/health` with 200 -- "looking perfectly
+    healthy" -- then failed the first real request with
+    `sqlite3.OperationalError: no such table: users`. `create_app()` is now
+    the one path that both builds (already done at import) AND initialises.
+
+    SINGLE-SHOT, NOT "MAKE init_app() ITSELF IDEMPOTENT" -- a deliberate
+    choice, made by reusing the SAME `_INIT_APP_HAS_RUN` flag
+    `_refuse_to_serve_before_init_app` already reads, rather than teaching
+    `init_app()` to tolerate being re-run. `init_app()` starts background
+    timers that are NOT provably safe to start twice: `_sync_service.start()`
+    / `_registry_sync_service.start()` mirror `licensing_contracts/
+    checkin_scheduler.py`'s LicenseCheckInScheduler, which -- per the
+    `_IdempotentEinvoicingWorkerHandle` comment above -- does NOT cancel a
+    running Timer on a second `.start()`, it only overwrites the handle to
+    it, so the first Timer chain keeps firing forever alongside a new one.
+    `_resume_notifications_workers()` / `_resume_whatsapp_workers()` call
+    `.start()` directly on `EmailOutboxWorker`/`WhatsAppOutboxWorker` with
+    no idempotent wrapper at all (unlike the einvoicing sweep, which is
+    wrapped precisely because it needed one -- see that class's docstring).
+    Re-running `init_app()` on a second `create_app()` call would therefore
+    risk duplicate background timers, not a harmless no-op re-init. So: the
+    FIRST call in a process runs `init_app()` and returns the
+    fully-initialised `app`; every later call is a no-op that returns the
+    SAME already-initialised `app` without touching `init_app()` again --
+    calling this factory more than once is safe, but only because the
+    second call is skipped outright, not because `init_app()` was made
+    re-entrant.
+
+    WHAT THIS DOES NOT FIX (being honest about it): this does not let
+    separate test files share one process. The module-level `app` -- its
+    blueprints, its DB connections -- is still built at IMPORT time, which
+    is exactly what the ~140 existing test bootstraps and the Android
+    embedding require. Sharing one process across test files needs THAT to
+    change (lazy construction of `app` itself), which is a separate, much
+    larger change than this one. Do not read this factory as a test-speed
+    improvement -- it removes the `flask run` trap and gives a single
+    construction path, nothing more.
+    """
+    global _INIT_APP_HAS_RUN
+    if not _INIT_APP_HAS_RUN:
+        init_app()
+    return app
+
+
 def _resume_einvoicing_workers():
     """A company that had e-invoicing enabled before a restart (PC reboot,
     app update) must keep submitting without waiting for a settings write
@@ -1164,12 +1231,68 @@ def _resume_whatsapp_workers():
         conn.close()
 
 
-if __name__ == '__main__':
-    init_app()
-    port = int(os.environ.get('PORT', 5000))
+def _run_server(port):
+    """Serve `app` via waitress (this codebase's production WSGI server),
+    with a governed fallback -- see the Fix 2 comments in the `except`
+    branch below for why a packaged build must never silently fall back to
+    Flask's development server (retail-hardware-viewports Fix 2).
+
+    Factored out of the `if __name__ == '__main__':` block below so the
+    fallback/refusal branch is directly callable -- e.g. with `waitress`'s
+    import forced to fail and `commercial_runtime.security.modes.IS_FROZEN`
+    monkeypatched to True -- without having to run this whole module as a
+    script to exercise it.
+    """
     try:
         from waitress import serve as _serve
         _serve(app, host='127.0.0.1', port=port, threads=12,
                channel_timeout=120, connection_limit=200, _quiet=True)
     except ImportError:
+        # Fix 2: a packaged build silently falling back to Flask's
+        # development server used to be entirely silent -- nothing logged,
+        # nothing refused. That is a production-grade problem: the dev
+        # server is not built for a real shop's sustained, concurrent till
+        # traffic, and a shop quietly running on it is a support incident
+        # nobody can diagnose -- every symptom (occasional dropped
+        # requests, no real concurrency under load) looks like a random bug
+        # rather than "the wrong server started."
+        #
+        # `IS_FROZEN` is this codebase's OWN existing idiom for "is this a
+        # packaged build" (commercial_runtime/security/modes.py -- "Single
+        # source of truth for which environment is this process running
+        # in"), imported lazily inside the function exactly the way
+        # retail_api.py's demo-mode gate already does. Reused here rather
+        # than re-deriving `getattr(sys, 'frozen', False)` a second time:
+        # the raw check at the very top of this file only exists because
+        # THAT path-resolution code has to run before sys.path even
+        # includes commercial_runtime -- not the case here, deep into the
+        # module after every import above has already succeeded.
+        from commercial_runtime.security.modes import IS_FROZEN
+        if IS_FROZEN:
+            logging.getLogger(__name__).error(
+                'FATAL: waitress is missing in a PACKAGED build -- refusing '
+                'to start. Aura Retail must never run a real shop on the '
+                'Flask development server: it is not built for sustained '
+                'concurrent till traffic, and a shop silently running on it '
+                'is a support incident nobody can diagnose (every symptom '
+                'looks like a random bug rather than "the wrong server is '
+                'running"). This means the packaged build is missing a '
+                'dependency -- waitress must be bundled (check the '
+                'PyInstaller .spec file\'s hidden imports and '
+                'requirements/retail.txt). Exiting without serving.'
+            )
+            sys.exit(1)
+        logging.getLogger(__name__).warning(
+            'waitress is not installed -- falling back to the Flask '
+            'development server. This is acceptable for local development '
+            'ONLY. It must never serve a real shop: install waitress (see '
+            'requirements/retail.txt) before packaging, or before pointing '
+            'a real till at this process.'
+        )
         app.run(host='127.0.0.1', port=port, debug=False)
+
+
+if __name__ == '__main__':
+    create_app()
+    port = int(os.environ.get('PORT', 5000))
+    _run_server(port)
