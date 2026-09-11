@@ -3341,6 +3341,8 @@ const SubsystemApp = {
   _renderSyncBanner(data) {
     if (!data) {
       if (this._syncBannerEl) { this._syncBannerEl.remove(); this._syncBannerEl = null; }
+      // Release the space this banner was holding. See _reflowTopBanners.
+      this._reflowTopBanners();
       return;
     }
 
@@ -3396,6 +3398,13 @@ const SubsystemApp = {
     else if (tier === 'behind-warning') this._renderSyncBehindWarningState(data, changed);
     else if (tier === 'behind') this._renderSyncBehindState(data, changed);
     else this._renderSyncCalmState(data, changed);
+    // AFTER the tier has painted, and here rather than inside each tier: all
+    // four fan out from this one point, they paint different amounts of text,
+    // and a fifth tier added later gets this for free instead of being the one
+    // that quietly reintroduces the overlap. Re-measured on every poll, not
+    // only on creation -- "Offline since 14:20 -- 412 unsynced" grows as the
+    // count does and wraps to a second line mid-session on a narrow till.
+    this._reflowTopBanners();
   },
 
   // See _renderSyncBanner's comment just above for why this is a distinct
