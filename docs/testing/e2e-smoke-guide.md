@@ -1,6 +1,6 @@
 # Aura Retail real-browser E2E smoke suite
 
-`products/retail/tests/retail_smoke_e2e_test.py` drives the REAL Aura Retail
+`products/retail/tests/retail_smoke_e2e.py` drives the REAL Aura Retail
 product (real Flask backend, real Chromium browser, real clicks) end to end.
 It exists because this repo has a written history of green test suites over
 a broken product -- screens that rendered wrong, money shown over a 403, dead
@@ -9,6 +9,34 @@ suite passed. Most "UI" suites here assert against SOURCE TEXT, which
 structurally cannot catch a screen that renders wrong. Before this suite,
 there was no test anywhere that drove the real UI in a real browser. This is
 that test.
+
+
+## Why this file is NOT called `*_test.py`
+
+Deliberate, and it cost a red CI run to learn.
+
+`products/run_all_tests.py` discovers suites with `glob('*_test.py')` and runs
+each one under **pytest**. This suite is a standalone script, not a pytest
+module: it defines no `test_` functions, so pytest collected nothing and exited
+`no tests ran`, which the canonical runner reports as a failure.
+
+Renaming it to match the convention does not fix that -- it makes it worse. The
+suite CANNOT run under the canonical runner at all, because Playwright is
+installed under the system interpreter
+(`C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe`) and not in
+the pytest venv. A file that the runner collects and can never pass is a
+permanently red suite; a file it does not collect is an honest manual tool.
+
+So it is run by hand, with the interpreter that has Playwright:
+
+```
+C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe products/retail/tests/retail_smoke_e2e.py
+```
+
+To put it in CI one day, the real prerequisites are: add `playwright` to a
+requirements file (a dependency decision this project does not take lightly),
+install a browser binary in the workflow, and give it its own job -- not a
+rename.
 
 ## Why it is not a pytest file
 
@@ -21,7 +49,7 @@ something only `pytest` can collect.
 ## How to run it
 
 ```
-C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe products/retail/tests/retail_smoke_e2e_test.py
+C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe products/retail/tests/retail_smoke_e2e.py
 ```
 
 Run from anywhere -- all paths are resolved from the script's own location,

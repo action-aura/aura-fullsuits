@@ -1105,7 +1105,18 @@ body {
 ───────────────────────────────────────────────────────────────── */
 .page {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  /* `top` is NOT 0: it starts below whatever top banner is showing.
+     Every screen is pinned to the four corners of the viewport, which means
+     nothing in normal flow can push it down -- so a `position:fixed` banner at
+     top:0 paints straight over the header. Measured in a real browser: a banner
+     occupying y:0-64 sat on top of the theme and language buttons at y:20-56,
+     and an ordinary (unforced) click on them was intercepted, on every
+     unlicensed install.
+     _reflowTopBanners() in app-shell.js measures the live banner and publishes
+     its height here; the fallback is 0px, so a till with no banner is pixel-for-
+     pixel unaffected. Measured rather than a constant because these banners wrap
+     to two lines on a narrow till, which is exactly where the overlap hurts. */
+  top: var(--top-banner-inset, 0px); left: 0; right: 0; bottom: 0;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--trans-slow);

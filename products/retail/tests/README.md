@@ -34,6 +34,21 @@ index rather than in the filesystem.
 A suite is picked up only if its filename ends in `_test.py` or `_test.js` (or
 begins with `test_`). A file named anything else is dead weight nothing runs.
 
+## The one suite the canonical runner does not run
+
+`retail_smoke_e2e.py` drives the real product in a real browser (Playwright) and
+is the only thing here that opens the app rather than reading its source. It is
+deliberately NOT named `*_test.py`, so `run_all_tests.py` does not collect it:
+it is a standalone script, and Playwright lives in the system interpreter rather
+than the pytest venv, so pytest would collect nothing and report a permanent
+failure. Run it by hand:
+
+```
+C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe products/retail/tests/retail_smoke_e2e.py
+```
+
+It found four shipped bugs on its first run. See `docs/testing/e2e-smoke-guide.md`.
+
 ## Reading the suites
 
 Two things worth knowing before you trust a green run:

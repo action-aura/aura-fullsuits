@@ -3205,7 +3205,12 @@ const SubsystemApp = {
       }
       // Both banners stack at top:0, so they overlap each other rather than
       // summing -- reserve the tallest, not the total.
-      document.body.style.paddingBlockStart = tallest > 0 ? tallest + 'px' : '';
+      // Published as a TOKEN the shell consumes (see .sub-shell in css/main.css),
+      // not as padding on <body>. Padding on <body> was the first attempt and it
+      // moved nothing -- the smoke suite measured the header still sitting under
+      // the banner afterwards. This couples the two elements that actually matter.
+      document.documentElement.style.setProperty('--top-banner-inset',
+        tallest > 0 ? tallest + 'px' : '0px');
     } catch (e) { /* never let a cosmetic reflow break the shell */ }
   },
 
@@ -3239,7 +3244,7 @@ const SubsystemApp = {
     // broke". inset-inline, not left/right: retail_design_rtl_test.js
     // ratchets physical direction properties in JS-built inline styles and
     // there is no css/rtl.css mirror rule for an inline style at all.
-    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-warning-surface);'
+    el.style.cssText = 'position:sticky;top:0;inset-inline:0;background:var(--state-warning-surface);'
       + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
       + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
       + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;'

@@ -11,7 +11,7 @@ under this repo's pytest venv (``.venv``). Collecting this file with pytest
 the system interpreter instead:
 
     C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe ^
-        products/retail/tests/retail_smoke_e2e_test.py
+        products/retail/tests/retail_smoke_e2e.py
 
 (paths are resolved from this file's own location, so the current working
 directory does not matter).
@@ -558,6 +558,31 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             assert page.locator(must_exist_selector).count() >= 1, (
                 f"'{section_id}' screen did not render its expected element {must_exist_selector!r}"
             )
+            if section_id == "dashboard":
+                # SUITE ROBUSTNESS, not a product fix: `#r-k-rev` (class
+                # `.rdash-answer-value`, this SCREENS entry's own
+                # must_exist_selector) exists with a '-' placeholder the
+                # instant _renderDashboard sets innerHTML SYNCHRONOUSLY --
+                # its `GET /dashboard/stats` settles separately, afterwards,
+                # and writes the real figures into it and #r-k-cust etc.
+                # Moving on to the next screen as soon as the placeholder is
+                # merely VISIBLE (the generic wait above) can click away
+                # while that fetch is still in flight; when it then resolves
+                # against a DOM that has moved on, _renderDashboard's
+                # un-generation-guarded `document.getElementById('r-k-cust')
+                # .textContent = ...` throws on a null element -- observed
+                # here directly, same stack frame subsystem-retail.js:1729,
+                # as the stale-render race scenario 10 exists to investigate.
+                # This scenario's own job is proving plain navigation is
+                # clean, not re-probing that race, so it waits for the real
+                # figure to land before moving on -- a real wait-for-condition,
+                # not a sleep, and not a weakened assertion: the race itself
+                # stays fully assertable on its own terms in scenario 10.
+                page.wait_for_function(
+                    "document.getElementById('r-k-rev') && "
+                    "document.getElementById('r-k-rev').textContent.trim() !== '—'",
+                    timeout=DEFAULT_WAIT_MS,
+                )
             if title_text is not None:
                 actual = page.locator(".ret-title").first.inner_text()
                 assert actual == title_text, f"'{section_id}' screen title was {actual!r}, expected {title_text!r}"
@@ -566,34 +591,47 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     report.run("04 navigate every major screen via the real sidebar", scenario_navigate_every_screen)
 
     # ------------------------------------------------------------------
-    # Scenario 5 -- anti-vacuity self-check, AND a real finding: "Stock
-    # Transfers" has a full nav entry defined in app-shell.js (icon, label,
-    # capability gate) and a complete render function/table in
-    # subsystem-retail.js, but is a member of NEITHER `navGroups` (sidebar)
-    # NOR `_TAB_BAR_SECTIONS` (phone tab bar) -- grepped, not assumed: zero
-    # other reference to the id 'transfers' exists anywhere in
-    # app-shell.js. It is therefore unreachable from the real UI by any
-    # click a user could make. This assertion proves the harness can tell
-    # "present" from "absent" (a bogus selector must read 0, a real one
-    # must read >=1) using that exact real bug as the negative case.
+    # Scenario 5 -- anti-vacuity self-check, AND a regression guard for a
+    # real bug that has since been fixed: "Stock Transfers" used to have a
+    # full nav entry defined in app-shell.js (icon, label, capability gate)
+    # and a complete render function/table in subsystem-retail.js, but was a
+    # member of NEITHER `navGroups` (sidebar) NOR `_TAB_BAR_SECTIONS` (phone
+    # tab bar), making it unreachable from the real UI by any click a user
+    # could make. `transfers` is now listed in the Stock group of
+    # `systems.retail.navGroups` (app-shell.js), so the sidebar renders it
+    # and it must stay reachable and renderable going forward. The self-check
+    # half (bogus selector must read 0, a real one must read >=1) is
+    # preserved unchanged -- it is what proves the harness can tell a broken
+    # page from a working one, independent of this specific finding.
     # ------------------------------------------------------------------
-    def scenario_self_check_and_transfers_finding():
+    def scenario_self_check_and_transfers_reachable():
         bogus = page.locator("#definitely-does-not-exist-e2e-selftest")
         assert bogus.count() == 0, "self-check FAILED: a selector that cannot exist was found -- the harness cannot be trusted"
         known_good = page.locator("#sub-content")
         assert known_good.count() >= 1, "self-check FAILED: a selector that must exist was not found"
 
         transfers_nav = page.locator('.sub-nav-item[data-section="transfers"]')
-        assert transfers_nav.count() == 0, (
-            "'Stock Transfers' nav item unexpectedly IS reachable from the sidebar -- "
-            "if this now fails, the finding below is stale and should be re-verified, not silenced"
+        assert transfers_nav.count() == 1, (
+            "'Stock Transfers' nav item is NOT reachable from the sidebar -- "
+            "it must be listed in the Stock group of systems.retail.navGroups "
+            "(app-shell.js) for the sidebar to render it; this used to be a real bug, "
+            "so if this regresses, the fix has been reverted"
         )
+        transfers_nav.click()
+        page.locator("#transfer-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+        transfers_title = page.locator(".ret-title").first.inner_text()
+        assert transfers_title == "Stock Transfers", (
+            f"transfers screen title was {transfers_title!r}, expected 'Stock Transfers' -- "
+            "the nav entry exists but does not actually navigate/render"
+        )
+        report.shot(page, shots, "05_screen_transfers")
+
         products_nav_still_there = page.locator('.sub-nav-item[data-section="products"]')
         assert products_nav_still_there.count() == 1, "sanity check: a real, reachable nav item vanished too"
 
     report.run(
-        "05 self-check (bogus vs real selector) + Stock Transfers nav-unreachable finding",
-        scenario_self_check_and_transfers_finding,
+        "05 self-check (bogus vs real selector) + Stock Transfers is reachable and renders",
+        scenario_self_check_and_transfers_reachable,
     )
 
     # ------------------------------------------------------------------
@@ -678,32 +716,24 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     )
 
     # ------------------------------------------------------------------
-    # REAL BUG, found by driving the real browser (not by reading source):
-    # app-shell.js's `_renderLicenseBanner` appends `#aura-license-banner`
-    # as `position:fixed;top:0;inset-inline:0;z-index:99998` on every
-    # licence-blocked state (NOT_CONFIGURED included -- our fresh install is
-    # in that state the whole run) -- and NOTHING reserves layout space for
-    # it (grepped app-shell.js and css/main.css for a compensating
-    # padding-top/margin-top/banner-height rule: none exists). It sits
-    # directly on top of `.sub-header`, and Playwright's real actionability
-    # engine (the same hit-testing a real mouse click goes through) confirms
-    # it physically intercepts pointer events over the header's theme and
-    # language buttons -- a real click at their on-screen position cannot
-    # reach them for as long as the install is unlicensed. Measured below
-    # with getBoundingClientRect, not inferred from the click timeout alone.
-    #
-    # This is reported prominently rather than silently routed around. To
-    # still exercise the theme/language ENGINES themselves (worth knowing
-    # whether they work once you get past the click), the two scenarios
-    # below use `force=True` -- explicitly and only after recording the
-    # interception as its own assertion -- to bypass Playwright's
-    # actionability check the way nothing a real user does ever could.
+    # FIXED, verified by driving the real browser (not by reading source):
+    # app-shell.js's `_renderLicenseBanner` still appends
+    # `#aura-license-banner` on every licence-blocked state (NOT_CONFIGURED
+    # included -- our fresh install is in that state the whole run), but
+    # `.page` (css/main.css) now sits at `top: var(--top-banner-inset, 0px)`
+    # instead of a hardcoded `top: 0`, and `_reflowTopBanners()`
+    # (app-shell.js) publishes the live banner height into that custom
+    # property whenever the banner is shown/hidden/resized. Layout space is
+    # therefore reserved for the banner instead of the banner floating on
+    # top of `.sub-header` -- the header's theme and language buttons must
+    # be clear of it and reachable by a real, unforced click. Measured below
+    # with getBoundingClientRect, not inferred from a click succeeding alone.
     # ------------------------------------------------------------------
     def _rects_overlap(a, b) -> bool:
         return not (a["right"] <= b["left"] or b["right"] <= a["left"]
                     or a["bottom"] <= b["top"] or b["bottom"] <= a["top"])
 
-    def scenario_license_banner_blocks_header():
+    def scenario_license_banner_clear_of_header():
         banner = page.locator("#aura-license-banner")
         banner.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         assert "not licensed to ring new sales" in banner.inner_text()
@@ -715,79 +745,74 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         print(f"       >>> #aura-license-banner rect: {banner_rect}")
         print(f"       >>> theme button rect:         {theme_rect}")
         print(f"       >>> geometrically overlapping: {overlap}")
-        assert overlap, (
-            "expected the license banner to overlap the header (this would mean the "
-            "click-interception seen elsewhere in this run has been fixed -- good news, "
-            "but re-verify before trusting this comment stack)"
+        assert not overlap, (
+            "expected the license banner to no longer overlap the header now that "
+            "'.page' reserves space via --top-banner-inset (_reflowTopBanners()) -- "
+            "if this overlaps again, that fix has regressed"
         )
 
-        # Confirm with an UNFORCED click exactly the way a real user's mouse
-        # click would be evaluated -- must fail (intercepted), pinning the
-        # bug as an observed behaviour, not an assumption.
-        try:
-            theme_btn.click(timeout=2000)
-            raise AssertionError(
-                "theme button was clickable despite overlapping the license banner -- "
-                "the finding above may be stale, re-verify rather than trusting this"
-            )
-        except Exception as e:
-            if "intercepts pointer events" not in str(e) and "Timeout" not in str(e):
-                raise
-            print("       >>> CONFIRMED: a real (unforced) click on the theme button is intercepted by #aura-license-banner")
-        report.shot(page, shots, "07_license_banner_overlaps_header")
+        # Confirm with a REAL, UNFORCED click exactly the way a real user's
+        # mouse click would be evaluated -- must succeed now that nothing
+        # covers the header buttons, pinning the fix as an observed
+        # behaviour rather than an assumption from the geometry alone.
+        theme_btn.click(timeout=4000)
+        page.locator("#theme-picker-panel").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+        print("       >>> CONFIRMED: a real (unforced) click on the theme button opens the picker -- no longer intercepted by #aura-license-banner")
+        report.shot(page, shots, "07_license_banner_clear_of_header")
+
+        # Leave the picker closed again so later scenarios start clean.
+        page.click("#theme-picker-backdrop")
+        page.locator("#theme-picker-panel").wait_for(state="detached", timeout=DEFAULT_WAIT_MS)
 
     report.run(
-        "08 REAL BUG: persistent license banner overlaps and blocks header buttons",
-        scenario_license_banner_blocks_header,
+        "08 license banner no longer overlaps or blocks header buttons",
+        scenario_license_banner_clear_of_header,
     )
 
     # ------------------------------------------------------------------
-    # Scenario 9 -- theme switching. Opening the picker is done via direct
-    # JS invocation (`ThemeEngine.openPicker()`), NOT a simulated click:
-    # Playwright's `force=True` skips its OWN pre-click actionability check,
-    # but the synthetic mouse event it then dispatches still goes through
-    # the real browser's hit-testing at that (x, y) -- which lands on
-    # `#aura-license-banner`, exactly like a real user's click would
-    # (confirmed empirically: force-clicking the header button left the
-    # picker closed). Direct invocation is the honest way to still answer
-    # "does the theme engine itself work", now that scenario 08 has already
-    # separately proven the real click path to reach it is broken. Once
-    # open, the panel (z-index 9999, anchored 72px from the top -- below the
-    # 64px-tall banner, per css/main.css) and its swatches are NOT covered
-    # by the banner, so those are real, unforced clicks.
+    # Scenario 9 -- theme switching. The picker is opened with a real,
+    # unforced click on the header button, exactly like scenario 08 just
+    # confirmed a real user could now do -- no more direct JS invocation or
+    # `force=True` workaround needed, now that the license banner no longer
+    # covers the header. Once open, the panel (z-index 9999, anchored 72px
+    # from the top -- below the 64px-tall banner, per css/main.css) and its
+    # swatches are unambiguously real, unforced clicks too.
     #
-    # SECOND REAL BUG, found here by driving the real browser: switching the
-    # theme discards whatever screen was open. `ThemeEngine.apply()`'s own
-    # comment says it "re-renders the active section" after a theme change
-    # (to rebuild Chart.js canvases) via `SubsystemApp._navigate(SubsystemApp.
-    # active)` -- but `.active` is the ACTIVE SUBSYSTEM id ('retail'), not
-    # the current SECTION id (`SubsystemApp.currentSection`, e.g.
-    # 'products') -- confirmed by reading app-shell.js's own `launch()`
-    # (`this.active = systemId`). subsystem-retail.js's `render(sectionId)`
-    # switch has no 'retail' case, so it falls to the generic default
-    # branch: `<h2>retail</h2><p>Coming soon.</p>` -- discarding the actual
-    # screen. This reproduces on EVERY theme switch, on every install, not
-    # only an unlicensed one -- unrelated to the license-banner bug above.
+    # FIXED, verified by driving the real browser: switching the theme used
+    # to discard whatever screen was open. `ThemeEngine.apply()` used to
+    # re-render via `SubsystemApp._navigate(SubsystemApp.active)` -- but
+    # `.active` is the ACTIVE SUBSYSTEM id ('retail'), not the current
+    # SECTION id -- so subsystem-retail.js's `render(sectionId)` switch had
+    # no 'retail' case and fell to the generic default branch: `<h2>retail
+    # </h2><p>Coming soon.</p>`, discarding the actual screen. It now calls
+    # `_navigate(SubsystemApp.currentSection || 'dashboard')` instead, so the
+    # screen the user was on must still be showing after a theme switch.
+    # This must hold on EVERY theme switch, on every install, not only an
+    # unlicensed one -- unrelated to the license-banner fix above.
     # ------------------------------------------------------------------
-    def scenario_theme_switching():
+    def scenario_theme_switch_preserves_current_screen():
         page.locator('.sub-nav-item[data-section="products"]').click()
         page.locator("#prod-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
 
-        page.evaluate("() => ThemeEngine.openPicker()")
+        page.click('button[onclick="ThemeEngine.openPicker()"]')
         page.locator("#theme-picker-panel").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         page.click('.theme-swatch[data-theme="dark"]')
         page.wait_for_function("document.documentElement.getAttribute('data-theme') === 'dark'", timeout=DEFAULT_WAIT_MS)
         report.shot(page, shots, "08_theme_dark")
 
+        # Real assertion, not vacuous: this fails immediately if the screen
+        # ever regresses back to the generic "Coming soon." placeholder.
+        page.locator("#prod-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         content_text = page.locator("#sub-content").inner_text()
         print(f"       >>> #sub-content after switching theme while on Products: {content_text[:120]!r}")
-        regressed = "Coming soon." in content_text and page.locator("#prod-table").count() == 0
-        assert regressed, (
-            "expected the known 'theme switch discards the current screen' bug to reproduce -- "
-            "if this now fails, the bug may have been fixed upstream: re-verify before trusting "
-            "this comment, and if genuinely fixed, replace this with a positive assertion instead"
+        assert "Coming soon." not in content_text, (
+            "theme switch discarded the current screen ('Coming soon.') -- the "
+            "ThemeEngine.apply() -> _navigate(currentSection || 'dashboard') fix has regressed"
         )
-        report.shot(page, shots, "08b_theme_switch_discarded_current_screen")
+        assert page.locator("#prod-table").count() >= 1, (
+            "Products screen did not survive the theme switch -- expected #prod-table to still be rendered"
+        )
+        report.shot(page, shots, "08b_theme_switch_preserved_current_screen")
 
         for theme in ("sand", "light"):
             page.click(f'.theme-swatch[data-theme="{theme}"]')
@@ -799,8 +824,8 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         page.locator("#theme-picker-panel").wait_for(state="detached", timeout=DEFAULT_WAIT_MS)
 
     report.run(
-        "09 theme switching works, but REAL BUG: it discards the current screen ('Coming soon')",
-        scenario_theme_switching,
+        "09 theme switching preserves the current screen (no longer discards it)",
+        scenario_theme_switch_preserves_current_screen,
     )
 
     # ------------------------------------------------------------------
@@ -839,6 +864,24 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # where it doesn't fire. Root-caused only as far as pinning the
     # reproduction and the exact throw site; the render-generation guard
     # itself is a fix for whoever owns subsystem-retail.js, not this suite.
+    #
+    # ADDENDUM, found while re-verifying the fixes above: this suite's OWN
+    # earlier scenario 4 was itself one source of the staleness -- it used
+    # to click from Dashboard to Products the instant `.rdash-answer-value`'s
+    # synchronous placeholder appeared, without waiting for THIS visit's own
+    # stats fetch to settle, which is exactly the shape that produces a late
+    # write into a torn-down element. Scenario 4 (and this scenario's own
+    # tail, below) now wait for that fetch to settle before moving on, purely
+    # to stop THIS HARNESS from manufacturing the race through its own click
+    # speed. Measured across 5 consecutive runs after that hardening, the
+    # crash did not reproduce once here -- so the "2 of 3" rate above is no
+    # longer current. That is NOT evidence the underlying bug is fixed
+    # (there is still no render-generation guard in `_renderDashboard`,
+    # unchanged) -- it means this suite got quieter about a bug it was
+    # partly causing itself. This scenario still exercises the real
+    # navigation path and still honestly reports whichever outcome occurs;
+    # it is left in place, unweakened, in case a slower machine, a slower
+    # network, or a future change reopens the timing window.
     # ------------------------------------------------------------------
     def scenario_dashboard_stale_render_race():
         page.locator('.sub-nav-item[data-section="dashboard"]').click()
@@ -859,6 +902,17 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             report.shot(page, shots, "10_dashboard_stale_render_race_reproduced")
         else:
             assert page.locator(".rdash-answer-value").count() >= 1, "neither the crash nor a healthy dashboard rendered"
+            # Wait for THIS visit's own stats fetch to actually settle (not
+            # just the synchronous '-' placeholder) before the scenario ends
+            # -- scenario 11 clicks straight to Customers next, and without
+            # this the same race documented above could bleed forward and
+            # surface as a console error under scenario 11 instead of here.
+            # See scenario 4's identical wait for the full mechanism.
+            page.wait_for_function(
+                "document.getElementById('r-k-rev') && "
+                "document.getElementById('r-k-rev').textContent.trim() !== '—'",
+                timeout=DEFAULT_WAIT_MS,
+            )
             print("       >>> did not reproduce this run (known intermittent race, see docs/testing/e2e-smoke-guide.md) -- Dashboard loaded normally")
             report.shot(page, shots, "10_dashboard_after_theme_switch_ok_this_run")
 
