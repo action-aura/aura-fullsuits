@@ -120,7 +120,12 @@ const ThemeEngine = {
     // theme would just cost a flicker.
     if (changed && window.SubsystemApp && SubsystemApp.active &&
         document.getElementById('sub-content')) {
-      try { SubsystemApp._navigate(SubsystemApp.active); } catch (e) { /* mid-boot */ }
+      // `active` is the SUBSYSTEM id ('retail'), NOT the section id -- navigating
+      // to it matched no section and replaced the screen with the router's
+      // "Coming soon." placeholder on EVERY theme switch. `currentSection` is the
+      // one this comment always meant. Found by switching the theme in a real
+      // browser; no source-reading test could have seen it.
+      try { SubsystemApp._navigate(SubsystemApp.currentSection || 'dashboard'); } catch (e) { /* mid-boot */ }
     }
   },
 
@@ -943,7 +948,7 @@ const SubsystemApp = {
       // empty section header is worse than the flat list this replaces.
       navGroups: [
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
-        { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases'] },
+        { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
         { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
@@ -1800,7 +1805,7 @@ const SubsystemApp = {
       overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#070b12;cursor:pointer';
 
       const frame = document.createElement('iframe');
-      frame.src = 'brand/intro.html';
+      frame.src = '/static/brand/intro.html';
       frame.title = 'Aura';
       frame.setAttribute('tabindex', '-1');
       // Pointer events pass through to the overlay behind it: intro.html has
@@ -3171,6 +3176,39 @@ const SubsystemApp = {
   // license state (_enforceActivationGate's boot-time GET /api/licensing/
   // status and _pollLicenseCheckIn's existing 5-minute poll) -- never a new
   // endpoint, never a new timer.
+  // Every top banner in this file is `position:fixed;top:0`, which takes it OUT
+  // OF FLOW -- so it paints ON TOP of the header instead of pushing it down.
+  // Measured in a real browser: the banner occupied y:0-64 while the theme
+  // button sat at y:20-56, entirely inside it, so a real click on the theme and
+  // language controls was provably intercepted.
+  //
+  // This was survivable while the only top banners were the transient sync ones
+  // (offline, behind) -- annoying for a moment, then gone. The licence banner
+  // made it PERMANENT on every unlicensed install, which is how it was finally
+  // noticed. The defect is older than that banner; the fix belongs to all of
+  // them, so it lives here rather than in any one renderer.
+  //
+  // `.sub-header` is in normal flow (not sticky, not fixed -- see css/main.css),
+  // so reserving space at the top of the document genuinely moves the whole
+  // shell clear rather than sliding it under. Measured from the live elements
+  // rather than hardcoded, because these banners wrap to two lines on a narrow
+  // till and a constant would be wrong exactly when it mattered.
+  _reflowTopBanners() {
+    try {
+      const ids = ['aura-license-banner', 'aura-sync-banner'];
+      let tallest = 0;
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const h = el.getBoundingClientRect ? el.getBoundingClientRect().height : 0;
+        if (h > tallest) tallest = h;
+      }
+      // Both banners stack at top:0, so they overlap each other rather than
+      // summing -- reserve the tallest, not the total.
+      document.body.style.paddingBlockStart = tallest > 0 ? tallest + 'px' : '';
+    } catch (e) { /* never let a cosmetic reflow break the shell */ }
+  },
+
   _renderLicenseBanner(state) {
     const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);
     if (!blocked) {
@@ -3182,6 +3220,10 @@ const SubsystemApp = {
       // once rather than needing to know whether this is the first paint.
       if (this._licenseBannerEl) this._licenseBannerEl.remove();
       this._licenseBannerEl = null;
+      // Release the reserved space too. Reserving on show and forgetting to
+      // release on hide would leave a permanent empty strip across the top of
+      // a healthy, licensed till -- a subtler bug than the one being fixed.
+      this._reflowTopBanners();
       return;
     }
     if (!this._licenseBannerEl) {
@@ -3214,6 +3256,11 @@ const SubsystemApp = {
       + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
       + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
       + t('Activate License') + '</button>';
+    // AFTER innerHTML, never before: the height is measured from the live
+    // element, and on a narrow till this banner wraps to two lines. Measuring
+    // an empty div would reserve the wrong amount -- and would do it wrongly
+    // exactly on the small screens where the overlap hurts most.
+    this._reflowTopBanners();
   },
 
   async _pollSyncHealth() {

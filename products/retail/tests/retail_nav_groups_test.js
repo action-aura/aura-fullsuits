@@ -88,7 +88,7 @@ const SHELL_FILE = path.join(FRONTEND_DIR, 'app-shell.js');
 // from each other.
 const GROUPS = [
   { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
-  { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases'] },
+  { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
   { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
   { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
@@ -212,6 +212,64 @@ function ownerEverythingVisibleHTML() {
 // 1 — every one of the 19 destinations is still reachable for an owner
 // ═════════════════════════════════════════════════════════════════════════════
 
+/* ── Every nav entry must belong to a group, or it is unreachable ──────────
+ *
+ * WHY THIS EXISTS, and why the test above did not catch it.
+ *
+ * Stock Transfers shipped with a complete nav entry, a render function, six
+ * gated backend routes and its own test suites -- and NO WAY FOR A USER TO OPEN
+ * IT. The entry went into `nav`; the sidebar draws from `navGroups`; an id in
+ * the first and not the second is simply never painted.
+ *
+ * Every guard in the repo passed. retail_route_reachability_test.py asks
+ * whether a shipped client CALLS each route, and subsystem-retail.js does call
+ * them, so it was satisfied. testAllDestinationsReachableForOwner above asks
+ * whether each destination IT KNOWS ABOUT renders, and its expectation is a
+ * hand-written copy of navGroups, so an entry in neither list is invisible to
+ * it. A hand-kept expectation cannot notice something nobody told it about.
+ *
+ * So this one derives BOTH sides from app-shell.js at run time. It cannot fall
+ * behind the code, because it has no list of its own to forget to update.
+ */
+function testEveryNavEntryIsInAGroup() {
+  const src = fs.readFileSync(SHELL_FILE, 'utf8');
+
+  // Ids declared in the flat `nav` array: `{ id: 'x', label: ... }`.
+  const navIds = [];
+  const navRe = /\{\s*id:\s*'([a-z0-9-]+)'\s*,\s*label:/g;
+  let m;
+  while ((m = navRe.exec(src))) navIds.push(m[1]);
+
+  // Ids listed inside navGroups' `items:` arrays.
+  const groupedIds = new Set();
+  const groupsBlock = src.slice(src.indexOf('navGroups:'), src.indexOf('navGroups:') + 2000);
+  const itemsRe = /items:\s*\[([^\]]*)\]/g;
+  while ((m = itemsRe.exec(groupsBlock))) {
+    for (const raw of m[1].split(',')) {
+      const id = raw.trim().replace(/^'|'$/g, '');
+      if (id) groupedIds.add(id);
+    }
+  }
+
+  // ANTI-VACUITY: if either scrape came back thin, every assertion below would
+  // pass over nothing. That is precisely how the guard this replaces failed.
+  assert.ok(navIds.length >= 15,
+    `only ${navIds.length} nav ids scraped from app-shell.js -- this check has nothing to inspect`);
+  assert.ok(groupedIds.size >= 15,
+    `only ${groupedIds.size} grouped ids scraped from navGroups -- this check has nothing to inspect`);
+
+  // Dashboard is deliberately ungrouped: _renderShell draws it above the groups
+  // (see its own comment). It is the ONLY exemption, and naming it here means a
+  // second one cannot appear without somebody editing this line.
+  const UNGROUPED_BY_DESIGN = new Set(['dashboard']);
+
+  const orphans = navIds.filter((id) => !groupedIds.has(id) && !UNGROUPED_BY_DESIGN.has(id));
+  assert.deepStrictEqual(orphans, [],
+    'nav entries that belong to no navGroup are UNREACHABLE -- the sidebar renders from '
+    + 'navGroups, so these screens exist and no user can open them: ' + orphans.join(', '));
+  console.log(`PASS: all ${navIds.length} nav entries are reachable (${groupedIds.size} grouped, dashboard ungrouped by design)`);
+}
+
 function testAllDestinationsReachableForOwner() {
   const html = ownerEverythingVisibleHTML();
   const missing = ALL_DESTINATIONS.filter((id) => !new RegExp(`_navigate\\('${id}'\\)`).test(html));
@@ -222,7 +280,7 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 19, 'sanity: this file\'s own expectation list drifted from 19 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 20, 'sanity: this file\'s own expectation list drifted from 19 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -333,6 +391,7 @@ function testDashboardRendersOutsideAnyGroup() {
 // its own name -- see retail_reports_capability_gate_test.js for why a flat
 // sequence that aborts on the first throw is the wrong shape here.
 const CASES = [
+  testEveryNavEntryIsInAGroup,
   testAllDestinationsReachableForOwner,
   testGroupsRenderInSpecifiedOrderWithMembers,
   testCashierSeesNoInsightNoAdminHeader,
