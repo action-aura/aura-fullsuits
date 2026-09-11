@@ -6,7 +6,7 @@
 ; Build (after `pyinstaller products/clinic/packaging/aura_clinic.spec --noconfirm`):
 ;   iscc products/clinic/packaging/aura_clinic_setup.iss
 
-#define AppVersion "1.0.0-rc.6"
+#define AppVersion "1.0.0-rc.7"
 #define AppId "{{159905F6-CEB8-4A5F-B5C3-D0190159F679}"
 #define DistDir "..\..\..\dist\AuraClinic"
 
