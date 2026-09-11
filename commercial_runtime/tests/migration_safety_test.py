@@ -127,6 +127,42 @@ def test_pre_migration_backup_of_an_already_corrupt_database_is_refused(tmp_path
     conn.close()
 
 
+def test_newer_database_version_is_refused_not_migrated(tmp_path):
+    """AUDIT: a shop that installs a newer build, then rolls back to an
+    older one, must not have the older code silently operate on a schema
+    it doesn't understand. Refuse outright -- no downgrade, no repair."""
+    db_path, conn = _make_db(str(tmp_path))
+    backup_dir = str(tmp_path / 'backups')
+    conn.execute('PRAGMA user_version = 5')
+    conn.commit()
+
+    # Anti-vacuity: prove the fixture really is ahead of target_version
+    # before calling, so a fixture that silently failed to set the version
+    # can't make this test pass for the wrong reason.
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 5
+
+    called = {'n': 0}
+
+    def should_not_run(c):
+        called['n'] += 1
+
+    raised = False
+    try:
+        ensure_schema_version(conn, db_path, target_version=3, migrate_fn=should_not_run, backup_dir=backup_dir)
+    except MigrationError as e:
+        raised = True
+        msg = str(e)
+        assert '5' in msg, "message must name the database's (higher) version"
+        assert '3' in msg, "message must name the code's (lower) expected version"
+        assert 'newer' in msg.lower()
+    assert raised, "a database version AHEAD of target_version must raise MigrationError"
+
+    assert called['n'] == 0, "migrate_fn must never run on the refusal path"
+    assert not os.path.isdir(backup_dir), "no backup may be taken on the refusal path -- nothing is being changed"
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 5, "user_version must be untouched by the refusal"
+    conn.close()
+
+
 def test_prune_keeps_only_the_most_recent_n_backups(tmp_path):
     backup_dir = str(tmp_path / 'backups')
     os.makedirs(backup_dir)

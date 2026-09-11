@@ -58,6 +58,17 @@ def ensure_schema_version(conn, db_path, target_version, migrate_fn, backup_dir)
       truncates the live file) and `user_version` is NOT advanced, so the
       next launch retries from the same safe starting point. The backup file
       remains on disk as an explicit recovery point either way.
+    - If the database's version is AHEAD of `target_version` -- this build
+      is OLDER than whatever wrote the database -- refuse outright instead
+      of opening it. This is the "rolled back to an older build" case: the
+      code doesn't know what the newer schema's columns/constraints mean, so
+      the only safe move is to say so and stop, before this function's own
+      backup/migrate machinery (built for the opposite direction) touches
+      anything. There is no safe automatic path from a newer schema back to
+      an older one -- no downgrade, no repair -- so this never attempts one.
+      Nothing is written on this path (no backup either): refusing means
+      nothing is being changed, so writing a file here would only add a new
+      way for an inert path to fail.
     """
     try:
         current = conn.execute('PRAGMA user_version').fetchone()[0]
@@ -67,8 +78,20 @@ def ensure_schema_version(conn, db_path, target_version, migrate_fn, backup_dir)
             f"BEFORE any migration was attempted ({e}). This does not look like a "
             f"valid SQLite database. Restore from a known-good backup instead."
         )
-    if current >= target_version:
+
+    if current == target_version:
         return  # already up to date -- most launches take this path
+
+    if current > target_version:
+        raise MigrationError(
+            f"Refusing to open {db_path}: its schema version ({current}) is NEWER than "
+            f"what this build of the application expects ({target_version}). This database "
+            f"was created or migrated by a newer version of the application, and this older "
+            f"build must not operate on a schema it does not understand -- doing so could "
+            f"silently write rows a newer schema's constraints would have refused. There is "
+            f"no safe automatic downgrade, so nothing was changed. Install the newer build "
+            f"again, or point AURA_APP_DATA at a fresh directory to start over."
+        )
 
     if not _integrity_ok(db_path):
         raise MigrationError(
