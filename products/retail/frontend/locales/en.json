@@ -1173,5 +1173,8 @@
   "Sign out with unsynced sales?": "Sign out with unsynced sales?",
   "This device has": "This device has",
   "completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.": "completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.",
-  "Sign out anyway": "Sign out anyway"
+  "Sign out anyway": "Sign out anyway",
+  "Diagnostics": "Diagnostics",
+  "A diagnostics export is a support file for your vendor -- app and database versions, licence status, record counts and recent log activity. It deliberately excludes customer names, phone numbers, emails, and any passwords or keys.": "A diagnostics export is a support file for your vendor -- app and database versions, licence status, record counts and recent log activity. It deliberately excludes customer names, phone numbers, emails, and any passwords or keys.",
+  "Export Diagnostics": "Export Diagnostics"
 }

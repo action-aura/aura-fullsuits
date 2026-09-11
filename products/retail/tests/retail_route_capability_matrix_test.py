@@ -440,6 +440,17 @@ EXPECTED_READ_CAPABILITIES = {
     # reasoning in EXPECTED_MUTATION_CAPABILITIES above, not the Settings-
     # screen hardware administration those two GETs gate.
     'printer_receipt_payload': CAP_SELL,
+
+    # ── Diagnostics export (retail-hardware-viewports) ────────────────────────
+    # `diagnostics_export` (GET /diagnostics/export) builds a support bundle
+    # (app/schema versions, licence STATE only, row counts, sync health, a
+    # redacted log tail) for a shopkeeper to email a vendor. CAP_EMPLOYEES,
+    # matching `printer_devices` immediately above's identical reasoning:
+    # collecting and exporting a support bundle is owner/administrative
+    # authority, the same tier as every other settings read/write in this
+    # file, not a cashier action (retail.sell) or a plain report
+    # (retail.reports).
+    'diagnostics_export': CAP_EMPLOYEES,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

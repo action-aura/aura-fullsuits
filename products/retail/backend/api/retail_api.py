@@ -69,6 +69,10 @@ from commercial_runtime.notifications.outbox import EmailOutboxRepository as _Em
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
 from database.schema import (
     get_retail_conn, sub_create, local_terminal_id,
+    # diagnostics_export's own version field, below -- imported rather than
+    # re-spelled, matching this file's `now_utc_iso`/status constants
+    # discipline immediately above.
+    RETAIL_SCHEMA_VERSION,
     # The drawer's status vocabulary and v16's force-end markers. IMPORTED,
     # never re-spelled: schema.py's migration writes these exact values onto
     # real rows, and a second copy of the word 'ended' living in this file is
@@ -116,7 +120,7 @@ from core.retail import modifiers as modifier_engine
 # private-import convention immediately above.
 from core.retail import money_format as _money_format
 from config import (
-    DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
+    DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
 )
 
@@ -12521,6 +12525,225 @@ def sync_offline_override():
     finally:
         conn.close()
     return jsonify({'status': 'success', 'data': _sync_get_active_health()})
+
+
+# ── Diagnostics export (retail-hardware-viewports) ───────────────────────────
+# THE GAP this closes: app.py configures no file logging at all before this
+# change (see its own `_configure_file_logging` docstring) -- this is the
+# other half. A single, self-contained support bundle a shopkeeper can attach
+# to an email to their vendor when "it stopped working yesterday" -- no
+# external service, no account, involved on either end.
+#
+# CAP_EMPLOYEES, matching printer_devices/printer_test/credit_settings_set/
+# tax_settings_set elsewhere in this file: collecting and exporting a support
+# bundle is an administrative act, the same tier as every other settings
+# read/write in this file -- NOT a cashier action (CAP_SELL) or a plain
+# report (CAP_REPORTS).
+
+#: Last N lines of the log tail included in the bundle, AFTER redaction.
+DIAGNOSTICS_LOG_TAIL_LINES = 200
+
+#: Must resolve to the SAME file app.py's `_configure_file_logging` writes --
+#: both derive it from `os.path.dirname(DATABASE_DIR)`, this file's own
+#: existing "app-data root" idiom (see `require_license_capability` above,
+#: and `printer_test`'s `receipt-test.bin` a few hundred lines down), so a
+#: change to one path must change the other.
+_DIAGNOSTICS_LOG_PATH = os.path.join(os.path.dirname(DATABASE_DIR), 'logs', 'backend.log')
+
+# Licence-key shape (owner/app/security/license_keys.py):
+#   AURA-<PRODUCT SHORT CODE>-<FORMAT VERSION>-XXXX-XXXX-XXXX-XXXX-XXXX
+# where each XXXX is 4 symbols from a 32-symbol Crockford-style alphabet
+# (uppercase letters and digits, 0/O/1/I/L excluded) -- a subset of [A-Z0-9],
+# so matching that broader class is deliberately still exact enough to
+# recognize the shape without re-encoding the excluded-letter alphabet here.
+_DIAGNOSTICS_LICENSE_KEY_RE = re.compile(r'AURA-[A-Z]{2,6}-\d+(?:-[A-Z0-9]{4}){5}')
+_DIAGNOSTICS_EMAIL_RE = re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+# Loosely "a run of digits, with optional dash separators, long enough to be
+# a phone number" -- see _redact_diagnostics_log_line's own docstring for
+# why this is a best-effort net, not a guarantee. Deliberately no `\s` in the
+# character class: a space is what separates an ISO log timestamp's date
+# from its time ("2026-09-11 12:00:00"), and excluding it keeps a matched
+# run from bridging across that boundary and eating half the timestamp.
+_DIAGNOSTICS_PHONE_RE = re.compile(r'(?<!\w)(\+?\d[\d\-]{6,}\d)(?!\w)')
+
+
+def _redact_diagnostics_log_line(line):
+    """BEST-EFFORT redaction net over ONE free-text log line before it is
+    ever included in a diagnostics bundle a shopkeeper might email to a
+    vendor.
+
+    This is NOT a guarantee. Arbitrary text can be logged by any module at
+    any call site (an exception message carrying a raw value, a debug print
+    of a request body, ...), and a regex sweep over free text can always
+    miss a shape nobody anticipated. The real defence is upstream -- never
+    log customer PII or secrets in the first place. This function exists so
+    that the common, recognisable SHAPES that DO slip into free-text log
+    messages despite that discipline (an email address, a phone number, this
+    product's own licence-key format) are degraded to a labelled
+    `[REDACTED:...]` marker instead of a silent, invisible leak -- the
+    reader of the bundle can see that something was removed, rather than
+    losing the context with no trace at all.
+
+    Deliberately does NOT attempt to recognise a customer's NAME -- there is
+    no regex shape for an arbitrary human name that would not also match
+    ordinary log prose, so guessing here would either miss real names or
+    redact half the log. See `_redact_known_pii_from_line` immediately below
+    for how an actual customer's name (and any other on-file PII) is instead
+    caught by exact match against this company's own records, which is a
+    problem regex cannot solve but a database lookup can.
+    """
+    line = _DIAGNOSTICS_EMAIL_RE.sub('[REDACTED:email]', line)
+    line = _DIAGNOSTICS_LICENSE_KEY_RE.sub('[REDACTED:license_key]', line)
+    line = _DIAGNOSTICS_PHONE_RE.sub('[REDACTED:phone]', line)
+    return line
+
+
+def _known_customer_pii_values(cid):
+    """Every non-empty name/phone/email/address THIS company has on file,
+    for the exact-match redaction pass below. Scoped to `cid` -- the same
+    company-scoping every query in this file uses -- so this never reads
+    (and therefore never redacts using) another company's data.
+
+    Bounded to one settings-screen export action, not a hot path: a single
+    extra company-scoped SELECT, same cost class as the row-count queries
+    this route already runs."""
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            'SELECT name, phone, email, address FROM customers WHERE company_id=?', (cid,)
+        ).fetchall()
+    finally:
+        conn.close()
+    values = set()
+    for row in rows:
+        for field in ('name', 'phone', 'email', 'address'):
+            value = row[field]
+            if value:
+                values.add(value)
+    return values
+
+
+def _redact_known_pii_from_line(line, known_pii_values):
+    """Exact-match redaction pass over ONE free-text log line, using values
+    the database already told us are this company's customer PII.
+
+    This is the other half of `_redact_diagnostics_log_line` immediately
+    above: a customer's NAME (or address) has no recognisable regex shape --
+    it is ordinary text -- so it cannot be caught by pattern matching. It
+    CAN be caught by exact match, because the customers table already knows
+    precisely which strings are this company's PII; there is nothing to
+    guess. Still best-effort, same as the regex pass: it only catches a
+    value that matches a CURRENT customer record exactly, not a typo'd or
+    partial one, and not PII belonging to a customer since deleted.
+    """
+    for value in known_pii_values:
+        if value and value in line:
+            line = line.replace(value, '[REDACTED:customer]')
+    return line
+
+
+def _diagnostics_log_tail(known_pii_values):
+    """The last `DIAGNOSTICS_LOG_TAIL_LINES` lines of the backend log file,
+    each run through BOTH redaction passes (see `_redact_diagnostics_log_line`
+    and `_redact_known_pii_from_line`). Best-effort, matching app.py's own
+    `_configure_file_logging`: a missing or unreadable log file (a fresh
+    install that has not logged anything yet, a permissions problem) yields
+    an empty list rather than failing the whole export."""
+    try:
+        with open(_DIAGNOSTICS_LOG_PATH, 'r', encoding='utf-8', errors='replace') as fh:
+            lines = fh.readlines()
+    except OSError:
+        return []
+    tail = lines[-DIAGNOSTICS_LOG_TAIL_LINES:]
+    out = []
+    for ln in tail:
+        ln = _redact_diagnostics_log_line(ln.rstrip('\n'))
+        ln = _redact_known_pii_from_line(ln, known_pii_values)
+        out.append(ln)
+    return out
+
+
+@retail_bp.route('/diagnostics/export', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_EMPLOYEES)
+def diagnostics_export():
+    """A single, safe support bundle a shopkeeper can email to a vendor.
+    See the section comment above for the capability reasoning.
+
+    NEVER includes: customer names/phones/emails/addresses, password
+    hashes, licence keys, API tokens, WhatsApp/SMTP credentials, device
+    private keys, or raw database file contents.
+
+    The licence field is STATE ONLY -- `present_status()`'s `current_state`
+    (e.g. 'ACTIVE_ONLINE', 'NOT_CONFIGURED'), never that function's full
+    dict, which also carries `installation_id`/`entitlements`/
+    `sync_relay_base_url`. None of those are needed for a support bundle, and
+    the smallest safe field set is the one actually returned here.
+
+    The log tail is the one genuinely dangerous part of this bundle -- free
+    text, so anything could have been logged into it -- see
+    `_redact_diagnostics_log_line`'s (regex shapes: email/phone/licence-key)
+    and `_redact_known_pii_from_line`'s (exact match against this company's
+    own customer records -- the only reliable way to catch a NAME, which has
+    no regex shape) docstrings for the two redaction passes applied before
+    it is ever serialized.
+
+    Sets `Content-Disposition` so the frontend's existing `_downloadUrl()`
+    navigation (the SAME mechanism `_renderBackupExport`'s backup/CSV
+    downloads already use) triggers a real file save rather than an inline
+    JSON view.
+    """
+    cid = _cid()
+
+    from pathlib import Path as _Path
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    from commercial_runtime.licensing_contracts.status_presenter import present_status
+    try:
+        _licence_repo = LicenseStateRepository(_Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+        licence_state = present_status(_licence_repo.load()).get('current_state', 'NOT_CONFIGURED')
+    except Exception:
+        # Matches config.py's own `_discover_persisted_sync_relay_url`
+        # discipline: a missing/locked/corrupt licensing.db must never fail
+        # the whole export, only degrade this one field.
+        licence_state = 'UNKNOWN'
+
+    conn = get_retail_conn()
+    try:
+        sales_count = conn.execute('SELECT COUNT(*) FROM sales WHERE company_id=?', (cid,)).fetchone()[0]
+        products_count = conn.execute('SELECT COUNT(*) FROM products WHERE company_id=?', (cid,)).fetchone()[0]
+        customers_count = conn.execute('SELECT COUNT(*) FROM customers WHERE company_id=?', (cid,)).fetchone()[0]
+    finally:
+        conn.close()
+
+    rconn = _registry_conn()
+    try:
+        users_count = rconn.execute('SELECT COUNT(*) FROM users WHERE company_id=?', (cid,)).fetchone()[0]
+    finally:
+        rconn.close()
+
+    known_pii_values = _known_customer_pii_values(cid)
+
+    import platform as _platform
+    resp = jsonify({'status': 'success', 'data': {
+        'app_version': APP_VERSION,
+        'retail_schema_version': RETAIL_SCHEMA_VERSION,
+        'platform': _platform.platform(),
+        'python_version': _platform.python_version(),
+        'licence': {'state': licence_state},
+        'row_counts': {
+            'sales': sales_count,
+            'products': products_count,
+            'customers': customers_count,
+            'users': users_count,
+        },
+        'sync_health': _sync_get_active_health(),
+        'log_tail': _diagnostics_log_tail(known_pii_values),
+    }})
+    filename = f'aura-retail-diagnostics-{datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")}.json'
+    resp.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 # ── AI Assistant (sidebar chat) ─────────────────────────────────────────────

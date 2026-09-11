@@ -10150,6 +10150,11 @@ const RetailSystem = {
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportCsv('payments')">${t('Payments')}</button>
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportCsv('cash-sessions')">${t('Cash Sessions (Z Reports)')}</button>
         </div>
+      </div>
+      <div class="sub-chart-card" style="margin-top:20px">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Diagnostics')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('A diagnostics export is a support file for your vendor -- app and database versions, licence status, record counts and recent log activity. It deliberately excludes customer names, phone numbers, emails, and any passwords or keys.')}</p>
+        <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportDiagnostics()">${t('Export Diagnostics')}</button>
       </div>`;
     await this._loadBackups();
   },
@@ -10255,6 +10260,15 @@ const RetailSystem = {
     if (!path) return;
     const qs = `date_from=${encodeURIComponent(from)}&date_to=${encodeURIComponent(to)}`;
     this._downloadUrl(`${path}?${qs}`);
+  },
+
+  // Reuses _downloadUrl -- the SAME same-origin-GET-carries-the-session-
+  // cookie mechanism the backup table's Download button and _exportCsv
+  // immediately above both use. The server sets Content-Disposition on this
+  // route too (retail_api.py's diagnostics_export), so this is a real file
+  // save, not an inline JSON view in the tab.
+  _exportDiagnostics() {
+    this._downloadUrl('/api/sub/retail/diagnostics/export');
   },
 
   // Restore OVERWRITES the shop's live data (backup/routes.py's `_restore`

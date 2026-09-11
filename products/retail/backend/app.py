@@ -14,6 +14,7 @@ import os
 import re
 import sys
 from datetime import timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # Path resolution must not rely on Path(__file__) alone: in a PyInstaller
@@ -930,6 +931,115 @@ def _refuse_to_serve_before_init_app():
     }), 503
 
 
+# ── File logging (retail-hardware-viewports) ────────────────────────────────
+# THE GAP this closes: nothing above configures file logging anywhere in this
+# module -- every `logging.getLogger(...)` call in this file and every module
+# it imports has only ever reached stderr (Python's own "no handlers found"
+# lastResort fallback). This ships as a PyInstaller/pywebview WINDOWED desktop
+# app (see products/retail/desktop/launcher_retail.py); a windowed process has
+# no console, so stderr goes nowhere at all. When a shop says "it stopped
+# working yesterday", there is currently no record -- nothing to read, nothing
+# to ask them to send.
+#
+# Bounded on purpose: a till runs for months unattended, and an unbounded log
+# is a disk-filling bug, not a diagnostic. 2 MB x 3 backups is a firm ceiling
+# (~8 MB) that still keeps weeks of INFO-level activity on a normal shop.
+LOG_MAX_BYTES = 2 * 1024 * 1024  # 2 MB per file
+LOG_BACKUP_COUNT = 3             # plus the active file -- 4 files, ~8 MB, forever
+LOG_LEVEL_ENV_VAR = 'AURA_LOG_LEVEL'  # overrides the INFO default, e.g. DEBUG/WARNING
+
+# Same directory launcher_retail.py's own `logging.basicConfig` already
+# writes 'startup.log' into (`Path(_app_data, 'logs')`) -- this is the
+# backend's OWN log, not a duplicate of the launcher's, so it gets a
+# different filename in the same, already-established, app-data-relative
+# 'logs' directory. `Path(DATABASE_DIR).parent` is this module's own
+# existing idiom for "the app-data root" (see `_sync_licensing_dir` above),
+# not a new path convention.
+LOG_DIR = Path(DATABASE_DIR).parent / 'logs'
+LOG_FILE_PATH = LOG_DIR / 'backend.log'
+
+# retail_diagnostics_export_test.py's diagnostics_export route (retail_api.py)
+# reads this same file's tail -- see that route's own module-level path
+# constant, which must be derived to the identical location.
+
+_file_logging_configured = False
+
+
+def _configure_file_logging():
+    """Attach a bounded RotatingFileHandler to the root logger, alongside
+    (never instead of) the existing stderr output, so every module's
+    `logging.getLogger(__name__)` call in this process lands in a real file
+    on disk. Called from `init_app()` -- the one seam BOTH the real entry
+    point (`if __name__ == '__main__':` at the bottom of this file) and
+    every test bootstrap (retail_printer_kick_test.py,
+    retail_route_capability_matrix_test.py, etc. -- each calls
+    `_app_module.init_app()` directly) actually run through. Starting this
+    module via `flask run`, or importing it without calling `init_app()`,
+    skips this exactly the same way it skips the schema migrations --
+    see `_refuse_to_serve_before_init_app` immediately above.
+
+    BEST-EFFORT ONLY: a read-only app-data volume, a permissions problem, or
+    any other failure creating the directory/file is caught here and logged
+    to stderr instead. A logging failure must NEVER be the reason a till
+    fails to boot -- this function cannot raise.
+
+    Idempotent: safe if `init_app()` ever runs more than once in a process
+    (some test bootstraps re-import/re-init within the same interpreter).
+    """
+    global _file_logging_configured
+    if _file_logging_configured:
+        return
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        level_name = os.environ.get(LOG_LEVEL_ENV_VAR, 'INFO').upper()
+        level = getattr(logging, level_name, logging.INFO)
+        if not isinstance(level, int):
+            level = logging.INFO
+
+        file_handler = RotatingFileHandler(
+            str(LOG_FILE_PATH), maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
+            encoding='utf-8',
+        )
+        formatter = logging.Formatter(
+            '%(asctime)s %(levelname)-8s %(name)s: %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+
+        root_logger = logging.getLogger()
+        # Explicit stderr handler alongside the new file handler -- NOT a
+        # replacement for it. Root previously had zero handlers, which meant
+        # only WARNING+ ever reached stderr at all (Python's lastResort);
+        # adding a handler here without also keeping an explicit stderr
+        # sink would be a silent regression for anyone still watching a
+        # console during development. See launcher_retail.py's own
+        # `logging.basicConfig(handlers=[FileHandler(...), StreamHandler(...)])`
+        # for the identical two-sinks-at-once shape this mirrors.
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(formatter)
+
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(stream_handler)
+        root_logger.setLevel(level)
+        _file_logging_configured = True
+        # A totally quiet, error-free boot (no sync configured, nothing
+        # mis-set) otherwise emits NOTHING at INFO level anywhere in this
+        # process -- verified while proving this feature works end to end.
+        # An empty log file is a weaker proof than a real one, and this line
+        # is also genuinely useful on its own: it is the first thing a
+        # vendor reading `backend.log` sees, timestamping exactly when this
+        # process started logging and to which file.
+        logging.getLogger(__name__).info(
+            'Aura Retail backend starting -- file logging active at %s (level=%s)',
+            LOG_FILE_PATH, level_name,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'File logging could not be configured (app-data volume unwritable '
+            'or similar); continuing with stderr-only logging. This is never '
+            'fatal to boot.'
+        )
+
+
 def init_app():
     """Initialize the registry + retail schema, and start the background
     sync loop (if configured). Call once before serving.
@@ -950,6 +1060,11 @@ def init_app():
     `SyncService` with its OWN timer/thread/lock, so each needs its own
     `.start()` call -- `.start()` on one has no effect on the other's own
     scheduling."""
+    # First, before anything else touches a database or starts a thread --
+    # see `_configure_file_logging`'s own docstring for why this is the one
+    # seam guaranteed to run for both the real entry point and every test
+    # bootstrap. Never fatal: a logging failure must not stop a till booting.
+    _configure_file_logging()
     init_registry_db()
     init_retail()
     # Launch-readiness Phase 5 prerequisite #1 -- must run AFTER both
