@@ -355,6 +355,16 @@ data class SaleResult(
 )
 data class SaleResponse(val status: String = "", val message: String? = null, val data: SaleResult? = null)
 
+// ── Receipt printing (retail-hardware-viewports) ──────────────────────────
+// Wire contract for GET api/sub/retail/printer/receipt-payload
+// (retail_api.py::printer_receipt_payload) -- see printer/
+// NetworkPrinterAdapter.kt for what happens to these bytes once decoded.
+// payload_b64/width_chars/byte_count are already the server's own
+// snake_case keys, so the property names below match them verbatim -- no
+// @SerializedName needed, same as every other response in this file.
+data class ReceiptPayloadData(val payload_b64: String, val width_chars: Int, val byte_count: Int)
+data class ReceiptPayloadResponse(val status: String = "", val message: String? = null, val data: ReceiptPayloadData? = null)
+
 // ── Retail customers + credit (Accounts Receivable) ──────────────────────────
 // id: String -- customers.id is also a UUID TEXT primary key (same
 // migration/rationale as Product.id above; see _migrate_customers_to_uuid).

@@ -10099,6 +10099,186 @@ def printer_kick():
         conn.close()
 
 
+# ── Printer: real-sale receipt payload (retail-hardware-viewports) ────────────
+# THE GAP this route closes: `render_receipt` (core/retail/escpos_receipt.py)
+# is a pure Python byte layer -- no ctypes, no Windows -- so it can run
+# anywhere, including inside the Android app's embedded Python backend. But it
+# has exactly ONE caller before this route: `printer_test` above, which
+# renders a fixed SAMPLE receipt from the Settings screen. Nothing anywhere
+# renders a REAL sale. That is the blocker for printing on Android: the
+# printer HARDWARE is reached from the Android (Kotlin) side, not this
+# backend, so this backend's only job is to hand the client the exact bytes a
+# real ESC/POS printer needs for a real sale -- which is what this route does.
+# Getting those bytes to Android's printer is a separate, later task.
+@retail_bp.route('/printer/receipt-payload', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def printer_receipt_payload():
+    """Renders one already-completed sale to ESC/POS bytes and hands them
+    back base64-encoded -- this is a JSON API and the payload is raw binary
+    with control codes, which cannot travel as a plain JSON string.
+
+    CAP_SELL, NOT CAP_EMPLOYEES -- matching printer_kick immediately above,
+    deliberately NOT printer_test/printer_devices' CAP_EMPLOYEES settings
+    tier. printer_test/printer_devices are for CHOOSING and TESTING hardware
+    from the Settings screen -- an administrative act. This route reprints
+    the receipt for a sale that was just rung (or any earlier sale of this
+    company); that is part of SELLING, the same tier printer_kick already
+    sits at, not a settings write.
+
+    NO @require_license_capability. Grep this whole file: every
+    @require_license_capability call site sits on a POST/PUT/PATCH/DELETE,
+    never a GET -- a plain read the till needs to function is never gated by
+    licensing state here (see customer_loyalty_balance's identical note, and
+    get_sale immediately below, the same sale-id-scoped GET shape this route
+    mirrors, which carries no licence decorator either). This route
+    reproduces a document for a sale that already exists in this company's
+    own ledger -- a read, not a mutation -- and a shop whose licence has
+    lapsed must still be able to reprint its own receipts. It is exactly the
+    read-only, records-scoped operation RETAIL_RESTRICTED_ALLOWLIST's
+    `retail.records.read` entry describes.
+
+    ESC/POS TEXT MODE IS ASCII-ONLY. escpos_receipt.py's own module
+    docstring ("TEXT ENCODING -- LATIN/ASCII ONLY, AND ARABIC IS NOT SOLVED
+    HERE") explains why: no ESC/POS text code page reliably renders Arabic
+    shaping across printer brands, so every non-ASCII character in this
+    payload -- product names, customer/shop names, everything -- degrades to
+    a literal '?' (never transliterated; see that module's own reasoning for
+    why a guess would be worse). This product's primary market is Jordan and
+    its receipts are frequently Arabic, so a caller printing through these
+    bytes gets an English/ASCII-only receipt. That is a real limitation of
+    this byte path, not a bug to fix here: printing Arabic correctly needs
+    the printer's GRAPHICS/RASTER path (rendering the line as a bitmap) or a
+    vendor SDK's own text API, and neither is in scope of this route.
+
+    `kick`, default OFF (`?kick=1`/`?kick=true` to turn it on). See
+    render_receipt's own docstring: "A receipt render must never silently
+    open the drawer -- printing a duplicate copy, a receipt for looking-up
+    purposes, or an emailed/filed PDF-from-bytes rendering must not pop the
+    till each time." This route can be called long after a sale was rung
+    (e.g. Android re-fetching a receipt to reprint), so the drawer bytes are
+    appended only when the caller explicitly asks for them.
+    """
+    from core.retail import escpos_receipt
+    import base64
+
+    sale_id = request.args.get('sale_id', type=int)
+    if sale_id is None:
+        return jsonify({'status': 'error', 'message': 'sale_id is required'}), 400
+
+    width_raw = request.args.get('width')
+    if width_raw is None:
+        width_chars = 42
+    else:
+        try:
+            width_chars = int(width_raw)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': "width must be 42 or 32"}), 400
+        if width_chars not in (42, 32):
+            return jsonify({'status': 'error', 'message': "width must be 42 or 32"}), 400
+
+    kick = (request.args.get('kick') or '').strip().lower() in ('1', 'true')
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        # COMPANY-SCOPED lookup FIRST -- unscoped would let one company
+        # render another's receipt (see get_sale/printer_kick's identical
+        # cross-tenant discipline elsewhere in this file).
+        sale = conn.execute(
+            "SELECT * FROM sales WHERE id=? AND company_id=?",
+            (sale_id, cid),
+        ).fetchone()
+        if not sale:
+            return jsonify({'status': 'error', 'message': 'Sale not found.'}), 404
+
+        # Same join shape as get_sale's own sale_items query above (product
+        # name resolved through the join, never a raw product_id on paper).
+        items = conn.execute("""
+            SELECT si.product_id, si.quantity, si.line_total, p.name as product_name
+            FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
+            WHERE si.sale_id=?
+        """, (sale_id,)).fetchall()
+
+        # Column-name mapping is deliberate, and NOT symmetrical with
+        # render_receipt's own keys: `sales.change_amount` (not `change`)
+        # and `sale_items`/the join's `product_name` (not `name`). A wrong
+        # mapping here would print a receipt with blank or zero figures and
+        # still pass a test that only checks "some bytes came back" -- see
+        # retail_receipt_payload_test.py's mutation-proof for exactly this.
+        sale_payload = {
+            'sale_number': sale['sale_number'],
+            'created_at': sale['created_at'],
+            'lines': [
+                {
+                    'name': item['product_name'],
+                    'product_id': item['product_id'],
+                    'quantity': item['quantity'],
+                    'line_total': item['line_total'],
+                }
+                for item in items
+            ],
+            'subtotal': sale['subtotal'],
+            'discount_amount': sale['discount_amount'],
+            'tax_amount': sale['tax_amount'],
+            'total': sale['total'],
+            'amount_paid': sale['amount_paid'],
+            'change': sale['change_amount'],
+        }
+
+        # `shop`/`currency` -- reused verbatim from printer_test's own
+        # resolution above, so this route and that one can never disagree on
+        # what a receipt header/currency looks like for the same company.
+        _ensure_credit_schema(conn)
+        s = _settings(conn, cid)
+        currency = s.get('base_currency') or tax_engine.DEFAULT_BASE_CURRENCY
+        shop_name = (s.get('branding_business_name') or '').strip()
+        shop = {
+            'name': shop_name,
+            'address': s.get('branding_address') or '',
+            'phone': s.get('branding_phone') or '',
+        } if shop_name else None
+
+        # E-invoice QR -- best-effort, never blocks this read (same
+        # never-fail discipline as create_sale's own einvoice enqueue try/
+        # except and branding_settings_get's einvoicing_seller read above).
+        # Only a CLEARED outbox row carries a real tax-authority QR payload
+        # (see commercial_runtime/einvoicing/outbox.py's state machine --
+        # QUEUED/SUBMITTING/etc. rows have none yet); anything else means no
+        # QR line on this receipt, never a fabricated one. Deliberately
+        # `qr_payload` (the raw ISTD TLV/base64 string render_receipt's own
+        # `_qr_command` ASCII-encodes and renders as a real ESC/POS QR
+        # symbol on the printer itself), NOT `qr_image_base64` (a
+        # pre-rendered PNG meant for the HTML receipt's `<img>` tag --
+        # commercial_runtime/einvoicing/qr.py's qr_for_outbox_row -- which
+        # is the wrong shape for this byte path entirely).
+        einvoice_qr = None
+        try:
+            from commercial_runtime.einvoicing import outbox as _einvoice_outbox
+            outbox_row = _einvoice_outbox.OutboxRepository(conn).get_by_ref(f'AURA_RETAIL:sale:{sale_id}')
+            if outbox_row and outbox_row['status'] == 'CLEARED' and outbox_row['qr_payload']:
+                einvoice_qr = outbox_row['qr_payload']
+        except Exception:
+            einvoice_qr = None
+    finally:
+        conn.close()
+
+    try:
+        payload = escpos_receipt.render_receipt(
+            sale_payload, width_chars=width_chars, currency=currency,
+            shop=shop, einvoice_qr=einvoice_qr, kick=kick,
+        )
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': f'Could not render the receipt: {exc}'}), 400
+
+    return jsonify({'status': 'success', 'data': {
+        'payload_b64': base64.b64encode(payload).decode('ascii'),
+        'width_chars': width_chars,
+        'byte_count': len(payload),
+    }})
+
+
 # ── Settings (this device's branch pin) ────────────────────────────────────────
 # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the multi-branch
 # capture defect" entry; docs/launch-readiness/seats-and-chain-design.md

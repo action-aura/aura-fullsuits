@@ -177,6 +177,19 @@ interface AuraApi {
     @GET("api/sub/retail/sales/{id}")
     suspend fun saleDetail(@Path("id") id: Int): SaleDetailResponse
 
+    // Real-sale receipt bytes for network/LAN ESC/POS printing (retail-
+    // hardware-viewports). sale_id is Int, matching SaleResult.id/
+    // saleDetail's @Path above -- retail_api.py's printer_receipt_payload
+    // reads it with request.args.get('sale_id', type=int). kick is sent as
+    // 0/1 (not a Boolean) because it travels as a query string, same as the
+    // route's own `?kick=1` documented shape.
+    @GET("api/sub/retail/printer/receipt-payload")
+    suspend fun receiptPayload(
+        @Query("sale_id") saleId: Int,
+        @Query("width") width: Int,
+        @Query("kick") kick: Int,
+    ): ReceiptPayloadResponse
+
     // Suppliers
     @GET("api/sub/retail/suppliers")
     suspend fun suppliers(): SuppliersResponse

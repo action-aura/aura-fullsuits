@@ -139,6 +139,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Quick actions" to "إجراءات سريعة",
     "New Sale" to "بيع جديد",
     "Share Receipt" to "مشاركة الإيصال",
+    // Network-printer receipt printing (retail-hardware-viewports) --
+    // see the "Retail settings" section below for the Settings-screen
+    // strings this button's feature is configured through.
+    "Print Receipt" to "طباعة الإيصال",
+    "Couldn't print receipt" to "تعذّرت طباعة الإيصال",
     "Today" to "اليوم",
     "Today's Sales" to "مبيعات اليوم",
     "Revenue today" to "إيرادات اليوم",
@@ -550,6 +555,25 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "New method" to "طريقة جديدة",
     "Couldn't add" to "تعذّرت الإضافة",
     "Add" to "إضافة",
+
+    // ── Retail settings → Receipt Printer (retail-hardware-viewports) ─────────
+    "Receipt Printer" to "طابعة الإيصالات",
+    "For a network (LAN) ESC/POS receipt printer only. Bluetooth and built-in printers are not supported yet." to
+        "لطابعة إيصالات ESC/POS عبر الشبكة المحلية (LAN) فقط. البلوتوث والطابعات المدمجة غير مدعومة بعد.",
+    "Printer IP address" to "عنوان IP الخاص بالطابعة",
+    "Port" to "المنفذ",
+    "Paper width" to "عرض الورق",
+    "80mm (42 chars)" to "80 مم (42 حرفًا)",
+    "58mm (32 chars)" to "58 مم (32 حرفًا)",
+    "Auto-print after each sale" to "الطباعة التلقائية بعد كل عملية بيع",
+    "Prints automatically as soon as a sale completes, with no extra tap." to
+        "تتم الطباعة تلقائيًا فور اكتمال البيع، دون الحاجة لأي لمسة إضافية.",
+    // A real limitation of the ESC/POS text byte path itself (see
+    // escpos_receipt.py's module docstring), not something Android could
+    // fix on its own -- a shopkeeper needs to know this up front.
+    "Printed receipts are in English only, even when the app is in Arabic — ESC/POS text mode cannot render Arabic script." to
+        "الإيصالات المطبوعة تكون بالإنجليزية فقط، حتى عند استخدام التطبيق بالعربية — وضع النص ESC/POS لا يمكنه عرض الحروف العربية.",
+    "Save printer settings" to "حفظ إعدادات الطابعة",
 
     // ── Purchase orders ───────────────────────────────────────────────────────
     "No purchase orders" to "لا توجد أوامر شراء",

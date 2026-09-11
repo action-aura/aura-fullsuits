@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
@@ -42,6 +43,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
+import com.actionaura.retail.printer.NetworkPrinterAdapter
+import com.actionaura.retail.printer.PrinterPrefs
 import com.actionaura.retail.ui.CAP_STOCK_ADJUST
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
@@ -120,6 +123,11 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var downPayment by remember { mutableStateOf("") }             // optional paid-now on a credit sale
     var payMethods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }  // configurable tenders
     val scope = rememberCoroutineScope()
+    // Needed here (not just inside PaymentSuccess below) for auto-print:
+    // PrinterPrefs is a per-device Context read, and the fire-and-forget
+    // auto-print call below fires from this success branch, before
+    // PaymentSuccess itself has even entered composition.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
     suspend fun loadCustomers() { customers = try { ApiClient.get().customers().data } catch (e: Exception) { emptyList() } }
@@ -306,7 +314,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
 
         // Payment success overlay
         AnimatedVisibility(successSale != null, enter = fadeIn(), exit = fadeOut()) {
-            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null })
+            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null }, snackbar = snackbar)
         }
     }
 
@@ -492,6 +500,18 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         cart.clear(); showCart = false; successSale = r.data
                                         paymentMethod = "cash"; customer = null; downPayment = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
+                                        // Auto-print (Settings toggle, default off): fire-and-
+                                        // forget, no blocking, no error dialog -- printReceipt's
+                                        // own doc comment covers why a print failure must never
+                                        // read as the sale having failed. A separate coroutine
+                                        // (not the one this success handling already runs in)
+                                        // so a slow/unreachable printer can never delay
+                                        // load()/loadCustomers() below.
+                                        r.data?.id?.let { saleId ->
+                                            if (PrinterPrefs.getAutoPrint(ctx)) {
+                                                scope.launch { printReceipt(ctx, saleId, snackbar) }
+                                            }
+                                        }
                                         load(); loadCustomers()   // refresh stock + customer balances
                                     } else snackbar.showSnackbar(r.message ?: tr("Sale failed"))
                                 // apiErrorMessage (net/ApiErrors.kt): a licensing
@@ -643,9 +663,11 @@ private fun StockBadge(stock: Double, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale: () -> Unit) {
+private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale: () -> Unit, snackbar: SnackbarHostState) {
     val check = remember { Animatable(0f) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var printing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         check.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
     }
@@ -676,6 +698,24 @@ private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale
             // email, etc. Every value is `sale`, the server's own response.
             OutlinedButton(onClick = { shareReceipt(ctx, sale) }, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 Icon(Icons.Default.Share, null); Spacer(Modifier.width(8.dp)); Text(tr("Share Receipt"))
+            }
+            // Only offered once a network printer is actually configured
+            // (Settings -> Receipt Printer) -- an install that never sets one
+            // up sees no new button here at all, matching this codebase's
+            // "costs nothing to an install that doesn't use it" rule.
+            if (PrinterPrefs.isConfigured(ctx)) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { scope.launch { printing = true; printReceipt(ctx, sale.id, snackbar); printing = false } },
+                    enabled = !printing,
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                ) {
+                    if (printing) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Print, null); Spacer(Modifier.width(8.dp)); Text(tr("Print Receipt"))
+                    }
+                }
             }
             Spacer(Modifier.height(12.dp))
             Button(onClick = onNewSale, modifier = Modifier.fillMaxWidth().height(54.dp)) {
@@ -718,6 +758,59 @@ private fun shareReceipt(ctx: android.content.Context, sale: com.actionaura.reta
     // designed artefact. "Aura Retail" stays English regardless -- it is the
     // product name, brand rather than copy.
     ctx.startActivity(android.content.Intent.createChooser(intent, tr("Share Receipt")))
+}
+
+// Receipt printing (retail-hardware-viewports): fetches the server-
+// rendered ESC/POS byte stream for `saleId` and sends it to the network
+// printer configured in Settings -> Receipt Printer. Both the manual
+// "Print Receipt" button above and auto-print (PosScreen's sale-success
+// branch) call this exact same function, so there is only one place that
+// can get "what does printing a receipt mean" wrong.
+//
+// Never lets a print failure look like the sale failed: this is only ever
+// called with a sale id from an already-successful, server-issued sale
+// response, and PaymentSuccess exists to CONFIRM that sale, not to gate
+// it. So every failure path here ends in a snackbar, exactly like the
+// checkout screen's own error handling above -- never a thrown exception,
+// never a dialog that could read as "the sale didn't go through."
+private suspend fun printReceipt(ctx: android.content.Context, saleId: Int, snackbar: SnackbarHostState) {
+    try {
+        val width = PrinterPrefs.getWidth(ctx)
+        // kick=0: reprinting/manual-printing a receipt must never pop the
+        // cash drawer a second time -- see the backend route's own doc
+        // comment (retail_api.py::printer_receipt_payload) for the "opening
+        // the drawer is a deliberate act, not a side effect of rendering
+        // bytes" reasoning this mirrors.
+        val resp = ApiClient.get().receiptPayload(saleId, width, kick = 0)
+        val data = resp.data
+        if (resp.status != "success" || data == null) {
+            snackbar.showSnackbar(resp.message ?: tr("Couldn't print receipt"))
+            return
+        }
+        // java.util.Base64, NOT android.util.Base64: android.util.Base64 is
+        // a stubbed Android framework class that throws in a plain JVM unit
+        // test (NetworkPrinterAdapterTest / ReceiptPayloadContractTest run
+        // under `testDebugUnitTest`, no emulator/Robolectric involved),
+        // while java.util.Base64 has been available since API 26 -- this
+        // app's own minSdk -- so the exact same call works at runtime and
+        // in tests. That matters here specifically because this decode is
+        // exactly where a corrupted payload would surface.
+        val bytes = try {
+            java.util.Base64.getDecoder().decode(data.payload_b64)
+        } catch (e: IllegalArgumentException) {
+            snackbar.showSnackbar(tr("Couldn't print receipt"))
+            return
+        }
+        val host = PrinterPrefs.getHost(ctx)
+        val port = PrinterPrefs.getPort(ctx)
+        NetworkPrinterAdapter(host, port).print(bytes)
+            .onFailure { e -> snackbar.showSnackbar(e.message ?: tr("Couldn't print receipt")) }
+    } catch (e: Exception) {
+        // apiErrorMessage (net/ApiErrors.kt): the same mapping every other
+        // screen's catch block uses, so a licensing block or an expired
+        // session reads the same way here as everywhere else in the app.
+        snackbar.showSnackbar(apiErrorMessage(e))
+    }
 }
 
 @Composable

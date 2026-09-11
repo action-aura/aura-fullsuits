@@ -431,6 +431,15 @@ EXPECTED_READ_CAPABILITIES = {
     # right next to it in retail_api.py, which are plain reads and carry no
     # capability at all.
     'printer_devices': CAP_EMPLOYEES,
+    # `printer_receipt_payload` (GET /printer/receipt-payload,
+    # retail-hardware-viewports) renders an already-completed sale to
+    # ESC/POS bytes for the Android app's own printer to send -- retail.sell,
+    # NOT CAP_EMPLOYEES like printer_devices/printer_test immediately above:
+    # this is a till operation (reprinting/handing off a receipt for a sale
+    # that was just rung), matching printer_kick's identical CAP_SELL
+    # reasoning in EXPECTED_MUTATION_CAPABILITIES above, not the Settings-
+    # screen hardware administration those two GETs gate.
+    'printer_receipt_payload': CAP_SELL,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each
