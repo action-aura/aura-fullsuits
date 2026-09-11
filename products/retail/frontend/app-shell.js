@@ -1297,6 +1297,15 @@ const SubsystemApp = {
       // licensing.js's render() does on its own side) is what stops a
       // long-dead marker from suppressing showSetupModal()'s key field later.
       this._clearActivationPending();
+      // Paints (or clears) the "selling is blocked" banner off this SAME
+      // fetch -- no second request. _needsActivation() above only catches 3
+      // of the 10 states in LICENSE_BANNER_BLOCKED_STATES (and those 3 just
+      // navigated away, so the shell never even renders for them); the other
+      // 7 -- RESTRICTED, SUSPENDED, REVOKED, EXPIRED, DEVICE_DEACTIVATED,
+      // CLOCK_REVIEW_REQUIRED, LOCAL_STATE_CORRUPT -- fall through to here and
+      // reach the shell with no warning today beyond a 403 the first time the
+      // shopkeeper presses Charge. This is the fix for that.
+      this._renderLicenseBanner(lic && lic.current_state);
     } catch (e) {
       // Network hiccup: fail open, same as every other best-effort check in
       // the init() sequence this was lifted out of.
@@ -3113,11 +3122,98 @@ const SubsystemApp = {
       this._licenseCheckInDisabled = true;
       this._stopLicenseCheckInPoll();
     }
-    // Deliberately no UI update here beyond that -- every mutation route
-    // already independently re-reads this same persisted state via
-    // require_license_capability() on its own next request; this poll's
-    // whole job is making sure that persisted state doesn't go stale for
-    // a full session, not rendering a banner itself.
+    // Also repaints the "selling is blocked" banner off this SAME response --
+    // no second poll, no second fetch (see _renderLicenseBanner). Before this,
+    // a licence Owner suspending or restoring a device WHILE the app stayed
+    // open changed the ENFORCEMENT (require_license_capability() reads this
+    // same persisted state on its own next request) with nothing on screen to
+    // explain why Charge suddenly started failing, or why it started working
+    // again -- the exact "a 403 in a network tab is not an onboarding flow"
+    // complaint this banner exists to fix, just mid-session instead of at
+    // boot. Still zero cost for an install that never opted in: NOT_CONFIGURED
+    // is one of LICENSE_BANNER_BLOCKED_STATES too (selling stays blocked
+    // whether or not Owner is wired up -- see that list's own comment), so the
+    // one call this makes before disabling itself above leaves the banner in
+    // the right state rather than skipping it.
+    this._renderLicenseBanner(body && body.current_state);
+  },
+
+  // ── "Selling is blocked, but your data is safe" banner ─────────────────────
+  // The onboarding failure this fixes: a fresh or restricted install is
+  // READ-ONLY, not unlocked (deliberate, pinned by capability_guard.py's own
+  // tests) -- but the only way the shell used to say so was a 403 in a
+  // network tab the first time someone pressed Charge. This list is derived
+  // directly from commercial_runtime/licensing_contracts/state_machine.py:
+  // DATA_PRESERVED_FAMILY minus ACTIVE_FAMILY. Every state in
+  // DATA_PRESERVED_FAMILY keeps read/backup/export/returns/customer-payment
+  // access (Part P); the ones ALSO in ACTIVE_FAMILY are normal commercial
+  // operation and must show no banner at all -- a permanent scary banner on a
+  // paying customer's till is worse than the bug this fixes. What is left --
+  // this list -- is exactly "the till still works for everything except
+  // ringing a new sale". Kept as an explicit list rather than re-derived at
+  // runtime (this is a browser script with no import of the Python enum), so
+  // retail_license_banner_test.js parses state_machine.py itself and fails
+  // loudly the moment this list drifts from it.
+  LICENSE_BANNER_BLOCKED_STATES: [
+    'NOT_CONFIGURED', 'ACTIVATION_REQUIRED', 'ACTIVATING', 'RESTRICTED',
+    'SUSPENDED', 'REVOKED', 'EXPIRED', 'DEVICE_DEACTIVATED',
+    'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT',
+  ],
+
+  // Persistent, full-width, top-of-shell banner -- never a modal: the shop
+  // must still reach every read-only screen (viewing, backups, exports,
+  // returns, customer payments) while a sale is blocked. Same create-once/
+  // repaint-in-place element _renderSyncBanner uses just below: one
+  // #aura-license-banner div, created the first time there is something to
+  // show and REMOVED OUTRIGHT (never merely hidden) the instant the state is
+  // healthy again, so an activated install carries no trace of this in the
+  // DOM at all. Called only from the two places this shell already learns the
+  // license state (_enforceActivationGate's boot-time GET /api/licensing/
+  // status and _pollLicenseCheckIn's existing 5-minute poll) -- never a new
+  // endpoint, never a new timer.
+  _renderLicenseBanner(state) {
+    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);
+    if (!blocked) {
+      // Explicitly null, not merely "leave whatever it was" -- the very
+      // first call this shell ever makes (a healthy ACTIVATE_ONLINE install,
+      // no prior blocked state to have created an element) must leave
+      // _licenseBannerEl in the SAME observable "nothing here" state as
+      // every later call that clears one, so a caller can assert absence
+      // once rather than needing to know whether this is the first paint.
+      if (this._licenseBannerEl) this._licenseBannerEl.remove();
+      this._licenseBannerEl = null;
+      return;
+    }
+    if (!this._licenseBannerEl) {
+      const el = document.createElement('div');
+      el.id = 'aura-license-banner';
+      document.body.appendChild(el);
+      this._licenseBannerEl = el;
+    }
+    const el = this._licenseBannerEl;
+    // WARNING triad, not danger: nothing is lost and no data is at risk (Part
+    // P keeps read/backup/export/returns/customer-payment access) -- only a
+    // NEW sale is refused, so this reads as "action needed", not "something
+    // broke". inset-inline, not left/right: retail_design_rtl_test.js
+    // ratchets physical direction properties in JS-built inline styles and
+    // there is no css/rtl.css mirror rule for an inline style at all.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-warning-surface);'
+      + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+      + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
+      + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+    el.innerHTML =
+      '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--state-warning-text);">'
+      + (window.AuraIcons ? AuraIcons.render('triangle-alert', 15) : '')
+      + t('This device is not licensed to ring new sales') + '</span>'
+      + '<span style="opacity:.85;">'
+      + t('Your data is safe -- viewing, backups, exports, returns, and customer payments all still work.')
+      + '</span>'
+      + '<button type="button" onclick="SubsystemApp.openLicensing()" '
+      + 'style="min-inline-size:var(--touch-target-min);min-block-size:var(--touch-target-min);'
+      + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
+      + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
+      + t('Activate License') + '</button>';
   },
 
   async _pollSyncHealth() {

@@ -1176,5 +1176,8 @@
   "Sign out anyway": "Sign out anyway",
   "Diagnostics": "Diagnostics",
   "A diagnostics export is a support file for your vendor -- app and database versions, licence status, record counts and recent log activity. It deliberately excludes customer names, phone numbers, emails, and any passwords or keys.": "A diagnostics export is a support file for your vendor -- app and database versions, licence status, record counts and recent log activity. It deliberately excludes customer names, phone numbers, emails, and any passwords or keys.",
-  "Export Diagnostics": "Export Diagnostics"
+  "Export Diagnostics": "Export Diagnostics",
+  "This device is not licensed to ring new sales": "This device is not licensed to ring new sales",
+  "Your data is safe -- viewing, backups, exports, returns, and customer payments all still work.": "Your data is safe -- viewing, backups, exports, returns, and customer payments all still work.",
+  "Activate License": "Activate License"
 }

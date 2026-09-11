@@ -1176,5 +1176,8 @@
   "Sign out anyway": "تسجيل الخروج على أي حال",
   "Diagnostics": "التشخيص",
   "A diagnostics export is a support file for your vendor -- app and database versions, licence status, record counts and recent log activity. It deliberately excludes customer names, phone numbers, emails, and any passwords or keys.": "ملف تصدير التشخيص هو ملف دعم فني للمورّد -- إصدارات التطبيق وقاعدة البيانات، وحالة الترخيص، وأعداد السجلات، ونشاط السجل الأخير. يستبعد عمداً أسماء العملاء وأرقام هواتفهم وبريدهم الإلكتروني وأي كلمات مرور أو مفاتيح.",
-  "Export Diagnostics": "تصدير بيانات التشخيص"
+  "Export Diagnostics": "تصدير بيانات التشخيص",
+  "This device is not licensed to ring new sales": "هذا الجهاز غير مرخّص لتسجيل عمليات بيع جديدة",
+  "Your data is safe -- viewing, backups, exports, returns, and customer payments all still work.": "بياناتك آمنة -- لا تزال المشاهدة والنسخ الاحتياطي والتصدير والمرتجعات ومدفوعات العملاء تعمل جميعها.",
+  "Activate License": "تفعيل الترخيص"
 }
