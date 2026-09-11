@@ -262,7 +262,8 @@ def test_sale_response_is_unaffected_by_email_queueing(client, monkeypatch):
     # line is upstream in e-invoicing, never a shorter list here.
     assert sorted(data.keys()) == sorted([
         'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-        'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines',
+        'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+        'id', 'idempotency_key', 'lines',
         'oversold_past_recorded_stock',
         'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',

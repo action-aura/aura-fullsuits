@@ -4599,10 +4599,21 @@ const RetailSystem = {
   // core (see this change's own report) -- never a money line, never the
   // sale number, date or e-invoice block, and each one only ever appears
   // when BOTH its own setting is on AND `saleData` actually carries the
-  // name. A checkout-time print (`saleData` = POST /sales's response) never
-  // carries either name today, so with both settings on that receipt is
-  // unchanged until the sale is reprinted from Sales History, which
-  // resolves and passes both through (see _reprintSale). `customer_id` is
+  // name.
+  //
+  // BOTH PATHS NOW CARRY BOTH NAMES, and that is a correction to what this
+  // comment used to say. It read "a checkout-time print never carries either
+  // name today", which was true when written: POST /sales' response had no
+  // employee_name, customer_id or customer_name, so a shop that switched
+  // these two settings on got the rows when it REPRINTED from Sales History
+  // and silently never got them on the receipt it actually handed the
+  // customer at the till. create_sale now returns all three, resolved
+  // through the same `_resolve_actor_identities` helper get_sale uses and
+  // with the same COALESCE(name,'Walk-in') fallback, specifically so the
+  // receipt printed at checkout and the same sale reprinted later cannot
+  // disagree -- pinned by retail_receipt_identity_parity_test.py, which
+  // compares the two responses field by field rather than merely checking
+  // each is non-empty. `customer_id` is
   // checked, not just `customer_name`, so an anonymous/walk-in sale (whose
   // resolved name is the literal fallback string "Walk-in", not a real
   // customer) never prints a customer line just because that fallback

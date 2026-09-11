@@ -79,9 +79,23 @@ def teardown_module(module):
 # figure rather than re-deriving it client-side. This list stays an EXACT
 # match -- widening it does not loosen the check, and a key disappearing or
 # an unexpected one appearing still fails.
+#
+# `customer_id` / `customer_name` / `employee_name` added for the receipt-
+# identity fix (2026-09-11): _receiptIdentityBlock (subsystem-retail.js)
+# renders optional Cashier/Customer rows gated on the shop's own branding
+# settings, but create_sale carried none of the three fields it reads --
+# only a REPRINT (get_sale) did, so a shop that switched those settings on
+# got the rows on a reprint and silently never got them on the receipt
+# actually handed over at the till. `employee_name` is resolved through
+# the SAME `_resolve_actor_identities` helper get_sale uses (its own
+# docstring exists so the two callers cannot disagree); `customer_name`
+# mirrors get_sale's own `COALESCE(c.name,'Walk-in')`, walk-in string
+# included. Cash-drawer state still never affects any of the three -- the
+# equality loop below covers them like every other key.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+    'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]

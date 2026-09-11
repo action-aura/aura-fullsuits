@@ -4580,6 +4580,12 @@ def create_sale():
                               (idem, cid)).fetchone()
             if ex:
                 conn.close()
+                # Idempotent replay returns ONLY id/sale_number -- this narrow
+                # shape is pre-existing for every key on this response, not
+                # just the identity fields added below (employee_name/
+                # customer_id/customer_name): a resubmission of a request this
+                # device already wrote gets a confirmation, not a second full
+                # receipt payload. Considered here, not missed.
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'sale_number': ex['sale_number']}})
 
         items_in = data.get('items') or []
@@ -5546,6 +5552,38 @@ def create_sale():
         _emit('SaleCompleted', {'sale_id': sale_id, 'sale_number': sale_number, 'total': total,
                                  'payment_method': pm})
 
+        # Receipt identity, resolved HERE (conn/cur are still open -- this
+        # runs before the `finally: conn.close()` at the bottom of this
+        # function) so the checkout receipt handed to the customer at the
+        # till and a REPRINT of this same sale later can never disagree
+        # about who rang it or who it was rung for. Before this, `get_sale`
+        # (~line 6063) resolved both `employee_name` and `customer_name` and
+        # this endpoint resolved neither -- a shop that had switched on
+        # branding_receipt_show_cashier / branding_receipt_show_customer got
+        # the row on a reprint and silently never got it on the receipt that
+        # actually left the till.
+        #
+        # `employee_name` goes through the SAME `_resolve_actor_identities`
+        # helper `get_sale` calls, indexed with the SAME `_UNRESOLVED_IDENTITY`
+        # default -- that helper's own docstring exists precisely so two
+        # callers naming the same uid can never disagree, and this is the
+        # second caller. `actor` is the exact uid already stamped onto this
+        # sale's own `actor_user_uid` column above (`_stamp()`, ~line 4672),
+        # never re-derived from the free-text `cashier` field.
+        identity = _resolve_actor_identities(cid, [actor]).get(actor, _UNRESOLVED_IDENTITY)
+        employee_name = identity['employee_name']
+        # `customer_name` mirrors get_sale's own `COALESCE(c.name,'Walk-in')`
+        # deliberately, walk-in string included: a sale with no customer_id
+        # must come back 'Walk-in' here too, not None and not '', or the two
+        # paths would drift apart on exactly the case most likely to be
+        # tested loosely. Company-scoped like every other lookup in this
+        # file -- a query that is not would be a bug, not a simplification.
+        customer_name_row = cur.execute(
+            "SELECT COALESCE(name,'Walk-in') as customer_name FROM customers WHERE id=? AND company_id=?",
+            (customer_id, cid)
+        ).fetchone()
+        customer_name = customer_name_row['customer_name'] if customer_name_row else 'Walk-in'
+
         response_data = {
             'id': sale_id, 'sale_number': sale_number,
             'idempotency_key': idem, 'currency': _settings(conn, cid)['base_currency'],
@@ -5581,6 +5619,13 @@ def create_sale():
             # refusal without ever going negative, and Decision 4 is
             # explicit that landing on zero is not an oversell.
             'oversold_past_recorded_stock': sale_oversold_past_recorded_stock,
+            # Receipt identity (resolved just above, see that comment):
+            # present on EVERY sale, unconditionally, matching 'oversold_
+            # past_recorded_stock's own precedent -- whether the branding
+            # settings actually render the Cashier/Customer rows is a
+            # frontend decision (_receiptIdentityBlock in
+            # subsystem-retail.js), not something this endpoint pre-filters.
+            'employee_name': employee_name, 'customer_id': customer_id, 'customer_name': customer_name,
         }
 
         # docs/einvoicing/phase1/ -- best-effort, never blocks or fails the
