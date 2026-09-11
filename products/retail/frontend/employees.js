@@ -96,6 +96,20 @@ const RetailEmployees = {
   // there is exactly one place that can put this screen into reduced mode.
   _reduced: false,
 
+  // Bumped by _beginRender(), read by _isStaleRender() -- see the "Render
+  // generation guard" comment on render() below for the concrete race this
+  // stops. A counter LOCAL to this screen, not RetailSystem's own
+  // _renderGeneration (subsystem-retail.js): see the comment on _icon()
+  // below for the same reasoning applied to a different helper -- this
+  // screen's own test harness (retail_employees_screen_test.js) builds a
+  // small RetailSystem stub that has no obligation to carry RetailSystem's
+  // dashboard-only guard, and reaching across objects for it would make
+  // this screen's render() throw the moment any caller's RetailSystem does
+  // not happen to define it. A stale Employees render and a stale
+  // Dashboard render are also unrelated events that never need to share a
+  // counter.
+  _renderGeneration: 0,
+
   // Delegated rather than reimplemented -- same shape cash-drawer.js uses, so
   // the 401 -> re-login handling in RetailSystem._fetch covers this screen too
   // instead of every feature file inventing its own session behaviour.
@@ -165,11 +179,45 @@ const RetailEmployees = {
     return (emp && emp.effective_role) === 'admin';
   },
 
+  // ── Render generation guard (retail-hardware-viewports audit) ───────────
+  //
+  // `c` here is #sub-content -- the ONE persistent container every screen in
+  // this app renders into. RetailSystem.render()'s router swaps its
+  // innerHTML per screen but never replaces the element itself, so it stays
+  // live across a navigation rather than being torn down with the screen
+  // that used it.
+  //
+  // The branch-manager arm of render() below awaits a roster probe (GET
+  // /api/admin/employees) before it knows whether to show the reduced
+  // screen or the refusal, and only THEN writes into `c`. If the owner or a
+  // delegated manager navigates away from Employees before that probe
+  // resolves -- to Dashboard, POS, anywhere -- this continuation would
+  // otherwise paint its refusal panel or reduced employee table over
+  // whatever screen the user has since navigated to, unrelated to Employees
+  // entirely. This is the same class of bug subsystem-retail.js's own
+  // "Render generation guard" comment (above its Router, near
+  // _renderDashboard) describes and fixes for the Dashboard's stats fetch --
+  // here the container being overwritten is the whole screen rather than a
+  // handful of KPI fields, which makes it more visible, not less real.
+  //
+  // _beginRender()/_isStaleRender() mirror that fix's names and contract
+  // exactly (_isStaleRender is a genuine early return at its call site,
+  // never a try/catch -- the point is to write NOTHING, not to recover
+  // after a wrong screen has already been painted) but count LOCALLY to
+  // this screen -- see the comment on _renderGeneration above for why this
+  // file does not reach into RetailSystem for it.
+  _beginRender() { return ++this._renderGeneration; },
+  _isStaleRender(token) { return token !== this._renderGeneration; },
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   async render(c) {
     if (!c) return;
     RetailSystem._injectStyles();
+    // See the "Render generation guard" comment above. Bumped here, at the
+    // very start of render(), and checked once below -- right after the one
+    // await this function makes before it next writes into `c`.
+    const renderToken = this._beginRender();
 
     if (this._isOwner()) {
       this._reduced = false;
@@ -254,6 +302,12 @@ const RetailEmployees = {
     } catch (err) {
       console.error('Branch-manager roster check failed', err);
     }
+    // Superseded while the probe was in flight -- see the "Render
+    // generation guard" comment above render(). A genuine early return,
+    // never a try/catch: written nothing into `c`, unlike the try/catch
+    // above, which exists only to give `probe` an honest null on a network
+    // failure, not to police staleness.
+    if (this._isStaleRender(renderToken)) return;
     const myId = window.SubsystemApp && SubsystemApp.currentUser && SubsystemApp.currentUser.id;
     // My own row is always present when the request was accepted: the
     // delegated arm of get_employees filters to
