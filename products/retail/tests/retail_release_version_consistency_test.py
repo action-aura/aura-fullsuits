@@ -25,14 +25,33 @@ WHAT IS CHECKED
    free-text strings, and the tuple cannot hold `-rc.N` -- so the two halves of
    the same file can drift apart on their own, independently of the other seven
    files. They did not, but nothing said so.
+3. Android `versionCode` agrees between the two Android modules, and is a
+   positive integer. Added after this test's original blind spot let
+   `versionName` roll from rc.6 to rc.7 in both `build.gradle` files while
+   `versionCode` sat still at its rc.6 value in both -- caught by inspection,
+   not by this suite, which is exactly the kind of drift this file exists to
+   catch instead. See "WHAT IS STILL DELIBERATELY NOT CHECKED" below for the
+   one thing this addition does NOT do.
 
-WHAT IS DELIBERATELY NOT CHECKED
+WHAT IS STILL DELIBERATELY NOT CHECKED
 
-Android `versionCode`. It is a monotonic integer that must rise on every store
-upload and is NOT derivable from the semver, so asserting a relationship
-between them would be inventing a rule the policy does not state. Its own
-constraint -- never reused, never decreasing -- is a different test against
-release history, not against this file.
+A numeric relationship between `versionCode` and `versionName`. `versionCode`
+is a monotonic integer that Google Play requires to strictly increase on every
+upload it accepts, and it is NOT derivable from the semver: `1.0.0-rc.6` ->
+`1.0.0-rc.7` -> `1.0.0` -> `1.0.1` all have to map to strictly increasing
+integers, and any formula tying the two together breaks the moment the
+versioning scheme itself changes (dropping `-rc.N` at GA is exactly such a
+change -- see docs/release/versioning-policy.md). Inventing that formula here
+would be inventing a rule the policy does not state, the same reasoning this
+docstring already gave for `versionCode` before this addition. So
+`versionCode` stays a plain integer, bumped by hand each release, per
+docs/release/versioning-policy.md's "Android versionCode" section --
+consistency between the two modules and "is it positive" are the only two
+properties checked here. Its OTHER real constraint -- never reused, never
+decreasing release-over-release -- is a check against release history (the
+last value actually published to Play), not against a single checkout of
+these two files, so it stays out of scope for this file; Google Play enforces
+that half itself by refusing the upload outright.
 
 Run standalone, one file per process, like every test here (AUDIT-010):
 
@@ -82,6 +101,22 @@ VERSION_RESOURCES = [
     ("clinic", "products/clinic/packaging/version_info.txt"),
 ]
 
+# Deliberately a SEPARATE list from DECLARATIONS above, not folded into it:
+# DECLARATIONS' eight sites all carry the same semver, and
+# test_this_test_reads_all_eight_sites_the_policy_names asserts that count
+# against the policy document. versionCode is a different value with a
+# different rule (see the module docstring's "WHAT IS STILL DELIBERATELY NOT
+# CHECKED" section) -- mixing it in would make that count assertion either
+# wrong or coincidentally right for the wrong reason.
+VERSION_CODE_DECLARATIONS = [
+    ("retail Android versionCode",
+     "android/aura-retail/app/build.gradle",
+     r"versionCode\s+(\d+)"),
+    ("clinic Android versionCode",
+     "android/aura-clinic/app/build.gradle",
+     r"versionCode\s+(\d+)"),
+]
+
 
 def _read(relative: str) -> str:
     path = ROOT / relative
@@ -110,6 +145,22 @@ def _declared() -> list[tuple[str, str, str]]:
     return found
 
 
+def _declared_version_codes() -> list[tuple[str, str, int]]:
+    """(label, relative path, versionCode) for both Android modules."""
+    found = []
+    for label, relative, pattern in VERSION_CODE_DECLARATIONS:
+        text = _read(relative)
+        match = re.search(pattern, text, re.MULTILINE)
+        assert match, (
+            f"{label}: no versionCode found in {relative} using {pattern!r}. "
+            f"Either the declaration moved or its shape changed -- this test "
+            f"reads the file rather than a copy, so a silent miss here would "
+            f"make the check below vacuous."
+        )
+        found.append((label, relative, int(match.group(1))))
+    return found
+
+
 def test_every_declaration_of_the_release_version_agrees():
     found = _declared()
     versions = {version for _, _, version in found}
@@ -131,6 +182,39 @@ def test_the_version_is_shaped_the_way_the_policy_says():
         f"{version!r} is not MAJOR.MINOR.PATCH[-rc.N] as "
         f"docs/release/versioning-policy.md prescribes."
     )
+
+
+def test_android_version_codes_agree_between_products():
+    # The one thing Google Play actually enforces: it refuses an upload whose
+    # versionCode is not strictly greater than the last one it accepted for
+    # that application. versionName can move (or not) as often as it likes --
+    # Play never looks at it -- so it is versionCode, not versionName, whose
+    # drift is the release-blocking failure mode. This test caught nothing
+    # itself before it existed: versionName rolled rc.6 -> rc.7 in both
+    # modules while versionCode sat unmoved at its rc.6 value in both, and
+    # nothing here said so.
+    found = _declared_version_codes()
+    codes = {code for _, _, code in found}
+    assert len(codes) == 1, (
+        "Android versionCode disagrees between the two modules. They are "
+        "released together and must stay equal for the same reason "
+        "versionName does (test_every_declaration_of_the_release_version_agrees "
+        "above). Every site, as found:\n"
+        + "\n".join(f"    {c:<6} {label}  ({rel})" for label, rel, c in found)
+    )
+
+
+def test_android_version_code_is_a_positive_integer():
+    # Belt-and-suspenders on top of the agreement check above: the regex
+    # already requires digits (no sign), so this only catches zero, but zero
+    # is exactly the kind of "technically a match" value a copy-paste
+    # placeholder could leave behind, and Google Play rejects it outright.
+    for label, relative, code in _declared_version_codes():
+        assert code > 0, (
+            f"{label} in {relative} is {code}, not a positive integer. "
+            f"Google Play requires versionCode > 0; it can never accept an "
+            f"upload with 0 or a negative value."
+        )
 
 
 @pytest.mark.parametrize("product,relative", VERSION_RESOURCES)

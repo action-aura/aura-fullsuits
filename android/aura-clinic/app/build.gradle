@@ -28,7 +28,17 @@ android {
         applicationId "com.actionaura.clinic"
         minSdk 26
         targetSdk 34
-        versionCode 7
+        // versionCode is a plain hand-bumped monotonic integer, deliberately
+        // NOT derived from versionName -- see docs/release/versioning-policy.md
+        // ("Android versionCode" section) and
+        // retail_release_version_consistency_test.py's docstring for why a
+        // semver-derived formula was rejected. It had been left at 7 (the
+        // rc.6-era value) through the rc.7 versionName bump; bumped to 8 here
+        // so this rc.7 release itself has a versionCode Google Play would
+        // accept as a new upload. Must stay equal to aura-retail's
+        // versionCode -- pinned by
+        // test_android_version_codes_agree_between_products.
+        versionCode 8
         versionName "1.0.0-rc.7"
 
         ndk {
