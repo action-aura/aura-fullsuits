@@ -9954,6 +9954,151 @@ def printer_test():
         'sent': False, 'bytes': len(payload), 'file': out_path,
     }})
 
+
+# ── Cash drawer kick (checkout, NOT settings) ──────────────────────────────────
+# THE GAP this route closes: `printer_test` above is the only caller of either
+# ESC/POS module that has ever existed -- a Settings-screen button an
+# administrator presses by hand. Nothing on the real sale path has ever
+# opened a drawer, so on every install with a printer configured, the
+# cashier opens it manually on every single cash sale. This route is the
+# first hardware-kick reachable from ringing a sale.
+#
+# DELIBERATELY NOT a receipt change. `_printReceipt`/the HTML/spooler path
+# a real sale prints from is untouched -- see escpos_receipt.py's module
+# docstring for why that path cannot carry a drawer-kick byte at all. This
+# route sends the kick pulse ONLY, never a rendered receipt (see the
+# `render_receipt`-free body below): re-routing what every existing shop's
+# receipt looks like is a separate, deliberate decision, not this one.
+#
+# THE SERVER DECIDES, NOT THE CLIENT. The client sends only a sale id (plus
+# which printer this device has configured) -- never a bare "kick now"
+# command. This function looks the sale up itself and refuses anything that
+# is not a cash sale of THIS company, which (a) keeps a cashier from
+# popping the drawer at will by hand-crafting a request with no real sale
+# behind it, and (b) gives every real kick an audit trail tied to the sale
+# that caused it.
+@retail_bp.route('/printer/kick', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.printer.kick", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def printer_kick():
+    """Opens the cash drawer for a just-completed CASH sale.
+
+    CAP_SELL, NOT CAP_EMPLOYEES -- deliberately the opposite of every other
+    route in this hardware-printer section. `printer_test` above is a
+    SETTINGS action an administrator performs (picking/testing hardware for
+    the shop), so it is gated the same as its settings siblings. This route
+    fires as part of RINGING a sale -- it is not a settings write, it is
+    selling -- so gating it on CAP_EMPLOYEES would mean the drawer never
+    opens for the cashier it exists for; only a manager/owner could ever
+    trigger it, on every single transaction. The Settings screen's own
+    "Open Cash Drawer" button (`_testEscPosPrint(true)`, above) keeps its
+    CAP_EMPLOYEES gate for the NO-SALE case -- popping the drawer to make
+    change with nothing being sold is still an administrative act. The two
+    buttons reach the same bytes for two different reasons, at two
+    different authority tiers, on purpose.
+
+    Every non-kick outcome (no printer configured, a non-cash sale, this
+    platform cannot reach the spooler, the spooler itself failed) is a 200
+    with `kicked: False` and a human-readable `reason`, NEVER an error
+    status. The sale this call names is already committed by the time a
+    caller reaches this route -- a drawer that did not open must never look
+    like a failed SALE to the till or the cashier, and the overwhelming
+    majority of installs have no ESC/POS printer at all, so "nothing to
+    kick" is the ordinary case, not a failure one.
+
+    `escpos_transport` is imported INSIDE this function, and only once this
+    route already knows it is on Windows -- same reasoning as
+    `printer_devices`'/`printer_test`'s identical local imports above:
+    `ctypes.windll` does not exist on non-Windows CPython and raises merely
+    by being ACCESSED, and CI imports this whole file on Linux during test
+    collection. `escpos_receipt` (a pure byte layer, no ctypes) is imported
+    locally too, purely so this task's entire diff to this file stays the
+    two new routes, matching `printer_test`'s own stated reasoning.
+    """
+    from core.retail import escpos_receipt
+
+    data = request.json or {}
+    sale_id = data.get('sale_id')
+    printer_name = (data.get('printer') or '').strip()
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        # COMPANY-SCOPED lookup first, unconditionally, before any printer/
+        # payment-method short-circuit below -- a sale id from another
+        # company must 404 regardless of whether a printer was named, the
+        # same cross-tenant discipline every other by-id route in this file
+        # already applies (see create_sale's idempotency-key lookup comment
+        # for the identical reasoning: an unscoped lookup here would let one
+        # company probe whether an id exists in another's ledger).
+        sale = conn.execute(
+            "SELECT id, payment_method FROM sales WHERE id=? AND company_id=?",
+            (sale_id, cid),
+        ).fetchone()
+        if not sale:
+            return jsonify({'status': 'error', 'message': 'Sale not found.'}), 404
+
+        if not printer_name:
+            # No ESC/POS printer configured on this device -- the ordinary
+            # case for most installs. Not an error: see this function's own
+            # docstring on why a checkout must never surface a failure toast
+            # for a drawer the shop does not own.
+            return jsonify({'status': 'success', 'data': {
+                'kicked': False,
+                'reason': 'No ESC/POS printer is configured on this device.',
+            }})
+
+        # This codebase stores ONE payment_method string per sale (create_sale's
+        # `pm` local, `sales.payment_method` -- there is no split/mixed-tender
+        # table anywhere in retail's schema; see `_record_payment`'s single
+        # `method=` argument per sale). So "does this sale carry any cash
+        # tender" is exactly `payment_method == 'cash'`, no partial-cash case
+        # to widen for. A card/credit/bank sale reaching this route is normal
+        # (the till calls it after every cash sale it rings, whether or not the
+        # shop has this setting on) and refused the same non-error way as "no
+        # printer" above.
+        payment_method = sale['payment_method'] or 'cash'
+        if payment_method != 'cash':
+            return jsonify({'status': 'success', 'data': {
+                'kicked': False,
+                'reason': f"Sale #{sale_id} was paid by {payment_method!r}, not cash -- drawer not opened.",
+            }})
+
+        import sys
+        if sys.platform != 'win32':
+            # Mirrors printer_devices' identical check above verbatim -- see
+            # that route's docstring for why this is checked BEFORE
+            # `escpos_transport` is ever imported.
+            return jsonify({'status': 'success', 'data': {
+                'kicked': False,
+                'reason': (
+                    f"Hardware receipt printing needs the Windows print spooler; "
+                    f"this install is running on {sys.platform!r}."
+                ),
+            }})
+
+        from core.retail import escpos_transport
+        try:
+            # ONLY the drawer pulse -- never `render_receipt`. A kick must
+            # not spit paper; see this function's own docstring and
+            # escpos_receipt.py's module docstring for why the sale path's
+            # receipt is a separate, untouched decision from this one.
+            escpos_transport.send_raw(printer_name, escpos_receipt.drawer_kick())
+        except escpos_transport.EscPosTransportError as exc:
+            # The drawer failing must never look like the sale failing --
+            # the sale named by `sale_id` is already committed by the time
+            # this route runs. Same non-error shape as every refusal above.
+            return jsonify({'status': 'success', 'data': {'kicked': False, 'reason': str(exc)}})
+
+        _audit(conn, 'CASH_DRAWER_KICKED', 'sale', sale_id, f'printer={printer_name!r}')
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {'kicked': True}})
+    finally:
+        conn.close()
+
+
 # ── Settings (this device's branch pin) ────────────────────────────────────────
 # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the multi-branch
 # capture defect" entry; docs/launch-readiness/seats-and-chain-design.md

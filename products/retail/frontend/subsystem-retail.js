@@ -4394,6 +4394,24 @@ const RetailSystem = {
         // decrement is never presented as more certain than it actually is.
         this._applyLocalStockDecrement(data.data && data.data.lines);
         this._showReceipt(data.data);
+        // Cash-drawer kick (retail-hardware-viewports) -- FIRE-AND-FORGET,
+        // deliberately not awaited. Mirrors _einvoiceReceiptBlock's own
+        // best-effort-only contract above: the sale this names is ALREADY
+        // COMMITTED by the time we get here, so a drawer that fails to open
+        // (no printer, hardware/spooler error, this till isn't on Windows)
+        // must never surface as a checkout failure -- there is no toast, no
+        // retry, nothing that would make an open drawer look load-bearing
+        // for "did the sale go through". THE SERVER DECIDES whether this
+        // sale actually warrants a kick (create_sale's payment_method is the
+        // source of truth, not this client) -- this call only asks, and only
+        // when the shop opted in AND a printer is actually configured, so an
+        // install that never touches this setting sends nothing extra at all.
+        if (this._printerCfg().autoKick && this._printerCfg().printer) {
+          this._post('/api/sub/retail/printer/kick', {
+            sale_id: data.data.id,
+            printer: this._printerCfg().printer,
+          }).catch(e => console.error('Cash-drawer kick failed:', e));
+        }
       } else {
         SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
         if (btn) { btn.textContent = this._checkoutLabel(total); btn.disabled = false; }
@@ -4488,8 +4506,13 @@ const RetailSystem = {
   // Every field is read directly from `saleData` (see _showReceipt's
   // docstring) -- this function does not compute or re-derive any total.
   _printerCfg() {
-    try { return Object.assign({ paperWidth: '80mm' }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
-    catch (e) { return { paperWidth: '80mm' }; }
+    // `autoKick` (retail-hardware-viewports): whether a completed CASH sale
+    // should fire a best-effort POST /printer/kick from _checkout() below.
+    // Defaults to `false` -- a new feature costs nothing to an install that
+    // never opens this settings screen, matching this codebase's own rule
+    // for shipping anything new off by default.
+    try { return Object.assign({ paperWidth: '80mm', autoKick: false }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
+    catch (e) { return { paperWidth: '80mm', autoKick: false }; }
   },
   savePrinterCfg(cfg) { try { localStorage.setItem('aura_printer_cfg', JSON.stringify(cfg)); } catch (e) {} },
 
@@ -6594,7 +6617,7 @@ const RetailSystem = {
                      _recalcReceive never needs a second lookup. -->
                 <input type="number" min="0" step="any" value="${i.quantity_sent}"
                   data-item-id="${this._esc(i.id)}" data-sent="${i.quantity_sent}"
-                  style="width:90px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
+                  style="width:90px;min-block-size:var(--touch-target-min, 44px);background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
                   oninput="RetailSystem._recalcReceive()" />
               </td>
             </tr>`).join('')}</tbody>
@@ -10386,9 +10409,17 @@ const RetailSystem = {
           <!-- Hardware (ESC/POS) printer -- Wave 1B follow-up, escpos_receipt.py
                /escpos_transport.py (commit f606739). Separate from the Paper
                Width field and both buttons above: those drive the EXISTING
-               HTML/spooler receipt a real sale prints. This sub-section is the
-               only thing that can reach a cash-drawer kick, and it never
-               touches the sale path. -->
+               HTML/spooler receipt a real sale prints. This sub-section used
+               to be the ONLY thing that could reach a cash-drawer kick, and
+               it never touched the sale path -- that comment is now stale
+               and would be actively misleading left as-is: retail-hardware-
+               viewports wired the "Open the drawer automatically" checkbox
+               below into _checkout()'s success path, so a completed CASH
+               sale now fires a best-effort POST /printer/kick too (server-
+               side gated on CAP_SELL, not the CAP_EMPLOYEES this whole
+               screen otherwise sits behind -- see printer_kick's own
+               docstring in retail_api.py). The buttons immediately below
+               remain administrator-only Settings actions. -->
           <div style="border-top:1px solid var(--border-default);margin-top:16px;padding-top:14px">
             <div class="ret-field">
               <label>${this._esc(t('Printer Device'))}</label>
@@ -10403,6 +10434,18 @@ const RetailSystem = {
             <div style="display:flex;gap:10px;margin-top:10px">
               <button class="ret-btn ret-btn-ghost" style="flex:1" id="pr-hw-test-btn" onclick="RetailSystem._testEscPosPrint(false)">${this._esc(t('Test Hardware Print'))}</button>
               <button class="ret-btn ret-btn-primary" style="flex:1" id="pr-hw-kick-btn" onclick="RetailSystem._testEscPosPrint(true)">${this._esc(t('Open Cash Drawer'))}</button>
+            </div>
+            <!-- Default OFF (see _printerCfg's own comment) -- a shop that
+                 never opens this screen gets no behaviour change at all.
+                 Sized to the app's own 44px touch floor on BOTH axes
+                 (retail_design_focus_test.js) via --touch-target-min,
+                 not a bare "width:auto" -- half of this product's installs
+                 are touchscreens with no pointer at all, and a checkbox
+                 that is only tall enough is one a cashier misses in a
+                 queue, same as any other control on this screen. -->
+            <div class="ret-field" style="display:flex;align-items:center;gap:8px;margin-top:12px">
+              <input type="checkbox" id="pr-auto-kick" ${this._printerCfg().autoKick ? 'checked' : ''} style="min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px)" />
+              <label for="pr-auto-kick" style="margin:0;text-transform:none;font-size:13px;color:var(--text-primary)">${this._esc(t('Open the drawer automatically on a cash sale'))}</label>
             </div>
           </div>
         </div>
@@ -10491,7 +10534,11 @@ const RetailSystem = {
     // be included explicitly here or a save from this button would erase
     // whatever _testEscPosPrint's device select had already remembered.
     const device = document.getElementById('pr-device')?.value || '';
-    this.savePrinterCfg({ paperWidth: width, printer: device });
+    // retail-hardware-viewports: the auto-kick-on-cash-sale toggle lives in
+    // this SAME blob (see _printerCfg's own comment) -- same reasoning as
+    // `device` above, or a Save here would silently turn it back off.
+    const autoKick = !!document.getElementById('pr-auto-kick')?.checked;
+    this.savePrinterCfg({ paperWidth: width, printer: device, autoKick });
     SubsystemApp.showToast('Printer settings saved', 'success');
   },
 

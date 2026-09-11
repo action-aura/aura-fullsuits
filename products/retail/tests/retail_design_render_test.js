@@ -796,6 +796,27 @@ const TABLE_DATA = {
   // names are joined server-side by list_stock_transfers (a LEFT JOIN, hence
   // the deliberately blank one below: a branch that fails to resolve must
   // still render its row rather than vanish from the list).
+  // The DETAIL shape (get_stock_transfer): header plus lines joined to
+  // product name/sku. Two lines on purpose -- the receive modal prefills each
+  // input with quantity_sent and turns a row amber only when the typed value
+  // DIFFERS, so a single-line fixture would render the neutral state alone and
+  // leave the amber rule unmeasured. quantity_received is null on both,
+  // because that is what an in_transit transfer actually looks like when the
+  // modal opens: NULL means "not reconciled yet", which is a different fact
+  // from 0 ("nothing arrived").
+  stockTransferDetail: {
+    transfer: {
+      id: 'bb22cc33-dd44-4e55-9f66-77a889900111', source_branch_id: 2, destination_branch_id: 1,
+      status: 'in_transit', created_at: '2026-09-09 16:02:00', sent_at: '2026-09-09 17:30:00',
+      received_at: null, source_branch_name: 'City Mall', destination_branch_name: 'Main Branch',
+    },
+    items: [
+      { id: 'li-1', transfer_id: 'bb22cc33-dd44-4e55-9f66-77a889900111', product_id: 'p1',
+        quantity_sent: 6, quantity_received: null, product_name: 'Coffee beans 250g', sku: 'CB250' },
+      { id: 'li-2', transfer_id: 'bb22cc33-dd44-4e55-9f66-77a889900111', product_id: 'p2',
+        quantity_sent: 2, quantity_received: null, product_name: 'Classic T-Shirt', sku: 'TS1' },
+    ],
+  },
   stockTransfers: [
     { id: 'aa11bb22-cc33-4d44-8e55-66f778899000', source_branch_id: 1, destination_branch_id: 2,
       status: 'pending', created_at: '2026-09-10 09:14:00', sent_at: null, received_at: null,
@@ -921,6 +942,12 @@ function apiResponseFor(url) {
   if (/\/audit-log/.test(u)) return ok(TABLE_DATA.auditLog, { total: 1, page: 1, limit: 50, actions: ['create'], entities: ['sale'] });
   if (/\/held-sales/.test(u)) return ok(TABLE_DATA.heldSales);
   if (/\/purchase-orders/.test(u)) return ok(TABLE_DATA.purchaseOrders);
+  // Detail BEFORE list: both URLs contain "/stock-transfers", so the list
+  // pattern would otherwise swallow the detail call and hand the receive
+  // modal a payload with no `transfer` and no `items` -- an empty modal
+  // that still renders, and still passes. Same ordering discipline as
+  // /sales/<id> above its own list.
+  if (/\/stock-transfers\/[A-Za-z0-9-]{6,}/.test(u)) return ok(TABLE_DATA.stockTransferDetail);
   if (/\/stock-transfers/.test(u)) return ok(TABLE_DATA.stockTransfers);
   if (/\/returns/.test(u)) return ok(TABLE_DATA.returns);
   if (/\/products/.test(u)) return ok(TABLE_DATA.products);
@@ -1285,6 +1312,21 @@ async function buildCorpus() {
     assert.ok(overlay, 'The held-sales modal never reached document.body.');
     screens.push(screenFrom('held-sales-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
   }
+  // The receive-transfer modal: the only screen in this product where a human
+  // types a number that moves stock. Its per-line inputs and the amber
+  // "differs from what was sent" row state are colour rules with no other
+  // home in the corpus.
+  {
+    const ctx = loadRetailSystem(['retail.reports', 'retail.employees']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderTransfers(content);
+    await settle();
+    await ctx.RetailSystem._openReceiveTransfer('bb22cc33-dd44-4e55-9f66-77a889900111');
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    assert.ok(overlay, 'The receive-transfer modal never reached document.body.');
+    screens.push(screenFrom('transfer-receive-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
+  }
 
   return screens;
 }
@@ -1395,7 +1437,7 @@ const DECLARED_SCREENS = [
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
   'backup-export', 'scanner', 'stock-accuracy', 'transfers',
-  'customer-modal', 'sale-modal', 'held-sales-modal',
+  'customer-modal', 'sale-modal', 'held-sales-modal', 'transfer-receive-modal',
 ];
 
 /* ── THE CORPUS MUST BE CLOSED AGAINST THE ROUTER ───────────────────────────
@@ -1695,6 +1737,13 @@ function testCorpusContainsTheKnownHazards(h) {
     ['sale-modal', (el) => el.classes.includes('ret-modal'), 'the sale-detail modal panel'],
     ['audit-log', (el) => el.tag === 'bdi', 'the audit log\'s bidi-isolated actor id'],
     ['held-sales-modal', (el) => el.classes.includes('ret-btn-danger'), 'the held-sale Discard button'],
+    // Named individually for the reason every entry below is: being in
+    // DECLARED_SCREENS is satisfied by a modal that built its chrome and no
+    // rows, which is precisely what a detail call answered with the LIST
+    // payload would produce -- an empty modal that renders and measures
+    // nothing. The per-line quantity input IS the screen; if it is absent,
+    // the modal did not really render.
+    ['transfer-receive-modal', (el) => el.tag === 'input' && 'data-item-id' in (el.attrs || {}), 'the receive-transfer per-line quantity input (the one control in this product where a typed number moves stock)'],
     // The three screens added when the corpus was closed against the router.
     // Named individually for the usual reason: "reports is in DECLARED_SCREENS"
     // is satisfied by a Reports screen that rendered its capability-restricted

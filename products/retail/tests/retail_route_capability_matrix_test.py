@@ -166,6 +166,14 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'create_customer': CAP_SELL,
     'update_customer': CAP_SELL,
     'customer_payment': CAP_SELL,
+    # Cash-drawer kick fired from the till on a completed CASH sale
+    # (retail-hardware-viewports). Deliberately NOT with printer_test/
+    # printer_devices below under CAP_EMPLOYEES: those are Settings-screen
+    # administration (pick/test hardware); this one fires as part of RINGING
+    # a sale, which is selling, not settings -- gating it on CAP_EMPLOYEES
+    # would mean the drawer never opens for the cashier it exists for. See
+    # printer_kick's own docstring in retail_api.py for the full reasoning.
+    'printer_kick': CAP_SELL,
 
     # ── Reversing money already taken: retail.refund ─────────────────────────
     'create_return': CAP_REFUND,
