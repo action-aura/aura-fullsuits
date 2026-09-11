@@ -690,7 +690,28 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # despite those being the two nearest precedents in this file -- a stock
 # transfer is a mutable, two-phase record two branches must agree on, not
 # an append-only ledger entry.
-RETAIL_SCHEMA_VERSION = 28
+#
+# v28 -> v29 (launch-readiness, "the loyalty return link"; ROADMAP.md's
+# "CLAIMED: retail v29" entry). One nullable column, one partial index on
+# an existing table -- additive only (ADD COLUMN / CREATE INDEX), so
+# ordering relative to every step above it does not matter functionally.
+#
+#   loyalty_ledger.return_id INTEGER -- links a return's two reversal rows
+#                                       (an 'adjust' earn-clawback and an
+#                                       'adjust' redeem-giveback) back to
+#                                       the specific `returns.id` that
+#                                       caused them.
+#
+# This cashes in the deviation recorded under the v27 comment block above:
+# that block's own "RETURNS AGAINST A SALE THAT USED POINTS" note said the
+# reversal rows would be "linked to the return rather than to the original
+# sale", and they were not -- `loyalty_ledger` had no `return_id` column
+# when `create_return` shipped that logic, so both rows went in with
+# `sale_id` NULL and the tie to the return survived only in the audit
+# log's free text. See _migrate_add_loyalty_return_id's own docstring
+# below for the full column reasoning, the deliberate NO BACKFILL decision,
+# and the one narrow NULL ambiguity worth stating rather than discovering.
+RETAIL_SCHEMA_VERSION = 29
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1669,6 +1690,15 @@ def _migrate_retail_schema(conn):
     # including why this pair's id shape deliberately does NOT match
     # `_migrate_add_loyalty_ledger`'s immediately above it.
     _migrate_add_stock_transfers(conn)
+    # v28 -> v29 (launch-readiness, "the loyalty return link"): appended
+    # LAST, same convention as every step above. One nullable column and one
+    # partial index on the existing `loyalty_ledger` table -- no other table
+    # is touched, so ordering relative to the steps above it does not matter
+    # functionally. See the RETAIL_SCHEMA_VERSION v29 comment above and
+    # _migrate_add_loyalty_return_id's own docstring for the full reasoning,
+    # including why there is deliberately no backfill for rows written
+    # before this column existed.
+    _migrate_add_loyalty_return_id(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -5904,6 +5934,121 @@ def _migrate_add_stock_transfers(conn):
             'CREATE INDEX IF NOT EXISTS idx_stock_transfer_items_transfer '
             'ON stock_transfer_items(transfer_id)'
         )
+
+
+def _migrate_add_loyalty_return_id(conn):
+    """One-time migration (schema v28 -> v29): launch-readiness "the loyalty
+    return link" (ROADMAP.md's "CLAIMED: retail v29" entry). One nullable
+    column and one partial index on the existing `loyalty_ledger` table --
+    additive only (column-existence-checked ADD COLUMN / CREATE INDEX IF NOT
+    EXISTS), no other table touched, so ordering relative to every step
+    above it does not matter functionally.
+
+        loyalty_ledger.return_id INTEGER -- the `returns.id` this reversal
+                                             row ties back to
+
+    THIS CASHES IN A DEVIATION RECORDED UNDER v27, not a fresh idea: the v27
+    comment block above (and _migrate_add_loyalty_ledger's own docstring)
+    describes `create_return`'s reversal logic writing two `entry_type=
+    'adjust'` rows -- an earn-clawback and a redeem-giveback -- and says the
+    ORIGINAL design intent was for both to be "linked to the return rather
+    than to the original sale". They were not: `loyalty_ledger` had a
+    `sale_id` column and no `return_id` column at the time, so both rows
+    went in with `sale_id` NULL, and the tie to the specific return survived
+    only in the audit log's free-text detail (`_audit(conn, 'RETURN_
+    PROCESSED', ...)` in retail_api.py). That was a defensible scope call
+    when v27 was already claimed and shipping, not a bug -- but it left a
+    real, written-down cost: the ledger ALONE cannot answer "which return
+    reversed these points", so anyone auditing a disputed balance has to go
+    join through the audit log to find out. This is the version that opens
+    for it; retail_api.py's own `create_return` change (ROADMAP.md, same
+    entry) is what actually starts writing the column this migration adds.
+
+    INTEGER, not TEXT: `returns.id` is `INTEGER PRIMARY KEY AUTOINCREMENT`
+    (see the `returns` CREATE TABLE above), so this column matches the type
+    of the key it points at -- the same rule `loyalty_ledger.sale_id`
+    already follows against `sales.id`. NO declared FOREIGN KEY, for the
+    IDENTICAL reason `sale_id` itself declares none (see _migrate_add_
+    loyalty_ledger's own docstring, `sale_id` column entry): a sync-relayed
+    ledger row must never fail to apply on a referential technicality, and
+    a returns row and its own reversal rows are not guaranteed to reach
+    every device in the same order.
+
+    WHY THIS RUNS AGAINST `loyalty_ledger` SPECIFICALLY, NOT ANY OTHER
+    TABLE, AND WHY IT GUARDS THE TABLE'S EXISTENCE ANYWAY: `loyalty_ledger`
+    is created by `_migrate_add_loyalty_ledger` (v27), which runs earlier in
+    this SAME `_migrate_retail_schema` chain call, so in practice the table
+    will always already exist by the time this step runs. The guard below
+    is written anyway, and returns immediately rather than assuming that --
+    a migration must never assume the step before it in the chain actually
+    ran, because this chain is also what runs against a database RESTORED
+    FROM A BACKUP taken mid-upgrade (see `_migrate_retail_schema`'s own
+    docstring: "ensure_schema_version only tells a migration you are
+    behind, not by exactly one version" -- the same reasoning applies one
+    level down, to a chain interrupted and resumed from an intermediate,
+    possibly inconsistent, snapshot). The column-existence check just below
+    the table guard follows the exact idiom `_migrate_add_loyalty_ledger`
+    itself already uses for `sales.points_redeemed_amount` -- `PRAGMA
+    table_info`, build a name set, ALTER only when the column is actually
+    missing -- so replaying this migration against an already-migrated
+    database (or one where retail_api.py's own lazy guard, see that file's
+    `_ensure_credit_schema`, already added the column first) is a no-op
+    rather than a "duplicate column name" error.
+
+    NO BACKFILL, AND THAT IS THE HONEST ANSWER, NOT A SHORTCUT: existing
+    `adjust` rows written before this column existed cannot be linked
+    retroactively. The information needed to do it -- which return caused a
+    given reversal pair -- lives only in the audit log's free-text detail,
+    and parsing that prose to manufacture a foreign key would produce rows
+    that LOOK authoritative and are actually guesses. So every pre-v29
+    reversal row keeps `return_id` NULL forever, and every reversal written
+    from v29 onward carries the real id from the moment `create_return`'s
+    own change lands.
+
+    THE ONE NARROW AMBIGUITY THIS LEAVES, worth stating here rather than
+    letting someone discover it later: a NULL `return_id` on an `entry_type
+    ='adjust'` row means one of two different things, and `entry_type`
+    alone does not separate them -- "written before this column existed" or
+    "a genuine manual adjustment that was never a return at all" (a
+    goodwill grant or correction; see _migrate_add_loyalty_ledger's own
+    docstring, `entry_type` column entry, for 'adjust' covering both
+    shapes). Deliberately NOT solved with a sentinel value for "pre-v29" --
+    a sentinel that can also arrive legitimately is its own bug class (the
+    exact failure shape a `LOCAL_STATE_CORRUPT`-style guard runs into when
+    the value it treats as an error can also be written by ordinary,
+    correct operation). `created_at` against this migration's own run date
+    is what actually separates the two for anyone who ever needs to, and
+    that is judged sufficient rather than worth a second column.
+
+    THE INDEX IS PARTIAL (`WHERE return_id IS NOT NULL`), matching `idx_
+    loyalty_ledger_uid`'s shape from v27 for the identical reason that
+    index gives in _migrate_add_loyalty_ledger's own docstring: the
+    overwhelming majority of ledger rows are plain earns and redeems that
+    will never carry a `return_id` at all, and indexing their NULLs buys
+    nothing. The one query this index exists to serve -- "which ledger rows
+    did this specific return write" -- only ever looks up a non-NULL value.
+
+    Idempotent in the same two independent ways _migrate_add_loyalty_ledger
+    itself is: the ALTER is column-existence-checked, and the index create
+    is IF NOT EXISTS, so a direct, repeated call against an already-migrated
+    database is a clean no-op rather than an error.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'loyalty_ledger' not in live_tables:
+        return
+
+    ledger_cols = {row[1] for row in conn.execute('PRAGMA table_info(loyalty_ledger)').fetchall()}
+    if 'return_id' not in ledger_cols:
+        conn.execute('ALTER TABLE loyalty_ledger ADD COLUMN return_id INTEGER')
+
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_return '
+        'ON loyalty_ledger(return_id) WHERE return_id IS NOT NULL'
+    )
 
 
 def load_sync_freshness(conn) -> dict:

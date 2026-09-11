@@ -2701,8 +2701,13 @@ def customer_loyalty_balance(cust_id):
         "SELECT COALESCE(SUM(points_delta), 0) FROM loyalty_ledger WHERE company_id=? AND customer_id=?",
         (cid, cust_id)
     ).fetchone()[0] or 0
+    # schema v29: `return_id` added to the explicit column list (not a bare
+    # SELECT *) so the return that caused a reversal row is visible to any
+    # caller of this route, the same way `sale_id` already is for an earn/
+    # redeem row -- see database/schema.py's _migrate_add_loyalty_return_id
+    # docstring for what the column does and does not mean.
     entries = conn.execute(
-        "SELECT entry_type, points_delta, sale_id, created_by, created_at FROM loyalty_ledger "
+        "SELECT entry_type, points_delta, sale_id, return_id, created_by, created_at FROM loyalty_ledger "
         "WHERE company_id=? AND customer_id=? ORDER BY created_at DESC, id DESC LIMIT 20",
         (cid, cust_id)
     ).fetchall()
@@ -6729,11 +6734,15 @@ def create_return():
         # this case ("a clawback tied to a returned sale"), and per that
         # SAME docstring `sale_id` is left NULL on both rows -- "'adjust'
         # ... by definition names no sale" (its own words). The link to
-        # THIS return (rather than to the original sale) therefore lives
-        # in the audit log below, not in a `loyalty_ledger` column --
-        # `loyalty_ledger` has no return_id column, and adding one is a
-        # schema change outside this route's file (this task's file
-        # restriction is `retail_api.py` only; see ROADMAP.md).
+        # THIS return used to live ONLY in the audit log below, not in a
+        # `loyalty_ledger` column, because the table had no `return_id`
+        # column when this block first shipped (v27) -- schema v29
+        # (ROADMAP.md's "CLAIMED: retail v29" entry,
+        # database/schema.py's _migrate_add_loyalty_return_id) closed that
+        # gap, and the two INSERTs just below now stamp `return_id=ret_id`
+        # on both rows. The audit log entry stays too -- belt and braces,
+        # not a redundancy to remove -- since it also carries the refund
+        # amount and reason in one human-readable line.
         #
         # Settled PROPORTIONALLY on the returned VALUE -- this return's own
         # tax/discount-correct `refund` (computed above from the per-line
@@ -6786,16 +6795,24 @@ def create_return():
                     # points one unit at a time. Whether the till then
                     # refuses to sell on a negative balance is a separate,
                     # undecided policy question -- not this route's call.
+                    # schema v29 (ROADMAP.md's "CLAIMED: retail v29" entry):
+                    # `return_id=ret_id` closes the v27 deviation recorded in
+                    # _migrate_add_loyalty_return_id's own docstring -- these
+                    # two rows used to write `sale_id` NULL with no way to
+                    # name the return that caused them, and the tie survived
+                    # only in the `_audit(...)` call below. `ret_id` is the
+                    # `returns.id` this SAME call already inserted, a few
+                    # lines above (`ret_id = cur.lastrowid`).
                     if earn_clawback:
                         cur.execute(
-                            "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by) "
-                            "VALUES (?,?,?,?,'adjust',?)",
-                            (_new_uid(), cid, sale['customer_id'], -earn_clawback, _uid()))
+                            "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by,return_id) "
+                            "VALUES (?,?,?,?,'adjust',?,?)",
+                            (_new_uid(), cid, sale['customer_id'], -earn_clawback, _uid(), ret_id))
                     if redeem_giveback:
                         cur.execute(
-                            "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by) "
-                            "VALUES (?,?,?,?,'adjust',?)",
-                            (_new_uid(), cid, sale['customer_id'], redeem_giveback, _uid()))
+                            "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by,return_id) "
+                            "VALUES (?,?,?,?,'adjust',?,?)",
+                            (_new_uid(), cid, sale['customer_id'], redeem_giveback, _uid(), ret_id))
                     if earn_clawback or redeem_giveback:
                         # `customers.loyalty_points` cache kept in step,
                         # obeying the SAME rule create_sale's own comment
@@ -9471,6 +9488,18 @@ def _ensure_credit_schema(conn):
     # no-op, same "whichever of the two sites runs first" contract this
     # function's own idx_payments_party comment above already documents.
     addcol('sales', 'points_redeemed_amount', "REAL DEFAULT 0")
+    # schema v29 (ROADMAP.md's "CLAIMED: retail v29" entry,
+    # database/schema.py's _migrate_add_loyalty_return_id). Same lazy-guard
+    # shape as `points_redeemed_amount` immediately above -- a SECOND,
+    # independent safety net for a process whose database has not yet run
+    # the versioned migration chain up to v29 by the time a request reaches
+    # this function: `_ensure_credit_schema` runs unconditionally on every
+    # request that reaches create_sale, gated only by the `_CREDIT_SCHEMA_
+    # READY` in-process flag, not by `user_version`. Idempotent with the
+    # versioned migration -- both check column existence first (`addcol`
+    # here, `PRAGMA table_info` there), so whichever runs first on a given
+    # database wins and the other is a no-op.
+    addcol('loyalty_ledger', 'return_id', "INTEGER")
     addcol('purchase_orders', 'amount_paid', "REAL DEFAULT 0")
     addcol('purchase_orders', 'payment_status', "TEXT DEFAULT 'unpaid'")  # paid | partial | unpaid/credit
     addcol('purchase_orders', 'due_date', "TEXT")

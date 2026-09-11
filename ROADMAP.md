@@ -1623,6 +1623,53 @@ adjustment at both ends, and no new capability is minted for it.
 
 ---
 
+**CLAIMED: retail v29, by `feat/launch-readiness`, for the loyalty return link.**
+One nullable column, one partial index. Additive only: ADD COLUMN /
+CREATE INDEX.
+
+    ALTER TABLE loyalty_ledger ADD COLUMN return_id INTEGER
+
+This cashes in the deviation recorded under v27 below, in the section headed
+"ONE DEVIATION FROM THE DECISION ABOVE". The v27 decision said the returns
+reversal rows would be "linked to the return rather than to the original sale".
+They were not: `loyalty_ledger` had a `sale_id` column and no `return_id`, so
+both reversal rows went in with `entry_type='adjust'` and `sale_id` NULL, and
+the tie to the return survived only in the audit log. That was a defensible
+scope call at the time -- v27 was already claimed and shipping -- and it left a
+real cost written down: the ledger alone cannot answer "which return reversed
+these points", so anyone auditing a disputed balance has to join through the
+audit log to find out. This is the version that opens for it.
+
+INTEGER, not TEXT: `returns.id` is `INTEGER PRIMARY KEY AUTOINCREMENT`
+(schema.py), so the column matches the key it points at. It is deliberately
+NOT a declared FOREIGN KEY, matching how `loyalty_ledger.sale_id` is already
+written and the convention the transfers tables' own commit spells out -- a
+sync apply must never fail on a referential technicality.
+
+### No backfill, and that is the honest answer, not a shortcut
+
+Existing `adjust` rows CANNOT be linked retroactively. The information needed to
+do it lives only in the audit log's free-text detail, and parsing prose to
+manufacture a foreign key would produce rows that look authoritative and are
+guesses. So pre-v29 reversal rows keep `return_id` NULL, and NULL here means
+exactly one thing: "written before this column existed, tie is in the audit
+log". Every reversal written from v29 onward carries the real id.
+
+That makes NULL ambiguous in one narrow way worth stating rather than
+discovering: a NULL `return_id` on an `adjust` row means either "pre-v29" or
+"an adjustment that was not a return at all" (a manual correction). The
+`entry_type` does not separate those two. It is not worth a second column or a
+sentinel -- the created_at of the migration separates them for anyone who ever
+needs to, and inventing a sentinel value here would repeat the mistake the
+`LOCAL_STATE_CORRUPT` guard made: a value that can also arrive legitimately.
+
+The partial index is `WHERE return_id IS NOT NULL`, matching
+`idx_loyalty_ledger_uid`'s shape from v27: the overwhelming majority of ledger
+rows are earns and redeems that will never carry one, and indexing their NULLs
+buys nothing.
+
+---
+
 **CLAIMED: retail v27, by `feat/launch-readiness`, for loyalty redemption.**
 One new table, two indexes, one column on `sales`. Additive only:
 CREATE TABLE / CREATE INDEX / ADD COLUMN.
