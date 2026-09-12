@@ -427,9 +427,25 @@ function testHeaderTitleShowsCurrentSection() {
 
 function testFaviconPointsAtBrandIcon() {
   const indexHTML = fs.readFileSync(INDEX_FILE, 'utf8');
+  // This used to regex-match the literal href `brand/aura-app-icon.svg` and pass
+  // -- on a link that 404s in the running app. A string match cannot tell "points
+  // at the icon" from "points at nothing", which is the only thing worth
+  // asserting here, so it pinned the bug in place instead of catching it.
+  // Measured 2026-09-12: /brand/aura-app-icon.svg 404, /static/brand/... 200.
+  // Resolve the href to a real path and stat it -- that also catches a renamed
+  // or deleted icon, which the old regex never could.
+  const iconHref = (indexHTML.match(/<link rel="icon"[^>]*href="([^"]+)"/) || [])[1];
+  assert.ok(iconHref, 'index.html has no <link rel="icon"> at all.');
   assert.ok(
-    /<link rel="icon" type="image\/svg\+xml" href="brand\/aura-app-icon\.svg">/.test(indexHTML),
-    'index.html\'s favicon link does not point at brand/aura-app-icon.svg.'
+    iconHref.startsWith('/static/'),
+    'index.html\'s favicon href is "' + iconHref + '". Flask serves the frontend ' +
+    'folder at /static, so any other href resolves against the page URL and 404s.'
+  );
+  const iconOnDisk = path.join(FRONTEND_DIR, iconHref.replace('/static/', ''));
+  assert.ok(
+    fs.existsSync(iconOnDisk),
+    'index.html\'s favicon points at ' + iconHref + ', which maps to ' + iconOnDisk +
+    ' -- no such file, so the browser gets a 404 and shows a blank tab icon.'
   );
   assert.ok(
     !/<link rel="icon" href="data:,">/.test(indexHTML),

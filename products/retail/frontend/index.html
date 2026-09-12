@@ -4,7 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aura Retail</title>
-  <link rel="icon" type="image/svg+xml" href="brand/aura-app-icon.svg">
+  <!-- /static/, not a relative href: Flask serves this folder at /static, so
+     "brand/..." resolves against the page URL and 404s. Measured: /brand/... 404,
+     /static/brand/... 200. Same root cause as the intro-frame src bug. -->
+<link rel="icon" type="image/svg+xml" href="/static/brand/aura-app-icon.svg">
   <script>
     // OPERATIONAL CALM: five sanctioned themes, and this boot line VALIDATES
     // the saved choice instead of trusting it. Runs before main.css so first
@@ -83,7 +86,13 @@
 </head>
 <body>
   <div id="app">
-    <div id="page-subsystem" class="page active" style="height:100vh;">
+    <!-- height, not just top: a fixed top banner offsets .page via
+       --top-banner-inset (css/main.css), and a page that is still a full
+       100vh tall simply hangs off the bottom -- body is overflow:hidden, so
+       nothing scrolls to reach it. Measured at 1366x768: the POS Charge
+       button sat at 739-792 in a 768 viewport, unreachable, on every
+       unlicensed till. 0px fallback keeps a licensed till identical. -->
+    <div id="page-subsystem" class="page active" style="height:calc(100vh - var(--top-banner-inset, 0px));">
       <div id="subsystem-shell" style="height:100%; display:flex;"></div>
     </div>
   </div>

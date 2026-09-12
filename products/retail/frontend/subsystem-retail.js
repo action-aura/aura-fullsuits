@@ -1664,6 +1664,10 @@ const RetailSystem = {
           border-radius:20px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap; }
         .rdash-delta.up   { color:var(--text-money-positive, var(--text));background:var(--state-success-surface, var(--surface-soft)); }
         .rdash-delta.down { color:var(--text-money-negative, var(--text));background:var(--state-danger-surface, var(--surface-soft)); }
+        /* Flat is its own state. A day that matched yesterday exactly used to
+           render in the up chip -- green, with an up arrow -- which reads as
+           growth that did not happen. */
+        .rdash-delta.flat { color:var(--text-dim);background:var(--surface-soft); }
         .rdash-breakdown { display:flex;gap:22px;flex-wrap:wrap;margin-block-start:12px; }
         .rdash-bd-item { display:flex;flex-direction:column;gap:2px; }
         .rdash-bd-label { color:var(--text-dim);font-size:12px; }
@@ -1883,9 +1887,14 @@ const RetailSystem = {
       // with no colour at all. The percentage and the words are separate nodes
       // so 'vs yesterday' is actually translatable (as one interpolated string
       // it never could be).
-      chgEl.innerHTML = chg >= 0
-        ? `<span class="rdash-delta up"><span aria-hidden="true">▲</span> ${Math.abs(chg)}% <span>${t('vs yesterday')}</span></span>`
-        : `<span class="rdash-delta down"><span aria-hidden="true">▼</span> ${Math.abs(chg)}% <span>${t('vs yesterday')}</span></span>`;
+      // Three states, not two. `chg >= 0` put an exact-zero day in the green
+      // up chip, so a shop that took precisely yesterday's money was told it grew.
+      // Flat is neutral in both glyph and colour.
+      const chgDir = chg > 0 ? 'up' : (chg < 0 ? 'down' : 'flat');
+      const chgGlyph = { up: '▲', down: '▼', flat: '–' }[chgDir];
+      chgEl.innerHTML =
+        `<span class="rdash-delta ${chgDir}"><span aria-hidden="true">${chgGlyph}</span> ` +
+        `${Math.abs(chg)}% <span>${t('vs yesterday')}</span></span>`;
 
       // Revenue (Net) = Sales − Returns. Accounting logic is unchanged (the
       // backend already nets returns out of `today_sales`) — this is purely
@@ -2139,7 +2148,16 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <style>
-        .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;block-size:calc(100vh - 120px); }
+        /* block-size:100%, NOT calc(100vh - 120px). The old value measured the
+           VIEWPORT while this element sits well down the page, and hard-coded the
+           chrome above it as 120px. Measured at 1366x768 with a licence banner up:
+           chrome is 161px (banner 64 + header 77 + padding 20), the wrap was still
+           648px tall, and its bottom landed at 809 in a 768px viewport -- taking
+           the Charge button (739-792) off screen with it. Even unbannered the old
+           value only cleared by 3px, which is why anything new on the screen broke
+           it. A percentage of the scroll container is self-correcting: whatever
+           chrome appears above, the till's primary action stays on screen. */
+        .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;block-size:100%; }
         @media(max-width:1100px){ .pos-wrap { grid-template-columns:minmax(0,1fr);block-size:auto; } }
         .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-right { background:var(--surface);border:1px solid var(--border-mid);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
@@ -2422,8 +2440,16 @@ const RetailSystem = {
         .pos-cust-select:focus { border-color:var(--focus-ring-color, var(--sub-accent)); }
 
         /* ── Summary + the total ─────────────────────────────────────────── */
+        /* SHRINKABLE AND SCROLLABLE, not flex-shrink:0. Measured at 1366x768
+           with a licence banner up: this panel refused to shrink, .pos-right
+           clips (overflow:hidden), and the Charge button sat at 739-792 in a
+           768px viewport -- the product's primary action, unreachable, on every
+           unlicensed till. Letting the totals scroll and pinning Charge below
+           keeps it reachable at any height rather than only when everything
+           happens to fit. */
         .pos-summary { padding-block:14px 16px;padding-inline:16px;background:var(--surface-card);
-          border-block-start:1px solid var(--border-mid);flex-shrink:0; }
+          border-block-start:1px solid var(--border-mid);flex-shrink:1;min-block-size:0;
+          overflow-y:auto; }
         .pos-sum-row { display:flex;justify-content:space-between;align-items:center;gap:12px;
           margin-block-end:8px;color:var(--text-dim);font-size:14px; }
         .pos-sum-val { color:var(--text);font-weight:600; }
@@ -2481,7 +2507,11 @@ const RetailSystem = {
           font-family:inherit;letter-spacing:.02em; }
         /* Charge is money coming IN, so it carries the money-in token rather
            than a decorative gradient -- colour that means something. */
-        .pos-checkout-btn { inline-size:100%;min-block-size:var(--touch-target-comfortable, 52px);padding-block:14px;padding-inline:18px;
+        /* Sticky to the bottom of the scrolling summary: the totals may scroll
+           away above it, Charge never does. Its background is solid, so nothing
+           shows through as rows pass beneath. */
+        .pos-checkout-btn { position:sticky;inset-block-end:0;
+          inline-size:100%;min-block-size:var(--touch-target-comfortable, 52px);padding-block:14px;padding-inline:18px;
           background:var(--text-money-positive, var(--sub-accent));border:1px solid transparent;border-radius:12px;
           color:var(--text-on-accent, var(--text-inverse));font-weight:800;font-size:18px;cursor:pointer;
           font-family:inherit;font-variant-numeric:tabular-nums;white-space:nowrap;
