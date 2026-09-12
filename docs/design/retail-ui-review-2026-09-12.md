@@ -184,15 +184,13 @@ container every screen uses — reserves as tail padding.
 of that container, so shrinking the container moves every control up, and all
 seven pay controls are reachable at rest.
 
-**Elsewhere it is a partial one, and worth saying plainly.** On a screen whose
-content scrolls, reserving tail padding only guarantees that the *end* of the
-content can be scrolled clear; the bar still covers whatever happens to sit at
-that screen position. Reports still shows it over part of the revenue chart.
-
-The durable fix is to stop it floating — move it into the top banner stack,
-which already reserves space properly. That is not a one-line change: two top
-banners both anchor at `top: 0` and would overlap each other, so it needs a real
-stack first. Left as its own piece of work rather than half-done here.
+**Elsewhere it took a second attempt, and the reason is worth keeping.** The
+first version reserved the space as bottom *padding*. That fixed the POS and did
+nothing for Reports, because **`overflow` clips at the padding box** — bottom
+padding on a scroll container only adds scrollable length at the end, so content
+is still painted in that strip while you are scrolled anywhere else. A *margin*
+shrinks the box itself, which moves the clip edge. Nothing is painted under the
+bar on any screen now.
 
 ### A guard that was missing
 

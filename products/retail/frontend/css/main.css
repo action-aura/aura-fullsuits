@@ -3079,8 +3079,13 @@ html[data-theme="light"] {
      HERE rather than on .pos-wrap: this is the scroll container for every
      screen, and the till is block-size:100% of it, so the POS is covered by
      the same rule instead of needing one of its own. */
-  padding-block-end: calc(20px + var(--bottom-overlay-inset, 0px));
-  margin: 0;
+  /* MARGIN, not padding. `overflow` clips at the PADDING box, so bottom padding
+     on a scroll container only adds scrollable length at the end -- content is
+     still painted in that strip while you are scrolled anywhere else, which is
+     exactly what the first attempt produced: the claim bar kept covering the
+     Reports revenue chart. A margin shrinks the box itself, so the clip edge
+     moves and nothing is ever painted under the bar. */
+  margin: 0 0 var(--bottom-overlay-inset, 0px);
   background: var(--surface-app);
   overflow-y: auto;
   display: block; /* Ensure it is a standard block stacking context */
