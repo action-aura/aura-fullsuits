@@ -211,14 +211,13 @@ against exactly that defect. It caught the second occurrence immediately.
 
 Ranked by what it costs a shopkeeper.
 
-1. **The rest of the dead CSS.** Two whole theming systems (`[data-app-theme]`,
-   `[data-l-theme]`) were deleted in this pass along with the two stale test
-   exemptions that had been protecting them. What remains is the `#page-landing` /
-   `#page-login` chrome and the vestigial CRM/PM/Mfg rules — also unreferenced,
-   but interleaved with live splash and canvas styling in the same range, so they
-   need per-rule verification rather than a block cut. The rule that makes it
-   safe: **delete only where the selector's own root container is provably never
-   created.**
+1. **The last of the dead CSS.** 1,098 lines are gone in total — two whole
+   theming systems, then 307 rules of vestigial monorepo chrome (a CRM, an intel
+   hub, an RPA console, a marketing landing page, a welcome splash), proven safe
+   by a 28-frame pixel diff across every screen in two themes. `main.css` is
+   5,489 → 4,414 lines. What remains are rules that mix a dead class with a live
+   one in the same selector list, and splash/canvas styling interleaved with live
+   rules — per-rule work, not a family sweep.
 2. **Native `<select>` elements** — CONSIDERED AND DECLINED, with the
    measurement. Every control on the non-modal screens already clears the 44px
    touch floor (measured: the Reports filters, both search boxes and all four POS
@@ -231,13 +230,9 @@ Ranked by what it costs a shopkeeper.
    "Analytics & Reports"; Customers, Stock Transfers and Settings show the *same
    word twice*. Left alone deliberately — renaming screens is a naming decision,
    not a defect fix.
-4. **~500 more rules in `main.css` look unreachable** — vestigial chrome from
-   the old monorepo (`comm-*`, `crm-*`, `intel-*`, `rpa-*`, `ml-*`, `ws-*`). A
-   detector for this is written but NOT trusted yet: its first run called 62
-   rules dead that a wider scan rescued, and its line numbers proved unreliable.
-   Deleting on its say-so would be exactly the kind of confident-and-wrong change
-   this review exists to catch. The safe route is a before/after screenshot diff
-   across every screen and theme — pixel-identical means nothing live was cut.
+4. **The contrast corpus does not render the auth screen.** So the focus ring on
+   the pre-login ground is unverified by contrast in any theme — which matters
+   now that the ground is per-theme rather than always near-black.
 5. **Chart series colours** (`#38bdf8`, `#a855f7`, `#8b5cf6`, `#10b981`) are
    framework defaults and off-palette. They are categorical identity colours so
    they are defensible, but they were not *chosen*.
@@ -331,3 +326,5 @@ suite being the thing that has to stay green.
     favicon                         resolved and served (was a 404)
     new guards                      3, all mutation-proved in both directions
     contrast corpus                 22 screens, now incl. the first-run empty state
+    main.css                        5,489 -> 4,414 lines (1,098 removed)
+    pixel diff                      22/22 deterministic frames byte-identical
