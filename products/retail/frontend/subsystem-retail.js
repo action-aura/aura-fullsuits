@@ -7674,7 +7674,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#branch-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No branches found.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5">${this._emptyState({
+          icon: 'landmark',
+          title: t('No branches yet'),
+          hint: t('A branch is a physical shop or location. Stock, cash drawers and sales are each counted per branch.'),
+          actions: [
+            { label: t('Add Branch'), onclick: 'RetailSystem._openAddBranch()', primary: true },
+          ],
+        })}</td></tr>`;
         return;
       }
       // Every interpolated value here is escaped (this._esc): `branch` is a
@@ -8621,7 +8628,20 @@ const RetailSystem = {
 
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No audit entries match these filters.')}</td></tr>`;
+        // "No entries match these filters" was shown unconditionally, so a
+        // fresh install -- Action "All actions", Entity "All entities", no
+        // dates -- blamed filters the operator had never set and sent them
+        // looking for a filter problem that did not exist. Derived from the
+        // SAME four values the query above is built from, so the message can
+        // never disagree with the request that produced it.
+        const filtered = !!(s.date_from || s.date_to || s.action || s.entity);
+        tbody.innerHTML = `<tr><td colspan="5">${this._emptyState({
+          icon: 'scroll-text',
+          title: filtered ? t('No entries match these filters') : t('No activity recorded yet'),
+          hint: filtered
+            ? t('Widen the date range, or set Action and Entity back to All, to see more.')
+            : t('The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.'),
+        })}</td></tr>`;
       } else {
         tbody.innerHTML = data.map(r => `<tr>
           <td style="color:var(--text-muted);white-space:nowrap">${this._bdi(this._auditTimestamp(r.timestamp))}</td>
@@ -11178,7 +11198,14 @@ const RetailSystem = {
       const tbody = document.getElementById('bex-backup-tbody');
       if (!tbody) return;
       if (!list.length) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No backups yet.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4">${this._emptyState({
+          icon: 'save',
+          title: t('No backups yet'),
+          hint: t('A backup is a full copy of this company data, saved on this device. Take one before any big change, and before moving to another machine.'),
+          actions: [
+            { label: t('Create Backup'), onclick: 'RetailSystem._createBackup()', primary: true },
+          ],
+        })}</td></tr>`;
         return;
       }
       // Every interpolated value is escaped even though these filenames are

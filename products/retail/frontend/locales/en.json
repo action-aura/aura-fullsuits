@@ -1280,5 +1280,13 @@
   "Price": "Price",
   "Reorder": "Reorder",
   "Add Product": "Add Product",
-  "Returns & Refunds": "Returns & Refunds"
+  "Returns & Refunds": "Returns & Refunds",
+  "No branches yet": "No branches yet",
+  "A branch is a physical shop or location. Stock, cash drawers and sales are each counted per branch.": "A branch is a physical shop or location. Stock, cash drawers and sales are each counted per branch.",
+  "No backups yet": "No backups yet",
+  "A backup is a full copy of this company data, saved on this device. Take one before any big change, and before moving to another machine.": "A backup is a full copy of this company data, saved on this device. Take one before any big change, and before moving to another machine.",
+  "No entries match these filters": "No entries match these filters",
+  "Widen the date range, or set Action and Entity back to All, to see more.": "Widen the date range, or set Action and Entity back to All, to see more.",
+  "No activity recorded yet": "No activity recorded yet",
+  "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them."
 }

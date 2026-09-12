@@ -1280,5 +1280,13 @@
   "Price": "السعر",
   "Reorder": "حد الطلب",
   "Add Product": "إضافة منتج",
-  "Returns & Refunds": "المرتجعات والاسترداد"
+  "Returns & Refunds": "المرتجعات والاسترداد",
+  "No branches yet": "لا توجد فروع بعد",
+  "A branch is a physical shop or location. Stock, cash drawers and sales are each counted per branch.": "الفرع هو محل أو موقع فعلي. يُحتسب المخزون وأدراج النقد والمبيعات لكل فرع على حدة.",
+  "No backups yet": "لا توجد نسخ احتياطية بعد",
+  "A backup is a full copy of this company data, saved on this device. Take one before any big change, and before moving to another machine.": "النسخة الاحتياطية نسخة كاملة من بيانات هذه الشركة محفوظة على هذا الجهاز. خذ نسخة قبل أي تغيير كبير وقبل الانتقال إلى جهاز آخر.",
+  "No entries match these filters": "لا توجد سجلات تطابق عوامل التصفية",
+  "Widen the date range, or set Action and Entity back to All, to see more.": "وسّع نطاق التاريخ، أو أعد الإجراء والكيان إلى \"الكل\"، لعرض المزيد.",
+  "No activity recorded yet": "لم يُسجَّل أي نشاط بعد",
+  "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "يمتلئ سجل التدقيق مع استخدام نقطة البيع: المبيعات والمرتجعات وتغييرات الأسعار وعمليات تسجيل الدخول تُسجَّل هنا مع اسم من قام بها."
 }
