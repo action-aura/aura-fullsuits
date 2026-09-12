@@ -3641,6 +3641,13 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
   background: none; border: 1px solid var(--border-mid);
   color: var(--text-dim); border-radius: 8px; padding: 4px 10px;
   font-size: 12px; cursor: pointer;
+  /* BOTH axes. This is a two-character button ("EN | ع") and was about 38x24 --
+     tall enough is not a target, and it is the only control that switches the
+     product into Arabic, on the one screen where a shop cannot yet get to
+     Settings to do it another way. */
+  min-inline-size: var(--touch-target-min);
+  min-block-size: var(--touch-target-min);
+  display: inline-flex; align-items: center; justify-content: center;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .auth-lang-btn:hover { background: var(--surface-soft); color: var(--text); }
@@ -3661,13 +3668,21 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
   font-size: 25px; font-weight: 800; letter-spacing: -0.5px;
 }
 .auth-sub { color: var(--text-dim); margin: 0; font-size: 14px; line-height: 1.5; }
+/* An OPAQUE state pair, not an alpha tint. This carried
+   rgba(var(--sub-accent-rgb),0.07) on a 0.18 border, whose effective colour
+   depends on whatever happens to be behind it -- so no checker can resolve it,
+   and the first screen the product shows had an unverifiable surface on it.
+   This is an informational callout and the product already solves that per
+   theme; same reasoning as the sync pill, where the comment puts it as "an
+   opaque state pair is self-contained, so it reads the same over whatever
+   corner it floats on". */
 .auth-note {
-  color: var(--text-dim); margin: 12px 0 0; font-size: 12px; line-height: 1.5;
-  background: rgba(var(--sub-accent-rgb),0.07);
-  border: 1px solid rgba(var(--sub-accent-rgb),0.18);
+  color: var(--state-info-text); margin: 12px 0 0; font-size: 12px; line-height: 1.5;
+  background: var(--state-info-surface);
+  border: 1px solid var(--state-info-border);
   border-radius: 8px; padding: 8px 12px;
 }
-.auth-note strong { color: var(--sub-accent); }
+.auth-note strong { color: var(--state-info-text); font-weight: 700; }
 
 .auth-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 520px) { .auth-grid-2 { grid-template-columns: 1fr; } }
@@ -3684,6 +3699,12 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
   border: 1px solid var(--border-mid);
   border-radius: 10px; color: var(--text);
   padding: 11px 14px; font-size: 14px; font-family: inherit;
+  /* DECLARED, not incidental. These came out near 40px from padding alone,
+     which drifts with font size, locale and browser zoom -- and this is the
+     first form a shop ever fills in, on installs that are frequently
+     touchscreens with no pointer. From the token, so one edit moves the floor
+     everywhere. */
+  min-block-size: var(--touch-target-min);
   outline: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -3706,10 +3727,23 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
 
 .auth-submit {
   width: 100%; padding: 14px; margin-top: 6px;
+  /* Declared, like every other control on this form. It came out near 48px from
+     padding alone, which is not a guarantee -- a shorter translation of the
+     label or a smaller base font takes it under without anything failing. */
+  min-block-size: var(--touch-target-min);
   border: none; border-radius: 12px;
   font-size: 15px; font-weight: 700; letter-spacing: 0.3px;
-  color: #fff; cursor: pointer;
-  background: linear-gradient(135deg, var(--sub-accent), rgba(var(--sub-accent-rgb),0.72));
+  /* FLAT fill and the sanctioned on-accent text token. This was `color:#fff`
+     -- which DESIGN.md forbids outright -- on a gradient whose far stop is
+     rgba(var(--sub-accent-rgb),0.72), i.e. 72% alpha compositing with the card
+     underneath. Over the light theme's white card that end of the button lands
+     near rgb(88,121,193), putting white 15px bold text at roughly 4.4:1, under
+     the 4.5:1 AA floor -- on the primary action of the first screen a new shop
+     ever sees. A gradient also has no single surface luminance, so nothing
+     could measure it either way. Flat accent is what every other primary button
+     in the product already uses. */
+  color: var(--text-on-accent); cursor: pointer;
+  background: var(--sub-accent);
   box-shadow: 0 10px 26px rgba(var(--sub-accent-rgb),0.32);
   /* transform/opacity/box-shadow only — compositor-friendly. */
   transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;

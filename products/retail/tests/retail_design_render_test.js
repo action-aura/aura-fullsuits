@@ -102,6 +102,8 @@ const dom = require('./retail_surface_domlite.js');
 
 const FRONTEND = path.join(__dirname, '..', 'frontend');
 const RETAIL_JS = path.join(FRONTEND, 'subsystem-retail.js');
+const APP_SHELL_JS = path.join(__dirname, '..', 'frontend', 'app-shell.js');
+const ICONS_JS = path.join(__dirname, '..', 'frontend', 'icons.js');
 const MAIN_CSS = path.join(FRONTEND, 'css', 'main.css');
 const RTL_CSS = path.join(FRONTEND, 'css', 'rtl.css');
 const INDEX_HTML = path.join(FRONTEND, 'index.html');
@@ -975,6 +977,57 @@ function makeStub(over) {
   return el;
 }
 
+/** Boot the real app-shell.js far enough to build its pre-login overlay.
+ *
+ * Separate from loadRetailSystem because the auth screens live in app-shell.js
+ * and nothing in subsystem-retail.js can produce them. icons.js is loaded into
+ * the same context first so the card's icons are the real ones rather than a
+ * stub that paints nothing -- an icon that renders as empty cannot fail a
+ * contrast check, which would make its inclusion here pointless. */
+function loadAppShell() {
+  const overlays = [];
+  const documentElement = makeStub({ id: 'html' });
+  documentElement.style = {
+    setProperty() {}, removeProperty() {}, getPropertyValue() { return ''; },
+  };
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {}, info() {} },
+    t: (x) => x,
+    document: {
+      readyState: 'complete',
+      body: makeStub({ appendChild(node) { if (node) overlays.push(node); } }),
+      documentElement,
+      head: makeStub(),
+      getElementById() { return null; },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      createElement() { return makeStub(); },
+      addEventListener() {},
+    },
+    localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
+    sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    location: { href: '', hash: '', reload() {} },
+    navigator: { language: 'en', userAgent: 'node' },
+    matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
+    requestAnimationFrame: (fn) => setTimeout(fn, 0),
+    CustomEvent: function () {}, Event: function () {},
+    BroadcastChannel: undefined,
+    fetch: () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) }),
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(ICONS_JS, 'utf8'), sandbox, { filename: 'icons.js' });
+  vm.runInContext(fs.readFileSync(APP_SHELL_JS, 'utf8'), sandbox, { filename: 'app-shell.js' });
+  assert.ok(
+    sandbox.SubsystemApp && typeof sandbox.SubsystemApp.showSetupModal === 'function',
+    'app-shell.js did not yield a SubsystemApp with showSetupModal() -- the pre-login '
+    + 'corpus entry has nothing to render.'
+  );
+  return { app: sandbox.SubsystemApp, overlays };
+}
+
 /** Load the real subsystem-retail.js. Never a reimplementation. */
 function loadRetailSystem(capabilities) {
   const code = fs.readFileSync(RETAIL_JS, 'utf8');
@@ -1312,6 +1365,25 @@ async function buildCorpus() {
     assert.ok(overlay, 'The held-sales modal never reached document.body.');
     screens.push(screenFrom('held-sales-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
   }
+  // THE PRE-LOGIN SCREEN -- the first surface the product ever shows, and the
+  // only one a shop sees before it has an account. It shipped a near-black
+  // ground under a warm-paper card on the Sand theme because nothing here had
+  // ever measured it.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const { app, overlays } = loadAppShell();
+    await app.showSetupModal();
+    await settle();
+    const overlay = overlays[overlays.length - 1];
+    assert.ok(overlay, 'showSetupModal() never reached document.body.');
+    assert.ok(
+      /auth-card/.test(overlay.innerHTML || ''),
+      'the pre-login overlay rendered without an .auth-card -- this entry would be '
+      + 'measuring an empty box rather than the screen it is named for'
+    );
+    screens.push(screenFrom('first-run-auth', ctx, '', overlayMarkup(overlay)));
+  }
+
   // THE FIRST-RUN STATE. Every list screen above renders with rows. A brand-new
   // shop has none, and the empty state is its own chrome (.ret-empty, and the
   // icon/title/hint/actions inside it) with its own colours -- on the literal
@@ -1488,6 +1560,9 @@ const DECLARED_SCREENS = [
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
   'backup-export', 'scanner', 'stock-accuracy', 'transfers',
   'customer-modal', 'sale-modal', 'held-sales-modal',
+  // The pre-login surface. Not a router section -- it renders before any
+  // section exists.
+  'first-run-auth',
   // Not a router section: a fragment, like the modals around it. The first-run
   // empty state, which every other entry here renders past by having rows.
   // Listed in BUILD order -- the assertion compares this to what came back
