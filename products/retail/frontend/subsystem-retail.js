@@ -733,6 +733,143 @@ const RetailSystem = {
         .ret-btn-danger:active { transform:none;background:var(--state-danger-border); }
         .ret-btn-primary:active { transform:none;opacity:.8; }
       }
+
+      /* ── retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
+         §3.1 "POS -- the money screen"): peek bar + cart sheet, phone only.
+         Lives HERE in #ret-styles (injected once into <head>, never thrown
+         away on navigation -- see the "Empty states" comment at the top of
+         this function for why shared chrome belongs here and not inside
+         _renderPOS()'s own per-render stylesheet block) rather than beside
+         the rest of the .pos-* rules, so #pos-peek's "hidden by default"
+         rule still exists even on a screen that has never mounted the POS.
+
+         640px matches the breakpoint css/main.css's own .sub-tabbar rule
+         already uses (that file's §5 token comment calls 640 "the canonical
+         phone breakpoint") -- the peek bar sits directly on top of the tab
+         bar, so the two must agree on where "phone" starts or a window
+         resized across 640px could show one without the other.
+
+         SPECIFICITY NOTE: every .pos-right override below is qualified as
+         .pos-wrap .pos-right, not bare .pos-right (no backtick in this
+         comment on purpose -- this whole sheet is a JS template literal, see
+         the reduced-motion comment in _renderPOS's own inline stylesheet for
+         the same rule stated the same way). _renderPOS()'s own per-render
+         style tag (which carries the base .pos-right rule, overflow:hidden
+         included)
+         lives inside #sub-content, physically AFTER this #ret-styles element
+         in <head> -- so at equal specificity the base rule's overflow:hidden
+         would win the cascade on source order alone and silently cancel this
+         block's overflow-y:auto, leaving the sheet unscrollable. The extra
+         ancestor class is the same fix button.pos-pay-btn's own comment
+         documents for the identical reason (a shared property, different
+         source position) -- not decoration. */
+      #pos-peek { display:none; }
+      /* Touch-floor guarantee declared UNCONDITIONALLY, outside the phone
+         media query below, on purpose: retail_design_focus_test.js's touch-
+         floor sweep resolves the cascade a control gets regardless of any
+         @media condition (a media-gated rule is a real declaration only at
+         that width -- see that file's own module comment on why a rule
+         nested in @media is not folded into the base check), so a minimum
+         declared only inside @media(max-width:640px) reads to that sweep as
+         "no minimum declared at all" for this control, even though the
+         control is genuinely display:none outside that width. #pos-peek-
+         charge is display:none above 640px regardless, so an always-declared
+         minimum here costs nothing visually -- it just closes that gap. */
+      .pos-peek-charge { min-inline-size: var(--touch-target-min, 44px);min-block-size: var(--touch-target-min, 44px); }
+      @media (max-width: 640px) {
+        #pos-peek {
+          display:flex;align-items:center;gap:10px;
+          position:fixed;inset-inline:0;
+          /* Directly on top of the tab bar -- the SAME
+             --tabbar-block-size + --safe-area-bottom sum css/main.css's own
+             .sub-tabbar rule uses for that bar's own height, so the two
+             stacks can never drift apart even if a device's safe-area inset
+             changes between phones. */
+          inset-block-end: calc(var(--tabbar-block-size) + var(--safe-area-bottom));
+          /* Below the tab bar's z-index:500 (css/main.css .sub-tabbar) --
+             the peek bar sliding OVER the tab bar's labels would be its own
+             bug, not just a cosmetic quirk. */
+          z-index: 480;
+          min-block-size: var(--touch-target-comfortable, 52px);
+          padding-inline: 16px;padding-block: 6px;
+          background: var(--surface-panel);
+          border-block-start: 1px solid var(--border-hairline, var(--border-mid));
+        }
+        .pos-peek-icon { display:inline-flex;line-height:1;color:var(--text-dim);flex-shrink:0; }
+        /* Ellipsis, not wrap -- a translated "Cart is empty" (Arabic runs
+           longer than English for several strings in this app, see §6) must
+           never push the Charge button off the end of a 343px-wide bar. */
+        .pos-peek-count { flex:1;min-inline-size:0;overflow:hidden;text-overflow:ellipsis;
+          white-space:nowrap;font-size:13px;font-weight:600;color:var(--text-dim); }
+        /* .money (css/main.css) already carries tabular figures + the
+           negative/accounting classes -- see _setMoney's own comment above
+           -- so only the SIZE is set here, matching .pos-grand-value's
+           weight of 800 so the peek total reads with the same authority the
+           full total does, just smaller. */
+        .pos-peek-total { font-size:16px;font-weight:800;flex-shrink:0; }
+        /* Charge is money coming IN -- the same token .pos-checkout-btn's
+           own background uses (see that rule's comment above), so the peek
+           bar's Charge affordance and the sheet's real Charge button read as
+           the same action rather than two different colours competing for
+           "this is the money control" on one screen. */
+        .pos-peek-charge { flex-shrink:0;display:inline-flex;align-items:center;gap:4px;
+          padding-inline:14px;
+          border-radius:10px;border:1px solid transparent;font-family:inherit;
+          background: var(--text-money-positive, var(--sub-accent));
+          color: var(--text-on-accent, var(--text-inverse));
+          font-weight:800;font-size:14px;cursor:pointer; }
+        .pos-peek-charge:disabled { opacity:.45;cursor:not-allowed; }
+        /* The sheet has its own Charge (#pos-checkout-btn) once it is open --
+           two Charge affordances stacked on one 390px screen is not
+           redundancy, it is confusion, so the peek bar disappears the moment
+           .pos-sheet-open is set rather than sitting there inert behind the
+           scrim. */
+        .pos-wrap.pos-sheet-open #pos-peek { display:none; }
+
+        /* ── The cart sheet -- .pos-right itself becomes it. No copy, no
+           second panel: position:fixed lifts it out of .pos-wrap's grid flow
+           entirely, so .pos-left (the scan/pick surface) naturally reclaims
+           the full row width once .pos-right stops being a grid column --
+           nothing beyond the existing @media(max-width:1100px) single-column
+           rule above (in _renderPOS's own inline stylesheet) is needed for
+           that. */
+        .pos-wrap .pos-right {
+          position:fixed;inset-inline:0;inset-block-end:0;
+          block-size:85dvh;
+          z-index:5002;
+          transform:translateY(100%);
+          transition:transform var(--motion-base, 240ms) var(--motion-ease-out, ease-out);
+          overflow-y:auto;
+        }
+        .pos-wrap.pos-sheet-open .pos-right { transform:translateY(0); }
+
+        /* Scrim: a ::before generated box on .pos-wrap itself, not a fourth
+           new element -- the hard constraint on this change is that
+           #pos-peek is the ONLY new DOM node, so "tap outside to close" is a
+           generated box plus a target check in _renderPOS's own click
+           handler (see the addEventListener wired at the end of _renderPOS,
+           and _toggleCartSheet below) rather than a real #pos-sheet-scrim
+           element. Sits below the sheet's z-index:5002, above every other
+           stacking context this screen creates. */
+        .pos-wrap.pos-sheet-open::before {
+          content:'';
+          position:fixed;inset:0;
+          background: var(--surface-scrim);
+          z-index: 5001;
+        }
+      }
+      /* Reduced motion: the sheet still opens and closes, it just snaps
+         instead of sliding -- the same "remove the ANIMATION, keep the state
+         change" rule .pos-wrap's own prefers-reduced-motion block already
+         applies to its :active presses (see _renderPOS's inline stylesheet).
+         One combined condition rather than nesting this inside the block
+         above, so the rule only exists where .pos-right actually HAS a
+         transform to cancel -- above 640px .pos-right has none, and a
+         transition:none for a property that was never set there would be
+         dead weight on every non-phone screen. */
+      @media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+        .pos-wrap .pos-right { transition:none; }
+      }
     `;
     document.head.appendChild(s);
   },
@@ -1162,6 +1299,40 @@ const RetailSystem = {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
     this._refocusScan();
     return false;
+  },
+
+  // retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
+  // §3.1): opens/closes the phone cart sheet. This is a LAYOUT toggle only --
+  // it never touches this._cart, never calls _recalc(), never posts
+  // anything. The money the sheet shows is the exact same #pos-sub/#pos-tax/
+  // #pos-total/#pos-pay-btns/#pos-checkout-btn this screen has always
+  // maintained; open vs. closed only changes where .pos-right (the SAME
+  // element, see _renderPOS's own comment on why there is no second copy)
+  // sits on screen. Above 640px this is inert: .pos-wrap.pos-sheet-open has
+  // no matching CSS rule outside the phone media query in _injectStyles(),
+  // so a desktop till calling this by mistake would toggle a class that does
+  // nothing.
+  //
+  // Wrapped in try/catch: a cosmetic sheet that fails to open or close is a
+  // UX bug, not a lost sale. this._cart and every _recalc()-maintained total
+  // are untouched either way, so swallowing the error here is safe -- letting
+  // it propagate out of an onclick handler would be the only way this bug
+  // could ever reach the actual charge path, and it must not.
+  _toggleCartSheet(open) {
+    try {
+      const wrap = document.querySelector('.pos-wrap');
+      if (!wrap) return;
+      wrap.classList.toggle('pos-sheet-open', !!open);
+      if (open) {
+        // Land the cashier next to the tender area, not the top of the cart
+        // list -- opening from the peek bar means they already know what is
+        // in the cart (they just read the count and total off the peek bar
+        // itself); what they came here to do is charge. 'nearest' (not
+        // 'start'/'center') so a short cart that already fits on screen is
+        // not scrolled at all.
+        document.getElementById('pos-pay-btns')?.scrollIntoView({ block: 'nearest' });
+      }
+    } catch (e) { /* cosmetic only -- see this method's own comment above */ }
   },
 
   _badge(text, color) { return `<span class="ret-badge ret-badge-${color||'blue'}">${text}</span>`; },
@@ -2511,6 +2682,25 @@ const RetailSystem = {
         .pos-promo-tag { display:flex;align-items:center;gap:4px;color:var(--state-success-text);font-size:11px;font-weight:600;margin-block-start:2px; }
         /* High-frequency zone: quantity stepper + the line's money. */
         .pos-line-freq { display:flex;align-items:center;gap:12px;flex-shrink:0; }
+        /* PHONE: let the row wrap so the name gets a line of its own.
+           .pos-line-freq is flex-shrink:0 -- correct on a desktop, where the
+           sale panel is a fixed-width column -- but in the phone cart sheet it
+           took about 310px of a 390px row and left the product name roughly
+           55px, so "Coffee beans 250g" rendered as three clipped fragments
+           ("Co... be... 25..."). Two similar lines are indistinguishable like
+           that, which at a till is a wrong-item-refunded waiting to happen.
+           Measured in the open sheet at 390x844. */
+        @media (max-width: 640px) {
+          .pos-cart-row { flex-wrap:wrap;row-gap:8px; }
+          /* The name takes the whole first line; the controls, the separator
+             and the remove button share the second. .pos-cart-row has FOUR
+             children, so giving the controls block a full 100% pushed the
+             separator and the remove button onto a THIRD line and left the
+             remove button orphaned under the stepper. flex:1 1 auto lets it
+             take the space that is left instead of all of it. */
+          .pos-line-main { flex:1 1 100%; }
+          .pos-line-freq { flex:1 1 auto;justify-content:space-between; }
+        }
         .pos-qty-wrap { display:flex;align-items:center;background:var(--input-bg);border:1px solid var(--border-mid);border-radius:10px;overflow:hidden; }
         .pos-qty-btn { min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);background:transparent;border:none;color:var(--text);
           cursor:pointer;font-size:18px;font-weight:700;line-height:1;font-family:inherit;transition:background .12s ease; }
@@ -2648,6 +2838,17 @@ const RetailSystem = {
           border-radius:4px;background:var(--surface-panel);color:var(--text-secondary);
           border:1px solid var(--border-strong);font-size:9px;font-weight:700;line-height:1.5;
           font-family:inherit;letter-spacing:.02em; }
+        /* Hidden on a touch-only device, for the same reason the hint STRIP
+           above is: these are a legend for keys the device does not have. They
+           stay wherever a keyboard might be attached -- including a desktop
+           window narrowed to phone width -- because they are the only place the
+           F1-F6 tender shortcuts are taught anywhere in the product.
+           Declared AFTER the base rule deliberately: both selectors are one
+           class, so at equal specificity the later one wins, and placing this
+           earlier in the sheet left the badges visible. */
+        @media (hover: none) and (pointer: coarse) {
+          .pos-pay-kbd { display:none; }
+        }
         /* Charge is money coming IN, so it carries the money-in token rather
            than a decorative gradient -- colour that means something. */
         /* Sticky to the bottom of the scrolling summary: the totals may scroll
@@ -2891,6 +3092,55 @@ const RetailSystem = {
             <button class="pos-checkout-btn" id="pos-checkout-btn" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
           </div>
         </div>
+        <!-- retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
+             §3.1 "POS -- the money screen"): the phone "money edge". Measured
+             at 390x844 on a touch context, as shipped: the POS had 1,379px of
+             content in a 343px viewport, the Charge button rendered at
+             y1378-1431 in an 844px window, and reaching it took scrolling
+             #sub-content ~1,000px -- at which point the cart itself had
+             scrolled off the top and (with a licence banner up) the grand
+             total sat behind it. This bar is the fix: fixed above the tab
+             bar, always showing the line count + running total + a Charge
+             affordance, on every phone screen regardless of scroll position.
+
+             THE ONLY NEW DOM in this whole change. No re-parenting, no
+             duplicated cart markup -- #pos-peek-count/#pos-peek-total are
+             read-only MIRRORS _recalc() writes alongside #pos-sub/#pos-tax/
+             #pos-total (see that function below), never a second source of
+             truth. display:none outside @media(max-width:640px) (see
+             _injectStyles()) so a desktop till, where .pos-right is already
+             the always-visible right column it has always been, never shows
+             this at all -- it is the LAST child of .pos-wrap specifically so
+             _renderPOS()'s c.innerHTML replacement destroys and recreates it
+             on every (re)mount/navigation exactly like every other element on
+             this screen, rather than needing separate cleanup.
+
+             onmousedown="_keepScanFocus": the spec calls scanner focus
+             sacred (same reasoning as .pos-cat-row/.pos-scanbar/#pos-cart
+             above) -- a hardware scanner paired to the phone must keep its
+             target even when a cashier's thumb lands on the peek bar. -->
+        <div id="pos-peek" onmousedown="RetailSystem._keepScanFocus(event)">
+          <span class="pos-peek-icon" aria-hidden="true">${this._icon('shopping-cart', 18, '🛒')}</span>
+          <span id="pos-peek-count" class="pos-peek-count">${t('Cart is empty')}</span>
+          <span id="pos-peek-total" class="pos-peek-total money">${this._esc(this._moneyDigits(0))}</span>
+          <!-- type="button" -- this control's ONLY job is
+               RetailSystem._toggleCartSheet(true). It must NEVER call
+               _checkout() or otherwise commit a sale: per the design doc,
+               "One accidental tap must not ring a sale. The commit button is
+               only ever the big one inside the sheet" (#pos-checkout-btn,
+               unchanged id, unchanged _checkout() handler, above). A phone
+               till gets jostled in an apron pocket, bumped on a counter, and
+               tapped by a customer leaning in to see their total -- none of
+               those are a cashier's deliberate charge decision, so this
+               button's only power is REVEALING the real Charge button, never
+               standing in for it. Starts disabled to match the empty-cart
+               state this template renders synchronously; _recalc() (below)
+               re-enables it the moment the cart holds a line. -->
+          <button type="button" id="pos-peek-charge" class="pos-peek-charge"
+            onclick="RetailSystem._toggleCartSheet(true)" disabled>
+            <span>${t('Charge')}</span><span aria-hidden="true"> ▸</span>
+          </button>
+        </div>
       </div>`;
 
     this._cart = [];
@@ -2937,6 +3187,42 @@ const RetailSystem = {
     // cash-drawer.js (e.g. an older cached index.html) still renders the
     // rest of the POS screen exactly as before.
     if (window.CashDrawer) CashDrawer.mount(c);
+
+    // retail-hardware-viewports Step 9: "tap outside to close" for the phone
+    // cart sheet. There is no separate #pos-sheet-scrim element -- the hard
+    // constraint on this change is that #pos-peek is the ONLY new DOM node
+    // (see its own comment above), so the scrim is a ::before generated box
+    // on .pos-wrap itself (_injectStyles()'s @media(max-width:640px) block)
+    // and closing it is a plain target check here, rather than a real
+    // element to attach a listener to.
+    //
+    // Bound the SAME way every other overlay in this file closes on an
+    // outside click (see .ret-modal-overlay's own e.target === overlay call
+    // sites elsewhere in this file) -- except there is no overlay variable
+    // here, so the check is against .pos-wrap itself: a click's target IS
+    // .pos-wrap only when it lands on the wrap's own box (the ::before scrim,
+    // or the grid gap/background), never when it lands on .pos-left or
+    // .pos-right (both real children with their own descendants as the
+    // target), so this can never fire from a tap inside either pane.
+    // Harmless above 640px too: .pos-right there is the plain right column
+    // it has always been, in normal grid flow, so it -- not .pos-wrap --
+    // is still what a click inside it targets.
+    //
+    // document.querySelector, not c.querySelector: c is the render target
+    // (#sub-content) and several existing test harnesses in
+    // products/retail/tests/ hand _renderPOS a minimal element stub that
+    // implements getElementById-style lookups on `document` but not a full
+    // querySelector on the container itself (see e.g.
+    // retail_currency_surface_test.js's makeElementStub) -- document.* is
+    // exactly the surface _renderPOS already relies on everywhere else in
+    // this function (pos-cats, pos-customer, ...), so this matches that
+    // existing contract instead of inventing a new one.
+    const posWrapEl = document.querySelector('.pos-wrap');
+    if (posWrapEl) {
+      posWrapEl.addEventListener('click', (e) => {
+        if (e.target === posWrapEl) this._toggleCartSheet(false);
+      });
+    }
   },
 
   // ── launch-readiness "the POS scale fix" (ROADMAP.md 2026-08-29 v21) ──────
@@ -3918,6 +4204,47 @@ const RetailSystem = {
     this._setMoney(document.getElementById('pos-sub'),   subtotal);
     this._setMoney(document.getElementById('pos-tax'),   tax);
     this._setMoney(document.getElementById('pos-total'), total);
+    // retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
+    // §3.1): the peek bar is a MIRROR of #pos-total, never a second source
+    // of truth -- same `total`, same _setMoney() call, updated in the same
+    // place every other money element on this screen already is. Guarded
+    // `if (el)` throughout: several existing test harnesses in
+    // products/retail/tests/ call _recalc() directly against element stubs
+    // that never went through _renderPOS() (see _bestPromoFor's own comment
+    // above for the identical caveat), and on a desktop till #pos-peek
+    // exists but is display:none -- present, so no guard here would ever
+    // actually throw, but still updated for free in case a window is
+    // resized across the 640px breakpoint mid-sale.
+    const peekTotalEl = document.getElementById('pos-peek-total');
+    if (peekTotalEl) this._setMoney(peekTotalEl, total);
+    const peekCountEl = document.getElementById('pos-peek-count');
+    const peekChargeEl = document.getElementById('pos-peek-charge');
+    const lineCount = this._cart.length;
+    if (peekCountEl) {
+      if (lineCount === 0) {
+        peekCountEl.textContent = t('Cart is empty');
+      } else {
+        // Held count folded in per the mockup ("3 · Held (1)") -- read
+        // off the existing #pos-held-count element, already kept current by
+        // _loadPOSData()/_holdSale()/_openHeldSalesModal() (see those call
+        // sites), rather than re-fetching held sales or duplicating that
+        // count into a second piece of state that could drift from it. Cheap
+        // on purpose: a textContent read, not a network call, on every
+        // keystroke-triggered recalc. Punctuation only (the middle dot), not
+        // a translatable string -- t('Held') is the only word in this line
+        // that needs one.
+        const heldEl = document.getElementById('pos-held-count');
+        const heldCount = heldEl ? (parseInt(heldEl.textContent, 10) || 0) : 0;
+        peekCountEl.textContent = heldCount > 0
+          ? `${lineCount} · ${t('Held')} (${heldCount})`
+          : String(lineCount);
+      }
+    }
+    // Empty cart: the peek Charge affordance must never open onto a sheet
+    // with nothing to charge -- disabled here, the same rule _renderPOS's
+    // own initial (pre-_recalc) markup already renders synchronously so
+    // there is no flash of an enabled button before the first recalc.
+    if (peekChargeEl) peekChargeEl.disabled = lineCount === 0;
     // "Show the redeemed value in the sale summary" -- own row, own
     // visibility, the same conditional-money-row shape #pos-change-row
     // already uses just below.
