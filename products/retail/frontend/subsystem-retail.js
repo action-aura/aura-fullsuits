@@ -68,7 +68,7 @@ function retailPaymentChartConfig(labels, values, tickColor) {
       scales: {
         // beginAtZero keeps the zero line on the axis so a negative bar is
         // visibly on the other side of it rather than merely shorter.
-        x: { beginAtZero: true, ticks: { color: tickColor, callback: v => axisMoney(v) },
+        x: { beginAtZero: true, ticks: { color: tickColor, callback: (v, i, ticks) => axisMoney(v, ticks) },
              // Token, not the old white-alpha literal: white at 5% is a HUD
              // leftover that is invisible over the light card and would have
              // been the one un-themed line left on this chart in dark. Read
@@ -114,13 +114,23 @@ function retailPaymentChartConfig(labels, values, tickColor) {
 // toLocaleString('en-US') explicitly, never a bare toLocaleString() -- a bare
 // call renders Eastern Arabic-Indic digits (٠١٢٣) under an Arabic UI locale,
 // and Jordan's shops price in Western digits regardless of UI language.
-function axisMoney(v) {
+function axisMoney(v, ticks) {
   try {
     const n = Number(v);
-    if (Number.isInteger(n)) {
-      return RetailSystem._currencyPrefix() + n.toLocaleString('en-US');
+    // ONE AXIS, ONE PRECISION. Deciding per tick produced "JD 0.800" directly
+    // above "JD 1" on the same axis -- caught by reading the Arabic dashboard.
+    // Chart.js passes the whole tick array, so ask it once: if ANY tick here is
+    // fractional, every tick takes the currency's decimals; if they are all
+    // whole, none do and they get thousands separators instead. A revenue axis
+    // running 0..1,200 reads "JD 400"; one running 0..1 reads "JD 0.400".
+    const all = Array.isArray(ticks) && ticks.length
+      ? ticks.map((t) => Number(t && typeof t === 'object' ? t.value : t))
+      : [n];
+    const anyFractional = all.some((x) => Number.isFinite(x) && !Number.isInteger(x));
+    if (anyFractional) {
+      return RetailSystem._currencyPrefix() + n.toFixed(RetailSystem._currencyDp());
     }
-    return RetailSystem._currencyPrefix() + n.toFixed(RetailSystem._currencyDp());
+    return RetailSystem._currencyPrefix() + n.toLocaleString('en-US');
   } catch (e) {
     return String(v);
   }
@@ -2040,7 +2050,7 @@ const RetailSystem = {
               borderRadius: 3 }] },
             options: { responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{display:false} },
-              scales:{ y:{grid:{color:gridClr},ticks:{color:tickClr,callback:v=>axisMoney(v)}},
+              scales:{ y:{grid:{color:gridClr},ticks:{color:tickClr,callback:(v,i,ticks)=>axisMoney(v,ticks)}},
                        x:{grid:{display:false},ticks:{color:tickClr}} } }
           });
         } else if (hCtx) {
@@ -5260,7 +5270,7 @@ const RetailSystem = {
               <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">${this._icon('camera', 16, '📷')} Scan</button>
             </div>
           </div>
-          <div class="ret-field"><label>Category</label><select id="pm-cat"><option value="">None</option>${catOpts}</select></div>
+          <div class="ret-field"><label>${t('Category')}</label><select id="pm-cat"><option value="">${t('None')}</option>${catOpts}</select></div>
         </div>
         <div class="ret-field-row3">
           <div class="ret-field"><label>Cost Price</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
@@ -5268,7 +5278,7 @@ const RetailSystem = {
           <div class="ret-field"><label>Tax Rate %</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
         </div>
         <div class="ret-field-row3">
-          <div class="ret-field"><label>${t('Supplier')}</label><select id="pm-sup"><option value="">None</option>${supOpts}</select></div>
+          <div class="ret-field"><label>${t('Supplier')}</label><select id="pm-sup"><option value="">${t('None')}</option>${supOpts}</select></div>
           <div class="ret-field"><label>Unit</label>
             <select id="pm-unit">
               ${['pcs','kg','g','l','ml','box','pack','pair','m','cm'].map(u=>`<option ${p.unit===u?'selected':''}>${u}</option>`).join('')}
@@ -5372,11 +5382,11 @@ const RetailSystem = {
           <input type="number" id="sa-qty" placeholder="+10 or -5" step="1" /></div>
         <div class="ret-field"><label>Reason</label>
           <select id="sa-reason">
-            <option value="Stock received">Stock received</option>
-            <option value="Manual correction">Manual correction</option>
-            <option value="Damaged goods">Damaged goods</option>
-            <option value="Stock count">Stock count adjustment</option>
-            <option value="Returned from customer">Returned from customer</option>
+            <option value="Stock received">${t('Stock received')}</option>
+            <option value="Manual correction">${t('Manual correction')}</option>
+            <option value="Damaged goods">${t('Damaged goods')}</option>
+            <option value="Stock count">${t('Stock count adjustment')}</option>
+            <option value="Returned from customer">${t('Returned from customer')}</option>
           </select>
         </div>
         <div class="ret-modal-footer">
@@ -6466,7 +6476,7 @@ const RetailSystem = {
           <div style="margin:12px 0">
             <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
               <div class="ret-field" style="margin:0"><label>Product</label>
-                <select id="po-item-prod"><option value="">Select product…</option>${prodOpts}</select></div>
+                <select id="po-item-prod"><option value="">${t('Select product…')}</option>${prodOpts}</select></div>
               <div class="ret-field" style="margin:0"><label>Qty</label>
                 <input type="number" id="po-item-qty" value="1" min="1" /></div>
               <div class="ret-field" style="margin:0"><label>Unit Cost</label>
@@ -8437,15 +8447,15 @@ const RetailSystem = {
           </div>
           <div class="ret-field"><label>Refund Method</label>
             <select id="ret-refund-method">
-              <option value="cash">Cash</option><option value="card">Card</option>
-              <option value="store_credit">Store Credit</option>
+              <option value="cash">${t('Cash')}</option><option value="card">${t('Card')}</option>
+              <option value="store_credit">${t('Store Credit')}</option>
             </select>
           </div>
         </div>
         <div class="ret-field"><label>Return Reason</label>
           <select id="ret-reason">
-            <option>Customer return</option><option>Defective / damaged</option>
-            <option>Wrong item</option><option>Not as described</option><option>Changed mind</option>
+            <option value="Customer return">${t('Customer return')}</option><option value="Defective / damaged">${t('Defective / damaged')}</option>
+            <option value="Wrong item">${t('Wrong item')}</option><option value="Not as described">${t('Not as described')}</option><option value="Changed mind">${t('Changed mind')}</option>
           </select>
         </div>
         <div id="ret-sale-items" style="margin-top:16px"></div>
@@ -10479,7 +10489,15 @@ const RetailSystem = {
       this._branches = branches;
       const sel = document.getElementById('rep-branch');
       if (!sel) return;
-      sel.innerHTML = '<option value="">All branches</option>' +
+      // t(), not a bare string. The markup that first renders this select
+      // already writes t('All branches'); this rebuild ran AFTER it, once the
+      // branch list arrived, and overwrote the translated option with a
+      // hardcoded English one -- so on an Arabic till the branch filter read
+      // "All branches" while the period filter beside it read "آخر 14 يومًا".
+      // Found by reading the Arabic Reports screen, not by any test: the key
+      // exists and is translated in ar.json, so nothing about the catalogue
+      // looked wrong.
+      sel.innerHTML = `<option value="">${this._esc(t('All branches'))}</option>` +
         branches.map(b => `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
     } catch(e) { console.error('Failed to load branches for report filter', e); }
   },
@@ -10602,7 +10620,7 @@ const RetailSystem = {
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{labels:{color:tickClr}} },
-              scales:{ y:{ticks:{color:tickClr,callback:v=>axisMoney(v)},grid:{color:gridClr}},
+              scales:{ y:{ticks:{color:tickClr,callback:(v,i,ticks)=>axisMoney(v,ticks)},grid:{color:gridClr}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:tickClr},grid:{display:false}} } }
           }],
@@ -10639,7 +10657,7 @@ const RetailSystem = {
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{labels:{color:tickClr}} },
-              scales:{ y:{ticks:{color:tickClr,callback:v=>axisMoney(v)},grid:{color:gridClr}},
+              scales:{ y:{ticks:{color:tickClr,callback:(v,i,ticks)=>axisMoney(v,ticks)},grid:{color:gridClr}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:tickClr},grid:{display:false}} } }
           }],
@@ -10992,17 +11010,17 @@ const RetailSystem = {
           <div class="ret-field">
             <label>Scanner Enabled</label>
             <select id="sc-enabled">
-              <option value="true"  ${cfg.enabled ? 'selected' : ''}>On — listen for scans</option>
-              <option value="false" ${!cfg.enabled ? 'selected' : ''}>Off — manual entry only</option>
+              <option value="true"  ${cfg.enabled ? 'selected' : ''}>${t('On — listen for scans')}</option>
+              <option value="false" ${!cfg.enabled ? 'selected' : ''}>${t('Off — manual entry only')}</option>
             </select>
           </div>
 
           <div class="ret-field">
             <label>Input Mode</label>
             <select id="sc-mode">
-              <option value="auto"     ${cfg.inputMode === 'auto' ? 'selected' : ''}>Auto Detect (recommended)</option>
-              <option value="keyboard" ${cfg.inputMode === 'keyboard' ? 'selected' : ''}>Keyboard HID</option>
-              <option value="serial" disabled>Serial / COM — coming soon</option>
+              <option value="auto"     ${cfg.inputMode === 'auto' ? 'selected' : ''}>${t('Auto Detect (recommended)')}</option>
+              <option value="keyboard" ${cfg.inputMode === 'keyboard' ? 'selected' : ''}>${t('Keyboard HID')}</option>
+              <option value="serial" disabled>${t('Serial / COM — coming soon')}</option>
             </select>
           </div>
 
@@ -11025,8 +11043,8 @@ const RetailSystem = {
           <div class="ret-field">
             <label>Success Sound</label>
             <select id="sc-sound">
-              <option value="true"  ${cfg.sound ? 'selected' : ''}>On — beep on each scan</option>
-              <option value="false" ${!cfg.sound ? 'selected' : ''}>Off</option>
+              <option value="true"  ${cfg.sound ? 'selected' : ''}>${t('On — beep on each scan')}</option>
+              <option value="false" ${!cfg.sound ? 'selected' : ''}>${t('Off')}</option>
             </select>
           </div>
         </div>
@@ -11042,8 +11060,8 @@ const RetailSystem = {
           <div class="ret-field">
             <label>Paper Width</label>
             <select id="pr-width">
-              <option value="80mm" ${(this._printerCfg().paperWidth !== '58mm') ? 'selected' : ''}>80mm (standard)</option>
-              <option value="58mm" ${(this._printerCfg().paperWidth === '58mm') ? 'selected' : ''}>58mm (compact)</option>
+              <option value="80mm" ${(this._printerCfg().paperWidth !== '58mm') ? 'selected' : ''}>${t('80mm (standard)')}</option>
+              <option value="58mm" ${(this._printerCfg().paperWidth === '58mm') ? 'selected' : ''}>${t('58mm (compact)')}</option>
             </select>
           </div>
           <div style="display:flex;gap:10px;margin-top:6px">
