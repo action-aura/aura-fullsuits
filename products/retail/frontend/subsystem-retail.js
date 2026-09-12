@@ -1882,10 +1882,19 @@ const RetailSystem = {
           <span class="rdash-context-value money" id="r-k-mtd">—</span>
           <span class="rdash-context-note"><span id="r-k-mtd-sub">—</span> ${t('transactions')}</span>
         </div>
+        <!-- TWO items, not one. This used to be a single "Customers" tile whose
+             supporting note read "N active products" -- an unrelated entity
+             presented as though it qualified the customer count above it. The
+             Month-to-Date tile beside it sets the pattern these follow: a note
+             must support its own value or there should not be one. Both ids are
+             unchanged; the strip is flex-wrap, so a third item is free. -->
         <div class="rdash-context-item">
           <span class="rdash-context-label">${t('Customers')}</span>
           <span class="rdash-context-value" id="r-k-cust">—</span>
-          <span class="rdash-context-note"><span id="r-k-prod">—</span> ${t('active products')}</span>
+        </div>
+        <div class="rdash-context-item">
+          <span class="rdash-context-label">${t('Active products')}</span>
+          <span class="rdash-context-value" id="r-k-prod">—</span>
         </div>
       </div>
 
@@ -5447,7 +5456,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#cat-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No categories found.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4">${this._emptyState({
+        icon: 'tag',
+        title: t('No categories yet'),
+        hint: t('Group products into categories so a cashier can find them without typing.'),
+        actions: [
+          { label: t('Add Category'), onclick: 'RetailSystem._openAddCategory()', primary: true },
+        ],
+      })}</td></tr>`;
         return;
       }
       // Every interpolated value here is escaped (see this._esc): a category
@@ -5851,7 +5867,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#prm-table tbody');
       if (!tbody) return;
       if (!this._promotionsList.length) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('No promotions found.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+        icon: 'gift',
+        title: t('No promotions yet'),
+        hint: t('Set up a discount and it applies automatically at checkout.'),
+        actions: [
+          { label: t('Add Promotion'), onclick: 'RetailSystem._openAddPromotion()', primary: true },
+        ],
+      })}</td></tr>`;
         return;
       }
       // Every interpolated value is escaped (see this._esc) -- a promotion
@@ -6055,7 +6078,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#sup-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">No suppliers yet.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+        icon: 'briefcase',
+        title: t('No suppliers yet'),
+        hint: t('Add the businesses you buy stock from, then raise purchase orders against them.'),
+        actions: [
+          { label: t('Add Supplier'), onclick: 'RetailSystem._openAddSupplier()', primary: true },
+        ],
+      })}</td></tr>`;
         return;
       }
       // Every interpolated value here is escaped (see this._esc): a supplier
@@ -6367,7 +6397,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#po-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">No purchase orders yet.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="7">${this._emptyState({
+        icon: 'clipboard-list',
+        title: t('No purchase orders yet'),
+        hint: t('Raise an order to restock from a supplier. What you receive updates stock for you.'),
+        actions: [
+          { label: t('New Purchase Order'), onclick: 'RetailSystem._openCreatePO()', primary: true },
+        ],
+      })}</td></tr>`;
         return;
       }
       const statusColor = { pending:'yellow', received:'green', cancelled:'red', partial:'blue' };
@@ -6755,7 +6792,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#transfer-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('No transfers yet.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+        icon: 'repeat',
+        title: t('No transfers yet'),
+        hint: t('Move stock between branches. The receiving branch confirms what actually arrived.'),
+        actions: [
+          { label: t('New Transfer'), onclick: 'RetailSystem._openCreateTransfer()', primary: true },
+        ],
+      })}</td></tr>`;
         return;
       }
       // DECISION: no Lines column. list_stock_transfers does not join
@@ -8355,7 +8399,11 @@ const RetailSystem = {
       const tbody = document.querySelector('#ret-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">No returns yet.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+        icon: 'undo-2',
+        title: t('No returns yet'),
+        hint: t('Refunds you process at the till appear here, with what came back and how it was paid out.'),
+      })}</td></tr>`;
         return;
       }
       // Three isolated runs per row: two document identifiers and a timestamp.

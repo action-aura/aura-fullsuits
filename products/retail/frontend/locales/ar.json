@@ -1187,5 +1187,20 @@
   "Add your first product, or import your existing list from a spreadsheet.": "أضف منتجك الأول، أو استورد قائمتك الحالية من ملف جدول بيانات.",
   "No customers yet": "لا يوجد عملاء بعد",
   "Customers you add at the till will appear here, with what they owe and what they have spent.": "سيظهر هنا العملاء الذين تضيفهم عند نقطة البيع، مع ما عليهم وما أنفقوه.",
-  "Ring a sale in this date range, or widen the range above, and the chart appears here.": "سجّل عملية بيع ضمن هذا النطاق الزمني، أو وسّع النطاق أعلاه، وسيظهر الرسم البياني هنا."
+  "Ring a sale in this date range, or widen the range above, and the chart appears here.": "سجّل عملية بيع ضمن هذا النطاق الزمني، أو وسّع النطاق أعلاه، وسيظهر الرسم البياني هنا.",
+  "Active products": "المنتجات النشطة",
+  "No categories yet": "لا توجد فئات بعد",
+  "Group products into categories so a cashier can find them without typing.": "رتّب المنتجات في فئات ليجدها الكاشير دون كتابة.",
+  "No promotions yet": "لا توجد عروض بعد",
+  "Set up a discount and it applies automatically at checkout.": "أنشئ خصماً وسيُطبّق تلقائياً عند الدفع.",
+  "No suppliers yet": "لا يوجد مورّدون بعد",
+  "Add the businesses you buy stock from, then raise purchase orders against them.": "أضف الجهات التي تشتري منها البضاعة، ثم أنشئ أوامر شراء لها.",
+  "Add Supplier": "إضافة مورّد",
+  "No purchase orders yet": "لا توجد أوامر شراء بعد",
+  "Raise an order to restock from a supplier. What you receive updates stock for you.": "أنشئ أمر شراء لإعادة التخزين من مورّد. ما تستلمه يحدّث المخزون تلقائياً.",
+  "New Purchase Order": "أمر شراء جديد",
+  "No transfers yet": "لا توجد تحويلات بعد",
+  "Move stock between branches. The receiving branch confirms what actually arrived.": "انقل البضاعة بين الفروع. يؤكّد الفرع المستلم ما وصل فعلاً.",
+  "No returns yet": "لا توجد مرتجعات بعد",
+  "Refunds you process at the till appear here, with what came back and how it was paid out.": "تظهر هنا المبالغ المستردّة التي تنفّذها عند نقطة البيع، مع ما أُعيد وكيف دُفع."
 }

@@ -221,14 +221,25 @@ Ranked by what it costs a shopkeeper.
    need per-rule verification rather than a block cut. The rule that makes it
    safe: **delete only where the selector's own root container is provably never
    created.**
-2. **Native `<select>` elements** ("All branches", "Last 14 days") render with OS
-   default styling and read as unfinished next to the rest of the chrome.
+2. **Native `<select>` elements** — CONSIDERED AND DECLINED, with the
+   measurement. Every control on the non-modal screens already clears the 44px
+   touch floor (measured: the Reports filters, both search boxes and all four POS
+   inputs are 44px or more; `min-block-size` is being applied). What remains is
+   only the OS-drawn dropdown arrow. A `<select>` cannot take a pseudo-element,
+   so a custom chevron means a background image with a **hardcoded colour** plus
+   a theme-guard exemption to permit it — which is precisely the pattern this
+   pass spent effort deleting. Not worth a literal and an exemption for an arrow.
 3. **Double titling.** The header says "Reports" and the page immediately says
    "Analytics & Reports"; Customers, Stock Transfers and Settings show the *same
    word twice*. Left alone deliberately — renaming screens is a naming decision,
    not a defect fix.
-4. **The Customers tile's sub-note reads "N active products"** — a mismatched
-   metric, deliberate in code but wrong on screen.
+4. **~500 more rules in `main.css` look unreachable** — vestigial chrome from
+   the old monorepo (`comm-*`, `crm-*`, `intel-*`, `rpa-*`, `ml-*`, `ws-*`). A
+   detector for this is written but NOT trusted yet: its first run called 62
+   rules dead that a wider scan rescued, and its line numbers proved unreliable.
+   Deleting on its say-so would be exactly the kind of confident-and-wrong change
+   this review exists to catch. The safe route is a before/after screenshot diff
+   across every screen and theme — pixel-identical means nothing live was cut.
 5. **Chart series colours** (`#38bdf8`, `#a855f7`, `#8b5cf6`, `#10b981`) are
    framework defaults and off-palette. They are categorical identity colours so
    they are defensible, but they were not *chosen*.

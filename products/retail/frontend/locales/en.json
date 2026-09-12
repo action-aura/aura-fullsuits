@@ -1187,5 +1187,20 @@
   "Add your first product, or import your existing list from a spreadsheet.": "Add your first product, or import your existing list from a spreadsheet.",
   "No customers yet": "No customers yet",
   "Customers you add at the till will appear here, with what they owe and what they have spent.": "Customers you add at the till will appear here, with what they owe and what they have spent.",
-  "Ring a sale in this date range, or widen the range above, and the chart appears here.": "Ring a sale in this date range, or widen the range above, and the chart appears here."
+  "Ring a sale in this date range, or widen the range above, and the chart appears here.": "Ring a sale in this date range, or widen the range above, and the chart appears here.",
+  "Active products": "Active products",
+  "No categories yet": "No categories yet",
+  "Group products into categories so a cashier can find them without typing.": "Group products into categories so a cashier can find them without typing.",
+  "No promotions yet": "No promotions yet",
+  "Set up a discount and it applies automatically at checkout.": "Set up a discount and it applies automatically at checkout.",
+  "No suppliers yet": "No suppliers yet",
+  "Add the businesses you buy stock from, then raise purchase orders against them.": "Add the businesses you buy stock from, then raise purchase orders against them.",
+  "Add Supplier": "Add Supplier",
+  "No purchase orders yet": "No purchase orders yet",
+  "Raise an order to restock from a supplier. What you receive updates stock for you.": "Raise an order to restock from a supplier. What you receive updates stock for you.",
+  "New Purchase Order": "New Purchase Order",
+  "No transfers yet": "No transfers yet",
+  "Move stock between branches. The receiving branch confirms what actually arrived.": "Move stock between branches. The receiving branch confirms what actually arrived.",
+  "No returns yet": "No returns yet",
+  "Refunds you process at the till appear here, with what came back and how it was paid out.": "Refunds you process at the till appear here, with what came back and how it was paid out."
 }
