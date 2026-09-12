@@ -109,3 +109,38 @@ body.rtl .toast { border-left-color: transparent; }
    never needs a matching edit here, and a non-directional icon can never be
    mirrored by a stale/duplicated selector. */
 body.rtl .aura-ic[data-aura-dir="mirror"] { transform: scaleX(-1); }
+
+/* --- Arabic is CURSIVE: letter-spacing breaks the joins (2026-09-12) -------
+   Arabic letters connect. `letter-spacing` inserts a gap between every glyph,
+   which severs those mandatory joins and renders the word as a row of
+   disconnected shapes -- to an Arabic reader that is not "loose tracking", it
+   is broken text, and it is the single most obvious tell that software was
+   translated by someone who never looked at the result.
+
+   It was applied in a lot of places, none of them wrong for English: the
+   uppercase micro-labels this design language uses throughout. Measured on
+   2026-09-12, the affected selectors carry translated strings on every screen
+   -- .sub-nav-group-label (the sidebar's SELL / STOCK / INSIGHT headers),
+   .rdash-answer-label (the largest headline on the dashboard),
+   .rdash-context-label, .sub-kpi-label, .ret-kpi-label, .theme-picker-label,
+   .ai-name / .ai-status, and the import wizard's stat captions. Nothing reset
+   it: there was no letter-spacing rule anywhere in this file, and the RTL
+   ratchet test only scans physical margin/padding/border/text-align.
+
+   ONE rule rather than a list of selectors, deliberately -- this file's own
+   history (see the accent-bar and directional-icon notes above) says a
+   hardcoded class list here goes stale the moment someone adds a label, and a
+   spaced Arabic label is exactly the kind of thing nobody notices in review.
+
+   !important because six of these are INLINE styles in import-wizard.js, and
+   an inline declaration beats any stylesheet selector. Same reason, and the
+   same precedent, as the #aura-beta-badge rule above.
+
+   Inputs and textareas are excluded, not overlooked. i18n.js never translates
+   into form controls (they are in its _SKIP list), so no Arabic chrome can
+   land there, and the one field in the product that spaces its characters on
+   purpose -- the employee PIN box, which is Latin digits and explicitly
+   direction:ltr -- is spaced for legibility while typing. Resetting that would
+   be a regression with no Arabic benefit. */
+body.rtl,
+body.rtl *:not(input):not(textarea) { letter-spacing: normal !important; }

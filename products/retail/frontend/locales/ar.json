@@ -1179,5 +1179,8 @@
   "Export Diagnostics": "تصدير بيانات التشخيص",
   "This device is not licensed to ring new sales": "هذا الجهاز غير مرخّص لتسجيل عمليات بيع جديدة",
   "Your data is safe -- viewing, backups, exports, returns, and customer payments all still work.": "بياناتك آمنة -- لا تزال المشاهدة والنسخ الاحتياطي والتصدير والمرتجعات ومدفوعات العملاء تعمل جميعها.",
-  "Activate License": "تفعيل الترخيص"
+  "Activate License": "تفعيل الترخيص",
+  "Account Created!": "تم إنشاء الحساب!",
+  "Welcome": "مرحباً",
+  "Loading your platform...": "جارٍ تحميل منصتك..."
 }

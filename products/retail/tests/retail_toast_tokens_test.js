@@ -58,17 +58,36 @@ const SHELL_FILE = path.join(__dirname, '..', 'frontend', 'app-shell.js');
 const SHELL_SRC = fs.readFileSync(SHELL_FILE, 'utf8');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Minimal sandbox -- showToast() only ever touches document.createElement,
-// the returned element's .style/.textContent, document.body.appendChild and
+// Minimal sandbox -- showToast() only ever touches document.createElement, the
+// returned element's .style/.textContent, document.body.appendChild and
 // setTimeout, so nothing heavier than retail_shell_chrome_test.js's stub is
 // needed. The whole file is loaded (not just showToast in isolation) so this
 // runs the REAL function, byte for byte, the same discipline every other
 // standalone test in this directory follows.
+//
+// The style stub carries setProperty/removeProperty and the element carries
+// getBoundingClientRect because toasts STACK (2026-09-12): _restackToasts()
+// measures each live toast and writes its offset as a custom property, so a
+// column of them cannot land in one box and hide each other. A real DOM
+// element has always had both; this fake did not, and an incomplete fake
+// reports a failure the product does not have -- just as misleading as a
+// test that passes on a real bug.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function makeElementStub() {
+  // Custom properties are recorded onto the same object, so an assertion can
+  // read `el.style['--toast-stack-offset']` alongside `el.style.cssText`.
+  const style = {
+    setProperty(name, value) { style[name] = value; },
+    removeProperty(name) { delete style[name]; },
+    getPropertyValue(name) { return style[name] || ''; },
+  };
   return {
-    style: {},
+    style,
+    // Zero-sized: these checks are about COLOUR and DIRECTION, never geometry.
+    // _restackToasts only needs the call not to throw; a real layout is the
+    // browser suite's job, not this stub's.
+    getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
     textContent: '',
     innerHTML: '',
     title: '',

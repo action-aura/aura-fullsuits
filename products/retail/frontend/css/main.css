@@ -80,6 +80,7 @@
                                      DARKEST text-bearing surface -- every
                                      money token is solved against THIS one. */
   --surface-scrim:      rgba(16, 22, 33, 0.55); /* modal backdrop            */
+  --surface-auth-ground: rgba(238, 241, 246, 0.94); /* full-bleed ground behind the pre-login auth card */
 
   /* ── TEXT ─────────────────────────────────────────────────────────────────
      Three weights of emphasis, all AA-or-better on every surface above.
@@ -305,6 +306,7 @@
   --elevation-card:  0 1px 2px rgba(20, 32, 60, 0.06), 0 4px 12px rgba(20, 32, 60, 0.07);
   --elevation-panel: 0 8px 28px rgba(20, 32, 60, 0.10);
   --elevation-modal: 0 24px 64px rgba(20, 32, 60, 0.22);
+  --elevation-auth-card: 0 30px 70px rgba(20, 32, 60, 0.18); /* the auth card's lift off that ground      */
 
   /* ── PHONE CHROME (One-Thumb Till) ───────────────────────────────────────
      docs/design/phone-ui-redesign.md §5. The two fixed bands at the bottom of
@@ -486,6 +488,7 @@ html[data-theme="dark"] {
   --surface-active:     #273140;  /* LIGHTEST text-bearing surface -- every
                                      text and money token is solved on THIS */
   --surface-scrim:      rgba(2, 6, 12, 0.72);
+  --surface-auth-ground: rgba(4, 6, 16, 0.93);
 
   /* ── TEXT — off-white, three steps, AA-or-better on every surface ─────── */
   --text-primary:       #edf2f8;
@@ -551,6 +554,7 @@ html[data-theme="dark"] {
   --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
   --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
   --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
+  --elevation-auth-card: 0 40px 90px rgba(0, 0, 0, 0.55);
 
   /* ── PHONE CHROME ── */
   --sheet-scrim: rgba(0, 0, 0, 0.60);
@@ -638,6 +642,7 @@ html[data-theme="night"] {
   --border-strong: #3f5271;
   --focus-ring-color: #59aef8;
   --surface-scrim: rgba(1, 4, 9, 0.74);
+  --surface-auth-ground: rgba(3, 6, 12, 0.94);
   /* WAS #000000 until 2026-09-08, in both Night and Dusk, and it made the
      pre-login focus ring INVISIBLE -- 1.07:1 -- in exactly the two themes it
      was written for. --focus-ring-halo has one consumer: the re-point on
@@ -654,6 +659,7 @@ html[data-theme="night"] {
   --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
   --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
   --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
+  --elevation-auth-card: 0 40px 90px rgba(0, 0, 0, 0.55);
   --sheet-scrim: rgba(0, 0, 0, 0.62);
   --sub-accent-rgb: 89, 174, 248;
 }
@@ -719,12 +725,14 @@ html[data-theme="dusk"] {
   --border-strong: #4d4870;
   --focus-ring-color: #b9a6ff;
   --surface-scrim: rgba(6, 4, 14, 0.74);
+  --surface-auth-ground: rgba(11, 9, 20, 0.94);
   /* White, not black -- see the note in the Night block above. The halo's only
      job is the #080808 pre-login canvas, which does not change with the theme. */
   --focus-ring-halo: #ffffff;
   --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
   --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
   --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
+  --elevation-auth-card: 0 40px 90px rgba(0, 0, 0, 0.55);
   --sheet-scrim: rgba(0, 0, 0, 0.62);
   --sub-accent-rgb: 185, 166, 255;
 }
@@ -810,10 +818,12 @@ html[data-theme="sand"] {
   --border-strong: #b7ab99;
   --focus-ring-color: #9a4f12;
   --surface-scrim: rgba(40, 30, 18, 0.45);
+  --surface-auth-ground: rgba(243, 237, 227, 0.94);
   --focus-ring-halo: #ffffff;
   --elevation-card:  0 1px 2px rgba(60, 45, 25, 0.10), 0 4px 12px rgba(60, 45, 25, 0.08);
   --elevation-panel: 0 8px 28px rgba(60, 45, 25, 0.14);
   --elevation-modal: 0 24px 64px rgba(60, 45, 25, 0.22);
+  --elevation-auth-card: 0 30px 70px rgba(60, 45, 25, 0.18);
   --sheet-scrim: rgba(40, 30, 18, 0.40);
   --sub-accent-rgb: 154, 79, 18;
 }
@@ -4642,17 +4652,19 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
   position: fixed; inset: 0; z-index: 99999;
   display: flex; align-items: center; justify-content: center;
   padding: 20px; overflow-y: auto;
+  /* TOKEN, not a theme-scoped override. This used to paint rgba(4,6,16,0.93)
+     and then repaint itself under `html[data-theme="light"]`. That selector
+     names ONE theme, and there are five: SAND -- the other LIGHT theme -- fell
+     through to the near-black default, so every shop on Sand met a black
+     backdrop behind a warm-paper card on the first screen the product ever
+     shows them. Night and Dusk borrowed Dark's ground rather than their own.
+     A per-theme value belongs in the theme blocks, where the token-parity
+     guard can see it; a sixth theme now cannot omit it. */
   background:
-    radial-gradient(900px 620px at 72% 12%, rgba(var(--sub-accent-rgb),0.10), transparent 60%),
-    radial-gradient(700px 500px at 18% 88%, rgba(var(--sub-accent-rgb),0.05), transparent 60%),
-    rgba(4,6,16,0.93);
+    radial-gradient(900px 620px at 72% 12%, rgba(var(--sub-accent-rgb),0.09), transparent 60%),
+    radial-gradient(700px 500px at 18% 88%, rgba(var(--sub-accent-rgb),0.045), transparent 60%),
+    var(--surface-auth-ground);
   backdrop-filter: blur(12px);
-}
-html[data-theme="light"] .auth-overlay {
-  background:
-    radial-gradient(900px 620px at 72% 12%, rgba(var(--sub-accent-rgb),0.08), transparent 60%),
-    radial-gradient(700px 500px at 18% 88%, rgba(var(--sub-accent-rgb),0.04), transparent 60%),
-    rgba(238,241,246,0.94);
 }
 
 .auth-card {
@@ -4661,11 +4673,12 @@ html[data-theme="light"] .auth-overlay {
   border: 1px solid var(--border-mid);
   border-radius: 22px;
   padding: 40px 42px 32px;
-  box-shadow: 0 40px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(var(--sub-accent-rgb),0.05);
+  /* Same reasoning as .auth-overlay above: a black 55% shadow with a single
+     light-theme override left Sand wearing Dark's shadow. */
+  box-shadow: var(--elevation-auth-card), 0 0 0 1px rgba(var(--sub-accent-rgb),0.05);
   overflow: hidden;
   animation: authCardIn 0.45s cubic-bezier(0.22,1,0.36,1) both;
 }
-html[data-theme="light"] .auth-card { box-shadow: 0 30px 70px rgba(20,32,60,0.18); }
 .auth-card-compact { width: 420px; }
 /* Accent ridge along the top edge — the one loud element on the card. */
 .auth-card::before {

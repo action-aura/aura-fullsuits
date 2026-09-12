@@ -97,9 +97,30 @@ function retailPaymentChartConfig(labels, values, tickColor) {
 // has set the mark. Falling back to the bare number is right there: an
 // unmarked axis is ambiguous, an axis marked with the WRONG currency is a
 // misread.
+//
+// PRECISION, separately from the mark (found the same way, another
+// screenshot of the running Reports page): the fix above put the right MARK
+// on the axis but left the wrong DECIMAL COUNT. Chart.js picks tick values
+// like 0, 0.2, 0.4, 0.8 and this function used to paste them at whatever
+// precision the raw float happened to have, so the KPI tile read "JD 0.000"
+// while the chart axis directly beside it, for the same figure, read
+// "JD 0.8" -- two precisions for one currency on one screen. A tick with a
+// fractional part now goes through the currency's own decimal count
+// (_currencyDp(), 3 for JOD) so it matches the KPI. A whole-number tick is
+// deliberately NOT run through that same decimal formatting: it is
+// formatted as an integer with thousands separators instead ('JD 1,200',
+// not 'JD 1,200.000'), because padding every large revenue tick with JOD's
+// three zero decimals is unreadable noise, not precision. The separators use
+// toLocaleString('en-US') explicitly, never a bare toLocaleString() -- a bare
+// call renders Eastern Arabic-Indic digits (٠١٢٣) under an Arabic UI locale,
+// and Jordan's shops price in Western digits regardless of UI language.
 function axisMoney(v) {
   try {
-    return RetailSystem._currencyPrefix() + v;
+    const n = Number(v);
+    if (Number.isInteger(n)) {
+      return RetailSystem._currencyPrefix() + n.toLocaleString('en-US');
+    }
+    return RetailSystem._currencyPrefix() + n.toFixed(RetailSystem._currencyDp());
   } catch (e) {
     return String(v);
   }
@@ -715,7 +736,17 @@ const RetailSystem = {
     //
     return (v < 0 ? '-' : '') + this._currencyPrefix() + Math.abs(v).toFixed(this._currencyDp());
   },
-  _fmtNum(n) { return (+(n||0)).toLocaleString(); },
+  // 'en-US', never a bare toLocaleString(). With no locale argument this
+  // followed the RUNTIME's locale -- the OS/browser display language, which is
+  // not the app's language toggle -- so on a Windows till set to Arabic (an
+  // entirely ordinary setup for a Jordanian shop) every customer, product and
+  // transaction COUNT silently rendered in Eastern Arabic-Indic digits
+  // (١٬٢٣٤), a numeral system Jordanian commerce does not use, while the money
+  // beside it stayed Western because _fmt() builds its digits by hand.
+  //
+  // Exactly the bug _auditTimestamp() below was already fixed for; this call
+  // was simply missed at the time.
+  _fmtNum(n) { return (+(n||0)).toLocaleString('en-US'); },
 
   // ── The two currency helpers _fmt and _moneyDigits share ─────────────────
   //
@@ -751,6 +782,31 @@ const RetailSystem = {
     // an unlisted currency degrades to its own mark rather than to blank.
     const sym = (typeof t === 'function') ? t(raw) : raw;
     return sym.length === 1 ? sym : sym + ' ';
+  },
+
+  // Chart.js dataset label for a series measured in money, carrying the
+  // shop's own currency mark instead of a literal '$' -- the same class of
+  // bug _fmt's comment above describes ("a non-negotiable fix: it is the
+  // first thing visible in a demo"), but for a Chart.js LABEL rather than a
+  // DOM element. Chart.js paints this string into the tooltip AND the
+  // legend, and the tooltip stays live even with the legend hidden, so a
+  // hardcoded '$' here was on screen just as often as the axis ticks were
+  // (see 'rep-top' and the dashboard's hourly chart, both callers).
+  // Trims _currencyPrefix()'s output because it appends a trailing space for
+  // multi-letter marks ('JD ', see the comment above it) so the mark reads
+  // naturally inside parentheses ('JD', not 'JD '). Falls back to the
+  // unmarked word, never to '$' -- an unmarked label is ambiguous, a label
+  // marked with the WRONG currency is a misread (same reasoning axisMoney's
+  // comment gives above). The WORD is translated via t(); the mark itself
+  // is not -- 'JD'/'$' are not natural-language words to translate, they
+  // are what a Jordanian/US till already prints in either UI language.
+  _revenueLabel() {
+    try {
+      const mark = this._currencyPrefix().trim();
+      return mark ? `${t('Revenue')} (${mark})` : t('Revenue');
+    } catch (e) {
+      return t('Revenue');
+    }
   },
 
   // The digits, in ONE place, so _money() and _setMoney() can never disagree
@@ -1006,7 +1062,18 @@ const RetailSystem = {
   // the previous behaviour exactly.
   _localeDate(d) {
     const when = d || new Date();
-    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar' : 'en-US';
+    // 'ar-u-nu-latn', not plain 'ar'. CLDR's Arabic locales default to the
+    // `arab` numbering system, so plain 'ar' renders the date as
+    // "الثلاثاء، ٢٢ سبتمبر ٢٠٢٦" -- Eastern Arabic-Indic digits. Jordan writes
+    // numbers in WESTERN digits in commerce; a shopkeeper here reads 2026, not
+    // ٢٠٢٦. The -u-nu-latn extension keeps the Arabic weekday and month names,
+    // which are correct and wanted, and forces only the digits back to Latin:
+    // "الثلاثاء، 22 سبتمبر 2026".
+    //
+    // It also keeps this heading consistent with every number beside it --
+    // money never went through Intl at all (_fmt builds its digits by hand),
+    // so before this the same screen showed two different numeral systems.
+    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar-u-nu-latn' : 'en-US';
     const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     try { return when.toLocaleDateString(lang, opts); }
     catch (e) { return when.toLocaleDateString('en-US', opts); }
@@ -1940,7 +2007,7 @@ const RetailSystem = {
         if (hCtx && (d.hourly_labels||[]).length) {
           new Chart(hCtx.getContext('2d'), {
             type: 'bar',
-            data: { labels: d.hourly_labels, datasets: [{ label: 'Revenue ($)', data: d.hourly_data,
+            data: { labels: d.hourly_labels, datasets: [{ label: this._revenueLabel(), data: d.hourly_data,
               backgroundColor: `rgba(${accentRgb},0.5)`, borderColor: `rgb(${accentRgb})`, borderWidth: 1,
               borderRadius: 3 }] },
             options: { responsive:true, maintainAspectRatio:false,
@@ -8190,7 +8257,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${r.sale_number ? this._bdi(r.sale_number) : '—'}</td>
         <td>${r.customer_name||'Walk-in'}</td>
         <td>${this._badge(r.refund_method||'cash','blue')}</td>
-        <td style="font-weight:600;color:var(--text-money-negative)">${this._fmt(r.refund_amount)}</td>
+        <td>${this._money(-Math.abs(r.refund_amount))}</td>
         <td style="color:var(--text-muted)">${this._bdi((r.created_at||'').slice(0,16))}</td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -8763,7 +8830,7 @@ const RetailSystem = {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-bottom:8px" id="rep-kpis">
         <div class="ret-kpi"><div class="ret-kpi-label">Revenue</div><div class="ret-kpi-value" id="rep-rev">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="rep-txn">—</div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit" style="color:var(--text-money-positive)">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Avg Ticket</div><div class="ret-kpi-value" id="rep-avg">—</div></div>
       </div>
       <!-- This note used to warn that the branch filter reached the two charts
@@ -10331,21 +10398,55 @@ const RetailSystem = {
       const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent=val; };
       setEl('rep-rev',    this._fmt(s.revenue));
       setEl('rep-txn',    this._fmtNum(s.transactions));
-      setEl('rep-profit', `${this._fmt(s.gross_profit)} (${s.margin_pct||0}%)`);
+      // Gross Profit is the one tile on this page that can go NEGATIVE: a period
+      // where cost of goods and refunds outran takings is a real thing a shop has
+      // to be able to see. This element used to carry a hardcoded
+      // `style="color:var(--text-money-positive)"` in its markup and only ever had
+      // its textContent replaced, so a LOSS was painted in exactly the same green
+      // as a profit -- the worst possible reading of the worst possible number.
+      //
+      // _money() gives the three states distinct treatment and, on a loss, supplies
+      // the U+2212 minus and accounting parentheses as well as the colour, so the
+      // sign survives greyscale, a colourblind manager and a black-and-white
+      // printout. Composed into larger markup (the margin percentage rides along),
+      // which is exactly what _money is documented for -- _setMoney would overwrite
+      // the percentage.
+      const profitEl = document.getElementById('rep-profit');
+      if (profitEl) {
+        const gp = +(s.gross_profit || 0);
+        profitEl.innerHTML = this._money(gp, gp > 0 ? 'money--positive' : '') +
+          ` (${s.margin_pct||0}%)`;
+      }
       setEl('rep-avg',    this._fmt(s.avg_ticket));
 
       if (window.Chart) {
+        // Same migration the dashboard's charts already had -- see the
+        // "Presentational only: Chart.js cannot consume CSS var() strings"
+        // comment above r-dash-hourly's own tickClr/gridClr (~line 1920).
+        // These four Reports charts were left on the pre-migration literals:
+        // '#94a3b8' is a dark-theme tick colour that sits at poor contrast
+        // on the light theme's card background, and 'rgba(255,255,255,0.05)'
+        // (white at 5% alpha) is invisible over that same light background --
+        // so the Reports charts had NO grid lines at all on the 'light' and
+        // 'sand' themes. Read once per render, same reasoning as the
+        // dashboard: a theme toggle is picked up on the next reports reload.
+        const tickClr = this._cssToken('--text-secondary', '#51607a');
+        const gridClr = this._cssToken('--border-hairline', '#e3e8ef');
         const chartDefs = [
           ['rep-trend', { type:'line',
             data:{ labels:trend.labels||[], datasets:[
-              { label:'Revenue', data:trend.data||[], borderColor:'#38bdf8', backgroundColor:'rgba(56,189,248,0.1)', fill:true, tension:.4, yAxisID:'y' },
-              { label:'Transactions', data:trend.transactions||[], borderColor:'#a855f7', backgroundColor:'transparent', borderDash:[4,4], type:'bar', yAxisID:'y1' }
+              // Series colours below ('#38bdf8', '#a855f7', and the y1 axis
+              // ticks that deliberately match it) are categorical identity
+              // colours, not theme tokens -- left alone deliberately in this
+              // pass so the next reader does not mistake them for a miss.
+              { label:t('Revenue'), data:trend.data||[], borderColor:'#38bdf8', backgroundColor:'rgba(56,189,248,0.1)', fill:true, tension:.4, yAxisID:'y' },
+              { label:t('Transactions'), data:trend.transactions||[], borderColor:'#a855f7', backgroundColor:'transparent', borderDash:[4,4], type:'bar', yAxisID:'y1' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{labels:{color:'#94a3b8'}} },
-              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>axisMoney(v)},grid:{color:'rgba(255,255,255,0.05)'}},
+              plugins:{ legend:{labels:{color:tickClr}} },
+              scales:{ y:{ticks:{color:tickClr,callback:v=>axisMoney(v)},grid:{color:gridClr}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
-                x:{ticks:{color:'#94a3b8'},grid:{display:false}} } }
+                x:{ticks:{color:tickClr},grid:{display:false}} } }
           }],
           // Built by the same shared helper as the dashboard's r-dash-pay
           // chart: identical named color lookup, and identical handling of a
@@ -10355,29 +10456,34 @@ const RetailSystem = {
             const cfg = retailPaymentChartConfig(
               (pay.data||[]).map(r=>r.payment_method),
               (pay.data||[]).map(r=>r.revenue),
-              '#94a3b8');
+              tickClr);
             return ['rep-pay', { type: cfg.type, data: cfg.data, opts: cfg.options }];
           })(),
           ['rep-top', { type:'bar',
             data:{ labels:top.labels||[], datasets:[
-              { label:'Units Sold', data:top.data||[], backgroundColor:'#8b5cf6' },
-              { label:'Revenue ($)', data:top.revenue||[], backgroundColor:'#10b981' }
+              // Series colours ('#8b5cf6', '#10b981') are categorical
+              // identity colours -- left alone deliberately, same as rep-trend.
+              { label:t('Units Sold'), data:top.data||[], backgroundColor:'#8b5cf6' },
+              { label:this._revenueLabel(), data:top.revenue||[], backgroundColor:'#10b981' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{labels:{color:'#94a3b8'}} },
-              scales:{ y:{ticks:{color:'#94a3b8'},grid:{color:'rgba(255,255,255,0.05)'}},
-                x:{ticks:{color:'#94a3b8',maxRotation:30},grid:{display:false}} } }
+              plugins:{ legend:{labels:{color:tickClr}} },
+              scales:{ y:{ticks:{color:tickClr},grid:{color:gridClr}},
+                x:{ticks:{color:tickClr,maxRotation:30},grid:{display:false}} } }
           }],
           ['rep-branch-chart', { type:'bar',
             data:{ labels:byBranch.labels||[], datasets:[
-              { label:'Revenue', data:byBranch.data||[], backgroundColor:'#38bdf8' },
-              { label:'Transactions', data:byBranch.transactions||[], backgroundColor:'#a855f7', yAxisID:'y1' }
+              // Series colours below ('#38bdf8', '#a855f7', and the y1 axis
+              // ticks that deliberately match it) are categorical identity
+              // colours -- left alone deliberately, same as rep-trend above.
+              { label:t('Revenue'), data:byBranch.data||[], backgroundColor:'#38bdf8' },
+              { label:t('Transactions'), data:byBranch.transactions||[], backgroundColor:'#a855f7', yAxisID:'y1' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{labels:{color:'#94a3b8'}} },
-              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>axisMoney(v)},grid:{color:'rgba(255,255,255,0.05)'}},
+              plugins:{ legend:{labels:{color:tickClr}} },
+              scales:{ y:{ticks:{color:tickClr,callback:v=>axisMoney(v)},grid:{color:gridClr}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
-                x:{ticks:{color:'#94a3b8'},grid:{display:false}} } }
+                x:{ticks:{color:tickClr},grid:{display:false}} } }
           }],
         ];
         chartDefs.forEach(([id, cfg]) => {

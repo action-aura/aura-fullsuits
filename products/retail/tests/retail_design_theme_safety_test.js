@@ -243,21 +243,37 @@ for (const name of BLOCK_THEMES) {
 check('html[data-theme="light"] scoping is limited to the justified closed list', () => {
   const css = blankCssComments(mainCss);
   const uses = [...css.matchAll(/html\[data-theme="light"\][^,{]*/g)].map((m) => m[0].trim());
-  // Each survivor is justified where it stands:
-  //   * the bare token-bridge arm (identical to :root; kept so a stale higher-
-  //     specificity value cannot resurrect -- see its comment in main.css);
-  //   * the two .auth-* rules: the auth overlay sits on the pre-login dark
-  //     canvas, which deliberately stays dark in both themes, so its LIGHT
-  //     variant genuinely is light-only styling.
+  // ONE survivor, and it is justified where it stands: the bare token-bridge
+  // arm (identical to :root; kept so a stale higher-specificity value cannot
+  // resurrect -- see its comment in main.css).
+  //
+  // REMOVED 2026-09-12: `.auth-overlay` and `.auth-card` used to sit on this
+  // list, justified by "the auth overlay sits on the pre-login dark canvas,
+  // which deliberately stays dark in BOTH THEMES". That was written when there
+  // were two themes. There are five, and the selector names exactly one of
+  // them -- so SAND, the other LIGHT theme, inherited the near-black backdrop
+  // and rendered a black ground behind a warm-paper card on the first-run,
+  // login, forgot-password and re-login screens, while Night and Dusk wore
+  // Dark's ground instead of their own.
+  //
+  // This exemption did not merely fail to catch that: it is what permitted it,
+  // for as long as nobody re-read a justification that had quietly expired. The
+  // rules are gone; their values are now --surface-auth-ground and
+  // --elevation-auth-card in the five theme blocks, where check 1b's token
+  // parity requires every theme to define them.
+  //
+  // Before adding anything here, check that the reason is still true of every
+  // theme in THEME_NAMES today, not of the themes that existed when it was
+  // written.
   const allowed = [
     /^html\[data-theme="light"\]$/,
-    /^html\[data-theme="light"\]\s+\.auth-overlay$/,
-    /^html\[data-theme="light"\]\s+\.auth-card$/,
   ];
   const strays = uses.filter((u) => !allowed.some((re) => re.test(u)));
-  assert(uses.length >= 3,
+  // Anti-vacuity floor: the token bridge is known to exist, so a scan finding
+  // nothing at all has broken rather than passed.
+  assert(uses.length >= 1,
     `only ${uses.length} html[data-theme="light"] occurrences found -- the scan is broken ` +
-    '(the token bridge and two auth rules are known to exist)');
+    '(the token bridge arm is known to exist)');
   assert(strays.length === 0,
     'new LIGHT-ONLY scoped rule(s) in main.css:\n    ' + strays.join('\n    ') +
     '\n  A rule only one theme gets is how the original dark theme lost the ' +

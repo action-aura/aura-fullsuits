@@ -1672,11 +1672,30 @@ const SubsystemApp = {
       // Show a brief welcome message overlay (on body, not inside #app so we preserve the #page-subsystem/#subsystem-shell containers)
       const overlay = document.createElement('div');
       overlay.id = 'aura-setup-complete-overlay';
-      overlay.style.cssText = 'position:fixed;inset:0;background:#020617;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:Inter,sans-serif;z-index:99999;';
+      // TOKENS, not literals. This is the first screen a brand-new customer ever
+      // sees, and it used to hardcode background:#020617 with color:#fff and a
+      // #64748b sub-line -- so on Day or Sand the product flashed a full-screen
+      // black takeover in the middle of a light UI, and DESIGN.md forbids pure
+      // #FFFFFF text outright. The old var(--sub-accent,#14b8a6) fallback was
+      // the same hardcoded teal ".auth-card" already documents as "matching
+      // nothing else in the app".
+      //
+      // --surface-auth-ground is deliberate rather than --surface-app: this
+      // overlay replaces the auth card that was on screen a moment ago, so
+      // sharing that ground makes it read as the same surface continuing
+      // rather than a second, different full-screen flash.
+      overlay.style.cssText = 'position:fixed;inset:0;background:var(--surface-auth-ground);'
+        + 'display:flex;flex-direction:column;align-items:center;justify-content:center;'
+        + 'color:var(--text-primary);font-family:var(--font-base);z-index:99999;';
+      // Both sentences go through t(): an Arabic shop used to meet its very
+      // first screen in English. The name is a separate node rather than an
+      // interpolation so the sentence is actually translatable, and <bdi>
+      // isolates it -- a Latin name inside an Arabic sentence otherwise gets
+      // reordered by the bidi algorithm along with the punctuation around it.
       overlay.innerHTML = `
-        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent,#14b8a6)">${AuraIcons.render('circle-check-big', 56, { animate: 'pop' })}</div>
-        <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
-        <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:var(--sub-accent,#14b8a6)"></strong>. Loading your platform…</p>`;
+        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent)">${AuraIcons.render('circle-check-big', 56, { animate: 'pop' })}</div>
+        <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">${t('Account Created!')}</h2>
+        <p style="color:var(--text-secondary);margin:0;font-size:16px;">${t('Welcome')}, <bdi id="aura-setup-complete-name" style="color:var(--sub-accent);font-weight:700"></bdi>. ${t('Loading your platform...')}</p>`;
       const nameEl = overlay.querySelector('#aura-setup-complete-name');
       if (nameEl) nameEl.textContent = name;
       document.body.appendChild(overlay);
@@ -3196,12 +3215,30 @@ const SubsystemApp = {
   _reflowTopBanners() {
     try {
       const ids = ['aura-license-banner', 'aura-sync-banner'];
+      // A band only displaces the shell if it is actually AT THE TOP of the
+      // viewport. Small tolerance for subpixel rounding, nothing more.
+      const TOP_EDGE_TOLERANCE_PX = 4;
       let tallest = 0;
       for (const id of ids) {
         const el = document.getElementById(id);
-        if (!el) continue;
-        const h = el.getBoundingClientRect ? el.getBoundingClientRect().height : 0;
-        if (h > tallest) tallest = h;
+        if (!el || !el.getBoundingClientRect) continue;
+        const rect = el.getBoundingClientRect();
+        // #aura-sync-banner is ONE persistent element reused by every sync tier
+        // (see _renderSyncCalmState), and its calm tier -- which means sync is
+        // HEALTHY, so the overwhelmingly common case -- is not a banner at all:
+        // it is a small pill pinned to bottom:14px in the corner. Measuring it
+        // unconditionally reserved its height at the TOP, so a perfectly
+        // healthy till carried a permanent ~30px empty strip across the top of
+        // every screen, caused by an element in the opposite corner. Measured
+        // 2026-09-12.
+        //
+        // Tested by POSITION, not against `_syncBannerTier`: that tier is a
+        // string this file maintains by hand, so a future tier would have to
+        // remember to update a list here -- the exact shape of stale-list bug
+        // this codebase keeps getting bitten by. Where the element actually IS
+        // cannot drift out of step with where it is drawn.
+        if (rect.top > TOP_EDGE_TOLERANCE_PX) continue;
+        if (rect.height > tallest) tallest = rect.height;
       }
       // Both banners stack at top:0, so they overlap each other rather than
       // summing -- reserve the tallest, not the total.
@@ -3879,6 +3916,42 @@ const SubsystemApp = {
     });
   },
 
+  // ── Toast stacking ───────────────────────────────────────────────────────
+  // Toasts used to be fire-and-forget: each call appended an element at the
+  // SAME fixed offset with no reference to any toast already on screen, so two
+  // inside the same 3s window occupied exactly the same box and the later one
+  // completely hid the earlier -- same z-index, later DOM order wins.
+  //
+  // At a till that is not cosmetic. Scanning fires one toast per barcode, and
+  // several checkout paths fire two back-to-back on a partial failure, so the
+  // message a cashier most needed to read ("item not found", "card declined")
+  // is exactly the one that got covered by whatever came next.
+  //
+  // Live toasts, OLDEST FIRST, so index 0 is the bottom of the column.
+  _liveToasts: [],
+
+  // Above this many, the oldest is dropped rather than letting the column climb
+  // the screen and cover the controls it exists to stay clear of.
+  MAX_VISIBLE_TOASTS: 4,
+
+  // Re-flows the whole column from the bottom up. Called on show AND on
+  // removal, so a toast expiring out of the middle closes the gap rather than
+  // leaving a hole with the others floating above it.
+  //
+  // Heights are MEASURED, never assumed: a toast wraps to two lines on a narrow
+  // till, and a fixed per-toast step would overlap exactly when the text was
+  // long enough to matter. Same reasoning as _reflowTopBanners just above.
+  _restackToasts() {
+    const GAP_PX = 10;
+    let offset = 0;
+    for (const el of this._liveToasts) {
+      if (!el || !el.style) continue;
+      el.style.setProperty('--toast-stack-offset', offset + 'px');
+      const h = el.getBoundingClientRect ? el.getBoundingClientRect().height : 0;
+      offset += h + GAP_PX;
+    }
+  },
+
   showToast(msg, type = 'info') {
     const STATE_TOKENS = {
       success: { surface: '--state-success-surface', border: '--state-success-border', text: '--state-success-text' },
@@ -3894,10 +3967,31 @@ const SubsystemApp = {
     // JavaScript, which is exactly how a `right:24px` got in here while the
     // colours were being moved onto tokens -- so the toast test below now
     // watches this line instead.
-    toast.style.cssText = `position:fixed;bottom:var(--overlay-inset-block-end,24px);inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
+    toast.style.cssText = `position:fixed;bottom:calc(var(--overlay-inset-block-end,24px) + var(--toast-stack-offset,0px));inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4);transition:bottom .18s ease`;
     toast.textContent = msg;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+
+    // Oldest first, so index 0 is the bottom of the column.
+    SubsystemApp._liveToasts.push(toast);
+    // A fast barcode scanner can fire faster than the 3s dismissal, and a
+    // column of toasts climbing the whole screen is its own problem -- it
+    // would end up covering the very controls the stack was introduced to
+    // stop covering. Past the cap the OLDEST goes immediately: the newest
+    // message is the one the cashier is waiting on.
+    while (SubsystemApp._liveToasts.length > SubsystemApp.MAX_VISIBLE_TOASTS) {
+      const evicted = SubsystemApp._liveToasts.shift();
+      if (evicted && evicted.remove) evicted.remove();
+    }
+    SubsystemApp._restackToasts();
+
+    setTimeout(() => {
+      toast.remove();
+      const i = SubsystemApp._liveToasts.indexOf(toast);
+      if (i !== -1) SubsystemApp._liveToasts.splice(i, 1);
+      // Re-stack on removal too, so a toast expiring from the middle or the
+      // bottom of the column closes the gap instead of leaving a hole.
+      SubsystemApp._restackToasts();
+    }, 3000);
   }
 };
 
