@@ -3291,6 +3291,26 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
     display: flex; justify-content: space-between; align-items: center; gap: 14px;
     border: none !important; padding: 7px 0; text-align: right; min-height: 34px;
   }
+  /* An EMPTY-STATE row is not a data row, and must opt out of the card
+     transform above. It has no columns to label and nothing to align against a
+     label, so the flex + text-align:right + empty ::before treatment pushed it
+     off-centre and clipped its hint mid-sentence -- measured on Products at
+     390x844, where "Add your first product, or..." ran off the card edge.
+
+     :has() is used here deliberately and is the only use of it in this file. If
+     an engine does not support it the rules are simply dropped and the empty
+     state renders as it did before -- degraded, never broken. The alternative
+     was a marker class threaded through every _emptyState() call site, which is
+     more code for the same result and one more thing to forget on the next
+     screen. */
+  #sub-content table tr:has(.ret-empty) {
+    padding: 0; border: none; background: none; margin-bottom: 0;
+  }
+  #sub-content table td:has(.ret-empty) {
+    display: block; text-align: center; padding: 0; min-height: 0;
+  }
+  #sub-content table td:has(.ret-empty)::before { content: none; }
+
   #sub-content table td::before {
     content: attr(data-label); font-weight: 600; text-align: left;
     color: var(--text-dim, var(--text-tertiary)); flex: 0 0 40%;
