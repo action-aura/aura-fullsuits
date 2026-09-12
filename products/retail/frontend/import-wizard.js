@@ -462,7 +462,7 @@ const ImportWizard = {
   // ── STEP 2: Map columns ─────────────────────────────────────────────────
   async _parseAndMap() {
     const btn = document.getElementById('iw-next1');
-    if (btn) { btn.disabled = true; btn.textContent = 'Reading file…'; }
+    if (btn) { btn.disabled = true; btn.textContent = this._t('Reading file…'); }
     const fd = new FormData();
     fd.append('file', this._file);
     fd.append('system', this._system);
@@ -617,7 +617,7 @@ const ImportWizard = {
         sampleEl.textContent = vals ? '↳ ' + vals : '';
       } else if (sel.dataset.req !== 'true') {
         sampleEl.style.color = 'var(--text-tertiary)';
-        sampleEl.textContent = 'Not found in your file — will be skipped';
+        sampleEl.textContent = this._t('Not found in your file — will be skipped');
       } else {
         sampleEl.style.color = '';
         sampleEl.textContent = '';

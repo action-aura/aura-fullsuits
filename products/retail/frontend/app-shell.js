@@ -1249,7 +1249,7 @@ const SubsystemApp = {
   async _claimAdminDevice(button) {
     button.disabled = true;
     const original = button.textContent;
-    button.textContent = 'Working…';
+    button.textContent = t('Working…');
     let body = null, ok = false;
     try {
       const res = await fetch('/api/devices/me/claim-admin', {
@@ -1288,7 +1288,7 @@ const SubsystemApp = {
     this.isAdminDevice = true;
     this.canClaimAdminDevice = false;
     this._removeAdminDeviceClaimBar();
-    this.showToast('This device is now your store\'s admin device.', 'success');
+    this.showToast(t('This device is now your store\'s admin device.'), 'success');
     // Re-render so the adminOnly nav entries (Settings, Audit Log) appear
     // immediately -- _renderShell()'s nav filter reads this.isAdminDevice,
     // so without this the user would have to restart the app to see the
@@ -1587,7 +1587,7 @@ const SubsystemApp = {
           </div>
         </div>
         <div id="su-error" class="auth-error"></div>
-        <button id="su-btn" class="auth-submit" onclick="SubsystemApp._setupSubmit()">Create Account &amp; Launch</button>
+        <button id="su-btn" class="auth-submit" onclick="SubsystemApp._setupSubmit()">${t('Create Account & Launch')}</button>
         <p class="auth-foot">Your data is stored locally on this device. No cloud required.</p>
       </div>`;
     document.body.appendChild(overlay);
@@ -1604,7 +1604,7 @@ const SubsystemApp = {
     const errEl   = document.getElementById('su-error');
     const btn     = document.getElementById('su-btn');
 
-    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent='Create Account & Launch';btn.disabled=false;} };
+    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Create Account & Launch');btn.disabled=false;} };
 
     if (!name)                   return showErr('Full name is required.');
     if (!email || !email.includes('@')) return showErr('A valid email address is required.');
@@ -1613,7 +1613,7 @@ const SubsystemApp = {
     if (pass.length < 6)         return showErr('Password must be at least 6 characters.');
     if (pass !== pass2)          return showErr('Passwords do not match.');
 
-    if (btn) { btn.textContent = 'Creating account…'; btn.disabled = true; }
+    if (btn) { btn.textContent = t('Creating account…'); btn.disabled = true; }
     if (errEl) errEl.style.display = 'none';
 
     try {
@@ -1644,7 +1644,7 @@ const SubsystemApp = {
       // admin calls create_session() itself) from this point on -- a key
       // failure below must NEVER send the user back through registration.
       if (this._setupNeedsKey && key) {
-        if (btn) btn.textContent = 'Activating license…';
+        if (btn) btn.textContent = t('Activating license…');
         let activation = null;
         try {
           const actRes = await fetch('/api/licensing/activate', {
@@ -2310,7 +2310,7 @@ const SubsystemApp = {
     const btn   = document.getElementById('su-key-2-btn');
     const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Activate');btn.disabled=false;} };
     if (!key) return showErr('A license key is required.');
-    if (btn) { btn.textContent = 'Activating…'; btn.disabled = true; }
+    if (btn) { btn.textContent = t('Activating…'); btn.disabled = true; }
     try {
       const res = await fetch('/api/licensing/activate', {
         method: 'POST', credentials: 'include',
@@ -2384,10 +2384,10 @@ const SubsystemApp = {
     const errEl = document.getElementById('rl-error');
     const btn   = document.getElementById('rl-btn');
     if (!email || !pass) {
-      if(errEl){errEl.textContent='Email and password are required.';errEl.style.display='block';}
+      if(errEl){errEl.textContent=t('Email and password are required.');errEl.style.display='block';}
       return;
     }
-    if (btn) { btn.textContent='Signing in…'; btn.disabled=true; }
+    if (btn) { btn.textContent=t('Signing in…'); btn.disabled=true; }
     if (errEl) errEl.style.display='none';
     try {
       const res  = await fetch('/api/auth/login', {
@@ -2417,11 +2417,11 @@ const SubsystemApp = {
         }
       } else {
         if (errEl) { errEl.textContent = data.error || 'Invalid email or password.'; errEl.style.display='block'; }
-        if (btn) { btn.textContent='Log In'; btn.disabled=false; }
+        if (btn) { btn.textContent=t('Log In'); btn.disabled=false; }
       }
     } catch(e) {
-      if (errEl) { errEl.textContent='Network error. Check the server is running.'; errEl.style.display='block'; }
-      if (btn) { btn.textContent='Log In'; btn.disabled=false; }
+      if (errEl) { errEl.textContent=t('Network error. Check the server is running.'); errEl.style.display='block'; }
+      if (btn) { btn.textContent=t('Log In'); btn.disabled=false; }
     }
   },
 
@@ -2455,10 +2455,10 @@ const SubsystemApp = {
     const errEl = document.getElementById('fp-error');
     const btn   = document.getElementById('fp-btn');
     if (!email || !email.includes('@')) {
-      if (errEl) { errEl.textContent = 'A valid email address is required.'; errEl.style.display = 'block'; }
+      if (errEl) { errEl.textContent = t('A valid email address is required.'); errEl.style.display = 'block'; }
       return;
     }
-    if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+    if (btn) { btn.textContent = t('Sending…'); btn.disabled = true; }
     if (errEl) errEl.style.display = 'none';
     try {
       await fetch('/api/auth/forgot-password', {
@@ -2562,11 +2562,11 @@ const SubsystemApp = {
     const pass2 = document.getElementById('rp-pass2')?.value;
     const errEl = document.getElementById('rp-error');
     const btn   = document.getElementById('rp-btn');
-    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = 'Set password'; btn.disabled = false; } };
+    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
     if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
     if (pass !== pass2) return showErr('Passwords do not match.');
 
-    if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+    if (btn) { btn.textContent = t('Saving…'); btn.disabled = true; }
     if (errEl) errEl.style.display = 'none';
     try {
       const res = await fetch('/api/auth/reset-password', {
@@ -2638,7 +2638,7 @@ const SubsystemApp = {
     const pass2 = document.getElementById('es-pass2')?.value;
     const errEl = document.getElementById('es-error');
     const btn   = document.getElementById('es-btn');
-    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = 'Set password'; btn.disabled = false; } };
+    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = t('Set password'); btn.disabled = false; } };
     if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
     if (pass !== pass2) return showErr('Passwords do not match.');
 

@@ -5414,17 +5414,17 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">Products & Inventory</h2>
+        <h2 class="ret-title">${t('Products & Inventory')}</h2>
         <div style="display:flex;gap:10px">
           <input class="ret-search" id="prod-search" data-i18n-ph="Search products…" placeholder="${t('Search products…')}" oninput="RetailSystem._filterProducts()" />
           <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">${this._icon('upload', 16, '⬆')} Import</button>
-          <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ Add Product</button>
+          <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ ${t('Add Product')}</button>
         </div>
       </div>
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="prod-table">
-            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Cost</th><th>Price</th><th>Stock</th><th>Reorder</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>${t('Cost')}</th><th>${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody><tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
@@ -5673,7 +5673,7 @@ const RetailSystem = {
   async _saveProduct(pid) {
     const name = document.getElementById('pm-name')?.value.trim();
     const sku  = document.getElementById('pm-sku')?.value.trim();
-    if (!name || !sku) { SubsystemApp.showToast('Name and SKU are required','error'); return; }
+    if (!name || !sku) { SubsystemApp.showToast(t('Name and SKU are required'),'error'); return; }
     const btn = document.getElementById('pm-save-btn');
     if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
     const payload = {
@@ -5718,7 +5718,7 @@ const RetailSystem = {
         <h3>${this._icon('package', 18, '📦')} Adjust Stock — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:var(--text-primary)">${currentStock}</strong></p>
         <div class="ret-field"><label>Adjustment Quantity (+ to add, − to deduct)</label>
-          <input type="number" id="sa-qty" placeholder="+10 or -5" step="1" /></div>
+          <input type="number" id="sa-qty" placeholder="${t('+10 or -5')}" step="1" /></div>
         <div class="ret-field"><label>Reason</label>
           <select id="sa-reason">
             <option value="Stock received">${t('Stock received')}</option>
@@ -5741,13 +5741,13 @@ const RetailSystem = {
   async _saveStockAdjust(pid) {
     const qty = parseFloat(document.getElementById('sa-qty')?.value || 0);
     const reason = document.getElementById('sa-reason')?.value || 'Manual adjustment';
-    if (!qty) { SubsystemApp.showToast('Enter a quantity','error'); return; }
+    if (!qty) { SubsystemApp.showToast(t('Enter a quantity'),'error'); return; }
     const btn = document.getElementById('sa-btn');
     if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
     try {
       const d = await this._post(`/api/sub/retail/products/${pid}/stock-adjust`, { quantity: qty, reason });
       if (d.status === 'success') {
-        SubsystemApp.showToast(`Stock updated. New balance: ${d.new_stock}`, 'success');
+        SubsystemApp.showToast(`${t('Stock updated. New balance:')} ${d.new_stock}`, 'success');
         document.getElementById('ret-stock-modal')?.remove();
         this._loadProducts();
       } else {
@@ -6034,9 +6034,9 @@ const RetailSystem = {
 
   async _saveCustomer(cid) {
     const name = document.getElementById('cm-name')?.value.trim();
-    if (!name) { SubsystemApp.showToast('Name required','error'); return; }
+    if (!name) { SubsystemApp.showToast(t('Name required'),'error'); return; }
     const btn = document.getElementById('cm-btn');
-    if (btn) { btn.disabled=true; btn.textContent='Saving…'; }
+    if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
     const payload = { name, phone:document.getElementById('cm-phone')?.value||'',
                       email:document.getElementById('cm-email')?.value||'',
                       address:document.getElementById('cm-addr')?.value||'' };
@@ -6117,7 +6117,7 @@ const RetailSystem = {
       const hist = (await this._get(`/api/sub/retail/customers/${cid}/sales`)).data || [];
       const el = document.getElementById('cu-hist-loading');
       if (!el) return;
-      if (!hist.length) { el.textContent = 'No purchases yet.'; return; }
+      if (!hist.length) { el.textContent = t('No purchases yet.'); return; }
       el.outerHTML = `<table class="ret-table">
         <thead><tr><th>Receipt #</th><th>Items</th><th>Method</th><th>Total</th><th>Date</th></tr></thead>
         <tbody>${hist.map(s=>`<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${this._esc(t('View invoice'))}">
@@ -6680,9 +6680,9 @@ const RetailSystem = {
 
   async _saveSupplier(sid) {
     const name = document.getElementById('sm-name')?.value.trim();
-    if (!name) { SubsystemApp.showToast('Name required','error'); return; }
+    if (!name) { SubsystemApp.showToast(t('Name required'),'error'); return; }
     const btn = document.getElementById('sm-btn');
-    if (btn) { btn.disabled=true; btn.textContent='Saving…'; }
+    if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
     const payload = { name, phone:document.getElementById('sm-phone')?.value||'',
                       email:document.getElementById('sm-email')?.value||'',
                       address:document.getElementById('sm-addr')?.value||'' };
@@ -6853,7 +6853,7 @@ const RetailSystem = {
     const prodName = prodSel?.options[prodSel.selectedIndex]?.text?.split('(')[0]?.trim();
     const qty      = +document.getElementById('po-item-qty')?.value || 1;
     const cost     = +document.getElementById('po-item-cost')?.value || 0;
-    if (!prodId || !cost) { SubsystemApp.showToast('Select product and enter cost','error'); return; }
+    if (!prodId || !cost) { SubsystemApp.showToast(t('Select product and enter cost'),'error'); return; }
     const existing = this._poItems.findIndex(i => i.product_id === prodId);
     if (existing >= 0) { this._poItems[existing].quantity += qty; }
     else { this._poItems.push({ product_id:prodId, product_name:prodName, quantity:qty, unit_cost:cost }); }
@@ -7052,7 +7052,7 @@ const RetailSystem = {
     try {
       const d = await this._post(`/api/sub/retail/purchase-orders/${poId}/receive`, {});
       if (d.status==='success') {
-        SubsystemApp.showToast('Stock received and inventory updated','success');
+        SubsystemApp.showToast(t('Stock received and inventory updated'),'success');
         this._loadPurchaseOrders();
       } else { SubsystemApp.showToast(d.message||'Error','error'); }
     } catch(e) {}
@@ -8728,7 +8728,7 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">Returns & Refunds</h2>
+        <h2 class="ret-title">${t('Returns & Refunds')}</h2>
         <button class="sub-btn-primary" onclick="RetailSystem._openCreateReturn()">+ Process Return</button>
       </div>
       <div class="sub-chart-card">
@@ -9228,7 +9228,7 @@ const RetailSystem = {
         </div>`;
       document.body.appendChild(overlay);
       overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
-    } catch(e) { SubsystemApp.showToast('Could not load invoice','error'); }
+    } catch(e) { SubsystemApp.showToast(t('Could not load invoice'),'error'); }
   },
 
   // Reuses the existing checkout-time receipt printer (_printReceipt, Wave
