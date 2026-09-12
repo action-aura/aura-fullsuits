@@ -278,6 +278,32 @@ const RetailSystem = {
   // its await the way _renderDashboard does (see that guard's own comment),
   // so a cross-navigation stale-paint was never possible for either; a
   // same-screen reload race was.
+  //
+  // retail-hardware-viewports (continuation, follow-up sites): the same
+  // shape was found at six more call sites -- _loadCustomers (debounced
+  // search), _loadReports/_loadEmployeeSales (the #rep-branch/#rep-days
+  // filters, sharing ONE name/token between the two -- see _loadReports'
+  // own comment for why), and _loadStockAccuracy plus the three Exceptions
+  // queue loaders (_loadExceptionStock/_loadExceptionConflicts/
+  // _loadExceptionRegistry), whose "try again" buttons are never disabled
+  // while a check is in flight. All six now use their own distinctly-named
+  // counter ('customers', 'reports', 'stockAccuracy', 'exceptionStock',
+  // 'exceptionConflicts', 'exceptionRegistry') -- see retail_list_reload_
+  // race_test.js for the earlier audit note that first identified these as
+  // sharing the defect shape without fixing them, and for the races proved
+  // against all of them.
+  //
+  // Two of the six (_loadReports' setEl() calls, and every _paintXxx() a
+  // repeat-loader calls at its very end) DO re-query a DOM element fresh by
+  // id after their await -- the pattern the paragraph above says would need
+  // the render-generation guard too, if taken in isolation. It does not
+  // here, because every entry point into each of these six lists' state
+  // ALSO goes through this same named _beginOp() call: a fresh render after
+  // navigating back to a screen calls the same _loadXxx() the filters/retry
+  // button call, which bumps the identical counter and so invalidates any
+  // still-in-flight call from before the navigation, exactly as it
+  // invalidates a same-screen re-fire. One guard, one counter per list,
+  // covering both cases uniformly -- not two guards layered on each other.
   _opSeq: Object.create(null),
   _beginOp(name) { return (this._opSeq[name] = (this._opSeq[name] || 0) + 1); },
   _isStaleOp(name, token) { return token !== this._opSeq[name]; },
@@ -5344,9 +5370,28 @@ const RetailSystem = {
   },
 
   async _loadCustomers(q='') {
+    // Per-operation reload guard -- NOT the navigation generation the
+    // dashboard uses. _filterCustomers debounces typing into the search box
+    // by 350ms, but never stops a second debounced call from firing before
+    // the first one's response lands, and this never navigates away from
+    // the screen -- so _isStaleRender could never catch an older search's
+    // response arriving after a newer one's; see "Per-operation reload
+    // guard" above the Router for the full writeup.
+    const opToken = this._beginOp('customers');
     try {
       const url = q ? `/api/sub/retail/customers?q=${encodeURIComponent(q)}` : '/api/sub/retail/customers';
       const data = (await this._get(url)).data || [];
+      // Superseded by a later _loadCustomers() call (the search box changed
+      // again before this one's response arrived)? Genuine early return,
+      // same contract as _isStaleRender: write NOTHING -- not even
+      // `this._customers` itself -- rather than let an older search's
+      // result set land on top of whatever the latest call already wrote.
+      // The assignment matters as much as the table paint: _openEditCustomer/
+      // _viewCustomer/_deleteCustomer all look the clicked row up in
+      // `this._customers` afterwards, so a stale assignment here would
+      // silently corrupt what Edit/View/Delete act on even if the table
+      // itself still matched the newer search.
+      if (this._isStaleOp('customers', opToken)) return;
       this._customers = data;
       const tbody = document.querySelector('#cust-table tbody');
       if (!tbody) return;
@@ -5370,7 +5415,13 @@ const RetailSystem = {
           <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._deleteCustomer('${this._esc(cu.id)}')">${t('Delete')}</button>
         </td>
       </tr>`).join('');
-    } catch(e) { console.error(e); }
+    } catch(e) {
+      // No operation-staleness check needed here: this catch has never
+      // painted anything (it only logs), so there is no write for a stale
+      // call to guard. If that ever changes, the check belongs right here,
+      // before the first write, same as the success path above.
+      console.error(e);
+    }
   },
 
   _filterCustomers() {
@@ -8871,6 +8922,19 @@ const RetailSystem = {
   // ── Loading (one pair per section, mirroring _loadStockAccuracy) ──────────
 
   async _loadExceptionStock() {
+    // Per-operation reload guard, mirroring _loadStockAccuracy's own comment
+    // above (this section's own header comment already says these mirror
+    // _loadStockAccuracy): the "Try again" button on this queue is never
+    // disabled while a check is in flight, and `s` is a shared,
+    // mutated-in-place state object _paintExceptionStock reads directly --
+    // so the check guards the mutation, not just the paint, same reasoning
+    // as _loadStockAccuracy's. Named 'exceptionStock', independently of
+    // 'exceptionConflicts' and 'exceptionRegistry' below: the three queues
+    // load in parallel (see _renderExceptions' Promise.all) and retry
+    // independently, one "Try again" button per section, so they must never
+    // share a counter -- retrying one must never invalidate an in-flight
+    // reload of either of the other two.
+    const opToken = this._beginOp('exceptionStock');
     const eq = this._exceptionQueue || (this._exceptionQueue = {});
     const s = eq.stock || (eq.stock = { state: 'checking', rows: [], error: '' });
     s.state = 'checking';
@@ -8878,6 +8942,10 @@ const RetailSystem = {
     this._paintExceptionStock();
     try {
       const res = await this._get('/api/sub/retail/inventory/stock-exceptions');
+      // Genuine early return, same contract as _isStaleRender: write
+      // NOTHING -- not even into `s` -- rather than let an older check's
+      // result land on top of whatever the latest check already wrote.
+      if (this._isStaleOp('exceptionStock', opToken)) return;
       if (!res || res.status !== 'success' || !res.data) {
         s.state = 'failed';
         s.rows = [];
@@ -8890,6 +8958,8 @@ const RetailSystem = {
       }
     } catch (e) {
       console.error('Exceptions: oversold-stock load failed', e);
+      // Same operation-staleness check as the success path above.
+      if (this._isStaleOp('exceptionStock', opToken)) return;
       s.state = 'failed';
       s.rows = [];
       s.error = t('Could not check for oversold stock.');
@@ -8904,6 +8974,13 @@ const RetailSystem = {
   },
 
   async _loadExceptionConflicts() {
+    // Per-operation reload guard -- see _loadExceptionStock's comment just
+    // above for the full reasoning (un-disabled retry button, shared
+    // mutated-in-place state object, mirrors _loadStockAccuracy). Named
+    // 'exceptionConflicts', its own counter independent of 'exceptionStock'
+    // and 'exceptionRegistry': these three queues load in parallel and
+    // retry independently, one button per section.
+    const opToken = this._beginOp('exceptionConflicts');
     const eq = this._exceptionQueue || (this._exceptionQueue = {});
     const s = eq.conflicts || (eq.conflicts = { state: 'checking', rows: [], error: '' });
     s.state = 'checking';
@@ -8911,6 +8988,10 @@ const RetailSystem = {
     this._paintExceptionConflicts();
     try {
       const res = await this._get('/api/sub/retail/inventory/sync-conflicts');
+      // Genuine early return, same contract as _isStaleRender: write
+      // NOTHING -- not even into `s` -- rather than let an older check's
+      // result land on top of whatever the latest check already wrote.
+      if (this._isStaleOp('exceptionConflicts', opToken)) return;
       if (!res || res.status !== 'success' || !res.data) {
         s.state = 'failed';
         s.rows = [];
@@ -8923,6 +9004,8 @@ const RetailSystem = {
       }
     } catch (e) {
       console.error('Exceptions: sync-conflict load failed', e);
+      // Same operation-staleness check as the success path above.
+      if (this._isStaleOp('exceptionConflicts', opToken)) return;
       s.state = 'failed';
       s.rows = [];
       s.error = t('Could not check for discarded catalogue edits.');
@@ -9257,6 +9340,13 @@ const RetailSystem = {
   // resolves itself once the owning account finishes arriving.
 
   async _loadExceptionRegistry() {
+    // Per-operation reload guard -- see _loadExceptionStock's comment above
+    // for the full reasoning (un-disabled retry button, shared
+    // mutated-in-place state object, mirrors _loadStockAccuracy). Named
+    // 'exceptionRegistry', its own counter independent of 'exceptionStock'
+    // and 'exceptionConflicts': these three queues load in parallel and
+    // retry independently, one button per section.
+    const opToken = this._beginOp('exceptionRegistry');
     const eq = this._exceptionQueue || (this._exceptionQueue = {});
     const s = eq.registry || (eq.registry = { state: 'checking', rows: [], error: '' });
     s.state = 'checking';
@@ -9264,6 +9354,10 @@ const RetailSystem = {
     this._paintExceptionRegistry();
     try {
       const res = await this._get('/api/sub/retail/account-quarantine');
+      // Genuine early return, same contract as _isStaleRender: write
+      // NOTHING -- not even into `s` -- rather than let an older check's
+      // result land on top of whatever the latest check already wrote.
+      if (this._isStaleOp('exceptionRegistry', opToken)) return;
       if (!res || res.status !== 'success' || !res.data) {
         s.state = 'failed';
         s.rows = [];
@@ -9276,6 +9370,8 @@ const RetailSystem = {
       }
     } catch (e) {
       console.error('Exceptions: account-quarantine load failed', e);
+      // Same operation-staleness check as the success path above.
+      if (this._isStaleOp('exceptionRegistry', opToken)) return;
       s.state = 'failed';
       s.rows = [];
       s.error = t('Could not check for account sync issues.');
@@ -9441,6 +9537,26 @@ const RetailSystem = {
   },
 
   async _loadStockAccuracy() {
+    // Per-operation reload guard -- NOT the navigation generation the
+    // dashboard uses. The "Run/Try the check again" button is never
+    // disabled while a check is in flight, so a user can fire this again
+    // before the first check's response lands, and the screen never
+    // navigates away in between -- so _isStaleRender could never catch it;
+    // see "Per-operation reload guard" above the Router for the full
+    // writeup. (The button staying enabled mid-flight is itself unchanged
+    // by this guard -- it makes stacked requests SAFE, not disabled; see
+    // this file's own task notes for that as a separate, un-fixed finding.)
+    //
+    // Checked BEFORE touching `s` at all, not just before painting: `s` is
+    // the ONE shared, MUTATED-IN-PLACE state object (`this._stockAccuracy`)
+    // that _paintStockAccuracy, _askRepairStockAccuracy and
+    // _repairStockAccuracy all read directly and later, so a stale write
+    // into it would corrupt those functions' view of the check even on a
+    // call whose own repaint is skipped -- e.g. a superseded response could
+    // silently leave s.state readable as 'failed' underneath a screen still
+    // visibly showing 'drift', which would break _repairStockAccuracy's own
+    // `s.state !== 'confirm'` guard on the NEXT click.
+    const opToken = this._beginOp('stockAccuracy');
     const s = this._stockAccuracy ||
       (this._stockAccuracy = { state: 'checking', data: null, repair: null, error: '' });
     s.state = 'checking';
@@ -9449,6 +9565,11 @@ const RetailSystem = {
     this._paintStockAccuracy();
     try {
       const res = await this._get('/api/sub/retail/inventory/reconciliation');
+      // Genuine early return, same contract as _isStaleRender: write
+      // NOTHING -- not even into `s` -- rather than let an older check's
+      // result (or refusal) land on top of whatever the latest check
+      // already wrote.
+      if (this._isStaleOp('stockAccuracy', opToken)) return;
       // `status !== 'success'` covers the 400 envelope; `res.error` with no
       // `status` at all is what _require_company_admin's 403 looks like. Both
       // are shown as the server worded them -- a refusal and a database
@@ -9469,6 +9590,8 @@ const RetailSystem = {
       }
     } catch (e) {
       console.error('Stock accuracy check failed', e);
+      // Same operation-staleness check as the success path above.
+      if (this._isStaleOp('stockAccuracy', opToken)) return;
       s.state = 'failed';
       s.data = null;
       s.error = t('Could not check stock accuracy.');
@@ -9976,7 +10099,7 @@ const RetailSystem = {
   // resolved person, an actor the route looked up and could not find, and the
   // unattributed bucket are three visibly different answers, and none of them
   // is a guess.
-  async _loadEmployeeSales(days, branchQS) {
+  async _loadEmployeeSales(days, branchQS, opToken) {
     const tbody = document.querySelector('#rep-emp-table tbody');
     if (!tbody) return;
     const note = document.getElementById('rep-emp-note');
@@ -10008,8 +10131,23 @@ const RetailSystem = {
       // one message would be the same category of dishonesty as showing an
       // empty table. (_fetch still handles the 401 re-auth path for us.)
       const res = await this._fetch(`/api/sub/retail/reports/by-employee?days=${days}${branchQS}`);
+      // Per-operation reload guard, shared with _loadReports -- see that
+      // function's own comment for why the two use ONE opToken/name
+      // ('reports') instead of each minting its own: this function has no
+      // control of its own (no button, no filter) and only ever runs as one
+      // step _loadReports awaits, so whatever supersedes _loadReports
+      // supersedes this table too. `opToken` is null/undefined when called
+      // directly with no arguments at all (retail_attribution_ui_test.js
+      // exercises exactly that path), which must stay a genuine no-op here,
+      // exactly as it always has.
+      if (opToken != null && this._isStaleOp('reports', opToken)) return;
       if (res.status === 404) return fail(t('Sales by employee are not available on this version.'));
       const body = await res.json().catch(() => ({}));
+      // Checked again after this SECOND await: a newer _loadReports() call
+      // (and the shared counter bump that comes with it) can land in the
+      // gap between this function's two awaits just as easily as before or
+      // after either of them.
+      if (opToken != null && this._isStaleOp('reports', opToken)) return;
       // Either discriminator counts -- see the envelope note above. An error
       // envelope carries neither, so this cannot read a failure as a success.
       const succeeded = body.status === 'success' || body.success === true;
@@ -10070,6 +10208,8 @@ const RetailSystem = {
       if (note) note.style.display = sawUnattributed ? 'block' : 'none';
     } catch (e) {
       console.error('Sales-by-employee load failed', e);
+      // Same operation-staleness check as the success path above.
+      if (opToken != null && this._isStaleOp('reports', opToken)) return;
       fail(t('Could not load sales by employee.'));
     }
   },
@@ -10090,6 +10230,23 @@ const RetailSystem = {
   },
 
   async _loadReports() {
+    // Per-operation reload guard -- NOT the navigation generation the
+    // dashboard uses. Picking a different branch or period (#rep-branch /
+    // #rep-days onchange) never navigates away from this screen, so
+    // _isStaleRender could never catch an older selection's response
+    // landing after a newer one's; see "Per-operation reload guard" above
+    // the Router for the full writeup. These are real revenue figures, so
+    // an older filter's numbers landing over a newer selection is the
+    // worst case in this whole group.
+    //
+    // Shared with _loadEmployeeSales -- ONE opToken/name ('reports'), not
+    // two -- because _loadEmployeeSales has no control of its own (no
+    // button, no filter): it is a sub-fetch this function awaits as one
+    // step of ONE user-visible reload, always triggered by these same
+    // onchange handlers. Two independent counters for a single operation
+    // would let _loadEmployeeSales's table finish "current" after its own
+    // caller had already been superseded.
+    const opToken = this._beginOp('reports');
     const daysEl   = document.getElementById('rep-days');
     const branchEl = document.getElementById('rep-branch');
     const days     = daysEl ? +daysEl.value : 14;
@@ -10119,7 +10276,13 @@ const RetailSystem = {
       // per-employee route is the newest thing on this page and the only one
       // that may legitimately be absent from a given backend build -- it must
       // not be able to blank the four charts that have always worked.
-      await this._loadEmployeeSales(days, branchQS);
+      await this._loadEmployeeSales(days, branchQS, opToken);
+      // Superseded by a later _loadReports() call (the branch or period
+      // filter changed again before the employee-sales sub-fetch settled)?
+      // Genuine early return, same contract as _isStaleRender: the five
+      // KPI/chart fetches below must never even go out once a newer
+      // selection has already superseded this one.
+      if (this._isStaleOp('reports', opToken)) return;
 
       const [trend, top, pay, summary, byBranch] = await Promise.all([
         this._get(`/api/sub/retail/reports/sales-trend?days=${days}${branchQS}`),
@@ -10128,6 +10291,11 @@ const RetailSystem = {
         this._get(`/api/sub/retail/reports/summary?days=${days}${branchQS}`),
         this._get(`/api/sub/retail/reports/by-branch?days=${days}`),
       ]);
+      // Superseded while those five fetches were in flight? Write NOTHING
+      // -- not even the KPI tiles -- rather than paint an older selection's
+      // revenue, transactions or charts over whatever the latest selection
+      // already wrote.
+      if (this._isStaleOp('reports', opToken)) return;
 
       const s = summary.data || {};
       const setEl = (id, val) => { const el = document.getElementById(id); if(el) el.textContent=val; };
