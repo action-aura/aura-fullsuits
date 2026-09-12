@@ -251,11 +251,29 @@ bring Charge and the tender grid on screen — but it is a ~1,000px scroll, and 
 the time you are there the cart has gone off the top and, with a licence banner
 up, the grand total sits *behind* it.
 
-The real fix already has a written spec: `docs/design/phone-ui-redesign.md`
-describes a **peek bar** — a pinned charge control carrying the running total.
-`#pos-peek-charge` and `.pos-peek` are **not in the DOM**; it was never built.
-That is a feature with a design behind it, not a polish pass, so it is named here
-rather than improvised.
+**The peek bar is now built.** `docs/design/phone-ui-redesign.md` §3.1 specified
+it and nothing had implemented it. Below 640px `.pos-right` is now a bottom
+sheet, and a pinned `#pos-peek` bar above the tab bar carries the line count, the
+running total and a Charge affordance. Tapping it raises the sheet with the real
+Charge button, the totals and all six tenders on one screen.
+
+Measured, closed → tapped → closed at 390×844:
+
+    closed    peek Charge        y723-780   reachable, no scrolling
+    open      Charge button      y718-771   reachable
+              total              y451       reachable
+              tender grid        y565-706   reachable
+              POSTs to /sales    0
+    outside   sheet closes cleanly
+
+That last line matters: the doc is explicit that "one accidental tap must not
+ring a sale", so the peek control's only job is to open the sheet. Verified by
+watching the network during the tap, not by reading the handler.
+
+Opening it then showed two more things — the line name crushed to ~55px by a
+`flex-shrink:0` control block ("Coffee beans 250g" rendering as "Co… be… 25…"),
+and the F1–F6 badges still on the tender buttons of a device with no keyboard.
+Both fixed.
 
 What was fixed: the POS rendered its **keyboard shortcut legend on a touch
 device** — 49px of Enter/N×/X//Del/Esc on a phone with no keyboard. Hidden on
