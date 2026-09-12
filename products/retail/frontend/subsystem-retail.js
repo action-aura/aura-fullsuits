@@ -3714,7 +3714,7 @@ const RetailSystem = {
     const existing = this._cart.find(i => i.product_id === productId);
     const newQty = existing ? existing.quantity + qty : qty;
     if (newQty > p.total_stock) {
-      SubsystemApp.showToast(`Only ${p.total_stock} in stock`, 'error');
+      SubsystemApp.showToast(`${t('Only')} ${p.total_stock} ${t('in stock')}`, 'error');
       return;
     }
     if (existing) {
@@ -3762,7 +3762,7 @@ const RetailSystem = {
   _updateQty(idx, delta) {
     const item = this._cart[idx];
     const newQty = item.quantity + delta;
-    if (newQty > item.max_stock) { SubsystemApp.showToast(`Max stock: ${item.max_stock}`, 'error'); return; }
+    if (newQty > item.max_stock) { SubsystemApp.showToast(`${t('Max stock')}: ${item.max_stock}`, 'error'); return; }
     if (newQty <= 0) { this._cart.splice(idx, 1); }
     else { item.quantity = newQty; item.line_total = newQty * item.unit_price; }
     this._renderCart();
@@ -3787,7 +3787,7 @@ const RetailSystem = {
   // survives navigating away, without ever touching the real checkout
   // (/sales) endpoint or its financial-record guarantees.
   _holdSale() {
-    if (!this._cart.length) { SubsystemApp.showToast('Cart is empty — nothing to hold', 'error'); return; }
+    if (!this._cart.length) { SubsystemApp.showToast(t('Cart is empty — nothing to hold'), 'error'); return; }
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-hold-modal';
@@ -3813,7 +3813,7 @@ const RetailSystem = {
 
   async _saveHold() {
     const btn = document.getElementById('hold-save-btn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Holding…'; }
+    if (btn) { btn.disabled = true; btn.textContent = t('Holding…'); }
     const label = document.getElementById('hold-label')?.value.trim() || '';
     const customerId = document.getElementById('pos-customer')?.value || null;
     const payload = {
@@ -3846,14 +3846,14 @@ const RetailSystem = {
         if (discInput) discInput.value = 0;
         const tenderedInput = document.getElementById('pos-tendered');
         if (tenderedInput) tenderedInput.value = '';
-        SubsystemApp.showToast(`Sale held — ${data.data.hold_number}`, 'success');
+        SubsystemApp.showToast(`${t('Sale held')} — ${data.data.hold_number}`, 'success');
         this._refreshHeldCount();
       } else {
         SubsystemApp.showToast(data.message || 'Could not hold sale', 'error');
-        if (btn) { btn.disabled = false; btn.textContent = 'Hold Sale'; }
+        if (btn) { btn.disabled = false; btn.textContent = t('Hold Sale'); }
       }
     } catch (e) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Hold Sale'; }
+      if (btn) { btn.disabled = false; btn.textContent = t('Hold Sale'); }
     }
   },
 
@@ -3966,7 +3966,7 @@ const RetailSystem = {
       // also runs the trailing _recalc() for us.
       await this._onCustomerChange();
       this._refreshHeldCount();
-      SubsystemApp.showToast(`Resumed ${snap.hold_number}`, 'success');
+      SubsystemApp.showToast(`${t('Resumed')} ${snap.hold_number}`, 'success');
     } catch (e) { /* _fetch already surfaces auth errors via toast/redirect */ }
   },
 
@@ -3980,7 +3980,7 @@ const RetailSystem = {
     try {
       const data = await this._del(`/api/sub/retail/held-sales/${id}`);
       if (data.status === 'success') {
-        SubsystemApp.showToast('Held sale discarded', 'success');
+        SubsystemApp.showToast(t('Held sale discarded'), 'success');
         this._loadHeldList();
       } else {
         SubsystemApp.showToast(data.message || 'Could not discard held sale', 'error');
@@ -4527,7 +4527,7 @@ const RetailSystem = {
     // Route to whatever is on screen. Open modals take priority over the section.
     if (document.getElementById('ret-prod-modal')) {  // Add/Edit Product → barcode field
       const f = document.getElementById('pm-barcode');
-      if (f) { f.value = code; f.focus(); SubsystemApp.showToast('Barcode captured', 'success'); }
+      if (f) { f.value = code; f.focus(); SubsystemApp.showToast(t('Barcode captured'), 'success'); }
       return;
     }
     if (document.getElementById('ret-po-modal'))   return this._poScan(code);
@@ -4535,7 +4535,7 @@ const RetailSystem = {
       case 'pos':       return this._posScan(code);
       case 'products':  return this._productsScan(code);
       case 'purchases': return this._poScan(code);
-      default:          SubsystemApp.showToast(`Scanned: ${code}`, 'info');
+      default:          SubsystemApp.showToast(`${t('Scanned')}: ${code}`, 'info');
     }
   },
 
@@ -4602,13 +4602,13 @@ const RetailSystem = {
       this._openVariantPicker(product.id);
     } else if (product) {
       this._addToCart(product.id);              // reuses existing stock checks + cart merge
-      SubsystemApp.showToast(`Added: ${product.name}`, 'success');
+      SubsystemApp.showToast(`${t('Added')}: ${product.name}`, 'success');
     } else if (error) {
       // Distinct from "not found": the lookup itself failed, so telling the
       // cashier this product doesn't exist would be a lie about why the
       // scan didn't resolve. Same phrasing _checkout's own network-failure
       // toast already uses.
-      SubsystemApp.showToast('Scan failed — check the connection and try again', 'error');
+      SubsystemApp.showToast(t('Scan failed — check the connection and try again'), 'error');
     } else {
       this._showScanNotFound(code);
     }
@@ -4618,7 +4618,7 @@ const RetailSystem = {
     const inp = document.getElementById('prod-search');
     if (inp) { inp.value = code; this._filterProducts(); }
     const { product, error } = await this._findByCode(code);
-    if (error) { SubsystemApp.showToast('Scan failed — check the connection and try again', 'error'); return; }
+    if (error) { SubsystemApp.showToast(t('Scan failed — check the connection and try again'), 'error'); return; }
     SubsystemApp.showToast(product ? `Found: ${product.name}` : `No product matches ${code}`, product ? 'success' : 'error');
   },
 
@@ -4631,7 +4631,7 @@ const RetailSystem = {
     const sel = document.getElementById('po-item-prod');
     if (sel) { sel.value = String(product.id); sel.dispatchEvent(new Event('change')); }
     document.getElementById('po-item-qty')?.focus();
-    SubsystemApp.showToast(`Scanned: ${product.name}`, 'success');
+    SubsystemApp.showToast(`${t('Scanned')}: ${product.name}`, 'success');
   },
 
   // "Product not found" prompt — Add New Product / Scan Again / Cancel.
@@ -4673,7 +4673,7 @@ const RetailSystem = {
     this.captureNextScan((code) => {
       if (field) field.value = code;
       if (btn) { btn.innerHTML = this._icon('camera', 16, '📷') + ' Scan'; btn.disabled = false; }
-      SubsystemApp.showToast('Barcode captured', 'success');
+      SubsystemApp.showToast(t('Barcode captured'), 'success');
     });
     // If no scan arrives, restore the button so it never gets stuck.
     setTimeout(() => {
@@ -4766,7 +4766,7 @@ const RetailSystem = {
       this._qtyKeyBuffer = '';
       if (n > 0) {
         this._pendingQty = n;
-        SubsystemApp.showToast(`×${n} — next item added at this quantity`, 'info');
+        SubsystemApp.showToast(`×${n} — ${t('next item added at this quantity')}`, 'info');
       }
       return;
     }
@@ -4943,7 +4943,7 @@ const RetailSystem = {
     const amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : total;
     const tendered = parseFloat(document.getElementById('pos-tendered')?.value || 0);
     if (this._paymentMethod === 'cash' && tendered > 0 && tendered < amountDue) {
-      SubsystemApp.showToast('Cash tendered is less than total', 'error'); return;
+      SubsystemApp.showToast(t('Cash tendered is less than total'), 'error'); return;
     }
     const customerId = document.getElementById('pos-customer')?.value || null;
     // AUDIT: mirrors retail_api.py's credit-sale rule ("Credit sales require
@@ -4955,7 +4955,7 @@ const RetailSystem = {
     // here means the button never even starts processing for a sale that
     // was never going to succeed.
     if (this._paymentMethod === 'credit' && !customerId) {
-      SubsystemApp.showToast('Credit sales require a customer (walk-in not allowed)', 'error'); return;
+      SubsystemApp.showToast(t('Credit sales require a customer (walk-in not allowed)'), 'error'); return;
     }
     const btn = document.getElementById('pos-checkout-btn');
     if (btn) { btn.textContent = t('Processing…'); btn.disabled = true; }
@@ -5082,7 +5082,7 @@ const RetailSystem = {
       // whether to retry, or whether the customer's cash was recorded --
       // on the single most consequential action on this screen.
       console.error('Checkout failed:', e);
-      SubsystemApp.showToast('Checkout failed — check the connection and try again', 'error');
+      SubsystemApp.showToast(t('Checkout failed — check the connection and try again'), 'error');
       if (btn) { btn.textContent = this._checkoutLabel(total); btn.disabled = false; }
     }
   },
@@ -5675,7 +5675,7 @@ const RetailSystem = {
     const sku  = document.getElementById('pm-sku')?.value.trim();
     if (!name || !sku) { SubsystemApp.showToast('Name and SKU are required','error'); return; }
     const btn = document.getElementById('pm-save-btn');
-    if (btn) { btn.disabled=true; btn.textContent='Saving…'; }
+    if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
     const payload = {
       name, sku,
       barcode:      document.getElementById('pm-barcode')?.value,
@@ -5743,7 +5743,7 @@ const RetailSystem = {
     const reason = document.getElementById('sa-reason')?.value || 'Manual adjustment';
     if (!qty) { SubsystemApp.showToast('Enter a quantity','error'); return; }
     const btn = document.getElementById('sa-btn');
-    if (btn) { btn.disabled=true; btn.textContent='Saving…'; }
+    if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
     try {
       const d = await this._post(`/api/sub/retail/products/${pid}/stock-adjust`, { quantity: qty, reason });
       if (d.status === 'success') {
@@ -5752,9 +5752,9 @@ const RetailSystem = {
         this._loadProducts();
       } else {
         SubsystemApp.showToast(d.message||'Error','error');
-        if(btn){btn.disabled=false;btn.textContent='Apply';}
+        if(btn){btn.disabled=false;btn.textContent=t('Apply');}
       }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent='Apply';} }
+    } catch(e) { if(btn){btn.disabled=false;btn.textContent=t('Apply');} }
   },
 
   async _deleteProduct(pid, name) {
@@ -8780,7 +8780,7 @@ const RetailSystem = {
         <div class="ret-field-row">
           <div class="ret-field"><label>Sale / Receipt Number *</label>
             <div style="display:flex;gap:8px">
-              <input id="ret-sale-search" placeholder="e.g. S-1234567890" style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none" />
+              <input id="ret-sale-search" placeholder="${t('e.g.')} S-1234567890" style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none" />
               <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._findSaleForReturn()">Lookup</button>
             </div>
           </div>
@@ -8815,11 +8815,11 @@ const RetailSystem = {
 
   async _findSaleForReturn() {
     const saleNum = document.getElementById('ret-sale-search')?.value.trim();
-    if (!saleNum) { SubsystemApp.showToast('Enter a receipt number','error'); return; }
+    if (!saleNum) { SubsystemApp.showToast(t('Enter a receipt number'),'error'); return; }
     try {
       const recent = (await this._get('/api/sub/retail/sales/recent?limit=200')).data || [];
       const sale   = recent.find(s => s.sale_number.toLowerCase()===saleNum.toLowerCase());
-      if (!sale) { SubsystemApp.showToast('Sale not found','error'); return; }
+      if (!sale) { SubsystemApp.showToast(t('Sale not found'),'error'); return; }
       const full = (await this._get(`/api/sub/retail/sales/${sale.id}`)).data || {};
       this._returnSaleId = sale.id;
       const items = full.items || [];
@@ -8837,13 +8837,13 @@ const RetailSystem = {
             <td>${this._fmt(item.unit_price)}</td>
           </tr>`).join('')}</tbody>
         </table>`;
-    } catch(e) { SubsystemApp.showToast('Error looking up sale','error'); }
+    } catch(e) { SubsystemApp.showToast(t('Error looking up sale'),'error'); }
   },
 
   async _saveReturn() {
-    if (!this._returnSaleId) { SubsystemApp.showToast('Look up a sale first','error'); return; }
+    if (!this._returnSaleId) { SubsystemApp.showToast(t('Look up a sale first'),'error'); return; }
     const checked = [...document.querySelectorAll('.ret-item-cb:checked')];
-    if (!checked.length) { SubsystemApp.showToast('Select items to return','error'); return; }
+    if (!checked.length) { SubsystemApp.showToast(t('Select items to return'),'error'); return; }
     const items = checked.map(cb => {
       const idx = cb.dataset.idx;
       const qty = +document.querySelectorAll('.ret-item-qty')[idx]?.value || 1;
@@ -8851,7 +8851,7 @@ const RetailSystem = {
       return { product_id:cb.dataset.pid, quantity:qty, unit_price:price, line_total:qty*price };
     });
     const btn = document.getElementById('ret-save-btn');
-    if (btn) { btn.disabled=true; btn.textContent='Processing…'; }
+    if (btn) { btn.disabled=true; btn.textContent=t('Processing…'); }
     try {
       const d = await this._post('/api/sub/retail/returns', {
         sale_id: this._returnSaleId,
@@ -8860,11 +8860,11 @@ const RetailSystem = {
         items,
       });
       if (d.status==='success') {
-        SubsystemApp.showToast(`Return processed — ${d.data.return_number} · Refund: ${this._fmt(d.data.refund_amount)}`,'success');
+        SubsystemApp.showToast(`${t('Return processed')} — ${d.data.return_number} · ${t('Refund')}: ${this._fmt(d.data.refund_amount)}`,'success');
         document.getElementById('ret-return-modal')?.remove();
         this._loadReturns();
-      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent='Process Refund';} }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent='Process Refund';} }
+      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent=t('Process Refund');} }
+    } catch(e) { if(btn){btn.disabled=false;btn.textContent=t('Process Refund');} }
   },
 
   // ── SALES HISTORY ────────────────────────────────────────────────────────
@@ -11494,37 +11494,41 @@ const RetailSystem = {
     const cfg = this.scannerCfg();
     const st  = this._scan;
     if (!cfg.enabled) {
-      text.textContent = 'Disabled';
+      text.textContent = t('Disabled');
       if (dot) dot.style.background = 'var(--text-tertiary)';
-      if (last) last.textContent = 'Scanner listening is turned off';
+      if (last) last.textContent = t('Scanner listening is turned off');
       return;
     }
     if (st.lastScanAt) {
       const secs = Math.round((Date.now() - st.lastScanAt) / 1000);
-      const ago  = secs < 60 ? `${secs}s ago` : `${Math.round(secs / 60)}m ago`;
+      // Same compromise app-shell.js's _formatRelativeTime documents: t() is
+      // a whole-string exact-match lookup, so a key per possible number
+      // isn't expressible -- the number stays plain-concatenated, but the
+      // fixed unit word now goes through t() (it never did before this fix).
+      const ago  = secs < 60 ? `${secs}${t('s ago')}` : `${Math.round(secs / 60)}${t('m ago')}`;
       // "Ready" within the last 10s of a scan, otherwise idle-but-waiting.
-      text.textContent = secs < 10 ? 'Ready' : 'Waiting for Scanner';
+      text.textContent = secs < 10 ? t('Ready') : t('Waiting for Scanner');
       if (dot) dot.style.background = secs < 10 ? 'var(--state-success-text)' : 'var(--state-warning-text)';
-      if (last) last.innerHTML = `Last Scan: <span style="color:var(--text-primary)">${ago}</span> · <span style="font-family:monospace">${st.lastScanCode || ''}</span>`;
+      if (last) last.innerHTML = `${t('Last Scan')}: <span style="color:var(--text-primary)">${ago}</span> · <span style="font-family:monospace">${st.lastScanCode || ''}</span>`;
     } else {
-      text.textContent = 'Waiting for Scanner';
+      text.textContent = t('Waiting for Scanner');
       if (dot) dot.style.background = 'var(--state-warning-text)';
-      if (last) last.textContent = 'No scans yet this session';
+      if (last) last.textContent = t('No scans yet this session');
     }
   },
 
   _armTestScan() {
     const btn = document.getElementById('sc-test-btn');
     const out = document.getElementById('sc-test-value');
-    if (btn) { btn.textContent = 'Listening…'; btn.disabled = true; }
-    if (out) { out.value = ''; out.placeholder = 'Scan now…'; }
+    if (btn) { btn.textContent = t('Listening…'); btn.disabled = true; }
+    if (out) { out.value = ''; out.placeholder = t('Scan now…'); }
     this.captureNextScan((code) => {
       if (out) out.value = code;
-      if (btn) { btn.textContent = 'Start Test'; btn.disabled = false; }
+      if (btn) { btn.textContent = t('Start Test'); btn.disabled = false; }
       this._refreshScannerStatus();
     });
     setTimeout(() => {
-      if (btn && btn.disabled) { btn.textContent = 'Start Test'; btn.disabled = false; this.cancelCapture(); }
+      if (btn && btn.disabled) { btn.textContent = t('Start Test'); btn.disabled = false; this.cancelCapture(); }
     }, 20000);
   },
 
@@ -11539,13 +11543,13 @@ const RetailSystem = {
       sound:     document.getElementById('sc-sound')?.value === 'true',
     };
     this.saveScannerCfg(cfg);
-    SubsystemApp.showToast('Scanner settings saved', 'success');
+    SubsystemApp.showToast(t('Scanner settings saved'), 'success');
     this._refreshScannerStatus();
   },
 
   _resetScannerSettings() {
     this.saveScannerCfg(Object.assign({}, this._scannerDefaults));
-    SubsystemApp.showToast('Scanner settings reset to defaults', 'success');
+    SubsystemApp.showToast(t('Scanner settings reset to defaults'), 'success');
     this._renderScannerSettings(document.getElementById('sub-content'));
   },
 
@@ -11571,7 +11575,7 @@ const RetailSystem = {
     const portRaw = +(document.getElementById('pr-port')?.value);
     const port = (Number.isInteger(portRaw) && portRaw >= 1 && portRaw <= 65535) ? portRaw : 9100;
     this.savePrinterCfg({ paperWidth: width, printer: device, autoKick, host, port });
-    SubsystemApp.showToast('Printer settings saved', 'success');
+    SubsystemApp.showToast(t('Printer settings saved'), 'success');
   },
 
   // Uses clearly-marked synthetic data (never a real sale) so testing the
