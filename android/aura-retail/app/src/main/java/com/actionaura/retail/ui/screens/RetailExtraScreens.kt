@@ -596,10 +596,14 @@ private fun ProcessReturnSheet(onDismiss: () -> Unit, onDone: () -> Unit) {
                             Text(tr("Sold") + " ${fmtQty(ln.quantity)} × ${money(ln.unit_price)}",
                                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        // − / qty / +  bounded to [0, quantity sold on this line]
+                        // − / qty / +  bounded to [0, quantity sold on this line].
+                        // No Modifier.size(34.dp) override -- 34dp sits below Material3's
+                        // own ~48dp default and the 44dp accessibility floor the desktop
+                        // client enforces (--touch-target-min); returns is one of the two
+                        // highest-frequency tap surfaces in the app.
                         FilledTonalIconButton(
                             onClick = { retQty[i] = fmtQty((cur - 1).coerceAtLeast(0.0)) },
-                            enabled = cur > 0.0, modifier = Modifier.size(34.dp),
+                            enabled = cur > 0.0,
                         ) { Icon(Icons.Default.Remove, tr("Remove")) }
                         OutlinedTextField(
                             value = retQty[i] ?: "",
@@ -616,14 +620,19 @@ private fun ProcessReturnSheet(onDismiss: () -> Unit, onDone: () -> Unit) {
                         )
                         FilledTonalIconButton(
                             onClick = { retQty[i] = fmtQty((cur + 1).coerceAtMost(ln.quantity)) },
-                            enabled = cur < ln.quantity, modifier = Modifier.size(34.dp),
+                            enabled = cur < ln.quantity,
                         ) { Icon(Icons.Default.Add, tr("Add")) }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth()) {
                     Text(tr("Refund total"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                    Text(money(refundTotal), fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.error)
+                    // "-" prefix, matching ReturnRow's returns-history figure above (~line
+                    // 527) -- colour alone (MaterialTheme.colorScheme.error) fails WCAG
+                    // 1.4.1 (use of colour) and is invisible on a phone screen in sunlight.
+                    // This sheet is where the cashier CONFIRMS the refund, so it is the
+                    // higher-stakes of the two places this figure appears.
+                    Text("-" + money(refundTotal), fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.error)
                 }
 
                 Spacer(Modifier.height(16.dp))

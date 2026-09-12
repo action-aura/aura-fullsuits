@@ -39,11 +39,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.LoginRequest
 import com.actionaura.retail.ui.brand.AuraAurora
 import com.actionaura.retail.ui.brand.AuraMark
 import com.actionaura.retail.ui.brand.AuraWordmark
+import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.theme.AccentAction
@@ -140,7 +142,12 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                 // step, which would have shrunk it out of proportion with
                 // that tracking instead.
                 color = TextTertiary.copy(alpha = 0.75f),
-                letterSpacing = 0.16.em,
+                // Arabic letters connect to their neighbors; forced letterSpacing severs
+                // those joins, which reads as broken text to an Arabic reader, not loose
+                // tracking. AppLocale is the app's one source of truth for the active
+                // language (same check AppRoot.kt uses for layout direction) -- 0.sp only
+                // when Arabic is active, so the Latin tracking above is untouched.
+                letterSpacing = if (AppLocale.isRtl) 0.sp else 0.16.em,
             )
             Spacer(Modifier.height(32.dp))
 
@@ -295,7 +302,10 @@ private fun FieldLabel(text: String) {
     Text(
         text.uppercase(),
         style = MaterialTheme.typography.labelSmall,
-        letterSpacing = 0.08.em,
+        // See the tagline's comment above -- letterSpacing breaks Arabic cursive joins,
+        // so Arabic gets 0.sp instead of forced tracking; tr("Email")/tr("Password")
+        // both have Arabic translations, so this path is live, not theoretical.
+        letterSpacing = if (AppLocale.isRtl) 0.sp else 0.08.em,
         color = TextTertiary,
     )
 }
@@ -409,7 +419,8 @@ private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
                 tr("Sign In"),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.02.em,
+                // Same Arabic cursive-join fix as the tagline and FieldLabel above.
+                letterSpacing = if (AppLocale.isRtl) 0.sp else 0.02.em,
                 color = AuraBrand.OnBrand,
             )
         }

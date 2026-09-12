@@ -376,14 +376,19 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                 Text(money(p.sell_price), style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                            // No Modifier.size(34.dp) override -- 34dp sits below Material3's
+                            // own ~48dp default and the 44dp accessibility floor the desktop
+                            // client enforces (--touch-target-min). The cart is the
+                            // highest-frequency tap surface in the app; every other icon
+                            // button here already relies on the Material default.
                             FilledTonalIconButton(onClick = {
                                 val n = qty - 1; if (n <= 0) cart.remove(id) else cart[id] = n
-                            }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Remove, "−") }
+                            }) { Icon(Icons.Default.Remove, "−") }
                             Text(fmtQty(qty), fontWeight = FontWeight.Bold,
                                 modifier = Modifier.widthIn(min = 28.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             FilledTonalIconButton(onClick = {
                                 if (!addOne(p)) scope.launch { snackbar.showSnackbar(tr("Max stock: %s").format(fmtQty(p.total_stock))) }
-                            }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Add, "+") }
+                            }) { Icon(Icons.Default.Add, "+") }
                         }
                     }
                 }

@@ -35,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
 
 /**
  * Activation/status UI (Phase 7 Part G, Android). Talks only to
@@ -105,7 +106,12 @@ private fun reasonText(reason: String?): String =
     LicensingMessages.reasonMessage(reason)?.let { tr(it) }
         ?: tr(LicensingMessages.UNKNOWN_REASON_TEMPLATE).format(reason ?: "UNKNOWN")
 
-private fun nowTimeLabel(): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
+// Locale.US pinned, not the implicit Locale.getDefault() this resolved through before --
+// on a device set to Arabic that rendered Eastern Arabic-Indic digits (e.g. "٢٠٢٦") into a
+// commerce timestamp. Jordan uses Western digits in commerce; see Num.kt's file header and
+// BackupRestoreScreen.kt's SimpleDateFormat(..., Locale.US) for the same pin applied
+// elsewhere in this app.
+private fun nowTimeLabel(): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.US).format(Date())
 
 @Composable
 fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated: (() -> Unit)? = null) {
