@@ -42,6 +42,13 @@ const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
    Each entry is a selector-prefix plus the reason it may still hold literal
    colour. "Because it was already there" is not a reason; every line below
    states what would break if the literal were tokenised. */
+// RETIRED 2026-09-12: the '[data-l-theme' and '[data-app-theme' exemptions
+// were removed along with the CSS they excused. Both described a
+// user-selectable theme feature that did not exist -- nothing had set either
+// attribute for a long time, and app-shell.js says so itself -- so the
+// justification was the reason ~110 lines of un-tokenised colour went
+// unchallenged. If an entry here ever stops being true, delete it; a stale
+// reason is worse than no exemption at all.
 const EXEMPTIONS = [
   { prefix: '.ws-', reason: 'Welcome splash: a timed intro over a full-screen animated black-hole canvas. Its palette is the canvas\'s, not the till\'s; light surfaces here would be white-on-white.' },
   { prefix: '.bh-', reason: 'Black-hole canvas layers themselves — colours are sampled by the WebGL/2D animation, not by the theme.' },
@@ -69,8 +76,6 @@ const EXEMPTIONS = [
   { prefix: '.sleek-icon', reason: 'Landing decorative icon chrome sitting on the dark canvas.' },
   { prefix: '.eyebrow-', reason: 'Landing eyebrow rule above the hero headline; a hairline drawn on the dark canvas.' },
   { prefix: '.sys-option', reason: 'E-invoicing system picker highlight; its cyan bloom is a deliberate one-off attention state on a dark configuration panel.' },
-  { prefix: '[data-l-theme', reason: 'User-selectable alternate LANDING themes (e.g. "neon"). The literal colours ARE the theme the user picked; tokenising them would collapse every alternate theme into the default one.' },
-  { prefix: '[data-app-theme', reason: 'User-selectable alternate app accents. Same reasoning as [data-l-theme]: the literal is the choice.' },
 ];
 
 /* Properties that actually paint a surface or text. box-shadow and gradients

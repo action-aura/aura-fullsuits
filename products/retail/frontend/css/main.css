@@ -4031,54 +4031,7 @@ html[data-theme="light"] {
   box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   APP UI THEMES  —  applied via  data-app-theme="x"  on  <html>
-   Each set overrides the hardcoded values in the subsystem shell.
-══════════════════════════════════════════════════════════════════ */
-[data-app-theme="deep-space"] body                        { background:var(--surface-panel); }
-[data-app-theme="deep-space"] .sub-shell                  { background:var(--surface-panel); }
-[data-app-theme="deep-space"] .sub-sidebar                { background:var(--surface-panel); border-right-color:var(--state-info-border); }
-[data-app-theme="deep-space"] .sub-header                 { background:var(--surface-panel); border-bottom-color:var(--state-info-border); }
-[data-app-theme="deep-space"] .sub-kpi-card               { background:var(--surface-panel); border-color:var(--border-default); }
-[data-app-theme="deep-space"] .sub-chart-card,
-[data-app-theme="deep-space"] .sub-table-card,
-[data-app-theme="deep-space"] .modern-card                { background:rgba(15,23,42,0.8)!important; border-color:rgba(255,255,255,0.06); }
 
-[data-app-theme="carbon"] body                            { background:var(--surface-panel); }
-[data-app-theme="carbon"] .sub-shell                      { background:var(--surface-panel); }
-[data-app-theme="carbon"] .sub-sidebar                    { background:var(--surface-panel); border-right-color:var(--border-default); }
-[data-app-theme="carbon"] .sub-header                     { background:var(--surface-panel); }
-[data-app-theme="carbon"] .sub-kpi-card                   { background:var(--surface-panel); }
-[data-app-theme="carbon"] .sub-chart-card,
-[data-app-theme="carbon"] .sub-table-card,
-[data-app-theme="carbon"] .modern-card                    { background:rgba(26,26,28,0.9)!important; }
-
-[data-app-theme="emerald"] body                           { background:var(--surface-panel); }
-[data-app-theme="emerald"] .sub-shell                     { background:var(--surface-panel); }
-[data-app-theme="emerald"] .sub-sidebar                   { background:var(--surface-panel); border-right-color:var(--state-success-border); }
-[data-app-theme="emerald"] .sub-header                    { background:var(--surface-panel); border-bottom-color:var(--state-success-border); }
-[data-app-theme="emerald"] .sub-kpi-card                  { background:var(--surface-panel); border-color:var(--state-success-border); }
-[data-app-theme="emerald"] .sub-chart-card,
-[data-app-theme="emerald"] .sub-table-card,
-[data-app-theme="emerald"] .modern-card                   { background:rgba(10,28,22,0.9)!important; }
-
-[data-app-theme="crimson"] body                           { background:var(--surface-panel); }
-[data-app-theme="crimson"] .sub-shell                     { background:var(--surface-panel); }
-[data-app-theme="crimson"] .sub-sidebar                   { background:var(--surface-panel); border-right-color:var(--state-danger-border); }
-[data-app-theme="crimson"] .sub-header                    { background:var(--surface-panel); border-bottom-color:var(--state-danger-border); }
-[data-app-theme="crimson"] .sub-kpi-card                  { background:var(--surface-panel); border-color:var(--state-danger-border); }
-[data-app-theme="crimson"] .sub-chart-card,
-[data-app-theme="crimson"] .sub-table-card,
-[data-app-theme="crimson"] .modern-card                   { background:rgba(22,10,10,0.9)!important; }
-
-[data-app-theme="violet"] body                            { background:var(--surface-panel); }
-[data-app-theme="violet"] .sub-shell                      { background:var(--surface-panel); }
-[data-app-theme="violet"] .sub-sidebar                    { background:var(--surface-panel); border-right-color:var(--state-info-border); }
-[data-app-theme="violet"] .sub-header                     { background:var(--surface-panel); border-bottom-color:var(--state-info-border); }
-[data-app-theme="violet"] .sub-kpi-card                   { background:var(--surface-panel); border-color:var(--state-info-border); }
-[data-app-theme="violet"] .sub-chart-card,
-[data-app-theme="violet"] .sub-table-card,
-[data-app-theme="violet"] .modern-card                    { background:rgba(14,11,25,0.9)!important; }
 
 /* ── Theme Picker Panel ──
    Restyled with tokens when ThemeEngine became the light/dark switch: this is
@@ -4159,33 +4112,7 @@ html[data-theme="light"] {
   transform:scale(1.02)!important;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   LANDING PAGE THEMES — applied via  data-l-theme  on  <body>
-   Canvas (black hole) provides the background; CSS handles
-   text/card accent tints only.
-═══════════════════════════════════════════════════════════════ */
 
-/* All themes: sections sit on top of canvas with no competing bg */
-[data-l-theme] #page-landing                     { background:transparent; }
-[data-l-theme] .page-section                     { background:transparent!important; }
-
-[data-l-theme="midnight"] .why-card,[data-l-theme="midnight"] .plan-card { background:var(--surface-raised); border-color:var(--state-info-border); }
-[data-l-theme="midnight"] .hero-title            { background-image:linear-gradient(to right,#ffffff,#818cf8)!important; }
-
-[data-l-theme="ocean"] .why-card,[data-l-theme="ocean"] .plan-card { background:var(--surface-raised); border-color:var(--state-info-border); }
-[data-l-theme="ocean"] .section-title            { color:var(--state-info-text)!important; }
-[data-l-theme="ocean"] .hero-title               { background-image:linear-gradient(135deg,#38bdf8,#818cf8)!important; }
-
-[data-l-theme="corporate"] .why-card             { background:var(--surface-raised); border:1px solid var(--state-info-border); }
-[data-l-theme="corporate"] .plan-card            { background:var(--surface-raised); border-color:var(--state-info-border); }
-[data-l-theme="corporate"] .section-title        { color:var(--state-info-text)!important; }
-[data-l-theme="corporate"] .hero-title           { background-image:linear-gradient(to right,#ffffff,#93c5fd)!important; }
-
-[data-l-theme="neon"] .why-card                  { background:var(--surface-app); border:1px solid rgba(0,255,170,0.2); box-shadow:0 0 18px rgba(0,255,170,0.05); }
-[data-l-theme="neon"] .plan-card                 { background:var(--surface-app); border:1px solid rgba(0,255,170,0.15); }
-[data-l-theme="neon"] .section-title             { color:#00ffaa!important; text-shadow:0 0 20px rgba(0,255,170,0.4); }
-[data-l-theme="neon"] .hero-title                { -webkit-text-fill-color:#00ffaa!important; text-shadow:0 0 40px rgba(0,255,170,0.4); }
-[data-l-theme="neon"] .btn-explore               { background:transparent!important; border:2px solid #00ffaa!important; color:#00ffaa!important; box-shadow:0 0 20px rgba(0,255,170,0.3)!important; }
 
 /* ── Language / Theme selector in landing nav ── */
 .lp-nav-controls {
@@ -4323,12 +4250,17 @@ html[data-theme] .sub-spinner { border-color: var(--border-mid); border-top-colo
 .cl-table { min-width: 560px; }
 .sub-content table { max-width: 100%; }
 
-/* ── The themed shell must beat the legacy data-app-theme accent rules (which
-   use !important). html[data-theme] (element+attr) outranks [data-app-theme]
-   (attr) among !important declarations, so these win in BOTH themes. Nothing
-   sets data-app-theme any more (ThemeEngine stopped writing it when it became
-   the light/dark switch), so these are belt-and-braces against a stale cached
-   app-shell.js rather than against live code. ── */
+/* ── These !important overrides existed to outrank the legacy data-app-theme
+   accent rules, which were themselves !important. Those rules were DELETED on
+   2026-09-12 (nothing had set the attribute for a long time -- app-shell.js's
+   module comment says so, and retail_design_theme_safety_test.js asserts it),
+   so there is no longer anything here to beat.
+   They are kept for now because they also pin the shell's surfaces against a
+   stale CACHED app-shell.js, which is the scenario the deleted rules were the
+   other half of. They are a candidate for removal once no cached build can
+   still carry them; taking a pile of !important out of the cascade is worth
+   doing, but it is a paint change and belongs in its own commit with its own
+   screenshots. ── */
 html[data-theme] body,
 html[data-theme] .sub-shell        { background: var(--app-bg) !important; }
 html[data-theme] .sub-sidebar      { background: var(--surface) !important; border-right-color: var(--border-soft) !important; }
