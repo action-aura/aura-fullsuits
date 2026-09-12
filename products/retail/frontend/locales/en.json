@@ -1182,5 +1182,10 @@
   "Activate License": "Activate License",
   "Account Created!": "Account Created!",
   "Welcome": "Welcome",
-  "Loading your platform...": "Loading your platform..."
+  "Loading your platform...": "Loading your platform...",
+  "No products yet": "No products yet",
+  "Add your first product, or import your existing list from a spreadsheet.": "Add your first product, or import your existing list from a spreadsheet.",
+  "No customers yet": "No customers yet",
+  "Customers you add at the till will appear here, with what they owe and what they have spent.": "Customers you add at the till will appear here, with what they owe and what they have spent.",
+  "Ring a sale in this date range, or widen the range above, and the chart appears here.": "Ring a sale in this date range, or widen the range above, and the chart appears here."
 }

@@ -1182,5 +1182,10 @@
   "Activate License": "تفعيل الترخيص",
   "Account Created!": "تم إنشاء الحساب!",
   "Welcome": "مرحباً",
-  "Loading your platform...": "جارٍ تحميل منصتك..."
+  "Loading your platform...": "جارٍ تحميل منصتك...",
+  "No products yet": "لا توجد منتجات بعد",
+  "Add your first product, or import your existing list from a spreadsheet.": "أضف منتجك الأول، أو استورد قائمتك الحالية من ملف جدول بيانات.",
+  "No customers yet": "لا يوجد عملاء بعد",
+  "Customers you add at the till will appear here, with what they owe and what they have spent.": "سيظهر هنا العملاء الذين تضيفهم عند نقطة البيع، مع ما عليهم وما أنفقوه.",
+  "Ring a sale in this date range, or widen the range above, and the chart appears here.": "سجّل عملية بيع ضمن هذا النطاق الزمني، أو وسّع النطاق أعلاه، وسيظهر الرسم البياني هنا."
 }

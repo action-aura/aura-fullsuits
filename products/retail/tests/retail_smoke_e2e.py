@@ -646,8 +646,26 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             "!document.querySelector('#prod-table tbody').textContent.includes('Loading')",
             timeout=DEFAULT_WAIT_MS,
         )
-        prod_body = page.locator("#prod-table tbody").inner_text()
-        assert "No products found." in prod_body, f"products empty state not shown, tbody was: {prod_body!r}"
+        # Structure, not prose. A silently-blank or broken table cannot produce a
+        # .ret-empty with a non-empty title, so this still catches the failure the
+        # scenario is named for -- and unlike the old literal-sentence match it
+        # survives a copy edit or a translation.
+        prod_empty = page.locator("#prod-table tbody .ret-empty")
+        assert prod_empty.count() == 1, (
+            "products table rendered no empty state at all on a fresh install; tbody was: "
+            f"{page.locator('#prod-table tbody').inner_text()!r}"
+        )
+        prod_title = page.locator("#prod-table tbody .ret-empty-title").inner_text().strip()
+        assert prod_title, "the products empty state has no title -- a blank card by another name"
+        # The guidance half, which is the point of an empty state on a FIRST-RUN
+        # screen: a new shop must be told what to do next, next to the control
+        # that does it. Before this, the screen said only "No products found."
+        # while Add Product and Import sat in the far corner of the header.
+        prod_actions = page.locator("#prod-table tbody .ret-empty-actions button")
+        assert prod_actions.count() >= 1, (
+            "the products empty state offers no action -- a new shop is told there is "
+            "nothing here and not told how to change that"
+        )
 
         page.locator('.sub-nav-item[data-section="customers"]').click()
         page.locator("#cust-table tbody").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
@@ -656,8 +674,13 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             "!document.querySelector('#cust-table tbody').textContent.includes('Loading')",
             timeout=DEFAULT_WAIT_MS,
         )
-        cust_body = page.locator("#cust-table tbody").inner_text()
-        assert "No customers found." in cust_body, f"customers empty state not shown, tbody was: {cust_body!r}"
+        cust_empty = page.locator("#cust-table tbody .ret-empty")
+        assert cust_empty.count() == 1, (
+            "customers table rendered no empty state at all on a fresh install; tbody was: "
+            f"{page.locator('#cust-table tbody').inner_text()!r}"
+        )
+        cust_title = page.locator("#cust-table tbody .ret-empty-title").inner_text().strip()
+        assert cust_title, "the customers empty state has no title -- a blank card by another name"
         report.shot(page, shots, "06_empty_states")
 
     report.run("06 empty-state tables render honestly (zero products, zero customers)", scenario_empty_states)
@@ -947,6 +970,106 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         assert page.evaluate("document.documentElement.getAttribute('lang')") == "en"
 
     report.run("11 Arabic/RTL toggle flips direction and keeps rendering", scenario_rtl_toggle)
+
+    # ------------------------------------------------------------------
+    # Scenario 12 -- the rail still says WHERE YOU ARE after a re-render.
+    #
+    # The nav rail holds more destinations than fit: measured 2026-09-12,
+    # 1017px of items in a 442px rail at 1366x768, `overflow-y: auto`. Nothing
+    # ever scrolled it to the active item, so a shell re-render left the marker
+    # for "you are here" below the fold on exactly the destinations far enough
+    # down the list to need it -- Reports at y787-831, Stock Transfers at
+    # y702-746. A 1440x900 laptop clipped the same ones, because the rail's
+    # content height does not change with the window.
+    #
+    # NOT tested through a sidebar click: Playwright scrolls an element into
+    # view before clicking it, so a click-driven navigation scrolls the rail as
+    # a side effect and the active item is visible afterwards no matter what.
+    # Scenario 04 clicks every destination and passed throughout the whole
+    # period this was broken. The rail is put back to the top explicitly below
+    # to reproduce the state a fresh render leaves it in.
+    #
+    # A theme switch is the real trigger: it re-navigates to the current
+    # section with the rail freshly laid out. (An earlier version of this
+    # scenario used a reload instead, on the strength of comments in
+    # app-shell.js and subsystem-retail.js claiming AuraRouter replays the
+    # section from the URL hash. Retail never loads a router -- window.AuraRouter
+    # is undefined and the hash stays empty -- so that path does not exist. The
+    # anti-vacuity assertion below is what caught it.)
+    # ------------------------------------------------------------------
+    def scenario_active_nav_visible_after_rerender():
+        page.locator('.sub-nav-item[data-section="reports"]').click()
+        page.wait_for_timeout(1200)
+
+        rail_sel = ".sub-nav"
+        assert page.locator(rail_sel).count() == 1, f"no single {rail_sel} rail to measure"
+
+        # Anti-vacuity: this scenario only means something if the rail actually
+        # overflows. On a hypothetical short nav list every assertion below
+        # would pass trivially and prove nothing.
+        overflow = page.evaluate(
+            "() => { const r = document.querySelector('.sub-nav');"
+            " return { scrollH: r.scrollHeight, clientH: r.clientHeight }; }"
+        )
+        assert overflow["scrollH"] > overflow["clientH"] + 1, (
+            f"the nav rail does not overflow ({overflow}), so it cannot clip the active "
+            "item and this scenario is checking nothing -- re-anchor it or delete it"
+        )
+
+        # Reproduce a fresh render: the rail starts at the top, not wherever the
+        # click that got us here happened to leave it.
+        page.evaluate("() => { document.querySelector('.sub-nav').scrollTop = 0; }")
+        page.wait_for_timeout(250)
+
+        # A real user action that re-navigates the shell.
+        page.evaluate("() => ThemeEngine.apply('dark')")
+        page.wait_for_timeout(1600)
+
+        state = page.evaluate(
+            """() => {
+              const active = document.querySelector('.sub-nav-item.active');
+              if (!active) return { found: false };
+              const r = active.getBoundingClientRect();
+              const cx = Math.round(r.left + r.width / 2);
+              const cy = Math.round(r.top + r.height / 2);
+              const onScreen = cy >= 0 && cy <= window.innerHeight;
+              const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
+              return {
+                found: true,
+                label: (active.textContent || '').trim(),
+                section: active.dataset.section,
+                top: Math.round(r.top),
+                bottom: Math.round(r.bottom),
+                vh: window.innerHeight,
+                // Hit-tested, not merely on-screen: a marker behind an overlay
+                // is no more use to a cashier than one below the fold.
+                visible: !!(hit && (hit === active || active.contains(hit))),
+              };
+            }"""
+        )
+        assert state["found"], (
+            "after a theme switch on Reports, NO nav item is marked active -- the rail "
+            "cannot say which screen the till is showing"
+        )
+        assert state["section"] == "reports", (
+            f"the re-render left section {state['section']!r} active, expected 'reports' "
+            "(scenario 09 covers the screen itself being preserved)"
+        )
+        assert state["visible"], (
+            "the active nav item ({label!r}) is marked but NOT VISIBLE: it sits at "
+            "y{top}-{bottom} in a {vh}px window, so the rail is showing 'you are here' "
+            "somewhere the user cannot see it. The rail holds more destinations than "
+            "fit and nothing scrolled it to the active one.".format(**state)
+        )
+        report.shot(page, shots, "12_active_nav_visible_after_rerender")
+
+        page.evaluate("() => ThemeEngine.apply('light')")
+        page.wait_for_timeout(900)
+
+    report.run(
+        "12 the rail still shows which screen you are on after a re-render",
+        scenario_active_nav_visible_after_rerender,
+    )
 
 
 if __name__ == "__main__":

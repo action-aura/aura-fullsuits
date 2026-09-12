@@ -893,8 +893,15 @@ const SubsystemApp = {
         // that dumps the shop's position. Both are needed, exactly as on the
         // Audit Log entry above -- and neither is the enforcement. The render
         // guard in subsystem-retail.js's _renderStockAccuracy repeats both,
-        // because AuraRouter replays the last section out of the URL hash and
-        // reaches this screen with no nav click in between.
+        // because this screen can be reached with no nav click in between --
+        // _navigate() is called directly by in-app controls, by the phone tab
+        // bar and More sheet, and by the shell's own re-render after a theme or
+        // language switch. (It used to say AuraRouter replays the section out of
+        // the URL hash. Nothing in products/ defines AuraRouter, no router
+        // script is loaded, and at runtime it is undefined with an empty hash --
+        // measured 2026-09-12. The four `if (window.AuraRouter)` branches in
+        // this file are therefore inert; they are correctly guarded and left in
+        // place, but nothing today can take them.)
         { id: 'stock-accuracy', label: 'Stock Accuracy', icon: '⚖️', ownerOnly: true, capability: 'retail.reports' },
         // Launch-readiness 2026-08-29 ("the two exception queues both need
         // ONE screen, not two"): the oversell queue (stock_exceptions,
@@ -2841,6 +2848,30 @@ const SubsystemApp = {
     document.querySelectorAll('.sub-nav-item').forEach(el => {
       el.classList.toggle('active', el.dataset.section === sectionId);
     });
+
+    // ...and bring it into view. The rail is `overflow-y: auto` and holds more
+    // destinations than fit: measured 2026-09-12, 1017px of items in a 442px
+    // viewport at 1366x768. Nothing ever scrolled it, so landing on Reports put
+    // the active marker at y787 -- below the rail's visible area -- and Stock
+    // Transfers at y702. The item that answers "which screen am I on" was
+    // off screen on exactly the screens far enough down the list to need it.
+    //
+    // A taller monitor does not help: the rail's content height is the same, so
+    // a 1440x900 laptop clipped precisely the same destinations as the till.
+    //
+    // `block: 'nearest'` scrolls ONLY when the item is genuinely out of view,
+    // so navigating to Dashboard or POS moves nothing and the rail does not
+    // twitch on every navigation. Instant rather than smooth, for the reason
+    // css/main.css's motion block gives -- a till that animates through a queue
+    // wastes everyone's time -- which also means no reduced-motion exception is
+    // needed. Wrapped because scrollIntoView options are ignored by very old
+    // engines and the whole thing is cosmetic; navigation must never fail here.
+    try {
+      const activeNav = document.querySelector('.sub-nav-item.active');
+      if (activeNav && activeNav.scrollIntoView) {
+        activeNav.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+    } catch (e) { /* a rail that did not scroll is not a reason to stop navigating */ }
 
     // Phone tab bar mirrors the same active-state toggle (§2 of
     // docs/design/phone-ui-redesign.md): the four mapped slots match by

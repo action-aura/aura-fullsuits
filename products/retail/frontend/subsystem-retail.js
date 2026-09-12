@@ -404,6 +404,25 @@ const RetailSystem = {
     const s = document.createElement('style');
     s.id = 'ret-styles';
     s.textContent = `
+      /* ── Empty states ─────────────────────────────────────────────────
+         A blank card with one muted sentence in it reads as a broken screen
+         rather than an empty one -- and on a fresh install that is most
+         screens, which is also what a buyer sees in a demo. Icon, a statement
+         of fact, one line of what to do next, and the control that does it.
+
+         HERE, in #ret-styles, and deliberately NOT beside the .rdash-* rules:
+         those live inside the dashboard's own innerHTML and are thrown away
+         the moment the user navigates, so shared chrome defined there silently
+         stops applying on every other screen. Measured: the Products empty
+         state rendered completely unstyled that way. */
+      .ret-empty { display:flex;flex-direction:column;align-items:center;gap:9px;
+        padding-block:46px 42px;padding-inline:24px;text-align:center; }
+      .ret-empty-icon { color:var(--text-dim);opacity:.5;line-height:0; }
+      .ret-empty-title { font-size:15px;font-weight:700;color:var(--text); }
+      .ret-empty-hint { font-size:13px;color:var(--text-dim);line-height:1.55;
+        max-inline-size:46ch; }
+      .ret-empty-actions { display:flex;gap:10px;flex-wrap:wrap;justify-content:center;
+        margin-block-start:7px; }
       .ret-hdr { display:flex;justify-content:space-between;align-items:center;margin-bottom:22px; }
       .ret-title { color:var(--text);margin:0;font-size:24px;font-weight:700; }
       /* AUDIT -- this rule used to say color:#fff, a leftover from the dark HUD.
@@ -2234,13 +2253,14 @@ const RetailSystem = {
            the tender grid sits BELOW Charge, so padding the summary never reached
            it, and offsetting the sticky button instead floated it mid-panel with
            the grand total scrolling underneath. Because the global reset sets
-           box-sizing to border-box, this comes out of block-size:100% rather than
-           adding to it, so every descendant ends above the bar at once.
-           --bottom-overlay-inset is published by app-shell's
-           _reflowBottomOverlays from the MEASURED height of what is actually
-           there, and is 0px when nothing is -- an ordinary till is unchanged. */
+           box-sizing to border-box, the reservation comes out of block-size:100%
+           rather than adding to it, so every descendant ends above the bar at
+           once. That reservation now lives on .sub-content (css/main.css) so
+           EVERY screen gets it, not just the till -- rendered proof showed the
+           same bar covering the Reports revenue chart. This element inherits it
+           for free by being 100% of that container. */
         .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;
-          block-size:100%;padding-block-end:var(--bottom-overlay-inset, 0px); }
+          block-size:100%; }
         @media(max-width:1100px){ .pos-wrap { grid-template-columns:minmax(0,1fr);block-size:auto; } }
         .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-right { background:var(--surface);border:1px solid var(--border-mid);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
@@ -5088,11 +5108,39 @@ const RetailSystem = {
   // suppliers below, and this._esc(name) is applied again at the
   // Stock-adjust modal's title in _openStockAdjust since that's a second,
   // independent innerHTML sink for the same field.
+  // Shared empty state. `actions` entries are {label, onclick, primary} and
+  // their onclick is developer-authored markup, never a server string -- the
+  // label IS escaped, because a caller could reasonably pass a translated or
+  // interpolated one.
+  _emptyState(opts) {
+    const o = opts || {};
+    const buttons = (o.actions || []).map((a) =>
+      `<button class="${a.primary ? 'sub-btn-primary' : 'ret-btn ret-btn-ghost'}" ` +
+      `onclick="${a.onclick}">${this._esc(a.label)}</button>`
+    ).join('');
+    return `<div class="ret-empty">`
+      + (o.icon ? `<div class="ret-empty-icon" aria-hidden="true">${this._icon(o.icon, 30, '')}</div>` : '')
+      + `<div class="ret-empty-title">${this._esc(o.title)}</div>`
+      + (o.hint ? `<div class="ret-empty-hint">${this._esc(o.hint)}</div>` : '')
+      + (buttons ? `<div class="ret-empty-actions">${buttons}</div>` : '')
+      + `</div>`;
+  },
+
   _renderProductTable(prods) {
     const tbody = document.querySelector('#prod-table tbody');
     if (!tbody) return;
     if (!prods.length) {
-      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px">No products found.</td></tr>';
+      // colspan spans the whole table so the state is centred under the
+      // headers rather than crammed into the first column.
+      tbody.innerHTML = `<tr><td colspan="9">${this._emptyState({
+        icon: 'package',
+        title: t('No products yet'),
+        hint: t('Add your first product, or import your existing list from a spreadsheet.'),
+        actions: [
+          { label: t('Add Product'), onclick: 'RetailSystem._openAddProduct()', primary: true },
+          { label: t('Import'), onclick: "ImportWizard.open('retail','products')" },
+        ],
+      })}</td></tr>`;
       return;
     }
     // launch-readiness "product variants, wave 1": built from this._products
@@ -5544,7 +5592,11 @@ const RetailSystem = {
       const tbody = document.querySelector('#cust-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">No customers found.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="7">${this._emptyState({
+          icon: 'users',
+          title: t('No customers yet'),
+          hint: t('Customers you add at the till will appear here, with what they owe and what they have spent.'),
+        })}</td></tr>`;
         return;
       }
       // Every interpolated value here is escaped (see this._esc): a customer
@@ -5738,9 +5790,15 @@ const RetailSystem = {
     // discount at checkout already requires -- reused rather than minted,
     // because configuring a standing discount is the same authority as typing
     // one in by hand. Hiding the nav entry (app-shell.js) is not the
-    // enforcement; this guard is the second, real one, for the same reason
-    // AuraRouter can replay this section from the URL hash with no nav click
-    // in between.
+    // enforcement; this guard is the second, real one, because a section can be
+    // entered with NO nav click in between: _navigate() is called directly by
+    // in-app controls, by the phone tab bar and More sheet, and by the shell's
+    // own re-render after a theme or language switch -- and a nav entry can be
+    // hidden while the section stays reachable by code. (This used to cite
+    // "AuraRouter replays this section from the URL hash". There is no
+    // AuraRouter: nothing in products/ defines it, index.html loads no router,
+    // and at runtime it is undefined with an empty hash. The guard was right;
+    // its stated reason was not.)
     if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.discount')) {
       return this._renderPromotionsRestricted(c);
     }
@@ -7139,9 +7197,10 @@ const RetailSystem = {
     // is CAP_EMPLOYEES (commercial_runtime/identity/user_accounts.py), the
     // SAME code create_branch's own @mt_require_capability(CAP_EMPLOYEES)
     // decorator requires. Hiding the nav entry (app-shell.js) is not the
-    // enforcement; this guard is the real one, for the same reason
-    // AuraRouter can replay this section from the URL hash with no nav
-    // click in between.
+    // enforcement; this guard is the real one, because a section can be entered
+    // with NO nav click in between -- see the note on the promotions guard
+    // above for the paths that do it, and for why the AuraRouter this comment
+    // used to cite does not exist.
     if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.employees')) {
       return this._renderCapabilityRestricted(c, {
         icon: '🏦',
@@ -10542,7 +10601,11 @@ const RetailSystem = {
           if (!el) return;
           try { Chart.getChart && Chart.getChart(el)?.destroy(); } catch(e) {}
           if ((cfg.data.labels||[]).length === 0) {
-            el.parentElement.innerHTML = '<div style="height:260px;display:flex;align-items:center;justify-content:center;color:var(--text-muted)">No data for this period</div>';
+            el.parentElement.innerHTML = RetailSystem._emptyState({
+              icon: 'bar-chart-3',
+              title: t('No data for this period'),
+              hint: t('Ring a sale in this date range, or widen the range above, and the chart appears here.'),
+            });
             return;
           }
           new Chart(el.getContext('2d'), { type: cfg.type, data: cfg.data, options: cfg.opts });

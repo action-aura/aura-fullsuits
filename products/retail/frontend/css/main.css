@@ -3069,6 +3069,17 @@ html[data-theme="light"] {
 .sub-content {
   flex: 1; 
   padding: 20px;
+  /* Plus whatever floats along the bottom of the shell -- today the
+     admin-device claim bar, which is bound to document.body and so survives
+     every navigation and covers whichever screen is open. Measured
+     2026-09-12: it sat over the POS tender grid AND over the Reports revenue
+     chart. app-shell's _reflowBottomOverlays publishes the MEASURED height
+     (the bar wraps to two rows on a narrow till, so it is not a constant),
+     and 0px when nothing is there, so an ordinary shop sees no change.
+     HERE rather than on .pos-wrap: this is the scroll container for every
+     screen, and the till is block-size:100% of it, so the POS is covered by
+     the same rule instead of needing one of its own. */
+  padding-block-end: calc(20px + var(--bottom-overlay-inset, 0px));
   margin: 0;
   background: var(--surface-app);
   overflow-y: auto;

@@ -138,6 +138,62 @@ from the `prefers-reduced-motion` block, so it kept pulsing for someone who had
 asked their OS to stop motion. Now static, and positioned logically (it was
 pinned with a physical `right`, so in Arabic it landed on the wrong side).
 
+### Navigation: the rail could not say where you were
+
+The nav rail is `overflow-y: auto` and holds **1017px of destinations in a 442px
+viewport** at 1366×768 — so it scrolls, but nothing ever scrolled it. Landing on
+Reports left the active marker at y787–831, below the rail entirely; Stock
+Transfers at y702–746. The item that answers "which screen am I on" was off
+screen on exactly the destinations far enough down the list to need it.
+
+A taller monitor did not help: the rail's content height does not change, so a
+1440×900 laptop clipped precisely the same destinations as the 768px till.
+
+Now `scrollIntoView({ block: 'nearest' })` after the active class is set — which
+scrolls only when the item is genuinely out of view, so navigating to Dashboard
+or POS moves nothing and the rail never twitches. Covered by a new browser
+scenario, mutation-proved: with the call removed, the scenario goes red.
+
+### Empty states
+
+Every list screen printed one muted sentence — "No products found." — in the
+middle of an otherwise blank card, with several hundred pixels of nothing under
+it. On a fresh install that is the first thing a new shop sees on most screens,
+and it reads as *this product is blank* rather than *you have not added anything
+yet*. It is also what a buyer sees in a demo.
+
+Three of them were never passed through the translation helper at all, so an
+Arabic shop got English there while the rest of the screen was Arabic.
+
+Now one shared helper — icon, a statement of fact, one line of what to do next,
+and the control that does it (Products offers **Add Product** and **Import** in
+place). And the first-run empty state is now part of the measured contrast
+corpus, which had only ever rendered these screens *with* rows.
+
+### The floating prompt — fixed where it costs money, partial elsewhere
+
+The admin-device claim bar is bottom-centred, up to 92vw wide, and bound to
+`document.body` so it survives every navigation and floats over whichever screen
+is open. On the POS it covered the Transfer tender and sat beside Charge.
+
+`_reflowBottomOverlays()` now measures whatever is genuinely anchored to the
+bottom and publishes `--bottom-overlay-inset`, which `.sub-content` — the scroll
+container every screen uses — reserves as tail padding.
+
+**On the POS this is a complete fix**: the till is a fixed-height layout at 100%
+of that container, so shrinking the container moves every control up, and all
+seven pay controls are reachable at rest.
+
+**Elsewhere it is a partial one, and worth saying plainly.** On a screen whose
+content scrolls, reserving tail padding only guarantees that the *end* of the
+content can be scrolled clear; the bar still covers whatever happens to sit at
+that screen position. Reports still shows it over part of the revenue chart.
+
+The durable fix is to stop it floating — move it into the top banner stack,
+which already reserves space properly. That is not a one-line change: two top
+banners both anchor at `top: 0` and would overlap each other, so it needs a real
+stack first. Left as its own piece of work rather than half-done here.
+
 ### A guard that was missing
 
 A one-character edit — a backtick inside a CSS comment in `_injectStyles` —
@@ -157,31 +213,50 @@ against exactly that defect. It caught the second occurrence immediately.
 
 Ranked by what it costs a shopkeeper.
 
-1. **~1,500 lines of dead CSS** in `main.css` (a 5,400-line file). `#page-landing`
-   and `#page-login` are never created anywhere; `[data-app-theme]` is disabled by
-   the shell's own comment; the CRM/PM/Mfg chrome is inherited from the old
-   monorepo and referenced by nothing. This is the single biggest obstacle to
-   understanding the stylesheet, and it is also what made the dead theming code
-   look live during this review. Deleting it is safe **only for rules whose root
-   container is provably never created** — that is the conservative rule to apply,
-   and it should be its own commit.
-2. **Empty states are weak.** Reports shows three different "no data" treatments
-   on one screen, all plain grey centred text, with ~700px of empty card below
-   them. On a fresh install — a new customer's first look — the product presents
-   as blank rather than as ready. These should say what to do next ("Ring your
-   first sale to see trends here"), next to the control that does it.
-3. **The sidebar overflows with no affordance.** At 900px tall the nav is cut off
-   mid-list; on the Reports screen the *active* item is not even visible. Nothing
-   indicates the rail scrolls.
-4. **Native `<select>` elements** ("All branches", "Last 14 days") render with OS
+1. **The rest of the dead CSS.** Two whole theming systems (`[data-app-theme]`,
+   `[data-l-theme]`) were deleted in this pass along with the two stale test
+   exemptions that had been protecting them. What remains is the `#page-landing` /
+   `#page-login` chrome and the vestigial CRM/PM/Mfg rules — also unreferenced,
+   but interleaved with live splash and canvas styling in the same range, so they
+   need per-rule verification rather than a block cut. The rule that makes it
+   safe: **delete only where the selector's own root container is provably never
+   created.**
+2. **Native `<select>` elements** ("All branches", "Last 14 days") render with OS
    default styling and read as unfinished next to the rest of the chrome.
-5. **Double titling.** The header says "Reports" and the page immediately says
-   "Analytics & Reports". Same on Products. Pick one.
-6. **The Customers tile's sub-note reads "N active products"** — a mismatched
+3. **Double titling.** The header says "Reports" and the page immediately says
+   "Analytics & Reports"; Customers, Stock Transfers and Settings show the *same
+   word twice*. Left alone deliberately — renaming screens is a naming decision,
+   not a defect fix.
+4. **The Customers tile's sub-note reads "N active products"** — a mismatched
    metric, deliberate in code but wrong on screen.
-7. **Chart series colours** (`#38bdf8`, `#a855f7`, `#8b5cf6`, `#10b981`) are
-   Tailwind defaults and off-palette. They are categorical identity colours so
+5. **Chart series colours** (`#38bdf8`, `#a855f7`, `#8b5cf6`, `#10b981`) are
+   framework defaults and off-palette. They are categorical identity colours so
    they are defensible, but they were not *chosen*.
+6. **Four inert `if (window.AuraRouter)` branches** in app-shell.js. `AuraRouter`
+   is not defined anywhere in `products/` — no router file exists, nothing assigns
+   it, and at runtime it is `undefined` with an empty hash. The branches are
+   correctly guarded and harmless; three *comments* citing it as the reason for a
+   capability guard were corrected, because a wrong reason on a security-adjacent
+   guard sends the next auditor looking for a code path that does not exist. It
+   cost real time here: a browser test was built on the claim before that test's
+   own anti-vacuity assertion caught it.
+
+## Two more traps worth knowing about
+
+Both cost time during this review and neither is visible at the point of edit.
+
+**This file has two stylesheets.** `_injectStyles()` creates a persistent
+`<style id="ret-styles">` that survives navigation. The dashboard *also* emits a
+`<style>` block inside its own `c.innerHTML`, which is thrown away the moment the
+user navigates. They look identical where you edit them. Shared chrome defined in
+the second one silently stops applying everywhere else — the new empty states
+rendered completely unstyled until they were moved.
+
+**A click-driven test cannot catch a scroll bug.** Playwright scrolls an element
+into view before clicking it, so any assertion made after a click sees a
+conveniently scrolled container. The existing "navigate every screen" scenario
+clicked every destination and passed throughout the entire period the nav rail
+was failing to show the active item.
 
 ## The logo
 
@@ -241,7 +316,9 @@ suite being the thing that has to stay green.
 ## Verification
 
     retail JS suite                 68/68
-    Playwright smoke suite          11/11 scenarios
+    Playwright smoke suite          12/12 scenarios
     POS pay controls at 1366x768    7/7 reachable at rest, banner + claim bar up
+    nav rail, every screen          active item visible at 768 and 900
     favicon                         resolved and served (was a 404)
-    new guards                      2, both mutation-proved in both directions
+    new guards                      3, all mutation-proved in both directions
+    contrast corpus                 22 screens, now incl. the first-run empty state

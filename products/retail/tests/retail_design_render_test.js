@@ -1312,6 +1312,56 @@ async function buildCorpus() {
     assert.ok(overlay, 'The held-sales modal never reached document.body.');
     screens.push(screenFrom('held-sales-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
   }
+  // THE FIRST-RUN STATE. Every list screen above renders with rows. A brand-new
+  // shop has none, and the empty state is its own chrome (.ret-empty, and the
+  // icon/title/hint/actions inside it) with its own colours -- on the literal
+  // first screen a new customer looks at, and the one a buyer sees in a demo.
+  // It had no coverage here, so those rules could only ever be counted as
+  // unexercised rather than measured.
+  //
+  // Rendered through the product's own _emptyState() helper, never a copy of
+  // its markup: if the helper's classes change, this follows, instead of
+  // quietly measuring a shape the product stopped emitting. Wrapped in the
+  // same .sub-chart-card the real tables sit on, so the contrast is taken
+  // against the surface it actually lands on.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const rs = ctx.RetailSystem;
+    const emptyStates =
+      rs._emptyState({
+        icon: 'package',
+        title: 'No products yet',
+        hint: 'Add your first product, or import your existing list from a spreadsheet.',
+        actions: [
+          { label: 'Add Product', onclick: 'RetailSystem._openAddProduct()', primary: true },
+          { label: 'Import', onclick: "ImportWizard.open('retail','products')" },
+        ],
+      })
+      + rs._emptyState({
+        icon: 'users',
+        title: 'No customers yet',
+        hint: 'Customers you add at the till will appear here.',
+      });
+    assert.ok(
+      emptyStates.includes('ret-empty-title') && emptyStates.includes('ret-empty-hint')
+        && emptyStates.includes('ret-empty-actions'),
+      'RetailSystem._emptyState() no longer emits the .ret-empty-* classes this corpus '
+      + 'entry exists to measure -- re-anchor it rather than leaving it passing on markup '
+      + 'that carries none of the rules in question.'
+    );
+    // No <table>/<tbody> wrapper, even though the product renders these inside a
+    // <td>: this corpus fails any screen whose tbody carries no multi-cell data
+    // row, because that is the signature of a list that silently rendered a
+    // placeholder instead of its rows. This fragment IS a placeholder by
+    // design, so a table wrapper trips that guard for exactly the right reason.
+    // The card is the surface the contrast is measured against; the cell the
+    // product wraps it in changes no colour.
+    screens.push(screenFrom(
+      'empty-lists', ctx,
+      `<div class="sub-chart-card">${emptyStates}</div>`
+    ));
+  }
+
   // The receive-transfer modal: the only screen in this product where a human
   // types a number that moves stock. Its per-line inputs and the amber
   // "differs from what was sent" row state are colour rules with no other
@@ -1437,7 +1487,13 @@ const DECLARED_SCREENS = [
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
   'backup-export', 'scanner', 'stock-accuracy', 'transfers',
-  'customer-modal', 'sale-modal', 'held-sales-modal', 'transfer-receive-modal',
+  'customer-modal', 'sale-modal', 'held-sales-modal',
+  // Not a router section: a fragment, like the modals around it. The first-run
+  // empty state, which every other entry here renders past by having rows.
+  // Listed in BUILD order -- the assertion compares this to what came back
+  // exactly and in sequence, so its position is part of the claim.
+  'empty-lists',
+  'transfer-receive-modal',
 ];
 
 /* ── THE CORPUS MUST BE CLOSED AGAINST THE ROUTER ───────────────────────────
