@@ -1267,6 +1267,25 @@ const RetailSystem = {
   // re-render path would otherwise yank the caret away mid-number.
   _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer', 'pos-loyalty-redeem'],
 
+  // True only on a device whose primary input cannot hover and is coarse --
+  // a phone or tablet, where focusing an input summons an on-screen keyboard.
+  // Guarded exactly the way app-shell.js guards its own matchMedia call
+  // (_applyMotionPreference), because this file's tests drive it against
+  // stubbed document/window objects that have no matchMedia at all; an
+  // unguarded call there throws and takes the whole POS render down with it.
+  //
+  // Fails CLOSED to desktop behaviour on purpose: no matchMedia, a throw, or
+  // anything unexpected returns false, and every caller then behaves exactly
+  // as it did before this existed.
+  _isTouchOnly() {
+    try {
+      return !!(typeof window !== 'undefined' && window.matchMedia &&
+                window.matchMedia('(hover: none) and (pointer: coarse)').matches);
+    } catch (e) {
+      return false;
+    }
+  },
+
   // Returns true only if focus was actually moved, so callers (and the tests)
   // can tell "the guard ran and declined" from "the guard never ran".
   _refocusScan(force) {
@@ -3178,7 +3197,21 @@ const RetailSystem = {
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
     // Put the caret where the next barcode is going to land, so the very first
     // scan of a shift works without the cashier clicking anything first.
-    this._refocusScan(true);
+    //
+    // NOT on a touch-only device. Measured on a real Mi Note 10 (393x851 CSS):
+    // focusing this input on mount raises the on-screen keyboard, which covers
+    // roughly the bottom half of the viewport -- including #pos-peek, the bar
+    // that exists precisely so Charge is reachable without scrolling. The till
+    // opened with its own primary affordance behind a keyboard nobody asked
+    // for. No test could see it: Playwright scrolls an element into view
+    // before clicking, so a click-driven check cannot detect "merely covered".
+    //
+    // Only the MOUNT call is gated. The focus serves a hardware wedge scanner
+    // and a phone has no wedge; but if a Bluetooth HID scanner is paired to
+    // one, every other _refocusScan() call is untouched, so a single tap on
+    // the scan field at shift start arms it and _keepScanFocus() then holds it
+    // there. That one tap is the deliberate cost of not covering the screen.
+    if (!this._isTouchOnly()) this._refocusScan(true);
 
     // feat/shift-cash-drawer: mounts a status bar just below the POS header
     // showing whether a cash session is open for this branch (soft warning
