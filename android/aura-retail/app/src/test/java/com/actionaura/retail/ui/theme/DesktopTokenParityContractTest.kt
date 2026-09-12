@@ -68,14 +68,70 @@ class DesktopTokenParityContractTest {
     // assumption stated elsewhere in this module).
     private val mainCss: String get() = source("../../../products/retail/frontend/css/main.css")
 
-    private val cssTokenPattern = Regex("""--([a-z0-9-]+):\s*#([0-9a-fA-F]{6})\s*;""")
+    /**
+     * Every `--name: value;` declaration in a block, with the value captured
+     * WHOLE and resolved separately by [parseCssColor].
+     *
+     * This used to be one regex pinned to `--name: #rrggbb;`, which meant a
+     * token written any other way was not merely unmatched, it was invisible:
+     * it never entered the map and nothing reported that anything had been
+     * skipped. main.css writes its TRANSLUCENT tokens as rgba(), so
+     * --surface-scrim, --sheet-scrim and --surface-auth-ground all sat outside
+     * this guard -- 35 of the block's 38 colour tokens were covered and the
+     * test said nothing about the other three.
+     */
+    private val cssDeclarationPattern = Regex("""--([a-z0-9-]+):\s*([^;]+);""")
 
     /**
-     * The `--name: #rrggbb;` declarations inside one CSS block, lower-cased
-     * name to upper-case 6-digit hex (no `#`). Non-colour declarations in
-     * that block (rgba() shadows, the sub-accent-rgb triplet, cubic-bezier
-     * easing) simply do not match [cssTokenPattern] and are skipped -- this
-     * only ever extracts `--name: #rrggbb;` pairs.
+     * A value that is TRYING to be a colour, whether or not it parses.
+     *
+     * Anchored at the start on purpose: `--elevation-auth-card` is
+     * `0 30px 70px rgba(...)`, a shadow that happens to contain a colour. A
+     * shadow is not a palette token and has no Android `Color` field, so it is
+     * correctly out of scope; a value that BEGINS as a colour is not.
+     */
+    private val colourShapedPattern = Regex("""^(#|rgba?\()""")
+
+    /**
+     * Resolve one custom-property value to `AARRGGBB`, or null when it is not
+     * a colour at all (a shadow, an easing curve, a length, a bare number).
+     *
+     * Alpha is carried rather than dropped so a translucent token compares
+     * honestly. Every `Color(0x...)` literal in Color.kt is opaque today (all
+     * 130 of them start `0xFF`), so this is `FF` + the same six digits for
+     * every pair that exists now.
+     */
+    private fun parseCssColor(raw: String): String? {
+        val v = raw.trim()
+        Regex("""^#([0-9a-fA-F]{6})$""").find(v)?.let {
+            return "FF" + it.groupValues[1].uppercase()
+        }
+        Regex("""^#([0-9a-fA-F]{3})$""").find(v)?.let {
+            val d = it.groupValues[1].uppercase()
+            return "FF" + d[0] + d[0] + d[1] + d[1] + d[2] + d[2]
+        }
+        val fn = Regex("""^rgba?\(([^)]*)\)$""").find(v) ?: return null
+        val parts = fn.groupValues[1].split(',').map { it.trim() }
+        if (parts.size != 3 && parts.size != 4) return null
+        val r = parts[0].toIntOrNull() ?: return null
+        val g = parts[1].toIntOrNull() ?: return null
+        val b = parts[2].toIntOrNull() ?: return null
+        if (r !in 0..255 || g !in 0..255 || b !in 0..255) return null
+        val a = if (parts.size == 4) {
+            val f = parts[3].toFloatOrNull() ?: return null
+            (f * 255f).roundToInt().coerceIn(0, 255)
+        } else {
+            255
+        }
+        return "%02X%02X%02X%02X".format(a, r, g, b)
+    }
+
+    /**
+     * The colour tokens inside one CSS block, lower-cased name to upper-case
+     * `AARRGGBB`. Declarations that are not colours (shadows, easing curves,
+     * the sub-accent-rgb triplet, lengths) resolve to null and are skipped --
+     * but a declaration that LOOKS like a colour and does not resolve is a
+     * failure, not a skip. See [desktopTokens].
      *
      * [marker] is the CSS selector line this block opens with -- e.g.
      * `:root {` or `html[data-theme="night"] {` -- and [missingMessage]
@@ -93,15 +149,33 @@ class DesktopTokenParityContractTest {
         assumeTrue("$marker has no closing brace in main.css", braceEnd > braceStart)
         val block = css.substring(braceStart + 1, braceEnd)
 
-        val tokens = cssTokenPattern.findAll(block)
-            .associate { it.groupValues[1] to it.groupValues[2].uppercase() }
-        // A parser that silently found nothing would make every comparison
-        // below vacuously pass. Fifteen-plus colour declarations exist in
-        // every theme block today (verified by reading main.css directly);
-        // if the CSS authoring style ever changes shape, this is the
-        // assertion that catches the parser going blind rather than the
-        // token comparisons quietly stopping to mean anything.
-        assertThat(tokens.size).isAtLeast(15)
+        val declarations = cssDeclarationPattern.findAll(block)
+            .map { it.groupValues[1] to it.groupValues[2].trim() }
+            .toList()
+        val tokens = declarations
+            .mapNotNull { (name, value) -> parseCssColor(value)?.let { name to it } }
+            .toMap()
+
+        // THE PARSER GOING BLIND IS THE FAILURE THIS FILE EXISTS TO CATCH, and
+        // the count floor below cannot catch it. A value shaped like a colour
+        // that the parser cannot resolve is a token this guard has quietly
+        // stopped covering -- exactly how --surface-scrim, --sheet-scrim and
+        // --surface-auth-ground ended up outside it when the old regex was
+        // pinned to `#rrggbb` and they were written rgba(). Name them.
+        val unresolved = declarations
+            .filter { (name, value) ->
+                colourShapedPattern.containsMatchIn(value) && !tokens.containsKey(name)
+            }
+            .map { (name, value) -> "--$name: $value" }
+        assertThat(unresolved).isEmpty()
+
+        // A parser that found nothing at all would make every comparison below
+        // vacuously pass. Measured 2026-09-13: every one of the five theme
+        // blocks carries 38 colour tokens. This floor is deliberately well
+        // BELOW that -- pinned to the exact count it would just be two numbers
+        // that move together, failing on any ordinary token removal while
+        // catching nothing [unresolved] does not already catch by name.
+        assertThat(tokens.size).isAtLeast(30)
         return tokens
     }
 
@@ -136,10 +210,17 @@ class DesktopTokenParityContractTest {
     )
 
     /** [color]'s sRGB channels as the 6 upper-case hex digits main.css spells. */
-    private fun Color.toHex6(): String {
+    private fun Color.toHex8(): String {
         fun channel(v: Float) = (v * 255f).roundToInt().coerceIn(0, 255)
-        return "%02X%02X%02X".format(channel(red), channel(green), channel(blue))
+        return "%02X%02X%02X%02X".format(channel(alpha), channel(red), channel(green), channel(blue))
     }
+
+    /**
+     * `FFRRGGBB` back to `RRGGBB` when fully opaque, so an ordinary failure
+     * still reads as the six-digit hex a human recognises from main.css. A
+     * translucent value keeps all eight digits, where the alpha is the point.
+     */
+    private fun String.readableHex(): String = if (startsWith("FF")) substring(2) else this
 
     /**
      * One CSS custom-property name paired with the Android `Color` constant
@@ -177,14 +258,14 @@ class DesktopTokenParityContractTest {
     private fun mismatches(desktop: Map<String, String>, pairs: List<TokenPair>): List<String> {
         return pairs.mapNotNull { pair ->
             val desktopHex = desktop[pair.cssName]
-            val androidHex = pair.androidColor.toHex6()
+            val androidHex = pair.androidColor.toHex8()
             when {
                 desktopHex == null ->
                     "${pair.androidName} (--${pair.cssName}): " +
-                        "not found in main.css's block -- android=#$androidHex"
+                        "not found in main.css's block -- android=#${androidHex.readableHex()}"
                 androidHex != desktopHex ->
                     "${pair.androidName} (--${pair.cssName}): " +
-                        "desktop=#$desktopHex android=#$androidHex"
+                        "desktop=#${desktopHex.readableHex()} android=#${androidHex.readableHex()}"
                 else -> null
             }
         }

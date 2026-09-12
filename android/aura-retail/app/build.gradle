@@ -391,6 +391,20 @@ android {
             // an undeclared input is how a comment-only edit gets to report
             // UP-TO-DATE on the guard written to catch it.
             test.inputs.dir("src/test/java").withPathSensitivity(PathSensitivity.RELATIVE)
+            // DesktopTokenParityContractTest reads the DESKTOP stylesheet at
+            // runtime -- products/retail/frontend/css/main.css, outside this
+            // module entirely -- and compares its parsed tokens to Color.kt.
+            // Same runtime-read problem as the two above, with a sharper edge:
+            // the drift that guard exists to catch IS an edit to main.css, and
+            // that was precisely the edit Gradle could not see. Measured
+            // 2026-09-13 while mutation-proving it: changing a token in
+            // main.css and re-running reported `testDebugUnitTest FROM-CACHE`
+            // and a green pass, without executing the comparison even once.
+            // Deleting the task's output directory does NOT help -- the cache
+            // key is built from declared inputs, so Gradle simply restores the
+            // stale result. Only declaring the file fixes it.
+            test.inputs.file("../../../products/retail/frontend/css/main.css")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
         }
     }
     kotlinOptions {
