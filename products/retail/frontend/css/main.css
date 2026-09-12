@@ -1488,7 +1488,19 @@ body {
 }
 .sb-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
 .sb-btn.danger:hover { background: var(--state-danger-surface); color: var(--accent-danger); border-color: var(--state-danger-border); }
-.ai-pulse { position: absolute; right: 12px; top: 18px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-info); animation: pulse 2s infinite; }
+/* Static, and logical. This dot used to run `animation: pulse 2s infinite` on
+   a screen a cashier looks at all shift, while carrying no state at all --
+   nothing binds it to unread output or activity, so it was perpetual motion
+   that told you nothing. It was also absent from the prefers-reduced-motion
+   block at the end of this file, so it kept pulsing for someone who had asked
+   their OS to stop motion; a static dot closes that by construction rather than
+   by remembering to add a selector.
+   inset-inline-end, not right: the sidebar mirrors under body.rtl, so a
+   physical `right` pinned this to the LEADING edge in Arabic, landing it over
+   the icon instead of trailing the label.
+   If this should ever mean something (an unread AI suggestion, say), bind it to
+   that state and it earns its motion back. */
+.ai-pulse { position: absolute; inset-inline-end: 12px; top: 18px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-info); }
 
 /* Main Wrapper */
 .main-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -2915,8 +2927,11 @@ html[data-theme="light"] {
    the tighter value smaller controls below get -- shrinking a full-width bar
    noticeably would read as a layout glitch, not a press. */
 .sub-nav-item:active { transform: scale(0.99); }
+/* 0.16, up from 0.12. With the AI button no longer wearing an accent fill of
+   its own (see .sub-ai-btn below), this pill is the sidebar's only filled
+   element, so it can afford to say so clearly instead of whispering it. */
 .sub-nav-item.active {
-  background: rgba(var(--sub-accent-rgb),0.12);
+  background: rgba(var(--sub-accent-rgb),0.16);
   color: var(--text-primary); border-left-color: var(--sub-accent);
 }
 .sub-nav-icon { font-size: 16px; }
@@ -2973,14 +2988,22 @@ html[data-theme="light"] {
   border-top: 1px solid var(--border-hairline);
   display: flex; flex-direction: column; gap: 8px;
 }
+/* OUTLINED, not filled. This used to carry background rgba(accent, 0.08) while
+   .sub-nav-item.active carries rgba(accent, 0.12) -- a 4% difference in the same
+   hue, which is to say none at all. So the sidebar showed two accent-filled
+   pills at once and the only thing actually saying "you are here" was a 3px
+   leading bar. A filled accent pill now means exactly one thing: the current
+   screen. The AI entry stays prominent through an accent outline and accent
+   text, and fills only on hover -- where a fill reads as feedback rather than
+   as state. */
 .sub-ai-btn {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; width: 100%;
-  background: rgba(var(--sub-accent-rgb),0.08);
-  border: 1px solid rgba(var(--sub-accent-rgb),0.2);
+  background: transparent;
+  border: 1px solid rgba(var(--sub-accent-rgb),0.45);
   border-radius: 9px; color: var(--sub-accent); font-size: 13px; font-weight: 600;
   cursor: pointer; transition: all 0.2s; position: relative;
 }
-.sub-ai-btn:hover { background: rgba(var(--sub-accent-rgb),0.16); }
+.sub-ai-btn:hover { background: rgba(var(--sub-accent-rgb),0.12); }
 .sub-ai-btn:active { transform: scale(0.97); }
 .sub-exit-btn {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; width: 100%;

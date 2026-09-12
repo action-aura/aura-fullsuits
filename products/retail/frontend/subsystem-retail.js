@@ -2224,7 +2224,23 @@ const RetailSystem = {
            value only cleared by 3px, which is why anything new on the screen broke
            it. A percentage of the scroll container is self-correcting: whatever
            chrome appears above, the till's primary action stays on screen. */
-        .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;block-size:100%; }
+        /* padding-block-end keeps the WHOLE till clear of anything floating along
+           the bottom of the shell -- today the admin-device claim bar, which is
+           bottom-centred, up to 92vw wide and bound to document.body so it
+           survives every navigation. Measured 2026-09-12 at 1366x768: it covered
+           the Transfer tender by 3,734 px^2. An overlay covering a tender at a
+           till costs a sale.
+           It goes HERE, on the grid, and not on the Charge button or the summary:
+           the tender grid sits BELOW Charge, so padding the summary never reached
+           it, and offsetting the sticky button instead floated it mid-panel with
+           the grand total scrolling underneath. Because the global reset sets
+           box-sizing to border-box, this comes out of block-size:100% rather than
+           adding to it, so every descendant ends above the bar at once.
+           --bottom-overlay-inset is published by app-shell's
+           _reflowBottomOverlays from the MEASURED height of what is actually
+           there, and is 0px when nothing is -- an ordinary till is unchanged. */
+        .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;
+          block-size:100%;padding-block-end:var(--bottom-overlay-inset, 0px); }
         @media(max-width:1100px){ .pos-wrap { grid-template-columns:minmax(0,1fr);block-size:auto; } }
         .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-right { background:var(--surface);border:1px solid var(--border-mid);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
@@ -2516,6 +2532,15 @@ const RetailSystem = {
            happens to fit. */
         .pos-summary { padding-block:14px 16px;padding-inline:16px;background:var(--surface-card);
           border-block-start:1px solid var(--border-mid);flex-shrink:1;min-block-size:0;
+          /* Tail padding the height of the sticky Charge button below. Sticky
+             does NOT reserve space for itself, so without this the last row of
+             tender buttons sits behind Charge permanently -- scrolling to the
+             end of the panel just parks it there. Measured 2026-09-12 at
+             1366x768: the Cash/Card/Mobile row sat behind the pinned button and
+             the Transfer/Credit/Voucher row was clipped away entirely. Derived
+             from the same touch-target token the button sizes itself from, so
+             the two cannot drift apart. */
+          padding-block-end:calc(var(--touch-target-comfortable, 52px) + 20px);
           overflow-y:auto; }
         .pos-sum-row { display:flex;justify-content:space-between;align-items:center;gap:12px;
           margin-block-end:8px;color:var(--text-dim);font-size:14px; }
@@ -2585,6 +2610,32 @@ const RetailSystem = {
           transition:opacity .15s ease, transform .12s ease; }
         .pos-checkout-btn:hover, .pos-checkout-btn:focus-visible { opacity:.92; }
         .pos-checkout-btn:active { transform:scale(0.99); }
+
+        /* ── SHORT TILLS (<= 820px tall) ──────────────────────────────────
+           1366x768 is the most common cheap POS panel, and with a licence
+           banner up the sale panel has 334px of visible height for 554px of
+           content -- so the second tender row needed a scroll to reach.
+           Density is taken back from DECORATION (a grand total set as large as
+           56px, generous band spacing), never from touch targets: every control
+           below still clears the 44px floor, and the F-key badges stay because
+           the shortcut strip at the top of this screen teaches Enter/N/X//Del/
+           Esc but never F1-F6, so these badges are the only place a cashier
+           learns the tender shortcuts. Height-based, not width-based: this is a
+           vertical-room problem, and a 1366x768 till is a wide screen. */
+        @media (max-height: 820px) {
+          .pos-total-band { padding-block:8px 10px;margin-block:6px; }
+          /* 32px floor, not 28: retail_surface_pos_test.js pins the grand total as
+             the LARGEST money element on the screen and holds it above a 30px
+             ceiling, and a 28px floor broke that invariant at narrow widths. The
+             invariant is right -- the number the customer pays has to dominate --
+             so the floor moved, not the test. At 1366px this still resolves to the
+             36px cap either way. */
+          .pos-grand-value { font-size:clamp(32px, 3vw, 36px); }
+          .pos-summary { padding-block:10px 12px; }
+          .pos-pay-btns { gap:6px;margin-block-end:8px; }
+          button.pos-pay-btn { padding-block:4px;font-size:12px; }
+          .pos-pay-kbd { font-size:9px; }
+        }
         .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
 
         /* ── Money typography (see rule 3) ───────────────────────────────── */

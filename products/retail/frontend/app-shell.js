@@ -1171,8 +1171,17 @@ const SubsystemApp = {
   // Persistent element on document.body, not inside #subsystem-shell, for
   // the same reason as the sync banner below: _renderShell() replaces that
   // element's entire innerHTML on every launch().
-  _maybeOfferAdminDeviceClaim() {
+  // Removing the bar and releasing the space it reserved are ONE action. They
+  // were four separate call sites (dismiss, two failure paths, success), which
+  // is three chances to remember only the first half and leave a dead strip
+  // across the bottom of the till.
+  _removeAdminDeviceClaimBar() {
     document.getElementById('aura-admin-device-claim')?.remove();
+    this._reflowBottomOverlays();
+  },
+
+  _maybeOfferAdminDeviceClaim() {
+    this._removeAdminDeviceClaimBar();
     if (this.isAdminDevice || !this.canClaimAdminDevice) return;
     if (sessionStorage.getItem('admin_device_claim_dismissed') === 'true') return;
 
@@ -1219,10 +1228,14 @@ const SubsystemApp = {
       // prompt exists to get out of.
       sessionStorage.setItem('admin_device_claim_dismissed', 'true');
       bar.remove();
+      SubsystemApp._reflowBottomOverlays();
     });
 
     bar.append(msg, claim, later);
     document.body.appendChild(bar);
+    // Measured AFTER it is in the document: this bar wraps to two rows on a
+    // narrow till, so its height is not a constant and must not be guessed.
+    this._reflowBottomOverlays();
     if (window.AuraI18n) AuraI18n.apply();   // translate before first paint settles
   },
 
@@ -1261,13 +1274,13 @@ const SubsystemApp = {
       );
       if (body && body.code === 'ADMIN_DEVICE_ALREADY_CLAIMED') {
         this.canClaimAdminDevice = false;
-        document.getElementById('aura-admin-device-claim')?.remove();
+        this._removeAdminDeviceClaimBar();
       }
       return;
     }
     this.isAdminDevice = true;
     this.canClaimAdminDevice = false;
-    document.getElementById('aura-admin-device-claim')?.remove();
+    this._removeAdminDeviceClaimBar();
     this.showToast('This device is now your store\'s admin device.', 'success');
     // Re-render so the adminOnly nav entries (Settings, Audit Log) appear
     // immediately -- _renderShell()'s nav filter reads this.isAdminDevice,
@@ -3248,6 +3261,47 @@ const SubsystemApp = {
       // the banner afterwards. This couples the two elements that actually matter.
       document.documentElement.style.setProperty('--top-banner-inset',
         tallest > 0 ? tallest + 'px' : '0px');
+    } catch (e) { /* never let a cosmetic reflow break the shell */ }
+    this._reflowBottomOverlays();
+  },
+
+  // The same mechanism as _reflowTopBanners, pointed at the BOTTOM edge.
+  //
+  // The admin-device claim bar is bottom-centred, up to 92vw wide and bound to
+  // document.body so it survives every navigation. On the POS screen that puts
+  // it squarely over the payment-method grid -- measured: it covers the
+  // Transfer tender -- and right beside the Charge button. An overlay covering
+  // the pay button at a till costs a sale, so this is not a cosmetic overlap.
+  //
+  // Publishing the height as a token lets the till's own layout move out of the
+  // way, exactly as .page does for the licence banner, instead of each new
+  // collision being patched one selector at a time (there is already one such
+  // hand-written patch in main.css, for the mobile More sheet).
+  //
+  // Toasts are deliberately NOT measured. They live 3 seconds, and re-flowing
+  // the primary control every time one appeared would be worse than the brief
+  // overlap: a Charge button that moves under the cashier's finger is its own
+  // bug. Toasts stack among themselves instead (see showToast).
+  _reflowBottomOverlays() {
+    try {
+      const ids = ['aura-admin-device-claim', 'aura-sync-banner'];
+      // Breathing room between a floating bar and whatever parks above it.
+      const GAP_PX = 12;
+      // Only something anchored to the BOTTOM half displaces the till; the same
+      // sync-banner element is a full-width TOP banner in its other tiers.
+      const viewportH = window.innerHeight || 0;
+      let reserved = 0;
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el || !el.getBoundingClientRect) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+        if (rect.top < viewportH / 2) continue;
+        const fromBottom = viewportH - rect.top;
+        if (fromBottom > reserved) reserved = fromBottom;
+      }
+      document.documentElement.style.setProperty('--bottom-overlay-inset',
+        reserved > 0 ? (reserved + GAP_PX) + 'px' : '0px');
     } catch (e) { /* never let a cosmetic reflow break the shell */ }
   },
 
