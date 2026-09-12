@@ -192,6 +192,31 @@ is still painted in that strip while you are scrolled anywhere else. A *margin*
 shrinks the box itself, which moves the clip edge. Nothing is painted under the
 bar on any screen now.
 
+### The first screen was never measured
+
+Both corpora covered post-login screens only. So the one screen every shop sees
+before it has an account — and the one a buyer is shown first — had never been
+checked by anything. That is exactly where the Sand bug shipped.
+
+Putting it in found four things immediately:
+
+- **The primary button was unverifiable and probably failing.** "Create Account
+  & Launch" painted `color: #fff` — which the brief forbids outright — on a
+  *gradient* whose far stop is 72% alpha. That end composites with the card
+  beneath it, landing near `rgb(88,121,193)`, which puts white 15px bold text at
+  roughly **4.4:1**, under the 4.5:1 AA floor. And a gradient has no single
+  surface luminance, so nothing could have measured it either way. Now a flat
+  accent fill with the sanctioned on-accent token — which is what every other
+  primary button in the product already uses.
+- **`.auth-note`** used a 7%-alpha tint whose effective colour depends on
+  whatever is behind it. Now the opaque per-theme info triad.
+- **Seven controls declared no touch floor at all** — every signup field, the
+  language toggle and the submit button. They came out near 40–48px from padding
+  alone, which drifts with font size, locale and zoom. The language toggle needed
+  *both* axes: a two-character button at ~38×24, and the only way to switch the
+  product into Arabic on the one screen where Settings isn't reachable yet.
+- The measured control count went **161 → 168**.
+
 ### A guard that was missing
 
 A one-character edit — a backtick inside a CSS comment in `_injectStyles` —
@@ -230,9 +255,8 @@ Ranked by what it costs a shopkeeper.
    "Analytics & Reports"; Customers, Stock Transfers and Settings show the *same
    word twice*. Left alone deliberately — renaming screens is a naming decision,
    not a defect fix.
-4. **The contrast corpus does not render the auth screen.** So the focus ring on
-   the pre-login ground is unverified by contrast in any theme — which matters
-   now that the ground is per-theme rather than always near-black.
+4. **Nothing left ranked above cosmetic.** The pre-login screen is now in the
+   corpus (see below), which closed the last verification gap this review opened.
 5. **Chart series colours** (`#38bdf8`, `#a855f7`, `#8b5cf6`, `#10b981`) are
    framework defaults and off-palette. They are categorical identity colours so
    they are defensible, but they were not *chosen*.
@@ -328,3 +352,5 @@ suite being the thing that has to stay green.
     contrast corpus                 22 screens, now incl. the first-run empty state
     main.css                        5,489 -> 4,414 lines (1,098 removed)
     pixel diff                      22/22 deterministic frames byte-identical
+    corpus                          23 screens, incl. the pre-login surface
+    touch floor                     168 rendered controls clear 44px on both axes
