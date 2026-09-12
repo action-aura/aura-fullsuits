@@ -223,7 +223,15 @@ for (const name of BLOCK_THEMES) {
     const HOLDS_COLOUR = /(#[0-9a-f]{3,8}\b|rgba?\()/i;
     // Deliberate exception, with the reason on the token itself: the focus
     // halo's one job is the pre-login canvas, which is dark in EVERY theme.
-    const EXEMPT = new Set(['--focus-ring-halo']);
+    // EMPTY as of 2026-09-12. This held '--focus-ring-halo', exempted from the
+    // redefine-in-every-theme rule because its one consumer -- the focus-ring
+    // re-point on .ws-overlay / #page-landing / #page-login -- painted the same
+    // near-black in every theme. Those selectors never matched anything in this
+    // product and have been deleted, so the token had no consumer left and went
+    // with them. An exemption outliving the thing it excused is how dead code
+    // becomes protected code; if this set grows again, say which rule consumes
+    // the token and check that rule still exists.
+    const EXEMPT = new Set([]);
     const colourTokens = [...light.entries()]
       .filter(([n, v]) => COLOUR_PREFIX.test(n) && HOLDS_COLOUR.test(v))
       .map(([n]) => n);

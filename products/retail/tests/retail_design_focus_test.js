@@ -176,14 +176,38 @@ function testFocusRingIsTokenisedSoItCanAdaptToDarkBrandSurfaces() {
     /--focus-ring-color\s*:/.test(css),
     'Expected a --focus-ring-color token so the ring can adapt per surface.'
   );
-  const darkOverride = /(\.ws-overlay|#page-landing|#page-login|\.auth-overlay)[^{]*\{[^}]*--focus-ring-color\s*:/.test(css);
+  /* This used to require a re-point of --focus-ring-color inside
+     `.ws-overlay | #page-landing | #page-login | .auth-overlay`. Only the first
+     three ever carried one, and none of those three selectors matches anything
+     in this product -- nothing produces them -- so the check was green on a rule
+     the browser never applied, while the LIVE pre-login surface had no re-point
+     at all.
+
+     It does not need one now. .auth-overlay paints var(--surface-auth-ground),
+     which every theme defines for itself (2026-09-12, the fix for Sand rendering
+     a black login screen), so a light theme gets a light pre-login ground and a
+     dark theme a dark one, and each theme's own --focus-ring-color is already
+     solved against its own surfaces. The old premise -- "the pre-login canvas is
+     near-black in EVERY theme" -- stopped being true then.
+
+     LIMIT: this no longer demands a re-point, so if a future change gave a LIGHT
+     theme a dark auth ground again, this file would not catch the ring contrast.
+     Closing that means rendering the auth surface into
+     retail_design_contrast_test.js's corpus, which does not cover it today. */
   assert.ok(
-    darkOverride,
-    'The pre-login brand surfaces sit on a near-black canvas where the ' +
-    'accent-blue ring is roughly 2:1 and effectively invisible. Re-point ' +
-    '--focus-ring-color inside those containers.'
+    /\.auth-overlay[^{]*\{[\s\S]*?var\(--surface-auth-ground\)/.test(css),
+    'The pre-login surface must take its ground from --surface-auth-ground so ' +
+    'each theme solves its own focus ring against its own surface. A hardcoded ' +
+    'near-black here puts an accent-blue ring at roughly 2:1 on the first screen ' +
+    'the product ever shows.'
   );
-  console.log('PASS: the focus ring is tokenised and re-pointed on the dark pre-login surfaces');
+  assert.ok(
+    /--surface-auth-ground\s*:/.test(css),
+    'The --surface-auth-ground token is gone. Every theme must define it -- ' +
+    'retail_design_theme_safety_test.js enforces the parity; this is the floor ' +
+    'that fails if the token disappears entirely.'
+  );
+  console.log('PASS: the pre-login ground is a per-theme token, so the ring adapts with it');
 }
 
 function testTouchTargetTokenExists() {
