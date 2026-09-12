@@ -232,6 +232,40 @@ as English, so it is near-invisible in review. `retail_frontend_parse_test.js`
 now parses all 12 frontend scripts in milliseconds and is mutation-proved
 against exactly that defect. It caught the second occurrence immediately.
 
+## The phone
+
+Everything above was measured at 1366×768. The product also has a phone surface
+below 640px — the nav rail gives way to a tab bar and a More sheet — and there is
+a shipped Android build, so it is a real surface with real users. Nobody had
+looked at it in this pass. Measured at 390×844, touch:
+
+    #sub-content        1,379px of content in a 343px viewport
+    Charge button       y1378-1431, in an 844px window
+    grand total         y1111
+    payment grid        y1225-1366
+    licence banner      141px (17% of the screen), three lines plus a button
+    admin prompt        211px
+
+**It is a bad till, not a broken one.** Scrolling `#sub-content` to its end does
+bring Charge and the tender grid on screen — but it is a ~1,000px scroll, and by
+the time you are there the cart has gone off the top and, with a licence banner
+up, the grand total sits *behind* it.
+
+The real fix already has a written spec: `docs/design/phone-ui-redesign.md`
+describes a **peek bar** — a pinned charge control carrying the running total.
+`#pos-peek-charge` and `.pos-peek` are **not in the DOM**; it was never built.
+That is a feature with a design behind it, not a polish pass, so it is named here
+rather than improvised.
+
+What was fixed: the POS rendered its **keyboard shortcut legend on a touch
+device** — 49px of Enter/N×/X//Del/Esc on a phone with no keyboard. Hidden on
+`(hover: none) and (pointer: coarse)`, which is a question about the device
+rather than the width, so the Android build and a touch-only 1024px till get the
+same answer and a narrow laptop window keeps its hints. Scroll depth 1,036 → 987.
+
+Otherwise the phone layout holds up: no horizontal overflow on any screen, the
+tab bar renders, and the raised Till button reads well.
+
 ## Found, not fixed
 
 Ranked by what it costs a shopkeeper.
