@@ -196,6 +196,7 @@ def lead_source_label(code: str) -> str:
         "COLD_OUTREACH": _("Cold outreach"),
         "EVENT": _("Event"),
         "OTHER": _("Other"),
+        "MAPS_DISCOVERY": _("Map discovery"),
     }
     return labels.get(code, code)
 
@@ -359,6 +360,15 @@ def device_key_status_label(code: str) -> str:
     return labels.get(code, code)
 
 
+def sync_quarantine_status_label(code: str) -> str:
+    labels = {
+        "PENDING": _("Pending"),
+        "REPLAYED": _("Replayed"),
+        "DISCARDED": _("Discarded"),
+    }
+    return labels.get(code, code)
+
+
 def localize_pilot_lifecycle_error(code: str, **params) -> str:
     """Presentation-boundary translation for app.commercial_ops.pilot_lifecycle
     .PilotLifecycleError -- called ONLY from a real Flask request handler
@@ -419,6 +429,14 @@ def localize_device_slot_error(code: str, **params) -> str:
         "EXCEPTION_EXCEEDS_MAX_DAYS": _("Device slot exceptions may not exceed %(max_days)s days -- temporary means temporary."),
         "INVALID_REVOKE_STATUS": _("Cannot revoke a device slot exception in status %(status)s."),
         "REASON_REQUIRED_TO_REVOKE": _("A reason is required to revoke a device slot exception."),
+        "ADDITIONAL_DEVICES_MUST_BE_POSITIVE": _("Enter a positive number of devices to add."),
+        "REASON_REQUIRED_TO_ADD_DEVICES": _("A reason is required to add devices to a license."),
+        "DEVICE_LIMIT_BELOW_ACTIVE_COUNT": _(
+            "Cannot set this license's device limit to %(new_limit)s -- %(active_count)s device(s) are "
+            "already active on it. Add enough devices to cover current usage."
+        ),
+        "LICENSE_NOT_FOUND": _("License not found."),
+        "SUBSCRIPTION_NOT_FOUND": _("Subscription not found for this license."),
     }
     template = messages.get(code)
     if template is None:
@@ -905,6 +923,7 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "SELF_CONFIRMATION_FORBIDDEN": _("You cannot confirm a payment you submitted yourself."),
         "FULFILLMENT_NOT_ELIGIBLE": _("This order is not eligible for fulfillment yet: %(reason)s."),
         "FULFILLMENT_ALREADY_COMPLETE": _("This order line has already been fulfilled."),
+        "FULFILLMENT_IN_PROGRESS": _("Another fulfillment of this order is still running; retry once it finishes."),
         "EMPLOYEE_PROFILE_REQUIRED": _("This action requires a real employee profile."),
     }
     template = messages.get(code)

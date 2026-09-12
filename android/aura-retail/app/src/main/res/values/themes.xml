@@ -1,9 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Window theme for the native Compose app (DayNight so the pre-compose window
-         background matches light/dark). Compose draws the actual MD3 UI. -->
-    <style name="Theme.Aura" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!-- Window theme for the native Compose app. Compose draws the actual MD3 UI.
+
+         Parent is the DARK AppCompat theme, not DayNight, on purpose - but NOT
+         for the reason this comment used to give. It said "the app's Compose
+         identity is fixed-dark (ui/theme/Theme.kt ignores the system setting)",
+         and that is no longer true: Theme.kt has a lightColorScheme branch and
+         AuraPalette ships five themes, two of them light (Day, Sand).
+
+         The parent choice survives its own original justification. Declaring
+         this window dark is what keeps HWUI force-dark OFF the light palettes
+         (values-v29 pins android:forceDarkAllowed=false for the very-measured
+         reason spelled out there), and a DayNight parent would still hand the
+         renderer a claim about polarity that has nothing to do with which of
+         the five Aura palettes the till is actually running.
+
+         android:windowBackground is the Calm-coloured PREVIEW-window fallback,
+         not a value that matches every theme - see values/colors.xml. It is
+         what the framework paints before this process draws; MainActivity
+         repaints the window with the restored palette's surfaceApp as soon as
+         it has one. -->
+    <style name="Theme.Aura" parent="Theme.AppCompat.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
 </resources>

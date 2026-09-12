@@ -14,7 +14,15 @@ from app.expenses.errors import ExpenseError
 from app.extensions import db_session
 from app.models.expenses import Expense, ExpenseAttachment
 
-_NON_ACTIVE_FOR_DUPLICATE_CHECK = ("VOID", "REJECTED")
+# The statuses a duplicate check ignores: a VOIDed or REJECTED expense can
+# never become spend, so it is not evidence of a double payment.
+#
+# AUDIT-owner-cross-screen: made public (was _NON_ACTIVE_FOR_DUPLICATE_CHECK)
+# so the Management dashboard's duplicate-review QUEUE COUNT imports the same
+# definition of "active" this per-expense check uses, instead of restating the
+# tuple. The two answering differently about one expense pair is precisely the
+# cross-screen disagreement that audit was about.
+NON_ACTIVE_FOR_DUPLICATE_CHECK = ("VOID", "REJECTED")
 
 
 def find_duplicate_signals(expense: Expense) -> list[dict]:
@@ -28,7 +36,7 @@ def find_duplicate_signals(expense: Expense) -> list[dict]:
             select(Expense.id).where(
                 Expense.external_reference == expense.external_reference,
                 Expense.id != expense.id,
-                Expense.status.notin_(_NON_ACTIVE_FOR_DUPLICATE_CHECK),
+                Expense.status.notin_(NON_ACTIVE_FOR_DUPLICATE_CHECK),
             )
         ).scalars().all()
         if matches:
@@ -57,7 +65,7 @@ def find_duplicate_signals(expense: Expense) -> list[dict]:
                 Expense.amount == expense.amount,
                 Expense.expense_date == expense.expense_date,
                 Expense.id != expense.id,
-                Expense.status.notin_(_NON_ACTIVE_FOR_DUPLICATE_CHECK),
+                Expense.status.notin_(NON_ACTIVE_FOR_DUPLICATE_CHECK),
             )
         ).scalars().all()
         if matches:

@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 from xml.sax.saxutils import escape, quoteattr
 
+from ..currency import format_money_plain
 from .document import EInvoiceDocument
 
 PROFILE_ID = "GENERIC_UBL_2_1"
@@ -36,8 +37,25 @@ PROFILE_ID = "GENERIC_UBL_2_1"
 _INVOICE_TYPE_CODE = "380"
 
 
-def _money(value: float) -> str:
-    return f"{value:.2f}"
+def _money(value: float, currency: str) -> str:
+    """Render one amount at the DOCUMENT'S OWN currency's minor unit.
+
+    `currency` is mandatory, not defaulted: this was `f"{value:.2f}"` and
+    every amount in the document -- TaxAmount, LineExtensionAmount,
+    TaxExclusiveAmount, TaxInclusiveAmount, PayableAmount, PriceAmount --
+    was coarsened to two decimals while <cbc:DocumentCurrencyCode> right
+    above them said JOD, which has three (see
+    commercial_runtime/currency.py's measurements). Measured on a real JOD
+    document carrying subtotal 12.345 / tax 1.975 / total 14.320, the old
+    renderer emitted 12.35 + 1.98 = 14.33 against a PayableAmount of 14.32:
+    a document that does not reconcile against ITSELF, fingerprinted by
+    document_sha256 as the compliance evidence of what was filed.
+
+    A default would have quietly reintroduced exactly that bug the next time
+    someone added an amount element and forgot to pass the currency through,
+    so there isn't one -- every call site already has `currency` in scope.
+    """
+    return format_money_plain(value, currency)
 
 
 def _build_note(document: EInvoiceDocument) -> str:
@@ -66,9 +84,9 @@ def _line_xml(index: int, line, currency: str) -> str:
         f'<cac:InvoiceLine>'
         f'<cbc:ID>{index}</cbc:ID>'
         f'<cbc:InvoicedQuantity>{line.quantity}</cbc:InvoicedQuantity>'
-        f'<cbc:LineExtensionAmount currencyID={quoteattr(currency)}>{_money(line.line_total)}</cbc:LineExtensionAmount>'
+        f'<cbc:LineExtensionAmount currencyID={quoteattr(currency)}>{_money(line.line_total, currency)}</cbc:LineExtensionAmount>'
         f'<cac:Item><cbc:Name>{escape(line.description)}</cbc:Name></cac:Item>'
-        f'<cac:Price><cbc:PriceAmount currencyID={quoteattr(currency)}>{_money(line.unit_price)}</cbc:PriceAmount></cac:Price>'
+        f'<cac:Price><cbc:PriceAmount currencyID={quoteattr(currency)}>{_money(line.unit_price, currency)}</cbc:PriceAmount></cac:Price>'
         f'</cac:InvoiceLine>'
     )
 
@@ -95,14 +113,14 @@ def to_ubl_xml(document: EInvoiceDocument) -> str:
         _party_xml('cac:AccountingSupplierParty', document.seller_name, tin=document.seller_tin),
         _party_xml('cac:AccountingCustomerParty', document.buyer_name, buyer_id=document.buyer_id),
         '<cac:TaxTotal>'
-        f'<cbc:TaxAmount currencyID={quoteattr(currency)}>{_money(document.tax_total)}</cbc:TaxAmount>'
+        f'<cbc:TaxAmount currencyID={quoteattr(currency)}>{_money(document.tax_total, currency)}</cbc:TaxAmount>'
         '</cac:TaxTotal>',
         '<cac:LegalMonetaryTotal>'
-        f'<cbc:LineExtensionAmount currencyID={quoteattr(currency)}>{_money(document.subtotal)}</cbc:LineExtensionAmount>'
-        f'<cbc:AllowanceTotalAmount currencyID={quoteattr(currency)}>{_money(document.discount_total)}</cbc:AllowanceTotalAmount>'
-        f'<cbc:TaxExclusiveAmount currencyID={quoteattr(currency)}>{_money(taxable_amount)}</cbc:TaxExclusiveAmount>'
-        f'<cbc:TaxInclusiveAmount currencyID={quoteattr(currency)}>{_money(document.grand_total)}</cbc:TaxInclusiveAmount>'
-        f'<cbc:PayableAmount currencyID={quoteattr(currency)}>{_money(document.grand_total)}</cbc:PayableAmount>'
+        f'<cbc:LineExtensionAmount currencyID={quoteattr(currency)}>{_money(document.subtotal, currency)}</cbc:LineExtensionAmount>'
+        f'<cbc:AllowanceTotalAmount currencyID={quoteattr(currency)}>{_money(document.discount_total, currency)}</cbc:AllowanceTotalAmount>'
+        f'<cbc:TaxExclusiveAmount currencyID={quoteattr(currency)}>{_money(taxable_amount, currency)}</cbc:TaxExclusiveAmount>'
+        f'<cbc:TaxInclusiveAmount currencyID={quoteattr(currency)}>{_money(document.grand_total, currency)}</cbc:TaxInclusiveAmount>'
+        f'<cbc:PayableAmount currencyID={quoteattr(currency)}>{_money(document.grand_total, currency)}</cbc:PayableAmount>'
         '</cac:LegalMonetaryTotal>',
         lines_xml,
         '</Invoice>',

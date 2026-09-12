@@ -20,7 +20,11 @@ from .state_machine import LicenseState
 from .state_repository import LICENSING_SCHEMA_VERSION, LicenseStateRecord, LicenseStateRepository
 
 
-def seed_active_license(app_data_dir: str, *, product_code: str, platform: str = "WINDOWS") -> None:
+def seed_active_license(
+    app_data_dir: str, *, product_code: str, platform: str = "WINDOWS", entitlements: dict | None = None
+) -> None:
+    """`entitlements` lets a product test seed the assertion's entitlement
+    dict (e.g. `{"max_branches": 1}`); default unchanged."""
     db_path = Path(app_data_dir) / "database" / "subsystems" / "licensing.db"
     repo = LicenseStateRepository(db_path)
     repo.save(
@@ -33,6 +37,6 @@ def seed_active_license(app_data_dir: str, *, product_code: str, platform: str =
             license_status="ACTIVE",
             installation_status="ACTIVE",
             subscription_status="ACTIVE",
-            entitlements_json=json.dumps({}),
+            entitlements_json=json.dumps(entitlements or {}),
         )
     )

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Launcher adaptive-icon foreground: the Aura mark (DESIGN.md §3), fixed
+    to the SVG's own dark-surface ink (#EDF2F8) rather than a theme token: the
+    launcher's ground (ic_launcher_background.xml) is always dark, the same
+    way products/retail/frontend/brand/aura-app-icon.svg is drawn once for a
+    dark ground rather than switching with the phone's theme. Compare
+    ui/brand/AuraMark.kt, which draws the same 256-unit geometry in Compose
+    with a theme-following `ink` for in-app use; this file is the launcher's
+    own copy because adaptive icons cannot host a Composable.
+
+    The whole mark is scaled 0.30x and offset (15.6, 15.6) so the ring (188
+    units, 56.4dp) sits inside the adaptive icon's 66dp safe zone.
+
+    2026-09-08: the A's stroke weights raised (peak 19->26, bar 15->20) and
+    its apex narrowed/raised (base 80/176->84/172, apex y 76->70), and the
+    old radial-gradient spark (a blurred glow plus a white dot) replaced by
+    a flat diamond in the SAME fixed ink as the A — same reasoning as
+    aura-mark.svg and AuraMark.kt's MARK EVOLUTION comments; the ring here
+    is unchanged.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.30"
+        android:scaleY="0.30"
+        android:translateX="15.6"
+        android:translateY="15.6">
+
+        <!-- Ring: 300 degree sweep, gap open top-right where the beacon sits. -->
+        <path
+            android:pathData="M 159.4 39.4 A 94 94 0 1 1 66.95 56.5"
+            android:strokeWidth="15"
+            android:strokeLineCap="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="38.4"
+                    android:startY="230.4"
+                    android:endX="217.6"
+                    android:endY="25.6">
+                    <item android:offset="0" android:color="#FF3F7BE6" />
+                    <item android:offset="0.55" android:color="#FF6EA8FF" />
+                    <item android:offset="1" android:color="#FF5FE3D0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Beacon: a flat diamond in the same fixed ink as the A, at the
+             ring's opening — no blur, no gradient (replaces the old
+             radial-gradient spark). -->
+        <path
+            android:pathData="M 196 45 L 211 60 L 196 75 L 181 60 Z"
+            android:fillColor="#FFEDF2F8" />
+
+        <!-- The A: fixed light ink (#EDF2F8), the launcher ground is always dark. -->
+        <path
+            android:pathData="M 84 178 L 128 70 L 172 178"
+            android:strokeColor="#FFEDF2F8"
+            android:strokeWidth="26"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M 108 142 L 148 142"
+            android:strokeColor="#FFEDF2F8"
+            android:strokeWidth="20"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

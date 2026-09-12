@@ -1,3 +1,33 @@
 -r base.txt
-# No additional third-party dependencies identified for Retail beyond base.txt
-# (Retail uses stdlib sqlite3, no ORM in the source implementation).
+# Retail uses stdlib sqlite3, no ORM in the source implementation, so there is
+# very little here beyond base.txt.
+
+# Business-date reporting (core/retail/metrics.py). WITHOUT THIS THE WHOLE
+# FEATURE IS DEAD CODE, silently:
+#
+#     >>> zoneinfo.TZPATH
+#     ()
+#     >>> zoneinfo.ZoneInfo('Asia/Amman')
+#     ZoneInfoNotFoundError: 'No time zone found with key Asia/Amman'
+#
+# Windows ships no system tz database, and `zoneinfo` falls back to the
+# `tzdata` package or to nothing at all. Measured on this build machine before
+# adding it: every shop configured with a real zone would have degraded to
+# device-local bucketing, which is precisely the bug the feature exists to fix
+# -- and it would have failed with a log line nobody reads rather than an
+# error anyone sees.
+#
+# A fixed UTC-offset was rejected in favour of IANA zone names because an
+# offset cannot express DST; that decision is what makes this dependency
+# mandatory rather than a convenience. See
+# docs/retail/unified_mobile/reporting-period-timezone-contract.md.
+#
+# Pure data, no compiled extension, universal wheel -- the same property that
+# lets `segno` install under Chaquopy on Android. NOTE: Chaquopy keeps its own
+# pip list in android/aura-retail/app/build.gradle; adding it here does NOT
+# reach the phone, and it must be added there too.
+#
+# Clinic deliberately does not get this: it is in retail.txt rather than
+# base.txt because nothing under products/clinic reads a business timezone,
+# and a shared dependency is a shared upgrade obligation.
+tzdata==2026.1

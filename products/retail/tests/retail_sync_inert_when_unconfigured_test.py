@@ -52,6 +52,13 @@ def test_sync_service_is_never_constructed_when_url_unset():
     assert _app_module._sync_service is None
 
 
+def test_registry_sync_service_is_never_constructed_when_url_unset():
+    """Phase 5 wave B2, Decision 6 (Task C) -- the registry-stream instance
+    is built inside the SAME `if` block as the retail one, so it must be
+    exactly as inert as `_sync_service` when sync is unconfigured."""
+    assert _app_module._registry_sync_service is None
+
+
 def test_no_service_is_registered_for_the_nudge_to_call():
     from commercial_runtime.sync import sync_service as sync_service_module
 

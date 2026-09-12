@@ -48,6 +48,10 @@ dist_launcher/
 
 # Android (two independent projects: android/aura-retail, android/aura-clinic)
 android/*/.gradle/
+# Kotlin compiler session dir -- build scratch, same as .gradle/ above. Already
+# ignored for mobile/aura-retail-unified further down; the android/ projects
+# were missed, so a Gradle build there left .kotlin/ showing up as untracked.
+android/*/.kotlin/
 android/*/app/build/
 android/*/build/
 android/*/local.properties
@@ -128,3 +132,10 @@ Thumbs.db
 # audit log, conflict reports -- never shared, never committed)
 /.autosync/
 .scratch/
+
+# Owner runtime artifact dirs (backups, expense attachments, release artifacts)
+# created relative to the process cwd -- machine-local, never committed.
+/var/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/

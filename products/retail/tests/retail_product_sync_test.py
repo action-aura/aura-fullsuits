@@ -121,8 +121,15 @@ def test_delete_product_is_always_a_soft_delete_even_with_no_sales_history(clien
     resp = client.delete(f'/api/sub/retail/products/{pid}')
     assert resp.status_code == 200
 
-    row = db_conn.execute("SELECT status FROM products WHERE id=?", (pid,)).fetchone()
-    assert row is not None and row['status'] == 'inactive'  # row still exists, never hard-deleted
+    # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    # `status`): `delete_product` no longer writes `status='inactive'` --
+    # `deleted_at_utc` alone is now the tombstone, and `status` stays
+    # 'active' (row still exists, never hard-deleted, exactly as this test's
+    # name still says -- just via a different column now).
+    row = db_conn.execute("SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+    assert row is not None
+    assert row['status'] == 'active'
+    assert row['deleted_at_utc'] is not None
 
     outbox = db_conn.execute(
         "SELECT event_type FROM sync_outbox WHERE entity_type='product' AND entity_id=? ORDER BY created_at DESC LIMIT 1",
@@ -138,10 +145,38 @@ def test_pulled_product_delete_soft_deletes_and_never_touches_a_row_this_device_
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript("""
-        CREATE TABLE products (id TEXT PRIMARY KEY, company_id INTEGER, sku TEXT, name TEXT, status TEXT DEFAULT 'active');
+        -- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+        -- row_version/updated_at_utc added -- _apply_event's product
+        -- delete branch now writes both columns (carrying the sender's
+        -- row_version through, so two devices' counters converge instead
+        -- of silently diverging), and this hand-built minimal fixture
+        -- predates that.
+        -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
+        -- added too -- the product delete branch now stamps it.
+        -- launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'` was
+        -- ALSO written here between 6b-ii and this stage; it no longer is --
+        -- `deleted_at_utc` alone is now the tombstone (see retail_api.py's
+        -- delete_product comment), and this fixture predates that the same
+        -- way it predated row_version.
+        CREATE TABLE products (id TEXT PRIMARY KEY, company_id INTEGER, sku TEXT, name TEXT, status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE sale_items (id INTEGER PRIMARY KEY, sale_id INTEGER, product_id TEXT, quantity REAL, unit_price REAL, line_total REAL);
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
+        -- launch-readiness Phase 6 stage 6a-ii: `sync_conflicts`, shaped
+        -- exactly like _migrate_add_sync_conflicts_and_drop_quantity_reserved's
+        -- own CREATE TABLE (products/retail/backend/database/schema.py, v17).
+        -- The product delete branch's reject-stale gate can legitimately
+        -- write a row here on a genuine (non-legacy) stale discard, so this
+        -- hand-built fixture -- which predates v17 the same way it predated
+        -- the row_version columns above -- has to carry the table forward
+        -- too, or it raises `sqlite3.OperationalError: no such table:
+        -- sync_conflicts` the moment that path is reached.
+        CREATE TABLE sync_conflicts (
+            id TEXT PRIMARY KEY, company_id INTEGER, entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL, event_type TEXT NOT NULL, local_row_version INTEGER,
+            incoming_row_version INTEGER, incoming_payload TEXT NOT NULL, detected_at_utc TEXT NOT NULL
+        );
     """)
     conn.execute("INSERT INTO products (id,company_id,sku,name,status) VALUES ('p-1',9,'SKU-X','X','active')")
     conn.execute("INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,line_total) VALUES (1,'p-1',1,10,10)")
@@ -154,6 +189,9 @@ def test_pulled_product_delete_soft_deletes_and_never_touches_a_row_this_device_
     })
     conn.commit()
 
-    row = conn.execute("SELECT status FROM products WHERE id='p-1'").fetchone()
-    assert row['status'] == 'inactive'  # never DELETE FROM -- sale_items row is untouched, no FK ever fires
+    row = conn.execute("SELECT status, deleted_at_utc FROM products WHERE id='p-1'").fetchone()
+    # launch-readiness Phase 6 stage 6b-iii-a: `status` no longer flips to
+    # 'inactive' on delete -- `deleted_at_utc` is the tombstone now.
+    assert row['status'] == 'active'  # never DELETE FROM -- sale_items row is untouched, no FK ever fires
+    assert row['deleted_at_utc'] is not None
     assert conn.execute("SELECT COUNT(*) c FROM sale_items").fetchone()['c'] == 1

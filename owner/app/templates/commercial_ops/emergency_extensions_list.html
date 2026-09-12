@@ -1,18 +1,17 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Emergency extensions") }}{% endblock %}
 {% block content %}
 <div class="card">
   <h2>{{ _("Emergency extensions") }}</h2>
-  <div class="filters">
-    <form method="get">
-      <label for="commercial-ops-emergency-extensions-list-status">{{ _("Status") }}</label>
-      <select id="commercial-ops-emergency-extensions-list-status" name="status" onchange="this.form.submit()">
-        {% for s in ["ACTIVE","REVOKED",""] %}
-        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ emergency_extension_status_label(s) if s else _("All") }}</option>
-        {% endfor %}
-      </select>
-    </form>
-  </div>
+  {# See renewals_list.html for why this is the shared macro and not a
+     hand-rolled <form>: the old one's CSP-blocked onchange was its only
+     trigger, leaving the filter unusable. The trailing "" entry in the old
+     option list was that markup's own "All" row; filter_bar() renders it. #}
+  {{ table.filter_bar(
+      status_options=["ACTIVE","REVOKED"],
+      status_value=status_filter, status_label_fn=emergency_extension_status_label
+  ) }}
   <table class="responsive-table">
     <thead><tr><th>{{ _("Subscription") }}</th><th>{{ _("Status") }}</th><th>{{ _("Starts") }}</th><th>{{ _("Expires") }}</th><th>{{ _("Reason") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>

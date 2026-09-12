@@ -147,6 +147,13 @@ def verify_email(conn, raw_token: str) -> Optional[str]:
     conn.execute(
         "UPDATE users SET email_verified_at=? WHERE id=?", (_now().isoformat(), user["id"])
     )
+    # Deliberately NOT a sync emission site (Phase 5 wave B2 stage 2b,
+    # docs/launch-readiness/phase5-waveb2-user-sync.md, Decision 3):
+    # `email_verified_at` is not in the wave's field allowlist, and this
+    # statement does not bump `row_version` -- both correctly, not by
+    # omission. Verification status was never scoped into this wave, and
+    # bumping `row_version` here with no allowlisted field actually changing
+    # would only add sync traffic for a column that never syncs.
     return user["id"]
 
 

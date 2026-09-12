@@ -3,7 +3,21 @@
 {% block title %}{{ _("Licenses") }}{% endblock %}
 {% block content %}
 <div class="card">
-  {{ table.toolbar(_("Licenses"), url_for('licensing.new_form'), _("New license"), new_permission="licenses.create") }}
+  {# The PRIMARY action is the three-act issuance screen (21e9c96), not the
+     six-step DRAFT flow it replaced. That screen shipped reachable only by a
+     memorised URL -- nothing in the nav, the command palette or any toolbar
+     linked it -- so the flow built to cut 6 steps to 3 was, in practice,
+     unreachable. A feature nobody can find is not a shipped feature.
+
+     The old DRAFT path stays, one click away below, because `replace_license`
+     and the tender/quote pipeline both still legitimately start from a DRAFT
+     licence. It is gated on `licenses.create` and the fast path on
+     `licenses.issue`, matching each route's own decorator, so a holder of
+     either permission still sees the action they are entitled to. #}
+  {{ table.toolbar(_("Licenses"), url_for('license_issuance.new_form'), _("Issue license"), new_permission="licenses.issue") }}
+  {% if has_permission("licenses.create") %}
+  <p><a href="{{ url_for('licensing.new_form') }}">{{ _("Create a draft license instead (advanced)") }}</a></p>
+  {% endif %}
   {{ table.filter_bar(
       status_options=["DRAFT","ISSUED","ACTIVE","SUSPENDED","EXPIRED","REVOKED","REPLACED"], status_value=status_filter, status_label_fn=license_status_label,
       search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Customer name or key prefix")

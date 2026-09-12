@@ -24,7 +24,7 @@ SECRET_KEY = get_or_create_secret_key(_app_data)
 
 IS_DEMO_MODE = not os.path.exists(os.path.join(_app_data, 'config.json'))
 
-APP_VERSION = '1.0.0-rc.5'
+APP_VERSION = '1.0.0-rc.7'
 PRODUCT_CODE = 'AURA_CLINIC'
 
 from commercial_runtime.backup.service import SCHEMA_VERSION

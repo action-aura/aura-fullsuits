@@ -19,11 +19,24 @@ from commercial_runtime.sync.sync_service import SyncService
 SECRET = "test-internal-secret"
 
 _SCHEMA = """
+-- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up): row_version/
+-- updated_at_utc added -- _apply_event's category branch now writes both
+-- columns (carrying the sender's row_version through, so two devices'
+-- counters converge instead of silently diverging), and this hand-built
+-- minimal fixture predates that.
 CREATE TABLE categories (
     id TEXT PRIMARY KEY,
     company_id INTEGER DEFAULT 1,
     name TEXT NOT NULL,
-    description TEXT
+    description TEXT,
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT,
+    -- launch-readiness Phase 6 stage 6b-ii: the real schema has carried this
+    -- since v13; the category apply branch now reads and writes it (a
+    -- tombstone, and an import resurrection clearing one), so a fixture
+    -- without it fails on the column, not on anything this file tests.
+    -- Column added to match the real schema; no assertion changed.
+    deleted_at_utc TEXT
 );
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,
@@ -38,6 +51,21 @@ CREATE TABLE sync_cursor (
     last_seq INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0);
+-- Phase 5 (money-moving sync): apply_pull_result() now unconditionally
+-- checks this table (SyncService._has_quarantined_events) on every pull, so
+-- it must exist even for a route test that never touches a money entity --
+-- see products/retail/backend/database/schema.py's own CREATE TABLE for the
+-- full reasoning.
+CREATE TABLE sync_apply_quarantine (
+    entity_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    detail TEXT,
+    quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity_id, event_type)
+);
 """
 
 
@@ -248,3 +276,88 @@ def test_pull_apply_failure_leaves_cursor_untouched(client, get_conn, monkeypatc
     cursor = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
     conn.close()
     assert cursor["last_seq"] == 0
+
+
+# ── blueprint_name / url_prefix parameterization (sync backend follow-up,
+# Android registry-stream wiring) ───────────────────────────────────────────
+#
+# `make_sync_internal_blueprint` gained these two keyword-only parameters so
+# products/retail/backend/app.py's ANDROID branch can register a SECOND
+# internal blueprint (over registry.db, REGISTRY_SYNC_ENTITY_TYPES) alongside
+# the original retail-stream one this whole file already exercises via the
+# `client` fixture above -- see commercial_runtime/sync/tests/
+# test_android_registry_stream.py for the full app.py wiring-level proof.
+# The two tests below are the narrower, direct proof of the parameterization
+# mechanism itself: that a caller-supplied name/prefix is actually honored,
+# and that two independently-parameterized blueprints can coexist on one
+# Flask app (the whole reason this parameter exists at all -- Flask refuses
+# a duplicate blueprint name or a duplicate URL prefix outright).
+
+def test_custom_blueprint_name_and_prefix_are_honored():
+    """Catches: `blueprint_name`/`url_prefix` accepted but silently ignored
+    (e.g. a leftover hardcoded `Blueprint("sync_internal", ...)` in the
+    function body) -- would pass every other test in this file (all of which
+    use the defaults) while still breaking Android's second registration."""
+    sync_service = SyncService(None, lambda: None, lambda: "irrelevant")
+    bp = make_sync_internal_blueprint(
+        sync_service=sync_service,
+        get_conn=lambda: None,
+        state_repository=FakeStateRepository(),
+        shared_secret=SECRET,
+        blueprint_name="registry_sync_internal",
+        url_prefix="/api/registry-sync",
+    )
+    assert bp.name == "registry_sync_internal"
+    assert bp.url_prefix == "/api/registry-sync"
+
+
+def test_two_independently_parameterized_blueprints_coexist_on_one_flask_app(get_conn, tmp_path):
+    """The actual reason blueprint_name/url_prefix exist: Android registers
+    TWO of these blueprints (one per SyncService/database) on the SAME Flask
+    app. Registering the default-named one twice, or two blueprints sharing
+    a URL prefix, raises at `register_blueprint()` time -- so this test
+    would fail LOUDLY (an exception during app construction, not a quiet
+    wrong answer) if the parameterization did not actually prevent the
+    collision it exists to prevent. Both instances point at the SAME sqlite
+    file here (irrelevant to what this test proves -- it proves ROUTING
+    coexistence, not database isolation, which test_android_registry_stream.
+    py's own tests cover against real retail.db/registry.db)."""
+    second_db_path = tmp_path / "second.db"
+    second_conn = sqlite3.connect(str(second_db_path))
+    second_conn.executescript(_SCHEMA)
+    second_conn.commit()
+    second_conn.close()
+
+    def _second_get_conn():
+        c = sqlite3.connect(str(second_db_path), timeout=30)
+        c.row_factory = sqlite3.Row
+        return c
+
+    app = Flask(__name__)
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=SyncService(None, get_conn, lambda: "company-a"),
+        get_conn=get_conn,
+        state_repository=FakeStateRepository(owner_installation_id="inst-first"),
+        shared_secret=SECRET,
+    ))
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=SyncService(None, _second_get_conn, lambda: "company-b"),
+        get_conn=_second_get_conn,
+        state_repository=FakeStateRepository(owner_installation_id="inst-second"),
+        shared_secret=SECRET,
+        blueprint_name="registry_sync_internal",
+        url_prefix="/api/registry-sync",
+    ))
+    app.testing = True
+    two_bp_client = app.test_client()
+
+    first = two_bp_client.get("/api/sync/_internal/cursor", headers=_auth_headers())
+    second = two_bp_client.get("/api/registry-sync/_internal/cursor", headers=_auth_headers())
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json()["installation_id"] == "inst-first"
+    assert second.get_json()["installation_id"] == "inst-second"
+
+    # Still secret-guarded independently on both prefixes.
+    assert two_bp_client.get("/api/sync/_internal/cursor").status_code == 403
+    assert two_bp_client.get("/api/registry-sync/_internal/cursor").status_code == 403

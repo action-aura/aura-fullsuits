@@ -35,6 +35,12 @@ EVENT_TYPES = frozenset(
         "DEVICE_DEACTIVATED",
         "LOCAL_STATE_CORRUPT",
         "CAPABILITY_DENIED",
+        # Guarded re-anchor (2026-09-04): the bundled anchor introduced a
+        # signing key this store had never seen, because Owner's key rotated
+        # with no continuity bridge. Rare and security-relevant by nature, so
+        # it is recorded rather than done silently -- an unexplained one is
+        # worth investigating.
+        "TRUST_ANCHOR_READMITTED",
     }
 )
 

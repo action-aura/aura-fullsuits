@@ -92,6 +92,7 @@ def init_app(app) -> None:
         billing_model_label,
         customer_status_label,
         device_key_status_label,
+        sync_quarantine_status_label,
         duplicate_review_marker_label,
         followup_status_label,
         interaction_type_label,
@@ -169,6 +170,11 @@ def init_app(app) -> None:
     from app.installations.status_presentation import installation_badge_class
     from app.employees.status_presentation import employment_status_badge_class, presence_badge_class
 
+    def license_status_drilldown_url(status: str) -> str:
+        from flask import url_for
+
+        return url_for("licensing.list_licenses", status=status)
+
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
     # importing/registering its own (Non-Negotiable Principle 1/10).
@@ -194,6 +200,7 @@ def init_app(app) -> None:
         format_owner_number=format_owner_number,
         subscription_status_label=subscription_status_label,
         license_status_label=license_status_label,
+        license_status_drilldown_url=license_status_drilldown_url,
         installation_status_label=installation_status_label,
         customer_status_label=customer_status_label,
         lead_status_label=lead_status_label,
@@ -221,6 +228,7 @@ def init_app(app) -> None:
         timeline_category_label=timeline_category_label,
         signing_key_status_label=signing_key_status_label,
         device_key_status_label=device_key_status_label,
+        sync_quarantine_status_label=sync_quarantine_status_label,
         emergency_extension_status_label=emergency_extension_status_label,
         generic_audit_action_label=generic_audit_action_label,
         health_status_label=health_status_label,
@@ -299,6 +307,11 @@ def init_app(app) -> None:
         (never itself translated or reversed)."""
         if value is None:
             return ""
-        from markupsafe import Markup, escape
+        from markupsafe import Markup
 
-        return Markup(f'<bdi dir="ltr">{escape(value)}</bdi>')
+        # Markup.format escapes every argument itself, so the value can never
+        # reach the page unescaped. This used to be Markup(f"...{escape(value)}...")
+        # -- the same output, but a Markup() call around a non-literal is the
+        # exact shape bandit B704 flags (CI's bandit gate, 2026-09-07), and a
+        # reader had to check the f-string to see the escape was there.
+        return Markup('<bdi dir="ltr">{}</bdi>').format(value)

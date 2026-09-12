@@ -4,36 +4,146 @@
  */
 
 // ── Theme Engine ──────────────────────────────────────────────────────────────
-const ThemeEngine = {
-  current: 'midnight',
+// The light/dark switch. This object used to be something else twice over, and
+// both priors are why it now looks over-careful:
+//
+//   * It was the ACCENT-PALETTE picker: six dark-HUD backgrounds (midnight /
+//     deep-space / carbon / ...) applied by writing --bg-dark / --bg-panel as
+//     INLINE styles on <html> -- near-black literals no stylesheet could
+//     override, applied on EVERY boot because init() defaulted to 'midnight'.
+//     The [data-app-theme] rules in main.css and a set of !important
+//     counter-rules existed purely to fight that. All of that is gone: this
+//     engine moves ONE attribute between two VALIDATED values and never writes
+//     an inline style, so the stylesheet owns every colour in both themes.
+//
+//   * Separately, the first light/dark toggle shipped a 1.00:1 white-on-white
+//     dark mode and was killed (see index.html's boot comment for the full
+//     postmortem). Dark v2 is token-value-only in main.css, which is what makes
+//     a toggle safe to have again -- but the PERSISTENCE discipline from that
+//     postmortem is kept here verbatim: a NEW key that the broken era never
+//     wrote, exact-match validation on read AND write, and the legacy keys
+//     ('aura_theme' in index.html, 'aura_app_theme' here) actively removed so
+//     nothing can quietly wire them back up.
+//
+// retail_design_theme_safety_test.js pins the validation and the key hygiene;
+// retail_design_contrast_test.js proves the palette both of these values land on.
+//
+// THE one allowlist. Five sanctioned themes (owner request, 2026-09: "night
+// mode back" + "some themes for both mobile and desktop"), mirrored by
+// index.html's boot script -- which cannot import this file, since it runs
+// before any <script src> loads -- and pinned equal to it by
+// retail_design_theme_safety_test.js, so the two lists cannot drift apart the
+// way the old exact-match-on-'dark' form never risked but a hand-copied list
+// always can.
+const THEME_NAMES = Object.freeze(['light', 'sand', 'dark', 'night', 'dusk']);
 
+// Sidebar brand lockup's second word ("Aura" + this), keyed by systemId --
+// deliberately NOT sys.name ("Retail & POS"/"Clinic..."): the lockup is a
+// two-word brand mark next to the Aura mark icon, not the nav's full product
+// title. Falls back to t(sys.name) in _renderShell for any systemId this
+// map does not know about, so a future subsystem still renders something.
+const SYSTEM_PRODUCT_WORDS = { retail: 'Retail', clinic: 'Clinic' };
+
+const ThemeEngine = {
+  KEY: 'aura_theme_v2',   // NEVER 'aura_theme' -- that key belongs to the broken era
+  current: 'light',
+
+  // The dot literals are the swatch's CONTENT (each previews its theme's
+  // --surface-app / --surface-panel), not styling -- the same reason the
+  // .theme-swatch exemption exists in retail_design_tokens_test.js.
   themes: {
-    midnight:    { name:'Midnight',   icon:'🌑', dot:'#080810', bg:'#050508',  panel:'#0a0a10', sidebar:'#080810'  },
-    'deep-space':{ name:'Deep Space', icon:'🌌', dot:'#0b1225', bg:'#020617',  panel:'#0f172a', sidebar:'#0b1225'  },
-    carbon:      { name:'Carbon',     icon:'🪨', dot:'#161618', bg:'#111113',  panel:'#1a1a1f', sidebar:'#161618'  },
-    emerald:     { name:'Emerald',    icon:'💚', dot:'#081a14', bg:'#061410',  panel:'#0a2018', sidebar:'#081a14'  },
-    crimson:     { name:'Crimson',    icon:'🔴', dot:'#140808', bg:'#100606',  panel:'#1a0a0a', sidebar:'#140808'  },
-    violet:      { name:'Violet',     icon:'💜', dot:'#0e0b1a', bg:'#08060e',  panel:'#110e1f', sidebar:'#0e0b1a'  },
+    light: { label: 'Day',   dot: '#eaeef3', edge: '#b3bfcd' },
+    sand:  { label: 'Sand',  dot: '#efe8dc', edge: '#b7ab99' },
+    dark:  { label: 'Calm',  dot: '#0f1319', edge: '#47566a' },
+    night: { label: 'Night', dot: '#070b12', edge: '#5fe3d0' },
+    dusk:  { label: 'Dusk',  dot: '#13111c', edge: '#b9a6ff' },
   },
 
+  // Owner brief (2026-09-08): simplify the everyday choice to three primary
+  // themes (Day, Calm, Sand), with Night and Dusk moved behind an
+  // "Advanced" disclosure in the SAME picker -- presentation only. Night
+  // and Dusk are not deleted and never touch THEME_NAMES, `themes` above,
+  // or `_sanitize()`: three guards (this file's theme-safety test, the
+  // contrast test, and Android's DesktopTokenParityContractTest) pin all
+  // five palettes forever, a shop already on Night/Dusk must keep working,
+  // and the token blocks cost nothing to leave in main.css. PRIMARY_THEMES
+  // + ADVANCED_THEMES must together cover exactly THEME_NAMES with no
+  // overlap -- retail_design_theme_safety_test.js's check (6) pins that.
+  PRIMARY_THEMES: Object.freeze(['light', 'dark', 'sand']),
+  ADVANCED_THEMES: Object.freeze(['night', 'dusk']),
+
+  // Builds one swatch <button> for either grid (primary or advanced) --
+  // factored out of openPicker() so both grids render identically instead
+  // of two copies of the same createElement/addEventListener block drifting
+  // apart.
+  _renderThemeSwatch(key, def) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'theme-swatch' + (this.current === key ? ' active' : '');
+    swatch.dataset.theme = key;
+    swatch.addEventListener('click', () => this.apply(key));
+
+    const dot = document.createElement('div');
+    dot.className = 'theme-swatch-dot';
+    dot.style.background = def.dot;
+    dot.style.borderColor = def.edge;
+
+    const name = document.createElement('div');
+    name.className = 'theme-swatch-name';
+    name.textContent = t(def.label);
+
+    swatch.appendChild(dot);
+    swatch.appendChild(name);
+    return swatch;
+  },
+
+  // THE one sanitizer. Every path that turns a stored/argument value into a
+  // data-theme write goes through here, so "anything outside the allowlist is
+  // light" is a property of the engine, not of each caller's care.
+  _sanitize(name) { return THEME_NAMES.includes(name) ? name : 'light'; },
+
   apply(name) {
-    const t = this.themes[name];
-    if (!t) return;
-    document.documentElement.setAttribute('data-app-theme', name);
-    document.documentElement.style.setProperty('--bg-dark',  t.bg);
-    document.documentElement.style.setProperty('--bg-panel', t.panel);
-    localStorage.setItem('aura_app_theme', name);
-    this.current = name;
+    const theme = this._sanitize(name);
+    const changed = theme !== this.current ||
+      document.documentElement.getAttribute('data-theme') !== theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem(this.KEY, theme); } catch (e) { /* private mode */ }
+    this.current = theme;
     // Refresh picker active state if open
     document.querySelectorAll('.theme-swatch').forEach(el => {
-      el.classList.toggle('active', el.dataset.theme === name);
+      el.classList.toggle('active', el.dataset.theme === theme);
     });
+    // Canvas charts (Chart.js) read token values at build time via
+    // RetailSystem._cssToken -- CSS cannot restyle pixels already drawn -- so
+    // a theme change re-renders the active section to rebuild them. Guarded:
+    // during boot the shell may not exist yet, and re-rendering an unchanged
+    // theme would just cost a flicker.
+    if (changed && window.SubsystemApp && SubsystemApp.active &&
+        document.getElementById('sub-content')) {
+      // `active` is the SUBSYSTEM id ('retail'), NOT the section id -- navigating
+      // to it matched no section and replaced the screen with the router's
+      // "Coming soon." placeholder on EVERY theme switch. `currentSection` is the
+      // one this comment always meant. Found by switching the theme in a real
+      // browser; no source-reading test could have seen it.
+      try { SubsystemApp._navigate(SubsystemApp.currentSection || 'dashboard'); } catch (e) { /* mid-boot */ }
+    }
   },
 
   init() {
-    const saved = localStorage.getItem('aura_app_theme') || 'midnight';
-    this.apply(saved);
+    let saved = null;
+    try { saved = localStorage.getItem(this.KEY); } catch (e) {}
+    this.current = this._sanitize(saved);
+    // Re-assert rather than trust: index.html's boot script already stamped
+    // the attribute pre-paint, but the shell can also be booted by hosts with
+    // their own HTML (the Android WebView wrapper), where nothing has.
+    document.documentElement.setAttribute('data-theme', this.current);
+    // The accent-palette era's key. Nothing reads it any more; leaving a key
+    // whose stored value is 'midnight' in every shop's browser storage is an
+    // invitation to wire it back up without reading this file first.
+    try { localStorage.removeItem('aura_app_theme'); } catch (e) {}
   },
+
+  toggle() { this.apply(this.current === 'dark' ? 'light' : 'dark'); },
 
   openPicker() {
     if (document.getElementById('theme-picker-panel')) {
@@ -51,36 +161,67 @@ const ThemeEngine = {
 
     const label = document.createElement('div');
     label.className = 'theme-picker-label';
-    label.textContent = '🎨 App Theme';
+    // An ELEMENT PAIR, not one string. Two reasons, both real:
+    //   * The button that OPENS this panel (the header .sub-header-btn) and
+    //     the More-sheet row were both migrated to AuraIcons.render('palette')
+    //     with '🎨' kept only as the no-icons.js fallback -- so the palette
+    //     appeared twice, one click apart, in two different visual languages.
+    //     '🎨' (U+1F3A8) is in retail_shell_chrome_test.js's RAW_GLYPHS ban
+    //     list and that test PASSED, because it renders the shell and the More
+    //     sheet and this panel is neither. It does now.
+    //   * `'🎨 ' + t('Theme')` also put a glyph in the same text node as a
+    //     translated word, which is the shape that makes i18n.js's DOM sweep
+    //     unable to rescue the node -- the "🛒 Open POS" defect again.
+    const labelIcon = document.createElement('span');
+    labelIcon.setAttribute('aria-hidden', 'true');
+    if (window.AuraIcons) labelIcon.innerHTML = AuraIcons.render('palette', 16);
+    else labelIcon.textContent = '🎨';
+    label.appendChild(labelIcon);
+    label.appendChild(document.createTextNode(' ' + t('Theme')));
     panel.appendChild(label);
 
+    // A <button>, not the old click-wired <div>: Enter/Space and focus come
+    // free, and .theme-swatch:focus-visible in main.css already draws the
+    // ring for it. _renderThemeSwatch() builds one; this grid gets only the
+    // three PRIMARY themes now (see PRIMARY_THEMES' own comment above).
     const grid = document.createElement('div');
     grid.className = 'theme-grid';
-    Object.entries(this.themes).forEach(([key, t]) => {
-      const swatch = document.createElement('div');
-      swatch.className = 'theme-swatch' + (this.current === key ? ' active' : '');
-      swatch.dataset.theme = key;
-      swatch.addEventListener('click', () => this.apply(key));
-
-      const dot = document.createElement('div');
-      dot.className = 'theme-swatch-dot';
-      dot.style.background = t.sidebar;
-      dot.style.boxShadow = 'inset 0 0 0 2px rgba(255,255,255,0.1), 0 0 12px ' + t.sidebar + '88';
-
-      const name = document.createElement('div');
-      name.className = 'theme-swatch-name';
-      name.textContent = t.name;
-
-      swatch.appendChild(dot);
-      swatch.appendChild(name);
-      grid.appendChild(swatch);
+    this.PRIMARY_THEMES.forEach((key) => {
+      grid.appendChild(this._renderThemeSwatch(key, this.themes[key]));
     });
     panel.appendChild(grid);
 
-    const hint = document.createElement('div');
-    hint.style.cssText = 'font-size:10px;color:rgba(255,255,255,0.25);text-align:center;margin-top:4px;';
-    hint.textContent = 'Persists across sessions';
-    panel.appendChild(hint);
+    // Night and Dusk live behind this disclosure. A <details> element, not a
+    // second hand-rolled expand/collapse: keyboard and screen-reader
+    // semantics come free, same reasoning as the swatch <button> above. It
+    // starts OPEN when the active theme is one of the two behind it -- a
+    // shop already on Night or Dusk must land on a picker that already
+    // shows what it is on, not a collapsed section hiding its own choice.
+    const advanced = document.createElement('details');
+    advanced.className = 'theme-advanced';
+    advanced.style.marginTop = '10px';
+    if (this.ADVANCED_THEMES.includes(this.current)) advanced.open = true;
+
+    const summary = document.createElement('summary');
+    summary.className = 'theme-advanced-summary';
+    // Matches .theme-picker-label's own look (css/main.css) so the section
+    // reads as part of the same panel rather than a foreign control -- set
+    // here rather than in main.css because .theme-advanced-summary is a new
+    // class with no rule yet and this file may not add one (css/main.css is
+    // owned elsewhere); token-driven, so it still follows every theme.
+    summary.style.cssText = 'cursor:pointer;font-size:10px;font-weight:800;' +
+      'letter-spacing:2px;text-transform:uppercase;color:var(--text-tertiary);' +
+      'margin-bottom:10px;';
+    summary.textContent = t('Advanced');
+    advanced.appendChild(summary);
+
+    const advancedGrid = document.createElement('div');
+    advancedGrid.className = 'theme-grid theme-grid-advanced';
+    this.ADVANCED_THEMES.forEach((key) => {
+      advancedGrid.appendChild(this._renderThemeSwatch(key, this.themes[key]));
+    });
+    advanced.appendChild(advancedGrid);
+    panel.appendChild(advanced);
 
     document.body.appendChild(panel);
   },
@@ -213,6 +354,12 @@ const SubsystemApp = {
   currentUser: {},
   role: '',         // global role: 'admin' | 'employee'
   clinicRole: '',   // clinic overlay: '' | 'doctor' | 'secretary'
+  // `null` until /api/auth/session resolves, meaning "unknown, assume full
+  // access" -- see hasCapability() below for why that default is safe. Once
+  // resolved it is either `null` still (the field hasn't landed on the
+  // session response yet) or an array of the user's own granted
+  // `retail.*` codes (see hasCapability()).
+  capabilities: null,
 
   // True if the current user may access a clinic area restricted to the given
   // clinic roles. The clinic owner (global admin) always passes. Mirrors the
@@ -221,6 +368,167 @@ const SubsystemApp = {
     if (this.role === 'admin') return true;          // owner sees everything
     if (!roles || roles.length === 0) return true;   // unrestricted area
     return roles.includes(this.clinicRole);
+  },
+
+  // ── Accent: let the stylesheet win ────────────────────────────────────────
+  //
+  // `systems.retail.accent` is a hex literal sitting in JavaScript, and five
+  // separate call sites used to push it straight onto the root element with
+  // setProperty(). Two problems with that, one cosmetic and one structural:
+  //
+  //   * STRUCTURAL: an inline style on documentElement beats every stylesheet
+  //     rule short of !important, so the token layer in css/ physically cannot
+  //     restyle the accent while these lines exist. The accent was the one
+  //     colour in this product that no stylesheet could own.
+  //
+  //   * COSMETIC, but it matters at a till: the value is #f43f5e, a rose that
+  //     sits close enough to the danger red that "accent" and "refusal" stop
+  //     being distinguishable at a glance. On a screen where colour is meant
+  //     to carry meaning -- money in, money out, a warning, a refusal -- an
+  //     accent occupying the refusal hue quietly spends the one signal you
+  //     most need to keep unambiguous.
+  //
+  // This does NOT pick a colour here; choosing it is the token layer's job,
+  // not JavaScript's. It asks one question instead: DOES A TOKEN LAYER EXIST?
+  // If css/main.css defines --accent-action, that stylesheet already sets
+  // --sub-accent / --sub-accent-rgb from it at :root, and the correct action
+  // is to write nothing at all -- because an inline property on
+  // documentElement outranks every :root rule and would pin the accent to the
+  // JS hex forever, on every install, invisibly.
+  //
+  // --accent-action is used as the sentinel precisely because JavaScript never
+  // writes it. Probing --sub-accent instead would be useless: after the first
+  // call this method's own inline value is what getComputedStyle returns, so
+  // the check would pass on boot and fail on every subsequent navigation.
+  //
+  // If no token layer is present (an older cached stylesheet), the previous
+  // behaviour is preserved exactly.
+  _tokenLayerOwnsAccent() {
+    try {
+      return !!(getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent-action') || '').trim();
+    } catch (e) {
+      return false;   // no computed style (tests / very early boot)
+    }
+  },
+
+  _applyAccent(sys) {
+    if (this._tokenLayerOwnsAccent()) return;
+    const accent = sys && sys.accent;
+    const rgb    = sys && sys.accentRgb;
+    // Both or neither: a colour with no rgb triplet would break every
+    // rgba(var(--sub-accent-rgb), a) in the product.
+    if (!accent || !rgb) return;
+    try {
+      document.documentElement.style.setProperty('--sub-accent', accent);
+      document.documentElement.style.setProperty('--sub-accent-rgb', rgb);
+    } catch (e) { /* non-DOM host */ }
+  },
+
+  // True if the current user's per-user capability grants include `code`.
+  // RENDERING ADVICE ONLY -- every route keeps its own server-side gate
+  // (mt_auth.mt_require_capability); this exists purely so the shell can
+  // choose not to fetch/render a tile the server would 403 anyway (see
+  // subsystem-retail.js's _renderDashboard, the cashier-dashboard-on-login
+  // fix this was built for). Nothing downstream of this method may itself
+  // become an authorization decision.
+  //
+  // `this.capabilities === null` covers two cases this method deliberately
+  // treats the same way -- "/api/auth/session hasn't resolved yet" and "the
+  // backend hasn't shipped the `capabilities` field yet" -- and answers
+  // `true` for both, i.e. fails OPEN. That is the opposite of every real
+  // authorization check in this codebase, and is only safe here because
+  // rendering advice failing open just means a tile renders and its own
+  // fetch 403s -- the status quo before this method existed, not a new hole.
+  // It is what keeps a server build that predates the field from blanking
+  // every gated tile for every role.
+  //
+  // 2026-08-21: that fail-open default has a sharp edge, and it drew blood.
+  // See _adoptSessionCapabilities() below -- this method answered `true` for
+  // every code, for every role, on every install, for as long as the list was
+  // being read out of the wrong key. Failing open means a wiring mistake in
+  // the line that FILLS `this.capabilities` cannot announce itself here: it
+  // looks exactly like "no capability information available", which is a
+  // legitimate state. Anything that resolves this list needs its own test;
+  // this method cannot be the place a mistake surfaces.
+  hasCapability(code) {
+    if (!Array.isArray(this.capabilities)) return true;
+    return this.capabilities.includes(code);
+  },
+
+  // The exact per-item visibility rule _renderShell's nav used to inline in
+  // its filter(). Pulled out to its own method so the sidebar-grouping pass
+  // (launch-readiness 2026-08-29) can apply it once per item and reuse the
+  // result for both the ungrouped Dashboard entry and every sys.navGroups
+  // bucket, without re-deriving it or changing what it decides. Every axis
+  // stays exactly as it was: `roles` (canClinic), `desktopOnly` (this
+  // platform), `adminOnly` (this DEVICE, this.isAdminDevice), `ownerOnly`
+  // (this USER's role) and `capability` (this user's per-grant list via
+  // hasCapability). retail_employee_management_test.py greps app-shell.js's
+  // SOURCE for the literal fragment `!item.ownerOnly || this.role === 'admin'`
+  // -- keep that exact text if this method is ever touched.
+  _isNavItemVisible(item) {
+    return (!item.roles || this.canClinic(...item.roles)) &&
+      (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) &&
+      (!item.adminOnly || this.isAdminDevice) &&
+      (!item.ownerOnly || this.role === 'admin') &&
+      (!item.capability || this.hasCapability(item.capability));
+  },
+
+  // Resolve `this.capabilities` from a GET /api/auth/session body.
+  //
+  // Extracted from init() into its own named method for one reason: it is the
+  // single line in this file whose correctness cannot be established by
+  // reading it. Everything else here is "does this code do what it says";
+  // this is "does the server put the value where this code looks", which is a
+  // question about a different file in a different language, and the answer
+  // was NO for the entire life of the capability feature.
+  //
+  // The bug: this used to read `sess.user.capabilities`. get_session() in
+  // commercial_runtime/identity/onboarding_routes.py returns `capabilities`
+  // as a TOP-LEVEL key, a sibling of `user`, never a member of it. Confirmed
+  // by booting the app and logging in as each role, not by re-reading the
+  // handler -- a cashier's real response body is:
+  //
+  //   {"authenticated": true,
+  //    "capabilities": ["retail.cash.close", "retail.refund", "retail.sell"],
+  //    "is_mt": true, "language": "en",
+  //    "user": {"id": "...", "role": "cashier", "email": "...", ...}}
+  //
+  // So the old read was permanently `undefined`, `this.capabilities` was
+  // permanently `null`, and hasCapability() therefore answered `true` for
+  // everything (it fails open on null, correctly and by design). The visible
+  // consequence: subsystem-retail.js's `_renderDashboard` cashier-landing
+  // panel -- built specifically so a cashier's first screen after login is
+  // not a 403 -- never fired once. The fix shipped, the bug it fixed kept
+  // happening, and nothing was red, because a gate that never engages is
+  // indistinguishable from a gate on a permissive account.
+  //
+  // Both locations are accepted, top-level first. Not defensive padding: the
+  // clinic product shares this identity stack and its own session route is a
+  // separate code path, and `user` is the more obvious place for a future
+  // contributor to add it. Reading both costs one `Array.isArray` and removes
+  // the entire failure mode, whose whole character is that it is silent.
+  // retail_attribution_i18n_test.py asserts the server keeps sending the
+  // top-level key AND that this file still reads it -- the seam itself, which
+  // is the only place this class of bug is visible.
+  _adoptSessionCapabilities(session) {
+    const sess = session || {};
+    // `Array.isArray`, not truthiness. An intentionally EMPTY grant list (a
+    // user denied every capability) must NOT be folded into the same `null`
+    // bucket as "the server told us nothing": one means "deny everything this
+    // list doesn't name", the other means "nothing has been checked, render
+    // as before". Truthiness cannot tell them apart -- `[]` is truthy in JS,
+    // but `[] || fallback` is not the trap; `if (!caps)` is, and this is the
+    // shape that avoids ever writing it.
+    if (Array.isArray(sess.capabilities)) {
+      this.capabilities = sess.capabilities;
+    } else if (sess.user && Array.isArray(sess.user.capabilities)) {
+      this.capabilities = sess.user.capabilities;
+    } else {
+      this.capabilities = null;
+    }
+    return this.capabilities;
   },
 
   // ── HTML escaping ─────────────────────────────────────────────────────────
@@ -266,6 +574,25 @@ const SubsystemApp = {
     return lic.current_state === 'ACTIVATION_REQUIRED'
       || lic.current_state === 'ACTIVATING'
       || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
+  },
+
+  // "This device has already joined a licensed shop": the honest signal is a
+  // DATA fact, not a state list. status_presenter.py exposes `installation_id`
+  // only once Owner has issued one, so a build with no Owner wired up
+  // (NOT_CONFIGURED + detail), a fresh install (ACTIVATION_REQUIRED), or a
+  // null payload can never satisfy it. The `_needsActivation()` half then
+  // removes the one installation-bearing state that is still pre-activation:
+  // ACTIVATING, where Owner has the device pending approval and the owner's
+  // account cannot arrive yet.
+  //
+  // The first cut of the join door used `!_needsActivation(lic)` alone --
+  // which is also true for a never-licensed install, so a plain dev/demo
+  // build with needs_setup would have sat on "Connecting to your shop…" for
+  // the full 120 s before being offered setup at all. Pinned by
+  // retail_join_shop_modal_test.js (no-Owner and pending-approval checks).
+  _isJoinedDevice(lic) {
+    if (!lic || !lic.installation_id) return false;
+    return !this._needsActivation(lic);
   },
 
   // ── "A key was already submitted, Owner hasn't ruled on it yet" marker ────
@@ -367,15 +694,22 @@ const SubsystemApp = {
     return (Date.now() - at) <= this.PENDING_ACTIVATION_MAX_AGE_MS;
   },
 
-  // Light/Dark theme toggle (#15). Persists to localStorage; the pre-paint script
-  // in index.html applies the saved choice on load (default: light).
+  // A real toggle again -- but only because the work its previous comment
+  // demanded actually happened. For one era this was deliberately a no-op that
+  // forced light: the first dark theme rendered white-on-white at 1.00:1
+  // because the compatibility layer was scoped to [data-theme="light"] while
+  // dark was injected literals, and "restoring a dark theme is real work, not
+  // a flag flip" was written right here. Dark v2 IS that work: a full palette
+  // solved to the same AA/AAA bar (html[data-theme="dark"] in main.css), the
+  // compatibility layer made theme-agnostic, and the injected chrome fully
+  // tokenised. Delegating to ThemeEngine keeps every data-theme write behind
+  // its one sanitizer -- this method cannot produce a value the engine would
+  // not.
+  //
+  // Kept as a method (rather than pointing callers at ThemeEngine) because it
+  // was a documented public entry point (#15) and stale callers may remain.
   toggleTheme() {
-    const cur = document.documentElement.getAttribute('data-theme') || 'light';
-    const next = cur === 'light' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem('aura_theme', next); } catch (e) {}
-    const btn = document.getElementById('aura-theme-toggle');
-    if (btn) btn.textContent = next === 'dark' ? '☀️' : '🌙';
+    ThemeEngine.toggle();
   },
 
   systems: {
@@ -390,10 +724,54 @@ const SubsystemApp = {
         { id: 'products',   label: 'Products',          icon: '📦' },
         { id: 'categories', label: 'Categories',        icon: '🏷️' },
         { id: 'customers',  label: 'Customers',         icon: '👥' },
+        // Launch-readiness 2026-08-30 (ROADMAP.md "retail schema v23"):
+        // promotions wave 1 -- per-product/per-category discount rules the
+        // POS resolves automatically at checkout. `capability: 'retail.discount'`
+        // reuses the EXISTING CAP_DISCOUNT code (commercial_runtime/identity/
+        // user_accounts.py) rather than inventing a new one: configuring a
+        // promotion is the same authority as typing a manual discount at the
+        // till, and ROLE_CAPABILITIES already grants it to manager/admin and
+        // withholds it from a cashier by default. Same mechanism as the
+        // Reports entry above -- hiding the nav entry is not the enforcement,
+        // just the invitation not to walk into a screen every button on which
+        // will 403.
+        { id: 'promotions', label: 'Promotions',        icon: '🎁', capability: 'retail.discount' },
         { id: 'suppliers',  label: 'Suppliers',         icon: '🏭' },
         { id: 'purchases',  label: 'Purchase Orders',   icon: '📋' },
+        // Retail schema v28 added inter-branch stock transfers (pending ->
+        // in_transit -> received, plus cancel-while-pending). `capability:
+        // 'retail.stock.adjust'` matches CAP_STOCK_ADJUST -- the SAME
+        // decorator create/send/receive/cancel_stock_transfer all carry in
+        // retail_api.py -- exactly, so a cashier is not invited into a
+        // screen whose every button would 403. Same reasoning as the
+        // Promotions and Reports entries above: hiding the nav entry is not
+        // the enforcement, just the invitation not to walk into a dead end.
+        { id: 'transfers',  label: 'Stock Transfers',   icon: '🔁', capability: 'retail.stock.adjust' },
         { id: 'returns',    label: 'Returns',           icon: '↩️' },
-        { id: 'reports',    label: 'Reports',           icon: '📊' },
+        // `capability` is a THIRD axis, alongside `adminOnly` (this device)
+        // and `ownerOnly` (this user's role) -- see the note on `employees`
+        // below for why conflating those two breaks a feature in both
+        // directions at once. This one is per-USER GRANT: the actual
+        // user_permissions rows, which an owner can turn off for one person
+        // without changing their role, so neither of the other two axes can
+        // express it.
+        //
+        // Every panel on the Reports screen reads a route decorated
+        // @mt_require_capability(CAP_REPORTS) -- report_summary,
+        // report_sales_trend, report_top_products, report_payment_methods,
+        // report_by_branch -- and ROLE_CAPABILITIES grants a cashier only
+        // {sell, refund, cash.close}. Unconditional, this entry invited a
+        // cashier to click through to five 403s in one page load: the same
+        // bug class as the cashier-dashboard-on-login fix, and NOT covered by
+        // it (that one guards `_renderDashboard`; nothing guarded this).
+        //
+        // Hiding the entry is half the fix. The other half is in
+        // subsystem-retail.js's `_renderReports`, because `_navigate`
+        // ('reports') is reachable without this link at all -- AuraRouter
+        // persists the last section to the URL hash and replays it on the
+        // next launch, so a shared till where a manager last opened Reports
+        // drops the next cashier straight onto that screen.
+        { id: 'reports',    label: 'Reports',           icon: '📊', capability: 'retail.reports' },
         { id: 'scanner',    label: 'Barcode Scanner',   icon: '🔦', desktopOnly: true },
         // feat/reorder-automation-foundation: gated on this.isAdminDevice
         // (resolved once at init() via GET /api/devices/me -- see that
@@ -401,7 +779,88 @@ const SubsystemApp = {
         // below applies to every entry with this flag. Hidden entirely
         // (not just disabled) on any device that isn't this company's
         // single admin device, fail-closed if the check couldn't run.
+        // Multi-device Phase 1 (design §3). NOTE THE FLAG: `ownerOnly`, not
+        // `adminOnly`. They are different axes and picking the wrong one
+        // breaks the feature in both directions at once. `adminOnly` means
+        // `this.isAdminDevice` -- the DEVICE axis, which design §3 says in as
+        // many words is "not users.role='admin'". Every /api/admin/employees
+        // route gates on `session['mt_role'] == 'admin'` -- the USER axis. Had
+        // this entry reused `adminOnly`, the owner would lose the screen the
+        // moment they picked up their phone (a second terminal is by
+        // definition not the admin device), while a cashier standing at the
+        // admin terminal would be shown a screen every button on which
+        // answers 403.
+        { id: 'employees',    label: 'Employees',       icon: '👤', ownerOnly: true },
+        // ci-hardening-w0.3 continuation: THE DOORWAY. POST /api/sub/retail/
+        // branches (retail_api.py:7894, create_branch) has been complete and
+        // gated since Phase 5 wave A -- nothing in the frontend ever called
+        // it. Every install therefore self-heals exactly one branch
+        // (_default_branch) and a shop has had no way to add a second, ever,
+        // which left an entire multi-store programme already shipped on top
+        // of it (device-branch pinning dc22b04, branch-scoped accounts
+        // ab6b3c1, branch managers 93cef8c, the head-office comparison
+        // chart) real, tested and unreachable.
+        //
+        // `capability: 'retail.employees'` matches create_branch's own
+        // @mt_require_capability(CAP_EMPLOYEES) decorator exactly, the same
+        // reasoning as every other capability-gated entry in this list: a
+        // cashier must not be shown a screen every button of which would
+        // 403. list_branches (GET) carries no capability of its own -- read
+        // access is not the gate here, creating a new one is.
+        { id: 'branches',     label: 'Branches',        icon: '🏦', capability: 'retail.employees' },
         { id: 'admin-center', label: 'Settings',        icon: '⚙️', adminOnly: true },
+        // ci-hardening-w0.3 continuation: THE DOORWAY, a second one on this
+        // branch. GET/POST /api/notifications/{status,settings,outbox,
+        // outbox/run-once} (commercial_runtime/notifications/routes.py) have
+        // been complete since the outbox/worker/SMTP client shipped, plus a
+        // real trigger already enqueuing into it (low-stock alerts,
+        // core/retail/whatsapp_hook.py's sibling). WhatsApp got a settings
+        // page (whatsapp.html, linked from the Settings card below); email
+        // never did. So SMTP recipients could not be configured by any
+        // user, ever, and the channel was inert in practice.
+        //
+        // `ownerOnly`, NOT `adminOnly` -- the exact distinction the
+        // Employees and Stock Accuracy entries above both spell out. Every
+        // mutating route here (`_require_admin` in routes.py) reads
+        // `session['mt_role'] == 'admin'`, the USER axis; `adminOnly` means
+        // `this.isAdminDevice`, the DEVICE axis Admin Center actually uses.
+        // Picking `adminOnly` here would show this screen to a manager
+        // standing at the admin terminal (whose every mutating click would
+        // 403) while hiding it from the owner working from a second device.
+        { id: 'email-notifications', label: 'Email Notifications', icon: '📧', ownerOnly: true },
+        // ci-hardening-w0.3 continuation: THE DOORWAY, a third one on this
+        // branch, and the one that matters most: licensing.js promises a
+        // customer whose licence is RESTRICTED/SUSPENDED/EXPIRED/REVOKED --
+        // the exact moment they are wondering whether they can get their
+        // data out -- "Your existing data is safe and remains viewable;
+        // backup, restore, and export remain available." Four backup routes
+        // (commercial_runtime/backup/routes.py: POST /create, GET /list,
+        // GET /download/<filename>, POST /restore) and three CSV export
+        // routes (retail_api.py: /reports/export/{sales,payments,
+        // cash-sessions}) have all been complete and correctly gated since
+        // before this branch started. Nothing in the frontend ever called
+        // any of them, so the promise above was false at the UI level.
+        //
+        // Both axes, matching _renderStockAccuracy's precedent exactly for
+        // the identical reason: `capability: 'retail.reports'` matches
+        // export_{sales,payments,cash_sessions}_csv's own
+        // @mt_require_capability(CAP_REPORTS) decorator, and `ownerOnly`
+        // matches backup/routes.py's `_require_admin()`, which
+        // reads `session['mt_role'] == 'admin'` (the USER axis) for EVERY
+        // one of its four routes, none of which carry a capability code at
+        // all. ROLE_ADMIN holds every capability including retail.reports
+        // (user_accounts.py's ROLE_CAPABILITIES), so gating the whole
+        // screen on the stricter (admin) axis never costs a manager the
+        // export half either -- it would already 403 on the backup half.
+        //
+        // Deliberately NOT keyed on licence state anywhere: neither
+        // backup/routes.py nor the three export routes carry a
+        // @require_license_capability decorator at all (unlike most of
+        // this file's mutating routes), so this screen is reachable and
+        // fully functional under EVERY licence state, RESTRICTED included
+        // -- the exact state the promise above is made in. See
+        // retail_backup_export_test.js's testWorksUnderRestrictedLicence.
+        { id: 'backup-export', label: 'Backup & Export', icon: '💾', ownerOnly: true, capability: 'retail.reports' },
         // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
         // above -- refund/void/product-change audit trail carries every
         // user's attribution, not just this device's, so it's gated the
@@ -409,8 +868,90 @@ const SubsystemApp = {
         // route (GET /api/sub/retail/audit-log) also enforces this itself
         // (see retail_api.py's _is_admin_device) -- unlike Admin Center's
         // reorder-requests route, this one does NOT rely on nav-hiding alone.
-        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true },
-      ]
+        //
+        // Both axes, because list_audit_log gates on both and its docstring
+        // says why in as many words: the device check answers "is this the
+        // shop's admin terminal", the capability answers "is this person
+        // allowed to read the shop's records". `adminOnly` alone leaves a
+        // cashier standing AT the admin terminal looking at an entry that
+        // 403s -- the identical bug the Reports entry above just had.
+        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true, capability: 'retail.reports' },
+        // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md): the stock
+        // accuracy report, over GET /api/sub/retail/inventory/reconciliation.
+        //
+        // `ownerOnly`, NOT `adminOnly` -- and the distinction is the one the
+        // Employees entry above spells out, applied to a different route.
+        // That route enforces `_require_company_admin()`, which reads
+        // `session['mt_role'] == 'admin'`: the USER axis. `adminOnly` means
+        // `this.isAdminDevice`, the DEVICE axis, and picking it here would
+        // hide the shop's own stock report from the owner the moment they
+        // opened it on a second terminal, while showing it to a manager
+        // standing at the admin till whose one request answers 403.
+        //
+        // The capability is the third axis and is also real: the route
+        // carries @mt_require_capability(CAP_REPORTS) like every other read
+        // that dumps the shop's position. Both are needed, exactly as on the
+        // Audit Log entry above -- and neither is the enforcement. The render
+        // guard in subsystem-retail.js's _renderStockAccuracy repeats both,
+        // because AuraRouter replays the last section out of the URL hash and
+        // reaches this screen with no nav click in between.
+        { id: 'stock-accuracy', label: 'Stock Accuracy', icon: '⚖️', ownerOnly: true, capability: 'retail.reports' },
+        // Launch-readiness 2026-08-29 ("the two exception queues both need
+        // ONE screen, not two"): the oversell queue (stock_exceptions,
+        // Phase 7 stage 7d-i/ii) and the discarded-catalogue-edit queue
+        // (sync_conflicts, Phase 6 stage 6a-ii) as one surface.
+        //
+        // `capability` only, matching BOTH read routes
+        // (list_stock_exceptions / list_sync_conflicts, both gated
+        // CAP_REPORTS with no company-admin requirement) -- deliberately
+        // NOT `ownerOnly`, unlike Stock Accuracy immediately above. Neither
+        // route discloses an unpaginated whole-catalogue dump; both are the
+        // same operational disclosure tier as Reports/Audit Log. The
+        // per-row RESOLVE action inside the screen needs a stricter
+        // capability of its own (retail.stock.adjust) -- gated inside
+        // _renderExceptions, not here, because that authority varies by
+        // ROW section, not by whether the screen is reachable at all.
+        { id: 'exceptions', label: 'Exceptions', icon: '⚠️', capability: 'retail.reports' },
+      ],
+
+      // Sidebar section grouping (launch-readiness 2026-08-29: "the left
+      // panel needs reorganizing -- it's so much stuff on the left you get
+      // distracted"). This is a RENDER-TIME arrangement ONLY -- it does not
+      // gate anything and must never change WHO sees WHICH entry, only how
+      // the entries an owner already sees are laid out. `nav` above is left
+      // completely untouched: it stays the flat, per-item source of truth
+      // every capability/adminOnly/ownerOnly/desktopOnly check already reads
+      // (via _isNavItemVisible), and the exact shape
+      // retail_employee_management_test.py and
+      // retail_reports_capability_gate_test.js both assert against with a
+      // regex/render probe -- it cannot become a nested structure.
+      //
+      // Dashboard is deliberately absent from every group here: it is the
+      // home screen, not a member of a category, and _renderShell renders it
+      // before walking this list.
+      //
+      // Grouped by what a shopkeeper is DOING, not by what the data model
+      // calls things: Customers sits under Sell because you reach for a
+      // customer mid-sale, not while managing inventory; Purchase Orders
+      // sits under Stock because it is how stock arrives.
+      //
+      // Every id below must name exactly one entry in `nav` above (other
+      // than 'dashboard'), and every non-dashboard `nav` entry must appear in
+      // exactly one group -- retail_nav_groups_test.js's
+      // testAllFifteenDestinationsReachableForOwner and
+      // testGroupsRenderInSpecifiedOrderWithMembers pin both directions, so a
+      // future nav entry that forgets a group fails loudly instead of
+      // silently vanishing from the sidebar.
+      //
+      // A group whose every item is filtered out by _isNavItemVisible must
+      // render NO header at all -- see _renderShell's groupsHTML below. An
+      // empty section header is worse than the flat list this replaces.
+      navGroups: [
+        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
+        { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+        { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
+      ],
     },
   },
 
@@ -429,6 +970,10 @@ const SubsystemApp = {
     }
     if (hash.startsWith('#reset-password/')) {
       this._showResetPasswordScreen(hash.slice('#reset-password/'.length));
+      return;
+    }
+    if (hash.startsWith('#setup/')) {
+      this._showEmployeeSetupScreen(hash.slice('#setup/'.length));
       return;
     }
 
@@ -452,7 +997,11 @@ const SubsystemApp = {
       }
     }
     if (needsSetup) {
-      this.showSetupModal();
+      // Not showSetupModal() directly: a device that has just JOINED a shop
+      // is needs_setup too, and must wait for its owner's account instead of
+      // being asked to create one. _openFirstRun() is the one place that
+      // tells the two apart -- see its comment for the launch this got wrong.
+      await this._openFirstRun();
       return;
     }
 
@@ -467,6 +1016,11 @@ const SubsystemApp = {
     // below so any early return (setup/relogin modal) still leaves this
     // defined and hidden, never undefined.
     this.isAdminDevice = false;
+    // Same fail-closed default, same reason: an unreachable/failed
+    // /api/devices/me must never leave this undefined, or the claim prompt
+    // below would render off a `undefined === true` that happened to be
+    // falsy today and something else tomorrow.
+    this.canClaimAdminDevice = false;
 
     // Which optional modules (e.g. the AI Assistant) this installation is
     // licensed for. The standalone-shell trim (2026-08-06) removed the old
@@ -517,6 +1071,12 @@ const SubsystemApp = {
         this.currentUser = sess.user || {};
         this.role        = (sess.user && sess.user.role) || '';
         this.clinicRole  = (sess.user && sess.user.clinic_role) || '';
+        // Rendering advice for hasCapability() above. The resolution rule
+        // lives in _adoptSessionCapabilities() rather than inline here --
+        // read that method's comment before touching this line; the version
+        // that WAS inline here looked correct and silently disabled every
+        // capability gate in the product.
+        this._adoptSessionCapabilities(sess);
         // feat/reorder-automation-foundation: resolved once, here, BEFORE
         // _renderShell ever builds the nav list -- mirrors the desktopOnly
         // gate's own mechanism (a plain boolean flag on `this`, read by the
@@ -529,8 +1089,20 @@ const SubsystemApp = {
           const dev = await fetch('/api/devices/me', { credentials: 'include', cache: 'no-store' })
             .then(r => r.ok ? r.json() : { success: false });
           this.isAdminDevice = !!(dev && dev.success && dev.device && dev.device.is_admin_device === true);
+          // 2026-08-20: the other half of the admin-device fix. Until now
+          // NOTHING could set is_admin_device outside of an auto-promotion
+          // hidden inside the backend's authorization check, so removing
+          // that (it was granting admin to whichever device asked first --
+          // see retail_api.py's _is_admin_device) would have left this flag
+          // permanently false and the Settings/Audit Log nav entries
+          // permanently hidden on every install. The server now tells us
+          // whether a claim is available (admin role + nobody has claimed
+          // yet); _maybeOfferAdminDeviceClaim() below turns that into the
+          // one visible action that gets a fresh install its admin device.
+          this.canClaimAdminDevice = !!(dev && dev.success && dev.can_claim_admin === true);
         } catch (e) {
           this.isAdminDevice = false;
+          this.canClaimAdminDevice = false;
         }
 
         // ── Device activation gate ───────────────────────────────────────
@@ -558,9 +1130,150 @@ const SubsystemApp = {
       }
     }
 
+    // Whatever institute/co-op/foundation is running this install, read
+    // once here (best-effort, same fail-open shape as activeModules above)
+    // so document.title and the sidebar wordmark below can use it from the
+    // very first render. `this.branding` defaults to {} on any failure --
+    // every read of it below falls back to the current product name, never
+    // to a blank string.
+    await this._loadBranding();
+
     // Single-product build: there is only ever one system, so skip the
     // multi-subsystem chooser entirely and launch straight into it.
     this.launch('retail', 'dashboard');
+    this._maybeOfferAdminDeviceClaim();
+  },
+
+  // See the comment on the call site above. Reads the same
+  // GET /settings/branding route subsystem-retail.js's receipt printer
+  // reads -- one company-scoped source for "what does this shop call
+  // itself", never a second copy of the business name kept only in this file.
+  async _loadBranding() {
+    try {
+      const resp = await fetch('/api/sub/retail/settings/branding', { credentials: 'include', cache: 'no-store' })
+        .then(r => r.json());
+      this.branding = (resp && resp.status === 'success' && resp.data) ? resp.data : {};
+    } catch (e) {
+      this.branding = {};
+    }
+    document.title = (this.branding && this.branding.branding_business_name) || 'Aura Retail';
+  },
+
+  // ── Admin-device claim prompt ───────────────────────────────────────────────
+  // Shown only when the server says a claim is genuinely available: an admin
+  // is logged in AND no device has claimed the role yet for this company.
+  // Deliberately NOT shown to a non-admin, and never shown once some device
+  // holds the flag -- a button that can only ever return 409 is worse than
+  // no button. The server re-derives every one of those conditions on the
+  // POST (and the `idx_devices_one_admin` partial unique index has the final
+  // say), so this prompt is convenience, never the enforcement.
+  //
+  // Persistent element on document.body, not inside #subsystem-shell, for
+  // the same reason as the sync banner below: _renderShell() replaces that
+  // element's entire innerHTML on every launch().
+  _maybeOfferAdminDeviceClaim() {
+    document.getElementById('aura-admin-device-claim')?.remove();
+    if (this.isAdminDevice || !this.canClaimAdminDevice) return;
+    if (sessionStorage.getItem('admin_device_claim_dismissed') === 'true') return;
+
+    const bar = document.createElement('div');
+    bar.id = 'aura-admin-device-claim';
+    // The fourth site that was still on the pre-token HUD palette (#1e1e2e
+    // ground, #e8e8f0 text, a hardcoded rose border and a #f43f5e button)
+    // after the sync pill and the toast were converted. Danger triad: this
+    // bar exists because the install is in a state that hides Settings and
+    // the Audit Log until it is resolved. `left:50%` stays physical on
+    // purpose -- it is a CENTERING offset paired with translateX(-50%), the
+    // same direction-neutral pair retail_design_rtl_test.js's own budget
+    // excludes, not a leading-edge pin.
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:var(--overlay-inset-block-end,24px);z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:var(--state-danger-surface);border:1px solid var(--state-danger-border);box-shadow:0 10px 30px rgba(0,0,0,.45);color:var(--state-danger-text);font-size:13px;line-height:1.5;';
+    // textContent (not innerHTML) for the message, and every button built as
+    // a real element: nothing here interpolates a server-supplied string
+    // into markup.
+    const msg = document.createElement('span');
+    // flex BASIS, not a bare flex:1. At 390px the two buttons take their
+    // intrinsic width first and left the message about 60px, which wrapped
+    // it to ONE WORD PER LINE and grew this banner to roughly half the
+    // phone screen, burying the till underneath it. With a 220px basis and
+    // flex-wrap on the container, the buttons drop to their own row instead
+    // and the sentence reads normally.
+    msg.style.cssText = 'flex:1 1 220px;min-inline-size:0;';
+    msg.textContent = 'This device is not yet your store\'s admin device. Settings and the Audit Log stay hidden until one device is chosen.';
+    const claim = document.createElement('button');
+    claim.className = 'btn btn-primary';
+    // The one action on this bar, so it takes the accent -- "this is the
+    // action you take" (DESIGN.md §2.1) -- rather than a second red that
+    // would compete with the bar's own danger ground. --text-on-accent is
+    // the only text token allowed on an accent fill.
+    claim.style.cssText = 'white-space:nowrap;padding:8px 16px;border-radius:9px;border:none;background:var(--accent-action);color:var(--text-on-accent);font-size:13px;font-weight:600;cursor:pointer;';
+    claim.textContent = 'Make this the admin device';
+    const later = document.createElement('button');
+    later.style.cssText = 'background:none;border:none;color:var(--text-tertiary);font-size:13px;cursor:pointer;padding:8px;';
+    later.textContent = 'Not now';
+
+    claim.addEventListener('click', () => this._claimAdminDevice(claim));
+    later.addEventListener('click', () => {
+      // Session-scoped, not localStorage: "not now" should mean this
+      // sitting, not "never ask again on this machine" -- an install left
+      // permanently without an admin device is the failure state this whole
+      // prompt exists to get out of.
+      sessionStorage.setItem('admin_device_claim_dismissed', 'true');
+      bar.remove();
+    });
+
+    bar.append(msg, claim, later);
+    document.body.appendChild(bar);
+    if (window.AuraI18n) AuraI18n.apply();   // translate before first paint settles
+  },
+
+  async _claimAdminDevice(button) {
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = 'Working…';
+    let body = null, ok = false;
+    try {
+      const res = await fetch('/api/devices/me/claim-admin', {
+        method: 'POST', credentials: 'include', cache: 'no-store',
+      });
+      body = await res.json().catch(() => null);
+      ok = res.ok;
+    } catch (e) {
+      // Network failure -- leave the prompt in place so it can be retried.
+    }
+    if (!ok) {
+      button.disabled = false;
+      button.textContent = original;
+      // ADMIN_DEVICE_ALREADY_CLAIMED means another device won in the
+      // meantime; say which one, since the whole point of the server
+      // naming the holder is that the user knows where to go.
+      const holder = body && body.admin_device && (body.admin_device.device_label || body.admin_device.platform);
+      // AuraI18n.t() explicitly here, not the DOM sweep: the sweep only
+      // translates a text node whose FULL trimmed text matches a dictionary
+      // key (see i18n.js), so a sentence with a device name concatenated
+      // onto it would silently stay English in Arabic. Translating the fixed
+      // half and appending the (untranslatable) device name is the only
+      // shape that actually localizes.
+      const t = (s) => (window.AuraI18n ? AuraI18n.t(s) : s);
+      this.showToast(
+        holder ? t('Another device is already the admin device:') + ' ' + holder
+               : t('Could not make this the admin device.'),
+        'error'
+      );
+      if (body && body.code === 'ADMIN_DEVICE_ALREADY_CLAIMED') {
+        this.canClaimAdminDevice = false;
+        document.getElementById('aura-admin-device-claim')?.remove();
+      }
+      return;
+    }
+    this.isAdminDevice = true;
+    this.canClaimAdminDevice = false;
+    document.getElementById('aura-admin-device-claim')?.remove();
+    this.showToast('This device is now your store\'s admin device.', 'success');
+    // Re-render so the adminOnly nav entries (Settings, Audit Log) appear
+    // immediately -- _renderShell()'s nav filter reads this.isAdminDevice,
+    // so without this the user would have to restart the app to see the
+    // thing they just enabled.
+    this.launch(this.active || 'retail', this.currentSection || 'dashboard');
   },
 
   // ── Device-activation gate ──────────────────────────────────────────────────
@@ -589,6 +1302,15 @@ const SubsystemApp = {
       // licensing.js's render() does on its own side) is what stops a
       // long-dead marker from suppressing showSetupModal()'s key field later.
       this._clearActivationPending();
+      // Paints (or clears) the "selling is blocked" banner off this SAME
+      // fetch -- no second request. _needsActivation() above only catches 3
+      // of the 10 states in LICENSE_BANNER_BLOCKED_STATES (and those 3 just
+      // navigated away, so the shell never even renders for them); the other
+      // 7 -- RESTRICTED, SUSPENDED, REVOKED, EXPIRED, DEVICE_DEACTIVATED,
+      // CLOCK_REVIEW_REQUIRED, LOCAL_STATE_CORRUPT -- fall through to here and
+      // reach the shell with no warning today beyond a 403 the first time the
+      // shopkeeper presses Charge. This is the fix for that.
+      this._renderLicenseBanner(lic && lic.current_state);
     } catch (e) {
       // Network hiccup: fail open, same as every other best-effort check in
       // the init() sequence this was lifted out of.
@@ -617,8 +1339,7 @@ const SubsystemApp = {
     }
 
     // Set accent color CSS variable
-    document.documentElement.style.setProperty('--sub-accent', sys.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', sys.accentRgb);
+    this._applyAccent(sys);
 
     // Show subsystem page, hide others
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -657,7 +1378,59 @@ const SubsystemApp = {
     location.href = '/static/licensing.html';
   },
 
+  // True when it is OK to go ahead and sign out. See this section's reasoning
+  // in _unsyncedPendingCount below.
+  async _confirmSignOutWhileUnsynced() {
+    const pending = await this._unsyncedPendingCount();
+    if (!pending || pending <= 0) return true;
+
+    const message = t('This device has') + ' ' + String(pending) + ' ' +
+      t('completed sale(s) that have not reached the server yet. If you sign out now they stay on this device until someone signs in here again.');
+
+    // RetailSystem._confirm is the styled dialog every other destructive
+    // action in this product uses; window.confirm is the fallback for the
+    // pre-login shell, where no subsystem has been loaded yet and the
+    // styled one does not exist. Both default to NOT signing out.
+    if (window.RetailSystem && typeof window.RetailSystem._confirm === 'function') {
+      return !!(await window.RetailSystem._confirm({
+        title: t('Sign out with unsynced sales?'),
+        message,
+        confirmLabel: t('Sign out anyway'),
+        danger: true,
+      }));
+    }
+    try { return !!window.confirm(message); } catch (e) { return true; }
+  },
+
+  // The number of events still waiting to reach the relay, or null when no
+  // honest number can be produced.
+  //
+  // FRESH FIRST: the poll's cached snapshot can be up to SYNC_POLL_MS old and
+  // a stale ZERO is the one answer that silently defeats this guard.
+  // CACHED SECOND, not "allow": the fetch failing usually means the device is
+  // offline, which is exactly when sales are most likely to be queued -- a
+  // guard that fails open in the case it exists for is not a guard.
+  // `configured !== true` means sync was never switched on for this install,
+  // so there is no outbox and nothing can be stranded.
+  async _unsyncedPendingCount() {
+    try {
+      const res = await fetch('/api/sub/retail/sync/health', { credentials: 'include', cache: 'no-store' });
+      if (res.ok) {
+        const live = (await res.json()).data;
+        if (live && live.configured === true && Number.isFinite(live.pending_count)) return live.pending_count;
+        if (live && live.configured !== true) return 0;
+      }
+    } catch (e) { /* fall through to the cached snapshot */ }
+    const cached = window.RetailSystem && window.RetailSystem._syncHealth;
+    if (cached && cached.configured === true && Number.isFinite(cached.pending_count)) return cached.pending_count;
+    return null;
+  },
+
   async logout() {
+    // Asked BEFORE anything is torn down, so answering "stay signed in"
+    // leaves the session exactly as it was -- the sync poll still running,
+    // the session still live. Nothing below this line is reversible.
+    if (!(await this._confirmSignOutWhileUnsynced())) return;
     // Stopped BEFORE the logout fetch, not after: the global auth guard
     // intercepts any /api/ 401 and pops the relogin modal, so a sync-health
     // poll racing this logout would trigger a spurious relogin modal.
@@ -679,7 +1452,10 @@ const SubsystemApp = {
       const status = await fetch('/api/onboarding/status', { cache: 'no-store' })
         .then(r => r.json()).catch(() => ({ needs_setup: false }));
       if (status.needs_setup) {
-        this.showSetupModal();
+        // Same decision as init()'s boot path -- setup modal, or the
+        // "Connecting to your shop…" wait for a device that has already
+        // joined -- made in ONE place so the two callers cannot disagree.
+        await this._openFirstRun();
       } else {
         this.showReloginModal(errorMsg || 'Your session has expired. Please log in again.');
       }
@@ -696,8 +1472,12 @@ const SubsystemApp = {
   async showSetupModal() {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    // Always render into the ordinary (non-join) layout. _toggleJoinMode()
+    // below flips this to true in place without a re-render; the one path
+    // back to the setup form re-renders from here, which is what makes
+    // resetting it here sufficient to undo everything the toggle changed.
+    this._joinMode = false;
+    this._applyAccent(this.systems.retail);
 
     // AUDIT-fix 2026-08-17: registration now collects the license key
     // itself instead of the old separate pre-login "enter your key" screen
@@ -734,24 +1514,35 @@ const SubsystemApp = {
       <div class="auth-card">
         <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
-          <div class="auth-icon">${AuraIcons.render('zap', 32)}</div>
-          <h2 class="auth-title">${t('Welcome to Action Aura')}</h2>
-          <p class="auth-sub">${t('Create your administrator account to get started.')}</p>
-          <p class="auth-note">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
+          <!-- Guarded on the METHOD, not on the module: window.AuraIcons
+               alone is truthy for a partially-loaded or older icons.js, and
+               this line then throws inside the template literal and the
+               first-run modal never renders at all. That is exactly what
+               happened to retail_join_shop_modal_test.js when mark() was
+               added (2026-09-08, "AuraIcons.mark is not a function"), and a
+               shop meeting it would see a blank first run with no way
+               forward. NOTE: never put a backtick in a comment inside a
+               template literal -- it ends the literal, which is how this
+               very comment first broke the whole file. -->
+          <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
+          <h2 class="auth-title" id="su-title">${t('Welcome to Action Aura')}</h2>
+          <p class="auth-sub" id="su-sub">${t('Create your administrator account to get started.')}</p>
+          <p class="auth-note" data-role="setup-only">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
+          ${needsKey ? `<p class="auth-foot" style="margin:4px 0 0"><a href="#" id="su-join-link" onclick="SubsystemApp._toggleJoinMode(event)">${t('Already have a shop? Join it with your licence key')}</a></p>` : ''}
         </div>
-        <div class="auth-grid-2">
+        <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
             <label for="su-name">Full Name *</label>
-            <input id="su-name" type="text" placeholder="Your full name" autocomplete="name"
+            <input id="su-name" type="text" data-i18n-ph="Your full name" placeholder="${t('Your full name')}" autocomplete="name"
               onkeydown="if(event.key==='Enter')document.getElementById('su-company').focus()" />
           </div>
           <div class="auth-field">
             <label for="su-company">Company Name</label>
-            <input id="su-company" type="text" placeholder="Your company" autocomplete="organization"
+            <input id="su-company" type="text" data-i18n-ph="Your company" placeholder="${t('Your company')}" autocomplete="organization"
               onkeydown="if(event.key==='Enter')document.getElementById('su-email').focus()" />
           </div>
         </div>
-        <div class="auth-field">
+        <div class="auth-field" data-role="setup-only">
           <label for="su-email">Email Address *</label>
           <input id="su-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
             onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
@@ -761,17 +1552,17 @@ const SubsystemApp = {
           <label for="su-key">License Key *</label>
           <input id="su-key" type="text" placeholder="AURA-RETAIL-XXXX-YYYY-ZZZZ" autocomplete="off"
             style="text-transform:uppercase" onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
-          <p class="hint" style="margin:4px 0 0;font-size:12px;color:var(--text-muted)">${t('From your Aura order confirmation. Activated together with your account below.')}</p>
+          <p class="hint" id="su-key-hint" style="margin:4px 0 0;font-size:12px;color:var(--text-muted)">${t('From your Aura order confirmation. Activated together with your account below.')}</p>
         </div>` : ''}
-        <div class="auth-grid-2">
+        <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
             <label for="su-pass">Password *</label>
-            <input id="su-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+            <input id="su-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
               onkeydown="if(event.key==='Enter')document.getElementById('su-pass2').focus()" />
           </div>
           <div class="auth-field">
             <label for="su-pass2">Confirm Password *</label>
-            <input id="su-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+            <input id="su-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
               onkeydown="if(event.key==='Enter')SubsystemApp._setupSubmit()" />
           </div>
         </div>
@@ -883,7 +1674,7 @@ const SubsystemApp = {
       overlay.id = 'aura-setup-complete-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;background:#020617;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:Inter,sans-serif;z-index:99999;';
       overlay.innerHTML = `
-        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent,#14b8a6)">${AuraIcons.render('circle-check-big', 56)}</div>
+        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent,#14b8a6)">${AuraIcons.render('circle-check-big', 56, { animate: 'pop' })}</div>
         <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
         <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:var(--sub-accent,#14b8a6)"></strong>. Loading your platform…</p>`;
       const nameEl = overlay.querySelector('#aura-setup-complete-name');
@@ -901,6 +1692,327 @@ const SubsystemApp = {
 
     } catch(e) {
       showErr('Network error. Make sure the server is running.');
+    }
+  },
+
+  // ── First run: set up a new shop, or wait for a joined shop's account ──────
+  // The ONE place that decides what a needs_setup device sees. Both callers
+  // -- init() at boot and checkAuthAndSetup() on a 401 -- go through it.
+  //
+  // The first cut of the join door wired this branch into checkAuthAndSetup()
+  // only, and its test called that function directly, so it passed. On a real
+  // launch init() runs FIRST, read needs_setup itself and opened the setup
+  // modal straight away -- so a till that had just joined a shop was offered
+  // "Create your administrator account" a second time, the exact leftover
+  // the door exists to remove. Measured in Chromium on a fresh till
+  // (scripts/ops/join_door_e2e.py, after-restart phase, 2026-09-06); pinned
+  // by retail_join_shop_modal_test.js driving init() itself.
+  //
+  // A device that already activated via /api/licensing/activate with no
+  // admin session yet is ACTIVE and needs_setup at the same time: its
+  // owner's account simply has not synced down yet, which is the
+  // join-existing-shop-design.md waiting state, not a fresh install that
+  // still needs a key. _isJoinedDevice() tells the two apart from the status
+  // payload's Owner-issued installation_id, minus the pending-approval state.
+  async _openFirstRun() {
+    try {
+      const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+      if (this._isJoinedDevice(lic)) {
+        return this._waitForShopAccount();
+      }
+    } catch (e) {
+      // Fail open, same as every other best-effort licensing check in this
+      // file: fall through to the ordinary setup modal below.
+    }
+    // Owner instruction (2026-09-08): the brand intro plays here and ONLY
+    // here -- a device that just JOINED a shop took the early return above
+    // and never reaches this line, and neither does a returning login
+    // (showReloginModal, an entirely separate path this function never
+    // calls). See _maybeShowFirstRunIntro()'s own comment for the full
+    // reasoning, including why it is fired WITHOUT an await.
+    this._maybeShowFirstRunIntro();
+    this.showSetupModal();
+  },
+
+  // ── First-run brand intro (brand/intro.html) ────────────────────────────
+  // Plays AT MOST ONCE, EVER, immediately ahead of the create-admin wizard
+  // above -- never on a cold boot, never on the sign-in screen
+  // (showReloginModal), never after a logout (logout() always routes back
+  // through showReloginModal, never through here). Gating it in
+  // _openFirstRun() rather than inside showSetupModal() itself is what keeps
+  // it off every OTHER caller of showSetupModal(): _toggleJoinMode()'s
+  // "Set up a new shop instead" reversal and the join-flow's own fallback
+  // link both call showSetupModal() directly, and must not replay this.
+  //
+  // Deliberately NOT awaited from _openFirstRun(): the create-admin screen
+  // must render immediately regardless of what the intro does, so the
+  // overlay this builds simply sits on top of the already-rendering setup
+  // screen until it is skipped or times out -- indistinguishable on a real
+  // screen from a sequential "intro, then setup", but it means nothing here
+  // can ever delay reaching the form (and, concretely, does not saddle
+  // every existing first-run test with a multi-second real wait).
+  _INTRO_PLAYED_KEY: 'aura_intro_played_v1',
+
+  _maybeShowFirstRunIntro() {
+    try {
+      if (localStorage.getItem(this._INTRO_PLAYED_KEY) === '1') return;
+      // Committed the INSTANT the decision to show it is made, not after it
+      // finishes -- "at most once ever" must hold even if the window is
+      // closed mid-animation, not only on a clean dismissal.
+      localStorage.setItem(this._INTRO_PLAYED_KEY, '1');
+    } catch (e) {
+      // No localStorage (private mode, or a WebView build that disabled it)
+      // -- fail OPEN toward showing it, the same convention every other
+      // best-effort storage read in this file follows. Worst case here is
+      // one extra six-second overlay; the alternative (fail closed) risks
+      // "never plays anywhere localStorage is unavailable", which is worse.
+    }
+    try {
+      this._playIntroOverlay();
+    } catch (e) {
+      // Never let a broken/missing intro asset strand the user here -- the
+      // setup screen underneath is already rendering regardless (see the
+      // caller, and _playIntroOverlay's own guards for the same contract
+      // applied a second time, closer to the DOM work that can actually
+      // throw).
+    }
+  },
+
+  // Builds a full-screen overlay over brand/intro.html and tears itself down
+  // on the FIRST of: a click/tap anywhere on it, any keypress, or a timeout
+  // (the real ~6s clip length, or ~1.2s under prefers-reduced-motion --
+  // intro.html's OWN `@media (prefers-reduced-motion: reduce)` block already
+  // swaps the drawing animation for its static final frame; this only
+  // decides how long that frame, or the full clip, stays on screen before
+  // being torn down). Every step that could throw (matchMedia, DOM
+  // construction, timers) is wrapped so this can never strand the caller --
+  // see _maybeShowFirstRunIntro()'s contract, which this exists to uphold.
+  _playIntroOverlay() {
+    let overlay;
+    let timer;
+    const finish = () => {
+      try { clearTimeout(timer); } catch (e) {}
+      try { window.removeEventListener('keydown', finish); } catch (e) {}
+      try { overlay && overlay.remove(); } catch (e) {}
+    };
+    try {
+      const reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+      overlay = document.createElement('div');
+      overlay.id = 'aura-intro-overlay';
+      overlay.setAttribute('role', 'button');
+      overlay.setAttribute('aria-label', t('Skip intro'));
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#070b12;cursor:pointer';
+
+      const frame = document.createElement('iframe');
+      frame.src = '/static/brand/intro.html';
+      frame.title = 'Aura';
+      frame.setAttribute('tabindex', '-1');
+      // Pointer events pass through to the overlay behind it: intro.html has
+      // no interactive content of its own, and this keeps "click anywhere"
+      // a single listener instead of also needing one inside the iframe's
+      // (same-origin, but separate) document.
+      frame.style.cssText = 'width:100%;height:100%;border:0;display:block;pointer-events:none';
+      frame.onerror = finish;
+      overlay.appendChild(frame);
+
+      overlay.addEventListener('click', finish);
+      overlay.addEventListener('touchstart', finish, { passive: true });
+      window.addEventListener('keydown', finish);
+      document.body.appendChild(overlay);
+
+      timer = setTimeout(finish, reducedMotion ? 1200 : 6500);
+      // Node test harnesses only (a browser's setTimeout id has no
+      // .unref()): stops a standalone test process from sitting around for
+      // the full duration just because this fired during it.
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    } catch (e) {
+      finish();
+    }
+  },
+
+  // ── JOIN AN EXISTING SHOP (second device / phone) ──────────────────────────
+  // docs/launch-readiness/join-existing-shop-design.md. A device joining a
+  // shop that already exists on another till needs nothing this modal
+  // otherwise collects -- no name, no email, no password -- because there is
+  // no new admin to create: POST /api/licensing/activate takes no session,
+  // the identity rebind it triggers seeds company_settings for a device that
+  // activates with no admin, and the owner's real account then arrives by
+  // sync. The only input this flow needs is the key already in the form.
+  //
+  // Reached from the "Already have a shop?" link showSetupModal() renders
+  // above (only when this build even carries a key field -- an install with
+  // no Owner wired up has no shop to join), and toggled back the same way.
+  _joinMode: false,
+
+  // Turning join mode ON hides the setup-only fields IN PLACE -- same
+  // overlay, same DOM nodes, so anything already typed survives a mind
+  // change -- via the `data-role="setup-only"` wrappers showSetupModal()'s
+  // template carries on both `.auth-grid-2` blocks and the email field.
+  // Turning it back OFF re-renders the whole modal from scratch through
+  // showSetupModal() instead of hand-restoring every title/button/link string
+  // this mutates below -- simpler, and showSetupModal() resets `_joinMode`
+  // itself, re-fetches /api/licensing/status (idempotent) and is the exact
+  // function this overlay was built by in the first place.
+  _toggleJoinMode(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) return;
+    if (this._joinMode) {
+      return this.showSetupModal();
+    }
+    this._joinMode = true;
+    overlay.querySelectorAll('[data-role="setup-only"]').forEach(el => { el.style.display = 'none'; });
+    const titleEl = document.getElementById('su-title');
+    const subEl   = document.getElementById('su-sub');
+    const btnEl   = document.getElementById('su-btn');
+    const linkEl  = document.getElementById('su-join-link');
+    const hintEl  = document.getElementById('su-key-hint');
+    if (titleEl) titleEl.textContent = t('Join your shop');
+    if (subEl)   subEl.textContent = t("Enter the licence key your shop already uses. Your account will arrive from your shop's other device.");
+    // The setup layout's key hint ends "activated together with your account
+    // below" -- there is no account form below in join mode (seen in the
+    // Chromium run's screenshot, 2026-09-06), so say what the key IS instead.
+    if (hintEl)  hintEl.textContent = t("The same key your shop's other device was activated with. It is in your Aura order confirmation.");
+    if (btnEl) {
+      btnEl.textContent = t('Join shop');
+      btnEl.setAttribute('onclick', 'SubsystemApp._joinSubmit()');
+    }
+    if (linkEl) linkEl.textContent = t('Set up a new shop instead');
+  },
+
+  async _joinSubmit() {
+    const key   = document.getElementById('su-key')?.value.trim().toUpperCase();
+    const errEl = document.getElementById('su-error');
+    const btn   = document.getElementById('su-btn');
+    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Join shop');btn.disabled=false;} };
+
+    if (!key) return showErr('A license key is required.');
+
+    if (btn) { btn.textContent = t('Joining…'); btn.disabled = true; }
+    if (errEl) errEl.style.display = 'none';
+
+    // Activation only -- deliberately no /api/onboarding/create-admin call
+    // anywhere in this function. There is no admin to create on this device;
+    // the one this join is FOR already exists on the shop's other till and
+    // arrives by sync once this device is trusted.
+    let activation = null;
+    try {
+      const res = await fetch('/api/licensing/activate', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ license_key: key }),
+      });
+      activation = await res.json();
+      activation._status = res.status;
+    } catch (e) {
+      activation = { result: 'NETWORK_ERROR' };
+    }
+
+    if (activation.result !== 'SUCCESS') {
+      // Same reason-code mapping _setupSubmit's own activation branch uses --
+      // one table, not a second copy that can drift from it.
+      return showErr(this._activationFailureMessage(activation));
+    }
+
+    // Activated -- but the relay address this device just learned only takes
+    // effect at the NEXT launch (read at import, see the design doc), so the
+    // honest instruction is to restart, not to carry on in this process
+    // pretending the new wiring is already live.
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (overlay) {
+      overlay.querySelector('.auth-card').innerHTML = `
+        <div class="auth-head">
+          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
+          <h2 class="auth-title">${t('Connected to your shop')}</h2>
+          <p class="auth-sub">${t("Restart Aura to finish joining. Your account is on its way from your shop's other device.")}</p>
+        </div>
+        <button id="su-join-continue-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount()">${t('I restarted — continue')}</button>`;
+    }
+  },
+
+  // ── Waiting for the owner's account to arrive by sync ───────────────────────
+  // Reached two ways: right after _joinSubmit() above ("I restarted --
+  // continue"), and by checkAuthAndSetup() below on the VERY NEXT launch, for
+  // a device that is already ACTIVE but still has no admin session -- the
+  // owner's account just hasn't synced down yet, which is not the same thing
+  // as a fresh install that still needs a key.
+  //
+  // `intervalMs`/`ceilingMs` default to the design's real 3s/120s and are
+  // parameters ONLY so a test can drive this with a short real ceiling --
+  // this frontend has no test framework and no fake-timer shim (see this
+  // file's other standalone Node tests), so a short REAL wait is the only
+  // way to exercise the timeout branch without a 120-second test. Production
+  // call sites never pass either argument.
+  _waitApprovalTimer: null,
+  _waitApprovalElapsedMs: 0,
+
+  _waitForShopAccount(intervalMs, ceilingMs) {
+    const interval = intervalMs || 3000;
+    const ceiling  = ceilingMs  || 120000;
+    // Two very different entry states share this function: _joinSubmit()
+    // above calls it into an overlay that already exists (its own "Connected"
+    // screen), while checkAuthAndSetup() below calls it at boot, before ANY
+    // modal has been created -- there is nothing on screen yet for an ACTIVE,
+    // no-admin-yet device's very first render. Build the overlay ourselves
+    // when it is missing, the same way showSetupModal()/showReloginModal() do.
+    let overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'aura-relogin-modal';
+      overlay.className = 'auth-overlay';
+      overlay.innerHTML = '<div class="auth-card"></div>';
+      document.body.appendChild(overlay);
+    }
+    this._authModalOpen = true;
+    this._applyAccent(this.systems.retail);
+    this._waitApprovalElapsedMs = 0;
+    overlay.querySelector('.auth-card').innerHTML = `
+      <div class="auth-head">
+        <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+        <h2 class="auth-title">${t('Connecting to your shop…')}</h2>
+        <p class="auth-sub">${t('This takes a few seconds once the app has restarted.')}</p>
+      </div>`;
+    this._stopWaitForShopAccountPoll();
+    this._waitApprovalTimer = setInterval(() => this._pollShopAccount(interval, ceiling), interval);
+  },
+
+  _stopWaitForShopAccountPoll() {
+    if (this._waitApprovalTimer) {
+      clearInterval(this._waitApprovalTimer);
+      this._waitApprovalTimer = null;
+    }
+  },
+
+  async _pollShopAccount(interval, ceiling) {
+    this._waitApprovalElapsedMs += interval;
+    let status = null;
+    try {
+      status = await fetch('/api/onboarding/status', { cache: 'no-store' }).then(r => r.json());
+    } catch (e) {
+      // Transient -- keep waiting silently, same fail-open convention every
+      // other best-effort poll in this file follows.
+    }
+    if (status && status.needs_setup === false) {
+      this._stopWaitForShopAccountPoll();
+      document.getElementById('aura-relogin-modal')?.remove();
+      this._authModalOpen = false;
+      this.showReloginModal(t('Your shop is connected. Sign in with your account.'));
+      return;
+    }
+    if (this._waitApprovalElapsedMs >= ceiling) {
+      this._stopWaitForShopAccountPoll();
+      const overlay = document.getElementById('aura-relogin-modal');
+      const card = overlay && overlay.querySelector('.auth-card');
+      if (card) {
+        card.innerHTML = `
+          <div class="auth-head">
+            <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+            <h2 class="auth-title">${t('Still waiting for your account. Check the connection, or set up a new shop instead.')}</h2>
+          </div>
+          <button id="su-wait-retry-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount(${interval}, ${ceiling})">${t('Keep waiting')}</button>
+          <button id="su-wait-setup-btn" class="auth-submit" style="margin-top:8px" onclick="SubsystemApp.showSetupModal()">${t('Set up a new shop instead')}</button>`;
+      }
     }
   },
 
@@ -955,6 +2067,15 @@ const SubsystemApp = {
     LOCAL_STATE_CORRUPT: 1,
   },
 
+  // The only members of the set above a customer can resolve without support,
+  // and so the only ones "check the date and time" is true advice for. Mirrors
+  // CLOCK_FIXABLE_REASON_CODES in licensing.js and LicensingMessages.kt.
+  ACTIVATION_CLOCK_FIXABLE_REASONS: {
+    ASSERTION_EXPIRED: 1,
+    ASSERTION_NOT_YET_VALID: 1,
+    CLOCK_ROLLBACK_SUSPECTED: 1,
+  },
+
   _activationFailureMessage(activation) {
     const a = activation || {};
     if (a.result === 'NETWORK_ERROR') {
@@ -967,14 +2088,24 @@ const SubsystemApp = {
     }
     // Deliberately ahead of the `a.detail` fallback, and deliberately says
     // nothing about the key: Owner said yes, so a new key cannot help and
-    // asking for one is actively harmful advice. The clock is called out
-    // because ASSERTION_EXPIRED / ASSERTION_NOT_YET_VALID /
-    // CLOCK_ROLLBACK_SUSPECTED are the only members of this set the customer
-    // can resolve without support.
+    // asking for one is actively harmful advice.
+    //
+    // Clock advice is given ONLY for the three codes a clock can actually
+    // cause. It used to be given for all twelve, and on a real handset
+    // stranded at UNKNOWN_SIGNING_KEY that sent an investigation off to
+    // compare clocks which already matched to the identical second, while the
+    // true cause was a trust store seeded once and never refreshed. Everything
+    // else gets the reason code to quote to support -- the fastest route to
+    // the cause. Keep in step with licensing.js and LicensingMessages.kt.
     if (this.ACTIVATION_LOCAL_VERIFICATION_REASONS[a.reason_code]) {
-      return 'Action Aura approved this activation, but this computer could not verify the signed '
-        + 'licence it received, so it has not been applied yet. Your license key is not the problem — '
-        + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+      const opening = 'Action Aura approved this activation, but this computer could not verify the signed '
+        + 'licence it received, so it has not been applied yet. Your license key is not the problem — ';
+      if (this.ACTIVATION_CLOCK_FIXABLE_REASONS[a.reason_code]) {
+        return opening
+          + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+      }
+      return opening + 'do not replace it, and re-entering it cannot help. Please contact support and quote '
+        + 'this code: ' + (a.reason_code || 'UNKNOWN') + '.';
     }
     // A real verdict from Owner. `detail` is Owner-supplied text; every caller
     // renders it through _esc().
@@ -1178,8 +2309,7 @@ const SubsystemApp = {
   showReloginModal(msg = 'Your session has expired. Please log in again.') {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
     const overlay = document.createElement('div');
     overlay.id = 'aura-relogin-modal';
     overlay.className = 'auth-overlay';
@@ -1307,7 +2437,7 @@ const SubsystemApp = {
     if (overlay) {
       overlay.querySelector('.auth-card').innerHTML = `
         <div class="auth-head">
-          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32)}</div>
+          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
           <h2 class="auth-title">${t('Check your email')}</h2>
           <p class="auth-sub">${t('If an account exists for that email, a reset link is on its way.')}</p>
         </div>
@@ -1317,8 +2447,7 @@ const SubsystemApp = {
 
   // ── VERIFY EMAIL LANDING SCREEN (from #verify-email/<token>) ──────────────
   _showVerifyEmailScreen(token) {
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
     const overlay = document.createElement('div');
     overlay.id = 'aura-verify-email-screen';
     overlay.className = 'auth-overlay';
@@ -1362,8 +2491,7 @@ const SubsystemApp = {
 
   // ── RESET PASSWORD LANDING SCREEN (from #reset-password/<token>) ──────────
   _showResetPasswordScreen(token) {
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
     const overlay = document.createElement('div');
     overlay.id = 'aura-reset-password-screen';
     overlay.className = 'auth-overlay';
@@ -1375,12 +2503,12 @@ const SubsystemApp = {
         </div>
         <div class="auth-field">
           <label for="rp-pass">${t('New password')}</label>
-          <input id="rp-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+          <input id="rp-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
             onkeydown="if(event.key==='Enter')document.getElementById('rp-pass2').focus()" />
         </div>
         <div class="auth-field" style="margin-bottom:20px;">
           <label for="rp-pass2">${t('Confirm new password')}</label>
-          <input id="rp-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+          <input id="rp-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
             onkeydown="if(event.key==='Enter')SubsystemApp._resetPasswordSubmit('${token}')" />
         </div>
         <div id="rp-error" class="auth-error"></div>
@@ -1414,7 +2542,7 @@ const SubsystemApp = {
       if (overlay) {
         overlay.querySelector('.auth-card').innerHTML = `
           <div class="auth-head">
-            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32)}</div>
+            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
             <h2 class="auth-title">${t('Password updated')}</h2>
             <p class="auth-sub">${t('You can now sign in with your new password.')}</p>
           </div>
@@ -1425,46 +2553,200 @@ const SubsystemApp = {
     }
   },
 
+  // ── EMPLOYEE SETUP LANDING SCREEN (from #setup/<token>) ────────────────────
+  // Measured 2026-09-06: the Employees screen's "+ Add Employee" dialog issues
+  // an invite link of the form http://<host>/#setup/<token> ("This link works
+  // once and expires in 7 days"), but init() only ever handled
+  // #verify-email/<token> and #reset-password/<token> -- opening a setup link
+  // in a fresh browser fell through to the ordinary sign-in modal, and a
+  // brand-new employee with no password had nowhere to set one. The backend
+  // route (POST /api/auth/employee/setup, commercial_runtime/identity/
+  // onboarding_routes.py) already existed -- its own comment called the
+  // invite link "currently frontend-unwired". This pair mirrors
+  // _showResetPasswordScreen/_resetPasswordSubmit exactly, on purpose: same
+  // shape, so the two one-time-link screens cannot silently drift apart.
+  _showEmployeeSetupScreen(token) {
+    this._applyAccent(this.systems.retail);
+    const overlay = document.createElement('div');
+    overlay.id = 'aura-employee-setup-screen';
+    overlay.className = 'auth-overlay';
+    overlay.innerHTML = `
+      <div class="auth-card auth-card-compact">
+        <div class="auth-head">
+          <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+          <h2 class="auth-title">${t('Set your password')}</h2>
+          <p class="auth-sub">${t('Choose the password you will sign in with. Your email is already on file.')}</p>
+        </div>
+        <div class="auth-field">
+          <label for="es-pass">${t('Password')}</label>
+          <input id="es-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')document.getElementById('es-pass2').focus()" />
+        </div>
+        <div class="auth-field" style="margin-bottom:20px;">
+          <label for="es-pass2">${t('Confirm password')}</label>
+          <input id="es-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')SubsystemApp._employeeSetupSubmit('${token}')" />
+        </div>
+        <div id="es-error" class="auth-error"></div>
+        <button id="es-btn" class="auth-submit" onclick="SubsystemApp._employeeSetupSubmit('${token}')">${t('Set password')}</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    setTimeout(() => document.getElementById('es-pass')?.focus(), 100);
+  },
+
+  async _employeeSetupSubmit(token) {
+    const pass  = document.getElementById('es-pass')?.value;
+    const pass2 = document.getElementById('es-pass2')?.value;
+    const errEl = document.getElementById('es-error');
+    const btn   = document.getElementById('es-btn');
+    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = 'Set password'; btn.disabled = false; } };
+    if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
+    if (pass !== pass2) return showErr('Passwords do not match.');
+
+    if (btn) { btn.textContent = t('Saving…'); btn.disabled = true; }
+    if (errEl) errEl.style.display = 'none';
+    try {
+      const res = await fetch('/api/auth/employee/setup', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password: pass }),
+      });
+      const data = await res.json();
+      if (!data.success) return showErr(data.error || t('This setup link is invalid or has expired. Ask your admin for a new one.'));
+
+      const overlay = document.getElementById('aura-employee-setup-screen');
+      if (overlay) {
+        overlay.querySelector('.auth-card').innerHTML = `
+          <div class="auth-head">
+            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
+            <h2 class="auth-title">${t('Your password is set')}</h2>
+            <p class="auth-sub">${t('Sign in with your email and this password, on this device or the phone.')}</p>
+          </div>
+          <button class="auth-submit" onclick="location.hash='';SubsystemApp.init();">${t('Continue to sign in')}</button>`;
+      }
+    } catch (e) {
+      showErr('Network error. Make sure the server is running.');
+    }
+  },
+
+  // The 5 bottom-tab-bar destinations (docs/design/phone-ui-redesign.md §2):
+  // Home/Stock/Till/Customers map 1:1 to these ids; the 5th slot is the More
+  // sheet, active whenever the current section is none of the four. Shared
+  // between _renderShell (builds the bar) and _navigate (keeps its active
+  // state in sync) so the two lists cannot silently drift apart -- the same
+  // reason the ungated-nav-entry list in the spec's §2 rationale is quoted
+  // once rather than copied.
+  _TAB_BAR_SECTIONS: ['dashboard', 'products', 'pos', 'customers'],
+
   _renderShell(sys, systemId) {
     const shell = document.getElementById('subsystem-shell');
     if (!shell) return;
-    
+
     const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
 
-    shell.innerHTML = `
-      <!-- Subsystem Sidebar -->
-      <aside class="sub-sidebar" id="sub-sidebar">
-        <div class="sub-sidebar-brand aura-logo" title="Return to Home">
-          <div class="sub-brand-icon">${window.AuraIcons ? AuraIcons.render(sys.icon, 22) : sys.icon}</div>
-          <div class="sub-brand-text">
-            <span class="sub-system-name">${t(sys.name)}</span>
-            <span class="logo-name" style="font-size:11px;color:var(--text-muted)">Action<strong>Aura</strong></span>
-          </div>
-        </div>
+    // ── Phone tab bar (≤640px, css/main.css) — docs/design/phone-ui-redesign.md
+    // §2/§7 Step 1. Renders unconditionally (like the sidebar it replaces at
+    // that width); the media query is what actually hides it ≥641px, not a
+    // JS branch, so there is nothing here for a resize to get out of sync
+    // with. Stable across every role on purpose -- see the spec's "why these
+    // five" -- so no _isNavItemVisible() gating applies to the four mapped
+    // slots the way it does for the sidebar/More-sheet items.
+    const activeSection = this.currentSection || 'dashboard';
+    const tabIcon = (val) => window.AuraIcons ? AuraIcons.render(val, 22) : val;
+    const tabHTML = (id, emoji, label, extraClass) => `
+            <a class="sub-tab${extraClass ? ' ' + extraClass : ''}${id === activeSection ? ' active' : ''}"
+               data-tab="${id}"
+               onclick="SubsystemApp._navigate('${id}')">
+              <span class="sub-tab-icon">${tabIcon(emoji)}</span>
+              <span class="sub-tab-label">${t(label)}</span>
+            </a>
+          `;
+    const tabBarHTML = `
+      <nav class="sub-tabbar" id="sub-tabbar">
+        ${tabHTML('dashboard', '🏠', 'Home')}
+        ${tabHTML('products', '📦', 'Stock')}
+        ${tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
+        ${tabHTML('customers', '👥', 'Customers')}
+        <a class="sub-tab${!this._TAB_BAR_SECTIONS.includes(activeSection) ? ' active' : ''}"
+           id="sub-tab-more"
+           onclick="SubsystemApp._openMoreSheet()">
+          <span class="sub-tab-icon">${tabIcon('☰')}</span>
+          <span class="sub-tab-label">${t('More')}</span>
+        </a>
+      </nav>
+    `;
 
-        <nav class="sub-nav" id="sub-nav">
-          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice)).map(item => `
+    // ── Sidebar nav: Dashboard ungrouped, then sys.navGroups ────────────────
+    // See the long comment on systems.retail.navGroups for why this stays a
+    // separate render-time arrangement over the untouched flat `nav` array
+    // rather than a nested nav structure.
+    const navItemHTML = (item) => `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
                onclick="SubsystemApp._navigate('${item.id}')">
               <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
               <span class="sub-nav-label">${t(item.label)}</span>
             </a>
-          `).join('')}
+          `;
+    const byId = new Map(sys.nav.map((item) => [item.id, item]));
+    const dashboardItem = byId.get('dashboard');
+    const dashboardHTML = (dashboardItem && this._isNavItemVisible(dashboardItem)) ? navItemHTML(dashboardItem) : '';
+    const groupsHTML = (sys.navGroups || []).map((group) => {
+      const visibleItems = group.items
+        .map((id) => byId.get(id))
+        .filter((item) => item && this._isNavItemVisible(item));
+      // THE EMPTY-GROUP RULE: no visible members means no header and no box
+      // at all, not an empty section. See the mutation proof on this line in
+      // retail_nav_groups_test.js -- rendering the header unconditionally
+      // here is exactly the bug that test exists to catch.
+      if (!visibleItems.length) return '';
+      return `
+          <div class="sub-nav-group-label">${t(group.label)}</div>
+          ${visibleItems.map(navItemHTML).join('')}`;
+    }).join('');
+
+    shell.innerHTML = `
+      <!-- Subsystem Sidebar -->
+      <aside class="sub-sidebar" id="sub-sidebar">
+        <div class="sub-sidebar-brand aura-logo" title="${t('Return to Home')}">
+          <!-- The Aura mark itself, not a boxed sys.icon emoji -- the owner's
+               "shouldn't the logo be where it says aura retail" complaint,
+               2026-09-07. AuraIcons.mark() (icons.js) inlines the same
+               geometry as brand/aura-mark.svg; see that function's own
+               comment for why it is inlined rather than an <img>. -->
+          <div class="sub-brand-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
+          <div class="sub-brand-text">
+            <!-- Line 1: the "Aura <Product>" lockup. Line 2 (below): the
+                 configured business name, or nothing -- the old second line
+                 here ("ActionAura", always shown) was the redundant repeat
+                 of the product name the owner's complaint above was about;
+                 dropping it means the brand slot names the product exactly
+                 once. -->
+            <span class="aura-lockup"><span class="aura-wordmark">Aura</span><span class="aura-product">${this._esc(SYSTEM_PRODUCT_WORDS[systemId] || t(sys.name))}</span></span>
+            <!-- this.branding is loaded once in init() (_loadBranding) and is
+                 operator-entered text, so it is escaped like every other
+                 shop-typed string this file interpolates (see _esc's own
+                 comment). -->
+            ${(this.branding && this.branding.branding_business_name) ? `<span class="sub-system-name">${this._esc(this.branding.branding_business_name)}</span>` : ''}
+          </div>
+        </div>
+
+        <nav class="sub-nav" id="sub-nav">
+          ${dashboardHTML}${groupsHTML}
         </nav>
 
         <div class="sub-sidebar-bottom">
           ${hasAI ? `
           <button class="sub-ai-btn" onclick="SubAI.open('${systemId}')">
-            <span>🤖</span> <span>${t('AI Assistant')}</span>
+            <span>${window.AuraIcons ? AuraIcons.render('sparkles', 18) : '🤖'}</span> <span>${t('AI Assistant')}</span>
             <span class="ai-pulse"></span>
           </button>
           ` : ''}
-          <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="Device license activation and status">
-            <span>🔑</span> <span>${t('License')}</span>
+          <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="${t('Device license activation and status')}">
+            <span>${window.AuraIcons ? AuraIcons.render('key-round', 18) : '🔑'}</span> <span>${t('License')}</span>
           </button>
-          <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.25);color:#f87171;margin-top:4px;">
-            <span>⏻</span> <span>${t('Log Out')}</span>
+          <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:var(--state-danger-surface);border-color:var(--state-danger-border);color:var(--state-danger-text);margin-top:4px;">
+            <span>${window.AuraIcons ? AuraIcons.render('log-out', 18) : '⏻'}</span> <span>${t('Log Out')}</span>
           </button>
         </div>
       </aside>
@@ -1473,17 +2755,30 @@ const SubsystemApp = {
       <div class="sub-main">
         <header class="sub-header">
           <div class="sub-header-left">
-            <h2 class="sub-header-title" id="sub-header-title">${t(sys.name)}</h2>
+            <!-- #sub-header-section IS the header's title now -- the separate
+                 sub-header-title <h2> this pass deleted used to sit here AND
+                 repeat a few px away in a header badge; the owner's "why is
+                 ... a 'Retail & POS' badge repeating the title" complaint
+                 (2026-09-07) removed the badge, and this element (restyled in
+                 main.css to the old h2's typography, no chip look) is what
+                 shows "which section am I on" instead. The id/element itself
+                 is UNCHANGED on purpose: _navigate() has always written the
+                 section label into #sub-header-section (below, unchanged),
+                 and eleven scripts/ops + ui-sweep Playwright scripts and
+                 docs/design/phone-ui-redesign.md's own ≤640px plan (§"Header
+                 at ≤640px", now made the ONE header for every width) already
+                 wait on #sub-header-section as the "shell is ready" selector
+                 -- moving the id would have broken all of them silently. -->
             <span class="sub-header-section" id="sub-header-section">${t('Dashboard')}</span>
           </div>
           <div class="sub-header-right">
             <button class="sub-header-btn" id="aura-lang-toggle" onclick="AuraI18n.toggle()" title="Language / اللغة" style="font-size:13px;font-weight:700;">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</button>
-            <button class="sub-header-btn" id="aura-theme-toggle" onclick="SubsystemApp.toggleTheme()" title="Light / Dark mode" style="font-size:15px;">${(document.documentElement.getAttribute('data-theme')==='dark')?'☀️':'🌙'}</button>
-            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme" style="font-size:15px;">🎨</button>
-            <div class="sub-header-badge" style="background:rgba(${sys.accentRgb},0.15);border-color:${sys.accent};color:${sys.accent}">
-              ${window.AuraIcons ? AuraIcons.render(sys.icon, 14) : sys.icon} ${t(sys.name)}
-            </div>
-            ${hasAI ? `<button class="sub-header-btn" onclick="SubAI.open('${systemId}')" title="AI Assistant">🤖</button>` : ''}
+            <!-- Theme control. ThemeEngine is the light/dark switch now (the
+                 old accent-palette picker it replaced is documented on the
+                 engine itself); dark v2 is token-value-only, so this can no
+                 longer produce the historical white-on-white state -- see
+                 index.html's boot comment for that postmortem. -->
+            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${t('Change UI theme')}">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
           </div>
         </header>
 
@@ -1491,6 +2786,7 @@ const SubsystemApp = {
           <div style="text-align:center;padding:80px;color:var(--text-muted)">Loading...</div>
         </main>
       </div>
+      ${tabBarHTML}
     `;
   },
 
@@ -1514,7 +2810,25 @@ const SubsystemApp = {
       el.classList.toggle('active', el.dataset.section === sectionId);
     });
 
-    // Update header
+    // Phone tab bar mirrors the same active-state toggle (§2 of
+    // docs/design/phone-ui-redesign.md): the four mapped slots match by
+    // data-tab, and More is active whenever the section is one of the 15 it
+    // owns rather than one of the four -- so the bar always shows where you
+    // are, even for a destination only the sheet lists.
+    document.querySelectorAll('.sub-tab[data-tab]').forEach(el => {
+      el.classList.toggle('active', el.dataset.tab === sectionId);
+    });
+    document.getElementById('sub-tab-more')?.classList.toggle('active', !this._TAB_BAR_SECTIONS.includes(sectionId));
+
+    // The More sheet never persists across a navigation (§2: "Tapping any
+    // row ... closes the sheet") -- every _navigate() call, whichever tab or
+    // sheet row triggered it, closes it.
+    this._closeMoreSheet();
+
+    // Update header -- unchanged: #sub-header-section has always been the
+    // element this writes into (see _renderShell's header comment for why
+    // that id could not move even though this element is now the header's
+    // ONLY title, not a chip next to a separate one).
     const sys = this.systems[this.active];
     const navItem = sys?.nav.find(n => n.id === sectionId);
     document.getElementById('sub-header-section')?.innerText &&
@@ -1578,42 +2892,167 @@ const SubsystemApp = {
         }
 
         // ── Show the live-data badge to confirm real-time mode is active ───────
-        this._updateLiveBadge(true);
 
       } catch (err) {
-        this._updateLiveBadge(false);
         const c = document.getElementById('sub-content');
+        // The screen shown when ANY nav section throws, in a file that makes
+        // ~100 t() calls everywhere else. Three separate i18n defects lived
+        // here: 'Failed to load' and 'An unexpected error occurred.' were in
+        // neither catalog, and 'Retry' IS a key (ar 'إعادة المحاولة') that
+        // could never reach the screen because the ↻ glyph shared its text
+        // node -- i18n.js's sweep matches only when the FULL trimmed text is
+        // a key. That is the "🛒 Open POS" defect this product has now
+        // shipped three times. The section name is an internal nav id, not
+        // copy, so it stays OUT of the translated sentence.
+        const failIcon = (name, size, fallback) => (window.AuraIcons ? AuraIcons.render(name, size) : fallback);
         if (c) c.innerHTML = `
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:60px;text-align:center;">
-            <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
-            <h3 style="color:#f87171;margin-bottom:12px;font-size:20px;">Failed to load ${sectionId}</h3>
-            <p style="color:#64748b;max-width:500px;line-height:1.6;font-size:14px;">${err.message || 'An unexpected error occurred.'}</p>
-            <button onclick="SubsystemApp._navigate('${sectionId}')" style="margin-top:24px;padding:10px 24px;background:#3b82f6;border:none;border-radius:8px;color:white;font-weight:600;cursor:pointer;font-size:14px;">↻ Retry</button>
+            <div style="font-size:48px;margin-bottom:20px;" aria-hidden="true">${failIcon('triangle-alert', 48, '⚠️')}</div>
+            <h3 style="color:var(--state-danger-text);margin-bottom:12px;font-size:20px;">${t('Failed to load')} <bdi dir="ltr">${this._esc(sectionId)}</bdi></h3>
+            <p style="color:var(--text-secondary);max-width:500px;line-height:1.6;font-size:14px;">${this._esc(err.message || t('An unexpected error occurred.'))}</p>
+            <button onclick="SubsystemApp._navigate('${sectionId}')" style="margin-top:24px;padding:10px 24px;background:var(--accent-action);border:none;border-radius:8px;color:var(--text-on-accent);font-weight:600;cursor:pointer;font-size:14px;"><span aria-hidden="true">${failIcon('repeat', 16, '↻')}</span> ${t('Retry')}</button>
           </div>`;
         console.error('[SubsystemApp] Error in ' + this.active + '/' + sectionId + ':', err);
       }
     }, 50);
   },
 
-  // ── Show/hide a "● LIVE" badge in the header ────────────────────────────────
-  _updateLiveBadge(live) {
-    let badge = document.getElementById('sub-live-badge');
-    if (!live) { badge?.remove(); return; }
-    if (badge) return; // Already shown
-    const hdr = document.getElementById('sub-header-section');
-    if (!hdr) return;
-    badge = document.createElement('span');
-    badge.id = 'sub-live-badge';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;margin-left:12px;padding:3px 10px;border-radius:20px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:#10b981;font-size:11px;font-weight:600;letter-spacing:.5px;vertical-align:middle;';
-    badge.innerHTML = '<span style="width:6px;height:6px;border-radius:50%;background:#10b981;animation:live-pulse 2s infinite;display:inline-block;"></span> LIVE';
-    if (!document.getElementById('live-pulse-style')) {
-      const s = document.createElement('style');
-      s.id = 'live-pulse-style';
-      s.textContent = '@keyframes live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}';
-      document.head.appendChild(s);
-    }
-    hdr.parentNode?.insertBefore(badge, hdr.nextSibling);
+  // ── The More bottom sheet (docs/design/phone-ui-redesign.md §2, §7 Step 2) ──
+  // Reuses sys.navGroups + _isNavItemVisible exactly as the sidebar does (see
+  // _renderShell's own comment), so WHO sees WHAT stays governed by the one
+  // source of truth -- this is a render-time arrangement over the untouched
+  // flat `nav` array, not a second nav data model.
+  //
+  // Built on document.body, not inside #subsystem-shell, for the same
+  // persistence reason _maybeOfferAdminDeviceClaim's bar is: _renderShell
+  // replaces the shell's innerHTML wholesale on every launch()/language
+  // toggle, which would otherwise destroy an open sheet out from under a tap.
+  _openMoreSheet() {
+    this._closeMoreSheet();
+    const sys = this.systems[this.active];
+    if (!sys) return;
+
+    const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
+    const icon = (val) => window.AuraIcons ? AuraIcons.render(val, 20) : val;
+    const byId = new Map(sys.nav.map((item) => [item.id, item]));
+
+    const rowHTML = (item) => `
+            <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
+               onclick="SubsystemApp._navigate('${item.id}')">
+              <span class="sub-more-row-icon">${icon(item.icon)}</span>
+              <span>${t(item.label)}</span>
+            </a>
+          `;
+    const groupsHTML = (sys.navGroups || []).map((group) => {
+      const visibleItems = group.items
+        .map((id) => byId.get(id))
+        .filter((item) => item && this._isNavItemVisible(item))
+        // A destination that is already a BOTTOM TAB must not also appear in
+        // this sheet. The sheet exists for "the other fifteen"; a row for Till
+        // or Customers teaches two routes to the same place and makes the
+        // sheet longer for nothing.
+        //
+        // Same rule, same reason, as the Android client: its drawer duplicated
+        // Settings, and its bottom bar nearly re-introduced the duplication
+        // when Customers was promoted to a tab while still sitting in More.
+        .filter((item) => !this._TAB_BAR_SECTIONS.includes(item.id));
+      // THE EMPTY-GROUP RULE, same as _renderShell's sidebar (and the same
+      // mutation proof in retail_nav_groups_test.js): a group with nothing
+      // visible in it renders no header, not a header over an empty box.
+      if (!visibleItems.length) return '';
+      return `
+          <div class="sub-nav-group-label">${t(group.label)}</div>
+          ${visibleItems.map(rowHTML).join('')}`;
+    }).join('');
+
+    // Footer: the AI/License/Log-Out trio that used to be three unlabeled
+    // rail-bottom squares (§2's "why this answers the owner's complaints"),
+    // plus Language and Theme, as full-width labeled rows. Every action here
+    // closes the sheet itself first, rather than relying on _navigate()'s
+    // close (none of these five call _navigate) -- AI/Theme open their own
+    // overlay, License/Log Out navigate away, and Language rebuilds the
+    // whole shell (AuraI18n.setLang -> SubsystemApp.launch), so closing
+    // first keeps the sheet from being left open behind any of them.
+    const footerRows = [
+      hasAI ? `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('sparkles', 20) : '🤖'}</span>
+              <span>${t('AI Assistant')}</span>
+            </button>` : '',
+      `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();AuraI18n.toggle()">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('languages', 20) : '🌐'}</span>
+              <span>${t('Language')}</span>
+              <span class="sub-more-row-value">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</span>
+            </button>`,
+      `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();ThemeEngine.openPicker()">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('palette', 20) : '🎨'}</span>
+              <span>${t('Theme')}</span>
+            </button>`,
+      `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.openLicensing()">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('key-round', 20) : '🔑'}</span>
+              <span>${t('License')}</span>
+            </button>`,
+      `
+            <button class="sub-more-row danger" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.logout()">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('log-out', 20) : '⏻'}</span>
+              <span>${t('Log Out')}</span>
+            </button>`,
+    ].join('');
+
+    // Lets CSS stand the admin-device claim banner down while this sheet is
+    // up. A sheet is a modal surface; a banner floating over it is purely in
+    // the way, which the 390px screenshots showed plainly.
+    document.body.classList.add('sub-more-sheet-open');
+
+    const scrim = document.createElement('div');
+    scrim.className = 'sub-more-scrim';
+    scrim.id = 'sub-more-scrim';
+    scrim.onclick = () => this._closeMoreSheet();
+
+    const sheet = document.createElement('div');
+    sheet.className = 'sub-more-sheet';
+    sheet.id = 'sub-more-sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'true');
+    sheet.setAttribute('aria-label', t('More'));
+    sheet.innerHTML = `
+          <div class="sub-more-handle"></div>
+          <div class="sub-more-body">
+            ${groupsHTML}
+            <div class="sub-more-footer">${footerRows}</div>
+          </div>
+        `;
+
+    document.body.appendChild(scrim);
+    document.body.appendChild(sheet);
   },
+
+  _closeMoreSheet() {
+    document.body.classList.remove('sub-more-sheet-open');
+    document.getElementById('sub-more-scrim')?.remove();
+    document.getElementById('sub-more-sheet')?.remove();
+  },
+
+  // The "● LIVE" badge that used to live here is DELETED.
+  //
+  // It was set true after a section rendered and false in the catch -- and the
+  // catch immediately replaces the screen with a "Failed to load / Retry"
+  // panel. So it was visible in every state a user could actually observe,
+  // and therefore said nothing.
+  //
+  // It had one honest job once: retail_dashboard_error_propagation_test.js
+  // records that _renderDashboard used to swallow its fetch error, so the
+  // badge lit up over a dashboard frozen on placeholders. Fixing that (by
+  // rethrowing, which that test pins) removed the only condition under which
+  // the badge could disagree with the screen. The guarantee is tested
+  // directly; the badge was residue.
+  //
+  // It also carried costs a dark theme and an Arabic layout would both have
+  // had to pay: `margin-left` (physical), five hardcoded colour literals, an
+  // infinite animation, and header room on a 390px phone.
 
   // ── Multi-device sync health indicator ──────────────────────────────────────
   // Persistent (NOT showToast -- a 3s auto-dismissing toast is the wrong
@@ -1688,11 +3127,145 @@ const SubsystemApp = {
       this._licenseCheckInDisabled = true;
       this._stopLicenseCheckInPoll();
     }
-    // Deliberately no UI update here beyond that -- every mutation route
-    // already independently re-reads this same persisted state via
-    // require_license_capability() on its own next request; this poll's
-    // whole job is making sure that persisted state doesn't go stale for
-    // a full session, not rendering a banner itself.
+    // Also repaints the "selling is blocked" banner off this SAME response --
+    // no second poll, no second fetch (see _renderLicenseBanner). Before this,
+    // a licence Owner suspending or restoring a device WHILE the app stayed
+    // open changed the ENFORCEMENT (require_license_capability() reads this
+    // same persisted state on its own next request) with nothing on screen to
+    // explain why Charge suddenly started failing, or why it started working
+    // again -- the exact "a 403 in a network tab is not an onboarding flow"
+    // complaint this banner exists to fix, just mid-session instead of at
+    // boot. Still zero cost for an install that never opted in: NOT_CONFIGURED
+    // is one of LICENSE_BANNER_BLOCKED_STATES too (selling stays blocked
+    // whether or not Owner is wired up -- see that list's own comment), so the
+    // one call this makes before disabling itself above leaves the banner in
+    // the right state rather than skipping it.
+    this._renderLicenseBanner(body && body.current_state);
+  },
+
+  // ── "Selling is blocked, but your data is safe" banner ─────────────────────
+  // The onboarding failure this fixes: a fresh or restricted install is
+  // READ-ONLY, not unlocked (deliberate, pinned by capability_guard.py's own
+  // tests) -- but the only way the shell used to say so was a 403 in a
+  // network tab the first time someone pressed Charge. This list is derived
+  // directly from commercial_runtime/licensing_contracts/state_machine.py:
+  // DATA_PRESERVED_FAMILY minus ACTIVE_FAMILY. Every state in
+  // DATA_PRESERVED_FAMILY keeps read/backup/export/returns/customer-payment
+  // access (Part P); the ones ALSO in ACTIVE_FAMILY are normal commercial
+  // operation and must show no banner at all -- a permanent scary banner on a
+  // paying customer's till is worse than the bug this fixes. What is left --
+  // this list -- is exactly "the till still works for everything except
+  // ringing a new sale". Kept as an explicit list rather than re-derived at
+  // runtime (this is a browser script with no import of the Python enum), so
+  // retail_license_banner_test.js parses state_machine.py itself and fails
+  // loudly the moment this list drifts from it.
+  LICENSE_BANNER_BLOCKED_STATES: [
+    'NOT_CONFIGURED', 'ACTIVATION_REQUIRED', 'ACTIVATING', 'RESTRICTED',
+    'SUSPENDED', 'REVOKED', 'EXPIRED', 'DEVICE_DEACTIVATED',
+    'CLOCK_REVIEW_REQUIRED', 'LOCAL_STATE_CORRUPT',
+  ],
+
+  // Persistent, full-width, top-of-shell banner -- never a modal: the shop
+  // must still reach every read-only screen (viewing, backups, exports,
+  // returns, customer payments) while a sale is blocked. Same create-once/
+  // repaint-in-place element _renderSyncBanner uses just below: one
+  // #aura-license-banner div, created the first time there is something to
+  // show and REMOVED OUTRIGHT (never merely hidden) the instant the state is
+  // healthy again, so an activated install carries no trace of this in the
+  // DOM at all. Called only from the two places this shell already learns the
+  // license state (_enforceActivationGate's boot-time GET /api/licensing/
+  // status and _pollLicenseCheckIn's existing 5-minute poll) -- never a new
+  // endpoint, never a new timer.
+  // Every top banner in this file is `position:fixed;top:0`, which takes it OUT
+  // OF FLOW -- so it paints ON TOP of the header instead of pushing it down.
+  // Measured in a real browser: the banner occupied y:0-64 while the theme
+  // button sat at y:20-56, entirely inside it, so a real click on the theme and
+  // language controls was provably intercepted.
+  //
+  // This was survivable while the only top banners were the transient sync ones
+  // (offline, behind) -- annoying for a moment, then gone. The licence banner
+  // made it PERMANENT on every unlicensed install, which is how it was finally
+  // noticed. The defect is older than that banner; the fix belongs to all of
+  // them, so it lives here rather than in any one renderer.
+  //
+  // `.sub-header` is in normal flow (not sticky, not fixed -- see css/main.css),
+  // so reserving space at the top of the document genuinely moves the whole
+  // shell clear rather than sliding it under. Measured from the live elements
+  // rather than hardcoded, because these banners wrap to two lines on a narrow
+  // till and a constant would be wrong exactly when it mattered.
+  _reflowTopBanners() {
+    try {
+      const ids = ['aura-license-banner', 'aura-sync-banner'];
+      let tallest = 0;
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const h = el.getBoundingClientRect ? el.getBoundingClientRect().height : 0;
+        if (h > tallest) tallest = h;
+      }
+      // Both banners stack at top:0, so they overlap each other rather than
+      // summing -- reserve the tallest, not the total.
+      // Published as a TOKEN the shell consumes (see .sub-shell in css/main.css),
+      // not as padding on <body>. Padding on <body> was the first attempt and it
+      // moved nothing -- the smoke suite measured the header still sitting under
+      // the banner afterwards. This couples the two elements that actually matter.
+      document.documentElement.style.setProperty('--top-banner-inset',
+        tallest > 0 ? tallest + 'px' : '0px');
+    } catch (e) { /* never let a cosmetic reflow break the shell */ }
+  },
+
+  _renderLicenseBanner(state) {
+    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);
+    if (!blocked) {
+      // Explicitly null, not merely "leave whatever it was" -- the very
+      // first call this shell ever makes (a healthy ACTIVATE_ONLINE install,
+      // no prior blocked state to have created an element) must leave
+      // _licenseBannerEl in the SAME observable "nothing here" state as
+      // every later call that clears one, so a caller can assert absence
+      // once rather than needing to know whether this is the first paint.
+      if (this._licenseBannerEl) this._licenseBannerEl.remove();
+      this._licenseBannerEl = null;
+      // Release the reserved space too. Reserving on show and forgetting to
+      // release on hide would leave a permanent empty strip across the top of
+      // a healthy, licensed till -- a subtler bug than the one being fixed.
+      this._reflowTopBanners();
+      return;
+    }
+    if (!this._licenseBannerEl) {
+      const el = document.createElement('div');
+      el.id = 'aura-license-banner';
+      document.body.appendChild(el);
+      this._licenseBannerEl = el;
+    }
+    const el = this._licenseBannerEl;
+    // WARNING triad, not danger: nothing is lost and no data is at risk (Part
+    // P keeps read/backup/export/returns/customer-payment access) -- only a
+    // NEW sale is refused, so this reads as "action needed", not "something
+    // broke". inset-inline, not left/right: retail_design_rtl_test.js
+    // ratchets physical direction properties in JS-built inline styles and
+    // there is no css/rtl.css mirror rule for an inline style at all.
+    el.style.cssText = 'position:sticky;top:0;inset-inline:0;background:var(--state-warning-surface);'
+      + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+      + 'padding:9px 18px;font-size:13px;line-height:1.45;text-align:center;z-index:99998;'
+      + 'display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+    el.innerHTML =
+      '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--state-warning-text);">'
+      + (window.AuraIcons ? AuraIcons.render('triangle-alert', 15) : '')
+      + t('This device is not licensed to ring new sales') + '</span>'
+      + '<span style="opacity:.85;">'
+      + t('Your data is safe -- viewing, backups, exports, returns, and customer payments all still work.')
+      + '</span>'
+      + '<button type="button" onclick="SubsystemApp.openLicensing()" '
+      + 'style="min-inline-size:var(--touch-target-min);min-block-size:var(--touch-target-min);'
+      + 'padding:6px 16px;border-radius:8px;border:1px solid var(--state-warning-border);'
+      + 'background:transparent;color:var(--state-warning-text);font-weight:700;cursor:pointer;">'
+      + t('Activate License') + '</button>';
+    // AFTER innerHTML, never before: the height is measured from the live
+    // element, and on a narrow till this banner wraps to two lines. Measuring
+    // an empty div would reserve the wrong amount -- and would do it wrongly
+    // exactly on the small screens where the overlap hurts most.
+    this._reflowTopBanners();
   },
 
   async _pollSyncHealth() {
@@ -1702,6 +3275,14 @@ const SubsystemApp = {
       if (!res.ok) return;                        // transient -- leave the banner as-is
       data = (await res.json()).data;
     } catch (e) { return; }                       // never let a poll break the app
+    // Phase 7 stage 7b (docs/launch-readiness/phase7-offline-ux.md): the POS
+    // tile's stale-stock treatment (subsystem-retail.js's _isStockStale())
+    // reads this SAME snapshot rather than running a second poller -- this
+    // fetch already runs every SYNC_POLL_MS. Stashed even on the
+    // {configured:false} branch below (and on a null/malformed response),
+    // so the tile learns "sync isn't on for this install" too and applies
+    // its own silence rule instead of defaulting to "unknown -> stale".
+    if (window.RetailSystem) window.RetailSystem._syncHealth = data;
     if (!data || data.configured !== true) {
       // Sync was never turned on for this install. Stop polling entirely --
       // app.py builds _sync_service at import time, so this can never flip
@@ -1760,6 +3341,8 @@ const SubsystemApp = {
   _renderSyncBanner(data) {
     if (!data) {
       if (this._syncBannerEl) { this._syncBannerEl.remove(); this._syncBannerEl = null; }
+      // Release the space this banner was holding. See _reflowTopBanners.
+      this._reflowTopBanners();
       return;
     }
 
@@ -1774,15 +3357,182 @@ const SubsystemApp = {
       this._syncBannerEl = el;
     }
 
-    if (pushBad || pullBad) this._renderSyncAlarmState(data, pushBad, pullBad);
-    else this._renderSyncCalmState(data);
+    // Phase 7 stage 7b adds a THIRD tier between "actively failing" (above,
+    // keyed off LIVE consecutive_failures) and the calm pill (below): synced
+    // before, but the PERSISTED last-success clock (stage 7a) is older than
+    // RetailSystem.SYNC_STALE_THRESHOLD_SECONDS. Deliberately a SEPARATE
+    // signal from consecutive_failures -- that counter resets to 0 on a
+    // single lucky retry (or on an app restart, since it is in-memory only),
+    // so a connection that is silently bad for hours but occasionally
+    // reconnects could sit in the calm pill forever under the old two-way
+    // split alone. never_synced is excluded here on purpose: a fresh install
+    // that has never completed its first sync gets its OWN wording via the
+    // calm pill's existing "Waiting for first sync" fallback (below), not
+    // "behind by N" -- there is no "last synced" instant to report yet.
+    //
+    // Phase 7 stage 7c-i adds a FOURTH tier, checked BEFORE the plain
+    // "behind" tier since it is the more specific (and more severe) of the
+    // two: still behind, but by more than RetailSystem.
+    // SYNC_STALE_WARNING_THRESHOLD_SECONDS (24h). Purely an escalation of
+    // the SAME "behind" state's presentation -- it carries the identical
+    // facts (last-sync clock time, unsynced count) the plain "behind" tier
+    // does, just rendered more strongly, and still informs rather than
+    // blocks (Decision 2).
+    // Which of the 4 tiers this paint lands in -- computed once here so both
+    // branches below (which tier to draw) and the icon's own motion (whether
+    // to flip) read the SAME classification, rather than each re-deriving it
+    // and risking drift. `changed` is true only when the tier actually
+    // differs from the LAST paint, so the icon's aura-ic-flip animation
+    // fires once on a real transition (e.g. calm -> behind) and never on a
+    // same-tier repaint from the next poll tick -- see icons.js's MOTION
+    // comment: state icons animate on change, not on an idle interval.
+    let tier;
+    if (pushBad || pullBad) tier = 'alarm';
+    else if (!data.never_synced && this._isSyncBehindWarningThreshold(data)) tier = 'behind-warning';
+    else if (!data.never_synced && this._isSyncBehindThreshold(data)) tier = 'behind';
+    else tier = 'calm';
+    const changed = tier !== this._syncBannerTier;
+    this._syncBannerTier = tier;
+
+    if (tier === 'alarm') this._renderSyncAlarmState(data, pushBad, pullBad, changed);
+    else if (tier === 'behind-warning') this._renderSyncBehindWarningState(data, changed);
+    else if (tier === 'behind') this._renderSyncBehindState(data, changed);
+    else this._renderSyncCalmState(data, changed);
+    // AFTER the tier has painted, and here rather than inside each tier: all
+    // four fan out from this one point, they paint different amounts of text,
+    // and a fifth tier added later gets this for free instead of being the one
+    // that quietly reintroduces the overlap. Re-measured on every poll, not
+    // only on creation -- "Offline since 14:20 -- 412 unsynced" grows as the
+    // count does and wraps to a second line mid-session on a narrow till.
+    this._reflowTopBanners();
+  },
+
+  // See _renderSyncBanner's comment just above for why this is a distinct
+  // signal from consecutive_failures. RetailSystem.SYNC_STALE_THRESHOLD_
+  // SECONDS is read rather than declared a second time here, so the banner
+  // and the POS tile's own staleness check (subsystem-retail.js) can never
+  // disagree about what "stale" means (docs/launch-readiness/
+  // phase7-offline-ux.md). Guarded against RetailSystem not being loaded
+  // (defaults to "not behind" -- the calm pill -- rather than throwing).
+  _isSyncBehindThreshold(data) {
+    const threshold = window.RetailSystem && window.RetailSystem.SYNC_STALE_THRESHOLD_SECONDS;
+    const secs = data.seconds_since_last_success;
+    return typeof threshold === 'number' && typeof secs === 'number' && secs > threshold;
+  },
+
+  // Phase 7 stage 7c-i: the 24-hour escalation of _isSyncBehindThreshold
+  // just above -- identical shape, reading RetailSystem.
+  // SYNC_STALE_WARNING_THRESHOLD_SECONDS instead of RetailSystem.
+  // SYNC_STALE_THRESHOLD_SECONDS, and the same "not behind" default when
+  // RetailSystem isn't loaded.
+  _isSyncBehindWarningThreshold(data) {
+    const threshold = window.RetailSystem && window.RetailSystem.SYNC_STALE_WARNING_THRESHOLD_SECONDS;
+    const secs = data.seconds_since_last_success;
+    return typeof threshold === 'number' && typeof secs === 'number' && secs > threshold;
+  },
+
+  // Renders one of the banner's state icons through icons.js, falling back
+  // to '' when AuraIcons isn't loaded -- several standalone JS test
+  // harnesses (retail_offline_banner_*_test.js) load app-shell.js on its
+  // own without icons.js, matching how the sidebar nav icons at the top of
+  // this file already guard the same call. 'flip' plays only when
+  // _renderSyncBanner already determined the tier changed since the last
+  // paint, never on a same-tier repaint from the next poll tick.
+  _syncIcon(name, changed) {
+    return window.AuraIcons ? AuraIcons.render(name, 15, changed ? { animate: 'flip' } : undefined) : '';
+  },
+
+  // State 4 (docs/launch-readiness/phase7-offline-ux.md, stage decomposition:
+  // "Offline since 14:20 -- 412 unsynced"). Full-width and hard to miss, like
+  // the alarm state above -- this is meant to be SEEN, not ambient -- but
+  // visually distinct (no red/amber) since nothing is actively erroring
+  // right now; the device just hasn't reached the relay in a while.
+  _renderSyncBehindState(data, changed) {
+    const el = this._syncBannerEl;
+    const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
+    const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
+    // Clock time ("14:20"), not "45m ago" -- matches the POS tile's own
+    // dated figure (subsystem-retail.js's _formatClockTime, reused rather
+    // than re-implemented here) and, unlike a relative label, does not go
+    // stale on screen itself the next time someone glances at it.
+    const clock = (window.RetailSystem && window.RetailSystem._formatClockTime)
+      ? window.RetailSystem._formatClockTime(lastSuccess)
+      : null;
+    // lastSuccess is guaranteed non-null here (_renderSyncBanner only routes
+    // here when !data.never_synced), but fall back rather than ever render a
+    // blank "Offline since" if the clock formatter can't be reached.
+    const when = clock || this._formatRelativeTime(lastSuccess) || '';
+    const headline = t('Offline since') + ' ' + this._esc(when) + ' — ' +
+      this._esc(String(pending)) + ' ' + t('unsynced');
+
+    el.title = '';
+    // State tokens, not the old HUD literals (#1e1e2e ground, #60a5fa accent,
+    // color:white). This tier is INFORMATIONAL -- nothing is erroring, the
+    // device is merely behind -- so it takes the info triad, the same one
+    // showToast()'s 'info' type uses. DESIGN.md §4.4 forbids a colour literal
+    // outside the token block and #FFFFFF text in a dark theme; the three
+    // banner tiers were simply not converted when the calm pill and the toast
+    // were, and retail_design_tokens_test.js scans css/main.css only, so it
+    // reported "no stray colour literals" while these sat in JavaScript.
+    // inset-inline:0 rather than left:0;right:0 for the same reason the toast
+    // uses inset-inline-end -- see showToast()'s comment.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-info-surface);'
+      + 'border-bottom:2px solid var(--state-info-border);color:var(--state-info-text);'
+      + 'padding:9px 18px;font-size:13px;'
+      + 'line-height:1.45;text-align:center;z-index:99998;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+    el.innerHTML = '<span style="color:var(--state-info-text);font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
+      + this._syncIcon('cloud-off', changed) + headline + '</span>';
+  },
+
+  // State 5, Phase 7 stage 7c-i (docs/launch-readiness/phase7-offline-ux.md,
+  // "PART 2 -- the 24-hour soft warning"): the SAME two facts
+  // _renderSyncBehindState carries (last-sync clock time, unsynced count),
+  // escalated once the device has been behind for more than RetailSystem.
+  // SYNC_STALE_WARNING_THRESHOLD_SECONDS (24h). Visibly stronger than the
+  // plain "behind" tier -- red instead of blue, a heavier border and
+  // font-weight, a distinct ⚠ icon, and an explanatory detail sentence the
+  // plain tier does not carry -- but still informational only: no
+  // capability is checked, and nothing here refuses any write (Decision 2:
+  // "The 24-hour soft warning needs no capability: it informs, it does not
+  // block").
+  _renderSyncBehindWarningState(data, changed) {
+    const el = this._syncBannerEl;
+    const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
+    const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
+    const clock = (window.RetailSystem && window.RetailSystem._formatClockTime)
+      ? window.RetailSystem._formatClockTime(lastSuccess)
+      : null;
+    // lastSuccess is guaranteed non-null here (_renderSyncBanner only routes
+    // here when !data.never_synced), same fallback discipline as the plain
+    // "behind" tier just above.
+    const when = clock || this._formatRelativeTime(lastSuccess) || '';
+    const headline = t('Still offline since') + ' ' + this._esc(when) + ' — ' +
+      this._esc(String(pending)) + ' ' + t('unsynced');
+    const detail = t("This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.");
+
+    el.title = '';
+    // The escalated tier takes the DANGER triad where the plain "behind" tier
+    // above takes INFO -- still visibly stronger (a heavier border and
+    // font-weight, the red family instead of the blue one), but now through
+    // tokens that are contrast-proven in all five themes rather than a fixed
+    // #ef4444 on a fixed near-black. margin-inline-start, not margin-left: in
+    // Arabic the row reverses and a physical margin lands on the outer edge.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-danger-surface);'
+      + 'border-bottom:3px solid var(--state-danger-border);color:var(--state-danger-text);'
+      + 'padding:9px 18px;font-size:13px;'
+      + 'line-height:1.45;text-align:center;z-index:99998;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+    el.innerHTML = '<span style="color:var(--state-danger-text);font-weight:800;display:inline-flex;align-items:center;gap:6px;">'
+      + this._syncIcon('triangle-alert', changed) + headline + '</span>'
+      + '<span style="opacity:.85;margin-inline-start:10px;">' + detail + '</span>';
   },
 
   // The original failure-only banner, unchanged in look and behavior: full-
   // width, top of page, impossible to miss. Reached only once either half
   // has failed SYNC_DEGRADED_THRESHOLD times in a row -- a single blip
   // never triggers it (see sync_service.py's run_once()/per-tick retry).
-  _renderSyncAlarmState(data, pushBad, pullBad) {
+  _renderSyncAlarmState(data, pushBad, pullBad, changed) {
     const el = this._syncBannerEl;
     let headline;
     if (pushBad && pullBad) headline = t("Not syncing with your other devices right now");
@@ -1790,8 +3540,14 @@ const SubsystemApp = {
     else                    headline = t("This device isn't receiving updates from your other devices right now");
     const detail = t("This device is still working normally. Everything will catch up automatically once the connection comes back.");
 
-    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
-      + 'border-bottom:2px solid #fbbf24;color:white;padding:9px 18px;font-size:13px;'
+    // WARNING triad: sync is actively failing, but nothing is lost and no
+    // write is refused, so this is amber rather than the danger red the 24h
+    // tier carries -- one meaning, one colour (DESIGN.md §2.2). Tokens, not
+    // the old #fbbf24-on-#1e1e2e, for the reason spelled out on the "behind"
+    // tier above.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-warning-surface);'
+      + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+      + 'padding:9px 18px;font-size:13px;'
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
     // last_failure_reason goes ONLY in title= -- support can hover for the
@@ -1799,25 +3555,40 @@ const SubsystemApp = {
     const reason = (pushBad ? data.push.last_failure_reason : data.pull.last_failure_reason) || '';
     el.title = reason ? ('Sync detail: ' + reason) : '';
     el.innerHTML =
-      '<span style="color:#fbbf24;font-weight:700;">⚠ ' + headline + '</span>'
-      + '<span style="opacity:.8;margin-left:10px;">' + detail + '</span>';
+      '<span style="color:var(--state-warning-text);font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
+      + this._syncIcon('triangle-alert', changed) + headline + '</span>'
+      + '<span style="opacity:.8;margin-inline-start:10px;">' + detail + '</span>';
   },
 
   // New calm state: a small, unobtrusive bottom-right pill -- ambient
   // confirmation that sync is alive, not an alert. This is the whole point
   // of the freshness indicator: previously NOTHING rendered here while sync
   // was working normally. pointer-events:none so it never sits in the way
-  // of whatever's underneath it in that corner.
-  _renderSyncCalmState(data) {
+  // of whatever's underneath it in that corner. The dot (not an icon) is
+  // deliberate here -- see icons.js's module comment: "calm" is the one tier
+  // that stays untouched by the redesign, since a plain status dot already
+  // reads as calm/ambient and swapping in an icon would just be motion for
+  // its own sake on the one tier that should feel like nothing is happening.
+  _renderSyncCalmState(data, changed) {
     const el = this._syncBannerEl;
-    el.style.cssText = 'position:fixed;bottom:14px;right:14px;display:inline-flex;'
+    // inset-inline-end, not `right`: the pill floats over the shell and the
+    // shell mirrors in Arabic, so a physical corner sends the pill to the
+    // bottom-LEFT of the reading order while showToast() -- 186 lines below,
+    // already logical -- correctly moves with the language. Same blind spot
+    // as the toast's: retail_design_rtl_test.js ratchets physical properties
+    // in css/main.css and cannot see a style string built in JavaScript.
+    el.style.cssText = 'position:fixed;bottom:14px;inset-inline-end:14px;display:inline-flex;'
       + 'align-items:center;gap:7px;padding:6px 12px;border-radius:20px;'
-      + 'background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.28);'
-      + 'color:#a7f3d0;font-size:12px;font-weight:500;letter-spacing:.2px;'
+      // State tokens, not the old HUD mint (#a7f3d0 on a 10% green tint was
+      // ~1.5:1 over the light shell). An opaque state pair is self-contained,
+      // so the pill reads the same over whatever corner it floats on, in
+      // either theme.
+      + 'background:var(--state-success-surface);border:1px solid var(--state-success-border);'
+      + 'color:var(--state-success-text);font-size:12px;font-weight:500;letter-spacing:.2px;'
       + 'z-index:99997;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;';
     el.title = '';
     el.innerHTML =
-      '<span style="width:6px;height:6px;border-radius:50%;background:#10b981;display:inline-block;flex-shrink:0;"></span>'
+      '<span style="width:6px;height:6px;border-radius:50%;background:var(--state-success-text);display:inline-block;flex-shrink:0;"></span>'
       + '<span>' + this._syncIndicatorText(data) + '</span>';
   },
 
@@ -1898,7 +3669,12 @@ const SubsystemApp = {
   },
 
   async wipeDemoData() {
-    if (!confirm('Are you sure you want to permanently wipe all data in this subsystem?')) return;
+    const ok = await this.confirm({
+      title: t('Are you sure you want to permanently wipe all data in this subsystem?'),
+      confirmLabel: t('Wipe Data'),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`/api/sub/${this.active}/demo-wipe`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -1959,10 +3735,166 @@ const SubsystemApp = {
     el._chartInstance = new Chart(el.getContext('2d'), config);
   },
 
+  // Tokenised 2026-09-08: this used to build inline styles from hardcoded
+  // hex (#34d399 success green, #f87171 error red, a #1e1e2e background,
+  // plain white text) -- literals that cannot move when the palette moves.
+  // The toast is the one surface shown over EVERY screen, so an untokenised
+  // one was the single most visible thing left ignoring the theme after the
+  // 2026-09-08 re-grounding. Each state now resolves through the SAME
+  // --state-*-surface/-border/-text triad the .btn-mini.approve/.reject
+  // notification chrome already uses (css/main.css), rather than inventing
+  // a new mapping: surface+border+text together, not just the border, so
+  // success/error/info are correct AND already contrast-proven (DESIGN.md
+  // §4.4: every state-*-text is solved to >=4.5:1 against its OWN
+  // state-*-surface) in all five themes, not just the two dark/light shapes
+  // the old literals happened to assume. `info` moves off the old
+  // `var(--sub-accent)` reference on purpose: the accent is a per-subsystem
+  // runtime value (re-hued or absent depending which section is active),
+  // while --state-info-* is DELIBERATELY decoupled from the accent (see its
+  // comment in css/main.css) so "informational" reads the same everywhere,
+  // not differently per subsystem.
+  // ══ CONFIRM DIALOG (shared shell-level replacement for native confirm()) ══
+  // Mirrors RetailSystem._confirm (subsystem-retail.js:853) in behaviour and
+  // signature exactly -- see that method's comment for the full rationale
+  // (native confirm() cannot be themed, cannot be mirrored for Arabic, and
+  // its text never passes through t()). This is a SEPARATE implementation
+  // rather than a delegate to it because RetailSystem is a different object
+  // and its dialog is painted by RetailSystem._injectStyles(), a <style> tag
+  // that method injects into <head> from JS -- never present in css/main.css
+  // -- so nothing outside subsystem-retail.js has anything to call into. Any
+  // file loaded in index.html (employees.js, this file) reaches SubsystemApp
+  // as window.SubsystemApp instead, so this renders on the shell's own
+  // .sub-confirm-* classes (css/main.css) rather than duplicating that
+  // injected stylesheet.
+  //
+  // NOT reachable from licensing.js / whatsapp.js / einvoicing.js: those
+  // three are standalone documents that never load app-shell.js at all (see
+  // each file's own header comment -- "no shared SubsystemApp shell exists
+  // to plug into"), so window.SubsystemApp is undefined there. Each of those
+  // files carries its own small local confirm dialog instead.
+  //
+  // Returns a Promise<boolean> -- true on Confirm (click or Enter), false on
+  // Cancel, Escape, or a click on the overlay itself (outside the card).
+  //
+  // opts: { title, message, confirmLabel, cancelLabel, danger } -- same shape
+  // as RetailSystem._confirm's opts. title/message are caller-composed
+  // (already run through t() at the call site for their static text, same
+  // convention as every RetailSystem._confirm call site); confirmLabel/
+  // cancelLabel default to t('Confirm')/t('Cancel'); danger paints the
+  // confirm button with the danger tokens (sub-btn-danger) instead of the
+  // primary accent (sub-btn-primary).
+  //
+  // KEYDOWN IS CAPTURE-PHASE, same reasoning as RetailSystem._confirm: a
+  // bubble-phase document listener elsewhere could otherwise treat the same
+  // Enter/Escape as input for whatever screen sits behind this dialog before
+  // it has even resolved.
+  confirm(opts) {
+    const o = opts || {};
+    const danger = !!o.danger;
+    const title = o.title || '';
+    const message = o.message || '';
+    const confirmLabel = o.confirmLabel || t('Confirm');
+    const cancelLabel = o.cancelLabel || t('Cancel');
+    // The element focused when confirm() was called -- almost always the
+    // button that triggered it -- so focus can be handed back to it on close
+    // instead of being dropped on <body>.
+    const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
+
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'sub-confirm-overlay';
+
+      const card = document.createElement('div');
+      card.className = 'sub-confirm-card';
+      card.setAttribute('role', 'alertdialog');
+      card.setAttribute('aria-modal', 'true');
+
+      const h3 = document.createElement('h3');
+      h3.textContent = title;
+      card.appendChild(h3);
+
+      // textContent throughout -- title/message can carry a shop-typed value
+      // (e.g. an employee name), so there is no innerHTML/escaping step to
+      // get wrong here at all.
+      if (message) {
+        const p = document.createElement('p');
+        p.className = 'sub-confirm-message';
+        p.textContent = message;
+        card.appendChild(p);
+      }
+
+      const footer = document.createElement('div');
+      footer.className = 'sub-confirm-footer';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'sub-btn-secondary';
+      cancelBtn.textContent = cancelLabel;
+      const okBtn = document.createElement('button');
+      okBtn.className = danger ? 'sub-btn-danger' : 'sub-btn-primary';
+      okBtn.textContent = confirmLabel;
+      footer.appendChild(cancelBtn);
+      footer.appendChild(okBtn);
+      card.appendChild(footer);
+
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;   // Enter/click/overlay-click can race; resolve once only
+        settled = true;
+        document.removeEventListener('keydown', onKeydown, true);
+        overlay.remove();
+        if (trigger && typeof trigger.focus === 'function') {
+          // The trigger can legitimately be gone by now (its row/modal was
+          // removed by an unrelated re-render while this was open) -- focus()
+          // on a detached/removed element is a silent no-op in every real
+          // browser, so no try/catch is needed to make this safe.
+          trigger.focus();
+        }
+        resolve(result);
+      };
+
+      const onKeydown = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+        // Enter confirms ONLY on a non-destructive dialog. On a danger one it
+        // is deliberately not bound: focus starts on Cancel below, so Enter
+        // activates that button natively and resolves false. Binding Enter to
+        // "yes" here would mean a shop owner who hits Enter out of habit --
+        // the same key that submits every other form in this product --
+        // permanently wipes their data with no further prompt.
+        if (e.key === 'Enter' && !danger) {
+          e.preventDefault(); e.stopPropagation(); finish(true);
+        }
+      };
+      document.addEventListener('keydown', onKeydown, true);
+
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      cancelBtn.addEventListener('click', () => finish(false));
+      okBtn.addEventListener('click', () => finish(true));
+      // Focus moves INTO the dialog on open. On an ordinary confirm that is
+      // the confirm action, where a keyboard user's next Enter should land.
+      // On a destructive one it is Cancel, so the safe answer is the default
+      // and destroying something always takes a deliberate second action.
+      (danger ? cancelBtn : okBtn).focus();
+    });
+  },
+
   showToast(msg, type = 'info') {
-    const colors = { success: '#34d399', error: '#f87171', info: 'var(--sub-accent)' };
+    const STATE_TOKENS = {
+      success: { surface: '--state-success-surface', border: '--state-success-border', text: '--state-success-text' },
+      error:   { surface: '--state-danger-surface',  border: '--state-danger-border',  text: '--state-danger-text' },
+      info:    { surface: '--state-info-surface',    border: '--state-info-border',    text: '--state-info-text' },
+    };
+    const tok = STATE_TOKENS[type] || STATE_TOKENS.info;
     const toast = document.createElement('div');
-    toast.style.cssText = `position:fixed;bottom:24px;right:24px;background:#1e1e2e;border:1px solid ${colors[type]};color:white;padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
+    // inset-inline-end, never `right`: this toast appears over every screen,
+    // and in Arabic the whole shell mirrors, so a physical `right` would pin
+    // it to the wrong corner. retail_design_rtl_test.js ratchets physical
+    // properties in the STYLESHEETS and cannot see an inline style built in
+    // JavaScript, which is exactly how a `right:24px` got in here while the
+    // colours were being moved onto tokens -- so the toast test below now
+    // watches this line instead.
+    toast.style.cssText = `position:fixed;bottom:var(--overlay-inset-block-end,24px);inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
     toast.textContent = msg;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);

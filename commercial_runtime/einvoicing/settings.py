@@ -9,7 +9,16 @@ ladder):
   1. AURA_EINVOICING_DISABLED=1  -- build/ops hard off, no DB or file I/O.
   2. killswitch.py's DISABLED flag file -- fastest per-install override.
   3. This company's own `enabled` setting in einvoice_settings -- the normal
-     per-company opt-in. Default '0' (OFF).
+     per-company opt-in. Default '1' (ON): Jordan has mandated e-invoicing
+     since 2024-05-31, and a shop that has to go find a toggle is not a
+     shop that's compliant, so a fresh install now records the obligation
+     without anyone touching a setting. "On" here does NOT mean documents
+     get submitted or clearance gets claimed -- with no provider configured
+     (the shipped default; see providers/unconfigured.py), the worker
+     enqueues and holds every document, waiting for the shop to complete
+     JoFotara portal registration. The three disable layers above are
+     unchanged and still each independently sufficient to turn the whole
+     feature off, including this new default.
 
 Settings live in the einvoice_settings table (see
 commercial_runtime/einvoicing/schema.py) -- a dedicated key/value store, not
@@ -26,15 +35,47 @@ from typing import Optional
 from . import killswitch
 
 DEFAULTS = {
-    'enabled': '0',
-    'provider': 'mock',
+    'enabled': '1',
+    # 'unconfigured', not 'mock', since the default flipped to enabled. This
+    # value is never dispatched on -- it is recorded onto each outbox row and
+    # shown on the status screen -- so its only job is to be TRUE. A shipped
+    # install runs UnconfiguredProvider (see either product's app.py), and a
+    # row stamped 'mock' would have said the shop was talking to a fake
+    # JoFotara it is not wired to. Measured on the running till on 2026-09-08:
+    # a real sale queued a row reading provider='mock' while the app was
+    # actually holding UnconfiguredProvider.
+    'provider': 'unconfigured',
     'invoice_family': 'income',           # 'income' | 'general_sales'
     'default_payment_type': 'cash',       # 'cash' | 'credit'
     'seller_tin': '',
     'seller_name': '',
+    # KNOWN GAP, written down rather than left to be rediscovered: this key
+    # accepts a value and nothing reads it, because no client offers a field
+    # for it. Both products' e-invoicing pages tell the shop to "enter the
+    # Client-ID, Secret-Key and activity number" JoFotara issues
+    # (products/retail/frontend/einvoicing.js, clinic's identical line, and
+    # providers/unconfigured.py's _NOT_CONFIGURED_MESSAGE), but the settings
+    # form collects only invoice_family/seller_name/seller_tin/currency and
+    # the credentials form only client_id/client_secret. The key already
+    # validates, so closing this is one label, one input and one payload
+    # field per product -- frontend work, tracked outside this module.
     'seller_activity_code': '',
     'currency': 'JOD',
-    'buyer_id_required': '1',
+    # `buyer_id_required` USED TO LIVE HERE, defaulting to '1', and was read
+    # by nothing anywhere in the repo. Removed rather than wired, because
+    # wiring it would have been the wrong fix: the only thing that could
+    # honour it is document.require_buyer_id(), which RAISES when a buyer has
+    # no identifier on file, and both adapters deliberately call
+    # select_buyer_id() instead so a walk-in cash sale still files (see
+    # products/retail/backend/core/retail/einvoice_adapter.py's docstring).
+    # Turning the setting on would therefore have blocked exactly the sales
+    # Phase 1 decided must never be blocked.
+    #
+    # THE PHASE 1 DECISION, in writing so a later reader does not trust a
+    # name that promises enforcement: always select_buyer_id, never require.
+    # A setting whose name asserts an enforcement the product does not
+    # perform is worse than no setting -- an operator who found it would
+    # believe invoices without a buyer ID were being refused.
     'submit_interval_seconds': '60',
     'max_attempts': '20',
     'enabled_at': '',

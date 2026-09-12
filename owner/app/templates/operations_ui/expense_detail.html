@@ -114,7 +114,14 @@
   </div>
 
   {% if is_own and expense.status not in ('PAID', 'VOID', 'REJECTED') %}
-  <form method="post" action="{{ url_for('operations_ui.void_expense_route', expense_id=expense.id) }}" onsubmit="return confirm('{{ _('Void this expense?') }}');">
+  {# data-confirm (static/js/confirm.js), never onsubmit="return confirm(...)":
+     the inline form was blocked outright by the app's script-src 'self' CSP,
+     so this destructive action had NO confirmation at all -- the guard did not
+     error, it vanished. The message is localized server-side and read from the
+     attribute, so an apostrophe in a translation can no longer break (or
+     escape) a JS string literal. #}
+  <form method="post" action="{{ url_for('operations_ui.void_expense_route', expense_id=expense.id) }}"
+        data-confirm="{{ _('Void this expense?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input name="reason" placeholder="{{ _('Reason') }}" required>
     <button type="submit" class="btn-danger">{{ _("Void") }}</button>

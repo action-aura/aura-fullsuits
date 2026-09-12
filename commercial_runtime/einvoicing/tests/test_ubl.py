@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from decimal import Decimal
 
 from commercial_runtime.einvoicing.document import BuyerId, EInvoiceDocument, EInvoiceLine
 from commercial_runtime.einvoicing.ubl import PROFILE_ID, document_sha256, to_ubl_xml
@@ -79,8 +80,59 @@ def test_einvoice_number_and_amounts_present_in_output():
     root = ET.fromstring(xml)
     assert root.find('cbc:ID', _NS).text == 'INC-000001'
     payable = root.find('cac:LegalMonetaryTotal/cbc:PayableAmount', _NS)
-    assert payable.text == '23.00'
+    # CHANGED from '23.00' when _money() became currency-aware. WHAT THIS
+    # ASSERTION CAN NO LONGER CATCH: a renderer that ignores the currency and
+    # emits two decimals for everything. Such a renderer would produce
+    # '23.00' here and FAIL rather than pass -- so this line no longer pins
+    # the 2-decimal default at all, in either direction. The two tests below
+    # exist to replace exactly that coverage: one pins the 2dp ALLOW-half on
+    # a USD document (which a JOD-only 3dp renderer would break), and one
+    # pins the DENY-half with a JOD value carrying real fils, which a 2dp
+    # renderer is arithmetically incapable of producing.
+    assert payable.text == '23.000'
     assert payable.get('currencyID') == 'JOD'
+
+
+def test_a_two_decimal_currency_still_renders_two_decimals():
+    """The allow-half. Making JOD correct must not make USD wrong -- a fix
+    that simply hardcoded 3 decimals instead of 2 passes every JOD assertion
+    in this file and is just as broken for the currencies that have 2."""
+    xml = to_ubl_xml(_sample_document(currency='USD'))
+    root = ET.fromstring(xml)
+    payable = root.find('cac:LegalMonetaryTotal/cbc:PayableAmount', _NS)
+    assert payable.text == '23.00'
+    assert payable.get('currencyID') == 'USD'
+
+
+def test_jod_fils_survive_and_the_document_reconciles_against_itself():
+    """The deny-half, pinned by values a 2-decimal renderer cannot produce.
+
+    Measured against the old renderer, this exact document came out as
+    LineExtensionAmount 12.35, TaxAmount 1.98, PayableAmount 14.32 -- so the
+    document contradicted itself (12.35 + 1.98 = 14.33), and document_sha256
+    was a stable fingerprint of a wrong document. Jordan's minor unit is the
+    fils, 1/1000 of a dinar; 12.345 JOD is a real, ordinary price.
+    """
+    doc = _sample_document(
+        currency='JOD',
+        lines=(EInvoiceLine(description='Consultation', quantity=1, unit_price=12.345,
+                            discount_amount=0.0, tax_amount=1.975, line_total=12.345),),
+        subtotal=12.345, discount_total=0.0, tax_total=1.975, grand_total=14.320,
+    )
+    root = ET.fromstring(to_ubl_xml(doc))
+
+    line_ext = root.find('cac:LegalMonetaryTotal/cbc:LineExtensionAmount', _NS).text
+    tax = root.find('cac:TaxTotal/cbc:TaxAmount', _NS).text
+    tax_excl = root.find('cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount', _NS).text
+    payable = root.find('cac:LegalMonetaryTotal/cbc:PayableAmount', _NS).text
+    price = root.find('cac:InvoiceLine/cac:Price/cbc:PriceAmount', _NS).text
+
+    assert (line_ext, tax, tax_excl, payable, price) == (
+        '12.345', '1.975', '12.345', '14.320', '12.345')
+    # The self-reconciliation the old renderer failed: exclusive + tax must
+    # equal payable, read back out of the document as the tax authority
+    # would read it.
+    assert Decimal(tax_excl) + Decimal(tax) == Decimal(payable)
 
 
 def test_local_document_no_and_family_carried_in_note_not_fabricated_istd_field():

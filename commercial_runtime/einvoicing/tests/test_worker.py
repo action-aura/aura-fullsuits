@@ -24,8 +24,17 @@ def _setup_db(tmp_path, company_id=1, enabled=True):
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
     apply_einvoicing_schema(conn)
-    if enabled:
-        settings.set_setting(conn, company_id, 'enabled', '1')
+    # AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']=
+    # '1'), so `enabled=False` used to rely on writing NOTHING and letting
+    # the absence of a row mean "disabled" -- that was only ever true under
+    # the OLD default. With no row, a company now falls back to the new
+    # default and IS enabled, so test_run_once_does_nothing_when_disabled
+    # was silently exercising the ENABLED path. Write '0' explicitly so
+    # "disabled" here means the setting is actually disabled, not merely
+    # unset -- this is a fixture correction, not a test weakening: the test
+    # still proves exactly the same claim (a disabled company's queued row
+    # is never touched), just against a state that's actually disabled.
+    settings.set_setting(conn, company_id, 'enabled', '1' if enabled else '0')
     conn.commit()
     conn.close()
     return db_path

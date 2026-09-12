@@ -25,6 +25,45 @@ class TrustStoreError(ValueError):
     pass
 
 
+# Bounded so a hostile or garbled manifest can never turn admission into an
+# unbounded verification loop. Owner emits one entry per retained non-revoked
+# key; 64 is roughly five years of monthly rotation, far beyond any real
+# schedule, and the legacy single-signature slot is checked regardless of how
+# full this list is.
+MAX_MANIFEST_SIGNATURES = 64
+
+
+def _candidate_signatures(manifest: dict) -> list[tuple[str, str]]:
+    """(key_id, signature_b64) pairs offered by a manifest, most-preferred
+    first: the continuity `signatures` list Owner emits since the key-
+    continuity fix, then the legacy single `signed_by_key_id`/`signature`
+    pair that pre-continuity Owner builds emit on their own.
+
+    Purely structural -- this decides what is worth CHECKING, never what is
+    trusted. Every pair still has to name a key already in the store and
+    still has to verify against the public key the store already holds for
+    it.
+    """
+    candidates: list[tuple[str, str]] = []
+
+    entries = manifest.get("signatures")
+    if isinstance(entries, list):
+        for entry in entries[:MAX_MANIFEST_SIGNATURES]:
+            if not isinstance(entry, dict):
+                continue
+            key_id = entry.get("key_id")
+            signature = entry.get("signature")
+            if isinstance(key_id, str) and isinstance(signature, str):
+                candidates.append((key_id, signature))
+
+    legacy_key_id = manifest.get("signed_by_key_id")
+    legacy_signature = manifest.get("signature")
+    if isinstance(legacy_key_id, str) and isinstance(legacy_signature, str):
+        candidates.append((legacy_key_id, legacy_signature))
+
+    return candidates
+
+
 @dataclass(frozen=True)
 class TrustedKey:
     key_id: str
@@ -73,18 +112,50 @@ class OwnerTrustStore:
         key = self._keys.get(key_id)
         return key.public_key_b64 if key else None
 
+    def trusted_key_ids(self) -> list[str]:
+        """Key IDs only -- never public key material, never the file itself.
+
+        Diagnostics only (see activation.py::_failure_details). A key id is a
+        public, non-secret identifier that Owner already publishes in every
+        assertion envelope it signs, so recording one in the LOCAL event log
+        leaks nothing; the corresponding public keys are deliberately NOT
+        exposed here, because nothing outside this class needs them to explain
+        a failure.
+        """
+        return sorted(self._keys)
+
     def admit_manifest(self, manifest: dict) -> None:
         """Part D step 3: admit a signed key-set manifest only if it is
-        itself signed by a key already in this trust store. A manifest
-        signed by an unknown key is discarded silently -- it never partially
-        updates the trusted set."""
-        signed_by = manifest.get("signed_by_key_id")
-        if not signed_by or not self.is_trusted(signed_by):
-            return  # untrusted signer -- discard, do not raise (this is an
-            # expected, non-exceptional outcome on every routine check-in
-            # where nothing has changed).
+        itself signed by a key already in this trust store. A manifest whose
+        signers are all unknown is discarded silently -- it never partially
+        updates the trusted set.
 
-        signer_pub_b64 = self.get_public_key_b64(signed_by)
+        KEY CONTINUITY (launch-readiness CRITICAL fix). This used to look at
+        exactly one signature -- `signed_by_key_id`, which Owner always set
+        to the CURRENTLY ACTIVE key. That made rotation unpropagatable and
+        unrecoverable: right after a rotation the only manifest Owner could
+        produce was signed by a key no fielded install had ever trusted, so
+        it was discarded here, every subsequent assertion failed
+        UNKNOWN_SIGNING_KEY, and only a new installer with a fresh bundled
+        anchor could fix it.
+
+        Owner now countersigns the manifest with every retained non-revoked
+        key (see owner/app/licensing_service/signing.py::
+        export_signed_keyset_manifest), so the OUTGOING key -- which this
+        install still trusts -- vouches for the manifest introducing its
+        successor. All that changes here is WHICH already-trusted key is
+        allowed to be the one that vouches: it no longer has to be Owner's
+        current active key. The rule itself is untouched -- a signature is
+        still verified against the public key THIS STORE already holds for
+        that key_id, so a manifest signed only by keys that were never
+        trusted is still rejected, and a forged entry naming a trusted
+        key_id still fails verification. Nothing is ever admitted on a
+        manifest's own say-so.
+
+        The legacy single-signature shape is still accepted (checked last),
+        so an Owner instance that predates the countersigning change keeps
+        working unchanged.
+        """
         signable = {
             "manifest_version": manifest.get("manifest_version"),
             "issued_at": manifest.get("issued_at"),
@@ -92,15 +163,25 @@ class OwnerTrustStore:
         }
         try:
             canonical_bytes = canonicalize_bytes(signable)
-            signature = base64.b64decode(manifest["signature"])
-            signer_pub = base64.b64decode(signer_pub_b64)
         except Exception:
             return  # malformed manifest -- discard, not a hard error.
 
-        if not verify_signature(signer_pub, canonical_bytes, signature):
-            return  # bad signature -- discard.
+        for key_id, signature_b64 in _candidate_signatures(manifest):
+            if not self.is_trusted(key_id):
+                continue  # expected and non-exceptional -- Owner countersigns
+                # with keys this install may never have seen.
+            try:
+                signature = base64.b64decode(signature_b64)
+                signer_pub = base64.b64decode(self.get_public_key_b64(key_id))
+            except Exception:
+                continue  # malformed entry -- skip it, another may be sound.
+            if verify_signature(signer_pub, canonical_bytes, signature):
+                break
+        else:
+            return  # no trusted key vouched for this manifest -- discard.
 
-        # Signature verified -- now safe to admit/update/remove keys.
+        # A trusted key's signature verified -- now safe to admit/update/
+        # remove keys.
         incoming_ids = set()
         for entry in manifest.get("keys", []):
             key_id = entry["key_id"]
@@ -119,6 +200,66 @@ class OwnerTrustStore:
                 source="ROTATION_MANIFEST",
             )
         self._save()
+
+    def admit_bundled_anchor(self, anchor_json: dict) -> bool:
+        """Guarded re-anchor: LAST-RESORT recovery for an install whose trust
+        store predates a DISCONTINUOUS Owner key. Returns True if it actually
+        admitted something new.
+
+        Why this exists (2026-09-04, approved deliberately rather than assumed).
+        bootstrap_from_anchor() refuses once keys exist, and routes.py only
+        calls it when trust_store.json is absent, so a store seeded on first run
+        permanently shadows every corrected anchor shipped afterwards. When
+        Owner's key rotates WITH continuity that is fine -- admit_manifest()'s
+        countersigning bridge carries trust forward. When a fresh Owner deploy
+        has no bridge (it holds only its new key, so nothing this install trusts
+        can countersign), the device is stranded for good: a real Mi Note 10 was,
+        and no reinstall could fix it because app data survives.
+
+        Three properties keep this from being a TOFU hole:
+
+        * ADD-ONLY. A key_id already present is never overwritten, so a tampered
+          anchor cannot silently swap the public key behind a key_id this store
+          already trusts -- it can only introduce an id that means nothing yet.
+        * MERGE, NOT REPLACE. Keys admitted from a rotation manifest are kept,
+          so an install that has legitimately rotated FORWARD past its build's
+          anchor is never dragged back to it. This matches admit_manifest(),
+          which is itself additive and prunes only explicit REVOKED entries.
+        * CALLED ONLY FROM THE STRANDED PATH. activation.py invokes this solely
+          after a real UNKNOWN_SIGNING_KEY that a manifest refresh could not
+          repair -- never speculatively, never on a healthy install.
+
+        On the threat model: the anchor is build material, not network material.
+        On Android it lives inside the APK, so replacing it already requires the
+        original app-signing key (and an uninstall wipes app data anyway). On
+        Windows it sits in the install directory while trust_store.json sits in
+        app data -- so an attacker who can write the anchor is strictly more
+        privileged than one who can already delete trust_store.json and force a
+        fresh bootstrap from it today. This grants no capability that deleting
+        one file did not already grant.
+
+        Residual risk, stated rather than hidden: an anchor from an old build
+        can re-admit a key Owner has since REVOKED. That only matters to an
+        attacker holding that revoked private key AND able to answer as Owner,
+        against a device that is already non-functional -- and the next
+        successfully-admitted manifest re-applies the revocation.
+        """
+        admitted = False
+        for entry in anchor_json.get("keys", []):
+            key_id = entry["key_id"]
+            if key_id in self._keys:
+                continue
+            self._keys[key_id] = TrustedKey(
+                key_id=key_id,
+                public_key_b64=entry["public_key"],
+                algorithm=entry.get("algorithm", "ed25519"),
+                status="ACTIVE",
+                source="BUNDLED_ANCHOR",
+            )
+            admitted = True
+        if admitted:
+            self._save()
+        return admitted
 
     def revoke_locally(self, key_id: str) -> None:
         """Emergency local-only revocation (e.g. staff-initiated, out of

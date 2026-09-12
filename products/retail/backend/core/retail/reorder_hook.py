@@ -95,8 +95,27 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # launch-readiness Phase 6 stage 6b-iii-b: `AND deleted_at_utc IS
+        # NULL` added -- this is the WRITE gate for a NEW reorder request, so
+        # a tombstoned product must raise none, exactly like create_purchase_
+        # order's own product read (retail_api.py). This is deliberately NOT
+        # the same rule as an EXISTING pending request for a product that is
+        # deleted AFTER the request was raised -- see phase6b-decisions.md /
+        # this stage's own docs for why that one stays visible and declinable
+        # (list_reorder_requests's INNER JOIN is untouched) while only the
+        # CREATE path here is gated. A missing/tombstoned product simply
+        # reads as `not product` below, exactly like an id that never
+        # existed.
+        #
+        # `status='active'` joins the tombstone check for the same
+        # two-population reason retail_api.py's `create_supplier_contact`
+        # comment spells out in full -- a product deleted before tombstones
+        # existed never got a `deleted_at_utc` stamp, so the tombstone
+        # filter alone would miss it and let a new reorder request raise
+        # against it.
         product = conn.execute(
-            "SELECT name, reorder_method, reorder_level FROM products WHERE id=? AND company_id=?",
+            "SELECT name, reorder_method, reorder_level FROM products "
+            "WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
             (product_id, company_id),
         ).fetchone()
         if not product or (product['reorder_method'] or 'none') == 'none':
@@ -128,13 +147,20 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
             f"Stock for this product is at {on_hand:g} (reorder level {reorder_level:g}). "
             f"Suggested reorder quantity: {max(reorder_level, 1):g}."
         )
+        # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
+        # stamped at creation, same reasoning as retail_api.py's
+        # create_category. `now` is this row's own created_at instant --
+        # reused for updated_at_utc too, one instant, not two.
         conn.execute(
-            "INSERT INTO reorder_requests (id, company_id, branch_id, product_id, status, draft_message, created_at) "
-            "VALUES (?,?,?,?,'pending',?,?)",
-            (request_id, company_id, branch_id, product_id, draft_message, now),
+            "INSERT INTO reorder_requests "
+            "(id, company_id, branch_id, product_id, status, draft_message, created_at, "
+            "row_version, updated_at_utc) "
+            "VALUES (?,?,?,?,'pending',?,?,?,?)",
+            (request_id, company_id, branch_id, product_id, draft_message, now, 1, now),
         )
         _queue_reorder_sync_event(conn, request_id, company_id, branch_id, product_id,
-                                   'pending', draft_message, now, 'create')
+                                   'pending', draft_message, now, 'create',
+                                   row_version=1, updated_at_utc=now)
         _maybe_queue_low_stock_email(conn, company_id, product_name=product['name'] or 'Product',
                                       on_hand=on_hand, reorder_level=reorder_level,
                                       draft_message=draft_message)
@@ -191,19 +217,29 @@ def _maybe_queue_low_stock_email(conn, company_id, *, product_name, on_hand, reo
 
 
 def _queue_reorder_sync_event(conn, request_id, company_id, branch_id, product_id,
-                               status, draft_message, timestamp, event_type):
+                               status, draft_message, timestamp, event_type,
+                               *, row_version=None, updated_at_utc=None):
     """Same INSERT shape as retail_api.py's `_queue_sync_event` -- this
     module runs outside any Flask request context (its own connection, no
     `cur` handed in from a route), so it cannot import that helper without
     creating a core/retail -> api import (backwards from every other
     dependency in this codebase); this is a deliberate, minimal duplicate
-    of that one INSERT statement, not a divergent implementation."""
+    of that one INSERT statement, not a divergent implementation.
+
+    `row_version`/`updated_at_utc` (launch-readiness Phase 6 stage 6a-i,
+    docs/launch-readiness/phase6-catalogue-correctness.md): keyword-only and
+    optional so this function's one caller states them explicitly rather
+    than this function guessing a value on the caller's behalf -- this is
+    the CREATE site for `reorder_requests`, so the caller always has the
+    freshly-inserted row's own `row_version` (1) and `updated_at_utc`
+    (`now`) in hand already."""
     conn.execute(
         "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
         (str(_uuid.uuid4()), 'reorder_request', request_id, event_type,
          json.dumps({
              'id': request_id, 'branch_id': branch_id, 'product_id': product_id,
              'status': status, 'draft_message': draft_message, 'resolved_at': None,
+             'row_version': row_version, 'updated_at_utc': updated_at_utc,
          }),
          timestamp),
     )

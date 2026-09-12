@@ -14,6 +14,15 @@
 (function () {
   'use strict';
 
+  // i18n.js (loaded before this script in whatsapp.html) defines the global
+  // t()/AuraI18n. Falling back to identity when it's absent keeps this file
+  // loadable standalone -- e.g. retail's own test harnesses run product
+  // frontend files through a bare vm sandbox with no i18n.js in it, and this
+  // file worked standalone before i18n was wired in, so it still should.
+  const t = (typeof window !== 'undefined' && typeof window.t === 'function')
+    ? window.t
+    : function (s) { return s; };
+
   const messageArea = document.getElementById('message-area');
   const statusContent = document.getElementById('status-content');
   const templatesContent = document.getElementById('templates-content');
@@ -60,6 +69,55 @@
     return node;
   }
 
+  // ── Confirm dialog (replaces native confirm()) ──────────────────────────
+  // Mirrors licensing.js's confirmDialog exactly (same rationale: no shared
+  // SubsystemApp shell exists to plug into -- see the file header, and
+  // RetailSystem._confirm in subsystem-retail.js for the full rationale
+  // behind replacing native confirm() at all). Built with el()/textContent
+  // only, matching this file's no-innerHTML policy. This page loads i18n.js
+  // directly (see the file header), so opts route through t() like the rest
+  // of this file.
+  function confirmDialog(opts) {
+    const o = opts || {};
+    const danger = !!o.danger;
+    const trigger = document.activeElement;
+
+    const cancelBtn = el('button', { className: 'secondary', text: o.cancelLabel || t('Cancel') });
+    const okBtn = el('button', { className: danger ? 'danger' : '', text: o.confirmLabel || t('Confirm') });
+    const cardChildren = [el('h3', { text: o.title || '' })];
+    if (o.message) cardChildren.push(el('p', { className: 'confirm-message', text: o.message }));
+    cardChildren.push(el('div', { className: 'row' }, [cancelBtn, okBtn]));
+    const card = el('div', { className: 'confirm-card' }, cardChildren);
+    card.setAttribute('role', 'alertdialog');
+    card.setAttribute('aria-modal', 'true');
+    const overlay = el('div', { className: 'confirm-overlay' }, [card]);
+
+    return new Promise((resolve) => {
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;   // Enter/click/overlay-click can race; resolve once only
+        settled = true;
+        document.removeEventListener('keydown', onKeydown, true);
+        overlay.remove();
+        if (trigger && typeof trigger.focus === 'function') trigger.focus();
+        resolve(result);
+      };
+
+      const onKeydown = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+      };
+      document.addEventListener('keydown', onKeydown, true);
+
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      cancelBtn.addEventListener('click', () => finish(false));
+      okBtn.addEventListener('click', () => finish(true));
+      okBtn.focus();
+    });
+  }
+
   function showMessage(text, kind) {
     clearChildren(messageArea);
     messageArea.appendChild(el('div', { className: 'message message-' + kind, text: text }));
@@ -100,7 +158,7 @@
   }
 
   function stateBadge(label) {
-    return el('span', { className: 'state-badge ' + label.cls, text: label.text });
+    return el('span', { className: 'state-badge ' + label.cls, text: t(label.text) });
   }
 
   // ─── status card ────────────────────────────────────────────────────
@@ -109,7 +167,7 @@
     const { status, body } = await apiGet('/api/notifications/whatsapp/status');
     if (status !== 200) {
       clearChildren(statusContent);
-      statusContent.appendChild(el('p', { text: 'Could not load status.' }));
+      statusContent.appendChild(el('p', { text: t('Could not load status.') }));
       return;
     }
     renderStatus(body.data);
@@ -122,7 +180,7 @@
       statusContent.appendChild(stateBadge({ text: 'Transport not configured', cls: 'state-warning' }));
       statusContent.appendChild(el('p', {
         className: 'hint',
-        text: 'AURA_WHATSAPP_PHONE_NUMBER_ID / AURA_WHATSAPP_ACCESS_TOKEN are not set on this installation. Nothing can send until the installer sets them.',
+        text: t('AURA_WHATSAPP_PHONE_NUMBER_ID / AURA_WHATSAPP_ACCESS_TOKEN are not set on this installation. Nothing can send until the installer sets them.'),
       }));
     } else {
       statusContent.appendChild(data.enabled
@@ -131,20 +189,20 @@
     }
 
     const dl = el('dl');
-    dl.appendChild(el('dt', { text: 'Recipients configured' }));
+    dl.appendChild(el('dt', { text: t('Recipients configured') }));
     dl.appendChild(el('dd', { text: String(data.recipient_count || 0) }));
     const counts = data.counts_by_state || {};
-    dl.appendChild(el('dt', { text: 'Queued' }));
+    dl.appendChild(el('dt', { text: t('Queued') }));
     dl.appendChild(el('dd', { text: String(counts.QUEUED || 0) }));
-    dl.appendChild(el('dt', { text: 'Sent' }));
+    dl.appendChild(el('dt', { text: t('Sent') }));
     dl.appendChild(el('dd', { text: String(counts.SENT || 0) }));
-    dl.appendChild(el('dt', { text: 'Needs attention' }));
+    dl.appendChild(el('dt', { text: t('Needs attention') }));
     dl.appendChild(el('dd', { text: String(counts.FAILED_PERMANENT || 0) }));
     statusContent.appendChild(dl);
 
     const toggleRow = el('div', { className: 'toggle-row' });
     toggleRow.style.marginTop = '14px';
-    const toggleLabel = el('label', { text: 'Enable WhatsApp reports for this business', htmlFor: 'wa-enabled' });
+    const toggleLabel = el('label', { text: t('Enable WhatsApp reports for this business'), htmlFor: 'wa-enabled' });
     toggleLabel.style.margin = '0';
     const toggle = el('input', { id: 'wa-enabled', type: 'checkbox' });
     toggle.checked = data.enabled === true;
@@ -161,12 +219,12 @@
     try {
       const { status, body } = await apiPost('/api/notifications/whatsapp/settings', { enabled: toggle.checked ? '1' : '0' });
       if (status === 200) {
-        showMessage(toggle.checked ? 'WhatsApp reports enabled.' : 'WhatsApp reports disabled.', 'info');
+        showMessage(toggle.checked ? t('WhatsApp reports enabled.') : t('WhatsApp reports disabled.'), 'info');
       } else {
-        showMessage(body.message || 'Could not save this setting.', 'error');
+        showMessage(body.message || t('Could not save this setting.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     await refreshStatus();
   }
@@ -177,7 +235,7 @@
     const { status, body } = await apiGet('/api/notifications/whatsapp/settings');
     if (status !== 200) {
       clearChildren(templatesContent);
-      templatesContent.appendChild(el('p', { text: 'Could not load templates.' }));
+      templatesContent.appendChild(el('p', { text: t('Could not load templates.') }));
       return;
     }
     renderTemplates(body.data.settings);
@@ -186,10 +244,10 @@
   function renderTemplates(settings) {
     clearChildren(templatesContent);
 
-    templatesContent.appendChild(el('label', { text: 'Default language code', htmlFor: 'wa-default-lang' }));
+    templatesContent.appendChild(el('label', { text: t('Default language code'), htmlFor: 'wa-default-lang' }));
     const langSelect = el('select', { id: 'wa-default-lang' });
     [['en_US', 'English (en_US)'], ['ar', 'Arabic (ar)']].forEach(([value, label]) => {
-      const opt = el('option', { value: value, text: label });
+      const opt = el('option', { value: value, text: t(label) });
       if (settings.default_language_code === value) opt.selected = true;
       langSelect.appendChild(opt);
     });
@@ -197,15 +255,15 @@
 
     REPORT_TYPES.forEach((rt) => {
       const block = el('div', { className: 'template-block' });
-      block.appendChild(el('label', { text: rt.label + ' — template name', htmlFor: 'wa-name-' + rt.key }));
-      block.appendChild(el('input', { id: 'wa-name-' + rt.key, type: 'text', value: settings[rt.nameKey] || '', placeholder: 'e.g. ' + rt.namePlaceholder }));
-      block.appendChild(el('label', { text: 'Reference text (not sent — see note above)', htmlFor: 'wa-body-' + rt.key }));
+      block.appendChild(el('label', { text: t(rt.label) + ' — ' + t('template name'), htmlFor: 'wa-name-' + rt.key }));
+      block.appendChild(el('input', { id: 'wa-name-' + rt.key, type: 'text', value: settings[rt.nameKey] || '', placeholder: t('e.g.') + ' ' + rt.namePlaceholder }));
+      block.appendChild(el('label', { text: t('Reference text (not sent — see note above)'), htmlFor: 'wa-body-' + rt.key }));
       block.appendChild(el('textarea', { id: 'wa-body-' + rt.key, rows: 2, value: settings[rt.bodyKey] || '' }));
       templatesContent.appendChild(block);
     });
 
     const row = el('div', { className: 'row' });
-    const saveBtn = el('button', { text: 'Save templates' });
+    const saveBtn = el('button', { text: t('Save templates') });
     saveBtn.addEventListener('click', () => onSaveTemplatesClicked(saveBtn));
     row.appendChild(saveBtn);
     templatesContent.appendChild(row);
@@ -222,12 +280,12 @@
     try {
       const { status, body } = await apiPost('/api/notifications/whatsapp/settings', payload);
       if (status === 200) {
-        showMessage('Templates saved.', 'info');
+        showMessage(t('Templates saved.'), 'info');
       } else {
-        showMessage(body.message || 'Could not save templates.', 'error');
+        showMessage(body.message || t('Could not save templates.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await refreshTemplates();
@@ -248,28 +306,28 @@
     const { status, body } = await apiGet('/api/notifications/whatsapp/recipients');
     if (status !== 200) {
       clearChildren(recipientsContent);
-      recipientsContent.appendChild(el('p', { text: 'Could not load recipients.' }));
+      recipientsContent.appendChild(el('p', { text: t('Could not load recipients.') }));
       return;
     }
     renderRecipients(body.data);
   }
 
   function branchName(branchId) {
-    if (branchId === null || branchId === undefined) return 'All branches';
+    if (branchId === null || branchId === undefined) return t('All branches');
     const b = branchOptions.find((x) => String(x.id) === String(branchId));
-    return b ? b.name : ('Branch ' + branchId);
+    return b ? b.name : (t('Branch') + ' ' + branchId);
   }
 
   function renderRecipients(rows) {
     clearChildren(recipientsContent);
 
     if (!rows.length) {
-      recipientsContent.appendChild(el('p', { text: 'No recipients configured yet.' }));
+      recipientsContent.appendChild(el('p', { text: t('No recipients configured yet.') }));
     } else {
       const table = el('table');
       const thead = el('thead');
       const headRow = el('tr');
-      ['Name', 'Phone', 'Role', 'Branch', 'Reports', 'Active', ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
+      [t('Name'), t('Phone'), t('Role'), t('Branch'), t('Reports'), t('Active'), ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
       thead.appendChild(headRow);
       table.appendChild(thead);
 
@@ -281,13 +339,13 @@
         tr.appendChild(el('td', { text: r.role_label || '—' }));
         tr.appendChild(el('td', { text: branchName(r.branch_id) }));
         tr.appendChild(el('td', { text: r.report_types.join(', ') || '—' }));
-        tr.appendChild(el('td', { text: r.status === 'active' ? 'Yes' : 'No' }));
+        tr.appendChild(el('td', { text: r.status === 'active' ? t('Yes') : t('No') }));
 
         const actionsCell = el('td');
-        const editBtn = el('button', { className: 'small secondary', text: 'Edit' });
+        const editBtn = el('button', { className: 'small secondary', text: t('Edit') });
         editBtn.addEventListener('click', () => onEditRecipientClicked(r));
         actionsCell.appendChild(editBtn);
-        const removeBtn = el('button', { className: 'small danger', text: 'Remove' });
+        const removeBtn = el('button', { className: 'small danger', text: t('Remove') });
         removeBtn.style.marginLeft = '6px';
         removeBtn.addEventListener('click', () => onRemoveRecipientClicked(r.id));
         actionsCell.appendChild(removeBtn);
@@ -304,20 +362,20 @@
 
   function buildRecipientForm(prefill) {
     const form = el('div', { className: 'template-block' });
-    form.appendChild(el('label', { text: editingRecipientId ? 'Edit recipient' : 'Add a recipient' }));
+    form.appendChild(el('label', { text: editingRecipientId ? t('Edit recipient') : t('Add a recipient') }));
 
-    form.appendChild(el('label', { text: 'Name', htmlFor: 'wa-r-name' }));
-    form.appendChild(el('input', { id: 'wa-r-name', type: 'text', value: (prefill && prefill.display_name) || '', placeholder: 'e.g. Owner, Downtown Manager' }));
+    form.appendChild(el('label', { text: t('Name'), htmlFor: 'wa-r-name' }));
+    form.appendChild(el('input', { id: 'wa-r-name', type: 'text', value: (prefill && prefill.display_name) || '', placeholder: t('e.g. Owner, Downtown Manager') }));
 
-    form.appendChild(el('label', { text: 'Phone (with country code, e.g. +962791234567)', htmlFor: 'wa-r-phone' }));
+    form.appendChild(el('label', { text: t('Phone (with country code, e.g. +962791234567)'), htmlFor: 'wa-r-phone' }));
     form.appendChild(el('input', { id: 'wa-r-phone', type: 'tel', value: (prefill && prefill.phone_e164) || '' }));
 
-    form.appendChild(el('label', { text: 'Role (optional)', htmlFor: 'wa-r-role' }));
-    form.appendChild(el('input', { id: 'wa-r-role', type: 'text', value: (prefill && prefill.role_label) || '', placeholder: 'e.g. Owner, Manager, Accountant' }));
+    form.appendChild(el('label', { text: t('Role (optional)'), htmlFor: 'wa-r-role' }));
+    form.appendChild(el('input', { id: 'wa-r-role', type: 'text', value: (prefill && prefill.role_label) || '', placeholder: t('e.g. Owner, Manager, Accountant') }));
 
-    form.appendChild(el('label', { text: 'Branch', htmlFor: 'wa-r-branch' }));
+    form.appendChild(el('label', { text: t('Branch'), htmlFor: 'wa-r-branch' }));
     const branchSelect = el('select', { id: 'wa-r-branch' });
-    const allOpt = el('option', { value: '', text: 'All branches' });
+    const allOpt = el('option', { value: '', text: t('All branches') });
     branchSelect.appendChild(allOpt);
     branchOptions.forEach((b) => {
       const opt = el('option', { value: String(b.id), text: b.name });
@@ -326,33 +384,33 @@
     });
     form.appendChild(branchSelect);
 
-    form.appendChild(el('label', { text: 'Language', htmlFor: 'wa-r-lang' }));
+    form.appendChild(el('label', { text: t('Language'), htmlFor: 'wa-r-lang' }));
     const langSelect = el('select', { id: 'wa-r-lang' });
     [['en_US', 'English'], ['ar', 'Arabic']].forEach(([value, label]) => {
-      const opt = el('option', { value: value, text: label });
+      const opt = el('option', { value: value, text: t(label) });
       if (prefill && prefill.language_code === value) opt.selected = true;
       langSelect.appendChild(opt);
     });
     form.appendChild(langSelect);
 
-    form.appendChild(el('label', { text: 'Reports this recipient gets' }));
+    form.appendChild(el('label', { text: t('Reports this recipient gets') }));
     const prefillTypes = (prefill && prefill.report_types) || [];
     REPORT_TYPES.forEach((rt) => {
       const rowEl = el('div', { className: 'checkbox-row' });
       const cb = el('input', { id: 'wa-r-type-' + rt.key, type: 'checkbox' });
       cb.checked = prefillTypes.indexOf(rt.key) !== -1;
-      const cbLabel = el('label', { text: rt.label, htmlFor: 'wa-r-type-' + rt.key });
+      const cbLabel = el('label', { text: t(rt.label), htmlFor: 'wa-r-type-' + rt.key });
       rowEl.appendChild(cb);
       rowEl.appendChild(cbLabel);
       form.appendChild(rowEl);
     });
 
     const row = el('div', { className: 'row' });
-    const saveBtn = el('button', { text: editingRecipientId ? 'Save changes' : 'Add recipient' });
+    const saveBtn = el('button', { text: editingRecipientId ? t('Save changes') : t('Add recipient') });
     saveBtn.addEventListener('click', () => onSaveRecipientClicked(saveBtn));
     row.appendChild(saveBtn);
     if (editingRecipientId) {
-      const cancelBtn = el('button', { className: 'secondary', text: 'Cancel' });
+      const cancelBtn = el('button', { className: 'secondary', text: t('Cancel') });
       cancelBtn.addEventListener('click', () => { editingRecipientId = null; refreshRecipients(); });
       row.appendChild(cancelBtn);
     }
@@ -372,7 +430,7 @@
     const displayName = document.getElementById('wa-r-name').value.trim();
     const phone = document.getElementById('wa-r-phone').value.trim();
     if (!displayName || !phone) {
-      showMessage('Enter both a name and a phone number.', 'error');
+      showMessage(t('Enter both a name and a phone number.'), 'error');
       return;
     }
     const branchVal = document.getElementById('wa-r-branch').value;
@@ -394,30 +452,36 @@
         ? await apiPut('/api/notifications/whatsapp/recipients/' + encodeURIComponent(editingRecipientId), payload)
         : await apiPost('/api/notifications/whatsapp/recipients', payload);
       if (status === 200) {
-        showMessage(editingRecipientId ? 'Recipient updated.' : 'Recipient added.', 'info');
+        showMessage(editingRecipientId ? t('Recipient updated.') : t('Recipient added.'), 'info');
         editingRecipientId = null;
       } else {
-        showMessage(body.message || 'Could not save this recipient.', 'error');
+        showMessage(body.message || t('Could not save this recipient.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await Promise.all([refreshRecipients(), refreshStatus()]);
   }
 
   async function onRemoveRecipientClicked(recipientId) {
-    if (!window.confirm('Remove this recipient? They will stop receiving any WhatsApp reports.')) return;
+    const ok = await confirmDialog({
+      title: t('Remove this recipient?'),
+      message: t('They will stop receiving any WhatsApp reports.'),
+      confirmLabel: t('Remove'),
+      danger: true,
+    });
+    if (!ok) return;
     clearMessage();
     try {
       const { status, body } = await apiDelete('/api/notifications/whatsapp/recipients/' + encodeURIComponent(recipientId));
       if (status === 200) {
-        showMessage('Recipient removed.', 'info');
+        showMessage(t('Recipient removed.'), 'info');
       } else {
-        showMessage(body.message || 'Could not remove this recipient.', 'error');
+        showMessage(body.message || t('Could not remove this recipient.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     await Promise.all([refreshRecipients(), refreshStatus()]);
   }
@@ -428,7 +492,7 @@
     const { status, body } = await apiGet('/api/notifications/whatsapp/outbox?limit=20');
     if (status !== 200) {
       clearChildren(queueContent);
-      queueContent.appendChild(el('p', { text: 'Could not load the queue.' }));
+      queueContent.appendChild(el('p', { text: t('Could not load the queue.') }));
       return;
     }
     renderQueue(body.data);
@@ -441,7 +505,7 @@
       const table = el('table');
       const thead = el('thead');
       const headRow = el('tr');
-      ['Type', 'Phone', 'Template', 'Status', 'Attempts', ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
+      [t('Type'), t('Phone'), t('Template'), t('Status'), t('Attempts'), ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
       thead.appendChild(headRow);
       table.appendChild(thead);
 
@@ -463,19 +527,19 @@
       table.appendChild(tbody);
       queueContent.appendChild(table);
     } else {
-      queueContent.appendChild(el('p', { text: 'Nothing queued yet.' }));
+      queueContent.appendChild(el('p', { text: t('Nothing queued yet.') }));
     }
 
     const row = el('div', { className: 'row' });
-    const runBtn = el('button', { className: 'secondary', text: 'Process queue now' });
+    const runBtn = el('button', { className: 'secondary', text: t('Process queue now') });
     runBtn.addEventListener('click', () => onRunOnceClicked(runBtn));
     row.appendChild(runBtn);
 
-    const dailyBtn = el('button', { className: 'secondary', text: 'Send daily summary now' });
+    const dailyBtn = el('button', { className: 'secondary', text: t('Send daily summary now') });
     dailyBtn.addEventListener('click', () => onSendNowClicked(dailyBtn, 'daily_sales_summary'));
     row.appendChild(dailyBtn);
 
-    const arBtn = el('button', { className: 'secondary', text: 'Send AR overdue alert now' });
+    const arBtn = el('button', { className: 'secondary', text: t('Send AR overdue alert now') });
     arBtn.addEventListener('click', () => onSendNowClicked(arBtn, 'ar_overdue_alert'));
     row.appendChild(arBtn);
 
@@ -510,9 +574,9 @@
       // run_once() short-circuits on the disabled gate BEFORE claiming
       // anything, so nothing was even attempted -- never call this processed.
       if (d.reason === 'disabled') {
-        return { text: 'Nothing was sent — WhatsApp reports are switched off for this business. Enable them above first.', kind: 'error' };
+        return { text: t('Nothing was sent — WhatsApp reports are switched off for this business. Enable them above first.'), kind: 'error' };
       }
-      return { text: 'The queue was not processed' + (d.reason ? ' (' + d.reason + ').' : '.'), kind: 'error' };
+      return { text: t('The queue was not processed') + (d.reason ? ' (' + d.reason + ').' : '.'), kind: 'error' };
     }
 
     const outcomes = d.outcomes || {};
@@ -532,20 +596,20 @@
       // conflation is what this whole function exists to remove. The wording
       // leads with the healthy state for the same reason: opening on "Nothing
       // was sent" reads as a failure report even inside a blue box.
-      return { text: 'Queue is up to date — nothing was due to go out.', kind: 'info' };
+      return { text: t('Queue is up to date — nothing was due to go out.'), kind: 'info' };
     }
 
     const parts = [];
-    if (sent) parts.push(sent + ' sent');
-    if (retry) parts.push(retry + ' failed and will be retried');
-    if (failed) parts.push(failed + ' failed permanently');
-    if (!parts.length) parts.push('no messages completed');
+    if (sent) parts.push(sent + ' ' + t('sent'));
+    if (retry) parts.push(retry + ' ' + t('failed and will be retried'));
+    if (failed) parts.push(failed + ' ' + t('failed permanently'));
+    if (!parts.length) parts.push(t('no messages completed'));
 
-    let text = 'Processed ' + claimed + ' message(s): ' + parts.join(', ') + '.';
+    let text = t('Processed') + ' ' + claimed + ' ' + t('message(s):') + ' ' + parts.join(', ') + '.';
     if (retry || failed) {
       // The per-row Meta error code/message now lands in last_error and is
       // rendered under the Status badge by renderQueue().
-      text += ' See the reason under Status below.';
+      text += ' ' + t('See the reason under Status below.');
     }
     return { text: text, kind: (retry || failed || !sent) ? 'error' : 'info' };
   }
@@ -559,10 +623,10 @@
         const outcome = describeRunOnce(body.data);
         showMessage(outcome.text, outcome.kind);
       } else {
-        showMessage(body.message || 'Could not process the queue.', 'error');
+        showMessage(body.message || t('Could not process the queue.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await Promise.all([refreshStatus(), refreshQueue()]);
@@ -574,12 +638,12 @@
     try {
       const { status, body } = await apiPost('/api/sub/retail/reports/whatsapp', { report_type: reportType });
       if (status === 200) {
-        showMessage('Queued for ' + body.data.queued + ' recipient(s).', 'info');
+        showMessage(t('Queued for') + ' ' + body.data.queued + ' ' + t('recipient(s).'), 'info');
       } else {
-        showMessage(body.message || 'Could not queue this report.', 'error');
+        showMessage(body.message || t('Could not queue this report.'), 'error');
       }
     } catch (e) {
-      showMessage('Network error while contacting this installation.', 'error');
+      showMessage(t('Network error while contacting this installation.'), 'error');
     }
     btn.disabled = false;
     await Promise.all([refreshStatus(), refreshQueue()]);
@@ -587,7 +651,12 @@
 
   // ─── boot ───────────────────────────────────────────────────────────
 
+  // Gate the first render on the translation dictionaries the same way
+  // index.html gates SubsystemApp.init() -- see i18n.js's docstring/apply().
+  // Skipped when AuraI18n isn't present (see the t() fallback above for why
+  // that has to be possible).
   (async function boot() {
+    if (typeof window !== 'undefined' && window.AuraI18n) await window.AuraI18n.load();
     await refreshBranches();
     await Promise.all([refreshStatus(), refreshTemplates(), refreshRecipients(), refreshQueue()]);
   })();

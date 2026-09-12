@@ -12,7 +12,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
+from flask_babel import gettext as _
 
 from app.auth.session import load_current_staff
 from app.customers.services import describe_duplicate_candidates_for_actor
@@ -21,6 +22,7 @@ from app.extensions import db_session
 from app.i18n_labels import localize_lead_error, localize_location_error
 from app.leads.contacts import add_lead_contact, list_lead_contacts
 from app.leads.conversion import DuplicateCustomerError, InvalidLeadStateError, convert
+from app.leads.discovery import LeadDiscoveryError, MAX_RESULTS, build_provider, is_discovery_enabled
 from app.leads.engagement import (
     cancel_customer_followup,
     cancel_lead_followup,
@@ -54,6 +56,23 @@ def _localized_lead_error(exc) -> str:
     if isinstance(exc, LocationValidationError):
         return localize_location_error(exc.code, **exc.params)
     return str(exc)
+
+
+def _localized_discovery_error(code: str) -> tuple[str, int]:
+    """Route-boundary localization for app.leads.discovery.LeadDiscoveryError,
+    built fresh on every call rather than as a module-level dict -- same
+    discipline as app.i18n_labels' own localize_*_error functions: a
+    module-level dict would call gettext() once at import time, before any
+    request/locale context exists, permanently freezing the message in
+    whatever locale (or none) happened to be active at import time.
+    Returns (message, http_status) since each discovery failure mode maps
+    to a distinct status the caller renders with."""
+    messages = {
+        "INVALID_QUERY": (_("Check the segment and area and try again."), 400),
+        "RATE_LIMITED": (_("The map service is busy -- try again in a minute."), 502),
+        "PROVIDER_ERROR": (_("The map service could not be reached."), 502),
+    }
+    return messages.get(code, (_("The map service could not be reached."), 502))
 
 
 def _actor():
@@ -142,7 +161,7 @@ def list_leads():
         result = list_own_leads(profile.id, page=page, status=status_filter, search=search, sort=sort, direction=direction)
     return render_template(
         "leads/list.html", result=result, status_filter=status_filter, search_value=search,
-        sort=sort, direction=direction,
+        sort=sort, direction=direction, discovery_enabled=is_discovery_enabled(current_app.config),
     )
 
 
@@ -171,6 +190,157 @@ def create():
     except LeadError as exc:
         return render_template("leads/new.html", error=_localized_lead_error(exc)), 400
     return redirect(url_for("leads.detail", lead_id=lead.id))
+
+
+# --------------------------------------------------- Milestone -- lead discovery --
+#
+# Google Places-backed prospecting: a sales rep types a segment ("pharmacies")
+# and an area ("Irbid, Jordan"), gets back real businesses from
+# app.leads.discovery's provider, ticks the ones with a usable phone number,
+# and imports them as leads. Gated on its own "leads.discover" permission
+# (not folded into leads.create) so it can be revoked independently of the
+# ability to hand-enter a lead -- this hits an external paid API per search,
+# a materially different cost/abuse profile than a manual form post.
+
+_DISCOVERY_FORM_DEFAULTS = {"segment": "", "area": "", "priority": "MEDIUM", "assigned_employee_profile_id": ""}
+
+
+@bp.route("/discover", methods=["GET"])
+@require_permission("leads.discover")
+def discover_form():
+    return render_template(
+        "leads/discover.html", enabled=is_discovery_enabled(current_app.config),
+        results=None, error=None, **_DISCOVERY_FORM_DEFAULTS,
+    )
+
+
+@bp.route("/discover/search", methods=["POST"])
+@require_permission("leads.discover")
+def discover_search():
+    enabled = is_discovery_enabled(current_app.config)
+    if not enabled:
+        # Race/misconfiguration guard: the form that posted here was itself
+        # rendered from discover_form(), so this should be unreachable in
+        # practice, but never trust that the config didn't change between
+        # GET and POST -- fail into the same disabled notice, not a 500.
+        return render_template(
+            "leads/discover.html", enabled=False, results=None, error=None, **_DISCOVERY_FORM_DEFAULTS,
+        )
+
+    staff, profile = _actor()
+    if _missing_profile(profile):
+        return render_template(
+            "leads/discover.html", enabled=True, results=None, error=_NO_PROFILE_MESSAGE, **_DISCOVERY_FORM_DEFAULTS,
+        ), 400
+
+    segment = (request.form.get("segment") or "").strip()
+    area = (request.form.get("area") or "").strip()
+    priority = request.form.get("priority") or "MEDIUM"
+    assigned_employee_profile_id = (request.form.get("assigned_employee_profile_id") or "").strip()
+    echo = {"segment": segment, "area": area, "priority": priority, "assigned_employee_profile_id": assigned_employee_profile_id}
+
+    if not segment or not area or len(segment) > 120 or len(area) > 120:
+        return render_template(
+            "leads/discover.html", enabled=True, results=None,
+            error=_("Enter both a segment and an area, each 120 characters or fewer."), **echo,
+        ), 400
+
+    try:
+        provider = build_provider(current_app.config)
+        results = provider.search(segment, area, limit=MAX_RESULTS)
+    except LeadDiscoveryError as exc:
+        if exc.code == "NOT_CONFIGURED":
+            return render_template("leads/discover.html", enabled=False, results=None, error=None, **echo)
+        message, status = _localized_discovery_error(exc.code)
+        return render_template("leads/discover.html", enabled=True, results=None, error=message, **echo), status
+
+    return render_template("leads/discover.html", enabled=True, results=results, error=None, **echo)
+
+
+@bp.route("/discover/import", methods=["POST"])
+@require_permission("leads.discover")
+def discover_import():
+    staff, profile = _actor()
+    if _missing_profile(profile):
+        return render_template(
+            "leads/discover.html", enabled=is_discovery_enabled(current_app.config), results=None,
+            error=_NO_PROFILE_MESSAGE, **_DISCOVERY_FORM_DEFAULTS,
+        ), 400
+
+    priority = request.form.get("priority") or "MEDIUM"
+    if priority not in ("LOW", "MEDIUM", "HIGH"):
+        priority = "MEDIUM"
+    assigned_raw = (request.form.get("assigned_employee_profile_id") or "").strip()
+    assigned_id = None
+    if assigned_raw:
+        try:
+            assigned_id = uuid.UUID(assigned_raw)
+        except ValueError:
+            return render_template(
+                "leads/discover.html", enabled=is_discovery_enabled(current_app.config), results=None,
+                error=_("That employee profile ID is not a valid UUID."),
+                segment="", area="", priority=priority, assigned_employee_profile_id=assigned_raw,
+            ), 400
+
+    # Clamped to what a search can ever have rendered. `count` comes from a
+    # hidden input, so a crafted POST could otherwise set it to ten million and
+    # spin this loop that many times on an authenticated route -- cheap per
+    # iteration, but there is no reason to let it run past MAX_RESULTS.
+    count = max(0, min(request.form.get("count", 0, type=int) or 0, MAX_RESULTS))
+    imported = 0
+    skipped_no_phone = 0
+    row_errors = []
+    for n in range(count):
+        if not request.form.get(f"select-{n}"):
+            continue
+        phone = (request.form.get(f"phone-{n}") or "").strip()
+        if not phone:
+            # The checkbox for a no-phone row is rendered disabled, but a
+            # crafted/replayed POST could still set select-<n> -- re-check
+            # server-side rather than trusting the client, same discipline
+            # as every other write path in this file.
+            skipped_no_phone += 1
+            continue
+        place_id = (request.form.get(f"place_id-{n}") or "").strip()
+        name = (request.form.get(f"name-{n}") or "").strip()
+        address = (request.form.get(f"address-{n}") or "").strip()
+        if not place_id or not name:
+            # Never let an empty place_id reach the idempotency key. Every
+            # such row would share the single key "maps-discovery:", so the
+            # first would create a lead and every later one would silently be
+            # deduplicated INTO it -- N places collapsing to one lead with no
+            # error. A real search always renders both; only a crafted or
+            # truncated POST lacks them, and that is refused per row.
+            row_errors.append(_("Row %(row)d is missing its place ID or name and was not imported.", row=n + 1))
+            continue
+        fields = {
+            "organization_or_prospect_name": name[:200],
+            "phone": phone[:32],
+            "source": "MAPS_DISCOVERY",
+            "priority": priority,
+            "location_summary": address[:200] or None,
+        }
+        if assigned_id is not None:
+            fields["assigned_employee_profile_id"] = assigned_id
+        try:
+            # idempotency_key is THE dedup mechanism -- create_lead() looks
+            # up this exact key first and returns the existing lead instead
+            # of inserting a new row, so re-importing the same Google Place
+            # (same place_id) twice, whether by accident or by re-running a
+            # search, never creates a second lead for it.
+            create_lead(fields, profile.id, staff.id, idempotency_key=f"maps-discovery:{place_id}")
+            imported += 1
+        except LeadError as exc:
+            row_errors.append(_localized_lead_error(exc))
+
+    # create_lead() commits internally on every path (see leads/services.py) --
+    # no extra db_session.commit() needed here, same as the create() route above.
+    flash(_("%(count)d lead(s) imported or already present.", count=imported), "info")
+    if skipped_no_phone:
+        flash(_("%(count)d row(s) skipped -- no phone listed.", count=skipped_no_phone), "info")
+    if row_errors:
+        flash(_("Some rows could not be imported: %(errors)s", errors="; ".join(row_errors)), "error")
+    return redirect(url_for("leads.list_leads"))
 
 
 @bp.route("/<uuid:lead_id>", methods=["GET"])

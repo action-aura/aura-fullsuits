@@ -11,7 +11,7 @@ from flask import Flask
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
-from app.catalog.services import import_release_manifest, seed_canonical_catalog
+from app.catalog.services import import_release_manifest, seed_canonical_catalog, seed_canonical_plans
 from app.extensions import db_session
 from app.licensing_service import signing as signing_service
 from app.licensing_service.offline_policy import seed_default_offline_policy
@@ -57,6 +57,22 @@ def register_cli(app: Flask) -> None:
         """Seed canonical products/platforms/release channels/entitlement
         definitions/DRAFT add-ons (idempotent, no fake customer data)."""
         result = seed_canonical_catalog()
+        click.echo(json.dumps(result))
+
+    @app.cli.command("seed-plans")
+    def seed_plans_cmd():
+        """Seed ONE minimal, immediately-sellable placeholder plan per
+        canonical product (idempotent). Run 'flask seed-catalog' first --
+        without a plan, `issue_license_direct` has nothing to issue against
+        and a fresh Owner cannot cut its first licence key.
+
+        PLACEHOLDER PRICING ONLY: $99.00 flat, ONE_TIME, per product. This is
+        not a real commercial price -- set real prices from the Owner UI
+        (catalog -> plan -> add price) before selling anything for real."""
+        try:
+            result = seed_canonical_plans()
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         click.echo(json.dumps(result))
 
     @app.cli.command("create-superadmin")
@@ -288,6 +304,79 @@ def register_cli(app: Flask) -> None:
                 indent=2,
             )
         )
+
+    @app.cli.group("sync")
+    def sync_group():
+        """Phase 5 prerequisite jobs for the multi-device sync relay
+        (docs/launch-readiness/phase5-prerequisites.md). Meant to be invoked
+        by a systemd timer (see deploy/systemd/), same convention as the
+        `reports generate-scheduled` group below -- never in the request
+        path (app/sync/routes.py's push/pull handlers never call any of
+        this)."""
+
+    @sync_group.command("prune-events")
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually delete pruned events. Default is dry-run (report only).")
+    @click.option("--batch-size", default=None, type=int, help="Override the delete batch size (mainly useful for tests/tuning).")
+    def prune_events_cmd(apply_: bool, batch_size: int | None):
+        """Prunes owner_sync_events below each license's slowest-active-
+        device watermark (Phase 5 prerequisite #2), then checks and logs
+        the row-count and quarantine-rate alarms -- run on every invocation
+        regardless of --apply, since a stuck/failing prune is exactly the
+        condition the row-count alarm exists to catch.
+
+        Refuses to run unless OWNER_SCHEDULER_ROLE is explicitly "owner",
+        exactly like `reports generate-scheduled` below -- app/scheduling.py's
+        own docstring makes this the contract for ANY command "meant to be
+        triggered by an external scheduler rather than a human", and this
+        group's docstring above already claims that convention. It matters
+        more here than for any other scheduled job in this file, not less:
+        every other one is idempotent-by-construction (advisory lock +
+        unique constraint + dedup keys), so a second accidentally-enabled
+        host merely wastes a query pass. This one issues real DELETEs
+        against the sync ledger. A second host firing concurrently races
+        the watermark computation against the first host's in-flight
+        batch commits -- and unlike a duplicated report snapshot, a row
+        deleted from owner_sync_events has no salvage: the device that
+        still needed it resyncs into a hole with no error, which is the
+        exact failure mode pruning.py's module docstring says there is no
+        recovery from. Gating the whole command (not just the --apply
+        path) matches the reports precedent, and costs nothing: the
+        alarms below are advisory logging, not a signal anyone consumes
+        from a non-scheduler process."""
+        from app.scheduling import SchedulerNotOwnerError, require_scheduler_owner
+        from app.sync.pruning import check_quarantine_rate_alarm, check_row_count_alarms, prune_owner_sync_events
+
+        try:
+            require_scheduler_owner(app.config)
+        except SchedulerNotOwnerError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        kwargs = {"dry_run": not apply_}
+        if batch_size:
+            kwargs["batch_size"] = batch_size
+        report = prune_owner_sync_events(**kwargs)
+        click.echo(
+            json.dumps(
+                {
+                    "dry_run": report.dry_run,
+                    "per_license_deleted": report.per_license_deleted,
+                    "total_deleted": report.total_deleted,
+                },
+                indent=2,
+            )
+        )
+
+        for alarm in check_row_count_alarms():
+            app.logger.warning(
+                "owner_sync_events row-count alarm: license=%s row_count=%s threshold=%s",
+                alarm.license_id, alarm.row_count, alarm.threshold,
+            )
+        for alarm in check_quarantine_rate_alarm():
+            app.logger.warning(
+                "sync quarantine pending-rate alarm: license=%s pending_count=%s threshold=%s",
+                alarm.license_id, alarm.pending_count, alarm.threshold,
+            )
+
     @app.cli.group("reports")
     def reports_group():
         """Phase 9R M5 -- scheduled report-snapshot generation. Meant to be

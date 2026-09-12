@@ -159,8 +159,45 @@ const ClinicSystem = {
     document.documentElement.style.setProperty('--cl-accent', '#14b8a6');
   },
 
+  // Ported verbatim from retail's subsystem-retail.js:795 -- this file had NO
+  // escaping helper at all while writing operator-entered patient and doctor
+  // names straight into innerHTML, and building onclick attributes with only
+  // an apostrophe-doubling pass that covers neither `"` nor `<`.
+  //
+  // Fixed now, while nothing loads this file (products/clinic/frontend has no
+  // index.html and no app-shell.js, so neither table can be reached today),
+  // rather than as a security fix once the clinic shell ships: retail pins the
+  // same boundary with three dedicated tests, and the cheapest time to inherit
+  // that boundary is before there is a live sink.
+  _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  },
+
+  // "⬆ Import" is a button that can only fail here, and DESIGN.md §1 is
+  // explicit that the product "never shows a button that can only fail".
+  // Three layers are missing, not one: ImportWizard is defined only in
+  // products/retail/frontend/import-wizard.js; the clinic app's static_folder
+  // (products/clinic/frontend, app.py:37) does not contain that file; and
+  // ImportWizard.open() reads /api/import/schemas, a blueprint that exists
+  // only in products/retail/backend/api/import_api.py. Rendering the button
+  // only when the wizard is actually present is the honest state -- it will
+  // light up by itself if the clinic shell ever loads the retail wizard and
+  // the import blueprint, and stays absent until then.
+  //
+  // REPORTED, NOT FIXED HERE: docs/migration/clinic-dependency-map.md's
+  // "Frontend dependency" section claims to enumerate this file's deps and
+  // lists only the SubsystemApp shell and the locale files -- ImportWizard
+  // and /api/import are both absent from it. That file is outside this
+  // change's ownership.
+  _importButton(handler) {
+    if (!window.ImportWizard) return '';
+    return `<button class="cl-btn cl-btn-ghost" onclick="${this._esc(handler)}">⬆ Import</button>`;
+  },
+
   _badge(status) {
-    return `<span class="cl-badge cl-badge-${(status||'').replace(/ /g,'_')}">${(status||'').replace(/_/g,' ')}</span>`;
+    return `<span class="cl-badge cl-badge-${this._esc((status||'').replace(/ /g,'_'))}">${this._esc((status||'').replace(/_/g,' '))}</span>`;
   },
 
   // ── Dashboard ────────────────────────────────────────────────────────────
@@ -271,7 +308,7 @@ const ClinicSystem = {
         <h2 class="cl-section-title">Patient Registry</h2>
         <div style="display:flex;gap:12px">
           <input class="cl-search" id="cl-pt-search" placeholder="Search name / phone / code…" oninput="ClinicSystem._searchPatients()" />
-          <button class="cl-btn cl-btn-ghost" onclick="ImportWizard.open('clinic','patients',()=>ClinicSystem._loadPatients())">⬆ Import</button>
+          ${this._importButton("ImportWizard.open('clinic','patients',()=>ClinicSystem._loadPatients())")}
           <button class="sub-btn-primary" onclick="ClinicSystem._openAddPatient()">+ Add Patient</button>
         </div>
       </div>
@@ -299,20 +336,26 @@ const ClinicSystem = {
       }
       tbody.innerHTML = data.map(p => `
         <tr onclick="ClinicSystem._openPatientDetail(${p.id})" title="View patient file">
-          <td style="font-family:monospace;color:#14b8a6">${p.patient_code}</td>
-          <td style="font-weight:600">${p.name}</td>
-          <td style="color:var(--text-muted)">${p.gender || '—'}</td>
-          <td style="color:var(--text-muted)">${p.dob || '—'}</td>
-          <td>${p.phone || '—'}</td>
-          <td><span class="cl-badge cl-badge-active">${p.blood_type || 'N/A'}</span></td>
+          <td style="font-family:monospace;color:#14b8a6">${this._esc(p.patient_code)}</td>
+          <td style="font-weight:600">${this._esc(p.name)}</td>
+          <td style="color:var(--text-muted)">${this._esc(p.gender || '—')}</td>
+          <td style="color:var(--text-muted)">${this._esc(p.dob || '—')}</td>
+          <td>${this._esc(p.phone || '—')}</td>
+          <td><span class="cl-badge cl-badge-active">${this._esc(p.blood_type || 'N/A')}</span></td>
           <td>${this._badge(p.status || 'active')}</td>
           <td onclick="event.stopPropagation()">
-            <button class="cl-btn cl-btn-ghost cl-btn-sm" style="margin-right:6px"
-              onclick="ClinicSystem._openBookModal(${p.id}, '${p.name.replace(/'/g,"\\'")}')">Book</button>
-            <button class="cl-btn cl-btn-primary cl-btn-sm" style="margin-right:6px"
+            <!-- Two escapes, in this order, because there are two nested
+                 contexts: .replace(/'/g,"\\'") makes the name safe inside the
+                 single-quoted JS STRING, then _esc() makes the result safe
+                 inside the double-quoted HTML ATTRIBUTE. Retail's supplier
+                 rows use exactly this pair and pin it with
+                 retail_supplier_name_apostrophe_onclick_test.js. -->
+            <button class="cl-btn cl-btn-ghost cl-btn-sm" style="margin-inline-end:6px"
+              onclick="ClinicSystem._openBookModal(${p.id}, '${this._esc(String(p.name || '').replace(/'/g,"\\'"))}')">Book</button>
+            <button class="cl-btn cl-btn-primary cl-btn-sm" style="margin-inline-end:6px"
               onclick="ClinicSystem._openPatientDetail(${p.id})">File</button>
             <button class="cl-btn cl-btn-danger cl-btn-sm"
-              onclick="ClinicSystem._deletePatient(${p.id}, '${p.name.replace(/'/g,"\\'")}')">Delete</button>
+              onclick="ClinicSystem._deletePatient(${p.id}, '${this._esc(String(p.name || '').replace(/'/g,"\\'"))}')">Delete</button>
           </td>
         </tr>`).join('');
     } catch (e) { console.error(e); }
@@ -448,7 +491,7 @@ const ClinicSystem = {
           ${p.notes ? `<div class="cl-detail-item" style="grid-column:1/-1"><label>Notes</label><span style="color:#fbbf24">${p.notes}</span></div>` : ''}
         </div>
         <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
-          <button class="cl-btn cl-btn-primary cl-btn-sm" onclick="ClinicSystem._openBookModal(${p.id},'${(p.name||'').replace(/'/g,"\\'")}');document.getElementById('cl-pt-detail-overlay').remove()">📅 Book Appointment</button>
+          <button class="cl-btn cl-btn-primary cl-btn-sm" onclick="ClinicSystem._openBookModal(${p.id},'${this._esc(String(p.name||'').replace(/'/g,"\\'"))}');document.getElementById('cl-pt-detail-overlay').remove()">📅 Book Appointment</button>
           <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._openInvoiceModal(${p.id});document.getElementById('cl-pt-detail-overlay').remove()">🧾 New Invoice</button>
           <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._openPrescModalForPatient(${p.id});document.getElementById('cl-pt-detail-overlay').remove()">💊 New Prescription</button>
         </div>
@@ -803,7 +846,7 @@ const ClinicSystem = {
       <div class="cl-section-header">
         <h2 class="cl-section-title">Doctors & Staff</h2>
         <div style="display:flex;gap:10px">
-          <button class="cl-btn cl-btn-ghost" onclick="ImportWizard.open('clinic','doctors',()=>ClinicSystem._loadDoctors())">⬆ Import</button>
+          ${this._importButton("ImportWizard.open('clinic','doctors',()=>ClinicSystem._loadDoctors())")}
           <button class="sub-btn-primary" onclick="ClinicSystem._openAddDoctor()">+ Add Doctor</button>
         </div>
       </div>
@@ -830,11 +873,11 @@ const ClinicSystem = {
       }
       tbody.innerHTML = data.map(d => `
         <tr>
-          <td style="font-family:monospace;color:#a855f7">#${d.id}</td>
-          <td style="font-weight:600">${d.name}</td>
-          <td style="color:var(--text-muted)">${d.specialty||'—'}</td>
-          <td>${d.phone||'—'}</td>
-          <td>${d.email||'—'}</td>
+          <td style="font-family:monospace;color:#a855f7">#${this._esc(d.id)}</td>
+          <td style="font-weight:600">${this._esc(d.name)}</td>
+          <td style="color:var(--text-muted)">${this._esc(d.specialty||'—')}</td>
+          <td>${this._esc(d.phone||'—')}</td>
+          <td>${this._esc(d.email||'—')}</td>
           <td>${this._badge(d.status||'active')}</td>
         </tr>`).join('');
     } catch(e) { console.error(e); }

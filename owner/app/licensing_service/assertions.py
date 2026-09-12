@@ -35,9 +35,29 @@ def _guard_payload(payload: dict) -> dict:
 
 
 def build_assertion_payload(
-    *, license_row, installation_row, device_fingerprint: str | None, entitlements: dict, offline_policy: dict,
+    *, license_row, installation_row, device_fingerprint: str, entitlements: dict, offline_policy: dict,
     contract_version: str, ttl_seconds: int,
 ) -> dict:
+    # Launch-readiness (2026-09-04): an assertion without a device
+    # fingerprint is not a degraded assertion, it is an unusable one -- every
+    # client compares this field against its own key and raises
+    # ASSERTION_DEVICE_MISMATCH on a null. Signing one produces a device that
+    # can never activate while Owner records it ACTIVE, and nothing on the
+    # server side looks wrong (see activation.py's DEVICE_KEY_REVOKED guard,
+    # which is the one path that actually reached here with None).
+    #
+    # Fail loudly instead. This is defence in depth over that fix, not a
+    # substitute for it: it turns any FUTURE route to the same state into a
+    # server error someone can see, rather than another silently bricked
+    # device. The annotation above narrowed from `str | None` to `str` at the
+    # same time: there is no caller for which None is correct -- check-in and
+    # activation both resolve a real ACTIVE key before calling -- so the old
+    # Optional was describing a state that should never have been reachable.
+    if not device_fingerprint:
+        raise AssertionError_(
+            "Refusing to sign an assertion with no device_key_fingerprint -- "
+            "no client can accept it."
+        )
     now = datetime.now(timezone.utc)
     payload = {
         "assertion_id": str(uuid.uuid4()),

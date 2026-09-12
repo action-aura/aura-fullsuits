@@ -30,6 +30,11 @@ def _service_config() -> dict:
         "license_pepper": current_app.config["LICENSE_PEPPER"],
         "signing_key_directory": current_app.config["SIGNING_KEY_DIRECTORY"],
         "download_token_ttl_seconds": current_app.config["RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS"],
+        # Launch-readiness (2026-09-03) -- see config.py's SYNC_RELAY_PUBLIC_URL
+        # docstring. Empty string (not None) when unconfigured, matching
+        # every other optional value threaded through this dict;
+        # process_activation() only adds it to the response when truthy.
+        "sync_relay_base_url": current_app.config.get("SYNC_RELAY_PUBLIC_URL", ""),
     }
 
 

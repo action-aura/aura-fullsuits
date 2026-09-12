@@ -210,7 +210,28 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         # reuse someone else's installation_id is rejected at the device-key
         # binding check.
         active_device_key = device_identity.get_active_device_key(existing_installation.id)
-        if active_device_key is not None and active_device_key.fingerprint != device_identity.fingerprint_of(body["device_public_key"]):
+        # Launch-readiness (2026-09-04): a revoked key must be rejected HERE,
+        # not fall through. Revoking a device key (licensing_admin/routes.py)
+        # deliberately leaves installation.status ACTIVE, so this branch is
+        # reached with no active key at all. The guard below used to read
+        # `if active_device_key is not None and ... != ...`, which a None key
+        # passes silently; register_device_key() is only called on the other
+        # branch, so nothing re-registered it either, and the assertion was
+        # then signed with device_key_fingerprint = None.
+        #
+        # Owner answered SUCCESS and recorded the installation ACTIVE while
+        # the device -- which independently re-verifies every assertion --
+        # compared None against its own real fingerprint and raised
+        # ASSERTION_DEVICE_MISMATCH. The device could never activate, no
+        # retry could ever help, and nothing on the server side looked
+        # wrong. Reject instead, with the same code check-in
+        # (checkin.py::DEVICE_KEY_REVOKED), deactivation, sync and
+        # release-download already return for this exact state; re-enrolling
+        # a revoked device is a deliberate staff action
+        # (replace_device_slot()), never a side effect of it asking again.
+        if active_device_key is None:
+            raise ActivationRejected("DEVICE_KEY_REVOKED")
+        if active_device_key.fingerprint != device_identity.fingerprint_of(body["device_public_key"]):
             raise ActivationRejected("DEVICE_KEY_MISMATCH")
         installation = existing_installation
     else:
@@ -368,6 +389,23 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         "signing_key_id": envelope["signing_key_id"],
         "assertion_version": envelope["assertion_version"],
     }
+    # Launch-readiness (2026-09-03): tell a device where its shop syncs at
+    # the exact moment it has just proved it holds a valid licence -- see
+    # config.py's SYNC_RELAY_PUBLIC_URL docstring for the full design.
+    # `config` here is the dict api_external/routes.py's _service_config()
+    # builds from current_app.config, exactly like license_pepper/
+    # signing_key_directory above -- .get() rather than a required key so
+    # this function stays backward-compatible with any caller (tests
+    # included) that doesn't pass it. Included ONLY when truthy: an Owner
+    # deploy that never sets OWNER_SYNC_RELAY_PUBLIC_URL must produce a
+    # response with this key OMITTED entirely, not present-and-empty --
+    # that is what makes this change safe to deploy with no client-side
+    # migration. Deliberately NOT added to _pending_review_response() below
+    # -- a PENDING activation has not yet proven anything and signs no
+    # assertion, so it has nothing to tell the device about sync either.
+    sync_relay_base_url = config.get("sync_relay_base_url")
+    if sync_relay_base_url:
+        response["sync_relay_base_url"] = sync_relay_base_url
 
     idempotency.record_idempotency(
         body["idempotency_key"], "ACTIVATION", fingerprint, str(installation.id), "SUCCESS", json.dumps(response)

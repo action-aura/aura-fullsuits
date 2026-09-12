@@ -58,10 +58,34 @@ object ServerBootstrap {
             BuildConfig.AURA_AI_BEARER_TOKEN, BuildConfig.AURA_WHATSAPP_PHONE_NUMBER_ID,
             BuildConfig.AURA_WHATSAPP_ACCESS_TOKEN,
         ).toInt()
-        main.callAttr("wait_until_ready", p, 45)
+        // wait_until_ready() RETURNS a Boolean and returns false on timeout
+        // (main.py polls GET /api/health until a deadline). Discarding it made
+        // a backend that never came up indistinguishable from one that did:
+        // `port` was published anyway, every subsequent call to it failed with
+        // a bare connection error, and AppRoot turned all of that into a login
+        // screen with no explanation. Checking it is what turns "the app is
+        // mysteriously broken" into a named, reportable failure.
+        val ready = main.callAttr("wait_until_ready", p, READINESS_TIMEOUT_SECONDS).toBoolean()
+        if (!ready) {
+            throw ServerStartupError(
+                "The embedded server did not answer /api/health on port $p within " +
+                    "$READINESS_TIMEOUT_SECONDS seconds."
+            )
+        }
         port = p
         p
     }
+
+    private const val READINESS_TIMEOUT_SECONDS = 45
+
+    /**
+     * The embedded Flask server started but never became reachable. Named
+     * (rather than an IllegalStateException) so AppRoot's diagnostic can print
+     * a type that distinguishes it from a Chaquopy/PyException start failure --
+     * "the server never became ready" and "Python itself would not load" have
+     * completely different causes and completely different fixes.
+     */
+    class ServerStartupError(message: String) : IllegalStateException(message)
 
     fun baseUrl(): String = "http://127.0.0.1:$port/"
 

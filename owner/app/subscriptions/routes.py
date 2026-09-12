@@ -77,7 +77,20 @@ def detail(subscription_id):
     if subscription is None:
         return jsonify({"error": "not_found"}), 404
     allowed_transitions = sorted(VALID_TRANSITIONS.get(subscription.status, set()))
-    return render_template("subscriptions/detail.html", subscription=subscription, allowed_transitions=allowed_transitions)
+    # This page could RECORD a payment but never showed one, so
+    # correct_payment_route -- complete and permission-gated -- was unreachable
+    # for want of a payment id to act on (test_route_reachability.py's
+    # KNOWN_GAPS). Newest first: a correction is nearly always to the payment
+    # just entered.
+    payments = db_session.execute(
+        select(PaymentRecord)
+        .where(PaymentRecord.subscription_id == subscription.id)
+        .order_by(PaymentRecord.payment_date.desc(), PaymentRecord.created_at.desc())
+    ).scalars().all()
+    return render_template(
+        "subscriptions/detail.html", subscription=subscription,
+        allowed_transitions=allowed_transitions, payments=payments,
+    )
 
 
 @bp.route("/<uuid:subscription_id>/transition", methods=["POST"])

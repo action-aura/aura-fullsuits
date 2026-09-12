@@ -16,6 +16,24 @@
   <p><a href="{{ url_for('licensing_admin.signing_keys') }}">{{ _("Signing keys") }}</a> &middot;
      <a href="{{ url_for('licensing_admin.requests_list') }}">{{ _("Recent activation/check-in requests") }}</a> &middot;
      <a href="{{ url_for('licensing_admin.device_keys') }}">{{ _("Device keys") }}</a> &middot;
-     <a href="{{ url_for('licensing_admin.offline_policies') }}">{{ _("Offline policies") }}</a></p>
+     <a href="{{ url_for('licensing_admin.offline_policies') }}">{{ _("Offline policies") }}</a>
+     {%- if has_permission("sync_quarantine.view") %} &middot;
+     {# AUDIT: the sync quarantine console (Phase 5 prerequisite #3) shipped
+        registered but linked from NOWHERE -- reachable only by typing
+        /sync/quarantine by hand, which for an operator screen is the same
+        as not shipping it. This Quick links card is already the discovery
+        point for exactly this class of console (device keys, signing keys,
+        offline policies all live here), so it goes here too.
+
+        Permission-gated, unlike its neighbours: sync_quarantine.view is
+        granted to SUPPORT and SUPER_ADMIN only (staff/seed_data.py), so an
+        ungated link would offer some staff a link straight into a 403.
+
+        Deliberately reuses the EXISTING "Sync Quarantine" msgid (the
+        console's own page title) rather than introducing a new literal --
+        both catalogs already carry it, so this adds no untranslated string
+        and needs no .po/.mo change at all. #}
+     <a href="{{ url_for('sync_quarantine.list_view') }}">{{ _("Sync Quarantine") }}</a>
+     {%- endif %}</p>
 </div>
 {% endblock %}

@@ -29,6 +29,19 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_einvoicing_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
+# AUDIT: app.py's shipped default provider is now UnconfiguredProvider
+# (e-invoicing defaults ON, but the real ISTD provider isn't wired until
+# Phase 2 -- see commercial_runtime/einvoicing/providers/unconfigured.py),
+# which deliberately refuses to submit anything -- worker.py's run_once()
+# returns {'ran': False, 'reason': 'unconfigured'} before leasing a single
+# row. This file's whole point is a REAL round trip through a provider
+# (test_run_once_clears_and_qr_becomes_available,
+# test_reconciliation_sweep_picks_up_a_lost_enqueue), so it needs the
+# MockProvider opt-in. Must be set before `import app` below -- app.py
+# picks the provider once, at import time, based on this var.
+# AURA_EINVOICING_ALLOW_MOCK=1 is a development/test-only override
+# (products/retail/backend/app.py); production never sets it.
+os.environ["AURA_EINVOICING_ALLOW_MOCK"] = "1"
 
 from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
 seed_active_license(str(DATA), product_code="AURA_RETAIL", platform="WINDOWS")
@@ -114,7 +127,15 @@ def _sell(client, pid, quantity=1, extra=None):
 
 
 def test_disabled_sale_response_has_no_einvoice_key():
+    # AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']=
+    # '1'), so a freshly created company here is enabled unless told
+    # otherwise -- this test needs a genuinely DISABLED company to prove
+    # its claim, which now takes an explicit write rather than merely never
+    # calling the enable endpoint. Fixture correction, not a weakened test:
+    # it still proves the same claim (a disabled company's sale response
+    # carries no 'einvoice' key), against a state that's actually disabled.
     client, cid, pid, bid = _make_admin_and_product()
+    client.post('/api/einvoicing/settings', json={'enabled': '0'})
     data = _sell(client, pid)
     assert 'einvoice' not in data
 
@@ -292,6 +313,14 @@ def test_build_document_respects_configured_tax_calculation_mode():
 
 def test_enabled_at_prevents_backfilling_pre_enablement_sales():
     client, cid, pid, bid = _make_admin_and_product()
+    # AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']=
+    # '1'), so the "before enablement" state this test needs (a company
+    # that is NOT yet enabled, with no enabled_at stamped) must be created
+    # explicitly now -- a fresh company here would otherwise already be
+    # enabled by the new default and this pre-sale would wrongly enqueue.
+    # Fixture correction: the test still proves the same claim (a sale from
+    # before enablement is never retroactively submitted).
+    client.post('/api/einvoicing/settings', json={'enabled': '0'})
     # Sale happens BEFORE the feature is ever enabled.
     pre_sale = _sell(client, pid)
     assert 'einvoice' not in pre_sale

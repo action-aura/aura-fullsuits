@@ -2,6 +2,8 @@
 
 package com.actionaura.retail.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,12 +15,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AssignmentReturn
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Payments
@@ -27,6 +31,10 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,29 +46,47 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
+import com.actionaura.retail.printer.PrinterPrefs
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
+import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SectionHeader
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.AppLang
 import com.actionaura.retail.ui.i18n.AppLocale
+import com.actionaura.retail.ui.i18n.AppTheme
 import com.actionaura.retail.ui.i18n.fmtQty
+import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.CAP_EMPLOYEES
+import com.actionaura.retail.ui.CAP_REPORTS
+import com.actionaura.retail.ui.RetailSession
+import com.actionaura.retail.ui.theme.AuraColors
+import com.actionaura.retail.ui.theme.AuraPalette
 import com.actionaura.retail.ui.theme.Info
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import java.util.UUID
 
-private fun money(v: Double) = String.format(java.util.Locale.US, "$%.2f", v)
+// Delegates to the ONE formatter (ui/i18n/Num.kt). This was a second, private
+// copy that hard-coded a dollar sign and two decimals -- so every amount on
+// every screen in this file said "$" and dropped the third decimal the
+// Jordanian dinar needs, independently of the shared helper and invisibly to
+// anyone fixing that helper. A duplicate of money-formatting logic is exactly
+// the kind that drifts without anyone noticing, because both halves look right
+// on their own.
+private fun money(v: Double) = com.actionaura.retail.ui.i18n.money(v)
 private fun shortDate(s: String?) = (s ?: "").replace("T", " ").take(16)
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  MORE — hub linking to the records screens
 // ══════════════════════════════════════════════════════════════════════════════
 @Composable
-fun MoreScreen(onNavigate: (String) -> Unit) {
+fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -70,8 +96,11 @@ fun MoreScreen(onNavigate: (String) -> Unit) {
         MoreItem(tr("Reports"), tr("Sales stats by time period"), Icons.Default.BarChart) { onNavigate("reports") }
         MoreItem(tr("Transactions"), tr("Past sales & invoices"), Icons.Default.ReceiptLong) { onNavigate("transactions") }
         MoreItem(tr("Returns"), tr("Refund items from a sale"), Icons.Default.AssignmentReturn) { onNavigate("returns") }
-        SectionHeader(tr("Customers & credit"))
-        MoreItem(tr("Customers"), tr("Manage customers & credit"), Icons.Default.People) { onNavigate("customers") }
+        // Customers is NOT listed here: it is a bottom-bar tab now. Repeating a
+        // tab destination in the overflow list is the same duplication the
+        // deleted drawer was guilty of with Settings, and OverflowNavigation-
+        // ContractTest fails if any tab route reappears in this list.
+        SectionHeader(tr("Credit"))
         MoreItem(tr("Receivables"), tr("Who owes you & repayments"), Icons.Default.AccountBalanceWallet) { onNavigate("receivables") }
         SectionHeader(tr("Purchasing"))
         MoreItem(tr("Suppliers"), tr("Vendors you buy from"), Icons.Default.LocalShipping) { onNavigate("suppliers") }
@@ -81,12 +110,64 @@ fun MoreScreen(onNavigate: (String) -> Unit) {
         MoreItem(tr("Cash Summary"), tr("Daily cash in / out / net"), Icons.Default.AccountBalanceWallet) { onNavigate("cash_summary") }
         MoreItem(tr("Aging"), tr("Receivables & payables by age"), Icons.Default.Schedule) { onNavigate("aging") }
         MoreItem(tr("Settings"), tr("Credit, currency & payment methods"), Icons.Default.Settings) { onNavigate("retail_settings") }
+        // Owner-only entry (design §3: employee management is the admin's
+        // authority, and `retail.employees` is the one capability a manager
+        // never gets). Hidden rather than disabled for a non-admin, matching
+        // how RetailSettingsScreen gates Backup & restore -- and the screen
+        // itself repeats the check, because a hidden entry is not a control.
+        if (com.actionaura.retail.ui.RetailSession.isAdmin) {
+            SectionHeader(tr("Team"))
+            MoreItem(tr("Employees"), tr("Accounts, roles & till PINs"), Icons.Default.Groups) { onNavigate("employees") }
+        }
+        // Log out lives here because the navigation DRAWER that used to hold
+        // it is gone. That drawer carried exactly two entries -- Settings,
+        // which this list already offers under Finance, and Log out -- so it
+        // spent an edge-swipe gesture, a hamburger button and a full-height
+        // panel on ONE destination not reachable anywhere else. The owner's
+        // words after using it on a phone: "its inconvenient to swipe left
+        // and there is 2 things and it looks bad."
+        //
+        // Device section: sync status. `SyncCoordinator.health()` has existed
+        // since the multi-device sync foundation landed, with a doc comment
+        // that read "No UI consumes this yet ... this exists so a failure is
+        // inspectable rather than invisible, and is the seam any future UI
+        // would read." This is that UI's doorway -- a complete backend with
+        // no doorway is the recurring defect class in this codebase (see
+        // EmployeesWiringContractTest, EmployeeSalesWiringContractTest).
+        SectionHeader(tr("Device"))
+        MoreItem(tr("Sync status"), tr("Whether this device is reaching your others"), Icons.Default.Sync) { onNavigate("sync_status") }
+        // LICENCE IS REACHABLE FROM HERE IN EVERY STATE, and that is the whole
+        // point of this entry rather than a convenience.
+        //
+        // LicensingScreen used to be reachable ONLY through AppRoot's boot
+        // gate, which shows it when the state is in NEEDS_ACTIVATION_STATES --
+        // "NOT_CONFIGURED", "ACTIVATION_REQUIRED", "ACTIVATING". Found on a
+        // real handset: that device's state was "LOCAL_STATE_CORRUPT", which
+        // is in none of them. So the gate never fired, the app booted straight
+        // to the dashboard, every mutation was refused by the capability guard
+        // with no explanation, and there was NO route anywhere in the UI back
+        // to activation. The screen even has a label for that exact state
+        // ("Local state needs reset") -- it was designed to be seen in it, and
+        // could not be.
+        //
+        // Deliberately fixed as a permanent doorway rather than by adding one
+        // more string to NEEDS_ACTIVATION_STATES. Widening that set fixes the
+        // one state somebody thought of; a door that is always there fixes the
+        // next one nobody thought of, and licence state is exactly the kind of
+        // thing that acquires new values over time. Also note the shape of the
+        // bug: a complete, working screen with no way in, which is this
+        // repo's recurring defect class.
+        MoreItem(tr("Licence"), tr("Activation, status and device registration"), Icons.Default.VerifiedUser) { onNavigate("licensing") }
+
+        // One overflow surface now, not two.
+        SectionHeader(tr("Session"))
+        MoreItem(tr("Log out"), tr("End this session on this device"), Icons.AutoMirrored.Filled.ExitToApp) { onLogout() }
     }
 }
 
 @Composable
 private fun MoreItem(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(14.dp))
@@ -103,17 +184,69 @@ private fun MoreItem(title: String, subtitle: String, icon: ImageVector, onClick
 // ══════════════════════════════════════════════════════════════════════════════
 //  REPORTS — period-selectable stats (Today / 7d / 30d / 90d / 1y)
 // ══════════════════════════════════════════════════════════════════════════════
-private data class ReportPeriod(val label: String, val days: Int)
-private val reportPeriods = listOf(
+// `internal`, not `private`: EmployeeSalesScreen.kt offers the same period
+// chips over the same window, and two hand-maintained copies of this list is
+// how "30 days" on one screen quietly stops meaning "30 days" on the other.
+internal data class ReportPeriod(val label: String, val days: Int)
+internal val reportPeriods = listOf(
     ReportPeriod("Today", 0), ReportPeriod("7 days", 7), ReportPeriod("30 days", 30),
     ReportPeriod("90 days", 90), ReportPeriod("1 year", 365),
 )
 
+/**
+ * The DISPLAY NAME for a payment method the server grouped a report by.
+ *
+ * The sales-report breakdown does not carry a name; it carries whatever
+ * string the sale stored in `sales.payment_method`, verbatim. retail_api.py
+ * takes that straight off the request body (`data.get('payment_method',
+ * 'cash')`) with no normalisation anywhere, and this client sends the
+ * configured method's NAME lowercased (RetailScreens.kt's payOptions,
+ * `it.lowercase()`), so a Bank Transfer sale is stored as the literal
+ * "bank transfer".
+ *
+ * That is a wire CODE, not a catalogue key: the Arabic catalogue is keyed on
+ * the seeded names ("Cash", "Card", "Bank Transfer", "Mobile Wallet",
+ * "Check"), so `tr("bank transfer")` misses every one of them and the whole
+ * column stayed English on an Arabic till while the tender chips beside it
+ * translated. Capitalising the first letter -- what this site used to do --
+ * only ever produced "Bank transfer" and "Mobile wallet", wrong in English
+ * too.
+ *
+ * So: resolve the code back to a configured method's name first (case-
+ * insensitively, which is the only relationship the two ends actually share),
+ * and let the CALLER translate the result. Returning the untranslated name
+ * keeps this function pure and testable, and matches the rule
+ * PaymentMethodLabelsContractTest already pins for the Charge-step chips --
+ * only the visible label goes through [tr], never the stored value.
+ *
+ * Falls back to the stored string with its first letter capitalised for
+ * anything the configured list has no entry for: a shop's own custom method,
+ * a method that has since been deleted, "credit" (which the Charge step
+ * always appends and which the server never seeds as a method row), or a
+ * legacy code from before the list existed. Those were never translated
+ * either way, so nothing regresses for them.
+ */
+internal fun paymentMethodName(storedCode: String?, configured: List<PayMethod>): String {
+    val code = storedCode?.trim().orEmpty()
+    if (code.isEmpty()) return "—"
+    configured.mapNotNull { it.name }
+        .firstOrNull { it.trim().equals(code, ignoreCase = true) }
+        ?.let { return it.trim() }
+    return code.replaceFirstChar { it.uppercase() }
+}
+
 @Composable
-fun ReportsScreen(snackbar: SnackbarHostState) {
+fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
     var days by remember { mutableStateOf(30) }
     var summary by remember { mutableStateOf<ReportSummary?>(null) }
     var payments by remember { mutableStateOf<List<PaymentMethodStat>>(emptyList()) }
+    // The configured tender list, fetched for its NAMES only. The breakdown
+    // below arrives keyed by the lowercased wire CODE the sale stored, which
+    // is not a translation key and not a display name -- see
+    // paymentMethodName()'s docstring. Loaded once (it does not depend on the
+    // report period) and best-effort: an empty list just means every row falls
+    // back to the stored string, which is what shipped before this fix.
+    var configuredMethods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
     // Refetch whenever the chosen period changes (or the screen first loads).
@@ -122,6 +255,9 @@ fun ReportsScreen(snackbar: SnackbarHostState) {
         summary = try { ApiClient.get().reportSummary(days).data } catch (e: Exception) { null }
         payments = try { ApiClient.get().reportPaymentMethods(days).data } catch (e: Exception) { emptyList() }
         loading = false
+    }
+    LaunchedEffect(Unit) {
+        configuredMethods = try { ApiClient.get().payMethods().data } catch (e: Exception) { emptyList() }
     }
 
     val s = summary ?: ReportSummary()
@@ -158,13 +294,30 @@ fun ReportsScreen(snackbar: SnackbarHostState) {
             StatCard(tr("Inventory Value (at cost)"), money(s.inventory_value), tr("current stock on hand"),
                 Info, Modifier.fillMaxWidth())
 
+            // Takings per person. The entry is hidden without `retail.reports`
+            // rather than disabled -- the same choice MoreScreen makes for the
+            // owner-only Employees entry, and the same gate the desktop shell
+            // applies to its own reports surfaces. Usability only: the screen
+            // behind it re-checks, and the route re-checks server-side.
+            //
+            // `hasCapability` fails open until /api/auth/session actually
+            // carries `capabilities` (see holdsCapability), so today this
+            // renders for everyone and the server keeps doing the enforcing --
+            // the change is inert, not a screen that blanks for every role the
+            // day it ships.
+            if (RetailSession.hasCapability(CAP_REPORTS)) {
+                MoreItem(tr("By Employee"), tr("Takings and transactions per employee"),
+                    Icons.Default.Groups) { onNavigate("employee_sales") }
+            }
+
             if (payments.isNotEmpty()) {
                 SectionHeader(tr("Payment methods"))
-                GlowCard(Modifier.fillMaxWidth()) {
+                TillCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         payments.forEach { pm ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text((pm.payment_method ?: "—").replaceFirstChar { it.uppercase() }, Modifier.weight(1f))
+                                Text(tr(paymentMethodName(pm.payment_method, configuredMethods)),
+                                    Modifier.weight(1f))
                                 Text("${pm.count}×", style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Spacer(Modifier.width(12.dp))
@@ -180,7 +333,7 @@ fun ReportsScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun StatCard(label: String, value: String, sub: String?, accent: Color, modifier: Modifier = Modifier) {
-    GlowCard(modifier = modifier, glow = accent) {
+    TillCard(modifier = modifier, accent = accent) {
         Column(Modifier.padding(16.dp)) {
             Text(label.uppercase(), style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -225,7 +378,7 @@ fun TransactionsScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun SaleRow(s: Sale, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(s.sale_number ?: "—", fontWeight = FontWeight.Bold)
@@ -257,6 +410,32 @@ private fun SaleDetailSheet(saleId: Int, onDismiss: () -> Unit) {
             Text(s?.sale_number ?: tr("Receipt"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("${s?.customer_name ?: tr("Walk-in")} · ${shortDate(s?.created_at)}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            // Who rang it (retail schema v13). Rendered for every sale,
+            // including the ones with no attribution -- an absent line is
+            // indistinguishable from a screen that forgot to show it, and the
+            // one thing an owner has to be able to establish is the date from
+            // which this shop actually has attribution.
+            //
+            // Never guessed. `sales.cashier` is deliberately not on the client
+            // model (see Sale's doc comment): it defaults to the literal 'POS'
+            // and otherwise holds an opaque account id, so printing it here
+            // would put a placeholder where a person's name goes -- the
+            // fabrication the v13 migration went out of its way not to commit
+            // when it refused to backfill actor_user_uid from it.
+            if (!loading && detail != null) {
+                Text(
+                    when (saleAttribution(s)) {
+                        Attribution.NAMED -> tr("Rung by") + " " +
+                            bidiIsolate(attributedName(s?.actor_employee_id, s?.actor_email).orEmpty())
+                        Attribution.ACCOUNT_GONE -> tr("Rung by an account that no longer exists")
+                        Attribution.NOT_RECORDED ->
+                            tr("Who rang this sale was not recorded — it predates employee attribution.")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(16.dp))
             when {
                 loading -> CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
@@ -335,7 +514,7 @@ fun ReturnsScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun ReturnRow(r: Return) {
-    GlowCard(Modifier.fillMaxWidth()) {
+    TillCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(r.return_number ?: "—", fontWeight = FontWeight.Bold)
@@ -488,7 +667,7 @@ private fun ProcessReturnSheet(onDismiss: () -> Unit, onDone: () -> Unit) {
                                 val r = ApiClient.get().createReturn(
                                     CreateReturnRequest(s.id, reason, refund, items, UUID.randomUUID().toString()))
                                 if (r.status == "success") onDone() else { err = r.message ?: tr("Couldn't process"); saving = false }
-                            } catch (e: Exception) { err = tr("Couldn't reach the server"); saving = false }
+                            } catch (e: Exception) { err = apiErrorMessage(e); saving = false }
                         }
                     },
                     enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -545,7 +724,7 @@ fun CustomersScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun CustomerRow(c: Customer, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(c.name ?: "—", fontWeight = FontWeight.Bold)
@@ -587,7 +766,7 @@ private fun AddCustomerSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                     try {
                         val r = ApiClient.get().createCustomer(CreateCustomerRequest(name.trim(), phone.trim(), email.trim()))
                         if (r.status == "success") onCreated() else { err = r.message ?: tr("Couldn't save"); saving = false }
-                    } catch (e: Exception) { err = tr("Couldn't reach the server"); saving = false }
+                    } catch (e: Exception) { err = apiErrorMessage(e); saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -671,7 +850,7 @@ fun ReceivablesScreen(snackbar: SnackbarHostState) {
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                GlowCard(Modifier.fillMaxWidth(), glow = Warning) {
+                TillCard(Modifier.fillMaxWidth(), accent = Warning) {
                     Column(Modifier.padding(18.dp)) {
                         Text(tr("TOTAL RECEIVABLE"), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -682,7 +861,7 @@ fun ReceivablesScreen(snackbar: SnackbarHostState) {
                 }
             }
             items(rows, key = { it.id }) { c ->
-                GlowCard(Modifier.fillMaxWidth(), onClick = { stmtId = c.id }) {
+                TillCard(Modifier.fillMaxWidth(), onClick = { stmtId = c.id }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(c.name ?: "—", fontWeight = FontWeight.Bold)
@@ -763,7 +942,7 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                                 try {
                                     val r = ApiClient.get().customerPayment(customerId, PaymentRequest(amt, "cash"))
                                     if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
-                                } catch (e: Exception) { err = tr("Couldn't reach the server"); paying = false }
+                                } catch (e: Exception) { err = apiErrorMessage(e); paying = false }
                             }
                         }, enabled = !paying, modifier = Modifier.height(52.dp)) {
                             if (paying) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -817,7 +996,7 @@ fun SuppliersScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun SupplierRow(s: Supplier) {
-    GlowCard(Modifier.fillMaxWidth()) {
+    TillCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(s.name ?: "—", fontWeight = FontWeight.Bold)
@@ -868,7 +1047,7 @@ private fun AddSupplierSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                             val r = ApiClient.get().createSupplier(CreateSupplierRequest(
                                 name = name.trim(), phone = phone.trim(), email = email.trim(), address = address.trim()))
                             if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
-                        } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -903,7 +1082,7 @@ fun PayablesScreen(snackbar: SnackbarHostState) {
             tr("Unpaid purchase orders will appear here."))
         else -> LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                GlowCard(Modifier.fillMaxWidth(), glow = MaterialTheme.colorScheme.error) {
+                TillCard(Modifier.fillMaxWidth(), accent = MaterialTheme.colorScheme.error) {
                     Column(Modifier.padding(18.dp)) {
                         Text(tr("TOTAL PAYABLE"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(6.dp))
@@ -913,7 +1092,7 @@ fun PayablesScreen(snackbar: SnackbarHostState) {
                 }
             }
             items(rows, key = { it.id }) { s ->
-                GlowCard(Modifier.fillMaxWidth(), onClick = { stmtId = s.id }) {
+                TillCard(Modifier.fillMaxWidth(), onClick = { stmtId = s.id }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(s.name ?: "—", fontWeight = FontWeight.Bold)
@@ -994,7 +1173,7 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                                 try {
                                     val r = ApiClient.get().supplierPayment(supplierId, PaymentRequest(amt, "cash"))
                                     if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
-                                } catch (e: Exception) { err = tr("Couldn't reach the server"); paying = false }
+                                } catch (e: Exception) { err = apiErrorMessage(e); paying = false }
                             }
                         }, enabled = !paying, modifier = Modifier.height(52.dp)) {
                             if (paying) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -1040,7 +1219,7 @@ fun DailyCashScreen(snackbar: SnackbarHostState) {
             StatCard(tr("Net Cash"), money(d.net), tr("in − out"), MaterialTheme.colorScheme.primary, Modifier.fillMaxWidth())
             if (d.by_method.isNotEmpty()) {
                 SectionHeader(tr("By method"))
-                GlowCard(Modifier.fillMaxWidth()) {
+                TillCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         d.by_method.forEach { m ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1095,7 +1274,7 @@ fun AgingScreen(snackbar: SnackbarHostState) {
                 tr("90+ days") to (b?.d90_plus ?: 0.0))
             val total = rows.sumOf { it.second }
             val accent = if (isAr) Warning else MaterialTheme.colorScheme.error
-            GlowCard(Modifier.fillMaxWidth(), glow = accent) {
+            TillCard(Modifier.fillMaxWidth(), accent = accent) {
                 Column(Modifier.padding(18.dp)) {
                     Text(if (isAr) tr("TOTAL RECEIVABLE") else tr("TOTAL PAYABLE"),
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1104,7 +1283,7 @@ fun AgingScreen(snackbar: SnackbarHostState) {
                         fontWeight = FontWeight.ExtraBold, color = accent)
                 }
             }
-            GlowCard(Modifier.fillMaxWidth()) {
+            TillCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     rows.forEachIndexed { i, (label, amt) ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1121,6 +1300,16 @@ fun AgingScreen(snackbar: SnackbarHostState) {
     }
 }
 
+/** The translated label for one of [AuraPalette.ALL]'s five theme choices. */
+private fun themeLabel(p: AuraColors): String = when (p) {
+    AuraPalette.DAY -> tr("Day")
+    AuraPalette.SAND -> tr("Sand")
+    AuraPalette.CALM -> tr("Calm")
+    AuraPalette.NIGHT -> tr("Night")
+    AuraPalette.DUSK -> tr("Dusk")
+    else -> p.name
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  RETAIL SETTINGS — credit enforcement, defaults, currency, payment methods
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1132,8 +1321,19 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     // in SettingsScreen.kt, a file never wired to any nav route (this
     // RetailSettingsScreen, in this file, is the real routed "retail_settings"
     // screen). Mirrors Clinic's working SettingsScreen.kt picker.
+    //
+    // The "This Device's Branch" section a few lines below made the identical
+    // trip for the identical reason: commit 0c6c3ea wrote it into that same
+    // never-routed SettingsScreen.kt, so it also never rendered for a single
+    // user. Moved here rather than fixed in place, and SettingsScreen.kt has
+    // since been deleted -- once both real controls had left it, nothing
+    // unique about it remained, only "coming soon" stubs and a hardcoded
+    // version string RetailSettingsScreen already read live from
+    // BuildConfig.VERSION_NAME. See BranchPinWiringContractTest for the
+    // reachability guard this history earned.
     val ctx = LocalContext.current
     var showLanguage by remember { mutableStateOf(false) }
+    var showTheme by remember { mutableStateOf(false) }
     var s by remember { mutableStateOf(CreditSettings()) }
     var methods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -1142,6 +1342,53 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     var enforceMenu by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // Receipt Printer (retail-hardware-viewports) -- seeded once from
+    // PrinterPrefs (a plain SharedPreferences read, see its own doc comment
+    // for why this is not cached global state like AppTheme/AppLocale
+    // above) and written back on "Save printer settings" below.
+    var printerHost by remember { mutableStateOf(PrinterPrefs.getHost(ctx)) }
+    var printerPort by remember { mutableStateOf(PrinterPrefs.getPort(ctx).toString()) }
+    var printerWidth by remember { mutableStateOf(PrinterPrefs.getWidth(ctx)) }
+    var printerAutoPrint by remember { mutableStateOf(PrinterPrefs.getAutoPrint(ctx)) }
+
+    // ── This device's branch pin (Wave C1 -- see net/Models.kt's Branch/
+    // DeviceBranch doc comments for the dc22b04 defect this closes on
+    // Android). Loaded through its OWN LaunchedEffect and its OWN
+    // loading/error state, deliberately separate from `loading` above: a
+    // failed or slow branch load must not hold Credit policy/Payment
+    // methods/Backup/Licensing behind the `if (loading) return` gate below,
+    // and a failed credit-settings load must not blank the branch section
+    // either.
+    var branchLoading by remember { mutableStateOf(true) }
+    var branchLoadError by remember { mutableStateOf<String?>(null) }
+    var pinnedBranchUid by remember { mutableStateOf<String?>(null) }
+    var pinnedBranchName by remember { mutableStateOf<String?>(null) }
+    // Flips true only if the POST itself comes back 403 -- a defensive net
+    // for the moment RetailSession.capabilities is still null (fails open,
+    // see holdsCapability's doc comment) and this row briefly rendered as
+    // editable for an account that turns out not to hold CAP_EMPLOYEES.
+    var branchForbidden by remember { mutableStateOf(false) }
+    var showBranchPicker by remember { mutableStateOf(false) }
+
+    suspend fun loadDeviceBranch() {
+        try {
+            val d = ApiClient.get().deviceBranch().data
+            pinnedBranchUid = d?.branch_uid
+            pinnedBranchName = d?.branch_name
+            branchLoadError = null
+        } catch (e: Exception) {
+            branchLoadError = apiErrorMessage(e)
+        }
+    }
+    LaunchedEffect(Unit) { branchLoading = true; loadDeviceBranch(); branchLoading = false }
+    // A cashier holds CAP_SELL but not CAP_EMPLOYEES (see RetailSession.kt's
+    // CAP_EMPLOYEES doc comment) -- this decides whether the row below is a
+    // picker or a read-only fact with an explanation, BEFORE the POST is ever
+    // attempted, so the common case never needs to hit a 403 to know its own
+    // state.
+    val canManageBranch = RetailSession.hasCapability(CAP_EMPLOYEES) && !branchForbidden
+
     suspend fun loadMethods() { methods = try { ApiClient.get().payMethods().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) {
         s = try { ApiClient.get().creditSettingsGet().data ?: CreditSettings() } catch (e: Exception) { CreditSettings() }
@@ -1155,7 +1402,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SectionHeader(tr("Language"))
-        GlowCard(Modifier.fillMaxWidth()) {
+        TillCard(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth().clickable { showLanguage = true }.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1164,6 +1411,106 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 Text(AppLocale.lang.nativeName, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // Theme row -- owner request, 2026-09: "night mode back" + "themes
+        // for both mobile and desktop". Same picker pattern as Language right
+        // above; the five choices are AuraPalette.ALL, in the same order the
+        // desktop's own switcher offers them.
+        SectionHeader(tr("Theme"))
+        TillCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().clickable { showTheme = true }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(tr("Theme"), Modifier.weight(1f))
+                Text(themeLabel(AuraPalette.current), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        SectionHeader(tr("This Device's Branch"))
+        when {
+            branchLoading -> TillCard(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text(tr("Loading…"))
+                }
+            }
+            branchLoadError != null -> TillCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(12.dp))
+                        Text(tr("Couldn't load this device's branch"), Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                    }
+                    Text(branchLoadError!!, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { scope.launch { branchLoading = true; loadDeviceBranch(); branchLoading = false } }) {
+                        Text(tr("Try again"))
+                    }
+                }
+            }
+            else -> {
+                // Unpinned is the state that silently files every sale on this
+                // till under the company's default branch -- worth noticing on
+                // a chain, but not an error on the single-branch shop this same
+                // install might be. So: colored and iconed like the rest of
+                // this app's Warning states (EmployeesScreen.statusLabel's
+                // "pending_setup" is the same idiom), never Danger/red.
+                val unpinned = pinnedBranchName == null
+                TillCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .let { if (canManageBranch) it.clickable { showBranchPicker = true } else it }
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        pinnedBranchName ?: tr("No branch pinned"),
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (unpinned) Warning else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    if (unpinned) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Icon(Icons.Default.WarningAmber, null, tint = Warning,
+                                            modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                Text(
+                                    if (unpinned)
+                                        tr("Sales on this till file under the company's default branch. Worth checking on a multi-branch chain.")
+                                    else tr("Sales rung on this till are filed under this branch."),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (unpinned) Warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (canManageBranch) {
+                                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        // Never a silent no-op: a cashier or manager sees exactly
+                        // why the row doesn't open, without having to tap it
+                        // first to find out. Matches EmployeesScreen's owner-gate
+                        // explanation in tone.
+                        if (!canManageBranch) {
+                            Text(
+                                tr("Only the owner can change which branch this device is pinned to. Ask the owner to make the change on their account."),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -1211,9 +1558,11 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
 
         SectionHeader(tr("Payment methods"))
         methods.forEach { m ->
-            GlowCard(Modifier.fillMaxWidth()) {
+            TillCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(m.name ?: "—", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                    // Translated the same way the Charge-step tender chips are: the name is
+                    // display-only here (the wire code lives in m.type, untouched below).
+                    Text(tr(m.name ?: "—"), Modifier.weight(1f), fontWeight = FontWeight.Medium)
                     Text(m.type ?: "", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -1229,6 +1578,63 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             }, modifier = Modifier.height(52.dp)) { Text(tr("Add")) }
         }
 
+        // Receipt Printer (retail-hardware-viewports): network/LAN ESC/POS
+        // only -- see NetworkPrinterAdapter.kt for why that transport (and
+        // not Bluetooth or a vendor SDK) is what this app implements. An
+        // honest empty-state note below beats a setting that silently does
+        // nothing on hardware this doesn't support.
+        SectionHeader(tr("Receipt Printer"))
+        Text(
+            tr("For a network (LAN) ESC/POS receipt printer only. Bluetooth and built-in printers are not supported yet."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(printerHost, { printerHost = it },
+            label = { Text(tr("Printer IP address")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(printerPort, { printerPort = it.filter(Char::isDigit) },
+            label = { Text(tr("Port")) }, singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth())
+        Text(tr("Paper width"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = printerWidth == PrinterPrefs.WIDE_CHARS,
+                onClick = { printerWidth = PrinterPrefs.WIDE_CHARS },
+                label = { Text(tr("80mm (42 chars)")) })
+            FilterChip(selected = printerWidth == PrinterPrefs.NARROW_CHARS,
+                onClick = { printerWidth = PrinterPrefs.NARROW_CHARS },
+                label = { Text(tr("58mm (32 chars)")) })
+        }
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(tr("Auto-print after each sale"), fontWeight = FontWeight.Medium)
+                Text(
+                    tr("Prints automatically as soon as a sale completes, with no extra tap."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = printerAutoPrint, onCheckedChange = { printerAutoPrint = it })
+        }
+        // A real limitation of the byte path itself (core/retail/
+        // escpos_receipt.py's ASCII-only text encoding, not an Android
+        // gap) -- a shopkeeper needs to learn this here, not from a
+        // customer at the counter.
+        Text(
+            tr("Printed receipts are in English only, even when the app is in Arabic — ESC/POS text mode cannot render Arabic script."),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = {
+                val portNum = printerPort.toIntOrNull() ?: PrinterPrefs.DEFAULT_PORT
+                PrinterPrefs.set(ctx, printerHost, portNum, printerWidth, printerAutoPrint)
+                printerPort = portNum.toString()
+                scope.launch { snackbar.showSnackbar(tr("Settings saved")) }
+            },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+        ) { Text(tr("Save printer settings")) }
+
         if (com.actionaura.retail.ui.RetailSession.isAdmin) {
             SectionHeader(tr("Backup & restore"))
             OutlinedButton(onClick = onOpenBackup, modifier = Modifier.fillMaxWidth().height(50.dp)) {
@@ -1237,7 +1643,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         }
 
         SectionHeader(tr("Licensing"))
-        GlowCard(Modifier.fillMaxWidth()) {
+        TillCard(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth().clickable(onClick = onOpenLicensing).padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1248,10 +1654,16 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         }
 
         SectionHeader(tr("About"))
-        GlowCard(Modifier.fillMaxWidth()) {
+        TillCard(Modifier.fillMaxWidth()) {
             Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(tr("Version"), Modifier.weight(1f))
-                Text(com.actionaura.retail.BuildConfig.VERSION_NAME, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // ltrIsolate: bare, Arabic's bidi algorithm lays "1.0.0-rc.5"
+                // out as "rc.5-1.0.0". Same fix as the sign-in footer; see
+                // ltrIsolate's own comment for the measurement.
+                Text(
+                    ltrIsolate(com.actionaura.retail.BuildConfig.VERSION_NAME),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -1286,6 +1698,206 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             },
         )
     }
+
+    if (showTheme) {
+        AlertDialog(
+            onDismissRequest = { showTheme = false },
+            title = { Text(tr("Choose theme")) },
+            text = {
+                Column {
+                    AuraPalette.ALL.forEach { palette ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = AuraPalette.current === palette, onClick = {
+                                    AppTheme.set(ctx, palette)
+                                    showTheme = false
+                                })
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = AuraPalette.current === palette, onClick = {
+                                AppTheme.set(ctx, palette); showTheme = false
+                            })
+                            Spacer(Modifier.width(8.dp))
+                            // A small swatch so the label ("Night", "Dusk", ...)
+                            // is not the only cue -- a glance at the dot tells a
+                            // cashier which theme is which without reading.
+                            Box(
+                                Modifier.size(14.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.surfaceApp)
+                                    .border(1.dp, palette.accentAction, CircleShape),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(themeLabel(palette), style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTheme = false }) { Text(tr("Done")) }
+            },
+        )
+    }
+
+    if (showBranchPicker) {
+        BranchPickerDialog(
+            currentUid = pinnedBranchUid,
+            onDismiss = { showBranchPicker = false },
+            onSaved = { uid, name ->
+                pinnedBranchUid = uid
+                pinnedBranchName = name
+                showBranchPicker = false
+            },
+            onForbidden = {
+                branchForbidden = true
+                showBranchPicker = false
+            },
+            snackbar = snackbar,
+        )
+    }
+}
+
+// ── This device's branch picker (Wave C1) ───────────────────────────────────
+/**
+ * Only ever shown to an account `canManageBranch` in [RetailSettingsScreen]
+ * above already judged able to save. The POST is still wrapped in its own 403
+ * check here regardless, because that client-side judgment can be stale (a
+ * role changed elsewhere, or `RetailSession.capabilities` had not resolved
+ * yet) and the server's refusal is the one that actually matters;
+ * [onForbidden] is how this dialog reports that back so the row behind it can
+ * drop into its read-only explanation instead of silently reopening the same
+ * way next time.
+ */
+@Composable
+private fun BranchPickerDialog(
+    currentUid: String?,
+    onDismiss: () -> Unit,
+    onSaved: (uid: String?, name: String?) -> Unit,
+    onForbidden: () -> Unit,
+    snackbar: SnackbarHostState,
+) {
+    var loading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var branches by remember { mutableStateOf<List<Branch>>(emptyList()) }
+    var selected by remember { mutableStateOf(currentUid) }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        try {
+            branches = ApiClient.get().branches().data
+            loadError = null
+        } catch (e: Exception) {
+            loadError = apiErrorMessage(e)
+        }
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text(tr("This device's branch")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    tr("Choose which branch sales rung on this till are filed under."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                when {
+                    loading -> Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                    }
+                    loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                    else -> Column {
+                        // The explicit "clear the pin" option -- always first,
+                        // and never omitted just because the company happens
+                        // to have branches: unpinning is a real, reachable
+                        // choice, not only an initial default.
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = selected == null, onClick = { selected = null })
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = selected == null, onClick = { selected = null })
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(tr("No branch pinned"), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    tr("Falls back to the company's default branch"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (branches.isNotEmpty()) HorizontalDivider()
+                        branches.forEach { b ->
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .selectable(selected = selected == b.uid, onClick = { selected = b.uid })
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = selected == b.uid, onClick = { selected = b.uid })
+                                Spacer(Modifier.width(8.dp))
+                                Text(b.name ?: "—", style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+                saveError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !saving && !loading && loadError == null,
+                onClick = {
+                    saving = true; saveError = null
+                    scope.launch {
+                        try {
+                            val r = ApiClient.get().setDeviceBranch(SetDeviceBranchRequest(selected))
+                            saving = false
+                            val name = r.data?.branch_name
+                            onSaved(r.data?.branch_uid, name)
+                            snackbar.showSnackbar(
+                                if (name != null) tr("This device is now pinned to %s").format(name)
+                                else tr("Branch pin cleared")
+                            )
+                        } catch (e: Exception) {
+                            saving = false
+                            // A cashier's client-side gate can be stale (see
+                            // this dialog's own doc comment) -- the server's
+                            // CAP_EMPLOYEES refusal is what actually decides,
+                            // and it gets its own honest explanation rather
+                            // than falling through to apiErrorMessage's
+                            // generic "Blocked by your subscription/license"
+                            // wording, which would misname a role problem as
+                            // a licensing one.
+                            if (e is HttpException && e.code() == 403) {
+                                onForbidden()
+                                snackbar.showSnackbar(
+                                    tr("Only the owner can change this device's branch. Ask the owner to make the change on their account.")
+                                )
+                            } else {
+                                saveError = apiErrorMessage(e)
+                            }
+                        }
+                    }
+                },
+            ) {
+                if (saving) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Text(tr("Save"))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(tr("Cancel")) } },
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1349,7 +1961,7 @@ private fun payStatusColor(status: String?): Color = when (status) {
 
 @Composable
 private fun PoRow(po: PurchaseOrder, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(po.po_number ?: "—", fontWeight = FontWeight.Bold)
@@ -1567,7 +2179,7 @@ private fun CreatePoSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                                 items = lines.map { PoItemReq(it.first.id, it.second, it.third) },
                                 amount_paid = parseNum(amountPaid) ?: 0.0))
                             if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
-                        } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),

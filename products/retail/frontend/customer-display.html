@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aura Retail — Customer Display</title>
+<link rel="icon" type="image/svg+xml" href="brand/aura-app-icon.svg">
+<script>
+  // Same boot-theme contract as index.html (read ONLY 'aura_theme_v2',
+  // validate through the sanctioned allowlist, fall back to 'light') so this
+  // second screen never flashes the wrong palette and never lags a theme
+  // change made on the till -- both documents share one localStorage because
+  // both are served from the same origin. This is a LOCAL copy, not a shared
+  // <script src>, because retail_design_theme_safety_test.js pins index.html
+  // specifically and this page is not part of the app shell it probes; kept
+  // deliberately identical in behaviour rather than merely similar.
+  (function () {
+    try {
+      var saved = null;
+      try { saved = localStorage.getItem('aura_theme_v2'); } catch (e) {}
+      var names = ['light', 'sand', 'dark', 'night', 'dusk'];
+      document.documentElement.setAttribute('data-theme', names.indexOf(saved) !== -1 ? saved : 'light');
+    } catch (e) {}
+  })();
+</script>
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/rtl.css">
+<style>
+  /* ── Customer-facing display (second screen) ───────────────────────────────
+     Read by a shopper a metre or two away, not an operator -- so nothing here
+     is a control (no buttons, no inputs; this document never takes focus or
+     input on purpose) and every size is bigger than its POS equivalent. Every
+     colour is a token from css/main.css so the five sanctioned themes and
+     dark mode apply here exactly as they do on the till; every spacing
+     property is logical (inline/block) so Arabic mirrors with no separate
+     ruleset. State is pushed in by subsystem-retail.js over a same-origin
+     BroadcastChannel -- see customer-display.js -- never fetched or computed
+     here except the one-time shop branding read on load.
+
+     `#cd-*`/`.cd-*` is a private namespace: nothing here is reused by, or
+     reuses, a class the till/dashboard already owns. */
+  html, body { margin: 0; padding: 0; inline-size: 100%; block-size: 100%; }
+  body {
+    background: var(--app-bg);
+    color: var(--text);
+    font-family: var(--font-base);
+    overflow: hidden; /* a kiosk screen never scrolls itself; the item list scrolls internally */
+  }
+  #cd-root { min-block-size: 100vh; display: flex; flex-direction: column; }
+
+  .cd-screen { min-block-size: 100vh; box-sizing: border-box; }
+  .cd-screen[hidden] { display: none; }
+
+  /* ── Idle: shop identity + welcome line ──────────────────────────────────── */
+  #cd-idle {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--space-roomy);
+    text-align: center;
+    padding-inline: var(--space-section);
+  }
+  #cd-logo { max-inline-size: 240px; max-block-size: 240px; object-fit: contain; }
+  #cd-shop-name {
+    margin: 0; font-weight: var(--text-weight-bold); color: var(--text);
+    font-size: clamp(32px, 5vw, 64px); line-height: var(--text-leading-tight);
+  }
+  #cd-welcome {
+    margin: 0; color: var(--text-dim); font-weight: var(--text-weight-medium);
+    font-size: clamp(18px, 2.4vw, 28px);
+  }
+
+  /* ── Active: live cart ────────────────────────────────────────────────────── */
+  #cd-active { display: flex; flex-direction: column; }
+  .cd-active-header {
+    padding-inline: var(--space-section); padding-block: var(--space-roomy);
+    border-block-end: 1px solid var(--border-soft);
+  }
+  .cd-active-header .cd-shop-name-small {
+    margin: 0; font-weight: var(--text-weight-bold); color: var(--text-dim);
+    font-size: var(--text-size-title); letter-spacing: -0.01em;
+  }
+  #cd-items {
+    flex: 1; min-block-size: 0; overflow-y: auto;
+    padding-inline: var(--space-section); padding-block: var(--space-roomy);
+    display: flex; flex-direction: column; gap: var(--space-comfy);
+  }
+  .cd-item-row {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-roomy);
+  }
+  .cd-item-main { flex: 1; min-inline-size: 0; }
+  .cd-item-name {
+    font-size: var(--text-size-display); font-weight: var(--text-weight-semibold); color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .cd-item-meta { font-size: var(--text-size-subhead); color: var(--text-dim); margin-block-start: var(--space-tight); }
+  .cd-item-total {
+    font-size: var(--text-size-display); font-weight: var(--text-weight-bold);
+    white-space: nowrap; flex-shrink: 0;
+  }
+  #cd-summary {
+    border-block-start: 1px solid var(--border-soft);
+    background: var(--surface-card);
+    padding-inline: var(--space-section); padding-block: var(--space-roomy);
+  }
+  .cd-row {
+    display: flex; justify-content: space-between; gap: var(--space-roomy);
+    font-size: var(--text-size-subhead); color: var(--text-dim);
+    padding-block: var(--space-tight);
+  }
+  .cd-total-band {
+    display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-roomy);
+    margin-block-start: var(--space-base); padding-block-start: var(--space-comfy);
+    border-block-start: 2px solid var(--border-mid);
+  }
+  #cd-total-label,
+  #cd-due-label { font-size: var(--text-size-title); font-weight: var(--text-weight-bold); color: var(--text); }
+  /* THE biggest thing on this screen, on purpose -- see --text-size-total's
+     own comment in css/main.css. This display sits further from the reader
+     than the till does, so the ceiling here is wider than the POS's own
+     clamp(), not merely equal to it. */
+  #cd-total-value,
+  #cd-due-value {
+    font-size: clamp(var(--text-size-total, 40px), 9vw, 128px);
+    font-weight: var(--text-weight-bold); line-height: 1;
+  }
+
+  /* ── Complete: paid / change, briefly ─────────────────────────────────────── */
+  #cd-complete {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--space-comfy);
+    text-align: center;
+    padding-inline: var(--space-section);
+  }
+  #cd-complete-icon {
+    font-size: 88px; line-height: 1; color: var(--text-money-positive);
+  }
+  #cd-complete-heading {
+    margin: 0; font-size: clamp(28px, 4vw, 48px); font-weight: var(--text-weight-bold); color: var(--text);
+  }
+  #cd-complete .cd-row {
+    justify-content: center; font-size: var(--text-size-display); color: var(--text);
+  }
+  #cd-complete .cd-row .cd-row-label { color: var(--text-dim); }
+  #cd-complete-thanks {
+    margin: 0; color: var(--text-dim); font-size: var(--text-size-subhead);
+  }
+
+  @media (max-width: 640px) {
+    .cd-item-name, .cd-item-total { font-size: var(--text-size-title); }
+  }
+</style>
+</head>
+<body>
+  <div id="cd-root">
+    <section id="cd-idle" class="cd-screen" aria-live="polite">
+      <img id="cd-logo" alt="" hidden>
+      <h1 id="cd-shop-name">Aura Retail</h1>
+      <p id="cd-welcome">Welcome!</p>
+    </section>
+
+    <section id="cd-active" class="cd-screen" hidden aria-live="polite">
+      <div id="cd-items"></div>
+      <div id="cd-summary">
+        <div class="cd-row" id="cd-subtotal-row">
+          <span id="cd-subtotal-label" class="cd-row-label"></span>
+          <span id="cd-subtotal-value" class="money"></span>
+        </div>
+        <div class="cd-row" id="cd-discount-row" hidden>
+          <span id="cd-discount-label" class="cd-row-label"></span>
+          <span id="cd-discount-value" class="money"></span>
+        </div>
+        <div class="cd-row" id="cd-tax-row">
+          <span id="cd-tax-label" class="cd-row-label"></span>
+          <span id="cd-tax-value" class="money"></span>
+        </div>
+        <div class="cd-total-band">
+          <span id="cd-total-label"></span>
+          <span id="cd-total-value" class="money"></span>
+        </div>
+        <!-- Points are a TENDER, not a discount, so they come off BELOW the
+             total rather than reducing it: the bill is the bill, the points
+             pay part of it, and what remains is the amount due. Same order
+             the POS summary and the printed receipt both use. Hidden unless
+             the till actually sends a redemption. -->
+        <div class="cd-row" id="cd-loyalty-row" hidden>
+          <span id="cd-loyalty-label" class="cd-row-label"></span>
+          <span id="cd-loyalty-value" class="money"></span>
+        </div>
+        <!-- What the shopper actually hands over. Shown ONLY when it differs
+             from the total (the till decides that and sends the field, or
+             not) -- with no redemption there is nothing here the total band
+             above does not already say, and a second identical figure would
+             read as a second charge. -->
+        <div class="cd-total-band" id="cd-due-band" hidden>
+          <span id="cd-due-label"></span>
+          <span id="cd-due-value" class="money"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="cd-complete" class="cd-screen" hidden aria-live="polite">
+      <div id="cd-complete-icon" aria-hidden="true">&#10003;</div>
+      <h1 id="cd-complete-heading"></h1>
+      <div class="cd-row" id="cd-paid-row">
+        <span id="cd-paid-label" class="cd-row-label"></span>
+        <span id="cd-paid-value" class="money"></span>
+      </div>
+      <div class="cd-row" id="cd-change-row" hidden>
+        <span id="cd-change-label" class="cd-row-label"></span>
+        <span id="cd-change-value" class="money"></span>
+      </div>
+      <p id="cd-complete-thanks"></p>
+    </section>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="customer-display.js"></script>
+</body>
+</html>

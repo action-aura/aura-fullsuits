@@ -12,7 +12,16 @@ pyotp==2.9.0
 # UI modernization -- renders the MFA enrollment QR code server-side as an
 # inline SVG data URI (no client-side JS, no external request, no CDN).
 # Pure-Python, zero transitive dependencies.
-segno==1.6.1
+# Pinned to the SAME version as requirements/base.txt on purpose:
+# requirements/development.txt installs both files into one environment, and
+# pip's resolver refuses two different exact pins of one package outright
+# ("Cannot install segno==1.6.1 and segno==1.6.6 ... ResolutionImpossible"),
+# which is how CI's dependency step -- and every job after it -- went red on
+# 2026-08-06 when base.txt moved to 1.6.6 for e-invoicing. Both call sites
+# (owner/app/auth/routes.py, commercial_runtime/einvoicing/qr.py) use only
+# `segno.make(..., error="m")` + `.save(kind="svg")`, unchanged across 1.6.x.
+# Move BOTH pins together, never one.
+segno==1.6.6
 cryptography==50.0.0
 gunicorn==22.0.0
 jsonschema==4.23.0

@@ -170,9 +170,27 @@ def test_full_onboarding_flow_creates_first_admin_and_blocks_a_second():
 
 
 def test_complete_onboarding_requires_admin_session():
+    # 401, not 403, for a caller with NO session at all. This route used to gate
+    # on a bare `session.get('mt_role') != 'admin'` read straight from the
+    # cookie, so an anonymous caller fell through into the wrong-role branch and
+    # was told 403 -- "you are signed in as the wrong person" -- when in truth
+    # nobody was signed in. It now runs @mt_login_required first, which answers
+    # the earlier question honestly.
+    #
+    # The distinction is load-bearing rather than cosmetic: 403 tells a client
+    # its session is fine and the role is wrong, so the web frontend keeps the
+    # session and shows a permissions error, while 401 sends the user to log in
+    # -- which is the correct outcome when the session is absent, expired, or
+    # revoked. `clinic_rbac_test.py:186` already accepts either code for this
+    # same reason.
+    #
+    # A logged-in-but-wrong-role caller still gets 403, unchanged; only the
+    # genuinely anonymous case moved. Asserting the pair keeps this test honest
+    # about what it is checking (authentication, not authorization) without
+    # loosening it into "any refusal will do".
     with app.test_client() as c:
         r = c.post('/api/onboarding/complete')
-        assert r.status_code == 403
+        assert r.status_code == 401
 
 
 def test_login_with_the_onboarded_admin_account():

@@ -363,41 +363,62 @@ def test_update_round_trips_every_payload_field_against_actual_columns(client, a
         assert a_row[col] == b_row[col], f"products.{col} diverged after update: A={a_row[col]!r} B={b_row[col]!r}"
 
 
-# ── 3. Soft-delete then restore round-trips `status` (exactly Bug 2) ───────
+# ── 3. Soft-delete then restore round-trips `deleted_at_utc` (exactly Bug 2,
+#      updated for stage 6b-iii-a -- see that stage's own note below) ──────
 
-def test_soft_delete_then_restore_round_trips_status_a_to_b(client, service_a, service_b, install_b):
+def test_soft_delete_then_restore_round_trips_deleted_at_utc_a_to_b(client, service_a, service_b, install_b):
     # Supplier, not product/customer: update_supplier's own `allowed` PATCH
     # fields list (retail_api.py) includes 'status', so a restore is
     # actually reachable through the real HTTP route, exactly like a real
     # second device would trigger it.
+    #
+    # RENAMED and REWRITTEN for launch-readiness Phase 6 stage 6b-iii-a
+    # (deletion stops overloading `status`): this test used to be named
+    # `test_soft_delete_then_restore_round_trips_status_a_to_b` and asserted
+    # `status` flipping 'active' -> 'inactive' -> 'active' across the wire.
+    # That is no longer what happens -- `delete_supplier` stopped writing
+    # `status='inactive'` this stage, so `status` stays 'active' through the
+    # whole delete/restore cycle now. `deleted_at_utc` is what actually
+    # round-trips: it gets stamped on delete and cleared on restore (Step 3's
+    # `update_supplier` change), so this test asserts THAT column instead --
+    # the underlying property Bug 2 fixed (a restore reaching the other
+    # device via the upsert's DO UPDATE SET, not just the delete branch) is
+    # unchanged and still exercised here, just through the column that now
+    # actually carries the meaning.
     create = client.post('/api/sub/retail/suppliers', json={'name': 'Round Trip Supplier'})
     assert create.status_code == 200
     sup_id = create.get_json()['data']['id']
     _sync_a_to_b(service_a, service_b)
 
-    def _b_status():
+    def _b_row():
         b_conn = install_b()
-        row = b_conn.execute("SELECT status FROM suppliers WHERE id=?", (sup_id,)).fetchone()
+        row = b_conn.execute("SELECT status, deleted_at_utc FROM suppliers WHERE id=?", (sup_id,)).fetchone()
         b_conn.close()
-        return row["status"] if row else None
+        return dict(row) if row else None
 
-    assert _b_status() == "active"
+    assert _b_row() == {"status": "active", "deleted_at_utc": None}
 
     delete_resp = client.delete(f'/api/sub/retail/suppliers/{sup_id}')
     assert delete_resp.status_code == 200
     _sync_a_to_b(service_a, service_b)
     # This direction already worked before yesterday's fix -- a "delete"
-    # event was always applied via its own dedicated
-    # UPDATE ... SET status='inactive' branch, never through the upsert.
-    assert _b_status() == "inactive"
+    # event was always applied via its own dedicated soft-delete branch,
+    # never through the upsert. `status` stays 'active' now (stage
+    # 6b-iii-a); `deleted_at_utc` is the one that must have landed.
+    b_after_delete = _b_row()
+    assert b_after_delete["status"] == "active"
+    assert b_after_delete["deleted_at_utc"] is not None
 
     restore_resp = client.patch(f'/api/sub/retail/suppliers/{sup_id}', json={'status': 'active'})
     assert restore_resp.status_code == 200
     _sync_a_to_b(service_a, service_b)
-    # This is exactly Bug 2: a restore is an "update" event, and `status`
-    # was missing from the upsert's ON CONFLICT DO UPDATE SET -- this would
-    # have silently stayed 'inactive' on B forever.
-    assert _b_status() == "active"
+    # This is exactly Bug 2, reached through `deleted_at_utc` instead of
+    # `status`: a restore is an "update" event, and `deleted_at_utc` is now
+    # in the upsert's DELTA-GATED ON CONFLICT DO UPDATE SET -- without that
+    # (stage 6b-iii-a's Step 3), this would have silently stayed tombstoned
+    # on B forever, the same failure shape Bug 2 originally described for
+    # `status`.
+    assert _b_row() == {"status": "active", "deleted_at_utc": None}
 
 
 # ── 4. Unknown entity_type is silently skipped by the apply side ───────────

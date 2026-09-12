@@ -61,11 +61,49 @@ def teardown_module(module):
 # ─── Frozen literals -- captured live from the real app before any
 # e-invoicing code existed. Do not "fix" a failing assertion by editing these
 # without confirming the underlying behavior change was deliberate. ─────────
+#
+# `oversold_past_recorded_stock` added launch-readiness Phase 7 stage
+# 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+# Decision 1") -- confirmed deliberate: create_sale now always reports
+# whether a sale was allowed past its recorded on-hand figure. E-invoicing
+# still only conditionally adds its own 'einvoice' key; that claim is
+# unaffected.
 
+# AUDIT (2026-09-08): e-invoicing now defaults ON (settings.py
+# DEFAULTS['enabled']='1' -- the Jordanian mandate means a fresh company
+# records the obligation without anyone touching a toggle). A sale response
+# now carries an additional 'einvoice' key ({'invoice_ref':..., 'status':
+# 'queued'}) whenever the enqueue succeeds -- see retail_api.py::create_sale's
+# own comment on that block. This is a deliberate, reviewed shape change,
+# not a regression to "fix" back to the old list: verified the three actual
+# consumers of this response tolerate an unknown extra key before updating
+# this frozen literal --
+#   1. Desktop (products/retail/frontend/subsystem-retail.js): _showReceipt/
+#      _einvoiceReceiptBlock already access saleData.einvoice by name and
+#      explicitly no-op when it's absent -- built for exactly this
+#      conditional-key shape, never a strict destructure or key-set check.
+#   2. Android (android/aura-retail/.../net/Models.kt's SaleResult data
+#      class + ApiClient.kt's Retrofit GsonConverterFactory): Gson silently
+#      ignores JSON fields with no matching property -- SaleResult has no
+#      `einvoice` field, so it is dropped on parse, not an error. (The
+#      "non-lenient GsonConverterFactory throws" comment elsewhere in
+#      Models.kt is about TYPE MISMATCHES, e.g. a UUID string into an Int
+#      field -- unrelated to an extra, unmapped key.)
+#   3. commercial_runtime/sync/: replicates DB ROWS (sync_outbox/sync_cursor
+#      against `sales` etc.), never this HTTP response body -- unaffected
+#      by any change to what POST /sales returns.
+# points_redeemed / points_redeemed_amount joined this set when loyalty
+# redemption shipped (v27). They are always present, zero when nothing was
+# redeemed, so the receipt and the sale-complete modal can show the SERVER's
+# figure rather than re-deriving it client-side. This list stays an EXACT
+# match -- widening it does not loosen the check, and a key disappearing or
+# an unexpected one appearing still fails.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-    'subtotal', 'tax_amount', 'total', 'warning',
+    'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+    'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'points_redeemed', 'points_redeemed_amount',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
     'calculation_version', 'id', 'idempotency_key', 'items', 'refund_amount',
@@ -91,11 +129,41 @@ SALES_TABLE_COLUMNS = [
     # calls _ensure_credit_schema() -- see that function's own addcol('sales',
     # 'due_date', ...) call. SQLite's PRAGMA table_info always reflects
     # physical ALTER TABLE order, not declaration/logical order.
-    'session_id', 'due_date',
+    'session_id',
+    # launch-readiness Phase 2 (schema v13, database/schema.py's
+    # _migrate_add_identity_and_attribution_columns): the wire identity plus
+    # the actor/terminal/UTC-clock triple. Same "real, expected additive
+    # shape change" category as session_id above, and it lands in the same
+    # position in the list for the same reason -- it is applied by the
+    # boot-time versioned migration, so physically before due_date's lazy
+    # _ensure_credit_schema addcol. v13 is the first migration to ALTER
+    # `sales` at all; the claim this test makes -- that the E-INVOICING
+    # migration (v7) added only new tables -- is untouched by it.
+    'uid', 'actor_user_uid', 'terminal_id', 'created_at_utc',
+    # Loyalty redemption (schema v27, claimed in ROADMAP.md before the work
+    # started): sales.points_redeemed_amount, the money value of the points a
+    # customer spent on this sale. Same "real, expected additive shape change"
+    # category as session_id and the v13 identity triple above, and it sits in
+    # the same place for the same reason -- it is applied by the BOOT-TIME
+    # versioned migration, so physically before due_date's lazy
+    # _ensure_credit_schema addcol, whatever the declaration order suggests.
+    # Verified by reading PRAGMA table_info off a freshly migrated database
+    # rather than reasoning about it: index 22, with due_date absent until a
+    # request triggers the lazy path.
+    #
+    # The claim this test actually makes -- that the E-INVOICING migration (v7)
+    # added only new tables -- is untouched by this, exactly as it was by v10
+    # and v13.
+    'points_redeemed_amount',
+    'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [
     'id', 'sale_id', 'product_id', 'quantity', 'unit_price', 'discount_pct',
     'tax_rate', 'line_total',
+    # schema v13: sale_items is one of the seven tables given a wire
+    # identity, so a relayed line item can be named by something other than
+    # this install's private autoincrement id.
+    'uid',
 ]
 CUSTOMERS_TABLE_COLUMNS = [
     # 'status' and the created_at reorder are a real, expected shape change
@@ -108,6 +176,12 @@ CUSTOMERS_TABLE_COLUMNS = [
     'id', 'company_id', 'name', 'phone', 'email', 'address', 'loyalty_points',
     'total_spent', 'status', 'credit_mode', 'credit_limit', 'credit_balance',
     'created_at',
+    # launch-readiness Phase 2 (schema v13): customers is one of the four
+    # catalogue tables given the reject-stale marker and soft tombstone --
+    # the same triple registry v3 put on `users`. No uid here: catalogue
+    # tables already carry a client-generated UUID primary key (see
+    # _migrate_customers_to_uuid), so their `id` IS already wire-safe.
+    'row_version', 'updated_at_utc', 'deleted_at_utc',
 ]
 RETURNS_TABLE_COLUMNS = [
     'id', 'company_id', 'return_number', 'sale_id', 'branch_id', 'cashier',
@@ -115,7 +189,11 @@ RETURNS_TABLE_COLUMNS = [
     # feat/shift-cash-drawer (schema v10): returns.session_id, same boot-time-
     # migration-vs-lazy-addcol ordering reasoning as SALES_TABLE_COLUMNS
     # above -- idempotency_key is also a lazy _ensure_credit_schema addcol.
-    'session_id', 'idempotency_key',
+    'session_id',
+    # schema v13, same four columns and same ordering reasoning as
+    # SALES_TABLE_COLUMNS above.
+    'uid', 'actor_user_uid', 'terminal_id', 'created_at_utc',
+    'idempotency_key',
 ]
 BASELINE_THREAD_NAMES = {'MainThread'}
 
@@ -215,16 +293,31 @@ def test_no_alter_ran_on_existing_tables():
     conn.close()
 
 
-def test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle():
-    """With the feature at its default (OFF, nothing has enabled it), a full
-    sale + return cycle must not enqueue anything -- proves the eventual
-    enqueue hook (Step 13) is correctly gated and cannot fire before the
-    feature is wired at all, let alone before it's turned on."""
+def test_einvoice_outbox_gets_exactly_one_row_for_the_sale_not_the_return():
+    """AUDIT (2026-09-08): renamed from
+    test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle.
+    That claim described the OLD default (OFF) and is now false by design
+    -- e-invoicing defaults ON, so the sale in this same cycle DOES enqueue.
+    What's still true, and still worth a regression test: a return never
+    enqueues anything of its own -- Retail has no credit-note/e-invoice
+    handling for returns at all (grep core/retail/einvoice_adapter.py and
+    retail_api.py's create_return: neither references an enqueue call), so
+    exactly ONE outbox row -- the sale's -- must exist after a sale+return
+    cycle, not two and not zero.
+
+    Scoped to THIS test's own company_id: einvoice_outbox has no company
+    filter of its own, and other tests in this same module share one
+    physical db across the whole process -- with the feature defaulting ON,
+    every other test's own sale also adds a row to this same table, so an
+    unscoped COUNT(*) here would assert on cross-test leakage, not on this
+    test's own behavior (it happened to read 3 before this fix, which was
+    never a stable number)."""
     client, cid, pid, bid = _make_admin_and_product(stock=10)
     sale = client.post('/api/sub/retail/sales', json={
         'items': [{'product_id': pid, 'quantity': 2}],
         'amount_paid': 999999, 'payment_method': 'cash', 'idempotency_key': str(uuid.uuid4()),
     }).get_json()['data']
+    assert 'einvoice' in sale, "the sale itself must have enqueued -- e-invoicing defaults ON"
     client.post('/api/sub/retail/returns', json={
         'sale_id': sale['id'],
         'items': [{'product_id': pid, 'quantity': 1}],
@@ -232,24 +325,79 @@ def test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle():
         'idempotency_key': str(uuid.uuid4()),
     })
     conn = get_retail_conn()
-    count = conn.execute("SELECT COUNT(*) FROM einvoice_outbox").fetchone()[0]
+    rows = conn.execute(
+        "SELECT source_type, source_id FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchall()
     conn.close()
-    assert count == 0
+    assert len(rows) == 1, "a return must never enqueue its own e-invoice/credit-note row (not implemented in Phase 1)"
+    assert rows[0][0] == 'sale' and rows[0][1] == sale['id'], "the one row must be the sale itself, not the return"
 
 
-def test_no_background_thread_exists_when_feature_never_enabled():
-    """No einvoicing worker thread exists anywhere in this process -- proves
-    that even after the app has booted and processed real sales, nothing
-    started a background job. This test is meaningful NOW (trivially true,
-    no worker module exists yet) and stays meaningful after Step 11/13 land
-    a real worker: it will only keep passing if that worker's startup is
-    correctly gated on the feature actually being enabled."""
+def test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot():
+    """Renamed and re-scoped 2026-09-08. This was
+    test_no_background_thread_exists_when_feature_never_enabled, and BOTH
+    halves of that name were false by the time anyone read it:
+
+      * "never enabled" -- e-invoicing defaults ON
+        (commercial_runtime/einvoicing/settings.py DEFAULTS 'enabled': '1'),
+        which is why the test above this one asserts `'einvoice' in sale`.
+        Every company in this process has the feature on.
+      * the old docstring's "trivially true, no worker module exists yet" --
+        app.py:248 defines _get_or_create_einvoicing_worker and app.py:944
+        starts real OutboxWorkers through _resume_einvoicing_workers().
+
+    So the failure message was a statement about a fixture that does not
+    exist, and the obvious next move -- starting the worker on enqueue --
+    would have turned it red for doing the right thing.
+
+    What is actually pinned here, and it is worth pinning: the boot sweep,
+    _resume_einvoicing_workers() at app.py:952. It runs once at init_app()
+    (import time, top of this file), selects companies with an explicit
+    enabled='1' row UNIONed with companies that already have
+    einvoice_outbox rows, and this process's database was empty at that
+    moment -- so zero threads. The sale below then enqueues a real row and
+    starts nothing, because enqueue_sale (retail_api.py:4816) writes the
+    outbox and does not touch the worker registry.
+
+    That is deliberate, not an oversight: the worker for a company enabled
+    only by the default resumes at the NEXT boot, which is what the AUDIT
+    note in _resume_einvoicing_workers' own docstring is about. If someone
+    later starts the worker on enqueue instead, this test goes red and the
+    right response is to update it, not to work around it -- the message
+    below says so.
+
+    Scope, stated plainly because threading.enumerate() is process-global
+    while the fixture is company-scoped: this proves a fact about the whole
+    process, not about `cid`. What it can no longer catch -- and never
+    could -- is a worker started for ONE company while another company's
+    stayed off."""
     client, cid, pid, bid = _make_admin_and_product()
     client.post('/api/sub/retail/sales', json={
         'items': [{'product_id': pid, 'quantity': 1}],
         'amount_paid': 999999, 'payment_method': 'cash', 'idempotency_key': str(uuid.uuid4()),
     })
+
+    # Anti-vacuity. Without this the assertion below is satisfied just as
+    # well by a sale that enqueued NOTHING -- which is precisely the state
+    # the old version of this test silently measured, and the first failure
+    # shape in ENGINEERING.md section 1.
+    conn = get_retail_conn()
+    queued = conn.execute(
+        "SELECT COUNT(*) c FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchone()['c']
+    conn.close()
+    assert queued == 1, (
+        f"fixture is not exercising the thing under test: {queued} outbox row(s) "
+        "for this company. This check must run against a sale that really did "
+        "enqueue, or 'no worker started' proves nothing."
+    )
+
     names = {t.name for t in threading.enumerate()}
     assert names.issubset(BASELINE_THREAD_NAMES | {'MainThread'}), (
-        f"unexpected background thread(s) present with e-invoicing never enabled: {names - BASELINE_THREAD_NAMES}"
+        "an e-invoicing worker thread is running in a process whose boot sweep "
+        "(_resume_einvoicing_workers, app.py:952) found an empty outbox: "
+        f"{names - BASELINE_THREAD_NAMES}. Either the boot sweep's gate "
+        "regressed, or enqueueing now starts a worker -- if the latter is "
+        "deliberate, rewrite this test to pin the new startup rule; do not "
+        "widen BASELINE_THREAD_NAMES."
     )

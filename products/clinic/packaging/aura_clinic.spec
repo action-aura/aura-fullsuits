@@ -44,6 +44,13 @@ a = Analysis(
         'commercial_runtime.identity.auth_routes',
         'commercial_runtime.identity.onboarding_routes',
         'commercial_runtime.identity.registry_db',
+        # registry.db is shared with Retail, so its v3 migration modules ship
+        # in this bundle too -- see the identical entry (and its reasoning) in
+        # products/retail/packaging/aura_retail.spec. Clinic is otherwise out
+        # of scope for that change; omitting these would mean a Retail-side
+        # migration silently breaking the Clinic executable's first launch.
+        'commercial_runtime.identity.account_schema',
+        'commercial_runtime.identity.user_accounts',
         'commercial_runtime.security.app_secret',
         'commercial_runtime.security.passwords',
         'commercial_runtime.security.audit',

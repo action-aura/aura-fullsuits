@@ -69,7 +69,15 @@ def _health():
 def _version():
     """Release metadata for the About screen / release-manifest tooling
     (Wave 1B). Separate from /api/health on purpose -- see that route's
-    docstring for why its contract is frozen."""
+    docstring for why its contract is frozen.
+
+    `schema_version` IS NOT THE DATABASE SCHEMA VERSION, despite the name --
+    same trap as Retail's identical endpoint, and the same reasoning applies
+    verbatim. It is `commercial_runtime.backup.service.SCHEMA_VERSION`, the
+    BACKUP ARCHIVE FORMAT version, which is 1 for every install ever shipped.
+    The database's own level is `PRAGMA user_version`, maintained by
+    `ensure_schema_version()`. See products/retail/backend/app.py's `_version`
+    for the measurement and for why this is documented rather than renamed."""
     from config import SCHEMA_VERSION, PRODUCT_CODE
     return jsonify({
         'product_code': PRODUCT_CODE,
@@ -90,6 +98,7 @@ from commercial_runtime.identity.device_routes import device_bp
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.worker import OutboxWorker
 from commercial_runtime.einvoicing.providers.mock import MockProvider
+from commercial_runtime.einvoicing.providers.unconfigured import UnconfiguredProvider
 from commercial_runtime.einvoicing import settings as _einvoicing_settings
 from core.clinic import einvoice_adapter as _einvoice_adapter
 
@@ -104,20 +113,54 @@ app.register_blueprint(device_bp)
 # comments for the full rationale (default OFF, per-company worker
 # registry, why one fixed company_id at import time would be wrong).
 _EINVOICING_APP_DATA_DIR = str(Path(DATABASE_DIR).parent)
-_einvoicing_provider = MockProvider()  # Phase 1 default -- see providers/direct_istd.py
+# E-invoicing now defaults ENABLED -- see products/retail/backend/app.py's
+# identical block for the full rationale (Jordanian mandate, why MockProvider
+# reporting CLEARED without contacting JoFotara would be a false compliance
+# claim on a real receipt, why DirectISTDProvider still isn't real until
+# Phase 2). Shipped default is UnconfiguredProvider: documents enqueue and
+# wait, nothing submits, nothing claims clearance. AURA_EINVOICING_ALLOW_MOCK=1
+# opts back into MockProvider for development/tests that need a real round trip.
+_einvoicing_provider = (
+    MockProvider() if os.environ.get('AURA_EINVOICING_ALLOW_MOCK') == '1' else UnconfiguredProvider()
+)
 _einvoicing_workers = {}
+
+
+class _IdempotentEinvoicingWorkerHandle:
+    """Mirrors products/retail/backend/app.py's identical class -- see that
+    file's docstring for the full rationale (OutboxWorker.start() is not
+    idempotent by itself, deliberately mirroring LicenseCheckInScheduler,
+    so routes.py's _post_settings() calling .start() on every enabled
+    write needs a call-site guard, not a change to OutboxWorker)."""
+
+    def __init__(self, worker):
+        self._worker = worker
+        self._running = False
+
+    def start(self, interval_seconds):
+        if self._running:
+            return
+        self._worker.start(interval_seconds=interval_seconds)
+        self._running = True
+
+    def stop(self):
+        self._worker.stop()
+        self._running = False
+
+    def run_once(self):
+        return self._worker.run_once()
 
 
 def _get_or_create_einvoicing_worker(company_id):
     if company_id not in _einvoicing_workers:
-        _einvoicing_workers[company_id] = OutboxWorker(
+        _einvoicing_workers[company_id] = _IdempotentEinvoicingWorkerHandle(OutboxWorker(
             conn_factory=get_clinic_conn,
             app_data_dir=_EINVOICING_APP_DATA_DIR,
             company_id=company_id,
             provider=_einvoicing_provider,
             document_builder=_einvoice_adapter.build_document,
             reconcile_fn=_einvoice_adapter.reconcile_missing_invoices,
-        )
+        ))
     return _einvoicing_workers[company_id]
 
 
@@ -173,15 +216,22 @@ def init_app():
 
 def _resume_einvoicing_workers():
     """Mirrors products/retail/backend/app.py's identical function -- see
-    its docstring. A fresh/never-enabled install finds zero rows and starts
-    zero threads."""
+    its docstring for the full rationale (e-invoicing now defaults ON, so a
+    default-only-enabled company has no explicit einvoice_settings row at
+    all; the sweep must also cover companies with einvoice_outbox rows,
+    each filtered through settings.is_enabled() so the killswitch and an
+    explicit '0' still win). A fresh/never-enabled install finds zero rows
+    and starts zero threads."""
     conn = get_clinic_conn()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1'"
+            "SELECT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1' "
+            "UNION SELECT company_id FROM einvoice_outbox"
         ).fetchall()
         for row in rows:
             cid = row[0]
+            if not _einvoicing_settings.is_enabled(conn, _EINVOICING_APP_DATA_DIR, cid):
+                continue
             interval = int(_einvoicing_settings.get_setting(conn, cid, 'submit_interval_seconds'))
             _get_or_create_einvoicing_worker(cid).start(interval_seconds=interval)
     finally:

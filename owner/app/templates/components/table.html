@@ -40,11 +40,28 @@
 {% endmacro %}
 
 {# ---------- Filter bar: search + status select + optional sort select,
-   one real GET form (server round-trip, never client-side). Reuses the
-   existing `.filters` auto-submit-on-change convention for the status/sort
-   selects (matches every pre-existing list screen); the search box needs
-   its own explicit submit button since auto-submitting on every keystroke
-   would mean a full page reload per character typed -- not attempted here.
+   one real GET form (server round-trip, never client-side).
+
+   Submission is a single, always-rendered submit button -- NOT the
+   `onchange="this.form.submit()"` convention this macro used to carry.
+   Two independent reasons, both real:
+
+   1. The inline onchange never ran. Owner ships script-src 'self' with no
+      'unsafe-inline' (app/security/headers.py), so the browser refused the
+      attribute outright. Combined with reason 2 below, every status-only
+      filter bar in the app (Commissions, Cash Closings, and the four
+      commercial_ops queues) was completely unsubmittable: no working
+      trigger and no button either, because the button used to be rendered
+      only when the caller passed search_label.
+   2. Even working, auto-submit is wrong for this form. It has several
+      independent fields (search + status + sort + direction); submitting
+      the instant one select changes means the user cannot set two filters
+      at once, and it throws away whatever they had typed into the search
+      box but not yet committed.
+
+   Single-field forms elsewhere (e.g. the per-row add-on availability
+   select in catalog/index.html) are the legitimate auto-submit case and
+   use `data-auto-submit` + static/js/auto-submit.js instead.
 
    status_options: list of raw status codes (e.g. ["NEW","QUALIFIED"]).
    status_label_fn: callable(code) -> localized label (the existing
@@ -69,7 +86,7 @@
   {% if status_options %}
   <div>
     <label for="aura-filter-{{ status_field }}">{{ _("Status") }}</label>
-    <select id="aura-filter-{{ status_field }}" name="{{ status_field }}" onchange="this.form.submit()">
+    <select id="aura-filter-{{ status_field }}" name="{{ status_field }}">
       <option value="">{{ _("All") }}</option>
       {% for s in status_options %}
       <option value="{{ s }}" {% if status_value == s %}selected{% endif %}>{{ status_label_fn(s) if status_label_fn else s }}</option>
@@ -80,7 +97,7 @@
   {% if sort_options %}
   <div>
     <label for="aura-filter-{{ sort_field }}">{{ _("Sort by") }}</label>
-    <select id="aura-filter-{{ sort_field }}" name="{{ sort_field }}" onchange="this.form.submit()">
+    <select id="aura-filter-{{ sort_field }}" name="{{ sort_field }}">
       {% for value, label in sort_options %}
       <option value="{{ value }}" {% if sort_value == value %}selected{% endif %}>{{ label }}</option>
       {% endfor %}
@@ -88,15 +105,20 @@
   </div>
   <div>
     <label for="aura-filter-{{ direction_field }}">{{ _("Direction") }}</label>
-    <select id="aura-filter-{{ direction_field }}" name="{{ direction_field }}" onchange="this.form.submit()">
+    <select id="aura-filter-{{ direction_field }}" name="{{ direction_field }}">
       <option value="asc" {% if direction_value == "asc" %}selected{% endif %}>{{ _("Ascending") }}</option>
       <option value="desc" {% if direction_value == "desc" %}selected{% endif %}>{{ _("Descending") }}</option>
     </select>
   </div>
   {% endif %}
-  {% if search_label is not none %}
-  <div><label>&nbsp;</label><button type="submit" class="secondary">{{ _("Search") }}</button></div>
-  {% endif %}
+  {# Unconditional, and computed via {% set %} rather than an {% if %} around
+     the button itself: making the button conditional is precisely the bug --
+     a status-only filter bar rendered no submit control at all, and its
+     select's onchange was CSP-blocked, so the filter could not be applied by
+     any means. Label follows the form's dominant field so the existing
+     search-bearing screens keep reading "Search". #}
+  {% set submit_label = _("Search") if search_label is not none else _("Filter") %}
+  <div><label>&nbsp;</label><button type="submit" class="secondary">{{ submit_label }}</button></div>
 </form>
 {% endmacro %}
 

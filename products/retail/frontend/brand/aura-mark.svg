@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t d">
+  <title id="t">Aura mark</title>
+  <desc id="d">A luminous ring, open at the top right where a beacon sits, around a bold upward A.</desc>
+  <defs>
+    <linearGradient id="aura-ring" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
+      <stop offset="0" stop-color="#1745a9"/>
+      <stop offset="0.55" stop-color="#3f7be6"/>
+      <stop offset="1" stop-color="#5fe3d0"/>
+    </linearGradient>
+  </defs>
+  <!-- The ring: one stroke, 300 degrees, thinning nowhere — the gap is the
+       point of the mark. It opens where the beacon sits, so the ring reads as
+       something that has just been lit rather than a closed badge. (2026-09-08:
+       proven with a real 1-bit render that this gradient bands/vanishes on a
+       monochrome thermal printer — see aura-mark-1bit.svg, the solid-ink
+       variant for that path; this file is unchanged for screen/colour use.) -->
+  <circle cx="128" cy="128" r="94" fill="none" stroke="url(#aura-ring)" stroke-width="15"
+          stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32"
+          transform="rotate(-90 128 128)"/>
+  <!-- The beacon, at the ring's opening: a flat diamond in the SAME ink as
+       the A below, not a soft glow — replaces the old radial-gradient
+       spark (2026-09-08, the owner read that softness as a generic tech/
+       crypto token). No blur, no gradient: it is a hard-edged geometric
+       vertex, and because it shares the A's flat ink it never bands or
+       fades under a one-colour print threshold the way the old glow did. -->
+  <path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="#0f1319"/>
+  <!-- The A: a peak with a short bar, ink not gradient so it survives
+       one-colour printing and a 16 px favicon. 2026-09-08: stroke weights
+       raised (peak 19->26, bar 15->20) and the apex narrowed/raised
+       (base 80/176->84/172, apex y 76->70) so the A — not the ring — is
+       the first thing read; same silhouette, same 256 box. -->
+  <path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="#0f1319" stroke-width="26"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 108 142 L 148 142" fill="none" stroke="#0f1319" stroke-width="20" stroke-linecap="round"/>
+</svg>

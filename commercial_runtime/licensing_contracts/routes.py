@@ -23,7 +23,14 @@ from typing import Callable, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
-from .activation import ActivationFailed, ActivationPending, ingest_activation_response, perform_activation
+from .activation import (
+    ActivationFailed,
+    ActivationPending,
+    ingest_activation_response,
+    make_bundled_anchor_recovery,
+    make_trust_manifest_refresher,
+    perform_activation,
+)
 from .checkin_scheduler import LicenseCheckInScheduler
 from .client import LicensingClient, LicensingClientConfig
 from .deactivation import DeactivationFailed, ingest_deactivation_response, perform_deactivation
@@ -49,8 +56,30 @@ def make_licensing_blueprint(
     device_identity_factory: DeviceIdentityFactory,
     release_channel: Optional[str] = "rc",
     internal_shared_secret: Optional[str] = None,
+    on_activation_success: Optional[Callable[[], object]] = None,
 ) -> Blueprint:
-    """internal_shared_secret: only set on Android. Enables the
+    """on_activation_success: an optional, product-supplied callback invoked
+    once immediately after an activation is verified and persisted, on both
+    the Windows (/activate) and Android (/_internal/sync-activation) paths.
+
+    A callback parameter rather than an import, because this module is the
+    seam between the generic licensing domain and each concrete product and
+    it never imports anything product-specific (see the module docstring).
+    Retail passes `database.schema.rebind_company_id_after_activation` here:
+    activation is the exact moment an install first learns its Owner-issued
+    tenant key, and retail.db's `company_id` has to converge onto it. An
+    install that activates months after it migrated would otherwise wait for
+    a next migration that may never come.
+
+    Deliberately fire-and-forget: the return value is discarded and any
+    exception is swallowed (see `_run_activation_hook`). An activation that
+    genuinely succeeded at Owner must never be reported to the customer as a
+    failure because a product-local bookkeeping step went wrong -- the
+    customer's only recourse would be to retry the activation, which is the
+    one action that cannot help. Left None (the default) by Clinic and by
+    every existing test, for which this changes nothing at all.
+
+    internal_shared_secret: only set on Android. Enables the
     /_internal/sync-* routes (Part U) that the Kotlin layer -- which holds
     the AndroidKeystore-wrapped device key and makes the actual signed
     Owner HTTP calls itself -- uses to hand this embedded backend a raw,
@@ -134,6 +163,11 @@ def make_licensing_blueprint(
                 release_channel=release_channel,
                 license_key=license_key,
                 device_public_key_fingerprint=_device_fingerprint(signer),
+                # Same last-resort recovery the Android path gets below: an
+                # install stranded by a DISCONTINUOUS Owner rotation cannot be
+                # rescued by a manifest (nothing it trusts can countersign),
+                # only by the anchor its own build shipped with.
+                anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
@@ -147,6 +181,7 @@ def make_licensing_blueprint(
             if "license_key" in body:
                 body["license_key"] = None
 
+        _run_activation_hook(on_activation_success)
         return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
 
     @bp.route("/check-in", methods=["POST"])
@@ -166,6 +201,10 @@ def make_licensing_blueprint(
             product_code=product_code,
             platform=platform,
             device_public_key_fingerprint=_device_fingerprint(signer),
+            # A discontinuous Owner rotation strands an already-ACTIVE install
+            # exactly as it strands a new one; without this it would grind down
+            # to RESTRICTED on a licence that is perfectly valid.
+            anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
         )
         scheduler.run_once()
         # present_status() only reflects the currently-persisted snapshot --
@@ -202,13 +241,36 @@ def make_licensing_blueprint(
         return jsonify({"result": "SUCCESS", "state": new_state.value}), 200
 
     if internal_shared_secret:
-        _register_internal_sync_routes(bp, internal_shared_secret, _build_context, product_code, platform)
+        _register_internal_sync_routes(
+            bp, internal_shared_secret, _build_context, product_code, platform,
+            on_activation_success, trust_anchor_path,
+        )
 
     return bp
 
 
+def _run_activation_hook(hook: Optional[Callable[[], object]]) -> None:
+    """Invoke a product's post-activation callback, swallowing everything.
+
+    The activation itself has already been verified and persisted by the time
+    this runs; the hook is bookkeeping layered on top of a result the
+    customer is entitled to. Letting a hook exception escape would turn a
+    successful activation into a 500 and leave the customer retrying the one
+    operation that cannot fix it -- and, worse, retrying an activation that
+    already consumed a device slot at Owner.
+    """
+    if hook is None:
+        return
+    try:
+        hook()
+    except Exception:  # noqa: BLE001 -- deliberately total; see docstring
+        current_app.logger.exception("post-activation hook failed; activation itself stands")
+
+
 def _register_internal_sync_routes(
-    bp: Blueprint, shared_secret: str, build_context, product_code: str, platform: str
+    bp: Blueprint, shared_secret: str, build_context, product_code: str, platform: str,
+    on_activation_success: Optional[Callable[[], object]] = None,
+    trust_anchor_path=None,
 ) -> None:
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -227,7 +289,7 @@ def _register_internal_sync_routes(
         if not isinstance(owner_response, dict):
             return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected a JSON object."}), 400
 
-        state_repository, event_recorder, trust_store, signer, _client = build_context()
+        state_repository, event_recorder, trust_store, signer, client = build_context()
         if not signer.has_key():
             return jsonify({"reason_code": "DEVICE_KEY_UNAVAILABLE", "detail": "No local device key registered."}), 400
 
@@ -240,11 +302,26 @@ def _register_internal_sync_routes(
                 product_code=product_code,
                 platform=platform,
                 device_public_key_fingerprint=_device_fingerprint(signer),
+                # Android's Kotlin layer made the Owner call, but this
+                # process still owns trust. It may fetch the public key-set
+                # manifest itself to recover from a stale bundled anchor --
+                # the same allowance the Windows path gets. Kotlin never
+                # supplies trust material.
+                trust_refresher=make_trust_manifest_refresher(client, trust_store),
+                # Last resort when even that refresh cannot help, because
+                # Owner's new key has no continuity bridge to anything this
+                # install trusts. Kotlin still supplies no trust material: the
+                # anchor read here is this build's own bundled file.
+                anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
         except ActivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
+        # Same hook, same point in the flow as the Windows /activate route
+        # above -- Android reaches activation only through here, so omitting
+        # it would leave every Android install permanently un-rebound.
+        _run_activation_hook(on_activation_success)
         return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
 
     @bp.route("/_internal/sync-checkin", methods=["POST"])
@@ -255,9 +332,12 @@ def _register_internal_sync_routes(
         if not isinstance(owner_response, dict):
             return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected a JSON object."}), 400
 
-        state_repository, event_recorder, trust_store, signer, _client = build_context()
+        state_repository, event_recorder, trust_store, signer, client = build_context()
         scheduler = LicenseCheckInScheduler(
-            client=None,  # never used -- ingest_checkin_response() makes no Owner call itself
+            # Only ever used by the trust refresher below (a public key-set
+            # fetch). ingest_checkin_response() still makes no Owner call of
+            # its own -- Kotlin already made the check-in request.
+            client=client,
             signer=signer,
             trust_store=trust_store,
             state_repository=state_repository,
@@ -265,8 +345,22 @@ def _register_internal_sync_routes(
             product_code=product_code,
             platform=platform,
             device_public_key_fingerprint=_device_fingerprint(signer),
+            # Same last resort as the Windows path above -- Kotlin supplies no
+            # trust material; the anchor read here is this build's own file.
+            anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
         )
-        new_state = scheduler.ingest_checkin_response(owner_response)
+        # The twin of /_internal/sync-activation's identical line, and it must
+        # stay that way. Kotlin made the Owner call, but this process still
+        # owns trust, and a signing-key rotation that happens AFTER activation
+        # is only ever seen here: Android never runs run_once(), which is what
+        # refreshes the manifest every cycle on Windows. Without this, such a
+        # rotation left Android permanently unable to accept another
+        # assertion. Kotlin never supplies trust material.
+        # test_internal_sync_routes.py pins BOTH routes against drifting apart.
+        scheduler.ingest_checkin_response(
+            owner_response,
+            trust_refresher=make_trust_manifest_refresher(client, trust_store),
+        )
         return jsonify(present_status(state_repository.load())), 200
 
     @bp.route("/_internal/reevaluate", methods=["POST"])

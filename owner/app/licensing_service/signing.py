@@ -199,6 +199,28 @@ def export_public_keys() -> list[dict]:
     ]
 
 
+def _manifest_countersigners() -> list[SigningKey]:
+    """Every key permitted to countersign a key-set manifest, ACTIVE first,
+    then RETIRED newest-first.
+
+    ACTIVE + RETIRED, never DRAFT (never published, so no client can trust
+    it) and -- critically -- never REVOKED. A revoked key is treated as
+    compromised: whoever holds it must never again be able to introduce a
+    key into a fielded trust store, which is exactly what countersigning a
+    manifest does. Retirement, by contrast, is routine rotation, and a
+    retired key is still trusted by every client that has not yet caught up
+    -- that trust is precisely what makes continuity possible.
+    """
+    rows = (
+        db_session.execute(
+            select(SigningKey).where(SigningKey.status.in_(["ACTIVE", "RETIRED"])).order_by(SigningKey.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    return [r for r in rows if r.status == "ACTIVE"] + [r for r in rows if r.status == "RETIRED"]
+
+
 def export_signed_keyset_manifest(key_directory: str) -> dict:
     """Phase 7 Part D addition -- wraps export_public_keys() in a signed
     envelope so a product client can admit a rotation without ever trusting
@@ -208,15 +230,49 @@ def export_signed_keyset_manifest(key_directory: str) -> dict:
     signed_by_key_id/signature are new fields layered on top, never a
     replacement of the existing shape.
 
-    Signed by whichever key is currently ACTIVE -- the same key a product
-    already trusts (either as its bundled build-time anchor, or as the most
-    recently rotation-admitted key), continuing the same chain of trust
-    rather than introducing a separate manifest-signing key. If no key is
-    currently ACTIVE (e.g. mid-rotation gap), the manifest fields are
-    omitted rather than failing the whole endpoint -- a client's
-    OwnerTrustStore.admit_manifest() safely discards an unsigned/malformed
-    manifest, so raw key discovery still degrades gracefully without a hard
-    503 on this particular route.
+    KEY CONTINUITY (launch-readiness CRITICAL fix). Signing the manifest
+    with only the ACTIVE key made rotation unpropagatable, and unfixable
+    after the fact: the client rule (OwnerTrustStore.admit_manifest) admits
+    a manifest only if an ALREADY-TRUSTED key signed it, so the moment
+    rotate_signing_key() ran, the manifest announcing the new key was signed
+    by a key no fielded install had ever seen. Every activation and check-in
+    then failed UNKNOWN_SIGNING_KEY forever, recoverable only by shipping a
+    new installer carrying a fresh bundled trust_anchor.json.
+
+    The fix is the standard cross-signing / key-continuity shape: the
+    manifest now carries a `signatures` list with one entry per retained
+    non-revoked key (see _manifest_countersigners), so the OUTGOING key --
+    which fielded clients still trust -- vouches for the manifest that
+    introduces its successor. Trust transfers exactly one hop per rotation,
+    and a client that is several rotations behind still recovers as long as
+    it trusts ANY key that countersigned. Nothing is weakened: each entry is
+    a real signature over the same canonical body, verified against the
+    public key the client has ALREADY stored for that key_id, so a key that
+    was never trusted still cannot introduce anything.
+
+    `signatures` needs no integrity protection of its own -- every entry is
+    self-authenticating, a forged or junk entry simply fails verification,
+    and stripping entries can only make a client fail to admit (its
+    pre-existing behaviour), never make it trust something new.
+
+    The legacy `signed_by_key_id`/`signature` pair is deliberately left
+    byte-for-byte as it was (the ACTIVE key's signature over an unchanged
+    signable body), so already-fielded builds that only understand the
+    single-signature shape behave exactly as before -- in particular they
+    keep receiving revocations. Those older builds cannot benefit from
+    continuity; that requires the client change shipping alongside this one.
+
+    OPERATIONAL REQUIREMENT: retired keys' private PEMs must be RETAINED in
+    OWNER_SIGNING_KEY_DIRECTORY, not deleted, or their continuity bridge
+    disappears. Deleting one is the deliberate way to end its bridging role;
+    revoke_signing_key() is the way to end it under compromise (which also
+    removes it from client trust stores).
+
+    If no key is currently ACTIVE (e.g. mid-rotation gap), the manifest
+    fields are omitted rather than failing the whole endpoint -- a client's
+    admit_manifest() safely discards an unsigned/malformed manifest, so raw
+    key discovery still degrades gracefully without a hard 503 on this
+    particular route.
     """
     keys = export_public_keys()
     active = get_active_signing_key()
@@ -226,18 +282,36 @@ def export_signed_keyset_manifest(key_directory: str) -> dict:
 
     issued_at = datetime.now(timezone.utc).isoformat()
     signable = {"manifest_version": 1, "issued_at": issued_at, "keys": keys}
-    try:
-        private_key = load_private_key(key_directory, active.key_id)
-    except SigningKeyError:
-        return base
+    canonical_bytes = canonicalize_bytes(signable)
 
-    signature = private_key.sign(canonicalize_bytes(signable))
+    signatures: list[dict] = []
+    for row in _manifest_countersigners():
+        try:
+            private_key = load_private_key(key_directory, row.key_id)
+        except Exception:
+            # One unreadable/absent/corrupt private key -- most plausibly an
+            # old retired one whose PEM was archived away -- must never take
+            # down key discovery for every client. It just stops bridging.
+            continue
+        signatures.append(
+            {
+                "key_id": row.key_id,
+                "algorithm": row.algorithm,
+                "signature": base64.b64encode(private_key.sign(canonical_bytes)).decode("ascii"),
+            }
+        )
+
+    active_signature = next((s["signature"] for s in signatures if s["key_id"] == active.key_id), None)
+    if active_signature is None:
+        return base  # same graceful degradation as before when the active private key is unusable
+
     return {
         **base,
         "manifest_version": 1,
         "issued_at": issued_at,
         "signed_by_key_id": active.key_id,
-        "signature": base64.b64encode(signature).decode("ascii"),
+        "signature": active_signature,
+        "signatures": signatures,
     }
 
 

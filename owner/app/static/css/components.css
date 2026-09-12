@@ -105,6 +105,31 @@ th {
   color: var(--aura-color-danger);
 }
 
+/* A select that also reports state, so a row needs one control instead of a
+   badge and a dropdown showing the same word. Colours are the badge palette
+   above, deliberately -- this replaced a `.badge` and should not introduce a
+   second vocabulary for the same states. */
+.aura-status-select {
+  font-size: var(--aura-font-size-xs);
+  font-weight: 600;
+  padding-block: 0.15rem;
+  padding-inline: 0.5rem;
+  border-radius: var(--aura-radius-full);
+  border: 1px solid transparent;
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-primary);
+}
+
+.aura-status-select.is-available {
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+}
+
+.aura-status-select.is-draft {
+  background: var(--aura-color-warning-soft);
+  color: var(--aura-color-warning);
+}
+
 form.inline { display: inline; }
 
 input, select, textarea {
@@ -292,17 +317,35 @@ code.masked {
 
 .aura-password-field {
   position: relative;
+
+  /* ONE value drives both the toggle's footprint and the padding the input
+     reserves for it. They used to be independent -- a hard 36px toggle
+     against a 2rem (32px) reserve -- and that mismatch produced two visible
+     defects at once: the word "Show" (~37px at 0.75rem) overflowed its own
+     box and spilled past the field's right border, and the control sat 4px
+     over the end of a typed password. */
+  --aura-password-toggle-inline-size: 4rem;
 }
 
 .aura-password-field input {
-  padding-inline-end: var(--aura-space-8);
+  padding-inline-end: var(--aura-password-toggle-inline-size);
 }
 
 .aura-password-toggle {
   position: absolute;
   inset-block: 0;
   inset-inline-end: 0;
-  inline-size: 36px;
+
+  /* min-inline-size, NOT inline-size. The label is translated -- "Show" and
+     "Hide" in English, "إظهار" and "إخفاء" in Arabic -- so a fixed width
+     clips whichever locale happens to be widest, which is exactly how the
+     36px version shipped. A floor keeps the common case aligned with the
+     input's reserved padding; a longer label grows the button instead of
+     being cut off. */
+  min-inline-size: var(--aura-password-toggle-inline-size);
+  padding-inline: var(--aura-space-2);
+  white-space: nowrap;
+
   border: none;
   background: transparent;
   color: var(--aura-color-text-muted);

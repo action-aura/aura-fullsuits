@@ -50,10 +50,54 @@ def teardown_module(module):
 # Frozen literal -- captured live from the real app, identical to
 # retail_reorder_hook_regression_test.py's own SALE_RESPONSE_KEYS. Cash-
 # drawer linkage NEVER adds a key to the checkout response, same contract.
+#
+# `oversold_past_recorded_stock` added launch-readiness Phase 7 stage
+# 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+# Decision 1") -- a REAL, deliberate checkout-response contract change
+# (create_sale now always reports whether a sale was allowed past its
+# recorded on-hand figure), not a reason to "fix" this test by editing it
+# away. Cash-drawer state still never affects its value -- the equality
+# loop below covers it like every other key.
+#
+# `einvoice` added 2026-09-08, and it brings a coupling worth stating here
+# because this file is about cash drawers, not tax authorities. E-invoicing
+# now defaults ON (commercial_runtime/einvoicing/settings.py DEFAULTS
+# 'enabled': '1'), so create_sale reaches the enqueue block at
+# retail_api.py:4816 on every sale. That block is wrapped in a broad
+# try/except and sets `response_data['einvoice']` ONLY when
+# enqueue_sale(...) returns truthy -- so from now on, a failed or skipped
+# e-invoicing enqueue makes THIS cash-drawer test fail with a key-set diff,
+# not an e-invoicing test. That is the honest reading of the contract (the
+# response really does carry the key now) and the reason the four sibling
+# copies of this list were all missed when the default flipped: only
+# retail_einvoicing_regression_test.py was updated with it. If this list
+# ever disagrees with the live response again, check the e-invoicing
+# settings default and that enqueue path FIRST.
+# points_redeemed / points_redeemed_amount joined this set when loyalty
+# redemption shipped (v27). They are always present, zero when nothing was
+# redeemed, so the receipt and the sale-complete modal can show the SERVER's
+# figure rather than re-deriving it client-side. This list stays an EXACT
+# match -- widening it does not loosen the check, and a key disappearing or
+# an unexpected one appearing still fails.
+#
+# `customer_id` / `customer_name` / `employee_name` added for the receipt-
+# identity fix (2026-09-11): _receiptIdentityBlock (subsystem-retail.js)
+# renders optional Cashier/Customer rows gated on the shop's own branding
+# settings, but create_sale carried none of the three fields it reads --
+# only a REPRINT (get_sale) did, so a shop that switched those settings on
+# got the rows on a reprint and silently never got them on the receipt
+# actually handed over at the till. `employee_name` is resolved through
+# the SAME `_resolve_actor_identities` helper get_sale uses (its own
+# docstring exists so the two callers cannot disagree); `customer_name`
+# mirrors get_sale's own `COALESCE(c.name,'Walk-in')`, walk-in string
+# included. Cash-drawer state still never affects any of the three -- the
+# equality loop below covers them like every other key.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-    'subtotal', 'tax_amount', 'total', 'warning',
+    'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+    'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'points_redeemed', 'points_redeemed_amount',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
     'calculation_version', 'id', 'idempotency_key', 'items', 'refund_amount',
@@ -182,6 +226,60 @@ def test_full_shift_round_trip_with_correct_expected_cash_and_variance_math():
     assert current is None
 
 
+def test_brand_new_till_can_close_its_first_shift_without_ever_creating_device_identity():
+    """AUDIT-032D. `_device_doc_discriminator()` (retail_api.py) used to fall
+    back to `local_device_uuid()` -- the CREATING twin of
+    `device/local_device.json` -- whenever no terminal id existed yet, i.e.
+    on exactly the brand-new-till state this whole test file boots into
+    (`local_terminal_id()` is a deliberate peek that never creates that
+    file). Ringing that till's first sale therefore minted device identity
+    MID-SHIFT: the drawer was opened with `terminal_id` stamped None (no
+    identity yet), the sale that followed created a REAL terminal uuid, and
+    every later `_terminal_owns()` check (float/close) compared the
+    session's stamped None against that now-real uuid -- 403, permanently.
+    See `test_full_shift_round_trip_with_correct_expected_cash_and_variance_math`
+    above for the same round trip without this file's own device-identity
+    assertions; this test's job is specifically to assert on the file's
+    absence directly, per this fix's own requirement -- a test that only
+    checked "float/close return 200" would already have been satisfied by a
+    fix that merely special-cased the FIRST call differently while still
+    creating identity somewhere in the chain.
+    """
+    local_device_json = DATA / "device" / "local_device.json"
+    assert not local_device_json.exists(), (
+        'a PRIOR test in this module already created device/local_device.json '
+        '-- this test cannot prove anything about a "brand-new till" anymore')
+
+    client, cid, pid = _make_admin_and_product(price=50.0)
+    assert not local_device_json.exists(), \
+        'creating a company/admin/product created device identity'
+
+    r = _open_shift(client, 100.0)
+    assert r.status_code == 200, r.get_json()
+    sid = r.get_json()['data']['id']
+    assert not local_device_json.exists(), 'opening a shift created device identity'
+
+    sale = _sell_cash(client, pid, qty=1, amount_paid=50.0)
+    assert sale.status_code == 200, sale.get_json()
+    assert not local_device_json.exists(), (
+        'ringing a sale created device identity -- THE AUDIT-032D bug: minting '
+        'a document number must never manufacture device identity as a side '
+        'effect')
+
+    # THE regression itself: before this fix, this next call 403'd, because
+    # the sale above had just materialized a terminal identity the OPEN
+    # shift was never stamped with.
+    assert _movement(client, sid, 'float_out', 10.0, 'bank drop').status_code == 200
+    assert not local_device_json.exists(), 'filing a float movement created device identity'
+
+    close_resp = _close(client, sid, 140.0)
+    assert close_resp.status_code == 200, close_resp.get_json()
+    assert close_resp.get_json()['data']['session']['status'] == 'closed'
+    assert not local_device_json.exists(), (
+        'closing the shift created device identity -- device/local_device.json '
+        'must not exist after a brand-new till completes its first full shift')
+
+
 def test_variance_sign_is_counted_minus_expected():
     """No sales/movements at all -- expected cash is just the opening float,
     so variance is pure counted-vs-opening-float arithmetic, unambiguous."""
@@ -291,11 +389,33 @@ def test_create_sale_response_byte_for_byte_unchanged_whether_or_not_a_cash_sess
     data_closed = _sell_cash(client_closed, pid_closed, qty=1, amount_paid=75.0).get_json()['data']
 
     assert sorted(data_open.keys()) == sorted(data_closed.keys()) == sorted(SALE_RESPONSE_KEYS)
-    excluded = {'id', 'sale_number', 'idempotency_key', 'lines'}
+    # 'einvoice' joins the per-sale-unique exclusions for the same reason
+    # 'id' and 'sale_number' are already here, not to get this green: its
+    # invoice_ref is literally f'AURA_RETAIL:sale:{sale_id}'
+    # (retail_api.py:4818), so two DIFFERENT sales can never produce an
+    # equal value and a raw == here could only ever fail. What that gives
+    # up is the ability to catch a change in the einvoice payload's shape
+    # from this loop -- so it is checked explicitly below instead, against
+    # each response's own id, which is a stronger statement than equality
+    # would have been.
+    excluded = {'id', 'sale_number', 'idempotency_key', 'lines', 'einvoice'}
     for key in SALE_RESPONSE_KEYS:
         if key in excluded:
             continue
         assert data_open[key] == data_closed[key], f"divergence on {key!r}"
+
+    # The excluded 'einvoice' key, checked the only way it can be: the
+    # drawer must not change WHETHER the sale enqueued, nor the ref it
+    # enqueued under. A missing key here means the enqueue silently failed
+    # for the session-open till but not the session-closed one (or the
+    # reverse) -- exactly the drawer-coupled divergence this test exists to
+    # refuse, and invisible to the key-set assertion above, which would
+    # still pass if BOTH lost the key.
+    for label, data in (('session open', data_open), ('session closed', data_closed)):
+        assert data['einvoice'] == {
+            'invoice_ref': f"AURA_RETAIL:sale:{data['id']}",
+            'status': 'queued',
+        }, f"e-invoice payload wrong with a cash {label}: {data['einvoice']!r}"
 
     line_open = data_open['lines'][0]
     line_closed = data_closed['lines'][0]

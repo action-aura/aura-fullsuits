@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t d">
+  <title id="t">Aura mark, one-bit print</title>
+  <desc id="d">The Aura mark in one flat ink, no gradients anywhere, for one-bit thermal receipt printing.</desc>
+  <!-- 2026-09-08: proven necessary by actually rendering aura-mark.svg to a
+       canvas, thresholding every pixel to pure black/white at 50%, and
+       measuring the result (not asserted): sampling 120 points evenly
+       around the ring found the real 51 degree gap PLUS a further ~100
+       degrees of the drawn ring gone white, roughly a third of the ring's
+       own 300 degree sweep, because the gradient's teal end (#5fe3d0,
+       luminance ~186/255 at ITU-R 601-2) crosses the 50% threshold before
+       the sweep ends. Every shape here is the SAME flat ink, so nothing
+       can band or disappear at any threshold: the identical sampling on
+       THIS file's thresholded render returns solid ink everywhere except
+       the one intentional gap. Geometry is identical to aura-mark.svg
+       (same ring sweep, same beacon diamond, same A) — only the colour
+       treatment differs. -->
+  <circle cx="128" cy="128" r="94" fill="none" stroke="#0f1319" stroke-width="15"
+          stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32"
+          transform="rotate(-90 128 128)"/>
+  <path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="#0f1319"/>
+  <path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="#0f1319" stroke-width="26"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 108 142 L 148 142" fill="none" stroke="#0f1319" stroke-width="20" stroke-linecap="round"/>
+</svg>

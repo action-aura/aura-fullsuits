@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.actionaura.retail.ui.theme.AuraColors
+import com.actionaura.retail.ui.theme.AuraPalette
 
 /**
  * Lightweight in-app localization for the retail (Aura POS) UI.
@@ -46,6 +48,30 @@ object AppLocale {
 }
 
 /**
+ * The active till theme, one of [AuraPalette.ALL] (Day, Sand, Calm, Night,
+ * Dusk -- owner request, 2026-09: "night mode back" + "themes for both mobile
+ * and desktop"). Same persistence shape as [AppLocale] right above: a plain
+ * String in the same "aura_prefs" SharedPreferences, restored before the
+ * first composition and switched instantly through [AuraPalette.current]'s
+ * observable Compose state -- no Activity restart, no per-screen wiring.
+ */
+object AppTheme {
+    private const val PREFS = "aura_prefs"
+    private const val KEY = "app_theme"
+
+    /** Restores the saved theme, or Calm (this app's original palette) if none was ever saved. */
+    fun load(ctx: Context) {
+        val name = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, "dark")
+        AuraPalette.current = AuraPalette.byName(name)
+    }
+
+    fun set(ctx: Context, palette: AuraColors) {
+        AuraPalette.current = palette
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, palette.name).apply()
+    }
+}
+
+/**
  * Translate an English UI string to the active language. Falls back to the English
  * key when no translation exists, so partial coverage degrades gracefully.
  *
@@ -63,8 +89,22 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "More" to "المزيد",
     "Settings" to "الإعدادات",
     "Log out" to "تسجيل الخروج",
+    // Session section in MoreScreen -- added when the two-item navigation
+    // drawer was deleted and Log out moved into the overflow list.
+    "Session" to "الجلسة",
+    "End this session on this device" to "إنهاء الجلسة على هذا الجهاز",
     "Back" to "رجوع",
     "Menu" to "القائمة",
+    // The startup-failure screen. The single worst place in the app to fall
+    // back to English: it is what an Arabic-speaking owner sees when nothing
+    // else in the app will load, and it is the screen that has to convince
+    // them their data is intact.
+    "Aura could not start" to "تعذّر تشغيل Aura",
+    "The app's built-in server did not start, so nothing can be loaded or saved. " +
+        "Your data is untouched. Please try again; if this keeps happening, restart the " +
+        "device and send the details below to support." to
+        "لم يبدأ الخادم المدمج في التطبيق، لذا لا يمكن تحميل أي بيانات أو حفظها. بياناتك سليمة ولم تتأثر. " +
+        "يرجى المحاولة مرة أخرى؛ وإذا تكرر ذلك، أعد تشغيل الجهاز وأرسل التفاصيل أدناه إلى الدعم.",
     "Reports" to "التقارير",
     "Transactions" to "المعاملات",
     "Returns" to "المرتجعات",
@@ -83,7 +123,9 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Ask about your business" to "اسأل عن نشاطك التجاري",
     "SUGGESTED" to "مقترحات",
     "Ask anything…" to "اسأل أي شيء…",
-    "Aura AI is coming soon ✨" to "Aura AI قريبًا ✨",
+    "Send" to "إرسال",
+    "Aura AI is thinking…" to "Aura AI يفكّر…",
+    "AI assistant is temporarily unavailable." to "مساعد الذكاء الاصطناعي غير متاح مؤقتًا.",
     "Today's best sellers" to "الأكثر مبيعًا اليوم",
     "Low stock items" to "أصناف المخزون المنخفض",
     "Sales vs last week" to "المبيعات مقابل الأسبوع الماضي",
@@ -97,6 +139,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Quick actions" to "إجراءات سريعة",
     "New Sale" to "بيع جديد",
     "Share Receipt" to "مشاركة الإيصال",
+    // Network-printer receipt printing (retail-hardware-viewports) --
+    // see the "Retail settings" section below for the Settings-screen
+    // strings this button's feature is configured through.
+    "Print Receipt" to "طباعة الإيصال",
+    "Couldn't print receipt" to "تعذّرت طباعة الإيصال",
     "Today" to "اليوم",
     "Today's Sales" to "مبيعات اليوم",
     "Revenue today" to "إيرادات اليوم",
@@ -126,6 +173,12 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Payment method" to "طريقة الدفع",
     "Cash" to "نقدًا",
     "Card" to "بطاقة",
+    // The five payment-method names retail_api.py's _DEFAULT_METHODS seeds for every
+    // company; a shop's own custom method name has no entry here and tr() falls back
+    // to that name itself, which is fine since it was never translated either way.
+    "Bank Transfer" to "تحويل بنكي",
+    "Mobile Wallet" to "محفظة إلكترونية",
+    "Check" to "شيك",
     "Transfer" to "تحويل",
     "Credit" to "آجل",
     "Paid now (optional) — rest goes on credit" to "المدفوع الآن (اختياري) — الباقي آجل",
@@ -144,6 +197,64 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "in stock" to "في المخزون",
     "Payment successful" to "تمت عملية الدفع بنجاح",
     "collected" to "تم تحصيله",
+
+    // ── Shared API error mapping (net/ApiErrors.kt) ──────────────────────────
+    // "This action is not available..." is flask_guard.py's fixed 403 message
+    // text, translated verbatim so the licensing block reads natively in
+    // Arabic instead of falling back to the English server string.
+    "Blocked by your subscription/license:" to "محظور بسبب اشتراكك/ترخيصك:",
+    "This action is not available in the current licensing state." to "هذا الإجراء غير متاح في حالة الترخيص الحالية.",
+    // retail_api.py's BRANCH_LIMIT refusal (2026-09-06): the branch add-on is
+    // enforced by the till, and apiErrorMessage() appends the server's own
+    // sentence -- same key as products/retail/frontend/locales/ar.json.
+    "Your licence has reached its branch limit. Ask Aura to add a branch." to "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع.",
+    "Your session has expired. Please log in again." to "انتهت صلاحية جلستك. يرجى تسجيل الدخول مرة أخرى.",
+    // ── Dashboard: cashier gate + failed-figures honesty (2026-09-06) --
+    // same two keys, same sentences, as products/retail/frontend/locales/ar.json's
+    // desktop "Ready to sell" card. See DashboardScreen.kt's gate comment.
+    "Ready to sell" to "جاهز للبيع",
+    "Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales." to
+        "إجماليات المبيعات والتقارير متاحة للمديرين ومالك المتجر فقط. افتح نقطة البيع لبدء تسجيل المبيعات.",
+    "Figures unavailable" to "الأرقام غير متاحة",
+    "Could not load today's figures. Pull to refresh or check the connection." to
+        "تعذّر تحميل أرقام اليوم. اسحب للتحديث أو تحقق من الاتصال.",
+    "Till" to "نقطة البيع",
+
+    // ── Join-existing-shop (ui/screens/JoinShopScreens.kt) -- same keys as
+    // products/retail/frontend/locales/ar.json, where the desktop has the
+    // same sentence.
+    "Licence activated" to "تم تفعيل الترخيص",
+    "Is your shop already set up on another device?" to "هل محلك مُجهَّز بالفعل على جهاز آخر؟",
+    "Yes — connect to my shop" to "نعم — اربطني بمحلي",
+    "No — this is the shop's first device" to "لا — هذا أول جهاز للمحل",
+    "Connecting brings your existing owner and staff accounts to this phone. No new account is created."
+        to "الربط يجلب حسابات المالك والموظفين الموجودة إلى هذا الهاتف. لا يُنشأ أي حساب جديد.",
+    "Connecting to your shop…" to "جارٍ الاتصال بمحلك…",
+    "Your account is on its way from your shop's other device." to "حسابك في الطريق من الجهاز الآخر لمحلك.",
+    "Still waiting for your account. Check the connection, or set up a new shop instead."
+        to "ما زلنا ننتظر حسابك. تحقق من الاتصال، أو أنشئ محلاً جديداً بدلاً من ذلك.",
+    "Keep waiting" to "متابعة الانتظار",
+    "Set up a new shop instead" to "إنشاء محل جديد بدلاً من ذلك",
+    "Server error" to "خطأ في الخادم",
+    "Unexpected error" to "خطأ غير متوقع",
+
+    // ── Licensing: the awaiting-approval screen (ui/screens/LicensingScreen.kt)
+    // The three lines that make a factual claim about what the app has just
+    // done -- "we are checking", "we last checked at X", "we have stopped
+    // checking". They are the ones a customer reads back to support over the
+    // phone, so an English fallback here is worse than anywhere else on the
+    // screen. (The rest of the licensing surface is still untranslated; see
+    // the note in LicensingScreen.kt.)
+    "Checking with the licensing service automatically every %s seconds…"
+        to "تتم المراجعة تلقائيًا مع خدمة التراخيص كل %s ثانية…",
+    "Still waiting for approval. Last checked at %s."
+        to "ما زال طلبك بانتظار الموافقة. آخر مراجعة في %s.",
+    "Could not reach the licensing service. Your key is still held for approval — " +
+        "press Check Now to try again when you are back online."
+        to "تعذّر الوصول إلى خدمة التراخيص. ما زال مفتاحك محفوظًا بانتظار الموافقة — " +
+            "اضغط \"تحقّق الآن\" للمحاولة مرة أخرى عند عودة الاتصال.",
+    "Check Now" to "تحقّق الآن",
+    "Use a different key" to "استخدام مفتاح آخر",
 
     // ── Products ──────────────────────────────────────────────────────────────
     "Add your first product to start selling." to "أضف أول منتج لك لبدء البيع.",
@@ -180,6 +291,12 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Email" to "البريد الإلكتروني",
     "Password" to "كلمة المرور",
     "Sign In" to "تسجيل الدخول",
+    // The sign-in screen's redesign (2026-09-08, DESIGN.md §3 brand tagline +
+    // a password-visibility toggle). "One shop. Every device." is the brand's
+    // fixed tagline (§3) -- same English/Arabic pair everywhere it appears.
+    "One shop. Every device." to "متجر واحد. كل الأجهزة.",
+    "Show password" to "إظهار كلمة المرور",
+    "Hide password" to "إخفاء كلمة المرور",
     "Email and a 6+ char password required" to "البريد الإلكتروني وكلمة مرور من 6 أحرف على الأقل مطلوبة",
     "Couldn't create account" to "تعذّر إنشاء الحساب",
     "Welcome to Action Aura" to "مرحبًا بك في Action Aura",
@@ -200,6 +317,13 @@ private val AR_STRINGS: Map<String, String> = mapOf(
 
     // ── More hub ──────────────────────────────────────────────────────────────
     "Records" to "السجلات",
+    // "Categories" and its subtitle were shipped on the More hub with no entry
+    // here, so the very first row of the Records section rendered English on
+    // an Arabic till. Exactly the silent tr() fallback the per-screen coverage
+    // tests exist to surface; found by adding RetailExtraScreens.kt to that
+    // scan, not by anybody noticing.
+    "Categories" to "الفئات",
+    "Group products for filtering" to "تجميع المنتجات لتسهيل التصفية",
     "Sales stats by time period" to "إحصاءات المبيعات حسب الفترة",
     "Past sales & invoices" to "المبيعات والفواتير السابقة",
     "Refund items from a sale" to "استرجاع أصناف من عملية بيع",
@@ -214,6 +338,9 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Daily cash in / out / net" to "النقد اليومي الداخل / الخارج / الصافي",
     "Receivables & payables by age" to "الذمم المدينة والدائنة حسب العمر",
     "Credit, currency & payment methods" to "الائتمان والعملة وطرق الدفع",
+    // Shipped untranslated on both the Settings hub and the licensing screen's
+    // own top bar. Same silent-fallback class as "Categories" above.
+    "Licensing" to "الترخيص",
 
     // ── Reports ───────────────────────────────────────────────────────────────
     "7 days" to "7 أيام",
@@ -231,6 +358,45 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "current stock on hand" to "المخزون الحالي المتوفر",
     "Payment methods" to "طرق الدفع",
 
+    // ── Reports → By employee (retail schema v13 attribution) ─────────────────
+    // "غير منسوبة" ("not attributed") rather than "غير معروف" ("unknown"):
+    // the shop DOES know these sales happened and what they were worth; what
+    // is missing is only the link to a person. Translating it as "unknown"
+    // would suggest the takings themselves are in doubt, which is a stronger
+    // and false claim.
+    "By Employee" to "حسب الموظف",
+    "Takings and transactions per employee" to "الإيرادات وعدد العمليات لكل موظف",
+    "Reports access required" to "مطلوب صلاحية التقارير",
+    "Only accounts with reports access can see takings by employee. " +
+        "Ask the owner to grant it." to
+        "يمكن فقط للحسابات التي تملك صلاحية التقارير الاطّلاع على الإيرادات حسب الموظف. اطلب من المالك منحك هذه الصلاحية.",
+    "Couldn't load takings by employee" to "تعذّر تحميل الإيرادات حسب الموظف",
+    "No sales in this period" to "لا توجد مبيعات في هذه الفترة",
+    "Nothing was rung up in the selected period. " +
+        "Choose a longer period to see more." to
+        "لم تُسجَّل أي عملية بيع في الفترة المحددة. اختر فترة أطول لعرض المزيد.",
+    "Not attributed" to "غير منسوبة",
+    "Sales rung before this app recorded who served them." to
+        "مبيعات نُفِّذت قبل أن يبدأ التطبيق بتسجيل من قام بها.",
+    "Account removed" to "حساب محذوف",
+    "The account that rang these sales no longer exists." to
+        "الحساب الذي نفّذ هذه المبيعات لم يعد موجودًا.",
+    "Every sale in the period is counted here, including any the " +
+        "app could not attribute." to
+        "تُحتسب هنا كل عمليات البيع في الفترة، بما فيها ما تعذّر على التطبيق نسبته إلى موظف.",
+    "This install's server doesn't provide takings by employee yet." to
+        "لا يوفّر خادم هذا التثبيت الإيرادات حسب الموظف بعد.",
+    // The last-resort wording for a 200 whose envelope refuses without naming a
+    // reason. The server's own sentence is preferred whenever it sends one --
+    // see byEmployeeRefusalOrNull -- so this only shows when there is genuinely
+    // nothing to quote, and it must still not read as "the report is empty".
+    "The server wouldn't send this report." to
+        "رفض الخادم إرسال هذا التقرير.",
+    "Rung by" to "نفّذها",
+    "Rung by an account that no longer exists" to "نفّذها حساب لم يعد موجودًا",
+    "Who rang this sale was not recorded — it predates employee attribution." to
+        "لم يُسجَّل من نفّذ عملية البيع هذه — فهي أقدم من ميزة نسب المبيعات إلى الموظفين.",
+
     // ── Transactions / receipt ────────────────────────────────────────────────
     "No transactions yet" to "لا توجد معاملات بعد",
     "Sales you complete in POS will show up here as invoices." to "ستظهر المبيعات التي تتمّها في نقطة البيع هنا كفواتير.",
@@ -239,6 +405,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Couldn't load this transaction." to "تعذّر تحميل هذه المعاملة.",
     "Item" to "صنف",
     "Subtotal" to "المجموع الفرعي",
+    // The cart's honesty line: the figure above it is pre-tax and
+    // pre-discount, and used to be labelled "Total" while the server charged
+    // something else. See PosScreen's cart summary for the full reasoning.
+    "Tax and discounts are applied at checkout" to "تُضاف الضريبة والخصومات عند الدفع",
     "Discount" to "الخصم",
     "Tax" to "الضريبة",
     "Paid" to "المدفوع",
@@ -307,6 +477,30 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Failed" to "فشل",
     "Pay" to "دفع",
 
+    // ── Categories screen ──────────────────────────────────────────────
+    // The whole screen (ui/screens/CategoriesScreen.kt) routes every visible
+    // string through tr(), and 11 of its 12 keys had no entry here -- only
+    // "Couldn't save" did -- so an Arabic till reached it from a fully
+    // translated More-hub row ("الفئات") and then rendered the entire screen
+    // in English. Exactly the silent tr() fallback the "Categories" entry in
+    // the More-hub section above was added for, one screen further in.
+    // TranslationCatalogueCoverageTest now scans EVERY screen for this shape
+    // rather than one screen at a time.
+    "No categories yet" to "لا توجد فئات بعد",
+    "Group products so they're easy to find and filter." to "جمّع المنتجات ليسهل العثور عليها وتصفيتها.",
+    "Add Category" to "إضافة فئة",
+    "Edit Category" to "تعديل فئة",
+    "Category added" to "تمت إضافة الفئة",
+    "Category updated" to "تم تحديث الفئة",
+    "Category name *" to "اسم الفئة *",
+    "Category name is required" to "اسم الفئة مطلوب",
+    "Description" to "الوصف",
+    "Save Category" to "حفظ الفئة",
+    // Rendered as "${c.product_count} " + tr("items") -- Arabic counts a bare
+    // singular after a numeral here, the same form "%d item(s)" already uses
+    // in the POS held-sales list.
+    "items" to "صنف",
+
     // ── Suppliers ─────────────────────────────────────────────────────────────
     "No suppliers yet" to "لا يوجد موردون بعد",
     "Add the vendors you buy stock from." to "أضف الموردين الذين تشتري منهم البضائع.",
@@ -362,6 +556,25 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Couldn't add" to "تعذّرت الإضافة",
     "Add" to "إضافة",
 
+    // ── Retail settings → Receipt Printer (retail-hardware-viewports) ─────────
+    "Receipt Printer" to "طابعة الإيصالات",
+    "For a network (LAN) ESC/POS receipt printer only. Bluetooth and built-in printers are not supported yet." to
+        "لطابعة إيصالات ESC/POS عبر الشبكة المحلية (LAN) فقط. البلوتوث والطابعات المدمجة غير مدعومة بعد.",
+    "Printer IP address" to "عنوان IP الخاص بالطابعة",
+    "Port" to "المنفذ",
+    "Paper width" to "عرض الورق",
+    "80mm (42 chars)" to "80 مم (42 حرفًا)",
+    "58mm (32 chars)" to "58 مم (32 حرفًا)",
+    "Auto-print after each sale" to "الطباعة التلقائية بعد كل عملية بيع",
+    "Prints automatically as soon as a sale completes, with no extra tap." to
+        "تتم الطباعة تلقائيًا فور اكتمال البيع، دون الحاجة لأي لمسة إضافية.",
+    // A real limitation of the ESC/POS text byte path itself (see
+    // escpos_receipt.py's module docstring), not something Android could
+    // fix on its own -- a shopkeeper needs to know this up front.
+    "Printed receipts are in English only, even when the app is in Arabic — ESC/POS text mode cannot render Arabic script." to
+        "الإيصالات المطبوعة تكون بالإنجليزية فقط، حتى عند استخدام التطبيق بالعربية — وضع النص ESC/POS لا يمكنه عرض الحروف العربية.",
+    "Save printer settings" to "حفظ إعدادات الطابعة",
+
     // ── Purchase orders ───────────────────────────────────────────────────────
     "No purchase orders" to "لا توجد أوامر شراء",
     "Create a PO to restock from a supplier." to "أنشئ أمر شراء لإعادة التخزين من مورد.",
@@ -392,6 +605,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Appearance" to "المظهر",
     "Theme" to "السمة",
     "System default" to "افتراضي النظام",
+    // The five sanctioned till themes (owner request, 2026-09: "night mode
+    // back" + "themes for both mobile and desktop") -- same names and same
+    // choice as the desktop's theme switcher, see ui/theme/Color.kt's
+    // AuraPalette. "Choose theme" mirrors "Choose language" right below.
+    "Day" to "نهاري",
+    "Sand" to "رملي",
+    "Calm" to "هادئ",
+    "Night" to "ليلي",
+    "Dusk" to "غسق",
+    "Choose theme" to "اختر المظهر",
     "Language" to "اللغة",
     "Notifications" to "الإشعارات",
     "Reminders & alerts" to "التذكيرات والتنبيهات",
@@ -407,6 +630,31 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     " — coming soon" to " — قريبًا",
     "Choose language" to "اختر اللغة",
 
+    // ── Settings → this device's branch (Wave C1) ────────────────────────────
+    // The Android half of the dc22b04 fix -- see net/Models.kt's Branch/
+    // DeviceBranch doc comments and RetailSettingsScreen in
+    // ui/screens/RetailExtraScreens.kt for the full "why". "Loading…" is used
+    // generically enough to belong here rather than scoped to one screen.
+    "Loading…" to "جارٍ التحميل…",
+    "This Device's Branch" to "فرع هذا الجهاز",
+    "Couldn't load this device's branch" to "تعذّر تحميل فرع هذا الجهاز",
+    "No branch pinned" to "لا يوجد فرع مثبَّت",
+    "Sales on this till file under the company's default branch. Worth checking on a multi-branch chain." to
+        "تُسجَّل مبيعات هذا الصندوق تحت الفرع الافتراضي للشركة. يستحق التحقق في سلسلة متعددة الفروع.",
+    "Sales rung on this till are filed under this branch." to
+        "تُسجَّل المبيعات التي تتم على هذا الصندوق تحت هذا الفرع.",
+    "Only the owner can change which branch this device is pinned to. Ask the owner to make the change on their account." to
+        "يمكن للمالك فقط تغيير الفرع الذي يُثبَّت عليه هذا الجهاز. اطلب من المالك إجراء التغيير من حسابه.",
+    "This device's branch" to "فرع هذا الجهاز",
+    "Choose which branch sales rung on this till are filed under." to
+        "اختر الفرع الذي تُسجَّل تحته مبيعات هذا الصندوق.",
+    "Falls back to the company's default branch" to "يعود إلى الفرع الافتراضي للشركة",
+    "Save" to "حفظ",
+    "This device is now pinned to %s" to "أصبح هذا الجهاز الآن مثبَّتًا على %s",
+    "Branch pin cleared" to "تم إلغاء تثبيت الفرع",
+    "Only the owner can change this device's branch. Ask the owner to make the change on their account." to
+        "يمكن للمالك فقط تغيير فرع هذا الجهاز. اطلب من المالك إجراء التغيير من حسابه.",
+
     // ── Backup & restore (Wave 1A / Part G) ─────────────────────────────────────
     "Create backup" to "إنشاء نسخة احتياطية",
     "Restore backup" to "استعادة نسخة احتياطية",
@@ -420,4 +668,145 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Create a backup above to see it listed here." to "أنشئ نسخة احتياطية أعلاه لتظهر هنا.",
     "The backup could not be processed." to "تعذّرت معالجة النسخة الاحتياطية.",
     "Cancel" to "إلغاء",
+
+    // ── Employees (Phase 1 — multi-device account model, design §3) ───────────
+    // Roles are translated as job titles, not transliterated: "أمين صندوق" is
+    // what the person's badge says in an Arabic-speaking shop, and a
+    // transliterated "كاشير" would read as software jargon to the owner who
+    // has to decide which of the two to assign somebody.
+    "Team" to "الفريق",
+    "Employees" to "الموظفون",
+    // "Role" and "Try again" were already used by shipped screens (the
+    // startup-error retry among them) with no entry here, so they rendered
+    // English on an Arabic device. Added once, here, rather than per screen.
+    "Role" to "الدور",
+    "Try again" to "حاول مرة أخرى",
+    "Accounts, roles & till PINs" to "الحسابات والأدوار وأرقام PIN للصندوق",
+    "Owner" to "المالك",
+    "Manager" to "مدير",
+    "Cashier" to "أمين صندوق",
+    "Active" to "نشط",
+    "Deactivated" to "معطّل",
+    "Invite pending" to "بانتظار قبول الدعوة",
+    "Owner access required" to "مطلوب حساب المالك",
+    "Only the owner account can create employees or change what they can do. " +
+        "Ask the owner to make the change on their account." to
+        "يمكن لحساب المالك فقط إنشاء الموظفين أو تغيير صلاحياتهم. اطلب من المالك إجراء التغيير من حسابه.",
+    "Couldn't load employees" to "تعذّر تحميل الموظفين",
+    "No employees yet" to "لا يوجد موظفون بعد",
+    "Create an account for each person who works a till. They sign in with " +
+        "their own email, so every sale is recorded against the person who rang it." to
+        "أنشئ حسابًا لكل شخص يعمل على الصندوق. يسجّل كل منهم الدخول ببريده الخاص، فتُسجَّل كل عملية بيع باسم من نفّذها.",
+    "Employee accounts live on this device until account sync is enabled." to
+        "تبقى حسابات الموظفين على هذا الجهاز حتى يتم تفعيل مزامنة الحسابات.",
+    "Add employee" to "إضافة موظف",
+    "Work email" to "بريد العمل",
+    "The account is identified by this email and an ID the app assigns " +
+        "(EMP-0001, EMP-0002…). There is no separate name field." to
+        "يُعرَّف الحساب بهذا البريد وبمعرّف يخصصه التطبيق (EMP-0001، EMP-0002…). لا يوجد حقل اسم منفصل.",
+    "Send invite" to "إرسال الدعوة",
+    // One fixed sentence covering both roles, not a per-role pair -- kept
+    // character-for-character identical (English key) to the desktop
+    // screen's copy of the same sentence (products/retail/frontend/
+    // employees.js) so the two apps can never state this differently. See
+    // EmployeesScreen.kt's roleExplainer() doc comment for why the previous
+    // per-role pair here was replaced.
+    "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports." to
+        "يمكن لأمين الصندوق البيع والاسترداد مقابل عملية بيع وإغلاق صندوقه الخاص. ويمكن للمدير أيضًا تطبيق الخصم وتعديل المخزون وقراءة التقارير.",
+    "The invite could not be created." to "تعذّر إنشاء الدعوة.",
+    "Invite created" to "تم إنشاء الدعوة",
+    "Give this code to the employee. They enter it once to choose their own password." to
+        "أعطِ هذا الرمز للموظف. يُدخله مرة واحدة ليختار كلمة المرور الخاصة به.",
+    "It works once, and it expires 7 days from now. After that, or after " +
+        "they use it, create another invite." to
+        "يعمل مرة واحدة، وتنتهي صلاحيته بعد 7 أيام من الآن. بعد ذلك، أو بعد استخدامه، أنشئ دعوة أخرى.",
+    "The employee redeems it on a till running Aura, on the sign-in screen's " +
+        "\"I have an invite code\" option." to
+        "يستخدمه الموظف على صندوق يعمل بنظام Aura، من خيار «لديّ رمز دعوة» في شاشة تسجيل الدخول.",
+    "Copy code" to "نسخ الرمز",
+    "Invite code copied" to "تم نسخ رمز الدعوة",
+    "Change role?" to "تغيير الدور؟",
+    "Change role" to "تغيير الدور",
+    "This resets their permissions to that role's defaults, including " +
+        "any exception you granted them before." to
+        "يعيد هذا ضبط صلاحياته إلى الإعدادات الافتراضية لذلك الدور، بما في ذلك أي استثناء منحته له سابقًا.",
+    "They are signed out and sign back in with the new role." to
+        "يتم تسجيل خروجه ثم يسجّل الدخول مجددًا بالدور الجديد.",
+    "Role updated" to "تم تحديث الدور",
+    "The change could not be saved." to "تعذّر حفظ التغيير.",
+    "Deactivate account" to "تعطيل الحساب",
+    "Reactivate account" to "إعادة تفعيل الحساب",
+    "Account deactivated" to "تم تعطيل الحساب",
+    "Account reactivated" to "تمت إعادة تفعيل الحساب",
+    "They are signed out everywhere and cannot sign in again. Their past " +
+        "sales stay on record. You can reactivate them later." to
+        "يتم تسجيل خروجه من كل الأجهزة ولا يمكنه تسجيل الدخول مجددًا. تبقى مبيعاته السابقة مسجّلة. يمكنك إعادة تفعيله لاحقًا.",
+    "Set till PIN" to "تعيين رمز PIN للصندوق",
+    "Reset till PIN" to "إعادة تعيين رمز PIN للصندوق",
+    "New 4-digit PIN" to "رمز PIN جديد من 4 أرقام",
+    "PIN set" to "تم تعيين رمز PIN",
+    "Save PIN" to "حفظ رمز PIN",
+    "PIN saved" to "تم حفظ رمز PIN",
+    "PIN removed" to "تمت إزالة رمز PIN",
+    "Remove this PIN" to "إزالة رمز PIN هذا",
+    // The four actions named here are `user_accounts.PASSWORD_ONLY_ACTIONS`,
+    // not a plausible-sounding list. Refunds are deliberately NOT among them
+    // (a cashier holds `retail.refund` by default and `create_return` is
+    // sale-bound), so claiming they need the password would overstate the
+    // protection to the one person deciding how much to trust a PIN.
+    "A PIN says who is acting at the till. It does not grant permission — " +
+        "voiding a closed sale, changing a price, managing employees and approving " +
+        "a cash difference still ask for the password." to
+        "يحدّد رمز PIN من يعمل على الصندوق. وهو لا يمنح أي صلاحية — فإلغاء فاتورة مقفلة وتغيير السعر وإدارة الموظفين واعتماد فروقات النقدية تطلب كلمة المرور دائمًا.",
+
+    // Server-sent refusals from the /api/admin/employees routes. They are
+    // rendered through apiErrorMessage(), which runs the server's own sentence
+    // through tr() -- so without these entries an Arabic phone would show the
+    // English original. Kept spelled EXACTLY as the backend raises them
+    // (onboarding_routes.py / user_accounts.PinPolicyError); a reworded key
+    // here silently stops matching and falls back to English.
+    "Role must be manager or cashier." to "يجب أن يكون الدور مديرًا أو أمين صندوق.",
+    "PIN must be exactly 4 digits." to "يجب أن يتكون رمز PIN من 4 أرقام بالضبط.",
+    "Email already registered." to "البريد الإلكتروني مسجّل بالفعل.",
+    "Email required" to "البريد الإلكتروني مطلوب",
+    "User not found." to "المستخدم غير موجود.",
+    "Admin only" to "للمالك فقط",
+    "The owner account's role cannot be changed." to "لا يمكن تغيير دور حساب المالك.",
+
+    // ── Sync status screen ──────────────────────────────────────────────────
+    // MoreScreen's new "Device" section and the screen it opens
+    // (ui/screens/SyncStatusScreen.kt). `SyncCoordinator.health()` existed,
+    // tested, with no reader until this screen -- these are every literal it
+    // introduces. `tr()` falls back to English on a missing key, which is
+    // exactly why this block is not optional: a gap here is silent.
+    "Device" to "الجهاز",
+    "Sync status" to "حالة المزامنة",
+    // The permanent Licence doorway in More -> Device. Added after a real
+    // handset was found stranded in LOCAL_STATE_CORRUPT with no route to
+    // activation anywhere in the UI.
+    "Licence" to "الترخيص",
+    "Activation, status and device registration" to "التفعيل والحالة وتسجيل الجهاز",
+    "Whether this device is reaching your others" to "هل يصل هذا الجهاز إلى أجهزتك الأخرى",
+    "Sync is not set up" to "المزامنة غير مُفعّلة",
+    "This build has no relay address, so this device never sends or receives. Other devices will not see its sales." to
+        "لا يحتوي هذا الإصدار على عنوان مُرحّل، لذا لا يرسل هذا الجهاز أو يستقبل أي بيانات أبدًا. لن تظهر مبيعاته على الأجهزة الأخرى.",
+    "Waiting for first sync" to "بانتظار أول مزامنة",
+    "Set up, but this device has not reached the relay yet." to "تم الإعداد، لكن هذا الجهاز لم يصل إلى المُرحّل بعد.",
+    "Sync is failing" to "المزامنة تفشل",
+    "This device is not reaching your other devices." to "لا يصل هذا الجهاز إلى أجهزتك الأخرى.",
+    "consecutive failures" to "محاولات فاشلة متتالية",
+    "Sync is working" to "المزامنة تعمل",
+    "Last synced" to "آخر مزامنة",
+    "waiting to send" to "بانتظار الإرسال",
+    "Detail" to "التفاصيل",
+    "Sending" to "الإرسال",
+    "Receiving" to "الاستلام",
+    "Healthy" to "سليم",
+    // The third sync half-state. "Healthy" only after a real round trip has
+    // succeeded; a half that is running but has never completed one is
+    // Waiting, not healthy.
+    "Waiting" to "بالانتظار",
+    "Failing" to "فاشل",
+    "Last success" to "آخر نجاح",
+    "never" to "أبدًا",
 )

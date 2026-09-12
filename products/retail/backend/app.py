@@ -9,10 +9,12 @@ monolith's app.py for the pieces that must behave identically (secret key
 handling, session cookie hardening, CORS-to-loopback-only) -- see
 docs/migration/retail-extraction-report.md.
 """
+import logging
 import os
 import re
 import sys
 from datetime import timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # Path resolution must not rely on Path(__file__) alone: in a PyInstaller
@@ -34,7 +36,7 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from config import (
@@ -107,7 +109,28 @@ def _version():
     """Release metadata for the About screen / release-manifest tooling
     (Wave 1B). Separate from /api/health on purpose -- that route's
     contract is frozen for the launcher's readiness probe (see its
-    docstring); this one is free to grow."""
+    docstring); this one is free to grow.
+
+    `schema_version` IS NOT THE DATABASE SCHEMA VERSION, despite the name.
+    It is `commercial_runtime.backup.service.SCHEMA_VERSION`, the version of
+    the BACKUP ARCHIVE FORMAT -- the number stamped into an .aurabak.zip
+    filename and checked on restore. It is 1, and has been since Wave 0.
+
+    The database's own version is `PRAGMA user_version` on each subsystem db,
+    maintained by `ensure_schema_version()`; retail's is at RETAIL_SCHEMA_VERSION
+    (26 as of 2026-09-08). Measured on a freshly installed build that same day:
+    this endpoint returned `"schema_version": 1` while `retail.db` reported
+    `user_version = 26`.
+
+    Written down rather than renamed. A release-manifest tool that reads this
+    field expecting "which migration is this install on" gets 1 for every
+    install ever shipped and concludes none of them need migrating -- and the
+    name invites exactly that reading. Renaming it would be a wire-contract
+    change for no consumer: both Android clients parse it into a model field
+    (`net/Models.kt`) and neither ever reads the value, so there is nothing to
+    fix on that side and no benefit in breaking the shape. If a caller ever
+    genuinely needs the migration level, add a separate, correctly-named field
+    beside this one; do not repurpose this one."""
     from config import SCHEMA_VERSION, CALCULATION_VERSION, PRODUCT_CODE
     return jsonify({
         'product_code': PRODUCT_CODE,
@@ -130,8 +153,28 @@ def _index():
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
-from database.schema import get_retail_conn, init_retail
-from api.retail_api import retail_bp
+from database.schema import (
+    get_retail_conn,
+    init_retail,
+    load_sync_freshness,
+    record_sync_freshness,
+    record_offline_override,
+    record_or_refresh_stock_exception,
+    rebind_company_id_after_activation,
+)
+# Launch-readiness Phase 5 prerequisite #1 (registry v4) -- the identity-side
+# half of the company_id rebind. Aliased because the retail-side function
+# just above shares the exact same name by design (mirrored dialect, see
+# commercial_runtime/identity/company_rebind.py's module docstring) and both
+# are needed here, composed in the right order. See _on_licence_activated
+# and init_app() below for where each is actually called.
+from commercial_runtime.identity.company_rebind import (
+    rebind_company_id_after_activation as rebind_registry_company_id_after_activation,
+    owner_issued_company_id as registry_owner_issued_company_id,
+    registry_tenant_ids as registry_company_tenant_ids,
+)
+from commercial_runtime.identity.registry_db import get_conn as get_registry_conn
+from api.retail_api import retail_bp, _ensure_credit_schema
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
@@ -139,6 +182,7 @@ from commercial_runtime.identity.device_routes import device_bp
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.worker import OutboxWorker
 from commercial_runtime.einvoicing.providers.mock import MockProvider
+from commercial_runtime.einvoicing.providers.unconfigured import UnconfiguredProvider
 from commercial_runtime.einvoicing import settings as _einvoicing_settings
 from core.retail import einvoice_adapter as _einvoice_adapter
 from commercial_runtime.notifications.routes import make_notifications_blueprint
@@ -165,20 +209,74 @@ app.register_blueprint(device_bp)
 # Workers are created lazily, one per company, the first time that
 # company's settings are touched or its background job is resumed at boot.
 _EINVOICING_APP_DATA_DIR = str(Path(DATABASE_DIR).parent)
-_einvoicing_provider = MockProvider()  # Phase 1 default -- see providers/direct_istd.py
+# E-invoicing now defaults ENABLED (settings.py DEFAULTS['enabled'] -- the
+# Jordanian mandate means a shop cannot ship with the obligation off by
+# default). That makes the LIVE provider choice a compliance decision, not
+# a convenience one: MockProvider reports CLEARED -- with a QR and a
+# provider_uuid -- without ever contacting JoFotara, so wiring it in as the
+# default would put a false "e-invoice cleared" claim on a real receipt no
+# tax authority ever saw. DirectISTDProvider is the real provider but
+# deliberately raises NotImplementedError until Phase 2 (see
+# providers/direct_istd.py), and worker.py's OutboxWorker will not submit
+# through any provider whose is_configured is False anyway. So the shipped
+# default here is UnconfiguredProvider: documents enqueue and wait, nothing
+# submits, nothing claims clearance. AURA_EINVOICING_ALLOW_MOCK=1 opts back
+# into MockProvider for development/tests that need a real round trip.
+_einvoicing_provider = (
+    MockProvider() if os.environ.get('AURA_EINVOICING_ALLOW_MOCK') == '1' else UnconfiguredProvider()
+)
 _einvoicing_workers = {}
+
+
+class _IdempotentEinvoicingWorkerHandle:
+    """Wraps one company's OutboxWorker so `.start()` is safe to call more
+    than once. OutboxWorker.start()/_schedule_next() deliberately mirrors
+    licensing_contracts/checkin_scheduler.py's LicenseCheckInScheduler, and
+    neither guards against a second start(): calling start() again does
+    NOT cancel the first Timer -- it only overwrites the handle to it, so
+    the first Timer chain keeps firing forever, alongside the new one. That
+    non-idempotency never mattered while the only caller was the boot-time
+    resume sweep below (called at most once per company, ever). It matters
+    now: commercial_runtime/einvoicing/routes.py's _post_settings() calls
+    .start() on EVERY settings write that resolves to enabled=True (not
+    only on a False->True transition -- see that function's comment for
+    why the transition-only check breaks for a default-enabled company),
+    so a company saving its e-invoicing settings twice while already
+    enabled must not spawn a second parallel timer family. Guarding here,
+    at the call site both this sweep and routes.py share (both ultimately
+    go through _get_or_create_einvoicing_worker), keeps OutboxWorker's own
+    scheduling code identical to the LicenseCheckInScheduler pattern it was
+    deliberately written to mirror -- see worker.py's module docstring.
+    """
+
+    def __init__(self, worker):
+        self._worker = worker
+        self._running = False
+
+    def start(self, interval_seconds):
+        if self._running:
+            return
+        self._worker.start(interval_seconds=interval_seconds)
+        self._running = True
+
+    def stop(self):
+        self._worker.stop()
+        self._running = False
+
+    def run_once(self):
+        return self._worker.run_once()
 
 
 def _get_or_create_einvoicing_worker(company_id):
     if company_id not in _einvoicing_workers:
-        _einvoicing_workers[company_id] = OutboxWorker(
+        _einvoicing_workers[company_id] = _IdempotentEinvoicingWorkerHandle(OutboxWorker(
             conn_factory=get_retail_conn,
             app_data_dir=_EINVOICING_APP_DATA_DIR,
             company_id=company_id,
             provider=_einvoicing_provider,
             document_builder=_einvoice_adapter.build_document,
             reconcile_fn=_einvoice_adapter.reconcile_missing_sales,
-        )
+        ))
     return _einvoicing_workers[company_id]
 
 
@@ -253,6 +351,184 @@ else:
     from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
     _licensing_device_identity_factory = WindowsDpapiDeviceIdentityProvider
 
+def _detect_split_state_reason():
+    """Run BOTH halves of the launch-readiness Phase 5 prerequisite #1
+    rebind (identity, then retail -- same order and same never-raises
+    contract as `_on_licence_activated` below) and report whether the
+    process is now stuck in Defect 2's split state: identity has
+    UNAMBIGUOUSLY adopted the Owner-issued `company_id` but retail.db could
+    not follow.
+
+    THE ONE PLACE this decision gets made. `_converge_and_refuse_to_serve_
+    if_stuck()` (the boot-time guard, already correct and mutation-proven --
+    see its own docstring) and the activation-time refusal below
+    (`_on_licence_activated` / `_refuse_while_split_state`) both call this
+    SAME function rather than each holding its own opinion about what
+    "stuck" means. Two independently-written predicates for the identical
+    question are exactly how the two seams quietly drift apart and disagree
+    about a shop's data -- reusing one function is what keeps that
+    impossible.
+
+    Returns the refusal message (a non-empty string, ready to raise or to
+    serve as a 503 body) if genuinely stuck, or `None` for every other
+    outcome: nothing to do, converged just now, deferred (identity has not
+    adopted the Owner id yet), or the CLAUDE.md-legitimate multi-tenant
+    case. See `_converge_and_refuse_to_serve_if_stuck`'s docstring for the
+    full reasoning behind each branch below -- this function only extracts
+    the shared decision, it does not re-derive it.
+    """
+    rebind_registry_company_id_after_activation()
+    result = rebind_company_id_after_activation()
+    if result['status'] != 'failed':
+        return None  # skipped / deferred / already_bound / rebound -- all fine
+
+    new_company_id = registry_owner_issued_company_id()
+    if not new_company_id:
+        return None  # the licence disappeared between the call above and this check
+
+    registry_conn = get_registry_conn()
+    try:
+        tenants = registry_company_tenant_ids(registry_conn)
+    finally:
+        registry_conn.close()
+
+    if tenants != {new_company_id}:
+        # Either genuinely multi-tenant, or identity itself has not adopted
+        # the Owner-issued id yet -- either way retail's failure above is
+        # not the empty-shop catastrophe this guard exists to prevent.
+        return None
+
+    return (
+        "REFUSING TO SERVE: registry.db's identity layer has adopted the "
+        f"Owner-issued company_id {new_company_id!r}, but retail.db could not "
+        f"converge onto it ({result.get('reason')!r}). Starting the server now "
+        "would make every WHERE company_id=? query in retail_api.py match zero "
+        "rows -- this shop's entire history would silently disappear from the "
+        "screen. See docs/launch-readiness/phase5-prerequisites.md §1."
+    )
+
+
+# Defect 2 (launch-readiness Phase 5 verification, HIGH): the in-process
+# equivalent of the boot-time refusal above, for the window `_converge_and_
+# refuse_to_serve_if_stuck()` cannot see -- an ACTIVATION that lands while
+# this process is already up and serving. `_on_licence_activated` (below)
+# used to call both rebind halves and discard BOTH result dicts; if
+# identity's half committed and retail's half then failed (a locked
+# retail.db under a concurrent sale is the ordinary cause), nothing noticed,
+# and this process kept serving that split state -- an empty-looking shop,
+# `200 OK`, for the rest of its running lifetime, healed only by the NEXT
+# restart's boot-time guard. `docs/launch-readiness/phase5-prerequisites.md`
+# §1 says plainly: "If retail's half fails, identity's half must be rolled
+# back or the app must refuse to serve." The boot path already refuses; this
+# is what makes the activation seam refuse too, instead of quietly serving.
+#
+# A tiny mutable module-level dict (not a bare global string) so the
+# `before_request` hook below can read AND clear it without a `global`
+# statement, and so a value of `None` is unambiguous: "not currently
+# refusing" is not a special string, it is the literal absence of a reason.
+_split_state_refusal = {'reason': None}
+
+
+_split_state_log = logging.getLogger(__name__)
+
+
+def _enter_split_state_refusal(reason):
+    _split_state_log.error("Entering split-state refusal after activation: %s", reason)
+    _split_state_refusal['reason'] = reason
+
+
+def _clear_split_state_refusal():
+    if _split_state_refusal['reason'] is not None:
+        _split_state_log.info(
+            "Split-state refusal cleared -- retail.db has converged; resuming normal service."
+        )
+    _split_state_refusal['reason'] = None
+
+
+@app.before_request
+def _refuse_while_split_state():
+    """Serves the 503 half of Defect 2's fix -- see the module-level
+    `_split_state_refusal` comment above for why this exists at all.
+
+    THE COMMON CASE (no activation has ever landed the process into this
+    state) is a single dict-key read and nothing else: no database touched,
+    no measurable cost added to every other request this app serves.
+
+    WHILE REFUSING, every request pays the cost of retrying convergence --
+    deliberately, not merely tolerated: "clear it as soon as convergence
+    succeeds (retry on a later request or at next boot)" is the whole point
+    of an in-process refusal instead of a hard crash. Re-running `_detect_
+    split_state_reason()` (the SAME predicate the boot guard and the
+    activation hook both use) means the very next request after whatever
+    was blocking retail's convergence clears (the lock let go, the disk
+    issue resolved, an operator fixed a fabricated multi-tenant retail.db)
+    is the request that ends the refusal -- no restart required, though a
+    restart still heals it too via the boot guard.
+
+    `/api/health` is exempted: its own docstring already freezes its
+    contract for the desktop launcher's startup readiness probe, it reveals
+    no business data, and refusing it would make the launcher unable to
+    tell "the process is up but refusing" apart from "the process never
+    started" -- turning an honest, diagnosable 503 into a bare timeout.
+    """
+    if _split_state_refusal['reason'] is None:
+        return None
+    if request.path == '/api/health':
+        return None
+
+    reason = _detect_split_state_reason()
+    if reason is None:
+        _clear_split_state_refusal()
+        return None
+
+    _split_state_refusal['reason'] = reason
+    return jsonify({
+        'error': (
+            'This till is finishing a one-time tenant-identity upgrade and cannot '
+            'serve requests yet. It retries automatically on the next request; '
+            'restarting the app also retries immediately. Contact support if this '
+            'persists.'
+        ),
+        'code': 503,
+        'reason': reason,
+    }), 503
+
+
+def _on_licence_activated():
+    """Composed `on_activation_success` hook: BOTH halves of the
+    launch-readiness Phase 5 prerequisite #1 rebind, in the order that keeps
+    the identity layer the leader and retail the follower, PLUS Defect 2's
+    activation-seam refusal check.
+
+    IDENTITY FIRST, ALWAYS -- inherited from `_detect_split_state_reason`,
+    which runs `rebind_registry_company_id_after_activation()` before
+    `rebind_company_id_after_activation()` for the same reason this
+    function always has: only once identity has landed does retail's own
+    convergence find `local_authoritative_company_id() == new_company_id`
+    and follow (see database/schema.py::_rebind_to_owner_issued's
+    docstring). Calling them in the opposite order would mean retail's
+    check never passes on THIS activation, deferring the real work to
+    whatever boot happens to come next -- correct eventually, but a
+    needless extra window.
+
+    NEVER RAISES (unchanged contract -- both rebind calls inside `_detect_
+    split_state_reason` are explicitly documented NEVER TO RAISE, for the
+    same reason: a licence activation that genuinely succeeded at Owner
+    must not be reported back to the customer as a failure because a local
+    bookkeeping rewrite hit a locked database). `_run_activation_hook` in
+    commercial_runtime/licensing_contracts/routes.py also swallows whatever
+    a hook raises regardless, so this composed function inherits that
+    safety net too, belt and suspenders -- but the split-state check itself
+    only ever reads status dicts and a set of strings, so there is nothing
+    left here that should raise in the first place.
+    """
+    reason = _detect_split_state_reason()
+    if reason is not None:
+        _enter_split_state_refusal(reason)
+    else:
+        _clear_split_state_refusal()
+
+
 app.register_blueprint(make_licensing_blueprint(
     product_code='AURA_RETAIL',
     platform=LICENSING_PLATFORM,
@@ -264,6 +540,18 @@ app.register_blueprint(make_licensing_blueprint(
     trust_anchor_path=Path(LICENSING_TRUST_ANCHOR_PATH),
     device_identity_factory=_licensing_device_identity_factory,
     internal_shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+    # Launch-readiness Phase 2 (retail schema v14) + Phase 5 prerequisite #1
+    # (registry v4): activation is the exact moment this install first
+    # learns its Owner-issued tenant key (`license_public_id`, the same
+    # value owner/app/sync/routes.py scopes every relayed event by).
+    # registry.db's identity layer has to adopt it before retail.db's
+    # `company_id` -- derived locally at onboarding as md5(admin_email) and
+    # therefore meaningless to Owner -- can safely converge onto it, and
+    # neither migration alone can do that: licensing is OFF by default here,
+    # so the common install migrates long before it ever activates, and a
+    # rebind that only ran at migration time would silently never happen.
+    # See _on_licence_activated above.
+    on_activation_success=_on_licence_activated,
 ))
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
@@ -273,10 +561,13 @@ app.register_blueprint(make_licensing_blueprint(
 # this client produces verifies against the SAME installation Owner already
 # knows from activation/check-in.
 _sync_service = None
+_registry_sync_service = None
 if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
     from commercial_runtime.sync.relay_client import SyncRelayClient
     from commercial_runtime.sync.sync_service import (
+        REGISTRY_SYNC_ENTITY_TYPES,
+        SyncFreshnessStore,
         SyncService,
         local_company_id_from_registry,
         register_active_service,
@@ -311,8 +602,93 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # batch that needs it -- never the pulled payload's own company_id (a
     # different device's value). See that function's docstring and the
     # module-level "Cross-device company_id bug fix" note.
-    _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry)
+    #
+    # `_ensure_credit_schema` (Launch-readiness Phase 5, money-moving sync):
+    # SyncService's own `local_ensure_schema` hook -- see that constructor
+    # parameter's docstring for the exact bug this closes (a lazy, route-
+    # triggered migration `sales.due_date`/`payments`'s AR-AP columns depend
+    # on, which the sync background loop's own timer can reach before any
+    # HTTP route ever has on a brand-new device).
+    #
+    # `_retail_sync_freshness_store` (Launch-readiness Phase 7 stage 7a,
+    # docs/launch-readiness/phase7-offline-ux.md "FINDING 1"): SyncService's
+    # `local_freshness_store` hook -- see `SyncFreshnessStore`'s own
+    # docstring for the full reasoning. `load_sync_freshness`/
+    # `record_sync_freshness` (database/schema.py) read and write the
+    # `sync_freshness` table (schema v18), which exists ONLY in retail.db --
+    # this instance's own database via `_sync_get_conn` above -- so it is
+    # passed here, and deliberately NOT to `_registry_sync_service` below,
+    # whose database has no such table.
+    #
+    # `record_offline_override` (schema v19, stage 7c-ii): the SAME table's
+    # third column, wired the same way for the same reason -- see
+    # SyncFreshnessStore's own docstring on why this rides the existing
+    # collaborator instead of a second one.
+    #
+    # `record_or_refresh_stock_exception` (schema v20, stage 7d-i; extended
+    # to a SECOND caller in stage 7d-iii): SyncService's own
+    # `stock_exception_recorder` hook -- see that constructor parameter's
+    # docstring for the full reasoning. Same shape of wiring as `local_
+    # ensure_schema` above (a bare optional callable, not a NamedTuple):
+    # `stock_exceptions` (schema v20) is a retail.db table, exactly like
+    # `sync_freshness` above, so it is passed here and deliberately NOT to
+    # `_registry_sync_service` below, whose database has no such table --
+    # and whose apply loop never reaches the branch that would call it
+    # anyway, since `inventory_movement` is not in
+    # `REGISTRY_SYNC_ENTITY_TYPES`.
+    _retail_sync_freshness_store = SyncFreshnessStore(
+        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
+    _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
+                                local_ensure_schema=_ensure_credit_schema,
+                                local_freshness_store=_retail_sync_freshness_store,
+                                stock_exception_recorder=record_or_refresh_stock_exception)
     register_active_service(_sync_service)
+
+    # Phase 5 wave B2, Decision 6 (docs/launch-readiness/
+    # phase5-waveb2-user-sync.md): a SECOND SyncService instance, pulling
+    # the SAME relay stream (`_build_sync_client` -- the exact same signer,
+    # so this stream authenticates as the same installation) into a
+    # DIFFERENT database. `users` lives in registry.db, not retail.db, and
+    # the two run in separate WAL-mode files with no cross-database atomic
+    # commit (§Decision 1) -- so `_sync_get_conn` below is registry.db's own
+    # `get_conn`, never `_sync_get_conn` above. `handled_entity_types=
+    # REGISTRY_SYNC_ENTITY_TYPES` is what keeps this instance from ever
+    # trying to write a `sale`/`category`/... event into registry.db, which
+    # has no such tables -- see sync_service.py's module docstring
+    # "Two-stream design" paragraph for the exact wedge this design avoids.
+    # `local_ensure_schema` is intentionally omitted: that hook only ever
+    # exists for retail's lazy, route-triggered AR/AP migration
+    # (`_ensure_credit_schema`), which has nothing to do with `users`.
+    # `local_freshness_store` is intentionally omitted too, for the same
+    # shape of reason: `sync_freshness` (schema v18) is a retail.db table,
+    # and registry.db is at its own, independent schema version -- see
+    # `SyncFreshnessStore`'s own docstring. This instance therefore persists
+    # no freshness at all; its `get_health()` behaves exactly as it always
+    # has, pre-Phase-7.
+    #
+    # Deliberately NEVER passed to `register_active_service` -- that global
+    # slot is what `nudge()` (called from retail_api.py after every
+    # catalogue/money/stock write) pushes through, and there is exactly one
+    # slot. Registering this second instance there would silently redirect
+    # every existing nudge() call away from the retail outbox it is meant to
+    # drain. It runs its OWN push/pull timer via `.start()` below instead --
+    # a plain 10-second tick, not a nudge()-triggered one -- which is what
+    # actually drains this instance's outbox: every identity write site
+    # (Phase 5 wave B2 stage 2b, commercial_runtime/identity/user_accounts.py
+    # `_queue_user_sync_event` + its onboarding_routes.py/auth_routes.py call
+    # sites) now queues a `user` event here on account creation, password
+    # change, role/status change, language change and PIN set/clear. Stage
+    # 2a shipped this timer BEFORE any write site existed specifically so the
+    # APPLY side (a `user` event arriving from Owner, from another device's
+    # own stage 2b) was already live the moment stage 2b landed, with no
+    # second deploy required.
+    def _registry_sync_get_conn():
+        from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
+        return _registry_get_conn()
+
+    _registry_sync_service = SyncService(
+        _build_sync_client, _registry_sync_get_conn, local_company_id_from_registry,
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
 elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # Android's own wiring (multi-device-sync-foundation, Task 9): this
     # process never holds the Android device's private key
@@ -331,7 +707,12 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # SyncCoordinator has its own short-interval timer instead of relying on
     # the shared retail_api.py nudge() call sites.
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
-    from commercial_runtime.sync.sync_service import SyncService, local_company_id_from_registry
+    from commercial_runtime.sync.sync_service import (
+        REGISTRY_SYNC_ENTITY_TYPES,
+        SyncFreshnessStore,
+        SyncService,
+        local_company_id_from_registry,
+    )
     from commercial_runtime.sync.internal_routes import make_sync_internal_blueprint
 
     _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
@@ -340,16 +721,323 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         from database.schema import get_retail_conn
         return get_retail_conn()
 
-    # local_company_id_from_registry: see the Windows branch above -- the
-    # /_internal/sync/pull-apply route below calls apply_pull_result() on
-    # THIS service, which needs the same fix.
-    _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry)  # client_factory never used -- see comment above
+    # local_company_id_from_registry / local_ensure_schema: see the Windows
+    # branch above for both -- the /_internal/sync/pull-apply route below
+    # calls apply_pull_result() on THIS service too, and needs the identical
+    # fix (Kotlin's own pull loop can reach this route before any other
+    # request has, on a brand-new Android install, exactly like the Windows
+    # timer can).
+    #
+    # local_freshness_store: same reasoning as the Windows branch above --
+    # this instance's `_sync_get_conn` is retail.db, so it carries the
+    # `sync_freshness` table (schema v18) exactly like the Windows retail
+    # instance does, and gets the same collaborator -- including
+    # `record_offline_override` (schema v19, stage 7c-ii; see the Windows
+    # branch above).
+    # stock_exception_recorder: same reasoning as the Windows branch above
+    # -- this instance's `_sync_get_conn` is retail.db too, so it carries
+    # `stock_exceptions` (schema v20) exactly like the Windows instance
+    # does, and gets the same collaborator.
+    _android_sync_freshness_store = SyncFreshnessStore(
+        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
+    _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry,
+                                        local_ensure_schema=_ensure_credit_schema,
+                                        local_freshness_store=_android_sync_freshness_store,
+                                        stock_exception_recorder=record_or_refresh_stock_exception)  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,
         state_repository=_sync_state_repository,
         shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
     ))
+
+    # Sync backend follow-up (Android registry stream): the ANDROID mirror of
+    # the Windows branch's `_registry_sync_service` above -- see that
+    # instance's own comment block for the full "Two-stream design" reasoning
+    # (sync_service.py's module docstring) and the exact bug this closes (a
+    # `user`/`user_permission` event arriving from Kotlin's pull loop had no
+    # instance gated to apply it at all: the ONE Android SyncService built
+    # above is `RETAIL_SYNC_ENTITY_TYPES`-gated, which excludes both, so
+    # `_apply_event` silently dropped them, cursor still advancing past --
+    # see that gate's own comment in sync_service.py).
+    #
+    # `get_conn` is registry.db's own `get_conn`, never `_sync_get_conn`
+    # above -- exactly the same registry.db-vs-retail.db split the Windows
+    # branch's `_registry_sync_get_conn` makes, for the identical reason:
+    # `users`/`user_permissions` live in registry.db, not retail.db.
+    #
+    # `client_factory=None`, exactly like `_android_sync_service` above --
+    # this process never holds the device signing key (Kotlin does; see the
+    # branch-opening comment), so nothing here ever calls push()/pull()
+    # itself. `.start()` is deliberately never called (mirrors
+    # `_android_sync_service`, and `init_app()`'s own docstring on why: a
+    # started timer would call this `client_factory` and crash on the first
+    # tick), and this instance is deliberately never passed to
+    # `register_active_service()` either -- same reasoning as the Windows
+    # `_registry_sync_service`: that global slot must stay pointed at
+    # whatever drains the RETAIL outbox (on Android, nothing -- Kotlin's
+    # SyncCoordinator drains both databases' outboxes itself via the two
+    # `/_internal/sync/*` blueprints), never silently redirected.
+    #
+    # `local_ensure_schema`/`local_freshness_store`/`stock_exception_recorder`
+    # are all deliberately omitted, mirroring the Windows `_registry_sync_
+    # service` exactly and for the identical reason -- `_ensure_credit_
+    # schema`, `sync_freshness` (schema v18) and `stock_exceptions` (schema
+    # v20) are all retail.db-only concerns (AR/AP columns, retail's own
+    # freshness/stock-exception tables). registry.db has none of them, and
+    # this instance's apply loop never reaches a branch that would need them
+    # anyway: `inventory_movement` (the only entity type that ever touches
+    # `local_ensure_schema`/the freshness store/the stock-exception
+    # recorder) is not in `REGISTRY_SYNC_ENTITY_TYPES`.
+    #
+    # Registered under its OWN blueprint name/url_prefix -- Flask refuses two
+    # blueprints sharing a name, or two routes sharing a prefix, on the same
+    # app, and `_android_sync_service`'s blueprint above already claimed the
+    # defaults (`"sync_internal"` / `/api/sync`).
+    def _android_registry_sync_get_conn():
+        from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
+        return _registry_get_conn()
+
+    _android_registry_sync_service = SyncService(
+        None, _android_registry_sync_get_conn, local_company_id_from_registry,
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)  # client_factory never used -- see comment above
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=_android_registry_sync_service,
+        get_conn=_android_registry_sync_get_conn,
+        state_repository=_sync_state_repository,
+        shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+        blueprint_name="registry_sync_internal",
+        url_prefix="/api/registry-sync",
+    ))
+
+
+def _converge_and_refuse_to_serve_if_stuck():
+    """Launch-readiness Phase 5 prerequisite #1 -- closes the boot-time half
+    of "the window" described in
+    docs/launch-readiness/phase5-prerequisites.md §1 and required by the
+    task that added this function (see git history / PR description for
+    "registry v4, the identity-side company_id rebind").
+
+    WHY THIS HAS TO RUN ON EVERY SINGLE BOOT, not just when a migration is
+    due: `ensure_schema_version`'s whole point is a fast no-op once a
+    database is already at its target version. That is exactly wrong for
+    this specific piece of state, because a crash landing between identity
+    adopting the Owner-issued company_id (registry v4's migration step, or
+    `_on_licence_activated`'s identity half) and retail's own convergence
+    following it would otherwise NEVER be revisited -- neither
+    registry_db.py's v4 step nor schema.py's v14 step re-enters a database
+    that is already at its own target version. `rebind_company_id_after_
+    activation()` has no such gate: it is a plain idempotent
+    read-then-maybe-write, safe to call on every boot at negligible cost (a
+    handful of SELECT DISTINCT queries) once an install has converged, and
+    it is what actually CLOSES this window on a converged single-tenant
+    install -- the far more common outcome than the refusal below.
+
+    THE REFUSAL, for the install that genuinely cannot converge: if identity
+    has UNAMBIGUOUSLY adopted the Owner-issued id (registry.db holds exactly
+    that one company_id and nothing else -- the ordinary single-tenant case,
+    never the legitimate "one install hosts more than one company" case
+    CLAUDE.md documents) and retail's attempt to follow still reports
+    'failed', starting the server anyway would mean serving a shop whose
+    entire history is invisible: `session['company_id']` would come from
+    registry.db's now-Owner-issued value, `retail_api._cid()` filters every
+    query on it, and not one row in retail.db would match. That is strictly
+    worse than refusing to boot, so this raises instead -- and because
+    `init_app()` is called unconditionally, synchronously, before this
+    process ever starts accepting a request (see `if __name__ == '__main__'`
+    at the bottom of this file), raising here means the process never
+    listens at all rather than listening and serving an empty-looking shop.
+
+    A genuinely multi-tenant registry.db (`registry_company_tenant_ids`
+    returns more than one value, or a value other than the Owner-issued one)
+    is deliberately NOT covered by this refusal -- that ambiguity is
+    `rebind_company_id`'s own, correct, permanent refusal (CLAUDE.md: "one
+    install *can* host more than one company"), and this function must never
+    mistake that legitimate, unchanged state for the specific catastrophe it
+    exists to prevent.
+
+    IDENTITY FIRST, on every boot, for the SAME reason the retail half runs
+    on every boot -- and it was missing before this function existed.
+    Identity's own rebind is reachable from exactly two seams: registry v4's
+    migration step (version-gated, so it never re-enters once user_version
+    is already 4) and `_on_licence_activated` (only /activate and
+    /_internal/sync-activation fire it -- NOT /check-in). An activation
+    whose identity half returned 'failed' (a locked registry.db is the
+    ordinary cause) therefore had no third chance at all: retail's half
+    correctly deferred, both databases stayed consistently on the legacy
+    key, the shop kept working -- and the install stayed permanently
+    un-rebound despite holding a licence, which is precisely the state
+    Phase 5 must not open on top of (rows pushed under md5(admin_email)
+    arrive at Owner scoped to a tenant it does not recognise).
+
+    THE ACTUAL DECISION is delegated to `_detect_split_state_reason()` --
+    see that function's docstring for why: `_on_licence_activated`'s own
+    in-process refusal (Defect 2) has to ask the identical question this
+    function asks, and two independently-written answers to "are we stuck?"
+    is how the two seams end up disagreeing about a shop's data. This
+    function's only remaining job is turning a non-`None` answer into the
+    boot-time consequence: refuse to start at all, rather than the
+    activation-time consequence (serve 503s until it clears).
+    """
+    reason = _detect_split_state_reason()
+    if reason is not None:
+        raise RuntimeError(reason)
+
+
+#: Set True at the end of `init_app()`. Read by the refusal guard below.
+#:
+#: WHY THIS EXISTS. `init_app()` runs every schema migration and is called
+#: only from this module's `__main__` block, so `python app.py` is the one
+#: correct way to start this server. Started any other way -- most plausibly
+#: `flask --app app run`, which imports the module-level `app` object and
+#: never calls this function -- the process comes up looking perfectly
+#: healthy: it binds its port, serves static files, and answers
+#: `GET /api/health` with 200. It then fails the first request that touches
+#: a table with `sqlite3.OperationalError: no such table: users`.
+#:
+#: That was observed for real while standing up a clean install, and it cost
+#: real time precisely because every signal available said the server was
+#: fine. A missing migration must announce itself as a missing migration, at
+#: the door, not as a confusing error from whichever query happens to run
+#: first.
+_INIT_APP_HAS_RUN = False
+
+
+@app.before_request
+def _refuse_to_serve_before_init_app():
+    """Answer every request with a clear 503 until `init_app()` has run.
+
+    Deliberately covers `/api/health` as well. Reporting healthy while the
+    databases have never been migrated is the exact lie this guard exists to
+    stop -- `launcher_support`'s readiness poll asks this endpoint whether the
+    server is ready to be shown to a user, and until the schema exists the
+    honest answer is no. The real launch path (`python app.py`) calls
+    `init_app()` before serving a single request, so nothing legitimate ever
+    sees this.
+    """
+    if _INIT_APP_HAS_RUN:
+        return None
+    return jsonify({
+        'status': 'error',
+        'reason_code': 'APP_NOT_INITIALISED',
+        'message': (
+            'Aura Retail was started without running its database migrations, '
+            'so no request can be served. Start it with "python app.py" (the '
+            'PORT environment variable selects the port). Starting it via '
+            '"flask --app app run" or any other WSGI entry point imports this '
+            'module without calling init_app(), which is what leaves the '
+            'schema uncreated.'
+        ),
+    }), 503
+
+
+# ── File logging (retail-hardware-viewports) ────────────────────────────────
+# THE GAP this closes: nothing above configures file logging anywhere in this
+# module -- every `logging.getLogger(...)` call in this file and every module
+# it imports has only ever reached stderr (Python's own "no handlers found"
+# lastResort fallback). This ships as a PyInstaller/pywebview WINDOWED desktop
+# app (see products/retail/desktop/launcher_retail.py); a windowed process has
+# no console, so stderr goes nowhere at all. When a shop says "it stopped
+# working yesterday", there is currently no record -- nothing to read, nothing
+# to ask them to send.
+#
+# Bounded on purpose: a till runs for months unattended, and an unbounded log
+# is a disk-filling bug, not a diagnostic. 2 MB x 3 backups is a firm ceiling
+# (~8 MB) that still keeps weeks of INFO-level activity on a normal shop.
+LOG_MAX_BYTES = 2 * 1024 * 1024  # 2 MB per file
+LOG_BACKUP_COUNT = 3             # plus the active file -- 4 files, ~8 MB, forever
+LOG_LEVEL_ENV_VAR = 'AURA_LOG_LEVEL'  # overrides the INFO default, e.g. DEBUG/WARNING
+
+# Same directory launcher_retail.py's own `logging.basicConfig` already
+# writes 'startup.log' into (`Path(_app_data, 'logs')`) -- this is the
+# backend's OWN log, not a duplicate of the launcher's, so it gets a
+# different filename in the same, already-established, app-data-relative
+# 'logs' directory. `Path(DATABASE_DIR).parent` is this module's own
+# existing idiom for "the app-data root" (see `_sync_licensing_dir` above),
+# not a new path convention.
+LOG_DIR = Path(DATABASE_DIR).parent / 'logs'
+LOG_FILE_PATH = LOG_DIR / 'backend.log'
+
+# retail_diagnostics_export_test.py's diagnostics_export route (retail_api.py)
+# reads this same file's tail -- see that route's own module-level path
+# constant, which must be derived to the identical location.
+
+_file_logging_configured = False
+
+
+def _configure_file_logging():
+    """Attach a bounded RotatingFileHandler to the root logger, alongside
+    (never instead of) the existing stderr output, so every module's
+    `logging.getLogger(__name__)` call in this process lands in a real file
+    on disk. Called from `init_app()` -- the one seam BOTH the real entry
+    point (`if __name__ == '__main__':` at the bottom of this file) and
+    every test bootstrap (retail_printer_kick_test.py,
+    retail_route_capability_matrix_test.py, etc. -- each calls
+    `_app_module.init_app()` directly) actually run through. Starting this
+    module via `flask run`, or importing it without calling `init_app()`,
+    skips this exactly the same way it skips the schema migrations --
+    see `_refuse_to_serve_before_init_app` immediately above.
+
+    BEST-EFFORT ONLY: a read-only app-data volume, a permissions problem, or
+    any other failure creating the directory/file is caught here and logged
+    to stderr instead. A logging failure must NEVER be the reason a till
+    fails to boot -- this function cannot raise.
+
+    Idempotent: safe if `init_app()` ever runs more than once in a process
+    (some test bootstraps re-import/re-init within the same interpreter).
+    """
+    global _file_logging_configured
+    if _file_logging_configured:
+        return
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        level_name = os.environ.get(LOG_LEVEL_ENV_VAR, 'INFO').upper()
+        level = getattr(logging, level_name, logging.INFO)
+        if not isinstance(level, int):
+            level = logging.INFO
+
+        file_handler = RotatingFileHandler(
+            str(LOG_FILE_PATH), maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
+            encoding='utf-8',
+        )
+        formatter = logging.Formatter(
+            '%(asctime)s %(levelname)-8s %(name)s: %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+
+        root_logger = logging.getLogger()
+        # Explicit stderr handler alongside the new file handler -- NOT a
+        # replacement for it. Root previously had zero handlers, which meant
+        # only WARNING+ ever reached stderr at all (Python's lastResort);
+        # adding a handler here without also keeping an explicit stderr
+        # sink would be a silent regression for anyone still watching a
+        # console during development. See launcher_retail.py's own
+        # `logging.basicConfig(handlers=[FileHandler(...), StreamHandler(...)])`
+        # for the identical two-sinks-at-once shape this mirrors.
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(formatter)
+
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(stream_handler)
+        root_logger.setLevel(level)
+        _file_logging_configured = True
+        # A totally quiet, error-free boot (no sync configured, nothing
+        # mis-set) otherwise emits NOTHING at INFO level anywhere in this
+        # process -- verified while proving this feature works end to end.
+        # An empty log file is a weaker proof than a real one, and this line
+        # is also genuinely useful on its own: it is the first thing a
+        # vendor reading `backend.log` sees, timestamping exactly when this
+        # process started logging and to which file.
+        logging.getLogger(__name__).info(
+            'Aura Retail backend starting -- file logging active at %s (level=%s)',
+            LOG_FILE_PATH, level_name,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'File logging could not be configured (app-data volume unwritable '
+            'or similar); continuing with stderr-only logging. This is never '
+            'fatal to boot.'
+        )
 
 
 def init_app():
@@ -362,14 +1050,105 @@ def init_app():
     False on Android. Calling `.start()` on it would run Python's own
     push/pull timer, which would call its `client_factory` (`None`) and
     crash on the first tick -- Kotlin's SyncCoordinator is what drives
-    Android's push/pull loop instead."""
+    Android's push/pull loop instead.
+
+    `_registry_sync_service` (Phase 5 wave B2, Decision 6) is started here
+    too, independently of `_sync_service` -- both are `None` together or
+    both non-`None` together on Windows (both are only ever built inside
+    the SAME `if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM !=
+    'ANDROID':` block above), but each is a genuinely separate
+    `SyncService` with its OWN timer/thread/lock, so each needs its own
+    `.start()` call -- `.start()` on one has no effect on the other's own
+    scheduling."""
+    # First, before anything else touches a database or starts a thread --
+    # see `_configure_file_logging`'s own docstring for why this is the one
+    # seam guaranteed to run for both the real entry point and every test
+    # bootstrap. Never fatal: a logging failure must not stop a till booting.
+    _configure_file_logging()
     init_registry_db()
     init_retail()
+    # Launch-readiness Phase 5 prerequisite #1 -- must run AFTER both
+    # migrations (it is what catches up when a migration's own version gate
+    # can no longer fire, see the docstring above) and BEFORE anything below
+    # this line reads company-scoped retail data, so a stuck install is
+    # caught before the sync loop or any outbox worker touches it.
+    _converge_and_refuse_to_serve_if_stuck()
     if _sync_service is not None:
         _sync_service.start()
+    if _registry_sync_service is not None:
+        _registry_sync_service.start()
     _resume_einvoicing_workers()
     _resume_notifications_workers()
     _resume_whatsapp_workers()
+    global _INIT_APP_HAS_RUN
+    _INIT_APP_HAS_RUN = True
+    return app
+
+
+def create_app():
+    """Application factory -- the single correct construction path this
+    module was missing (retail-hardware-viewports Fix 1).
+
+    WHAT "BUILD" ALREADY MEANS HERE: `app = Flask(...)` near the top of
+    this file, and every `app.register_blueprint(...)` call below it, run
+    unconditionally at IMPORT time -- not inside this function, and that is
+    deliberate and UNCHANGED by this fix (see the backward-compatibility
+    note below). The module-level `app` object already exists, fully
+    routed, the moment this module is imported; ~140 existing test files'
+    bootstraps (`import app as _app_module; app = _app_module.init_app()`)
+    and the Android/Chaquopy embedding all depend on exactly that. Moving
+    the `Flask(...)` construction and blueprint registration INTO this
+    function would break every one of those call sites -- a separate,
+    larger migration, not attempted here.
+
+    WHAT THIS FUNCTION ACTUALLY ADDS: the missing call to `init_app()` --
+    schema migrations, the split-state boot guard, background worker/sync
+    startup -- which, before this, only ran from the `if __name__ ==
+    '__main__':` block at the bottom of this file. `_INIT_APP_HAS_RUN`'s
+    own docstring above spells out the exact failure this closes: starting
+    this module any other way (most plausibly `flask --app app run`, which
+    imports the module and stops there) produced a process that bound its
+    port and answered `GET /api/health` with 200 -- "looking perfectly
+    healthy" -- then failed the first real request with
+    `sqlite3.OperationalError: no such table: users`. `create_app()` is now
+    the one path that both builds (already done at import) AND initialises.
+
+    SINGLE-SHOT, NOT "MAKE init_app() ITSELF IDEMPOTENT" -- a deliberate
+    choice, made by reusing the SAME `_INIT_APP_HAS_RUN` flag
+    `_refuse_to_serve_before_init_app` already reads, rather than teaching
+    `init_app()` to tolerate being re-run. `init_app()` starts background
+    timers that are NOT provably safe to start twice: `_sync_service.start()`
+    / `_registry_sync_service.start()` mirror `licensing_contracts/
+    checkin_scheduler.py`'s LicenseCheckInScheduler, which -- per the
+    `_IdempotentEinvoicingWorkerHandle` comment above -- does NOT cancel a
+    running Timer on a second `.start()`, it only overwrites the handle to
+    it, so the first Timer chain keeps firing forever alongside a new one.
+    `_resume_notifications_workers()` / `_resume_whatsapp_workers()` call
+    `.start()` directly on `EmailOutboxWorker`/`WhatsAppOutboxWorker` with
+    no idempotent wrapper at all (unlike the einvoicing sweep, which is
+    wrapped precisely because it needed one -- see that class's docstring).
+    Re-running `init_app()` on a second `create_app()` call would therefore
+    risk duplicate background timers, not a harmless no-op re-init. So: the
+    FIRST call in a process runs `init_app()` and returns the
+    fully-initialised `app`; every later call is a no-op that returns the
+    SAME already-initialised `app` without touching `init_app()` again --
+    calling this factory more than once is safe, but only because the
+    second call is skipped outright, not because `init_app()` was made
+    re-entrant.
+
+    WHAT THIS DOES NOT FIX (being honest about it): this does not let
+    separate test files share one process. The module-level `app` -- its
+    blueprints, its DB connections -- is still built at IMPORT time, which
+    is exactly what the ~140 existing test bootstraps and the Android
+    embedding require. Sharing one process across test files needs THAT to
+    change (lazy construction of `app` itself), which is a separate, much
+    larger change than this one. Do not read this factory as a test-speed
+    improvement -- it removes the `flask run` trap and gives a single
+    construction path, nothing more.
+    """
+    global _INIT_APP_HAS_RUN
+    if not _INIT_APP_HAS_RUN:
+        init_app()
     return app
 
 
@@ -378,14 +1157,36 @@ def _resume_einvoicing_workers():
     app update) must keep submitting without waiting for a settings write
     to notice -- sweep for companies with the feature already on and
     resume their background workers. A fresh/never-enabled install finds
-    zero rows here and starts zero threads."""
+    zero rows here and starts zero threads.
+
+    AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']=
+    '1'), so a company enabled purely by that default has NO row at all in
+    einvoice_settings -- the old query above (`WHERE skey='enabled' AND
+    svalue='1'`) only ever matched an EXPLICIT row, so it silently missed
+    every default-only-enabled company on every restart, and their workers
+    never resumed: documents would queue in einvoice_outbox forever, even
+    after real JoFotara credentials were configured, because nothing ever
+    ticked the worker again after the process that first enqueued them
+    exited. The set of companies that need a worker is exactly the set
+    with something WAITING for one -- companies with an explicit enabled='1'
+    row, UNIONed with companies that already have einvoice_outbox rows
+    (the default-only-enabled ones, since enqueue_sale/enqueue_invoice run
+    regardless of whether enabled_at was ever stamped) -- each candidate is
+    then filtered through settings.is_enabled() so the killswitch and an
+    explicit '0' still win over an outbox that happens to have old rows in
+    it. One pass, one start() call per company (the idempotent handle
+    above also makes a second call harmless, but this dedupes via UNION
+    and the loop so there's normally never a second call to make)."""
     conn = get_retail_conn()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1'"
+            "SELECT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1' "
+            "UNION SELECT company_id FROM einvoice_outbox"
         ).fetchall()
         for row in rows:
             cid = row[0]
+            if not _einvoicing_settings.is_enabled(conn, _EINVOICING_APP_DATA_DIR, cid):
+                continue
             interval = int(_einvoicing_settings.get_setting(conn, cid, 'submit_interval_seconds'))
             _get_or_create_einvoicing_worker(cid).start(interval_seconds=interval)
     finally:
@@ -430,12 +1231,68 @@ def _resume_whatsapp_workers():
         conn.close()
 
 
-if __name__ == '__main__':
-    init_app()
-    port = int(os.environ.get('PORT', 5000))
+def _run_server(port):
+    """Serve `app` via waitress (this codebase's production WSGI server),
+    with a governed fallback -- see the Fix 2 comments in the `except`
+    branch below for why a packaged build must never silently fall back to
+    Flask's development server (retail-hardware-viewports Fix 2).
+
+    Factored out of the `if __name__ == '__main__':` block below so the
+    fallback/refusal branch is directly callable -- e.g. with `waitress`'s
+    import forced to fail and `commercial_runtime.security.modes.IS_FROZEN`
+    monkeypatched to True -- without having to run this whole module as a
+    script to exercise it.
+    """
     try:
         from waitress import serve as _serve
         _serve(app, host='127.0.0.1', port=port, threads=12,
                channel_timeout=120, connection_limit=200, _quiet=True)
     except ImportError:
+        # Fix 2: a packaged build silently falling back to Flask's
+        # development server used to be entirely silent -- nothing logged,
+        # nothing refused. That is a production-grade problem: the dev
+        # server is not built for a real shop's sustained, concurrent till
+        # traffic, and a shop quietly running on it is a support incident
+        # nobody can diagnose -- every symptom (occasional dropped
+        # requests, no real concurrency under load) looks like a random bug
+        # rather than "the wrong server started."
+        #
+        # `IS_FROZEN` is this codebase's OWN existing idiom for "is this a
+        # packaged build" (commercial_runtime/security/modes.py -- "Single
+        # source of truth for which environment is this process running
+        # in"), imported lazily inside the function exactly the way
+        # retail_api.py's demo-mode gate already does. Reused here rather
+        # than re-deriving `getattr(sys, 'frozen', False)` a second time:
+        # the raw check at the very top of this file only exists because
+        # THAT path-resolution code has to run before sys.path even
+        # includes commercial_runtime -- not the case here, deep into the
+        # module after every import above has already succeeded.
+        from commercial_runtime.security.modes import IS_FROZEN
+        if IS_FROZEN:
+            logging.getLogger(__name__).error(
+                'FATAL: waitress is missing in a PACKAGED build -- refusing '
+                'to start. Aura Retail must never run a real shop on the '
+                'Flask development server: it is not built for sustained '
+                'concurrent till traffic, and a shop silently running on it '
+                'is a support incident nobody can diagnose (every symptom '
+                'looks like a random bug rather than "the wrong server is '
+                'running"). This means the packaged build is missing a '
+                'dependency -- waitress must be bundled (check the '
+                'PyInstaller .spec file\'s hidden imports and '
+                'requirements/retail.txt). Exiting without serving.'
+            )
+            sys.exit(1)
+        logging.getLogger(__name__).warning(
+            'waitress is not installed -- falling back to the Flask '
+            'development server. This is acceptable for local development '
+            'ONLY. It must never serve a real shop: install waitress (see '
+            'requirements/retail.txt) before packaging, or before pointing '
+            'a real till at this process.'
+        )
         app.run(host='127.0.0.1', port=port, debug=False)
+
+
+if __name__ == '__main__':
+    create_app()
+    port = int(os.environ.get('PORT', 5000))
+    _run_server(port)

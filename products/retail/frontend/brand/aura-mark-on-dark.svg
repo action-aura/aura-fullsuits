@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t d">
+  <title id="t">Aura mark, dark ground</title>
+  <desc id="d">The Aura ring and beacon around a light, bold A, for dark surfaces and the app icon.</desc>
+  <defs>
+    <linearGradient id="aura-ring-d" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
+      <stop offset="0" stop-color="#3f7be6"/>
+      <stop offset="0.55" stop-color="#6ea8ff"/>
+      <stop offset="1" stop-color="#5fe3d0"/>
+    </linearGradient>
+    <radialGradient id="aura-glow-d" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5fe3d0" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#5fe3d0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="128" cy="128" r="124" fill="url(#aura-glow-d)"/>
+  <circle cx="128" cy="128" r="94" fill="none" stroke="url(#aura-ring-d)" stroke-width="15"
+          stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32"
+          transform="rotate(-90 128 128)"/>
+  <path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="#edf2f8"/>
+  <path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="#edf2f8" stroke-width="26"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 108 142 L 148 142" fill="none" stroke="#edf2f8" stroke-width="20" stroke-linecap="round"/>
+</svg>

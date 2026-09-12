@@ -18,7 +18,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-LICENSING_SCHEMA_VERSION = 1
+LICENSING_SCHEMA_VERSION = 2  # bumped: launch-readiness (2026-09-03) added
+# sync_relay_base_url (see LicenseStateRecord + _MIGRATIONS below). This
+# constant is stored PER-ROW as data (licensing_schema_version column), not
+# read anywhere to gate behavior -- the real migration mechanism is
+# _migrate_add_missing_columns() below, which is additive-only and driven
+# by actually inspecting the live table shape (PRAGMA table_info), the same
+# "trust live shape, not a version number" principle
+# commercial_runtime/security/migration_safety.py's docstring argues for at
+# the product-schema level. Bumping this is just keeping the constant
+# honest for any NEW row saved from here on.
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS licensing_state (
@@ -46,9 +55,23 @@ CREATE TABLE IF NOT EXISTS licensing_state (
     subscription_status TEXT,
     trusted_signing_key_ids_json TEXT,
     restriction_state_metadata_json TEXT,
+    sync_relay_base_url TEXT,
     updated_at TEXT NOT NULL
 )
 """
+
+# Columns added AFTER the original CREATE TABLE shipped. CREATE TABLE IF NOT
+# EXISTS above is a no-op once the table already exists, so an existing
+# licensing.db from before this column existed would otherwise never get
+# it -- save()'s INSERT (which lists every dataclass field by name) would
+# then fail with "no such column" the first time a build that knows about
+# sync_relay_base_url tries to write to a database created by one that
+# doesn't. Each entry is (column_name, column_ddl_type); ADD COLUMN is
+# always nullable here (no server-side default), matching every field on
+# LicenseStateRecord being Optional.
+_ADDED_COLUMNS = (
+    ("sync_relay_base_url", "TEXT"),
+)
 
 
 class LicenseStateRepositoryError(Exception):
@@ -80,6 +103,16 @@ class LicenseStateRecord:
     subscription_status: Optional[str] = None
     trusted_signing_key_ids_json: Optional[str] = None
     restriction_state_metadata_json: Optional[str] = None
+    # Launch-readiness (2026-09-03): the relay base URL Owner told this
+    # device at activation (activation.py's ingest_activation_response()
+    # stores it the same way owner_installation_id already is), used by
+    # products/*/backend/config.py as a fallback when no operator has
+    # explicitly set AURA_SYNC_RELAY_URL. None on any record saved before
+    # this field existed, and on any activation response that never
+    # included the key (an Owner deploy that never configured
+    # OWNER_SYNC_RELAY_PUBLIC_URL) -- both are legitimate "not discovered"
+    # states, not errors.
+    sync_relay_base_url: Optional[str] = None
 
 
 class LicenseStateRepository:
@@ -99,6 +132,20 @@ class LicenseStateRepository:
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
             conn.execute(_CREATE_TABLE_SQL)
+            self._migrate_add_missing_columns(conn)
+
+    def _migrate_add_missing_columns(self, conn: sqlite3.Connection) -> None:
+        """Additive-only migration for a licensing.db that predates one of
+        _ADDED_COLUMNS -- must never raise on a brand-new database (the
+        columns are already present from _CREATE_TABLE_SQL, so this is a
+        no-op) and must never raise on an old one either (ALTER TABLE ADD
+        COLUMN is safe on SQLite regardless of how many rows already
+        exist; every added column is nullable, so existing rows simply
+        read back as NULL / None)."""
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(licensing_state)")}
+        for column_name, column_ddl_type in _ADDED_COLUMNS:
+            if column_name not in existing:
+                conn.execute(f"ALTER TABLE licensing_state ADD COLUMN {column_name} {column_ddl_type}")
 
     def load(self) -> Optional[LicenseStateRecord]:
         with self._conn() as conn:

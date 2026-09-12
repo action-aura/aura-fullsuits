@@ -4,9 +4,10 @@
  * Self-contained, mirroring products/clinic/frontend/licensing.js exactly
  * (same rationale: no shared SubsystemApp shell exists to plug into --
  * see that file's docstring). Talks only to /api/einvoicing/* -- never
- * touches /api/sub/clinic/* itself. Byte-identical to
- * products/retail/frontend/einvoicing.js except this header comment --
- * the API surface and UI are product-agnostic by design (see routes.py).
+ * touches /api/sub/clinic/* itself. Ported from
+ * products/retail/frontend/einvoicing.js's provider_configured/
+ * provider_in_use handling (the API surface is product-agnostic, see
+ * routes.py) -- wording says "invoice" here, not "sale".
  *
  * DOM is built with createElement/textContent throughout -- no
  * innerHTML/outerHTML assignment anywhere in this file, same policy as
@@ -29,6 +30,10 @@
     CLEARED: { text: 'Cleared', cls: 'state-active' },
     FAILED_PERMANENT: { text: 'Failed', cls: 'state-restricted' },
     CANCELLED: { text: 'Cancelled', cls: 'state-neutral' },
+  };
+
+  const PROVIDER_LABELS = {
+    unconfigured: 'Not connected',
   };
 
   function clearChildren(node) {
@@ -107,9 +112,31 @@
       statusContent.appendChild(stateBadge({ text: 'Paused: ' + data.killswitch.reason, cls: 'state-warning' }));
     }
 
+    // data.provider_configured describes the live provider OBJECT
+    // (routes.py), not the 'provider' setting below -- a clinic can have
+    // e-invoicing switched on (the new default in Jordan) while never
+    // having registered on the JoFotara portal, which is exactly the case
+    // this notice exists for: without it, the card would show "Enabled" +
+    // a growing Queued count and nothing telling the clinic why nothing is
+    // clearing. Missing on an older backend (undefined) reads as
+    // "configured" -- only an explicit false trips this.
+    const notConnected = data.provider_configured === false;
+    if (notConnected) {
+      statusContent.appendChild(el('div', {
+        className: 'state-warning',
+        text: 'E-invoicing is on and every invoice is being recorded, but nothing has been sent to the tax authority yet ' +
+          'because this installation is not connected to JoFotara. To connect, register the business on the JoFotara ' +
+          'portal and enter the Client-ID, Secret-Key and activity number it issues.',
+      }));
+    }
+
     const dl = el('dl');
     dl.appendChild(el('dt', { text: 'Provider' }));
-    dl.appendChild(el('dd', { text: data.provider }));
+    // provider_in_use is the object actually running; fall back to the
+    // older 'provider' setting key when a backend hasn't shipped the new
+    // field yet (undefined/null), so this card renders correctly either way.
+    const providerKey = data.provider_in_use != null ? data.provider_in_use : data.provider;
+    dl.appendChild(el('dd', { text: PROVIDER_LABELS[providerKey] || providerKey }));
     const counts = data.counts_by_state || {};
     dl.appendChild(el('dt', { text: 'Queued' }));
     dl.appendChild(el('dd', { text: String(counts.QUEUED || 0) }));
@@ -123,6 +150,13 @@
 
     const row = el('div', { className: 'row' });
     const runBtn = el('button', { className: 'secondary', text: 'Submit queue now' });
+    if (notConnected) {
+      // A button that cannot work is how a clinic concludes the software
+      // itself is broken -- disable it and say why, right here, rather
+      // than letting them press it and get a cryptic failure.
+      runBtn.disabled = true;
+      runBtn.title = 'Connect this installation to JoFotara (see the credentials below) before submitting the queue.';
+    }
     runBtn.addEventListener('click', () => onRunOnceClicked(runBtn));
     row.appendChild(runBtn);
 

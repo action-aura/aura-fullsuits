@@ -11,6 +11,15 @@ Deterministic: the same (invoice_ref, document) always yields the same
 provider_uuid, so a resubmission (e.g. after a crash-recovery lease reclaim)
 is trivially provable as idempotent in tests -- see outbox.py /
 test_worker.py's double-submission guard.
+
+This class must NEVER be wired into a shipped install as the live provider:
+it reports CLEARED -- with a QR payload and a provider_uuid -- without
+contacting anybody, which is a false compliance claim if it ever reaches a
+real receipt. products/retail/backend/app.py and products/clinic/backend/
+app.py both gate it behind the AURA_EINVOICING_ALLOW_MOCK=1 environment
+variable (development/test only); the shipped default is
+providers/unconfigured.py's UnconfiguredProvider, which queues documents
+instead of pretending to submit them.
 """
 from __future__ import annotations
 

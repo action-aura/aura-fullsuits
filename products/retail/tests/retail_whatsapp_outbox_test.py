@@ -277,10 +277,28 @@ def test_sale_response_is_unaffected_by_whatsapp_queueing(client, monkeypatch):
     pid = _make_product(client, reorder_level=5, initial_stock=6)
     data = _sell(client, pid, 2)
 
+    # 'oversold_past_recorded_stock' added launch-readiness Phase 7 stage
+    # 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+    # Decision 1") -- a real, deliberate checkout-response contract change,
+    # matching every other frozen SALE_RESPONSE_KEYS literal in this suite
+    # (see retail_cash_drawer_test.py's own comment on its copy).
+    #
+    # 'einvoice' added 2026-09-08. E-invoicing now defaults ON
+    # (commercial_runtime/einvoicing/settings.py DEFAULTS 'enabled': '1'),
+    # so create_sale always reaches the enqueue block at retail_api.py:4816
+    # and sets response_data['einvoice'] whenever enqueue_sale(...) returns
+    # truthy -- inside a broad try/except that logs and moves on. So a
+    # failed e-invoicing enqueue now surfaces as a WhatsApp-outbox key-set
+    # failure. What this assertion is actually about is unchanged: WhatsApp
+    # queueing adds nothing to the checkout response. A diff on this line is
+    # fixed upstream in e-invoicing, never by shortening the list.
     assert sorted(data.keys()) == sorted([
         'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-        'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-        'subtotal', 'tax_amount', 'total', 'warning',
+        'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+        'id', 'idempotency_key', 'lines',
+        'oversold_past_recorded_stock',
+        'points_redeemed', 'points_redeemed_amount',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
     ])
 
 

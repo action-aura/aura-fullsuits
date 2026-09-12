@@ -319,11 +319,44 @@ def test_item2_subscription_and_license_exist_result_write_crashes_retry_reconci
         assert order.status == "FULFILLED"
 
 
-def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app, seeded):
+def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app, seeded, monkeypatch):
     """Item #3: two concurrent fulfillment requests for the same order --
-    the SELECT ... FOR UPDATE row lock must serialize them so exactly one
-    Subscription is ever created, never two."""
+    a real lock must serialize them so exactly one Subscription (and one
+    License) is ever created, never two, and the four losers must be
+    refused BY THE GUARD (FULFILLMENT_ALREADY_COMPLETE), not by some other
+    accident.
+
+    Measured CI defect (run 34138397829, 2026-09-07): the comment this test
+    used to trust claimed `db_session.refresh(order, with_for_update=True)`
+    serialized concurrent callers. It does not -- the row lock it takes is
+    released by the very next statement, `audit_record(...
+    "FULFILLMENT_STARTED" ...)`, which commits, and every service called
+    afterwards (create_subscription/transition_subscription/create_license/
+    issue_license_key) commits again. On GitHub Actions this test got
+    `AssertionError: expected exactly 1 Subscription, got 4`. Locally it
+    passed 3/3 runs purely by thread-scheduling luck, which is why it was
+    never caught before CI ran it. `create_subscription` is now
+    monkeypatched with a 0.75s sleep before delegating to the real
+    implementation, so every one of the 5 threads is deliberately pushed
+    into the race window between "no Subscription exists yet" and the
+    insert -- this reproduces the duplicate on every run, on every machine,
+    instead of depending on timing.
+
+    Mutation proof (both directions, `fulfill_order`'s
+    `with _hold_fulfillment_lock(order.id):` swapped for
+    `with contextlib.nullcontext():`, this exact test run with
+    `-k item3_concurrent`):
+
+    RED (guard removed):
+        FAILED owner/tests/test_phase9_5d_fulfillment.py::test_item3_concurrent_fulfillment_requests_only_one_creates_subscription
+        AssertionError: expected exactly 1 Subscription, got 5
+        assert 5 == 1
+
+    GREEN (guard restored):
+        1 passed, 17 deselected in 20.31s
+    """
     import threading
+    import time
 
     staff_id, profile_id = _seed_sales_employee(app, "fulfillt@example.com")
     finance_id, _ = _seed_sales_employee(app, "fulfillu@example.com", role_codes=["FINANCE"])
@@ -334,6 +367,21 @@ def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app
     with app.app_context():
         order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
         order_id_holder["id"] = order.id
+
+    # Widen the race window deterministically: patched in the fulfillment
+    # MODULE's namespace, since that is what `fulfill_order` actually calls
+    # (`from app.subscriptions.services import create_subscription` binds a
+    # local name in app.commercial_sales.fulfillment -- patching
+    # app.subscriptions.services.create_subscription would not touch it).
+    import app.commercial_sales.fulfillment as fulfillment_module
+
+    real_create_subscription = fulfillment_module.create_subscription
+
+    def _slow_create_subscription(*args, **kwargs):
+        time.sleep(0.75)
+        return real_create_subscription(*args, **kwargs)
+
+    monkeypatch.setattr(fulfillment_module, "create_subscription", _slow_create_subscription)
 
     results = []
     errors = []
@@ -368,16 +416,31 @@ def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app
         t.join(timeout=30)
 
     with app.app_context():
+        from app.commercial_sales.errors import CommercialSalesError
         from app.extensions import db_session
+        from app.models.licensing import License
         from app.models.subscriptions import Subscription
 
         subscription_count = db_session.query(Subscription).filter_by(sales_order_id=order_id_holder["id"]).count()
         assert subscription_count == 1, f"expected exactly 1 Subscription, got {subscription_count}"
 
-    # Every thread either succeeded (reusing/creating the one real
-    # Subscription) or failed with a real, distinguishable error (e.g.
-    # FULFILLMENT_ALREADY_COMPLETE once serialized behind the winner) --
-    # never an unhandled crash.
+        winning_subscription = db_session.query(Subscription).filter_by(sales_order_id=order_id_holder["id"]).one()
+        license_count = db_session.query(License).filter_by(subscription_id=winning_subscription.id).count()
+        assert license_count == 1, f"expected exactly 1 License, got {license_count}"
+
+    # Every thread either succeeded (exactly one) or failed (exactly four)
+    # -- never an unhandled crash, and never a duplicate that happened to
+    # not raise.
+    assert len(results) == 1
+    assert len(errors) == 4
+    # The important assertion: the four losers were refused BY THE GUARD,
+    # not by something else that happened to also produce one row (e.g. a
+    # unique-constraint IntegrityError from two racing inserts, or a lock
+    # timeout). Proves the check ran, not merely that the outcome looked
+    # right.
+    for exc in errors:
+        assert isinstance(exc, CommercialSalesError), f"expected CommercialSalesError, got {type(exc).__name__}: {exc}"
+        assert exc.code == "FULFILLMENT_ALREADY_COMPLETE", f"expected FULFILLMENT_ALREADY_COMPLETE, got {exc.code}"
     assert len(results) + len(errors) == 5
 
 
@@ -501,6 +564,111 @@ def test_no_installation_created_by_fulfillment(app, seeded):
         fulfill_order(order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4()))
 
         assert db_session.query(Installation).count() == 0
+
+
+def test_fulfill_order_yields_retrievable_license_key(app, seeded):
+    """AUDIT-NNN: a licence fulfilled through the quote->order->invoice->
+    payment->fulfill pipeline must yield a key the operator can actually
+    read back. `issue_license_key()`'s plaintext return value used to be
+    discarded here (fulfillment.py just called it for effect) -- producing
+    a licence the customer could never activate, with `replace_license`
+    the only recovery. The full key is captured and returned once, the
+    same ADR-9 discipline `licensing/routes.py::issue` already uses for
+    the direct path."""
+    staff_id, profile_id = _seed_sales_employee(app, "fulfillkey_a@example.com")
+    finance_id, _ = _seed_sales_employee(app, "fulfillkey_b@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_id)
+    plan_id = _seed_plan(app, "FK_PLAN")
+    with app.app_context():
+        from app.commercial_sales.fulfillment import fulfill_order
+        from app.extensions import db_session
+        from app.models.licensing import License, LicenseKeyIssuanceEvent
+        from app.security.license_keys import verify_license_key
+
+        order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
+        result = fulfill_order(
+            order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4())
+        )
+
+        assert result["license_key"], "fulfillment must surface the plaintext key, not discard it"
+        license_row = db_session.get(License, result["license_id"])
+        # The returned key really is the one this license was issued with --
+        # verified against the persisted HMAC, the only thing actually stored.
+        assert verify_license_key(result["license_key"], app.config["LICENSE_PEPPER"], license_row.key_secret_hmac)
+
+        # Not persisted anywhere new: the stored HMAC is not the plaintext,
+        # and the prefix (the only plaintext fragment ever stored) is a
+        # strict prefix of the key, never the whole thing.
+        assert license_row.key_secret_hmac != result["license_key"]
+        assert result["license_key"].startswith(license_row.key_prefix)
+        assert license_row.key_prefix != result["license_key"]
+
+        events = db_session.query(LicenseKeyIssuanceEvent).filter_by(license_id=license_row.id).all()
+        assert len(events) == 1
+        assert events[0].key_prefix == license_row.key_prefix
+
+
+def test_fulfill_order_replay_reports_already_issued_not_blank_or_error(app, seeded):
+    """A REPLAY (the exact same idempotency key reused for the same order)
+    must not raise and must not present a blank key as if nothing had
+    happened -- a key really was issued, on the first call, and shown
+    once then. The second call must say so explicitly (`license_key`
+    populated on the first call, `None` -- not an exception -- on the
+    replay), never silently, and never by re-issuing."""
+    staff_id, profile_id = _seed_sales_employee(app, "fulfillkey_c@example.com")
+    finance_id, _ = _seed_sales_employee(app, "fulfillkey_d@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_id)
+    plan_id = _seed_plan(app, "FK2_PLAN")
+    with app.app_context():
+        from app.commercial_sales.fulfillment import fulfill_order
+        from app.extensions import db_session
+        from app.models.licensing import LicenseKeyIssuanceEvent
+
+        order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
+        key = str(uuid.uuid4())
+        first = fulfill_order(order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=key)
+        second = fulfill_order(order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=key)
+
+        assert first["license_key"]  # the real, once-shown key
+        assert second["replayed"] is True
+        assert second["license_key"] is None  # explicitly reported as absent, never an exception, never re-derived
+        assert second["subscription_id"] == first["subscription_id"]
+
+        # The replay never re-issues -- exactly one issuance event for this license.
+        events = db_session.query(LicenseKeyIssuanceEvent).filter_by(license_id=first["license_id"]).all()
+        assert len(events) == 1
+
+
+def test_fulfill_order_key_issuance_audited_without_plaintext(app, seeded):
+    """The audit trail this pipeline already relies on
+    (`LICENSE_KEY_ISSUED`, written by `issue_license_key` itself) is
+    unchanged by capturing the key here -- it still records only the
+    prefix/masked-suffix metadata, never the plaintext."""
+    staff_id, profile_id = _seed_sales_employee(app, "fulfillkey_e@example.com")
+    finance_id, _ = _seed_sales_employee(app, "fulfillkey_f@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_id)
+    plan_id = _seed_plan(app, "FK3_PLAN")
+    with app.app_context():
+        import json
+
+        from sqlalchemy import select
+
+        from app.commercial_sales.fulfillment import fulfill_order
+        from app.extensions import db_session
+        from app.models.audit import AuditLog
+
+        order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
+        result = fulfill_order(
+            order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4())
+        )
+
+        audit_row = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.action_code == "LICENSE_KEY_ISSUED", AuditLog.entity_public_id == str(result["license_id"])
+            )
+        ).scalars().first()
+        assert audit_row is not None
+        assert result["license_key"] not in json.dumps(audit_row.after_state_redacted)
 
 
 def test_fulfillment_module_never_constructs_subscription_or_license_directly():

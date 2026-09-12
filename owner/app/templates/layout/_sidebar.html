@@ -14,6 +14,15 @@
 
   Profile/account destinations (My Profile, Account, Log out) are NOT
   here -- they live in the top-bar profile menu (layout/base.html).
+
+  Department disclosures: each group heading below is a real <button>
+  that shows and hides only its own link list, and every group ships
+  COLLAPSED by default. The flat ~25-link scroll this replaced ran past
+  the fold at a 1000px viewport height, so every destination in the
+  product competed for attention at once. The single exception is the
+  group containing the current page -- rendered already-expanded by the
+  server (see nav_group below), so a page load never paints everything
+  shut and then pops one open once JS arrives.
 #}
 {% macro nav_link(endpoint, label) %}
   {% set is_current = (request.endpoint == endpoint) %}
@@ -26,199 +35,73 @@
   </li>
 {% endmacro %}
 
-{# ---------- OVERVIEW ---------- #}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('Overview') }}</div>
-  <ul class="aura-nav-group__list">
-    {{ nav_link('dashboard.index', _('Dashboard')) }}
-    {% if can_view_attention_center %}
-      {{ nav_link('attention.index', _('Attention Center')) }}
-    {% endif %}
-  </ul>
-</div>
+{#
+  nav_group(slug, label) -- wraps one department's links in a disclosure.
+  Used as {% call nav_group(...) %}...{% endcall %}; the block body is
+  that group's existing, untouched, permission-gated nav_link() calls.
 
-{# ---------- CRM ---------- #}
-{% set crm_visible = has_any_permission('leads.view_own', 'leads.view_all') or has_permission('customers.view') %}
-{% if crm_visible %}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('CRM') }}</div>
-  <ul class="aura-nav-group__list">
-    {% if has_any_permission('leads.view_own', 'leads.view_all') %}
-      {{ nav_link('leads.list_leads', _('Leads')) }}
-      {{ nav_link('leads.crm_dashboard', _('CRM Dashboard')) }}
-    {% endif %}
-    {% if has_permission('customers.view') %}
-      {{ nav_link('customers.list_customers', _('Customers')) }}
-    {% endif %}
-  </ul>
-</div>
-{% endif %}
+  WHY it captures the body before emitting the button: the initial
+  expanded state must be decided server-side, and the honest signal for
+  "the current page lives in this group" is already in the rendered
+  markup -- nav_link() stamps aria-current="page" on the link matching
+  request.endpoint. Reading that marker back out of the captured body
+  keeps the disclosure in lockstep with whatever the group actually
+  rendered, under whatever permissions this particular employee holds.
+  The alternative -- a second endpoint-to-group table maintained
+  alongside the list itself -- is exactly the duplication that already
+  bit layout/_shortcuts_cheatsheet.html (documented there as an accepted
+  deviation in dashboard-interactive-kit-contract.md, not a pattern to
+  spread further).
 
-{# ---------- SALES ---------- #}
-{% set sales_visible = has_any_permission('quotes.create', 'quotes.approve')
-  or has_any_permission('orders.create', 'orders.approve')
-  or has_any_permission('invoices.create', 'invoices.issue')
-  or has_permission('payments.view')
-  or has_any_permission('refunds.create', 'refunds.approve')
-  or has_any_permission('commissions.view_own', 'commissions.view_all')
-  or has_permission('commissions.pay')
-  or has_any_permission('quotes.create', 'orders.create', 'invoices.create')
-  or has_permission('commissions.view_all') %}
-{% if sales_visible %}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('Sales') }}</div>
-  <ul class="aura-nav-group__list">
-    {% if has_any_permission('quotes.create', 'quotes.approve') %}
-      {{ nav_link('commercial_sales_web.list_quotes', _('Quotes')) }}
-    {% endif %}
-    {% if has_any_permission('orders.create', 'orders.approve') %}
-      {{ nav_link('commercial_sales_web.list_orders', _('Sales Orders')) }}
-    {% endif %}
-    {% if has_any_permission('invoices.create', 'invoices.issue') %}
-      {{ nav_link('commercial_sales_web.list_invoices', _('Invoices')) }}
-    {% endif %}
-    {% if has_permission('payments.view') %}
-      {{ nav_link('commercial_sales_web.list_payments', _('Payments')) }}
-    {% endif %}
-    {% if has_any_permission('refunds.create', 'refunds.approve') %}
-      {{ nav_link('commercial_sales_web.list_refunds', _('Refunds')) }}
-    {% endif %}
-    {% if has_any_permission('commissions.view_own', 'commissions.view_all') %}
-      {{ nav_link('commercial_sales_web.list_commissions', _('Commissions')) }}
-    {% endif %}
-    {% if has_permission('commissions.pay') %}
-      {{ nav_link('commercial_sales_web.list_payout_batches', _('Commission Payouts')) }}
-    {% endif %}
-    {% if has_any_permission('quotes.create', 'orders.create', 'invoices.create') %}
-      {{ nav_link('commercial_sales_web.employee_dashboard_view', _('Commercial Dashboard')) }}
-    {% endif %}
-    {% if has_permission('commissions.view_all') %}
-      {{ nav_link('commercial_sales_web.finance_dashboard_view', _('Finance Dashboard')) }}
-    {% endif %}
-  </ul>
-</div>
-{% endif %}
+  WHY the slug is a passed-in constant rather than a loop index: a group
+  a role cannot see is not rendered at all, so an index would shift per
+  role and the same department would get different element ids -- and
+  therefore different persisted localStorage keys -- for different
+  employees. The slug is stable per department, forever.
+#}
+{% macro nav_group(slug, label) %}
+  {% set body %}{{ caller() }}{% endset %}
+  {% set group_is_open = 'aria-current="page"' in body %}
+  {% set list_id = 'aura-nav-group-' ~ slug ~ '-list' %}
+  <div class="aura-nav-group">
+    <button type="button" class="aura-nav-group__title"
+            id="aura-nav-group-{{ slug }}-toggle"
+            aria-expanded="{{ 'true' if group_is_open else 'false' }}"
+            aria-controls="{{ list_id }}"
+            data-nav-group-toggle="{{ slug }}">
+      <span class="aura-nav-group__title-text">{{ label }}</span>
+      <span class="aura-nav-group__chevron" aria-hidden="true"></span>
+    </button>
+    {#- `hidden`, not a visual-only clip, so a collapsed department is
+        genuinely gone for assistive tech AND out of the Tab order --
+        what is announced and what is reachable both match what is seen.
+        shell.css has to restate [hidden] at author level because this
+        class's own `display: flex` would otherwise beat the UA
+        stylesheet's [hidden] { display: none } rule. -#}
+    <ul class="aura-nav-group__list" id="{{ list_id }}"{% if not group_is_open %} hidden{% endif %}>{{ body }}</ul>
+  </div>
+{% endmacro %}
 
-{# ---------- FINANCE / OPERATIONS ---------- #}
-{% set finance_ops_visible = has_any_permission('expenses.view_own', 'expenses.view_all')
-  or has_any_permission('expenses.create', 'expenses.manage_payees')
-  or has_any_permission('cash_closing.view_own', 'cash_closing.view_all', 'cash_closing.prepare')
-  or has_permission('report_snapshots.view')
-  or has_permission('management_notes.view')
-  or has_permission('dashboard.view_own')
-  or has_permission('dashboard.view_all') %}
-{% if finance_ops_visible %}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('Finance / Operations') }}</div>
-  <ul class="aura-nav-group__list">
-    {% if has_any_permission('expenses.view_own', 'expenses.view_all') %}
-      {{ nav_link('operations_ui.list_expenses', _('Expenses')) }}
-    {% endif %}
-    {% if has_any_permission('expenses.create', 'expenses.manage_payees') %}
-      {{ nav_link('operations_ui.list_payees', _('Expense Payees')) }}
-    {% endif %}
-    {% if has_any_permission('cash_closing.view_own', 'cash_closing.view_all', 'cash_closing.prepare') %}
-      {{ nav_link('operations_ui.list_closings', _('Cash Closing')) }}
-    {% endif %}
-    {% if has_permission('report_snapshots.view') %}
-      {{ nav_link('operations_ui.list_snapshots', _('Operational Reports')) }}
-    {% endif %}
-    {% if has_permission('management_notes.view') %}
-      {{ nav_link('operations_ui.list_notes', _('Management Notes')) }}
-    {% endif %}
-    {% if has_permission('dashboard.view_own') %}
-      {{ nav_link('operations_ui.employee_expense_dashboard_view', _('My Expense Dashboard')) }}
-    {% endif %}
-    {% if has_permission('dashboard.view_all') %}
-      {{ nav_link('operations_ui.management_operational_dashboard_view', _('Operational Management Dashboard')) }}
-      {{ nav_link('operations_ui.finance_operational_dashboard_view', _('Operational Finance Dashboard')) }}
-    {% endif %}
-  </ul>
-</div>
-{% endif %}
-
-{# ---------- LICENSING ---------- #}
-{% set licensing_visible = has_permission('catalog.view')
-  or has_permission('subscriptions.view')
-  or has_permission('licenses.view')
-  or has_permission('installations.view')
-  or has_permission('pilots.view')
-  or has_permission('emergency_extensions.view')
-  or has_permission('pending_activations.view')
-  or has_permission('system.view')
-  or has_permission('activation_service.view') %}
-{% if licensing_visible %}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('Licensing') }}</div>
-  <ul class="aura-nav-group__list">
-    {% if has_permission('catalog.view') %}
-      {{ nav_link('catalog.index', _('Catalog')) }}
-    {% endif %}
-    {% if has_permission('subscriptions.view') %}
-      {{ nav_link('subscriptions.list_subscriptions', _('Subscriptions')) }}
-    {% endif %}
-    {% if has_permission('licenses.view') %}
-      {{ nav_link('licensing.list_licenses', _('Licenses')) }}
-    {% endif %}
-    {% if has_permission('installations.view') %}
-      {{ nav_link('installations.list_installations', _('Installations')) }}
-    {% endif %}
-    {% if has_permission('subscriptions.view') %}
-      {{ nav_link('commercial_ops_ui.list_renewals', _('Renewals')) }}
-    {% endif %}
-    {% if has_permission('pilots.view') %}
-      {{ nav_link('commercial_ops_ui.list_pilots', _('Pilots')) }}
-    {% endif %}
-    {% if has_permission('emergency_extensions.view') %}
-      {{ nav_link('commercial_ops_ui.list_emergency_extensions', _('Emergency Ext.')) }}
-    {% endif %}
-    {% if has_permission('pending_activations.view') %}
-      {{ nav_link('commercial_ops_ui.list_pending_activations', _('Activation Reviews')) }}
-    {% endif %}
-    {% if has_permission('subscriptions.view') %}
-      {{ nav_link('commercial_ops_ui.list_notifications', _('Notifications')) }}
-      {{ nav_link('commercial_ops_ui.queue_view', _('My Queue')) }}
-    {% endif %}
-    {% if has_permission('system.view') %}
-      {{ nav_link('commercial_ops_ui.reconciliation_view', _('Reconciliation')) }}
-    {% endif %}
-    {% if has_permission('activation_service.view') %}
-      {{ nav_link('licensing_admin.status', _('Activation Service')) }}
-    {% endif %}
-  </ul>
-</div>
-{% endif %}
-
-{# ---------- MANAGEMENT ---------- #}
-{% set management_visible = has_permission('staff.view') or has_permission('employees.view_all') %}
-{% if management_visible %}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('Management') }}</div>
-  <ul class="aura-nav-group__list">
-    {% if has_permission('staff.view') %}
-      {{ nav_link('staff.list_staff', _('Staff')) }}
-    {% endif %}
-    {% if has_permission('employees.view_all') %}
-      {{ nav_link('employees.list_view', _('Employees')) }}
-      {{ nav_link('employees.dashboard', _('Employee Dashboard')) }}
-    {% endif %}
-  </ul>
-</div>
-{% endif %}
-
-{# ---------- SYSTEM ---------- #}
-{% set system_visible = has_permission('audit.view') or has_permission('system.view') %}
-{% if system_visible %}
-<div class="aura-nav-group">
-  <div class="aura-nav-group__title">{{ _('System') }}</div>
-  <ul class="aura-nav-group__list">
-    {% if has_permission('audit.view') %}
-      {{ nav_link('audit.list_audit', _('Audit Log')) }}
-      {{ nav_link('audit.security_events', _('Security Events')) }}
-    {% endif %}
-    {% if has_permission('system.view') %}
-      {{ nav_link('system.list_backups', _('Backups')) }}
-    {% endif %}
-  </ul>
-</div>
-{% endif %}
+{#
+  Department list -- rendered from layout/_nav_model.html, the single
+  source of truth for "which department, which links, which permission
+  gates" that this file and layout/_dept_cards.html (dashboard
+  department cards) now both consume. See that file's own header comment
+  for the full rationale; nothing below re-implements a permission check
+  -- `dept.links` already arrives pre-filtered to exactly what this
+  employee may see, and a department with no visible links (`dept.links`
+  empty) is skipped entirely, same as every one of this block's old
+  per-department `..._visible` booleans used to gate on.
+#}
+{% import "layout/_nav_model.html" as navmodel with context %}
+{% set nav_departments = [] %}
+{% set _unused = navmodel.populate(nav_departments) %}
+{% for dept in nav_departments %}
+  {% if dept.links %}
+  {% call nav_group(dept.slug, dept.label) %}
+    {% for link in dept.links %}
+      {{ nav_link(link.endpoint, link.label) }}
+    {% endfor %}
+  {% endcall %}
+  {% endif %}
+{% endfor %}

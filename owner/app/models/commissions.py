@@ -23,6 +23,25 @@ COMMISSION_RULE_TYPES = ("PERCENTAGE_OF_PAYMENT", "FIXED_AMOUNT", "PERCENTAGE_FI
 COMMISSION_ENTRY_STATUSES = ("PENDING", "EARNED", "APPROVED", "PAID", "REVERSED", "CANCELLED", "DISPUTED")
 PAYOUT_BATCH_STATUSES = ("DRAFT", "APPROVED", "PAID")
 
+# AUDIT-owner-cross-screen: the single name for "a commission entry that is
+# waiting for a FINANCE approval decision". Verified in code, not assumed:
+# the only two rows this application ever inserts are
+# commissions/ledger.py::post_earning_for_allocation() (status="EARNED",
+# ledger.py:80) and its reversal counterpart (status="REVERSED",
+# ledger.py:164); approve_commission_entry()/record_payout() only ever
+# transition FROM "EARNED"/"APPROVED". "PENDING" survives in
+# COMMISSION_ENTRY_STATUSES and as this table's column default purely as a
+# historical artifact -- no code path assigns it, so no real row can hold it.
+#
+# It exists as a constant because the awaiting-approval status has to be
+# read by three places that MUST agree, and previously did not: the
+# Attention Center's badge count, the deep link that badge points at
+# (attention/service.py used "EARNED" to count and "PENDING" to link, so
+# clicking a badge showing N always landed on an empty list), and the
+# Finance dashboard's "Commissions pending approval" figure. One constant
+# means the count and the link cannot disagree again.
+COMMISSION_AWAITING_APPROVAL_STATUS = "EARNED"
+
 
 class CommissionPlan(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_commission_plans"

@@ -27,9 +27,10 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.Category as CategoryModel
 import com.actionaura.retail.net.CreateCategoryRequest
+import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
+import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.tr
 import kotlinx.coroutines.launch
@@ -86,7 +87,7 @@ fun CategoriesScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun CategoryRow(c: CategoryModel, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(c.name, fontWeight = FontWeight.Bold)
@@ -137,7 +138,7 @@ private fun AddOrEditCategorySheet(existing: CategoryModel?, onDismiss: () -> Un
                                 SyncCoordinator.nudge()
                                 onSaved()
                             } else error = r.message ?: tr("Couldn't save")
-                        } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),

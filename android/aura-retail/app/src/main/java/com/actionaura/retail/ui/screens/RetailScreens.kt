@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
@@ -42,9 +43,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
+import com.actionaura.retail.printer.NetworkPrinterAdapter
+import com.actionaura.retail.printer.PrinterPrefs
+import com.actionaura.retail.ui.CAP_STOCK_ADJUST
+import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
-import com.actionaura.retail.ui.components.pulseGlow
+import com.actionaura.retail.ui.components.TillCard
+import com.actionaura.retail.ui.theme.CategoryPalette
+import com.actionaura.retail.ui.theme.Danger
+import com.actionaura.retail.ui.theme.OnAccent
+import com.actionaura.retail.ui.theme.Success
+import com.actionaura.retail.ui.theme.SuccessContainer
+import com.actionaura.retail.ui.theme.Warning
 import com.actionaura.retail.ui.i18n.amount
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.money
@@ -55,10 +65,31 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 // ── Category color tiles (offline "product image" treatment) ──────────────────
-private val catPalette = listOf(
-    Color(0xFF6366F1), Color(0xFF14B8A6), Color(0xFFF59E0B), Color(0xFFEC4899),
-    Color(0xFF10B981), Color(0xFF38BDF8), Color(0xFFA855F7), Color(0xFFEF4444),
-)
+// DECORATIVE identity palette, not semantic -- these hues exist only so two
+// categories look different, and are exempt from the token layer for that
+// reason (ColorTokenContractTest.kt). They are however drawn TWICE:
+// as a quiet 18%-alpha tile backdrop AND as the full-strength colour of the
+// text/icon sitting on that same tile (see catColor's call sites below), so
+// the pairing still owes a WCAG check same as any other text-on-surface pair.
+// Measured against every surface this tile can land on (SurfaceRaised,
+// SurfaceTill, SurfacePanel, SurfaceApp) at both the 18%-tinted-backdrop
+// reading and the raw (category-name label, no tint) reading, four of the
+// original eight hues came in under the 4.5:1 floor:
+//   indigo 6366F1  worst 3.11 (tinted) / 3.62 (raw)
+//   pink   EC4899  worst 3.90 (tinted) / 4.59 (raw)   -- passed raw, failed tinted
+//   purple A855F7  worst 3.33 (tinted) / 4.09 (raw)
+//   red    EF4444  worst 3.60 (tinted) / 4.30 (raw)
+// Per the audit instructions, the fix is to lighten those ONE-BY-ONE minimally
+// (same hue, same saturation, HSL lightness nudged up just far enough to clear
+// 4.5:1 at the worst-case surface) rather than replace the palette -- the
+// point of these hues is that they differ, and after the nudge they still do.
+// teal/amber/emerald/sky were already compliant (4.74-7.55 worst-case) and are
+// untouched. avatarPalette in ui/components/Components.kt is the same eight
+// hues (different order) and got the identical nudge for the identical reason.
+// The values themselves moved to ui/theme/Color.kt (CategoryPalette) on
+// 2026-09-06 so that every colour in the app is painted from one file; the
+// measurements above are repeated there next to the numbers.
+private val catPalette = CategoryPalette
 private fun catColor(key: String?): Color {
     val k = key ?: ""
     return catPalette[(k.hashCode().let { if (it < 0) -it else it }) % catPalette.size]
@@ -92,6 +123,11 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var downPayment by remember { mutableStateOf("") }             // optional paid-now on a credit sale
     var payMethods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }  // configurable tenders
     val scope = rememberCoroutineScope()
+    // Needed here (not just inside PaymentSuccess below) for auto-print:
+    // PrinterPrefs is a per-device Context read, and the fire-and-forget
+    // auto-print call below fires from this success branch, before
+    // PaymentSuccess itself has even entered composition.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
 
     suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
     suspend fun loadCustomers() { customers = try { ApiClient.get().customers().data } catch (e: Exception) { emptyList() } }
@@ -134,12 +170,28 @@ fun PosScreen(snackbar: SnackbarHostState) {
         val event = com.actionaura.retail.barcode.HidScanBus.lastScan ?: return@LaunchedEffect
         if (!com.actionaura.retail.barcode.isUnconsumedScan(event, lastConsumedScanSeq)) return@LaunchedEffect
         lastConsumedScanSeq = event.seq
-        val p = com.actionaura.retail.barcode.findProductByCode(products, event.code)
-        if (p != null) {
-            lastScanned = if (addOne(p)) "✓ ${p.name}"
-                          else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
-        } else {
-            lastScanned = "✗ " + tr("Not found:") + " ${event.code}"
+        // Launch-readiness "the POS scale fix": resolves against the server
+        // (one indexed row) instead of linear-scanning the fully fetched
+        // `products` list -- see barcode/ProductLookup.kt's
+        // lookupProductByCode. Already inside this LaunchedEffect's suspend
+        // scope, so the suspend call is awaited directly, off the main
+        // thread the same way load()/loadCustomers()/loadMethods() above are.
+        when (val result = com.actionaura.retail.barcode.lookupProductByCode(ApiClient.get(), event.code)) {
+            is com.actionaura.retail.barcode.ProductLookupResult.Found -> {
+                val p = result.product
+                lastScanned = if (addOne(p)) "✓ ${p.name}"
+                              else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+            }
+            is com.actionaura.retail.barcode.ProductLookupResult.NotFound ->
+                lastScanned = "✗ " + tr("Not found:") + " ${event.code}"
+            // Distinct from NotFound on purpose: the lookup itself failed
+            // (offline, a non-404 server error), so telling the cashier this
+            // item doesn't exist would blame the product for a network
+            // problem. apiErrorMessage gives an honest, specific reason
+            // (including the licensing-block case) instead of a bare
+            // "not found" -- same mapping every other screen's catch block uses.
+            is com.actionaura.retail.barcode.ProductLookupResult.Failed ->
+                lastScanned = "✗ " + apiErrorMessage(result.cause)
         }
     }
 
@@ -230,10 +282,13 @@ fun PosScreen(snackbar: SnackbarHostState) {
             exit = slideOutVertically(tween(220)) { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
+            // Quiet neutral elevation instead of the old infinite pulseGlow
+            // animation -- a floating bar earns its lift with a shadow, not by
+            // breathing forever (and the pulse kept this screen recomposing
+            // whenever the cart had an item; see Components.kt's header note).
             Surface(
-                color = MaterialTheme.colorScheme.primary, shadowElevation = 0.dp,
-                modifier = Modifier.fillMaxWidth().padding(12.dp)
-                    .pulseGlow(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large),
+                color = MaterialTheme.colorScheme.primary, shadowElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
                 shape = MaterialTheme.shapes.large,
                 onClick = { showCart = true },
             ) {
@@ -259,7 +314,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
 
         // Payment success overlay
         AnimatedVisibility(successSale != null, enter = fadeIn(), exit = fadeOut()) {
-            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null })
+            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null }, snackbar = snackbar)
         }
     }
 
@@ -335,18 +390,45 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 Spacer(Modifier.height(10.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(10.dp))
+                // SUBTOTAL, not "Total" -- the figure this row shows is the
+                // same local `total` the checkout button below calls, in its
+                // own words, a "pre-tax, pre-discount PREVIEW only" that is
+                // "never persisted/displayed as the sale's actual total".
+                // That last claim was false: this row displayed it under the
+                // label "Total" while the server charged the taxed figure, so
+                // a cashier read one number aloud to the customer and the till
+                // took another.
+                //
+                // Fixed by making the LABEL honest rather than by computing
+                // tax here. A second pricing engine on the client is the exact
+                // drift this product already paid for once (AUDIT-002, the
+                // Android zero-tax defect) and the reason
+                // docs/architecture/financial-authority-contracts.md makes the
+                // server the only authority. The desktop does compute a live
+                // total client-side, but only because retail_pricing_parity_
+                // test.py pins its arithmetic to the server's line by line;
+                // Kotlin has no such harness, and inventing one to win a label
+                // is a far larger and riskier change than telling the truth.
                 Row {
-                    Text(tr("Total"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Text(tr("Subtotal"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Text(money(total), style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(tr("Tax and discounts are applied at checkout"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(14.dp))
                 Text(tr("Payment method"), style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
                 // Tenders come from the configurable payment-methods list (Settings); "Credit"
                 // (on account) is always appended. Falls back to a basic set if none load.
-                // The display label is translated; the value sent to the server stays English.
+                // The VALUE (it.lowercase()) is the wire code sent to the server and must
+                // never change; only the LABEL passed to tr() below is translated. The five
+                // names retail_api.py seeds (_DEFAULT_METHODS) have Arabic entries in
+                // Strings.kt; a shop's own custom method name has none and tr() falls back
+                // to that name itself, so nothing breaks for it.
                 val payOptions = (
                     if (payMethods.isNotEmpty()) payMethods.mapNotNull { it.name }.map { it to it.lowercase() }
                     else listOf("Cash" to "cash", "Card" to "card", "Transfer" to "transfer")
@@ -418,9 +500,24 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         cart.clear(); showCart = false; successSale = r.data
                                         paymentMethod = "cash"; customer = null; downPayment = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
+                                        // Auto-print (Settings toggle, default off): fire-and-
+                                        // forget, no blocking, no error dialog -- printReceipt's
+                                        // own doc comment covers why a print failure must never
+                                        // read as the sale having failed. A separate coroutine
+                                        // (not the one this success handling already runs in)
+                                        // so a slow/unreachable printer can never delay
+                                        // load()/loadCustomers() below.
+                                        r.data?.id?.let { saleId ->
+                                            if (PrinterPrefs.getAutoPrint(ctx)) {
+                                                scope.launch { printReceipt(ctx, saleId, snackbar) }
+                                            }
+                                        }
                                         load(); loadCustomers()   // refresh stock + customer balances
                                     } else snackbar.showSnackbar(r.message ?: tr("Sale failed"))
-                                } catch (e: Exception) { snackbar.showSnackbar(tr("Couldn't reach the server")) }
+                                // apiErrorMessage (net/ApiErrors.kt): a licensing
+                                // 403 on checkout must say the subscription
+                                // blocked the sale, never "server unreachable".
+                                } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
                                 finally { charging = false }
                             }
                         }
@@ -470,12 +567,23 @@ fun PosScreen(snackbar: SnackbarHostState) {
             continuous = true,
             statusText = scanStatus,
             onResult = { code ->
-                val p = com.actionaura.retail.barcode.findProductByCode(products, code)
-                if (p != null) {
-                    lastScanned = if (addOne(p)) "✓ ${p.name}"
-                                  else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
-                } else {
-                    lastScanned = "✗ " + tr("Not found:") + " $code"
+                // onResult is a plain (String) -> Unit callback (CameraX's ML Kit
+                // analyzer, dispatched via ContextCompat.getMainExecutor -- see
+                // BarcodeScanner.kt), not a suspend lambda, so the lookup goes
+                // through the screen's existing rememberCoroutineScope() the same
+                // way the stock-limit snackbar above already does.
+                scope.launch {
+                    when (val result = com.actionaura.retail.barcode.lookupProductByCode(ApiClient.get(), code)) {
+                        is com.actionaura.retail.barcode.ProductLookupResult.Found -> {
+                            val p = result.product
+                            lastScanned = if (addOne(p)) "✓ ${p.name}"
+                                          else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+                        }
+                        is com.actionaura.retail.barcode.ProductLookupResult.NotFound ->
+                            lastScanned = "✗ " + tr("Not found:") + " $code"
+                        is com.actionaura.retail.barcode.ProductLookupResult.Failed ->
+                            lastScanned = "✗ " + apiErrorMessage(result.cause)
+                    }
                 }
             },
             onDismiss = {
@@ -492,7 +600,7 @@ private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
     val accent = catColor(p.category_name)
     val stock = p.total_stock
 
-    GlowCard(glow = accent, shape = RoundedCornerShape(16.dp), onClick = onAdd) {
+    TillCard(accent = accent, shape = RoundedCornerShape(16.dp), onClick = onAdd) {
         Box(
             Modifier.fillMaxWidth().height(84.dp)
                 .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.85f), accent.copy(alpha = 0.5f)))),
@@ -527,31 +635,51 @@ private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
 
 @Composable
 private fun StockBadge(stock: Double, modifier: Modifier = Modifier) {
+    // SEMANTIC state colour, not decorative: out/low/in-stock is exactly what
+    // Danger/Warning/Success exist for. This badge sits on TOP of the
+    // ProductTile's category-colour gradient (any of catPalette's eight
+    // hues), so it must stay a fully OPAQUE solid fill to read reliably
+    // regardless of what is under it -- the quiet *Container tokens
+    // (SuccessContainer/DangerContainer) are translucent-over-surface by
+    // design and would take on whatever gradient is behind them here, so
+    // they are the wrong tool for this specific spot even though they are
+    // the right one in PaymentSuccess below. There is no WarningContainer
+    // token (Color.kt only has Success/DangerContainer), so all three
+    // branches use the same idiom for internal consistency: the *Text*
+    // token itself as the opaque fill, OnAccent (a dark, near-navy label
+    // already used for "text on a light/vivid fill" elsewhere) as the text
+    // colour. Measured: white text on the old literal fills was ALREADY
+    // broken (2.15:1 amber, 2.54:1 green, 3.76:1 red -- none reached AA);
+    // OnAccent on the token fills reaches 8.66-10.49:1.
     val (label, color) = when {
-        stock <= 0 -> tr("Out") to Color(0xFFEF4444)
-        stock <= 5 -> (tr("Low") + " · ${fmtQty(stock)}") to Color(0xFFF59E0B)
-        else -> tr("%s in stock").format(fmtQty(stock)) to Color(0xFF10B981)
+        stock <= 0 -> tr("Out") to Danger
+        stock <= 5 -> (tr("Low") + " · ${fmtQty(stock)}") to Warning
+        else -> tr("%s in stock").format(fmtQty(stock)) to Success
     }
     Surface(color = color, shape = RoundedCornerShape(20.dp), modifier = modifier) {
-        Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall,
+        Text(label, color = OnAccent, style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
     }
 }
 
 @Composable
-private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale: () -> Unit) {
+private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale: () -> Unit, snackbar: SnackbarHostState) {
     val check = remember { Animatable(0f) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var printing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         check.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
     }
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center) {
-            Box(Modifier.size(110.dp).scale(check.value)
-                .pulseGlow(Color(0xFF10B981), CircleShape).clip(CircleShape)
-                .background(Color(0xFF10B981)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(60.dp))
+            // Success badge idiom shared with the desktop: state text colour on
+            // its own quiet container, not white-on-bright-green (which failed
+            // contrast) and not a pulsing glow.
+            Box(Modifier.size(110.dp).scale(check.value).clip(CircleShape)
+                .background(SuccessContainer), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Check, null, tint = Success, modifier = Modifier.size(60.dp))
             }
             Spacer(Modifier.height(24.dp))
             Text(tr("Payment successful"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -570,6 +698,24 @@ private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale
             // email, etc. Every value is `sale`, the server's own response.
             OutlinedButton(onClick = { shareReceipt(ctx, sale) }, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 Icon(Icons.Default.Share, null); Spacer(Modifier.width(8.dp)); Text(tr("Share Receipt"))
+            }
+            // Only offered once a network printer is actually configured
+            // (Settings -> Receipt Printer) -- an install that never sets one
+            // up sees no new button here at all, matching this codebase's
+            // "costs nothing to an install that doesn't use it" rule.
+            if (PrinterPrefs.isConfigured(ctx)) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { scope.launch { printing = true; printReceipt(ctx, sale.id, snackbar); printing = false } },
+                    enabled = !printing,
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                ) {
+                    if (printing) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Print, null); Spacer(Modifier.width(8.dp)); Text(tr("Print Receipt"))
+                    }
+                }
             }
             Spacer(Modifier.height(12.dp))
             Button(onClick = onNewSale, modifier = Modifier.fillMaxWidth().height(54.dp)) {
@@ -598,7 +744,73 @@ private fun shareReceipt(ctx: android.content.Context, sale: com.actionaura.reta
         type = "text/plain"
         putExtra(android.content.Intent.EXTRA_TEXT, text)
     }
-    ctx.startActivity(android.content.Intent.createChooser(intent, "Share receipt"))
+    // The chooser TITLE is ordinary UI copy on an otherwise fully translated
+    // screen and simply missed tr() -- it stayed English while the button that
+    // opens it (tr("Share Receipt"), above) translated. Reuses that same
+    // catalogue key deliberately rather than minting a near-duplicate
+    // "Share receipt": two entries differing only in case is how a catalogue
+    // starts drifting from itself.
+    //
+    // The receipt BODY's own labels are still English literals. That is not an
+    // oversight to fix here: DESIGN.md §9 item 3 owns the bilingual receipt
+    // template (thermal 58/80 mm and A4, the mark, the fils, the e-invoicing
+    // QR) and translating seven labels ahead of it would ship half of a
+    // designed artefact. "Aura Retail" stays English regardless -- it is the
+    // product name, brand rather than copy.
+    ctx.startActivity(android.content.Intent.createChooser(intent, tr("Share Receipt")))
+}
+
+// Receipt printing (retail-hardware-viewports): fetches the server-
+// rendered ESC/POS byte stream for `saleId` and sends it to the network
+// printer configured in Settings -> Receipt Printer. Both the manual
+// "Print Receipt" button above and auto-print (PosScreen's sale-success
+// branch) call this exact same function, so there is only one place that
+// can get "what does printing a receipt mean" wrong.
+//
+// Never lets a print failure look like the sale failed: this is only ever
+// called with a sale id from an already-successful, server-issued sale
+// response, and PaymentSuccess exists to CONFIRM that sale, not to gate
+// it. So every failure path here ends in a snackbar, exactly like the
+// checkout screen's own error handling above -- never a thrown exception,
+// never a dialog that could read as "the sale didn't go through."
+private suspend fun printReceipt(ctx: android.content.Context, saleId: Int, snackbar: SnackbarHostState) {
+    try {
+        val width = PrinterPrefs.getWidth(ctx)
+        // kick=0: reprinting/manual-printing a receipt must never pop the
+        // cash drawer a second time -- see the backend route's own doc
+        // comment (retail_api.py::printer_receipt_payload) for the "opening
+        // the drawer is a deliberate act, not a side effect of rendering
+        // bytes" reasoning this mirrors.
+        val resp = ApiClient.get().receiptPayload(saleId, width, kick = 0)
+        val data = resp.data
+        if (resp.status != "success" || data == null) {
+            snackbar.showSnackbar(resp.message ?: tr("Couldn't print receipt"))
+            return
+        }
+        // java.util.Base64, NOT android.util.Base64: android.util.Base64 is
+        // a stubbed Android framework class that throws in a plain JVM unit
+        // test (NetworkPrinterAdapterTest / ReceiptPayloadContractTest run
+        // under `testDebugUnitTest`, no emulator/Robolectric involved),
+        // while java.util.Base64 has been available since API 26 -- this
+        // app's own minSdk -- so the exact same call works at runtime and
+        // in tests. That matters here specifically because this decode is
+        // exactly where a corrupted payload would surface.
+        val bytes = try {
+            java.util.Base64.getDecoder().decode(data.payload_b64)
+        } catch (e: IllegalArgumentException) {
+            snackbar.showSnackbar(tr("Couldn't print receipt"))
+            return
+        }
+        val host = PrinterPrefs.getHost(ctx)
+        val port = PrinterPrefs.getPort(ctx)
+        NetworkPrinterAdapter(host, port).print(bytes)
+            .onFailure { e -> snackbar.showSnackbar(e.message ?: tr("Couldn't print receipt")) }
+    } catch (e: Exception) {
+        // apiErrorMessage (net/ApiErrors.kt): the same mapping every other
+        // screen's catch block uses, so a licensing block or an expired
+        // session reads the same way here as everywhere else in the app.
+        snackbar.showSnackbar(apiErrorMessage(e))
+    }
 }
 
 @Composable
@@ -633,6 +845,10 @@ fun ProductsScreen(snackbar: SnackbarHostState) {
     var showAdd by remember { mutableStateOf(false) }
     var editProduct by remember { mutableStateOf<Product?>(null) }
     val scope = rememberCoroutineScope()
+    // A cashier's server-side grant set is sell/refund/cash-close only -- it
+    // does not include CAP_STOCK_ADJUST, so POST /api/sub/retail/products
+    // refuses them. Do not show a control that can only fail with a 403.
+    val canAddProduct = RetailSession.hasCapability(CAP_STOCK_ADJUST)
 
     suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) { loading = true; load(); loading = false }
@@ -644,7 +860,8 @@ fun ProductsScreen(snackbar: SnackbarHostState) {
                 icon = Icons.Default.Inventory2,
                 title = tr("No products yet"),
                 subtitle = tr("Add your first product to start selling."),
-                ctaText = tr("Add Product"), onCta = { showAdd = true },
+                ctaText = if (canAddProduct) tr("Add Product") else null,
+                onCta = if (canAddProduct) ({ showAdd = true }) else null,
             )
             else -> LazyColumn(contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -676,11 +893,13 @@ fun ProductsScreen(snackbar: SnackbarHostState) {
             }
         }
 
-        ExtendedFloatingActionButton(
-            onClick = { showAdd = true },
-            icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Product")) },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-        )
+        if (canAddProduct) {
+            ExtendedFloatingActionButton(
+                onClick = { showAdd = true },
+                icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Product")) },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+            )
+        }
     }
 
     if (showAdd) {
@@ -783,7 +1002,7 @@ private fun EditProductSheet(product: Product, onDismiss: () -> Unit, onSaved: (
                             }
                             if (r.status == "success") onSaved(tr("Product updated"))
                             else { error = r.message ?: tr("Couldn't save"); saving = false }
-                        } catch (e: Exception) { error = tr("Couldn't reach the server"); saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e); saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -870,7 +1089,7 @@ private fun AddProductSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                             cost_price = parseNum(cost) ?: 0.0,
                             initial_stock = parseNum(stock) ?: 0.0, unit = unit))
                         if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
-                    } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                    } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,

@@ -32,15 +32,24 @@ ALLOWED_CONTENT_TYPES = {
     "image/png": (b"\x89PNG\r\n\x1a\n",),
 }
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_PATH_SEPARATOR_RE = re.compile(r"[\\/]+")
+_DOT_RUN_RE = re.compile(r"\.{2,}")
 
 
 def _sanitize_display_filename(original_filename: str) -> str:
     """Used only for the Content-Disposition header on download -- never as
     part of the storage path. Strips directory components and any
     non-alphanumeric character (defeats traversal sequences, absolute paths,
-    unicode homograph tricks, and null-byte injection in one pass)."""
-    base = os.path.basename(original_filename or "attachment")
+    unicode homograph tricks, and null-byte injection in one pass). Splits on
+    BOTH separators explicitly rather than os.path.basename: basename only
+    knows the host's separator, so on the Linux droplet "..\\..\\secrets.pdf"
+    came through whole and reached the header as ".._.._secrets.pdf" (CI,
+    2026-09-07) while every local run, on Windows, stripped it. Any run of
+    two or more dots is then collapsed to "_": a display name that still
+    contains ".." after the split is not a name anyone typed."""
+    base = _PATH_SEPARATOR_RE.split(original_filename or "attachment")[-1]
     base = base.replace("\x00", "")
+    base = _DOT_RUN_RE.sub("_", base)
     cleaned = _SAFE_FILENAME_RE.sub("_", base)
     return cleaned[:200] or "attachment"
 

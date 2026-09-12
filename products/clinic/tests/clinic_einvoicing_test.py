@@ -24,6 +24,15 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_clinic_einvoicing_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
+# AUDIT: see products/retail/tests/retail_einvoicing_test.py's identical
+# comment -- app.py's shipped default provider is now UnconfiguredProvider,
+# which deliberately refuses to submit anything, and this file's whole
+# point is a REAL round trip through a provider
+# (test_run_once_clears_and_qr_becomes_available,
+# test_reconciliation_sweep_picks_up_a_lost_enqueue). Must be set before
+# `import app` below. AURA_EINVOICING_ALLOW_MOCK=1 is a development/
+# test-only override; production never sets it.
+os.environ["AURA_EINVOICING_ALLOW_MOCK"] = "1"
 
 from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
 seed_active_license(str(DATA), product_code="AURA_CLINIC", platform="WINDOWS")
@@ -85,7 +94,11 @@ def _create_invoice(client, patient_id, unit_price=100.0, qty=1, tax_rate=0.0):
 
 
 def test_disabled_invoice_response_has_no_einvoice_key():
+    # AUDIT: see retail_einvoicing_test.py's identical comment -- e-invoicing
+    # now defaults ON, so a genuinely disabled company needs an explicit
+    # write now. Fixture correction, not a weakened test.
     client, cid, patient_id = _make_admin_and_patient()
+    client.post('/api/einvoicing/settings', json={'enabled': '0'})
     data = _create_invoice(client, patient_id)
     assert 'einvoice' not in data
 
@@ -176,7 +189,10 @@ def test_reconciliation_sweep_picks_up_a_lost_enqueue():
 
 
 def test_enabled_at_prevents_backfilling_pre_enablement_invoices():
+    # AUDIT: see retail_einvoicing_test.py's identical test for why this
+    # explicit disable is now required (e-invoicing defaults ON).
     client, cid, patient_id = _make_admin_and_patient()
+    client.post('/api/einvoicing/settings', json={'enabled': '0'})
     pre_inv = _create_invoice(client, patient_id)
     assert 'einvoice' not in pre_inv
 

@@ -68,3 +68,78 @@ def test_unbuilt_addons_are_not_marked_available_by_seed(app, seeded):
         from app.models.catalog import Addon
 
         assert db_session.query(Addon).filter_by(availability_status="AVAILABLE").count() == 0
+
+
+def test_seed_defines_the_branch_limit_entitlement(app, seeded):
+    """The 2026-09-05 price list sells a branch as a paid add-on -- enforced
+    entirely by the retail till reading this entitlement off the stored
+    assertion (see retail_api.py's _branch_limit())."""
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.catalog import EntitlementDefinition
+
+        row = db_session.query(EntitlementDefinition).filter_by(entitlement_code="max_branches").first()
+        assert row is not None
+        assert row.value_type == "integer"
+
+
+# -- launch-readiness W0.3 Part A: seed_canonical_plans --------------------
+# Without a seeded plan, a brand-new Owner deployment cannot issue a single
+# licence (`owner_plans` stays empty after seed-catalog, and issuance is
+# always against a plan_id). See owner/app/catalog/services.py's own
+# docstring for why this is a separate command from seed-catalog.
+
+def test_seed_plans_produces_issuable_license_end_to_end(app, seeded):
+    """Acceptance test: seed-catalog (via `seeded`) + seed-plans is enough
+    for issue_license_direct to hand back a real, working key -- no manual
+    UI step first."""
+    staff_id = make_staff(app, "seedplan-issuer@example.com")
+    with app.app_context():
+        import uuid
+
+        from app.catalog.services import seed_canonical_plans
+        from app.extensions import db_session
+        from app.licensing.issuance import issue_license_direct
+        from app.models.catalog import Plan
+
+        seed_canonical_plans()
+        plan = db_session.query(Plan).filter_by(plan_code="AURA_RETAIL_STANDARD").first()
+        assert plan is not None
+
+        result = issue_license_direct(
+            new_customer_legal_name="Seed Plan Test Co",
+            plan_id=plan.id,
+            idempotency_key=str(uuid.uuid4()),
+            actor_staff_user_id=staff_id,
+            license_pepper=app.config["LICENSE_PEPPER"],
+        )
+        assert result["full_key"] is not None
+        assert result["full_key"].startswith("AURA-")
+        assert result["whatsapp_message"] is not None
+        assert result["full_key"] in result["whatsapp_message"]
+
+
+def test_seed_plans_is_idempotent(app, seeded):
+    with app.app_context():
+        from app.catalog.services import seed_canonical_plans
+
+        first = seed_canonical_plans()
+        assert first["plans"] == 2  # AURA_RETAIL_STANDARD + AURA_CLINIC_STANDARD
+        assert first["prices"] == 2
+
+        second = seed_canonical_plans()
+        assert second == {"plans": 0, "prices": 0}  # nothing new created on a second run
+
+
+def test_seed_plans_requires_catalog_seeded_first(app):
+    # Deliberately no `seeded` fixture -- an empty, un-seeded database is
+    # exactly what a truly fresh Owner deployment looks like before anyone
+    # has run `flask seed-catalog`.
+    with app.app_context():
+        from app.catalog.services import seed_canonical_plans
+
+        try:
+            seed_canonical_plans()
+            assert False, "should have raised"
+        except ValueError as exc:
+            assert "seed-catalog" in str(exc)

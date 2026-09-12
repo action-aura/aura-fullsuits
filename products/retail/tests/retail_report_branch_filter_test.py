@@ -233,33 +233,46 @@ def test_top_products_branch_filter_matches_and_sums_to_unfiltered(seeded):
 # ── Default-path byte-identical-output proof (the hard requirement) ────────
 
 def test_sales_trend_default_output_matches_hand_computed_all_branch_truth(seeded):
-    """This is the "byte-identical to before this change" proof for
-    sales-trend: the response when branch_id is omitted must be identical --
-    field for field -- to a manually-computed all-branches aggregate over
-    the raw sales rows, using the SAME date/day grouping the pre-change
-    query always used. Before this change, EVERY call to this route was
-    exactly this unfiltered query; the assertion below is that the
-    omitted-branch_id code path still produces that and only that."""
+    """Field-for-field proof that the omitted-branch_id path is exactly the
+    all-branches aggregate and nothing else -- no accidental filtering, no
+    dropped or duplicated day.
+
+    The hand-computed reference below is deliberately written against the
+    CANONICAL definitions (core/retail/metrics.py: revenue net of refunds,
+    avg_ticket = net revenue / transactions), not against the gross
+    SUM(total)/AVG(total) SQL this route used to run. Those two references
+    happen to agree for this fixture's data (one day, and this test runs
+    before the refund case below), so pinning the OLD shape here would keep
+    passing by coincidence while silently no longer proving anything the
+    moment a refund enters the window."""
     client = seeded['client']
     cid = seeded['cid']
 
     conn = get_retail_conn()
     rows = conn.execute("""
         SELECT date(created_at) as day,
-               COALESCE(SUM(total),0) as revenue,
-               COUNT(*) as transactions,
-               COALESCE(AVG(total),0) as avg_ticket
+               COALESCE(SUM(total),0) as gross,
+               COUNT(*) as transactions
         FROM sales WHERE company_id=?
           AND date(created_at) >= date('now', 'localtime', '-365 days')
+          AND date(created_at) <= date('now', 'localtime')
         GROUP BY day ORDER BY day
     """, (cid,)).fetchall()
+    refunds = dict(conn.execute("""
+        SELECT date(created_at) as day, COALESCE(SUM(refund_amount),0)
+        FROM returns WHERE company_id=?
+          AND date(created_at) >= date('now', 'localtime', '-365 days')
+          AND date(created_at) <= date('now', 'localtime')
+        GROUP BY day
+    """, (cid,)).fetchall())
     conn.close()
+    net = [(r['day'], round(r['gross'] - refunds.get(r['day'], 0), 2), r['transactions']) for r in rows]
     expected = {
         'success': True,
-        'labels': [r['day'] for r in rows],
-        'data': [round(r['revenue'], 2) for r in rows],
-        'transactions': [r['transactions'] for r in rows],
-        'avg_ticket': [round(r['avg_ticket'], 2) for r in rows],
+        'labels': [day for day, _, _ in net],
+        'data': [revenue for _, revenue, _ in net],
+        'transactions': [txns for _, _, txns in net],
+        'avg_ticket': [round(revenue / txns, 2) if txns else 0 for _, revenue, txns in net],
     }
 
     actual = client.get('/api/sub/retail/reports/sales-trend?days=365').get_json()
@@ -267,42 +280,75 @@ def test_sales_trend_default_output_matches_hand_computed_all_branch_truth(seede
 
 
 def test_top_products_default_output_matches_hand_computed_all_branch_truth(seeded):
-    """Same proof as above, for top-products' omitted-branch_id path."""
+    """Same proof as above, for top-products' omitted-branch_id path.
+
+    The reference now carries the period predicate this route gained (it had
+    NO date filter at all -- an all-time query on a days-scoped page) and the
+    return_items netting, i.e. the canonical definitions rather than the
+    superseded SQL. Asked for `days=365` explicitly so the reference and the
+    route are unambiguously the same window."""
     client = seeded['client']
     cid = seeded['cid']
 
     conn = get_retail_conn()
     rows = conn.execute("""
-        SELECT p.name, p.sku,
+        SELECT p.name, p.sku, p.cost_price,
                SUM(si.quantity) as units_sold,
-               SUM(si.line_total) as revenue,
-               SUM(si.quantity * p.cost_price) as cost,
-               SUM(si.line_total) - SUM(si.quantity * p.cost_price) as profit
+               SUM(si.line_total) as revenue
         FROM sale_items si
         JOIN products p ON si.product_id=p.id
         JOIN sales s ON si.sale_id=s.id
         WHERE s.company_id=?
+          AND date(s.created_at) >= date('now', 'localtime', '-365 days')
+          AND date(s.created_at) <= date('now', 'localtime')
         GROUP BY p.id ORDER BY units_sold DESC LIMIT ?
     """, (cid, 8)).fetchall()
+    returned = dict(conn.execute("""
+        SELECT p.name, SUM(ri.quantity)
+        FROM return_items ri
+        JOIN returns r ON ri.return_id=r.id
+        JOIN products p ON ri.product_id=p.id
+        WHERE r.company_id=?
+          AND date(r.created_at) >= date('now', 'localtime', '-365 days')
+          AND date(r.created_at) <= date('now', 'localtime')
+        GROUP BY p.id
+    """, (cid,)).fetchall())
+    refund_value = dict(conn.execute("""
+        SELECT p.name, SUM(ri.line_total)
+        FROM return_items ri
+        JOIN returns r ON ri.return_id=r.id
+        JOIN products p ON ri.product_id=p.id
+        WHERE r.company_id=?
+          AND date(r.created_at) >= date('now', 'localtime', '-365 days')
+          AND date(r.created_at) <= date('now', 'localtime')
+        GROUP BY p.id
+    """, (cid,)).fetchall())
     conn.close()
+    units = [round(r['units_sold'] - returned.get(r['name'], 0), 2) for r in rows]
+    revenue = [round(r['revenue'] - refund_value.get(r['name'], 0), 2) for r in rows]
+    cost = [round(u * r['cost_price'], 2) for u, r in zip(units, rows)]
     expected = {
         'success': True,
         'labels': [r['name'] for r in rows],
-        'data': [round(r['units_sold'], 0) for r in rows],
-        'revenue': [round(r['revenue'], 2) for r in rows],
-        'profit': [round(r['profit'], 2) for r in rows],
+        'data': units,
+        'revenue': revenue,
+        'profit': [round(rev - c, 2) for rev, c in zip(revenue, cost)],
     }
 
-    actual = client.get('/api/sub/retail/reports/top-products?limit=8').get_json()
+    actual = client.get('/api/sub/retail/reports/top-products?days=365&limit=8').get_json()
     assert actual == expected
 
 
-def test_payment_methods_and_summary_untouched_by_this_change(seeded):
-    """payment-methods and summary were deliberately NOT given branch_id
-    filtering in this change (out of scope -- see report_by_branch's
-    docstring) -- confirms they still respond normally and their totals
-    still reflect all branches combined, i.e. nothing about them regressed
-    even though this branch edited the file around them."""
+def test_payment_methods_and_summary_all_branches_totals(seeded):
+    """payment-methods and summary with NO branch_id must report every
+    branch combined.
+
+    Renamed from ..._untouched_by_this_change: both routes DO accept
+    branch_id now (the revenue-metrics consolidation -- leaving the KPI
+    cards company-wide while the charts moved was the defect, not the
+    design). The all-branches path asserted here is unchanged, and the
+    branch-scoped behaviour is covered in
+    products/retail/tests/retail_metrics_consistency_test.py."""
     client = seeded['client']
     pay = client.get('/api/sub/retail/reports/payment-methods?days=365').get_json()
     assert pay['success'] is True

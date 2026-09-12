@@ -18,14 +18,17 @@ unsupported fulfillment types").
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
+from contextlib import contextmanager
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from app.audit.services import record as audit_record
 from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
 from app.commercial_sales.errors import CommercialSalesError
-from app.extensions import db_session
+from app.extensions import db_session, get_engine
 from app.licensing.services import create_license, issue_license_key
 from app.models.base import utcnow
 from app.models.catalog import Plan
@@ -86,6 +89,78 @@ def _check_eligibility(order: SalesOrder) -> tuple[CommercialInvoice, SalesOrder
     return invoice, subscription_line
 
 
+_FULFILLMENT_LOCK_NAMESPACE = "commercial_sales.fulfill_order"
+
+
+def _fulfillment_lock_key(order_id: uuid.UUID) -> int:
+    # Same derivation shape as operational_reports/scheduler.py::_advisory_lock_key.
+    raw = f"{_FULFILLMENT_LOCK_NAMESPACE}|{order_id}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return int(digest[:15], 16)  # fits in a Postgres bigint
+
+
+@contextmanager
+def _hold_fulfillment_lock(order_id: uuid.UUID):
+    """Per-order mutual exclusion that SURVIVES the commits inside fulfill_order.
+
+    The row lock taken via `db_session.refresh(order, with_for_update=True)`
+    is released by the very next statement, `audit_record(...
+    "FULFILLMENT_STARTED" ...)`, which commits (app/audit/services.py:
+    `record()` always ends with `db_session.commit()`). Every service called
+    afterwards -- `create_subscription`, `transition_subscription`,
+    `create_license`, `issue_license_key` -- commits again for the same
+    reason (item #1/#2's recovery guard needs each step durable on its own).
+    So anything held ON db_session's transaction is not a lock across the
+    sequence at all: it is released the instant the first nested commit
+    fires, which is before the second concurrent caller's read of
+    `order.status` even happens. Measured on CI 2026-09-07 (run
+    34138397829): `test_item3_concurrent_fulfillment_requests_only_one_
+    creates_subscription` got 4 Subscriptions from 5 concurrent callers, not
+    1 -- see docs/corrections/owner/fulfillment-lock-released-by-nested-
+    commits-root-cause-analysis.md for the full trace.
+
+    This lock lives on a DEDICATED connection with its own transaction, so
+    db_session may commit as often as it likes without touching it -- the
+    lock ends only when this context exits (the `finally` below rolls back
+    that connection's otherwise-empty transaction, which is what releases a
+    transaction-scoped advisory lock). A transaction-scoped advisory lock
+    (`pg_advisory_xact_lock`, not the session-scoped variant) is used for the
+    same reason `operational_reports/scheduler.py` uses one: if this process
+    dies mid-fulfillment, the lock is released when Postgres notices the
+    connection is gone -- nothing can leak it forever.
+
+    `lock_timeout` (10s by default, `app/extensions.py::init_db`) applies to
+    the wait inside `pg_advisory_xact_lock`: a caller that cannot acquire the
+    lock in time is told `FULFILLMENT_IN_PROGRESS` and can retry once the
+    winner finishes, rather than crashing with a raw `OperationalError`.
+
+    Costs one extra pooled connection for the duration of a fulfillment
+    call, which is rare (an operator confirming one order at a time) and
+    bounded by `lock_timeout`.
+    """
+    conn = get_engine().connect()
+    try:
+        txn = conn.begin()
+        try:
+            conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _fulfillment_lock_key(order_id)})
+        except OperationalError as exc:
+            txn.rollback()
+            # 55P03 = lock_not_available (lock_timeout expired). Anything else is not ours to translate.
+            if getattr(getattr(exc, "orig", None), "sqlstate", None) == "55P03":
+                raise CommercialSalesError(
+                    "FULFILLMENT_IN_PROGRESS",
+                    reason="another fulfillment of this order is still running; retry once it finishes",
+                ) from exc
+            raise
+        try:
+            yield
+        finally:
+            # Nothing to commit on this connection; ending the transaction releases the lock.
+            txn.rollback()
+    finally:
+        conn.close()
+
+
 def fulfill_order(
     order: SalesOrder,
     *,
@@ -108,124 +183,160 @@ def fulfill_order(
             raise CommercialSalesError("IDEMPOTENCY_CONFLICT")
         # Duplicate idempotency key, identical payload (item #5): same
         # key, same order -- returns the original result, no re-execution.
-        return {"subscription_id": replayed.id, "order_id": order.id, "replayed": True}
+        # AUDIT-NNN: the license key was already revealed once, on the
+        # original (non-replayed) call -- a replay legitimately has no key
+        # to show. This is reported as "already issued" by the caller
+        # (never re-derivable, ADR-9), not treated as an error and not
+        # left to render as a blank/empty key.
+        return {"subscription_id": replayed.id, "order_id": order.id, "replayed": True, "license_key": None}
 
-    # Real concurrency guard (item #3): SELECT ... FOR UPDATE on the order
-    # row serializes two concurrent fulfillment attempts for the SAME
-    # order -- the second call blocks until the first commits (and then
-    # sees order.status == "FULFILLED" and is rejected) or rolls back
-    # (and then proceeds cleanly). Without this lock, two concurrent
-    # calls could both read order.status == "CONFIRMED" before either
-    # writes, and both create a Subscription.
-    db_session.refresh(order, with_for_update=True)
+    # Real concurrency guard (item #3): the ADVISORY LOCK held for the rest
+    # of this function (_hold_fulfillment_lock, above) is what serializes
+    # two concurrent fulfillment attempts for the SAME order. The
+    # SELECT ... FOR UPDATE re-read directly below is NOT that guard --
+    # it used to be described as one, and measurement proved that claim
+    # wrong: the row lock it takes is released by the very next statement,
+    # audit_record(... "FULFILLMENT_STARTED" ...), which commits (every
+    # audit_record call ends with db_session.commit()), and every service
+    # called afterwards in this function -- create_subscription,
+    # transition_subscription, create_license, issue_license_key -- commits
+    # again for the same reason. So a second concurrent caller can acquire
+    # the row lock and read order.status == "CONFIRMED" moments after the
+    # first caller's audit-start commit, long before the first caller has
+    # created anything. Measured on CI 2026-09-07 (run 34138397829):
+    # test_item3_concurrent_fulfillment_requests_only_one_creates_
+    # subscription got 4 Subscriptions from 5 concurrent callers, not 1.
+    # See docs/corrections/owner/fulfillment-lock-released-by-nested-
+    # commits-root-cause-analysis.md for the full trace. The re-read itself
+    # is still worth keeping: under the advisory lock, it gives this call a
+    # fresh view of whatever the previous lock-holder (if any) just
+    # committed.
+    with _hold_fulfillment_lock(order.id):
+        db_session.refresh(order, with_for_update=True)
 
-    if order.status == "FULFILLED":
-        raise CommercialSalesError("FULFILLMENT_ALREADY_COMPLETE")
+        if order.status == "FULFILLED":
+            raise CommercialSalesError("FULFILLMENT_ALREADY_COMPLETE")
 
-    invoice, line = _check_eligibility(order)
-    plan = db_session.get(Plan, line.plan_id)
-    # Real bug caught before this shipped: a literal "ALL" string would
-    # never match activation.py's exact membership check
-    # (request_platform in license_row.allowed_platforms.split(",")) --
-    # every real activation attempt would be silently rejected. Derived
-    # from the plan's actual supported platforms instead (Milestone 4's
-    # catalog read service, already computes this).
-    catalog_item = describe_plan_for_sale(plan.id)
-    allowed_platforms = ",".join(catalog_item["supported_platform_codes"]) if catalog_item else ""
-    if not allowed_platforms:
-        raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="plan has no supported platforms configured")
+        invoice, line = _check_eligibility(order)
+        plan = db_session.get(Plan, line.plan_id)
+        # Real bug caught before this shipped: a literal "ALL" string would
+        # never match activation.py's exact membership check
+        # (request_platform in license_row.allowed_platforms.split(",")) --
+        # every real activation attempt would be silently rejected. Derived
+        # from the plan's actual supported platforms instead (Milestone 4's
+        # catalog read service, already computes this).
+        catalog_item = describe_plan_for_sale(plan.id)
+        allowed_platforms = ",".join(catalog_item["supported_platform_codes"]) if catalog_item else ""
+        if not allowed_platforms:
+            raise CommercialSalesError("FULFILLMENT_NOT_ELIGIBLE", reason="plan has no supported platforms configured")
 
-    audit_record(
-        actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_STARTED",
-        entity_type="sales_order", entity_public_id=str(order.id), after_state={"invoice_id": str(invoice.id)},
-    )
-
-    try:
-        # Recovery guard (items #1/#2): create_subscription()/
-        # create_license() each commit their own transaction internally
-        # (their own established behavior, unchanged) -- fulfill_order()
-        # cannot wrap the whole sequence in one atomic outer transaction
-        # without changing code outside app/commercial_sales/. A retry
-        # after a partial failure at ANY point in the sequence (License
-        # creation crashes after Subscription exists; the final
-        # order/idempotency-key write crashes after both exist) must not
-        # create a SECOND Subscription/License for the same order -- an
-        # already-existing row for this sales_order_id/subscription_id is
-        # reused, never duplicated, before falling back to creating a new
-        # one.
-        subscription = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order.id)).scalars().first()
-        if subscription is None:
-            # Canonical service call -- never a direct model-row insert.
-            subscription = create_subscription(
-                {
-                    "customer_id": order.customer_id,
-                    "product_id": plan.product_id,
-                    "plan_id": plan.id,
-                    "sales_order_id": order.id,
-                    "device_allowance": plan.included_device_count,
-                    "sales_owner_staff_user_id": actor_staff_user_id,
-                },
-                actor_staff_user_id,
-            )
-        elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
-            # Item #4: an incompatible existing state (e.g. CANCELLED,
-            # EXPIRED, SUSPENDED) means something else already happened
-            # to this Subscription outside this fulfillment attempt --
-            # blindly reusing/transitioning it would silently override
-            # that. Rejected, not silently proceeded.
-            raise CommercialSalesError(
-                "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing subscription is in incompatible status {subscription.status}"
-            )
-
-        if subscription.status == "DRAFT":
-            transition_subscription(subscription, "ACTIVE", actor_staff_user_id, reason="Fulfilled from confirmed, paid Sales Order")
-
-        license_row = db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars().first()
-        if license_row is not None and license_row.status not in ("DRAFT", "ISSUED"):
-            raise CommercialSalesError(
-                "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing license is in incompatible status {license_row.status}"
-            )
-        if license_row is None:
-            # Canonical service call -- never a direct model-row insert.
-            license_row = create_license(
-                {
-                    "customer_id": order.customer_id,
-                    "subscription_id": subscription.id,
-                    "product_id": plan.product_id,
-                    "plan_id": plan.id,
-                    "allowed_platforms": allowed_platforms,
-                    "device_limit": plan.included_device_count,
-                },
-                actor_staff_user_id,
-            )
-        # The one real key-issuance authority -- never constructs the key
-        # or writes key fields directly (app/licensing/services.py). Its
-        # own idempotency ledger (LicenseKeyIssuanceEvent) already makes
-        # this call itself safely retryable.
-        if license_row.status == "DRAFT":
-            issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
-
-        order.status = "FULFILLED"
-        order.fulfilled_at = utcnow()
-        order.version += 1
-
-        db_session.add(
-            CommercialOperationsIdempotencyKey(
-                idempotency_key=idempotency_key, operation_code=OPERATION_CODE, result_reference_id=subscription.id
-            )
-        )
-        db_session.commit()
-    except Exception:
-        db_session.rollback()
         audit_record(
-            actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_FAILED",
-            entity_type="sales_order", entity_public_id=str(order.id),
+            actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_STARTED",
+            entity_type="sales_order", entity_public_id=str(order.id), after_state={"invoice_id": str(invoice.id)},
         )
-        raise
 
-    audit_record(
-        actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_COMPLETED",
-        entity_type="sales_order", entity_public_id=str(order.id),
-        after_state={"subscription_id": str(subscription.id), "license_id": str(license_row.id)},
-    )
-    return {"subscription_id": subscription.id, "license_id": license_row.id, "order_id": order.id, "replayed": False}
+        try:
+            # Recovery guard (items #1/#2): create_subscription()/
+            # create_license() each commit their own transaction internally
+            # (their own established behavior, unchanged) -- fulfill_order()
+            # cannot wrap the whole sequence in one atomic outer transaction
+            # without changing code outside app/commercial_sales/. A retry
+            # after a partial failure at ANY point in the sequence (License
+            # creation crashes after Subscription exists; the final
+            # order/idempotency-key write crashes after both exist) must not
+            # create a SECOND Subscription/License for the same order -- an
+            # already-existing row for this sales_order_id/subscription_id is
+            # reused, never duplicated, before falling back to creating a new
+            # one.
+            subscription = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order.id)).scalars().first()
+            if subscription is None:
+                # Canonical service call -- never a direct model-row insert.
+                subscription = create_subscription(
+                    {
+                        "customer_id": order.customer_id,
+                        "product_id": plan.product_id,
+                        "plan_id": plan.id,
+                        "sales_order_id": order.id,
+                        "device_allowance": plan.included_device_count,
+                        "sales_owner_staff_user_id": actor_staff_user_id,
+                    },
+                    actor_staff_user_id,
+                )
+            elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
+                # Item #4: an incompatible existing state (e.g. CANCELLED,
+                # EXPIRED, SUSPENDED) means something else already happened
+                # to this Subscription outside this fulfillment attempt --
+                # blindly reusing/transitioning it would silently override
+                # that. Rejected, not silently proceeded.
+                raise CommercialSalesError(
+                    "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing subscription is in incompatible status {subscription.status}"
+                )
+
+            if subscription.status == "DRAFT":
+                transition_subscription(subscription, "ACTIVE", actor_staff_user_id, reason="Fulfilled from confirmed, paid Sales Order")
+
+            license_row = db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars().first()
+            if license_row is not None and license_row.status not in ("DRAFT", "ISSUED"):
+                raise CommercialSalesError(
+                    "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing license is in incompatible status {license_row.status}"
+                )
+            if license_row is None:
+                # Canonical service call -- never a direct model-row insert.
+                license_row = create_license(
+                    {
+                        "customer_id": order.customer_id,
+                        "subscription_id": subscription.id,
+                        "product_id": plan.product_id,
+                        "plan_id": plan.id,
+                        "allowed_platforms": allowed_platforms,
+                        "device_limit": plan.included_device_count,
+                    },
+                    actor_staff_user_id,
+                )
+            # The one real key-issuance authority -- never constructs the key
+            # or writes key fields directly (app/licensing/services.py). Its
+            # own idempotency ledger (LicenseKeyIssuanceEvent) already makes
+            # this call itself safely retryable.
+            #
+            # AUDIT-NNN: the plaintext key `issue_license_key` returns here used
+            # to be discarded -- a licence fulfilled through this pipeline was
+            # issued to a customer who could never read the key to activate it.
+            # The full key exists only in this return value (ADR-9: never
+            # persisted, never logged, never re-derivable), so it is captured
+            # and threaded through fulfill_order's own return value, to be
+            # revealed once by the caller exactly the way
+            # licensing/routes.py::issue renders `revealed_key` for the direct
+            # path. `license_key` stays None when this call resumes a retry
+            # whose license was already ISSUED by an earlier attempt (the key
+            # was shown once, then, and is equally unrecoverable now).
+            license_key = None
+            if license_row.status == "DRAFT":
+                license_row, license_key = issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
+
+            order.status = "FULFILLED"
+            order.fulfilled_at = utcnow()
+            order.version += 1
+
+            db_session.add(
+                CommercialOperationsIdempotencyKey(
+                    idempotency_key=idempotency_key, operation_code=OPERATION_CODE, result_reference_id=subscription.id
+                )
+            )
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            audit_record(
+                actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_FAILED",
+                entity_type="sales_order", entity_public_id=str(order.id),
+            )
+            raise
+
+        audit_record(
+            actor_staff_user_id=actor_staff_user_id, actor_role_snapshot=None, action_code="FULFILLMENT_COMPLETED",
+            entity_type="sales_order", entity_public_id=str(order.id),
+            after_state={"subscription_id": str(subscription.id), "license_id": str(license_row.id)},
+        )
+        return {
+            "subscription_id": subscription.id, "license_id": license_row.id, "order_id": order.id,
+            "replayed": False, "license_key": license_key,
+        }

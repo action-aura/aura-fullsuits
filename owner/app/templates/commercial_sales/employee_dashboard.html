@@ -18,14 +18,56 @@
   <dl class="kv">
     {% for status, count in data.invoices_by_status.items() %}<dt>{{ commercial_invoice_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
   </dl>
-  <h3>{{ _("My commission earnings") }}</h3>
+  {# AUDIT-owner-cross-screen: these four figures are scoped to ONE currency
+     (they used to be every currency added together, which is a number in no
+     currency at all). Scoping them silently would have been worse than the
+     blended figure it replaced -- at least that one was visibly wrong -- so
+     the currency is named in the heading, on every amount, and is
+     changeable here; the full per-currency breakdown is rendered below, so
+     nothing is hidden behind the selected currency.
+
+     A plain GET form, never an inline onchange: Owner CC ships under CSP
+     script-src 'self', which drops inline handlers silently. Same control
+     as operations_ui/dashboard_management.html. #}
+  <h3>{{ _("My commission earnings") }} (<bdi dir="ltr">{{ data.currency }}</bdi>)</h3>
+  <form method="get" class="filters">
+    <label for="commercial-sales-employee-dashboard-currency">{{ _("Currency") }}</label>
+    <input id="commercial-sales-employee-dashboard-currency" name="currency" value="{{ data.currency }}" maxlength="3">
+    <button type="submit" class="secondary">{{ _("Apply") }}</button>
+  </form>
   <dl class="kv">
-    <dt>{{ _("Earned, awaiting approval") }}</dt><dd>{{ format_owner_number(data.commission_earned_unapproved) }}</dd>
-    <dt>{{ _("Approved, awaiting payout") }}</dt><dd>{{ format_owner_number(data.commission_approved_unpaid) }}</dd>
-    <dt>{{ _("Paid to date") }}</dt><dd>{{ format_owner_number(data.commission_paid_total) }}</dd>
-    <dt>{{ _("Reversed") }}</dt><dd>{{ format_owner_number(data.commission_reversed_total) }}</dd>
+    <dt>{{ _("Earned, awaiting approval") }}</dt><dd>{{ format_owner_number(data.commission_earned_unapproved) }} {{ data.currency }}</dd>
+    <dt>{{ _("Approved, awaiting payout") }}</dt><dd>{{ format_owner_number(data.commission_approved_unpaid) }} {{ data.currency }}</dd>
+    <dt>{{ _("Paid to date") }}</dt><dd>{{ format_owner_number(data.commission_paid_total) }} {{ data.currency }}</dd>
+    <dt>{{ _("Reversed") }}</dt><dd>{{ format_owner_number(data.commission_reversed_total) }} {{ data.currency }}</dd>
     <dt>{{ _("Pending approval requests") }}</dt><dd>{{ data.own_pending_approval_requests }}</dd>
   </dl>
+
+  <h3>{{ _("My commission earnings by currency") }}</h3>
+  <table class="responsive-table">
+    <thead>
+      <tr>
+        <th>{{ _("Currency") }}</th>
+        <th>{{ _("Earned, awaiting approval") }}</th>
+        <th>{{ _("Approved, awaiting payout") }}</th>
+        <th>{{ _("Paid to date") }}</th>
+        <th>{{ _("Reversed") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for code, stages in data.commission_totals_by_currency.items() %}
+      <tr>
+        <td><bdi dir="ltr">{{ code }}</bdi></td>
+        <td>{{ format_owner_number(stages.earned_unapproved) }}</td>
+        <td>{{ format_owner_number(stages.approved_unpaid) }}</td>
+        <td>{{ format_owner_number(stages.paid_total) }}</td>
+        <td>{{ format_owner_number(stages.reversed_total) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="empty">{{ _("No data.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
   {% endif %}
 </div>
 {% endblock %}

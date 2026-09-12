@@ -35,15 +35,76 @@ extraction -- see docs/migration/retail-parity-matrix.md.
 """
 import csv
 import io
+import logging
+import os
 import re
 import json as _json
 import uuid as _uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session
 
-from commercial_runtime.identity.mt_auth import mt_login_required
+from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem, mt_require_capability
+# Every POST below is gated on retail.stock.adjust. `execute`/`smart-execute`
+# write products, customers, suppliers, branches and OPENING STOCK, which
+# makes this the sixth writer into inventory_balances (see
+# core/retail/stock_reconciliation.py's list) and by some distance the
+# highest-leverage one -- a single upload can restate the whole catalogue.
+#
+# Two gates on every POST below, same as every mutating route in
+# retail_api.py: mt_require_subsystem is the LICENCE/module check ("is this
+# install actually licensed for Retail?"); mt_require_capability is the
+# PERMISSION check ("may THIS PERSON do this?"). Until this pass these five
+# routes carried @mt_login_required and mt_require_capability alone -- not
+# the subsystem gate every route in retail_api.py has, and not the
+# licensing-STATE gate (require_license_capability, below) those same
+# routes carry either. A restricted or expired licence therefore did not
+# stop a spreadsheet from rewriting the shop's whole catalogue and opening
+# stock -- the exact class of mutation a restricted licence exists to
+# block -- and any signed-in account whose company had never provisioned
+# the Retail module could reach these routes at all.
+#
+# parse/detect/clean write nothing -- they preview the same upload -- but they
+# are gated too rather than carved out. A preview of an import the caller may
+# never run is not an authority worth keeping separate, and an exemption is
+# one more shape a future route could quietly take.
+from commercial_runtime.identity.user_accounts import CAP_STOCK_ADJUST, now_utc_iso
+from commercial_runtime.identity.registry_db import get_conn as _registry_conn
+from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
+from commercial_runtime.sync.sync_service import nudge as _sync_nudge
+from config import DATABASE_DIR
+
+# Own instance rather than importing retail_api's -- retail_api.py is a peer
+# route module (see _queue_sync_event's comment below for the same
+# principle applied to sync events), and importing a name across it would
+# create exactly the route-module coupling this file otherwise avoids.
+# make_capability_guard(app_data_dir) is deterministic in that argument, so
+# this instance and retail_api.py's point at the SAME licensing.db and
+# agree on every decision; it is a second handle on one state machine, not
+# a second one.
+require_license_capability = make_capability_guard(os.path.dirname(DATABASE_DIR))
+
+# Every one of these five routes is squarely in RETAIL_RESTRICTED_ALLOWLIST's
+# own "everything else... is blocked" bucket (retail_api.py's comment on that
+# allowlist: "new products/suppliers/customers, stock adjustment... is
+# blocked") -- there is no read-only/export shape here worth exempting, so
+# this is deliberately empty rather than a second, driftable copy of
+# retail_api.py's allowlist.
+_IMPORT_RESTRICTED_ALLOWLIST = frozenset()
+
+# Every quantity comparison this importer makes uses the SAME tolerance the
+# reconciler grades it with (core/retail/stock_reconciliation.py), imported
+# rather than re-typed so the two can never drift apart. Quantities are REAL:
+# an exact `< 0` float comparison would refuse a perfectly legitimate
+# "declare exactly what is on hand" on a fractional-unit product purely
+# because of accumulated IEEE-754 residue.
+from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
 
 import_bp = Blueprint('import_api', __name__, url_prefix='/api/import')
+
+#: Module logger. This file had none at all, which is part of why the
+#: swallowed attribution failure below could stay silent for as long as it
+#: did: there was nowhere to say it.
+_log = logging.getLogger(__name__)
 
 
 def _demo_blocked():
@@ -54,6 +115,47 @@ def _demo_blocked():
             'error': 'Data import is not available in the demo. It is included in your downloaded system.'
         }), 403
     return None
+
+
+# Operator-facing contract for the products sheet's stock column. It is a
+# single fixed sentence (no interpolation) precisely so it can live in the
+# en/ar catalogs as a dictionary key -- see products/retail/frontend/locales/.
+STOCK_COLUMN_HELP = (
+    'Total opening stock declared for this product, not a live shelf count. '
+    'Re-importing the same number changes nothing; raising it adds only the difference. '
+    'Sales, returns and manual adjustments are never overwritten. '
+    'Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.'
+)
+
+# Refusal reasons the products handler can attach to a row whose declared
+# opening stock cannot be applied. Fixed sentences, in both catalogs, so the
+# wizard can translate them and append the (untranslatable) SKU and figures --
+# the same shape app-shell.js uses for its admin-device toast.
+STOCK_DECLARATION_BELOW_LEDGER = 'Declared less than has already been sold or moved'
+STOCK_DECLARATION_NEGATIVE = 'Opening quantity cannot be negative'
+
+# Operator-facing contract for the products sheet's optional `parent_sku`
+# column -- launch-readiness "product variants" follow-up (design doc
+# section 3.6.3's deferred CSV round-trip, now closed; schema v25 is
+# unchanged, `parent_sku` maps onto the existing `parent_product_id`
+# column). Localized like STOCK_COLUMN_HELP above, for the identical reason:
+# this column's behaviour (two-pass forward-reference resolve, per-row
+# refusal rather than a silent orphan) is not obvious from its name alone.
+PARENT_SKU_COLUMN_HELP = (
+    'Optional. The SKU of the PARENT product, when this row is a variant '
+    '(for example, Red / L under T-Shirt). The parent may appear anywhere in '
+    'the file, before or after its variants. A parent SKU that matches '
+    'nothing in this file or your existing catalogue is reported as a row '
+    'error, and that row still imports -- never silently as a standalone product.'
+)
+
+# Refusal reasons a row's `parent_sku` can attach when the LINK cannot be
+# made -- the product row itself (name/price/category/stock) still lands;
+# only the parent_product_id relationship is refused. Same fixed-sentence-
+# plus-untranslatable-SKU shape as STOCK_DECLARATION_* above.
+PARENT_SKU_NOT_FOUND = 'Parent SKU not found in this file or your catalogue'
+PARENT_SKU_IS_VARIANT = 'Parent SKU is itself a variant -- variants cannot have variants'
+PARENT_SKU_SELF = 'A product cannot be its own parent'
 
 
 # ── Retail entity schemas ─────────────────────────────────────────────────────
@@ -72,7 +174,24 @@ SCHEMAS = {
                 {'key': 'tax_rate',      'label': 'Tax Rate (%)',         'required': False, 'type': 'number',  'example': '15'},
                 {'key': 'unit',          'label': 'Unit (pcs/kg/box)',    'required': False, 'type': 'text',    'example': 'pcs'},
                 {'key': 'reorder_level', 'label': 'Reorder Level',        'required': False, 'type': 'integer', 'example': '10'},
-                {'key': 'initial_stock', 'label': 'Current Stock Qty',    'required': False, 'type': 'number',  'example': '50'},
+                # Renamed from "Current Stock Qty" when this column stopped
+                # being an absolute SET and became a cumulative opening
+                # DECLARATION applied as a delta (see the long comment at the
+                # stock block in _handle_retail_products). The old label
+                # promised a live count and delivered arithmetic the operator
+                # never asked for; label, example and `help` now say exactly
+                # what the backend does. Both strings are in the en/ar
+                # catalogs -- import-wizard.js renders them through t().
+                {'key': 'initial_stock', 'label': 'Opening Stock Qty',     'required': False, 'type': 'number',  'example': '50',
+                 'help': STOCK_COLUMN_HELP},
+                # launch-readiness "product variants" follow-up (design doc
+                # section 3.6.3, now closed): the ONLY way a CSV can say
+                # "this row is a variant of that row" -- see
+                # _handle_retail_products' two-pass resolve below. Optional
+                # and last, so a sheet with no such column maps nothing here
+                # and behaves byte-identically to before this field existed.
+                {'key': 'parent_sku',    'label': 'Parent SKU (for variants)', 'required': False, 'type': 'text',
+                 'example': 'TSH-BASE', 'help': PARENT_SKU_COLUMN_HELP},
             ]
         },
         'customers': {
@@ -290,6 +409,15 @@ FIELD_ALIASES = {
                           'gtin', 'barcodenum', 'barcodenumber', 'scancode', 'scannedcode',
                           'variantbarcode', 'upccode', 'gtincode', 'upca', 'upce',
                           'productbarcode', 'itembarcode', 'ean8', 'scanbarcode'],
+    # launch-readiness "product variants" follow-up: the CSV-side alias for
+    # `products.parent_product_id` (schema v25, unchanged -- this maps an
+    # existing column, it does not add one). Deliberately a SEPARATE key
+    # from 'sku' above (never merged into that alias list) -- a header
+    # literally named "Parent SKU"/"Parent Code" must map to THIS field, not
+    # silently steal the row's own 'sku' mapping.
+    'parent_sku':        ['parentsku', 'parentcode', 'parentproductcode', 'parentitemcode',
+                          'parentproduct', 'parentproductsku', 'variantparent', 'groupsku',
+                          'parentarticle', 'basesku', 'baseproductsku', 'parentitemno'],
     'tax_rate':          ['taxrate', 'tax', 'vat', 'gst', 'hst', 'vatrate', 'gstrate',
                           'taxpct', 'taxpercent', 'taxpercentage', 'vatpercent', 'taxcode',
                           'gstcode', 'vatcode', 'taxclass', 'vatclass', 'salestax',
@@ -489,6 +617,9 @@ def get_schemas():
 
 @import_bp.route('/parse', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def parse_file_endpoint():
     """Upload a file, return column names, sample values, row count, and auto-detected mapping."""
     blocked = _demo_blocked()
@@ -635,6 +766,9 @@ def _file_samples(headers, rows, keep=15):
 
 @import_bp.route('/detect', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def detect_entities():
     """Scan an uploaded file against every Retail entity and return the ones it
     covers -- powers the universal importer that splits a file across the right
@@ -717,6 +851,9 @@ def detect_entities():
 
 @import_bp.route('/smart-execute', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def smart_execute():
     """Import one (possibly combined) file into MULTIPLE Retail entities in one
     pass. Accepts the file + `targets` = [{system, entity, mapping}]. Runs each
@@ -916,6 +1053,9 @@ def _clean_records(rows, mapping, schema_fields):
 
 @import_bp.route('/clean', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def clean_preview():
     """Parse + run the cleaning pipeline and return the audit report WITHOUT importing."""
     blocked = _demo_blocked()
@@ -951,6 +1091,9 @@ def clean_preview():
 
 @import_bp.route('/execute', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def execute_import():
     """Re-upload file + mapping → clean, validate, and import all clean rows."""
     blocked = _demo_blocked()
@@ -1003,7 +1146,13 @@ def execute_import():
     landed = result.get('imported', 0) + result.get('updated', 0)
     if landed == 0:
         result['status'] = 'none'
-    elif result['skipped'] > 0:
+    elif result['skipped'] > 0 or result.get('stock_errors') or result.get('parent_errors'):
+        # A refused stock declaration -- or, launch-readiness "product
+        # variants" follow-up, a refused parent_sku link -- is NOT a clean
+        # import, even when every catalogue row landed: the operator asked
+        # for a stock figure, or a variant relationship, and did not get it.
+        # Reporting 'ok' here would put a green tick on exactly the
+        # silent-discard this branch (and mutation proof M1) exists to end.
         result['status'] = 'partial'
     else:
         result['status'] = 'ok'
@@ -1027,29 +1176,284 @@ def _uid():
     return session.get('mt_user_id') or session.get('user_id', 'system')
 
 
+# ── The v13 attribution stamp ────────────────────────────────────────────────
+# Duplicated from api/retail_api.py rather than imported, for exactly the
+# reason `_cid`/`_uid`/`_queue_sync_event` above are already duplicated and
+# which the comment on `require_license_capability` at the top of this file
+# states outright: retail_api.py is a PEER ROUTE MODULE, and importing a
+# private helper across it would create the route-module coupling this file
+# otherwise avoids. Read retail_api.py's own block for the full reasoning
+# behind each column -- especially why `actor_user_uid` must be the registry's
+# `users.uid` and never `_uid()`'s local `users.id`. Kept deliberately short
+# here so the two copies are trivially diffable.
+#
+# Why this file matters at least as much as retail_api.py: ONE upload can
+# restate the opening stock of an entire catalogue in a single transaction.
+# It is the highest-leverage writer into inventory_movements in the product
+# (see the CAP_STOCK_ADJUST comment at the top of this file) and the one
+# furthest from anybody watching it happen.
+
+#: The same counter retail_api.py keeps, kept SEPARATELY for the same reason
+#: `_cid`/`_uid`/`_actor_user_uid` themselves are duplicated rather than
+#: imported: retail_api.py is a PEER ROUTE MODULE and importing across it
+#: would create the coupling this file otherwise avoids. The reason keys carry
+#: an `import_` prefix so a reader of either counter can tell which module
+#: reported, and so the two can be summed without colliding.
+#:
+#: WHY THIS FILE NEEDS IT MORE THAN retail_api.py DOES. `_stamp()` below
+#: resolves ONCE PER RUN -- correct, and stated in its own docstring -- which
+#: means ONE swallowed exception here does not unattribute one row, it
+#: unattributes an ENTIRE UPLOAD: every product, customer, supplier, branch
+#: and opening-stock movement in a spreadsheet that can restate a whole
+#: catalogue. It was a bare `except Exception: return None`, so that outcome
+#: left no trace anywhere at all. The NULLs are still the right answer; going
+#: quiet about them was not.
+ACTOR_LOOKUP_FAILURES = {
+    'import_lookup_error': 0,
+    'import_no_user_row': 0,
+    'import_blank_uid': 0,
+}
+
+
+def _note_actor_lookup_failure(reason, detail, exc=None):
+    """Count it, then say so. Never raises -- an import must not die because
+    logging did."""
+    try:
+        ACTOR_LOOKUP_FAILURES[reason] = ACTOR_LOOKUP_FAILURES.get(reason, 0) + 1
+        _log.error(
+            "retail import attribution: %s (%s). THE WHOLE UPLOAD will be written with "
+            "NO actor identity -- this resolves once per run, not per row -- so every "
+            "product, customer, supplier and stock movement it writes is unattributed. "
+            "Occurrence #%d for this reason since process start.",
+            reason, detail, ACTOR_LOOKUP_FAILURES[reason], exc_info=exc is not None)
+    except Exception:  # pragma: no cover - a logger that throws must not fail an import
+        pass
+
+
+def _actor_user_uid():
+    """Registry `users.uid` for the signed-in user, or None. Never `_uid()`."""
+    local_user_id = session.get('mt_user_id')
+    if not local_user_id:
+        return None
+    try:
+        conn = _registry_conn()
+        try:
+            row = conn.execute("SELECT uid FROM users WHERE id=?", (local_user_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        _note_actor_lookup_failure(
+            'import_lookup_error',
+            f"registry read for mt_user_id={local_user_id!r} failed: {exc}", exc=exc)
+        return None
+    if not row:
+        _note_actor_lookup_failure(
+            'import_no_user_row', f"no registry users row for mt_user_id={local_user_id!r}")
+        return None
+    value = row['uid']
+    if value and str(value).strip():
+        return value
+    _note_actor_lookup_failure(
+        'import_blank_uid', f"registry users row {local_user_id!r} has no uid yet")
+    return None
+
+
+def _stamp():
+    """`(actor_user_uid, terminal_id, created_at_utc)`.
+
+    Resolved ONCE per import run, not per record: a 5,000-row spreadsheet
+    would otherwise do 5,000 registry reads and 5,000 local_device.json reads
+    to re-answer a question whose answer cannot change mid-upload. It also
+    makes the whole upload carry one instant, which is the truth -- the
+    operator pressed the button once.
+    """
+    from database.schema import local_terminal_id
+    return _actor_user_uid(), local_terminal_id(), now_utc_iso()
+
+
+def _new_uid():
+    """A fresh RFC-4122 uuid4 wire identity. Never hex(randomblob(16)) -- see
+    retail_api.py::_new_uid for why that shape passes `uuid.UUID()` and is
+    still rejected on the wire."""
+    return str(_uuid.uuid4())
+
+
+def _branch_uid(conn, branch_id):
+    """Same lookup as retail_api.py::_branch_uid (duplicated rather than
+    imported -- see `_queue_sync_event`'s own comment just below for why this
+    file never imports a private helper from that one). Resolves a local
+    `branches.id` to its v13 wire identity for an inventory_movement
+    payload's `branch_uid` field."""
+    row = conn.execute("SELECT uid FROM branches WHERE id=?", (branch_id,)).fetchone()
+    return row['uid'] if row else None
+
+
+# AUDIT fix (2026-08-19, CRITICAL): the handlers below inserted categories/
+# products/customers/suppliers with NO sync_outbox event at all, so a bulk
+# import never left the importing device -- other devices silently never saw
+# any of it. Same helper as retail_api.py's `_queue_sync_event` (duplicated
+# rather than imported: retail_api.py is a peer route module, and importing
+# a private helper across it would create exactly the route-module coupling
+# the sync module's own nudge() registration exists to avoid). Same contract
+# too: MUST be called with the same cur/conn as the row write it describes,
+# before that transaction's commit() -- the outbox row and the imported row
+# land or roll back together, so an import that fails mid-file leaves no
+# orphan sync events. Payload shapes mirror the equivalent single-record
+# routes in retail_api.py exactly (and, like them, never carry `company_id`
+# on the wire -- each device stamps its own on apply; see
+# commercial_runtime/sync/sync_service.py's module docstring). Events go
+# straight into the sync_outbox table row-by-row, never accumulated in a
+# Python list first, so a huge import file costs no extra memory here.
+def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
+    cur.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), entity_type, str(entity_id), event_type,
+         _json.dumps(payload), datetime.now(timezone.utc).isoformat()),
+    )
+
+
+# inventory_movements.reference stamped on every stock correction this
+# importer posts for a product it did not create. It is the marker that lets
+# a later import tell its OWN previous declarations apart from real stock
+# events (sales, returns, receipts, manual 'ADJ' adjustments) -- see the long
+# comment at the stock block in _handle_retail_products below.
+_IMPORT_STOCK_REFERENCE = 'IMPORT'
+
+
 def _handle_retail_products(records):
     from database.schema import get_retail_conn
     conn  = get_retail_conn()
     cur   = conn.cursor()
     cid   = _cid()
     imported, skipped, dupes, cat_cache = 0, 0, 0, {}
+    # Products whose declared opening stock could NOT be applied. Structured,
+    # not prose: the wizard translates the fixed `reason` sentence out of the
+    # catalogs and appends the SKU/figures, because i18n.js only translates a
+    # text node whose FULL text is a dictionary key -- an f-string with a SKU
+    # baked in could never be localized.
+    stock_errors = []
+    # launch-readiness "product variants" follow-up (design section 3.6.3):
+    # one entry per row this run wrote, `{pid, sku, parent_sku}` -- built
+    # during the main record loop below (pass 1, unchanged) and consumed
+    # AFTER it (pass 2, new) to resolve `parent_sku` -> `parent_product_id`.
+    # See the pass-2 block below the loop for why this needs its own pass
+    # rather than resolving inline.
+    record_meta = []
+
+    # Resolved once, before the record loop -- see _stamp()'s docstring.
+    actor, terminal, utc_now = _stamp()
 
     branch = conn.execute("SELECT id FROM branches WHERE company_id=? LIMIT 1", (cid,)).fetchone()
     bid = branch['id'] if branch else None
     if not bid:
-        cur.execute("INSERT INTO branches (company_id,name) VALUES (?,'Main Store')", (cid,))
+        # v13 `uid`. This is the importer's OWN self-healing branch insert --
+        # a second copy of the same easily-overlooked write retail_api.py's
+        # _default_branch does, and it has to agree with it: a branch invented
+        # by an upload is as real as one created through /branches, and the
+        # stock this import is about to file lands against it.
+        self_heal_branch_uid = _new_uid()
+        cur.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,'Main Store',?)",
+                    (cid, self_heal_branch_uid))
         bid = cur.lastrowid
+        # Wave B, CORRECTED: no sync event is queued for a self-heal, and
+        # this must stay in step with `retail_api.py`'s `_default_branch`,
+        # which carries the full reasoning. In short: a self-healed branch is
+        # a LOCAL PLACEHOLDER, not an operator act. Broadcasting it let two
+        # devices that each self-healed before their first pull mint two
+        # different `uid`s for "the default branch", and since the apply-side
+        # upsert dedupes on `uid` alone -- nothing dedupes by name -- both
+        # devices ended up holding two permanently-unmerged branches with the
+        # shop's stock split across them. `compute_drift` stayed zero the
+        # whole time, because the defect is in identity, not arithmetic.
+        #
+        # Branches an operator genuinely created still sync: the bulk branch
+        # import in `_handle_retail_branches` below keeps its event, as does
+        # POST /branches in retail_api.py.
+        import_branch_uid = self_heal_branch_uid
+    else:
+        # Resolved once, outside the record loop -- same reasoning as
+        # `actor, terminal, utc_now` above: every row this run posts a
+        # movement for lands at the SAME branch.
+        import_branch_uid = _branch_uid(conn, bid)
 
     for rec in records:
         cat_name = (rec.get('category') or '').strip()
         cat_id   = None
         if cat_name:
             if cat_name not in cat_cache:
-                row = conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, cat_name)).fetchone()
+                row = conn.execute(
+                    "SELECT id, deleted_at_utc FROM categories WHERE company_id=? AND name=?",
+                    (cid, cat_name)).fetchone()
                 if not row:
                     new_cat_id = str(_uuid.uuid4())
-                    cur.execute("INSERT INTO categories (id,company_id,name) VALUES (?,?,?)", (new_cat_id, cid, cat_name))
+                    # launch-readiness Phase 6 stage 6a-i: stamped at
+                    # creation, same reasoning as retail_api.py's
+                    # create_category. `utc_now` is the ONE instant already
+                    # resolved for this whole import run (see _stamp()'s
+                    # docstring above) -- reused here rather than a fresh
+                    # now_utc_iso() call, so every row this run creates or
+                    # touches agrees on when "now" was.
+                    cur.execute(
+                        "INSERT INTO categories (id,company_id,name,row_version,updated_at_utc) "
+                        "VALUES (?,?,?,?,?)",
+                        (new_cat_id, cid, cat_name, 1, utc_now))
+                    # Queued BEFORE the product event that will reference it
+                    # (same cur, so same outbox insertion order the push
+                    # replays in) -- receivers apply parent before child.
+                    # Payload mirrors create_category's.
+                    _queue_sync_event(cur, 'category', new_cat_id, 'create', {
+                        'id': new_cat_id, 'name': cat_name, 'description': '',
+                        'row_version': 1, 'updated_at_utc': utc_now,
+                    })
                     cat_cache[cat_name] = new_cat_id
+                elif row['deleted_at_utc'] is not None:
+                    # launch-readiness Phase 6 stage 6b-ii, Decision B
+                    # (phase6b-decisions.md): a sheet naming this category is
+                    # an operator UNAMBIGUOUSLY asserting "this category
+                    # exists, and here are its values" -- leaving it
+                    # tombstoned while quietly assigning imported products to
+                    # its now-invisible id would fail exactly as silently as
+                    # the pre-existing product-SKU dedupe bug that decision
+                    # documents (a re-import of a soft-deleted SKU updated
+                    # the dead row and left it invisible). Clear the
+                    # tombstone, bump row_version in the SAME statement, and
+                    # queue an `update` naming only `deleted_at_utc` as
+                    # changed. Categories have no `status` column at all, so
+                    # unlike a product/customer/supplier restore there is
+                    # nothing else to bring back.
+                    cur.execute(
+                        "UPDATE categories SET deleted_at_utc=NULL, row_version=row_version+1, "
+                        "updated_at_utc=? WHERE id=?",
+                        (utc_now, row['id']))
+                    rrow = conn.execute(
+                        "SELECT name, description, deleted_at_utc, row_version FROM categories WHERE id=?",
+                        (row['id'],)).fetchone()
+                    # `deleted_at_utc` (now NULL, re-read rather than
+                    # assumed) travels in the payload itself AND is named in
+                    # `_changed_fields`. Both halves are load-bearing.
+                    #
+                    # `SyncService._apply_event`'s category create/update
+                    # branch carries the column DELTA-GATED, never
+                    # unconditionally, which is what makes this resurrection
+                    # safe to broadcast: naming it here clears the tombstone
+                    # on every device, while an ordinary rename from a device
+                    # that never saw the delete leaves that tombstone alone,
+                    # because its own `_changed_fields` says `['name']`.
+                    # Written unconditionally instead, that rename's NULL
+                    # would un-delete a category somebody else deleted.
+                    #
+                    # Both directions are pinned by
+                    # `retail_tombstone_test.py`'s
+                    # `test_an_import_resurrection_of_a_tombstoned_category_reaches_the_other_device`
+                    # and
+                    # `test_a_name_edit_from_a_device_that_never_saw_the_delete_does_not_resurrect_the_category`.
+                    _queue_sync_event(cur, 'category', row['id'], 'update', {
+                        'id': row['id'], 'name': rrow['name'], 'description': rrow['description'],
+                        'deleted_at_utc': rrow['deleted_at_utc'],
+                        'row_version': rrow['row_version'], 'updated_at_utc': utc_now,
+                        '_changed_fields': ['deleted_at_utc'],
+                    })
+                    cat_cache[cat_name] = row['id']
                 else:
                     cat_cache[cat_name] = row['id']
             cat_id = cat_cache[cat_name]
@@ -1058,44 +1462,449 @@ def _handle_retail_products(records):
         if not sku:
             skipped += 1; continue
 
-        existing = conn.execute("SELECT id FROM products WHERE company_id=? AND sku=?", (cid, sku)).fetchone()
+        # launch-readiness Phase 6 stage 6b-iii-b: `deleted_at_utc` added to
+        # this SELECT -- Decision B (phase6b-decisions.md) says an import row
+        # naming a tombstoned SKU resurrects it, and this dedupe key already
+        # matches a tombstoned row today (no `deleted_at_utc` filter on the
+        # lookup itself -- unchanged, on purpose: filtering it out here would
+        # make the importer treat the SKU as brand-new and INSERT a second,
+        # duplicate row instead of resurrecting the one that already exists).
+        # COLLATE NOCASE (schema v22): this is the upsert key an import
+        # onboards a whole catalogue through, and at hypermarket volume it
+        # is the write door most likely to manufacture a case-duplicate --
+        # retail_api.py's create_product/update_product SKU checks were
+        # made case-insensitive for the identical reason lookup_product's
+        # scan was: the read and the writes have to agree on what "the
+        # same SKU" means, or a case-folding scan resolves to an arbitrary
+        # one of two rows. This IS a deliberate behaviour change: importing
+        # SKU 'abc' when 'ABC' already exists now UPDATES that product
+        # instead of inserting a second one (pinned by
+        # retail_product_lookup_nocase_test.py; recorded in ROADMAP.md's
+        # 2026-08-30 "retail schema v22 CLAIMED" entry).
+        existing = conn.execute(
+            "SELECT id, deleted_at_utc FROM products WHERE company_id=? AND sku=? COLLATE NOCASE", (cid, sku)).fetchone()
         if existing:
-            cur.execute("""
-                UPDATE products SET name=?, barcode=?, category_id=?, cost_price=?,
-                    sell_price=?, tax_rate=?, unit=?, reorder_level=?
-                WHERE company_id=? AND sku=?
-            """, (rec.get('name',''), rec.get('barcode',''), cat_id,
-                  rec.get('cost_price') or 0, rec.get('sell_price') or 0,
-                  rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
-                  rec.get('reorder_level') or 5,
-                  cid, sku))
+            resurrecting = existing['deleted_at_utc'] is not None
+            # launch-readiness Phase 6 stage 6a-i: every column this
+            # statement sets (name/barcode/category_id/cost_price/
+            # sell_price/tax_rate/unit/reorder_level) is a synced product
+            # column, always written regardless of the sheet's values (same
+            # "unconditional overwrite always counts as a change" reasoning
+            # as retail_api.py's update_category), so this always bumps, in
+            # the SAME UPDATE. `utc_now` is this run's one resolved instant.
+            #
+            # stage 6b-iii-b: `deleted_at_utc=NULL` appended to the SAME
+            # UPDATE, ONLY when `resurrecting` -- an operator naming this SKU
+            # in a sheet is asserting "this product exists" (Decision B), the
+            # same reasoning delete_product's own restore-clears-tombstone
+            # comment uses.
+            set_clause = ("name=?, barcode=?, category_id=?, cost_price=?, "
+                          "sell_price=?, tax_rate=?, unit=?, reorder_level=?, "
+                          "row_version=row_version+1, updated_at_utc=?")
+            if resurrecting:
+                set_clause += ", deleted_at_utc=NULL"
+            # COLLATE NOCASE here too, matching the SELECT above -- must key
+            # on the SAME set of rows the SELECT resolved `existing` from,
+            # or an 'abc'-vs-'ABC' mismatch selects one row and updates a
+            # different (or zero) rows underneath it.
+            cur.execute(
+                f"UPDATE products SET {set_clause} WHERE company_id=? AND sku=? COLLATE NOCASE",
+                (rec.get('name',''), rec.get('barcode',''), cat_id,
+                 rec.get('cost_price') or 0, rec.get('sell_price') or 0,
+                 rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
+                 rec.get('reorder_level') or 5, utc_now,
+                 cid, sku))
             pid = existing['id']
+            # Same full-current-row 'update' payload update_product queues
+            # (re-SELECTed after the UPDATE, status/deleted_at_utc included)
+            # -- an imported price/name change must reach other devices
+            # exactly like a PATCH would.
+            #
+            # launch-readiness Phase 6 stage 6b-i: `_changed_fields` names
+            # exactly the eight columns the UPDATE above ALWAYS writes --
+            # unlike a PATCH, this write applies all eight unconditionally
+            # from the sheet's values, whether or not the sheet actually
+            # differs from the stored row (same reasoning already recorded in
+            # this block's stage 6a-i comment for why an import always bumps
+            # `row_version`).
+            #
+            # stage 6b-iii-b (CORRECTION to the previous, pre-tombstone
+            # version of this comment, which is why it is being replaced
+            # rather than left to rot): this site used to queue NO
+            # `_changed_fields` key at all, reasoning that an absent key
+            # ("every column changed" on the apply side, see `_delta_set_
+            # clause`'s docstring) was harmless because every column this
+            # write touches was always applied anyway. That stopped being
+            # true the moment `deleted_at_utc` joined the apply-side
+            # DELTA-GATED column list (stage 6b-iii-a) -- `deleted_at_utc`
+            # was NEVER in this SELECT or this payload, so an absent
+            # `_changed_fields` key meant the apply side read
+            # `p.get("deleted_at_utc")` as None and, being told "every column
+            # changed", wrote that None onto EVERY receiving device on EVERY
+            # ordinary import edit -- silently un-deleting any product a
+            # receiving device had independently tombstoned, off the back of
+            # a price change that never touched deletion at all. The exact
+            # untouched-field clobber stage 6b-i exists to close, reached
+            # here by a route stage 6b-i never touched. An explicit list
+            # naming only the eight columns this UPDATE actually always
+            # writes -- plus `deleted_at_utc`, ONLY when `resurrecting` --
+            # closes it: supplier_id/reorder_method/status (which this write
+            # never touches either) are also no longer falsely claimed as
+            # changed, for the identical reason.
+            changed = {'name', 'barcode', 'category_id', 'cost_price',
+                       'sell_price', 'tax_rate', 'unit', 'reorder_level'}
+            if resurrecting:
+                changed.add('deleted_at_utc')
+            # `parent_product_id,variant_label` added to this SELECT (schema
+            # v25, launch-readiness "product variants, wave 1") for the same
+            # full-row-payload reason every other column here is read fresh
+            # rather than reconstructed -- NOT added to `changed` above,
+            # because THIS UPDATE (pass 1 of two -- see record_meta's own
+            # comment near the top of this function) never writes
+            # parent_product_id, whether or not the row's `parent_sku` cell
+            # is mapped. `parent_sku` resolution is a SEPARATE pass 2, after
+            # this whole record loop, which issues its OWN additive 'update'
+            # event naming `_changed_fields=['parent_product_id']` only when
+            # the link actually changes -- see that block for why a second
+            # pass, not this one, is where a CSV's parent_sku column round-
+            # trips onto the wire (design doc section 3.6.3, now closed).
+            # Whatever this row's current value is rides along unclaimed
+            # here, matching update_product's own "full row + explicit
+            # changed set" shape.
+            prow = conn.execute(
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
+                "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
+                "row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+            _queue_sync_event(cur, 'product', pid, 'update',
+                               dict(prow) | {'id': pid, '_changed_fields': sorted(changed)})
             dupes += 1
         else:
             pid = str(_uuid.uuid4())
+            # launch-readiness Phase 6 stage 6a-i: stamped at creation, same
+            # reasoning as retail_api.py's create_product.
             cur.execute("""
                 INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,
-                                      sell_price,tax_rate,unit,reorder_level,status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active')
+                                      sell_price,tax_rate,unit,reorder_level,status,
+                                      row_version,updated_at_utc)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)
             """, (pid, cid, sku, rec.get('barcode',''), rec.get('name',''), cat_id,
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                   rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
-                  rec.get('reorder_level') or 5))
+                  rec.get('reorder_level') or 5, 1, utc_now))
+            # Mirrors create_product's payload key-for-key. supplier_id is
+            # None (the import schema has no supplier column) and
+            # reorder_method is 'none' (the INSERT above never sets it, so
+            # the column default applies) -- both still on the wire so the
+            # receiving upsert sees the same shape a route-created product
+            # sends. `parent_product_id`/`variant_label` (schema v25) are
+            # ALWAYS None in THIS event -- not because `parent_sku` is
+            # unsupported (the follow-up closing design section 3.6.3's
+            # deferred round-trip means it now IS: see the pass-2 block
+            # after this loop), but because pass 1 (this loop) intentionally
+            # never writes parent_product_id at all, for either a new INSERT
+            # or an existing-row UPDATE -- see record_meta's own comment
+            # above for why. A row whose `parent_sku` resolves gets a
+            # SECOND, additive 'update' sync event from pass 2, exactly like
+            # a PATCH would. The KEYS still ride the wire here regardless,
+            # for the identical key-for-key reason: retail_import_sync_
+            # test.py's parity check compares payload key SETS between this
+            # route and create_product, and a receiving device's apply
+            # branch must not be able to tell an imported product from a
+            # route-created one structurally.
+            _queue_sync_event(cur, 'product', pid, 'create', {
+                'id': pid, 'sku': sku, 'barcode': rec.get('barcode', ''), 'name': rec.get('name', ''),
+                'category_id': cat_id, 'supplier_id': None,
+                'cost_price': rec.get('cost_price') or 0,
+                'sell_price': rec.get('sell_price') or 0, 'tax_rate': rec.get('tax_rate') or 0,
+                'unit': rec.get('unit', 'pcs') or 'pcs', 'reorder_level': rec.get('reorder_level') or 5,
+                'reorder_method': 'none',
+                'parent_product_id': None, 'variant_label': None,
+                'row_version': 1, 'updated_at_utc': utc_now,
+            })
             imported += 1
 
+        # launch-readiness "product variants" follow-up: recorded for EVERY
+        # row pass 1 touched (new or existing), whether or not this row's
+        # `parent_sku` cell is populated -- pass 2 below skips a blank one
+        # cheaply, and this is also what lets a LATER row in the same file
+        # resolve a parent_sku naming THIS row's own sku (forward and
+        # backward references both go through the same map).
+        record_meta.append({
+            'pid': pid, 'sku': sku,
+            'parent_sku': (rec.get('parent_sku') or '').strip(),
+        })
+
+        # ── Stock: a DECLARED OPENING figure, applied as a FLOORED DELTA ──
+        # Never an absolute SET, and never below zero. See BLANK vs ZERO and
+        # FLOOR further down for the two rules that make this safe.
+        #
+        # Stock-accuracy sweep. This block used to
+        # `SET quantity_on_hand = <sheet value>` on every import, new
+        # product or not, and wrote NO inventory_movements row at all.
+        # Both halves of that were wrong, and together they produced the
+        # single most-reported "the stock is not accurate" symptom:
+        # import a sheet declaring 50, sell 10 (balance 40), re-import the
+        # SAME unchanged sheet -- and the balance snapped back to 50. Ten
+        # sold units resurrected out of nothing, and the ledger
+        # (opening +50, sale -10 = 40) no longer agreed with the balance
+        # it is supposed to be a cache of, permanently and invisibly.
+        #
+        # Semantics chosen, and why. The sheet's stock column is a
+        # DECLARATION of what the operator says this product started with
+        # -- not a live physical count. A physical count is a stock-take:
+        # a different operation, with a different audit trail, deliberately
+        # exposed as its own route (retail_api.py::adjust_stock). Nothing
+        # in an uploaded file can distinguish "here is my opening
+        # catalogue" from "here is what I just counted on the shelf", and
+        # guessing wrong in the stock-take direction is exactly what
+        # resurrects sold units. So this treats it as a declaration:
+        #
+        #   * NEW product      -> file the declared figure and write the
+        #                         matching 'opening_stock'/'OPENING'
+        #                         movement -- byte-identical to what
+        #                         create_product does for a product added
+        #                         through the UI.
+        #   * EXISTING product -> compare the declared figure against what
+        #                         has ALREADY been declared as opening
+        #                         stock for this product+branch, and post
+        #                         only the DIFFERENCE, as a real signed
+        #                         movement. Re-importing an unchanged sheet
+        #                         is therefore a delta of 0: it moves
+        #                         nothing and cannot resurrect anything.
+        #                         Editing the sheet from 50 to 60 posts a
+        #                         +10 correction that is visible in the
+        #                         ledger like any other stock event.
+        #
+        # "Already declared" counts opening_stock movements (from
+        # create_product or a first import) plus this route's own prior
+        # corrections, matched by reference. It deliberately does NOT count
+        # 'ADJ' manual adjustments, sales, returns or receipts: those are
+        # real stock events, not declarations, and netting them in here
+        # would make a re-import silently undo them.
+        #
+        # BLANK vs ZERO -- made explicit, because delta semantics changed
+        # what a 0 means. The old guard was `if init_stock and
+        # float(init_stock) > 0`, which collapsed "column not mapped",
+        # "empty cell" and "the operator typed 0" into one silent no-op.
+        # Under an absolute SET that was merely odd; under a delta it
+        # silently discards a legitimate instruction. They are now separated
+        # by exactly the thing that distinguishes them: _clean_records
+        # coerces an empty numeric cell (and an unmapped column) to None,
+        # while a typed 0 survives as 0.0.
+        #   * None -> NO OPINION. Stock is left exactly as it is.
+        #   * 0    -> A DECLARATION. "This product opened with nothing",
+        #             processed like any other figure, which can legitimately
+        #             post a negative correction against a prior declaration.
+        #
+        # FLOOR -- the delta is never applied blind. `quantity_on_hand +
+        # delta` is checked against zero FIRST, and a declaration that would
+        # drive the balance negative is REFUSED for that product, with the
+        # reason reported back to the operator; the catalogue half of the row
+        # (name/price/category) still lands. Refusing rather than flooring
+        # matches retail_api.py::adjust_stock, which already answers 400
+        # instead of clamping, and for the same reason: silently flooring
+        # would invent stock that the ledger cannot account for, re-opening
+        # the exact balance-vs-ledger divergence this whole sweep exists to
+        # close. It is also the honest answer -- "I only ever opened with 10"
+        # cannot be true of a product that has already sold 80.
+        #
+        # Net effect for the ledger: every stock change an import makes now
+        # has a movement row behind it, so inventory_movements stays the
+        # single source of truth that
+        # core/retail/stock_reconciliation.py can recompute from.
         init_stock = rec.get('initial_stock')
-        if init_stock and float(init_stock) > 0 and bid:
+        if init_stock is not None and bid:
+            declared = float(init_stock)
+            is_new = not existing
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
             """, (cid, pid, bid))
-            cur.execute("""
-                UPDATE inventory_balances SET quantity_on_hand=?
-                WHERE company_id=? AND product_id=? AND branch_id=?
-            """, (float(init_stock), cid, pid, bid))
+            already_declared = 0.0
+            if not is_new:
+                declared_row = conn.execute(
+                    "SELECT COALESCE(SUM(quantity),0) FROM inventory_movements "
+                    "WHERE company_id=? AND product_id=? AND branch_id=? "
+                    "AND (movement_type='opening_stock' OR reference=?)",
+                    (cid, pid, bid, _IMPORT_STOCK_REFERENCE)
+                ).fetchone()
+                already_declared = float(declared_row[0] or 0)
+            delta = declared - already_declared
+            on_hand_row = conn.execute(
+                "SELECT quantity_on_hand FROM inventory_balances "
+                "WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, pid, bid)).fetchone()
+            on_hand = float(on_hand_row[0] or 0) if on_hand_row else 0.0
+
+            if declared < -_QTY_TOLERANCE:
+                stock_errors.append({
+                    # would_be is None, not on_hand: nothing was computed,
+                    # because a negative declaration is rejected before any
+                    # delta is meaningful. The wizard renders the arrow only
+                    # when there is a real "from -> to" to show.
+                    'sku': sku, 'reason': STOCK_DECLARATION_NEGATIVE,
+                    'declared': declared, 'on_hand': on_hand,
+                    'already_declared': already_declared, 'would_be': None,
+                })
+            elif on_hand + delta < -_QTY_TOLERANCE:
+                stock_errors.append({
+                    'sku': sku, 'reason': STOCK_DECLARATION_BELOW_LEDGER,
+                    'declared': declared, 'on_hand': on_hand,
+                    'already_declared': already_declared,
+                    'would_be': round(on_hand + delta, 4),
+                })
+            elif abs(delta) > _QTY_TOLERANCE:
+                cur.execute("""
+                    UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+                    WHERE company_id=? AND product_id=? AND branch_id=?
+                """, (delta, cid, pid, bid))
+                # v13 stamp on every correction this importer posts. `uid` is
+                # per-ROW (inside the loop, one fresh uuid4 each) while the
+                # actor triple is per-RUN (hoisted above the loop): the rows
+                # are distinct records of one act by one person at one moment.
+                movement_type = 'opening_stock' if is_new else ('stock_in' if delta > 0 else 'stock_out')
+                movement_reference = 'OPENING' if is_new else _IMPORT_STOCK_REFERENCE
+                movement_notes = '' if is_new else f'Declared stock changed by bulk import ({already_declared} -> {declared})'
+                movement_uid = _new_uid()
+                cur.execute("""
+                    INSERT INTO inventory_movements
+                        (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                         uid,actor_user_uid,terminal_id,created_at_utc)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (cid, pid, bid, movement_type, delta, movement_reference, movement_notes,
+                      _uid(), movement_uid, actor, terminal, utc_now))
+                # Wave B (AUDIT parity with the 2026-08-19 fix noted on
+                # `_queue_sync_event` above): this is the sixth and highest-
+                # leverage writer into inventory_movements in the product
+                # (see this function's own module-level comment) -- a bulk
+                # import that restates a whole catalogue's opening stock must
+                # reach every other device exactly like a single manual
+                # adjustment does.
+                _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                    'uid': movement_uid, 'product_id': pid, 'branch_id': bid,
+                    'branch_uid': import_branch_uid,
+                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': 0,
+                    'reference': movement_reference, 'notes': movement_notes, 'created_by': _uid(),
+                    'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                })
+
+    # ── Pass 2: parent_sku -> parent_product_id ───────────────────────────
+    # launch-readiness "product variants" follow-up, closing design doc
+    # section 3.6.3's deferred CSV round-trip. A SECOND pass over the SAME
+    # rows, deliberately, not resolved inline in the loop above:
+    #
+    # A CSV commonly lists a variant's PARENT after its variants (a
+    # hypermarket sheet sorted by SKU puts "TSH-BASE" after "TSH-BASE-RED",
+    # alphabetically), or in no particular order at all. Resolving inline,
+    # top-to-bottom, would fail every forward reference -- the parent row
+    # simply would not exist yet when its first variant's line runs. A
+    # second pass, run only after EVERY row in the file has already been
+    # written (pass 1 above, completely unchanged by this feature), sees
+    # the whole file's SKUs at once and cannot fail on ordering.
+    #
+    # Pass 1 never writes `parent_product_id` for ANY row, new or existing
+    # (see the SET clause and the two INSERT/create-event comments above) --
+    # so every row's parent link, whatever it was before this run, is
+    # exactly where pass 1 left it. That is what makes it SAFE to resolve
+    # here off this same `conn`/`cur`: a plain `SELECT ... WHERE sku=?
+    # COLLATE NOCASE` sees this run's own just-written rows (same
+    # connection, same open transaction -- sqlite3 reads its own
+    # uncommitted writes) exactly as if they had always been there, so ONE
+    # lookup path serves both "the parent is earlier in this file" and "the
+    # parent is a pre-existing catalogue row this file never touched" --
+    # no separate in-memory forward-reference index is needed for that half.
+    # `by_sku_this_run` below exists only to skip a redundant DB round trip
+    # for the (common) case where the parent IS a row from this same file.
+    parent_errors = []
+    linked = 0
+    if any(m['parent_sku'] for m in record_meta):
+        by_sku_this_run = {m['sku'].lower(): m['pid'] for m in record_meta}
+        for m in record_meta:
+            parent_sku = m['parent_sku']
+            if not parent_sku:
+                continue
+            # Same rule create_product/update_product's own PATCH refuses
+            # (retail_api.py's `_validate_parent_product`, self-reference
+            # refusal) -- checked BEFORE any lookup, because a fresh row's
+            # OWN parent_product_id is NULL, so without this check a
+            # self-naming row would sail through the "not a variant already"
+            # guard below and quietly become its own parent.
+            if parent_sku.lower() == m['sku'].lower():
+                parent_errors.append({'sku': m['sku'], 'parent_sku': parent_sku,
+                                      'reason': PARENT_SKU_SELF})
+                continue
+            parent_pid = by_sku_this_run.get(parent_sku.lower())
+            if parent_pid is not None:
+                prow = conn.execute(
+                    "SELECT parent_product_id FROM products WHERE id=?", (parent_pid,)
+                ).fetchone()
+            else:
+                # Not a row this run touched -- fall back to the existing
+                # catalogue. COLLATE NOCASE (schema v22): the SAME rule the
+                # SKU upsert key above already applies to THIS file's own
+                # rows -- `parent_sku` matching must agree with what "the
+                # same SKU" means everywhere else on this write door, or a
+                # case-folding scan here resolves to an arbitrary row while
+                # the upsert above resolved to a different one.
+                # `status='active' AND deleted_at_utc IS NULL`, matching
+                # `_validate_parent_product`'s own first refusal -- a
+                # tombstoned/inactive parent is refused outright rather than
+                # merely "not found", same reasoning as that function's
+                # docstring.
+                prow_full = conn.execute(
+                    "SELECT id, parent_product_id FROM products "
+                    "WHERE company_id=? AND sku=? COLLATE NOCASE "
+                    "AND status='active' AND deleted_at_utc IS NULL",
+                    (cid, parent_sku)
+                ).fetchone()
+                parent_pid = prow_full['id'] if prow_full else None
+                prow = prow_full
+            if parent_pid is None:
+                # NEVER silently unlinked. The product row itself already
+                # landed (catalogue fields + stock, both above) -- only the
+                # variant relationship the operator asked for is missing,
+                # and that must be visible, or this row becomes exactly the
+                # orphan-product state the variants work exists to prevent.
+                # See mutation proof M1.
+                parent_errors.append({'sku': m['sku'], 'parent_sku': parent_sku,
+                                      'reason': PARENT_SKU_NOT_FOUND})
+                continue
+            if prow['parent_product_id'] is not None:
+                # No grandchildren -- same rule create_product/update_product
+                # enforce via `_validate_parent_product` (retail_api.py).
+                parent_errors.append({'sku': m['sku'], 'parent_sku': parent_sku,
+                                      'reason': PARENT_SKU_IS_VARIANT})
+                continue
+            # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
+            # bumped in the SAME UPDATE as the field change, same convention
+            # every other write in this function follows.
+            cur.execute(
+                "UPDATE products SET parent_product_id=?, row_version=row_version+1, "
+                "updated_at_utc=? WHERE id=?",
+                (parent_pid, utc_now, m['pid']))
+            # A SECOND, additive sync event for this pid (the first, from
+            # pass 1 above, already queued a 'create' or 'update' with
+            # parent_product_id=None/unclaimed) -- exactly how a PATCH that
+            # only touches parent_product_id queues its own single 'update'
+            # event in retail_api.py's update_product. Full current row
+            # (same column list update_product's own SELECT uses), so a
+            # device seeing this id for the first time still gets a
+            # complete row; `_changed_fields` names only what THIS write
+            # touched, matching update_product's own delta-allowlist
+            # convention.
+            prow2 = conn.execute(
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
+                "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
+                "row_version,updated_at_utc FROM products WHERE id=?", (m['pid'],)).fetchone()
+            _queue_sync_event(cur, 'product', m['pid'], 'update',
+                               dict(prow2) | {'id': m['pid'], '_changed_fields': ['parent_product_id']})
+            linked += 1
 
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': dupes, 'skipped': skipped,
+            'stock_errors': stock_errors,
+            'parent_errors': parent_errors, 'linked': linked,
             'message': f'{imported} new products, {dupes} updated.'}
 
 
@@ -1105,27 +1914,98 @@ def _handle_retail_customers(records):
     cur  = conn.cursor()
     cid  = _cid()
     imported, updated = 0, 0
+    # launch-readiness Phase 6 stage 6a-i: one instant for the whole run,
+    # same "resolved once, not per record" reasoning as _stamp()'s own
+    # docstring -- this handler has no actor/terminal to resolve so it never
+    # called _stamp() at all, but `updated_at_utc` still needs ONE now.
+    utc_now = now_utc_iso()
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
         email = (rec.get('email') or '').strip().lower()
+        # launch-readiness Phase 6 stage 6b-iii-b: `deleted_at_utc` added to
+        # this SELECT -- Decision B applied to customers. Dedupe stays
+        # email-only-when-non-empty, UNCHANGED (see this function's own
+        # limitation, pinned by retail_tombstone_test.py's `test_
+        # reimporting_a_customer_with_no_email_does_not_match_an_existing_
+        # one`): a customer with no email on file is never matched and is
+        # always inserted as new, so re-import can never resurrect one --
+        # widening the dedupe key to fix that would silently MERGE two
+        # distinct same-named customers, a far worse failure than the gap it
+        # would close.
         existing = conn.execute(
-            "SELECT id FROM customers WHERE company_id=? AND (email=? AND email!='')",
+            "SELECT id, deleted_at_utc FROM customers WHERE company_id=? AND (email=? AND email!='')",
             (cid, email)).fetchone() if email else None
         lp = rec.get('loyalty_points')
         lp = float(lp) if lp is not None else 0
         ts = rec.get('total_spent')
         ts = float(ts) if ts is not None else 0
         if existing:
-            cur.execute("UPDATE customers SET name=?,phone=?,address=?,loyalty_points=?,total_spent=? WHERE id=?",
-                        (name, rec.get('phone',''), rec.get('address',''), lp, ts, existing['id']))
+            resurrecting = existing['deleted_at_utc'] is not None
+            # `name`/`phone`/`address` are unconditionally written every
+            # time (name is required above), so this always changes a
+            # SYNCED field (SYNCED_CUSTOMER_FIELDS, retail_api.py) and
+            # always bumps, in the SAME statement -- loyalty_points/
+            # total_spent ride along in the same UPDATE but are NOT what
+            # triggers the bump; see the loyalty-accumulator comment on
+            # create_sale for why those two never gate a bump on their own.
+            #
+            # stage 6b-iii-b: `deleted_at_utc=NULL` appended to the SAME
+            # UPDATE, ONLY when `resurrecting` -- same reasoning as the
+            # product branch above. `status` is deliberately NOT touched
+            # here at all (not in the SET clause, not in `changed` below):
+            # this route must not silently reactivate a LEGACY
+            # `status='inactive'` row with `deleted_at_utc` still NULL (the
+            # backfill posture phase6b-decisions.md pins) off the back of an
+            # unrelated contact-detail re-import -- only a genuine
+            # `deleted_at_utc` tombstone is resurrected here.
+            set_clause = "name=?,phone=?,address=?,loyalty_points=?,total_spent=?,row_version=row_version+1,updated_at_utc=?"
+            if resurrecting:
+                set_clause += ",deleted_at_utc=NULL"
+            cur.execute(
+                f"UPDATE customers SET {set_clause} WHERE id=?",
+                (name, rec.get('phone',''), rec.get('address',''), lp, ts, utc_now, existing['id']))
+            # Same re-SELECTed payload update_customer queues. loyalty_points/
+            # total_spent stay local-only (not in the normal route's payload
+            # either -- the apply side never writes them).
+            #
+            # `_changed_fields` names exactly `name`/`phone`/`address` (the
+            # SYNCED_CUSTOMER_FIELDS members this UPDATE actually always
+            # writes) -- deliberately NOT `email` (the dedupe key, never
+            # written here) and deliberately NOT `status` (see the comment
+            # on the UPDATE above) -- plus `deleted_at_utc`, only when
+            # `resurrecting`. An absent key would mean "every column
+            # changed" on the apply side (`_delta_set_clause`'s docstring),
+            # which would carry this device's own NULL `deleted_at_utc` (this
+            # SELECT never touches it when not resurrecting) onto every
+            # receiving device unconditionally -- exactly the untouched-field
+            # clobber the product branch's own stage 6b-iii-b comment
+            # describes, reproduced here for customers.
+            crow = conn.execute(
+                "SELECT name,phone,email,address,deleted_at_utc,row_version,updated_at_utc FROM customers WHERE id=?",
+                (existing['id'],)).fetchone()
+            changed = {'name', 'phone', 'address'}
+            if resurrecting:
+                changed.add('deleted_at_utc')
+            _queue_sync_event(cur, 'customer', existing['id'], 'update',
+                               dict(crow) | {'id': existing['id'], '_changed_fields': sorted(changed)})
             updated += 1
         else:
             nid = str(_uuid.uuid4())
-            cur.execute("INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent) VALUES (?,?,?,?,?,?,?,?)",
-                        (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts))
+            cur.execute(
+                "INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent,"
+                "row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts, 1, utc_now))
+            # Mirrors create_customer's payload key-for-key (see the
+            # loyalty_points/total_spent note on the update branch above).
+            _queue_sync_event(cur, 'customer', nid, 'create', {
+                'id': nid, 'name': name, 'phone': rec.get('phone', ''),
+                'email': email, 'address': rec.get('address', ''),
+                'row_version': 1, 'updated_at_utc': utc_now,
+            })
             imported += 1
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': updated, 'message': f'{imported} new customers, {updated} updated.'}
 
 
@@ -1135,20 +2015,74 @@ def _handle_retail_suppliers(records):
     cur  = conn.cursor()
     cid  = _cid()
     imported = 0
+    # launch-readiness Phase 6 stage 6a-i: one instant for the whole run,
+    # same reasoning as _handle_retail_customers above.
+    utc_now = now_utc_iso()
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
-        existing = conn.execute("SELECT id FROM suppliers WHERE company_id=? AND name=?", (cid, name)).fetchone()
-        if existing: continue
+        existing = conn.execute(
+            "SELECT id, deleted_at_utc FROM suppliers WHERE company_id=? AND name=?", (cid, name)).fetchone()
+        if existing:
+            # launch-readiness Phase 6 stage 6b-iii-b, Decision B applied to
+            # suppliers: before this stage a matched supplier was skipped
+            # unconditionally (`if existing: continue`), so a re-import of a
+            # soft-deleted supplier did nothing at all -- the operator
+            # re-imports their supplier list and the supplier silently stays
+            # gone, the exact pre-existing failure Decision B's own write-up
+            # describes for products. RESURRECTION ONLY: unlike products/
+            # customers, nothing else in this branch changes -- no
+            # name/phone/email/address UPDATE is added here, deliberately,
+            # because turning this into a general supplier UPDATE-on-reimport
+            # is a separate behaviour change nobody asked for. A LIVE
+            # (non-tombstoned) match still falls straight through to
+            # `continue` below, byte-identical to before this stage.
+            if existing['deleted_at_utc'] is not None:
+                cur.execute(
+                    "UPDATE suppliers SET deleted_at_utc=NULL, row_version=row_version+1, "
+                    "updated_at_utc=? WHERE id=?",
+                    (utc_now, existing['id']))
+                srow = conn.execute(
+                    "SELECT name,phone,email,address,status,deleted_at_utc,row_version,updated_at_utc "
+                    "FROM suppliers WHERE id=?", (existing['id'],)).fetchone()
+                # `_changed_fields` names only `deleted_at_utc` -- same shape
+                # as the category resurrect path (import_api.py's own
+                # products handler above, ~line 1335) and for the identical
+                # reason: nothing else about this row changed, so naming
+                # anything else would be a lie the apply side's delta gate
+                # would act on.
+                _queue_sync_event(cur, 'supplier', existing['id'], 'update',
+                                   dict(srow) | {'id': existing['id'], '_changed_fields': ['deleted_at_utc']})
+            continue
         nid = str(_uuid.uuid4())
-        cur.execute("INSERT INTO suppliers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
-                    (nid, cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address','')))
+        cur.execute(
+            "INSERT INTO suppliers (id,company_id,name,phone,email,address,row_version,updated_at_utc) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (nid, cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address',''), 1, utc_now))
+        # Mirrors create_supplier's payload key-for-key.
+        _queue_sync_event(cur, 'supplier', nid, 'create', {
+            'id': nid, 'name': name, 'phone': rec.get('phone', ''),
+            'email': rec.get('email', ''), 'address': rec.get('address', ''),
+            'row_version': 1, 'updated_at_utc': utc_now,
+        })
         imported += 1
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'message': f'{imported} suppliers imported.'}
 
 
 def _handle_retail_branches(records):
+    # Wave B (stock-moving sync): `branch` IS now a sync entity type (see
+    # sync_service.py's module docstring and its `_apply_event` `branch`
+    # branch) -- this handler used to queue nothing at all, on the theory
+    # that there was no parity to restore. That theory no longer holds: every
+    # other branch-creation site in this product (retail_api.py's
+    # `_default_branch`/`create_branch`, this file's own self-heal above)
+    # now queues a `branch`/`create` event, and a bulk-imported branch is as
+    # real as one created through /branches -- omitting it here would leave
+    # this ONE branch-creation path silently un-synced, the identical defect
+    # shape the AUDIT fix on `_queue_sync_event` above closed for categories/
+    # products/customers/suppliers.
     from database.schema import get_retail_conn
     conn = get_retail_conn(); cur = conn.cursor(); cid = _cid()
     imported = 0
@@ -1158,8 +2092,15 @@ def _handle_retail_branches(records):
         if conn.execute("SELECT id FROM branches WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
         status = (rec.get('status') or 'active').strip().lower()
-        cur.execute("INSERT INTO branches (company_id,name,address,phone,status) VALUES (?,?,?,?,?)",
-                    (cid, name, rec.get('address',''), rec.get('phone',''), status))
+        # v13 `uid`, one per branch -- the same wire identity every other
+        # branch-creation site in this product stamps.
+        branch_uid = _new_uid()
+        cur.execute("INSERT INTO branches (company_id,name,address,phone,status,uid) VALUES (?,?,?,?,?,?)",
+                    (cid, name, rec.get('address',''), rec.get('phone',''), status, branch_uid))
+        _queue_sync_event(cur, 'branch', branch_uid, 'create', {
+            'uid': branch_uid, 'name': name, 'address': rec.get('address', ''),
+            'phone': rec.get('phone', ''), 'status': status,
+        })
         imported += 1
     conn.commit(); conn.close()
     return {'imported': imported, 'message': f'{imported} branches imported.'}
@@ -1169,15 +2110,27 @@ def _handle_retail_categories(records):
     from database.schema import get_retail_conn
     conn = get_retail_conn(); cur = conn.cursor(); cid = _cid()
     imported = 0
+    # launch-readiness Phase 6 stage 6a-i: one instant for the whole run,
+    # same reasoning as _handle_retail_customers above.
+    utc_now = now_utc_iso()
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
         if conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
-        cur.execute("INSERT INTO categories (id,company_id,name,description) VALUES (?,?,?,?)",
-                    (str(_uuid.uuid4()), cid, name, rec.get('description','')))
+        nid = str(_uuid.uuid4())
+        cur.execute(
+            "INSERT INTO categories (id,company_id,name,description,row_version,updated_at_utc) "
+            "VALUES (?,?,?,?,?,?)",
+            (nid, cid, name, rec.get('description',''), 1, utc_now))
+        # Mirrors create_category's payload key-for-key.
+        _queue_sync_event(cur, 'category', nid, 'create', {
+            'id': nid, 'name': name, 'description': rec.get('description', ''),
+            'row_version': 1, 'updated_at_utc': utc_now,
+        })
         imported += 1
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'message': f'{imported} categories imported.'}
 
 

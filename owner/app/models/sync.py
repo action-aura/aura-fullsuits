@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, BigInteger, Identity, Index
+from sqlalchemy import DateTime, ForeignKey, String, BigInteger, Identity, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.extensions import Base
-from app.models.base import TimestampMixin
+from app.models.base import TimestampMixin, UUIDPKMixin
 
 
 class SyncEvent(Base, TimestampMixin):
@@ -37,4 +37,113 @@ class SyncEvent(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_owner_sync_events_license_seq", "license_id", "seq"),
+    )
+
+
+class SyncDeviceCursor(Base, TimestampMixin):
+    """Phase 5 prerequisite #2 (docs/launch-readiness/phase5-prerequisites.md
+    section 2) -- the server-side, durable record of how far EACH device has
+    caught up, keyed by pull()'s own `since`/returned-`cursor` value. This is
+    the one input pruning needs that nothing in the protocol persisted
+    before: `since` was purely a stateless request parameter the CLIENT
+    tracked locally and resent on its next pull -- the server never wrote
+    down "device X has acknowledged everything up to seq N" anywhere. To
+    prune below "the slowest device that still needs it", the server needs
+    exactly that fact, durably, for a device whose next pull could be days
+    away.
+
+    ONLY pull() writes this row (see routes.py::_advance_device_cursor) --
+    NEVER push(). A device that only ever pushes (never pulls) would
+    otherwise never get a cursor at all, even though it has, by definition,
+    already seen (by authoring) every event up to its own latest push's
+    seq -- pull()'s own WHERE clause excludes a device's own events
+    (`SyncEvent.device_id != installation.id`), so it can never receive them
+    back to "acknowledge" them that way. This is handled correctly without
+    any push-side special case: a push-only device still gets a cursor
+    recorded the next time it calls pull() with `since` set to the current
+    max seq, even when that pull returns zero NEW rows (nothing else to
+    receive) -- see test_sync_pruning.py's `_push_then_fully_catch_up_both_devices`
+    helper for the concrete mechanics this depends on, and the class-level
+    consequence: a device that only ever pushes and never pulls keeps
+    `last_acked_seq` at its (missing-row) default of "not caught up yet",
+    which correctly blocks pruning of its own unacknowledged history rather
+    than silently treating "never pulled" as "nothing to lose".
+
+    `installation_id` (not a synthetic id) is the PK -- one cursor row per
+    device, which is sufficient because a device's id (an Installation's own
+    id) is already globally unique, never license-scoped ambiguously.
+    `license_id` is denormalized onto this row (rather than derived via a
+    join back through owner_installations at prune time) purely so
+    pruning's per-license MIN(last_acked_seq) query is a single indexed
+    lookup, not a join for every prune run."""
+
+    __tablename__ = "owner_sync_device_cursors"
+
+    installation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_installations.id"), primary_key=True
+    )
+    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
+    # GREATEST-style: routes.py::_advance_device_cursor never lets this
+    # regress below its current value, regardless of what a given pull
+    # response computed -- see that function's own docstring.
+    last_acked_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        # pruning.py's per-license watermark query filters on license_id
+        # for every prune run (once per license, per run) -- this is that
+        # query's index, the same shape as owner_sync_events' own
+        # license_id-leading index above.
+        Index("ix_owner_sync_device_cursors_license", "license_id"),
+    )
+
+
+class SyncQuarantineEvent(Base, UUIDPKMixin, TimestampMixin):
+    """Phase 5 prerequisite #3 (docs/launch-readiness/phase5-prerequisites.md
+    section 3) -- one row per push-batch event that failed validation (or
+    was rejected by the database itself, e.g. a NUL byte Postgres refuses to
+    store) and was therefore SKIPPED rather than rolling back the entire
+    batch (see routes.py::_store_events's docstring for the full mechanism
+    and the "Never in the request path" / "skip trades strict consistency
+    for availability" reasoning, which belongs there since that's where the
+    trade is actually made).
+
+    `raw_payload` is the event exactly as the device sent it -- byte-
+    identical, never partially parsed or normalized -- so a fixed/replayed
+    submission (see quarantine_routes.py::replay) reproduces precisely what
+    the device originally pushed, and an operator reading the console can
+    see exactly what the client actually sent. `batch_index` is this
+    event's position within ITS OWN push batch (0-based), not a global
+    counter -- lets an operator correlate a quarantined row back to "the
+    3rd item in that particular push" if they're comparing against client-
+    side logs.
+
+    `status` starts PENDING and moves to REPLAYED (successfully re-applied
+    as a real SyncEvent once the underlying cause was fixed) or DISCARDED
+    (an operator decided it's not worth fixing) -- never DELETEd. "Nothing
+    is ever silently dropped": every quarantined event stays visible and
+    queryable in the Owner console regardless of its resolution, forever."""
+
+    __tablename__ = "owner_sync_quarantine"
+
+    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
+    device_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    batch_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Text, not a bounded String: a DataError's message (the DB-rejection
+    # path, as opposed to _build_event's own short InvalidEventError
+    # strings) is driver-formatted prose of unpredictable length -- better
+    # to keep it whole than silently truncate the one clue an operator has
+    # for why the row was rejected.
+    rejection_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING", nullable=False)  # PENDING|REPLAYED|DISCARDED
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+
+    __table_args__ = (
+        # pruning.py's quarantine-rate alarm groups PENDING rows by
+        # license_id on every run; the console's default list view filters
+        # by status too -- this composite index covers both access patterns.
+        Index("ix_owner_sync_quarantine_license_status", "license_id", "status"),
     )

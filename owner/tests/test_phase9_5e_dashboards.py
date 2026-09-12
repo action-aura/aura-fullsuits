@@ -52,6 +52,16 @@ def _create_expense(app, requester_staff, requester_profile, category_id, payee_
         )
         if status == "SUBMITTED":
             submit_expense(expense, actor_staff_user_id=requester_staff)
+        elif status != "DRAFT":
+            # AUDIT-owner-cross-screen: a status past SUBMITTED is set
+            # directly. These dashboard tests exercise the dashboards' own
+            # filters; the approval flow that legitimately produces such a
+            # status has its own dedicated suite, and driving it here would
+            # only add a second approver fixture to every caller.
+            from app.extensions import db_session
+
+            expense.status = status
+            db_session.commit()
         return expense.id
 
 
@@ -116,8 +126,16 @@ def test_currencies_never_merge_into_one_total(app, seeded):
         payee = create_payee(payee_type="EXTERNAL", display_name="V", employee_profile_id=None, external_contact_reference=None, created_by_staff_user_id=staff)
         payee_id = payee.id
 
-    _create_expense(app, staff, profile, category_id, payee_id, "100.00", currency="USD")
-    _create_expense(app, staff, profile, category_id, payee_id, "500.00", currency="EUR")
+    # AUDIT-owner-cross-screen: seeded APPROVED, not DRAFT. What this test
+    # asserts is unchanged (100 under USD, 500 under EUR, never a blended
+    # 600) -- but the Management expense totals now count authorized spend
+    # only (MANAGEMENT_EXPENSE_TOTAL_STATUSES), because counting DRAFT/
+    # SUBMITTED/RETURNED/REJECTED requests made the figure impossible to
+    # reconcile with the paid-expenses figure on the same screen. A DRAFT
+    # nobody has submitted is not company spend, so the fixture, not the
+    # assertion, is what had to move.
+    _create_expense(app, staff, profile, category_id, payee_id, "100.00", currency="USD", status="APPROVED")
+    _create_expense(app, staff, profile, category_id, payee_id, "500.00", currency="EUR", status="APPROVED")
 
     from app.operational_reports.dashboards import management_operational_dashboard
     with app.app_context():

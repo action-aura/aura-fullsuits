@@ -147,8 +147,14 @@ def test_delete_supplier_is_always_a_soft_delete(client, db_conn):
     resp = client.delete(f'/api/sub/retail/suppliers/{sup_id}')
     assert resp.status_code == 200
 
-    row = db_conn.execute("SELECT status FROM suppliers WHERE id=?", (sup_id,)).fetchone()
-    assert row is not None and row['status'] == 'inactive'  # row still exists, never hard-deleted
+    # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    # `status`): `delete_supplier` no longer writes `status='inactive'` --
+    # `deleted_at_utc` alone is now the tombstone (row still exists, never
+    # hard-deleted, exactly as before -- just via a different column now).
+    row = db_conn.execute("SELECT status, deleted_at_utc FROM suppliers WHERE id=?", (sup_id,)).fetchone()
+    assert row is not None
+    assert row['status'] == 'active'
+    assert row['deleted_at_utc'] is not None
 
     outbox = db_conn.execute(
         "SELECT event_type FROM sync_outbox WHERE entity_type='supplier' AND entity_id=? ORDER BY created_at DESC LIMIT 1",
@@ -173,11 +179,39 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript("""
-        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active');
+        -- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+        -- row_version/updated_at_utc added -- _apply_event's supplier
+        -- create/update/delete branches now write both columns (carrying
+        -- the sender's row_version through, so two devices' counters
+        -- converge instead of silently diverging), and this hand-built
+        -- minimal fixture predates that.
+        -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
+        -- added too -- the supplier delete branch now stamps it.
+        -- launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'` was
+        -- ALSO written here between 6b-ii and this stage; it no longer is --
+        -- `deleted_at_utc` alone is now the tombstone (see retail_api.py's
+        -- delete_supplier comment), and this fixture predates that the same
+        -- way it predated row_version.
+        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE purchase_orders (id INTEGER PRIMARY KEY, company_id INTEGER, supplier_id TEXT, total REAL,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id));
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
+        -- launch-readiness Phase 6 stage 6a-ii: `sync_conflicts`, shaped
+        -- exactly like _migrate_add_sync_conflicts_and_drop_quantity_reserved's
+        -- own CREATE TABLE (products/retail/backend/database/schema.py, v17).
+        -- The supplier delete branch's reject-stale gate can legitimately
+        -- write a row here on a genuine (non-legacy) stale discard, so this
+        -- hand-built fixture -- which predates v17 the same way it predated
+        -- the row_version columns above -- has to carry the table forward
+        -- too, or it raises `sqlite3.OperationalError: no such table:
+        -- sync_conflicts` the moment that path is reached.
+        CREATE TABLE sync_conflicts (
+            id TEXT PRIMARY KEY, company_id INTEGER, entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL, event_type TEXT NOT NULL, local_row_version INTEGER,
+            incoming_row_version INTEGER, incoming_payload TEXT NOT NULL, detected_at_utc TEXT NOT NULL
+        );
     """)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("INSERT INTO suppliers (id,company_id,name,status) VALUES ('s-1',9,'TechDistrib','active')")
@@ -191,8 +225,11 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
     })
     conn.commit()
 
-    row = conn.execute("SELECT status FROM suppliers WHERE id='s-1'").fetchone()
-    assert row['status'] == 'inactive'  # never DELETE FROM -- the declared FK from purchase_orders would fire
+    row = conn.execute("SELECT status, deleted_at_utc FROM suppliers WHERE id='s-1'").fetchone()
+    # launch-readiness Phase 6 stage 6b-iii-a: `status` no longer flips to
+    # 'inactive' on delete -- `deleted_at_utc` is the tombstone now.
+    assert row['status'] == 'active'  # never DELETE FROM -- the declared FK from purchase_orders would fire
+    assert row['deleted_at_utc'] is not None
     assert conn.execute("SELECT COUNT(*) c FROM purchase_orders").fetchone()['c'] == 1
 
 
@@ -203,7 +240,20 @@ def test_pulled_supplier_create_stamps_the_receiving_devices_own_company_id():
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript("""
-        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active');
+        -- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+        -- row_version/updated_at_utc added -- _apply_event's supplier
+        -- create/update/delete branches now write both columns (carrying
+        -- the sender's row_version through, so two devices' counters
+        -- converge instead of silently diverging), and this hand-built
+        -- minimal fixture predates that.
+        -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
+        -- added too -- the supplier delete branch now stamps it (see
+        -- retail_api.py's delete_supplier comment; stage 6b-iii-a later
+        -- removed the `status='inactive'` write that used to sit alongside
+        -- it), and this
+        -- fixture predates that the same way it predated row_version.
+        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
     """)

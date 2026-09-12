@@ -161,6 +161,47 @@ def _promote_to_admin(client, company_id):
     assert r.get_json()['device']['is_admin_device'] is True
 
 
+def _forget_local_device():
+    """Puts this process back into the genuine fresh-install state for the
+    device registry: no `devices` row for this install's local UUID at all.
+
+    Needed because every test in this file shares ONE AURA_APP_DATA, so
+    local_device_uuid() is a single value for the whole process and any
+    earlier test that resolved a device leaves a row behind. Deleting it (as
+    opposed to just clearing is_admin_device) is what makes the
+    "nothing has ever registered this device" case reachable, which is the
+    state a real first launch is in and the one the authorization check has
+    to answer correctly without inventing anything."""
+    conn = registry_conn()
+    try:
+        conn.execute("DELETE FROM devices WHERE id=?", (device_context.local_device_uuid(),))
+        conn.commit()
+    finally:
+        conn.close()
+    device_context._cached_device = None  # same reset the autouse fixture above uses
+
+
+def _rebind_local_device_to(company_id):
+    """Binds this install's local device row to `company_id` with the admin
+    flag explicitly cleared -- i.e. "this company has a known device and no
+    admin device yet", the state a real install is in the moment before
+    someone claims.
+
+    The explicit rebind is required, not cosmetic: resolve_local_device()
+    refuses to silently move a device row between companies (Phase 0
+    decision 0-a, DeviceCompanyMismatchError), and every test here uses a
+    different company_id against the same one local device UUID."""
+    conn = registry_conn()
+    try:
+        device_id = device_context.local_device_uuid()
+        device_registry.upsert_local_device(conn, device_id, company_id)
+        conn.execute("UPDATE devices SET is_admin_device=0 WHERE id=?", (device_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    device_context._cached_device = None  # same reset the autouse fixture above uses
+
+
 def _create_product(client, name='Widget', price=20.0, sku=None):
     r = client.post('/api/sub/retail/products', json={
         'name': name, 'sku': sku or f"SKU-{uuid.uuid4().hex[:8]}",
@@ -225,6 +266,64 @@ def test_audit_log_403s_for_a_non_admin_device():
     r = client.get('/api/sub/retail/audit-log')
     assert r.status_code == 403, r.get_json()
     assert r.get_json()['status'] == 'error'
+
+
+def test_a_refused_audit_log_request_never_makes_this_device_the_admin_device():
+    """The regression test for the actual hole (2026-08-20).
+
+    _is_admin_device() used to answer "am I the admin device?" by calling
+    device_context.resolve_local_device(), which WRITES -- it upserted the
+    device row and auto-promoted the first device a company ever resolved to
+    admin. So the first request to this route on a fresh company was granted
+    admin BY THE CHECK and then honestly told "yes, you're admin": 200, with
+    every user in the company's refund/void/edit trail. The 403 above alone
+    does not pin that down -- what pins it down is that being refused
+    changes nothing, so a second identical request is refused identically
+    and the device registry still says this device is not admin."""
+    client, cid, uid = _make_admin('aud-esc')
+    _forget_local_device()
+
+    first = client.get('/api/sub/retail/audit-log')
+    second = client.get('/api/sub/retail/audit-log')
+
+    assert first.status_code == 403, first.get_json()
+    assert second.status_code == 403, second.get_json()
+
+    # Not merely "still 403" -- the check must not have written anything at
+    # all. A device row conjured by an authorization check is the mechanism
+    # the bug was built out of, even before the promotion on top of it.
+    conn = registry_conn()
+    try:
+        row = device_registry.get_device(conn, device_context.local_device_uuid())
+    finally:
+        conn.close()
+    assert row is None, "a refused authorization check must not create a device row"
+
+    # And the real device surface agrees: not admin, but claimable -- the
+    # fresh install is not a dead end, it just needs a deliberate claim.
+    me = client.get('/api/devices/me')
+    assert me.status_code == 200, me.get_json()
+    assert me.get_json()['device']['is_admin_device'] is False
+    assert me.get_json()['can_claim_admin'] is True
+
+
+def test_audit_log_opens_after_this_device_is_claimed_through_the_real_claim_route():
+    """The other half of the fix: the flag has a real, working setter, so
+    'refused' is a state a company can get out of -- through POST
+    /api/devices/me/claim-admin, over real HTTP, with no test-only
+    set_admin_device() shortcut anywhere in this test."""
+    client, cid, uid = _make_admin('aud-claim')
+    _rebind_local_device_to(cid)
+
+    assert client.get('/api/sub/retail/audit-log').status_code == 403
+
+    claim = client.post('/api/devices/me/claim-admin')
+    assert claim.status_code == 200, claim.get_json()
+    assert claim.get_json()['device']['is_admin_device'] is True
+
+    opened = client.get('/api/sub/retail/audit-log')
+    assert opened.status_code == 200, opened.get_json()
+    assert opened.get_json()['status'] == 'success'
 
 
 def test_audit_log_opens_once_this_device_is_promoted_to_admin():

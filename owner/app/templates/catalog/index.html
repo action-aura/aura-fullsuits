@@ -33,16 +33,30 @@
 <div class="card">
   <h2>{{ _("Add-ons") }}</h2>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Availability") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Availability") }}</th></tr></thead>
     <tbody>
     {% for a in addons %}
     <tr>
       <td><bdi dir="ltr">{{ a.addon_code }}</bdi></td><td>{{ a.name }}</td>
-      <td><span class="badge {{ 'active' if a.availability_status == 'AVAILABLE' else 'draft' }}">{{ addon_availability_status_label(a.availability_status) }}</span></td>
+      {# ONE control, not two. This column used to hold a colour-coded badge
+         and the next column a select whose selected option rendered the same
+         label from the same value -- "Draft" sitting next to "Draft" on every
+         row. Merged rather than half-deleted: the badge was scannable and the
+         select was editable, so the select now carries the status colour and
+         does both jobs. #}
       <td>
         <form class="inline" method="post" action="{{ url_for('catalog.update_addon_availability', addon_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="status" aria-label="{{ _('Change availability status') }}" onchange="this.form.submit()">
+          {# data-auto-submit (static/js/auto-submit.js), not the inline
+             onchange this used to carry: under script-src 'self' the browser
+             refused the attribute, and since this form has no submit button
+             either, changing an add-on's availability from the UI was simply
+             impossible. This is the legitimate auto-submit case -- the select
+             is the only field in its form, so nothing else can be lost by
+             submitting on change, and a per-row button on every add-on would
+             be far noisier than the one-field control it replaces. #}
+          <select name="status" aria-label="{{ _('Change availability status') }}" data-auto-submit
+                  class="aura-status-select {{ 'is-available' if a.availability_status == 'AVAILABLE' else 'is-draft' }}">
             {% for s in ["DRAFT","PLANNED","PILOT","AVAILABLE","RETIRED"] %}
             <option value="{{ s }}" {% if s == a.availability_status %}selected{% endif %}>{{ addon_availability_status_label(s) }}</option>
             {% endfor %}
@@ -69,6 +83,17 @@
 
 <div class="card">
   <h2>{{ _("Recently imported versions") }}</h2>
+  {# releases.versions and releases.channels are real, permission-gated pages
+     with real templates that nothing linked to from anywhere in the app, so
+     they could only be reached by typing the URL (see
+     test_route_reachability.py's KNOWN_GAPS). This card shows a truncated
+     recent list, which makes it the place a reader already looks for the
+     full one. #}
+  <p>
+    <a href="{{ url_for('releases.versions') }}">{{ _("All product versions") }}</a>
+    &middot;
+    <a href="{{ url_for('releases.channels') }}">{{ _("Release channels") }}</a>
+  </p>
   <table class="responsive-table">
     <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Platform") }}</th><th>{{ _("Version") }}</th><th>{{ _("Checksum") }}</th><th>{{ _("Imported") }}</th></tr></thead>
     <tbody>

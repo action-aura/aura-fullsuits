@@ -19,7 +19,11 @@ from flask import Blueprint, current_app, redirect, render_template, request, ur
 from app.auth.session import load_current_staff
 from app.commercial_sales.allocation import allocate_payment, reverse_allocation, unallocated_payment_balance
 from app.commercial_sales.approvals import decide_approval
-from app.commercial_sales.dashboards import employee_commercial_dashboard, finance_commercial_dashboard
+from app.commercial_sales.dashboards import (
+    DEFAULT_DASHBOARD_CURRENCY,
+    employee_commercial_dashboard,
+    finance_commercial_dashboard,
+)
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.fulfillment import fulfill_order
 from app.commercial_sales.invoices import confirmed_allocated_amount, create_invoice_from_order, issue_invoice, void_invoice
@@ -406,10 +410,24 @@ def fulfill_order_route(order_id):
     if order is None:
         return render_template("commercial_sales/not_found.html"), 404
     try:
-        fulfill_order(order, actor_staff_user_id=staff.id, license_pepper=current_app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4()))
+        result = fulfill_order(order, actor_staff_user_id=staff.id, license_pepper=current_app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4()))
     except CommercialSalesError as exc:
         return redirect(url_for("commercial_sales_web.order_detail", order_id=order_id, error=exc.code))
-    return redirect(url_for("commercial_sales_web.order_detail", order_id=order_id))
+    # AUDIT-NNN: rendered inline, never redirected -- a redirect would lose
+    # the once-shown plaintext key (ADR-9) exactly the way
+    # licensing/routes.py::issue renders inline instead of
+    # redirect()-ing after a successful issuance, for the same reason.
+    codes = get_staff_permission_codes(staff)
+    lines = db_session.execute(select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id).order_by(SalesOrderLine.sort_order)).scalars().all()
+    invoice = db_session.execute(select(CommercialInvoice).where(CommercialInvoice.sales_order_id == order.id, CommercialInvoice.status != "VOID")).scalars().first()
+    quote = db_session.get(Quote, order.quote_id) if order.quote_id else None
+    customer = db_session.get(Customer, order.customer_id)
+    return render_template(
+        "commercial_sales/order_detail.html", order=order, lines=lines, invoice=invoice, quote=quote, customer=customer,
+        can_approve=("orders.approve" in codes), error=None,
+        created_by_name=_employee_profile_name(order.created_by_employee_profile_id),
+        fulfillment_result=result,
+    )
 
 
 # -------------------------------------------------------------- Invoices --
@@ -855,7 +873,18 @@ def employee_dashboard_view():
     staff, profile = _actor()
     if profile is None:
         return render_template("commercial_sales/employee_dashboard.html", data=None)
-    data = employee_commercial_dashboard(profile.id, staff.id)
+    # AUDIT-owner-cross-screen: the commission figures are single-currency
+    # now (they used to add USD and JOD together). Same ?currency= contract
+    # and same default as every other dashboard route here. The screen names
+    # the currency and offers a selector for it -- an unlabelled figure that
+    # silently depends on this default would be worse than the blended one.
+    #
+    # Deliberately NOT passed as a second template variable: the template
+    # reads data.currency, the one value the service actually scoped its
+    # numbers to, so the label can never disagree with the numbers under it
+    # (and metrics_contracts pins that key).
+    currency = request.args.get("currency") or DEFAULT_DASHBOARD_CURRENCY
+    data = employee_commercial_dashboard(profile.id, staff.id, currency)
     return render_template("commercial_sales/employee_dashboard.html", data=data)
 
 

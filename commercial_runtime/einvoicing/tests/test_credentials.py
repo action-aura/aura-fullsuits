@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import pytest
 
@@ -12,12 +13,19 @@ from commercial_runtime.einvoicing.credentials import (
 
 SECRET_MARKER = 'super-secret-client-secret-value-9f8e7d'
 
-# Both real backends are exercised -- this environment is genuinely Windows,
-# so the DPAPI path is not mocked; it goes through real CryptProtectData.
+# Both real backends are exercised wherever they can run. The DPAPI path is
+# not mocked -- it goes through real CryptProtectData -- which is exactly why
+# it exists only on Windows: crypt32 is not there on Linux, and CI
+# (ubuntu-latest, 2026-09-07) failed every `[dpapi]` case with
+# "module 'ctypes' has no attribute 'windll'" before reaching anything the
+# case proves. The app-secret AES-GCM box runs everywhere. What a Linux run
+# therefore cannot prove is the DPAPI round-trip itself; that is proven on
+# the Windows dev machines, the only place that box is ever used.
 BACKEND_FACTORIES = [
-    ('dpapi', lambda tmp_path: WindowsDpapiSecretBox(str(tmp_path))),
     ('app-secret-aes-gcm', lambda tmp_path: AppSecretDerivedSecretBox(str(tmp_path))),
 ]
+if sys.platform == 'win32':
+    BACKEND_FACTORIES.insert(0, ('dpapi', lambda tmp_path: WindowsDpapiSecretBox(str(tmp_path))))
 
 
 @pytest.mark.parametrize('name,factory', BACKEND_FACTORIES, ids=[n for n, _ in BACKEND_FACTORIES])

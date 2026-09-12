@@ -1,0 +1,51 @@
+Aura Sans -- font attribution and derivation notice
+===================================================
+
+The typeface bundled with this application as "Aura Sans"
+(res/font/aura_sans_regular.ttf, aura_sans_medium.ttf,
+aura_sans_semibold.ttf, aura_sans_bold.ttf) is not an original typeface. Each
+file is a merge of two typefaces, both licensed under the SIL Open Font
+License, Version 1.1:
+
+  Plus Jakarta Sans
+    Copyright 2020 The Plus Jakarta Sans Project Authors
+    https://github.com/tokotype/PlusJakartaSans
+    Licence text: res/raw/ofl_plus_jakarta_sans.txt
+    Supplies: Latin (U+0020-U+007E, U+00A0-U+00FF)
+
+  IBM Plex Sans Arabic
+    Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"
+    Licence text: res/raw/ofl_ibm_plex_sans_arabic.txt
+    Supplies: Arabic (U+0600-U+06FF incl. Arabic-Indic digits,
+              U+0750-U+077F, and Arabic presentation forms)
+
+WHY THEY WERE MERGED
+
+The desktop client resolves these two faces per character with an ordinary CSS
+font stack, because the Arabic face carries no Latin glyphs and the Latin face
+carries no Arabic ones. Jetpack Compose has no equivalent: a FontFamily
+selects a face by weight and style, not by script, and an application-supplied
+typeface does not inherit the system fallback chain. Bundling either face
+alone would therefore have rendered every character of the other script as
+tofu -- strictly worse than the platform sans-serif this replaced. Merging the
+two per weight is what keeps an Arabic-locale till and an English-locale till
+both readable from one typeface.
+
+WEIGHT MAPPING
+
+Plus Jakarta Sans ships 400/500/600/700/800; IBM Plex Sans Arabic ships
+400/600/700. Each Latin weight is paired with the nearest Arabic weight that
+exists rather than a synthesised one, so Arabic text at 500 is drawn in the
+400 Arabic weight. The 800 weight is not bundled at all because no text style
+in Type.kt requests it.
+
+NAMING
+
+These files are a Modified Version under OFL clause 3, so they do not present
+themselves under either source name. IBM Plex is licensed with the Reserved
+Font Name "Plex", which no name record in these files uses. The full
+derivation is recorded inside each file in name record 10 (description), and
+the licence in name records 13 and 14.
+
+The OFL requires that this licence accompany the font. Both licence texts are
+packaged with this application at the paths named above.

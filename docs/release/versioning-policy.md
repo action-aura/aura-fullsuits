@@ -54,6 +54,16 @@ Clinic's response omits `calculation_version` (no separate calculation engine to
 - Drop the `-rc.N` suffix only at an explicit, gate-reviewed general-availability decision (Wave 1C or later) — never silently.
 - Android `versionCode` must increase by at least 1 on every release build that changes app code, regardless of `versionName`.
 
+## Android `versionCode`
+
+`versionCode` is a separate value from `versionName`/the semver above, with its own rule, because Google Play enforces it directly: **an upload whose `versionCode` is not strictly greater than the last one Play accepted for that application is refused outright**, at upload time, regardless of what `versionName` says. A release-candidate string can move as often as it likes without Play caring; `versionCode` standing still is what actually blocks a release.
+
+**The rule is: `versionCode` is a plain integer, bumped by hand on every release, kept equal between `android/aura-retail/app/build.gradle` and `android/aura-clinic/app/build.gradle`.** It is deliberately **not** derived from `versionName` by any formula. A formula is attractive — it removes a manual step — and is a trap for this scheme specifically: `1.0.0-rc.6` → `1.0.0-rc.7` → `1.0.0` → `1.0.1` must all map to strictly increasing integers, `-rc.N` is dropped entirely at GA (see the bullet above), and any encoding scheme tying the integer to the string's shape breaks the moment that shape changes — which is exactly the point in this project's life where a release is happening. A hand-bumped integer with no encoded meaning has no shape to break.
+
+Pinned by `products/retail/tests/retail_release_version_consistency_test.py`'s `test_android_version_codes_agree_between_products` (the two modules must agree) and `test_android_version_code_is_a_positive_integer`. What that test does **not** and cannot check: that the new value is actually greater than the last one really published to Play — that is a fact about release history, not about a single checkout of these two files, and Play enforces it itself at upload time.
+
+Found stuck during this same pass: `versionName` had already moved `1.0.0-rc.6` → `1.0.0-rc.7` in both modules while `versionCode` sat unmoved at `7` (its rc.6-era value) in both — nothing had been checking it, which is the gap this section and the two tests above close. Bumped to `8` in both modules for this rc.7 release.
+
 ## Phase 7 bump (Licensing & Activation Integration)
 
 All four artifact families moved `1.0.0-rc.1` -> `1.0.0-rc.2` at the start of Phase 7 (product-to-Owner licensing integration), per that phase's explicit versioning requirement:

@@ -10,8 +10,59 @@
 # Build (from the aura-fullsuits repo root):
 #   pyinstaller products/retail/packaging/aura_retail.spec --noconfirm
 #
-# NOT YET BUILD-VERIFIED in this environment (no PyInstaller/Windows build
-# toolchain run as part of this extraction) -- see docs/migration/retail-extraction-report.md.
+# BUILD-VERIFIED 2026-08-30. This comment previously read "NOT YET BUILD-VERIFIED
+# in this environment (no PyInstaller/Windows build toolchain run as part of this
+# extraction)", which was true when written and had since become the most
+# load-bearing stale claim in the repo -- it was read as "the desktop product may
+# not package at all", which materially affected how close to sellable this suite
+# looked.
+#
+# Measured, not assumed. PyInstaller 6.21.0 on Python 3.14, Windows, from the repo
+# root exactly as the command above prescribes:
+#
+#     Building EXE from EXE-00.toc completed successfully.
+#     Building COLLECT COLLECT-00.toc completed successfully.
+#     Build complete!            -> dist/AuraRetail/AuraRetail.exe, 10.6 MB, exit 0
+#
+# What that does and does NOT establish, stated so the next reader does not
+# over-read it the way the old comment was under-read:
+#   * ESTABLISHED: the spec is valid, every hidden import and data file it names
+#     resolves, and a complete one-folder distribution is produced.
+#   * NOT established: that the exe RUNS correctly on a clean machine. It was not
+#     launched here, and a dev box carries state a customer's will not. That is
+#     step 2.2 of docs/release/go-live-runbook.md and it stays owed.
+#   * NOT established: the Inno Setup installer (aura_retail_setup.iss). Inno Setup
+#     is not installed on this dev machine, so setup.exe remains unbuilt and
+#     unverified -- see the runbook.
+#
+# RUN-VERIFIED 2026-09-08. Both "NOT established" bullets above are now closed,
+# and they are left standing rather than deleted so the sequence stays legible:
+# packaging was proved first, running second, a month apart.
+#
+# The build was made from a `git archive HEAD` snapshot rather than the working
+# tree, so no half-finished edit could get into it, and the exe was launched with
+# every inherited AURA_* variable stripped and AURA_APP_DATA pointed at a
+# directory that had never existed -- a dev box's leftover environment is exactly
+# how a packaging defect hides.
+#
+#     launcher starting -> no secret key found, generating one
+#     server on 127.0.0.1:5001, ready after 3 attempts, 5.87s
+#     GET /api/version -> 200   GET / -> 200, 5939 bytes
+#     retail.db migrated v0 -> v26, 46 tables, pre-migration backup taken
+#     stderr: empty
+#
+# The migration chain is the part worth noting: ensure_schema_version() ran
+# inside the frozen build and took its integrity-checked backup before touching
+# anything, which is the behaviour the whole migration_safety module exists for
+# and the thing most likely to be silently missing from a packaged app.
+#
+# The installer was then built (Inno Setup 6 is now installed) and exercised end
+# to end: silent install exit 0, 920 files / 93.3 MB, the INSTALLED copy served
+# GET / -> 200, silent uninstall exit 0, program files gone, business data kept.
+#
+# Still NOT established: behaviour on a machine that is not this one. Everything
+# above removes the dev environment from the picture; it cannot remove the dev
+# MACHINE. A second Windows box remains step 2.2's real remainder.
 
 import os
 
@@ -48,19 +99,46 @@ if os.path.exists(_trust_anchor):
 from PyInstaller.utils.hooks import collect_data_files
 _certifi_datas = collect_data_files('certifi')
 
+# tzdata is DATA, not a module, so hiddenimports cannot carry it and a bare
+# `import tzdata` in the spec would not help either -- `zoneinfo` reads the
+# package's .tzif files off disk.
+#
+# Without this the packaged .exe has no timezone database at all: Windows ships
+# none, so `zoneinfo.ZoneInfo('Asia/Amman')` raises and every shop that has
+# configured a business timezone silently falls back to bucketing reports on
+# whatever clock the device happens to hold. That is precisely the defect the
+# business-date feature exists to fix, and it would announce itself only in a
+# log line nobody reads.
+#
+# Measured on the build machine before adding it: `zoneinfo.TZPATH` is `()`.
+# Same failure shape as the `cryptography` omission on the Android side --
+# present in requirements, absent from the bundle, and only reproducible on a
+# real install rather than in a source checkout.
+_tzdata_datas = collect_data_files('tzdata')
+
 a = Analysis(
     [os.path.join(DESKTOP, 'launcher_retail.py')],
     pathex=[ROOT, BACKEND],
     binaries=[],
     datas=[
         (FRONTEND, os.path.join('products', 'retail', 'frontend')),
-    ] + _licensing_datas + _certifi_datas,
+    ] + _licensing_datas + _certifi_datas + _tzdata_datas,
     hiddenimports=[
         'flask', 'flask_cors', 'werkzeug', 'waitress',
         'commercial_runtime.identity.mt_auth',
         'commercial_runtime.identity.auth_routes',
         'commercial_runtime.identity.onboarding_routes',
         'commercial_runtime.identity.registry_db',
+        # registry.db v3 (docs/launch-readiness/multi-device-design.md §6).
+        # account_schema is imported INSIDE registry_db._migrate_registry_schema
+        # rather than at module scope, and it runs during first-launch
+        # migration -- i.e. before the server starts, on the one code path
+        # where a missing module is not a degraded feature but a build that
+        # cannot boot at all. Listed explicitly for the reason this file
+        # already gives below: nothing in commercial_runtime.* is left to
+        # PyInstaller's static analysis.
+        'commercial_runtime.identity.account_schema',
+        'commercial_runtime.identity.user_accounts',
         'commercial_runtime.security.app_secret',
         'commercial_runtime.security.passwords',
         'commercial_runtime.security.audit',

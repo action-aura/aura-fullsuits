@@ -6,7 +6,12 @@
 <div class="card card--critical">
   <h2>{{ _("License key -- shown once") }}</h2>
   <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
-  <p><code class="masked" dir="ltr">{{ revealed_key }}</code></p>
+  <p>
+    <code class="masked" dir="ltr" id="licensing-detail-revealed-key">{{ revealed_key }}</code>
+    <button type="button" class="secondary" data-copy-target="licensing-detail-revealed-key"
+            data-copy-label="{{ _('Copy key') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy key") }}</button>
+  </p>
 </div>
 {% endif %}
 
@@ -33,6 +38,53 @@
   ]) }}
 
   <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
+
+  <div class="card--action">
+    <h3>{{ _("Add devices") }}</h3>
+    <p>{{ _("Permanently raises this license's device limit and mirrors the new allowance onto its subscription. Requires a fresh MFA confirmation. Never lowers the limit below devices already active.") }}</p>
+    {% if recent_auth_ok %}
+    <form method="post" action="{{ url_for('licensing.add_devices_route', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="idempotency_key" value="{{ add_devices_idempotency_key }}">
+      <label for="licensing-detail-additional-devices">{{ _("Devices to add") }}</label>
+      <input id="licensing-detail-additional-devices" name="additional_devices" type="number" min="1" required>
+      <label for="licensing-detail-add-devices-reason">{{ _("Reason (required)") }}</label>
+      <input id="licensing-detail-add-devices-reason" name="reason" required>
+      <div style="margin-top:0.5rem;"><button type="submit" class="btn--primary-action">{{ _("Add devices (requires recent authentication)") }}</button></div>
+    </form>
+    {% else %}
+    <p><a href="{{ url_for('auth.reauth_form', next=url_for('licensing.detail', license_id=license.id)) }}">{{ _("Add devices (requires recent authentication)") }}</a></p>
+    {% endif %}
+  </div>
+
+  {# Offline policy could be listed but never ASSIGNED from the UI, and the
+     resolved entitlements it feeds could never be previewed -- both backends
+     complete and permission-gated (see test_route_reachability.py). The
+     recent-auth split below mirrors "Add devices" above because
+     assign_offline_policy carries the same @require_recent_auth.
+     policy_code is a free-text code rather than a select: the licence detail
+     view does not load the policy table, so the list is linked instead of
+     duplicated into this page's context. #}
+  {% if has_permission("offline_policies.manage") %}
+  <div class="card--action">
+    <h3>{{ _("Offline policy") }}</h3>
+    <p><a href="{{ url_for('licensing_admin.offline_policies') }}">{{ _("Browse offline policies") }}</a></p>
+    {% if recent_auth_ok %}
+    <form method="post" action="{{ url_for('licensing_admin.assign_offline_policy', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="licensing-detail-policy-code">{{ _("Policy code") }}</label>
+      <input id="licensing-detail-policy-code" name="policy_code" required>
+      <div style="margin-top:0.5rem;"><button type="submit">{{ _("Assign offline policy (requires recent authentication)") }}</button></div>
+    </form>
+    {% else %}
+    <p><a href="{{ url_for('auth.reauth_form', next=url_for('licensing.detail', license_id=license.id)) }}">{{ _("Assign offline policy (requires recent authentication)") }}</a></p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if has_permission("entitlement_resolution.preview") %}
+  <p><a href="{{ url_for('licensing_admin.entitlement_preview', license_id=license.id) }}">{{ _("Preview resolved entitlements") }}</a></p>
+  {% endif %}
 
   {% if license.status == "DRAFT" %}
   <div class="card--action">

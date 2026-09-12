@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same style as values/themes.xml plus the API 29+ force-dark opt-out.
+         Styles do not merge across resource qualifiers, so the whole style is
+         repeated here; keep the two definitions in sync.
+
+         android:forceDarkAllowed=false is a REAL, measured fix, not paranoia.
+         On a Mi Note 10 (MIUI 12, Android 11) with system dark mode on, HWUI
+         force dark dimmed this app's every pixel to ~72% of its declared
+         value: the Sign In button's fill rendered (175,45,67) instead of the
+         declared rose (244,63,94), dropping the label's contrast from a
+         computed 4.45:1 to a measured 2.81:1 - below the 3.0:1 floor for
+         large text. Measured 2026-09-02 by screenshot pixel sampling:
+           night off               -> fill (244,63,94)  exactly as declared
+           night on, prop false    -> fill (195,50,75)  0.80x (MIUI smart dark)
+           night on, prop true     -> fill (175,45,67)  0.72x (+ AOSP force dark)
+         Two dimmers stack on MIUI - the OS's own "smart dark" and AOSP force
+         dark via debug.hwui.force_dark - and both honour this attribute. An
+         app that is ALREADY dark must say so, or the OS "helpfully" darkens
+         it a second time and every computed contrast in the theme is off by
+         a third on the exact phones this product sells to.
+
+         Since the five-theme switch the app is no longer always dark - Day and
+         Sand are light palettes - which makes this opt-out MORE load-bearing,
+         not less: force dark would invert exactly those two, repainting a
+         WCAG-solved light palette into something nobody measured. Opting out
+         once, for every palette, is the only reading that holds for all five.
+
+         android:windowBackground is the Calm-coloured PREVIEW-window fallback,
+         not a value that matches every theme - see values/colors.xml. -->
+    <style name="Theme.Aura" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+</resources>

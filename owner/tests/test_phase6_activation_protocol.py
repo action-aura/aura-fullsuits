@@ -277,3 +277,128 @@ def test_service_unavailable_without_active_signing_key(client, seeded):
     resp = client.post("/api/licensing/v1/activations", data="{}", content_type="application/json")
     assert resp.status_code == 503
     assert resp.get_json()["reason_code"] == "SIGNING_KEY_UNAVAILABLE"
+
+
+def _installation_by_label(app, label):
+    from sqlalchemy import select as sa_select
+
+    from app.extensions import db_session
+    from app.models.installations import Installation
+
+    return db_session.execute(
+        sa_select(Installation).where(Installation.installation_label == label)
+    ).scalars().one()
+
+
+def test_reactivation_after_device_key_revoked_is_rejected_not_signed_blank(app, client, seeded, signing_key):
+    """Launch-readiness: an installation whose device key is REVOKED but whose
+    own status is still ACTIVE must be rejected here, exactly as check-in,
+    deactivation, sync and release-download already reject it.
+
+    Found while chasing "a phone cannot be licensed at all". Every other
+    protocol surface calls get_active_device_key() and raises
+    DEVICE_KEY_REVOKED when it comes back None (checkin.py, deactivation.py,
+    sync/routes.py, releases/distribution.py). Activation did not: the
+    existing-installation branch's guard is written as
+
+        if active_device_key is not None and active_device_key.fingerprint != ...
+
+    so a None key -- the precise state a staff revoke via
+    licensing_admin/routes.py leaves behind, since revoking a key
+    deliberately does NOT touch installation.status -- fell straight past
+    it. register_device_key() is only called on the OTHER branch, so
+    nothing re-registered the key either, and the assertion was then signed
+    with device_key_fingerprint = None.
+
+    That is not a harmless null. Owner reported SUCCESS and recorded the
+    installation ACTIVE, while every client independently re-verifying the
+    assertion compared None against its own real fingerprint and raised
+    ASSERTION_DEVICE_MISMATCH -- a device permanently unable to activate,
+    with a server that believes it did. Retrying could never help: the
+    outcome is deterministic. The failure is invisible from Owner's side,
+    which is why it survived three clean desktop activations.
+    """
+    actor_id = make_staff(app, "revoked-key-actor@example.com")
+    license_id, full_key = make_license(app, actor_id, device_limit=2)
+    private_key = make_device_keypair()
+    label = "dev-revoked-key"
+
+    first = _activate(client, build_activation_body(private_key, full_key=full_key, installation_id=label))
+    assert first.status_code == 200
+    assert first.get_json()["result"] == "SUCCESS"
+
+    # Exactly what licensing_admin/routes.py's revoke endpoint does. Note it
+    # leaves installation.status ACTIVE -- asserted, because if a future
+    # change made revoke also deactivate the installation, this test would
+    # silently start exercising the INSTALLATION_DEACTIVATED path instead
+    # and stop covering the bug it was written for.
+    with app.app_context():
+        from app.licensing_service import device_identity
+
+        installation = _installation_by_label(app, label)
+        device_identity.revoke_device_key(device_identity.get_active_device_key(installation.id), actor_id)
+        installation = _installation_by_label(app, label)
+        assert installation.status == "ACTIVE"
+        assert device_identity.get_active_device_key(installation.id) is None
+
+    resp = _activate(client, build_activation_body(private_key, full_key=full_key, installation_id=label))
+    data = resp.get_json()
+
+    # The bug's signature, asserted directly: never hand a client a SUCCESS
+    # carrying an assertion it is structurally incapable of accepting.
+    if data.get("result") == "SUCCESS":
+        payload = json.loads(json.dumps(data["signed_assertion"]))["payload"]
+        assert payload["device_key_fingerprint"] is not None, (
+            "Owner signed an assertion with a null device_key_fingerprint -- "
+            "every client rejects this as ASSERTION_DEVICE_MISMATCH."
+        )
+
+    assert resp.status_code == 400
+    assert data["reason_code"] == "DEVICE_KEY_REVOKED"
+
+
+def test_assertion_is_never_signed_without_a_device_fingerprint(app, client, seeded, signing_key):
+    """Defence in depth behind the DEVICE_KEY_REVOKED guard above, tested
+    directly rather than through activation -- that guard now stops the only
+    known route here, so exercising this through the HTTP surface would pass
+    whether or not this check exists, and prove nothing about it.
+
+    A null device_key_fingerprint is unusable, not merely incomplete: the
+    client compares it against its own key and raises
+    ASSERTION_DEVICE_MISMATCH. Refusing to sign turns any future route to
+    this state into a visible server error instead of a silently bricked
+    device.
+    """
+    actor_id = make_staff(app, "blank-fingerprint-actor@example.com")
+    _license_id, full_key = make_license(app, actor_id)
+    private_key = make_device_keypair()
+    label = "dev-blank-fingerprint"
+
+    # A real activation, so the rows below are the genuine article rather
+    # than a hand-built fixture that could drift from what Owner writes.
+    assert _activate(client, build_activation_body(private_key, full_key=full_key, installation_id=label)).status_code == 200
+
+    with app.app_context():
+        from app.licensing_service.assertions import AssertionError_, build_assertion_payload
+
+        installation = _installation_by_label(app, label)
+        license_row = installation.license
+
+        def _build(fingerprint):
+            return build_assertion_payload(
+                license_row=license_row, installation_row=installation, device_fingerprint=fingerprint,
+                entitlements={}, offline_policy={}, contract_version="v1", ttl_seconds=3600,
+            )
+
+        for missing in (None, ""):
+            try:
+                _build(missing)
+            except AssertionError_:
+                pass
+            else:
+                raise AssertionError(f"build_assertion_payload accepted device_fingerprint={missing!r}")
+
+        # The allow-half: a real fingerprint must still sign normally. Without
+        # this, a guard that rejected EVERYTHING would pass the checks above
+        # while breaking every activation on the platform.
+        assert _build("a" * 64)["device_key_fingerprint"] == "a" * 64

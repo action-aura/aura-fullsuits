@@ -53,7 +53,19 @@ def teardown_module(module):
 # ─── Frozen literals -- see the retail mirror's docstring for the rule on
 # editing these. ──────────────────────────────────────────────────────────
 
-CREATE_INVOICE_RESPONSE_KEYS = ['id', 'invoice_number', 'total']
+# AUDIT (2026-09-08): e-invoicing now defaults ON -- see the retail mirror's
+# identical comment on SALE_RESPONSE_KEYS for the full rationale and the
+# three consumers verified to tolerate the extra key:
+#   1. Desktop (subsystem-clinic.js): _einvoiceInvoiceBlock fetches the
+#      e-invoice state by invoice id (a separate GET), never by
+#      destructuring the create-invoice response -- unaffected either way.
+#   2. Android (android/aura-clinic/.../net/AuraApi.kt's createInvoice ->
+#      CreatedResponse, Models.kt's CreatedRow, ApiClient.kt's Retrofit
+#      GsonConverterFactory): same Gson behavior as the retail mirror --
+#      unmapped JSON fields are silently dropped on parse, not an error.
+#   3. commercial_runtime/sync/: replicates DB rows, never this HTTP
+#      response body.
+CREATE_INVOICE_RESPONSE_KEYS = ['einvoice', 'id', 'invoice_number', 'total']
 GET_INVOICE_RESPONSE_KEYS = ['invoice', 'items', 'payments']
 RECORD_PAYMENT_RESPONSE_KEYS = [
     'id', 'invoice_id', 'amount', 'total_paid', 'outstanding_balance',
@@ -153,23 +165,69 @@ def test_no_alter_ran_on_existing_tables():
     conn.close()
 
 
-def test_einvoice_outbox_stays_empty_through_a_full_invoice_and_payment_cycle():
+def test_einvoice_outbox_gets_exactly_one_row_for_the_invoice_not_the_payment():
+    """AUDIT (2026-09-08): renamed from
+    test_einvoice_outbox_stays_empty_through_a_full_invoice_and_payment_cycle
+    -- see the retail mirror's identical rewrite for the full rationale.
+    E-invoicing defaults ON, so the invoice creation below DOES enqueue.
+    What's still true: recording a payment never enqueues anything of its
+    own -- only create_invoice calls enqueue_invoice (see
+    core/clinic/einvoice_adapter.py; clinic_api.py's record_payment has no
+    e-invoice/credit-note handling at all), so exactly ONE outbox row must
+    exist after an invoice+payment cycle. Scoped to this test's own
+    company_id for the same cross-test-leakage reason as the retail
+    mirror -- see that file's comment."""
     client, cid, patient_id = _make_admin_and_patient()
     inv = _create_invoice(client, patient_id, unit_price=100.0)
+    assert 'einvoice' in inv, "the invoice itself must have enqueued -- e-invoicing defaults ON"
     client.post('/api/sub/clinic/payments', json={
         'invoice_id': inv['id'], 'amount': inv['total'], 'method': 'cash',
         'idempotency_key': str(uuid.uuid4()),
     })
     conn = get_clinic_conn()
-    count = conn.execute("SELECT COUNT(*) FROM einvoice_outbox").fetchone()[0]
+    rows = conn.execute(
+        "SELECT source_type, source_id FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchall()
     conn.close()
-    assert count == 0
+    assert len(rows) == 1, "a payment must never enqueue its own e-invoice row (not implemented in Phase 1)"
+    assert rows[0][0] == 'clinic_invoice' and rows[0][1] == inv['id'], "the one row must be the invoice itself, not the payment"
 
 
-def test_no_background_thread_exists_when_feature_never_enabled():
+def test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot():
+    """AUDIT (2026-09-08): renamed from
+    test_no_background_thread_exists_when_feature_never_enabled -- see the
+    retail mirror's identical rewrite for the full rationale. Short form:
+    e-invoicing defaults ON, so "never enabled" described no fixture that
+    exists here (the test above asserts `'einvoice' in inv`), and the old
+    failure message therefore said something untrue about its own setup.
+
+    What is pinned instead is the boot sweep, _resume_einvoicing_workers()
+    at app.py:209. It runs once inside init_app() (import time, top of this
+    file) over a database that was empty at that moment, so it starts zero
+    threads; the invoice below then enqueues a real row and starts nothing,
+    because enqueue_invoice writes the outbox and never touches the worker
+    registry. Same process-global scope caveat as the retail mirror:
+    threading.enumerate() cannot attribute a thread to `cid`."""
     client, cid, patient_id = _make_admin_and_patient()
     _create_invoice(client, patient_id)
+
+    # Anti-vacuity, same as the retail mirror: "no worker started" proves
+    # nothing unless the invoice above really did enqueue.
+    conn = get_clinic_conn()
+    queued = conn.execute(
+        "SELECT COUNT(*) c FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchone()['c']
+    conn.close()
+    assert queued == 1, (
+        f"fixture is not exercising the thing under test: {queued} outbox row(s) "
+        "for this company."
+    )
+
     names = {t.name for t in threading.enumerate()}
     assert names.issubset(BASELINE_THREAD_NAMES | {'MainThread'}), (
-        f"unexpected background thread(s) present with e-invoicing never enabled: {names - BASELINE_THREAD_NAMES}"
+        "an e-invoicing worker thread is running in a process whose boot sweep "
+        "(_resume_einvoicing_workers, app.py:209) found an empty outbox: "
+        f"{names - BASELINE_THREAD_NAMES}. Either that gate regressed, or "
+        "enqueueing now starts a worker -- if the latter is deliberate, rewrite "
+        "this test to pin the new rule; do not widen BASELINE_THREAD_NAMES."
     )

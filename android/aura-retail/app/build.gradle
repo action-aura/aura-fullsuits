@@ -20,6 +20,162 @@ if (keystorePropsFile.exists()) {
     keystoreProps.load(new FileInputStream(keystorePropsFile))
 }
 
+// ── Build-time secrets ───────────────────────────────────────────────────────
+// NEVER hardcoded here and never committed. Resolution order, first non-empty
+// wins:
+//   1. -PaiBearerToken=...  on the command line
+//   2. android/aura-retail/local.properties  ->  aiBearerToken=...
+//      (git-ignored by the root .gitignore's `android/*/local.properties`;
+//      see local.properties.template for the key names)
+//   3. environment variable AURA_AI_BEARER_TOKEN (the CI-secret path)
+// Same three sources for every secret below, so a machine can be configured
+// once in local.properties instead of re-typing -P flags on every build.
+def localPropsFile = rootProject.file("local.properties")
+def localProps = new Properties()
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+def resolveSecret = { String gradleProperty, String envVar ->
+    def value = project.findProperty(gradleProperty)
+    if (value == null || value.toString().trim().isEmpty()) value = localProps.getProperty(gradleProperty)
+    if (value == null || value.toString().trim().isEmpty()) value = System.getenv(envVar)
+    return value == null ? "" : value.toString().trim()
+}
+
+// Escaped rather than interpolated straight into the field: a real bearer
+// token or access token can legitimately contain a backslash or a quote, and
+// an unescaped one produces a BuildConfig.java that does not compile (or,
+// worse, one that compiles with a silently truncated value).
+def asJavaStringLiteral = { String value ->
+    '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+}
+
+def ownerLicensingBaseUrl = resolveSecret('ownerLicensingBaseUrl', 'AURA_OWNER_LICENSING_URL')
+def ownerSyncBaseUrl = resolveSecret('ownerSyncBaseUrl', 'AURA_SYNC_RELAY_URL')
+def aiBearerToken = resolveSecret('aiBearerToken', 'AURA_AI_BEARER_TOKEN')
+def whatsappPhoneNumberId = resolveSecret('whatsappPhoneNumberId', 'AURA_WHATSAPP_PHONE_NUMBER_ID')
+def whatsappAccessToken = resolveSecret('whatsappAccessToken', 'AURA_WHATSAPP_ACCESS_TOKEN')
+
+// ── Release-blocking build config ────────────────────────────────────────────
+// Every entry below is a value whose EMPTY state silently switches a whole
+// feature off in the shipped app, with nothing on screen to say so. That is
+// the one class of misconfiguration a release build must never carry: the APK
+// installs, launches, looks entirely correct, and quietly does less than it
+// claims -- which is exactly how the AI assistant shipped dead, and how an
+// APK that enforces no licensing at all could ship next.
+//
+// The bar for being on this list is "empty is INVISIBLE", not "empty is
+// inconvenient". The WhatsApp pair is deliberately NOT here: when it is unset
+// the app says so in plain words on its own screen instead of pretending to
+// send (products/retail/frontend/whatsapp.js's "AURA_WHATSAPP_* are not set on
+// this installation. Nothing can send until the installer sets them."), so an
+// unconfigured WhatsApp build is honest rather than silently broken. If that
+// ever stops being true, it belongs here.
+//
+// Adding a new empty-by-default buildConfigField that Kotlin then treats as a
+// kill switch (`if (BuildConfig.X.isBlank()) return`) WITHOUT adding it here
+// is itself a defect, and BuildGuardContractTest fails on it.
+//
+// Deliberately says how to fix it, not just that it is broken -- and names no
+// value anywhere, only the KEYS. Wrapped in a banner because a plain warn line
+// is invisible in Gradle's normal output volume, which is exactly how this
+// shipped broken in the first place.
+def supplyAdvice = { String gradleProperty, String envVar -> """
+   Supply it in ONE of these ways (never commit the value):
+     1.  ./gradlew <task> -P${gradleProperty}=<value>
+     2.  android/aura-retail/local.properties:  ${gradleProperty}=<value>
+         (git-ignored; see local.properties.template)
+     3.  export ${envVar}=<value>                       (CI secret)
+"""
+}
+
+def releaseRequiredConfig = [
+    [
+        gradleProperty: 'ownerLicensingBaseUrl',
+        envVar: 'AURA_OWNER_LICENSING_URL',
+        value: ownerLicensingBaseUrl,
+        headline: 'AURA_OWNER_LICENSING_URL is not set -- THIS BUILD ENFORCES NO LICENSING.',
+        consequence: """\
+   With this blank, licensing is not weakened, it is ABSENT. AppRoot's
+   activation gate is skipped outright (`licensingConfigured` is false, so
+   `needsActivation` can never become true) and LicenseCheckInCoordinator
+   returns immediately without ever starting its loop. The resulting APK
+   installs, asks for no licence key, never contacts Owner, and can never
+   be suspended, revoked or expired. It is the product, given away.""",
+    ],
+    [
+        gradleProperty: 'ownerSyncBaseUrl',
+        envVar: 'AURA_SYNC_RELAY_URL',
+        value: ownerSyncBaseUrl,
+        headline: 'AURA_SYNC_RELAY_URL is not set -- this build never syncs.',
+        consequence: """\
+   SyncCoordinator.start() returns before scheduling a single tick, so this
+   device never pushes and never pulls: whatever is rung up on it stays on
+   it, permanently, and nothing another device does ever arrives.
+   The failure is at least VISIBLE. More > Sync status polls
+   SyncCoordinator.health() and has a dedicated NOT_CONFIGURED tier that
+   hides the per-half breakdown and says sync is not set up -- added exactly
+   because 'Sending Healthy / Receiving Healthy' under an unconfigured relay
+   read as the opposite of the truth. (This entry used to say the app had no
+   sync UI at all; SyncStatusScreen.kt has been registered and reachable
+   since, pinned by SyncStatusPresentationTest.)
+   Release-blocking regardless: an honest 'not set up' on a device that is
+   permanently alone is a diagnosis, not a working multi-device install.""",
+    ],
+    [
+        gradleProperty: 'aiBearerToken',
+        envVar: 'AURA_AI_BEARER_TOKEN',
+        value: aiBearerToken,
+        headline: 'AURA_AI_BEARER_TOKEN is not set.',
+        consequence: """\
+   The Aura AI assistant proxies to an upstream that requires this bearer
+   token. Without it the upstream answers 401 on every request and the in-app
+   assistant is dead: it renders, accepts a question, and always fails with
+   "AI assistant is temporarily unavailable.\"""",
+    ],
+]
+
+def missingConfigBanner = { entry -> """
+  ===========================================================================
+   ${entry.headline}
+
+${entry.consequence}
+
+${supplyAdvice(entry.gradleProperty, entry.envVar)}\
+  ===========================================================================
+"""
+}
+
+// A release-shaped build (release/staging -- non-debuggable, installed on real
+// devices) is the one that must never ship silently broken, so it FAILS rather
+// than warns. A debug build is allowed to proceed with any of these missing (a
+// developer who is not working on that feature should not be blocked by it),
+// but says so unmissably. Evaluated on the resolved task graph rather than at
+// configuration time so that plain `test`/`lint` invocations are neither
+// failed nor spammed.
+gradle.taskGraph.whenReady { graph ->
+    def missing = releaseRequiredConfig.findAll { it.value.isEmpty() }
+    if (missing.isEmpty()) return
+    def advice = missing.collect { missingConfigBanner(it) }.join("")
+    def ours = graph.allTasks.findAll { it.project.path == project.path }
+    // Exact names only: `packageReleaseResources` and friends are
+    // intermediate steps of the same graph, and naming them in the
+    // failure message would bury the one task the developer actually
+    // asked for.
+    def releaseShaped = ours.findAll { it.name ==~ /^(assemble|bundle|install|package)(Release|Staging)$/ }
+    if (!releaseShaped.isEmpty()) {
+        throw new GradleException(
+            "Refusing to produce a release-shaped build (${releaseShaped*.name.join(', ')}) " +
+            "with ${missing.size()} silently-disabled feature(s): " +
+            "${missing*.gradleProperty.join(', ')}.\n" + advice)
+    }
+    if (!ours.findAll { it.name ==~ /^(assemble|bundle|install|package)Debug$/ }.isEmpty()) {
+        logger.warn("\nWARNING: building WITHOUT ${missing*.gradleProperty.join(', ')} -- " +
+                    "those features are silently OFF in this APK.\n" + advice)
+    }
+}
+
 android {
     namespace 'com.actionaura.retail'
     compileSdk 34
@@ -28,8 +184,18 @@ android {
         applicationId "com.actionaura.retail"
         minSdk 26
         targetSdk 34
-        versionCode 6
-        versionName "1.0.0-rc.5"
+        // versionCode is a plain hand-bumped monotonic integer, deliberately
+        // NOT derived from versionName -- see docs/release/versioning-policy.md
+        // ("Android versionCode" section) and
+        // retail_release_version_consistency_test.py's docstring for why a
+        // semver-derived formula was rejected. It had been left at 7 (the
+        // rc.6-era value) through the rc.7 versionName bump; bumped to 8 here
+        // so this rc.7 release itself has a versionCode Google Play would
+        // accept as a new upload. Must stay equal to aura-clinic's
+        // versionCode -- pinned by
+        // test_android_version_codes_agree_between_products.
+        versionCode 8
+        versionName "1.0.0-rc.7"
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
@@ -47,10 +213,17 @@ android {
         // routes reporting NOT_CONFIGURED (never a hidden fallback URL --
         // see products/retail/backend/config.py's identical rationale).
         // Overridden per real build via -PownerLicensingBaseUrl=... (gradle
-        // property, e.g. from a CI secret or local.properties), never
-        // hardcoded here.
-        buildConfigField "String", "OWNER_LICENSING_BASE_URL",
-                "\"${project.findProperty('ownerLicensingBaseUrl') ?: ''}\""
+        // property, local.properties, or the AURA_OWNER_LICENSING_URL env var
+        // -- see resolveSecret above), never hardcoded here.
+        //
+        // Empty is fail-SAFE for the embedded backend but fail-OPEN for the
+        // app around it: AppRoot skips the activation gate and
+        // LicenseCheckInCoordinator never starts, so the APK enforces no
+        // licensing whatsoever. That is why this is release-blocking (see
+        // releaseRequiredConfig above) -- "unset == not enforced" is a
+        // reasonable convention for a dev build and an unshippable one for a
+        // release build.
+        buildConfigField "String", "OWNER_LICENSING_BASE_URL", asJavaStringLiteral(ownerLicensingBaseUrl)
 
         // Multi-device sync foundation (2026-08-06), Task 9 wiring -- Owner's
         // sync relay root (Kotlin appends "/api/sync/v1/push|pull" itself,
@@ -62,9 +235,10 @@ android {
         // different path depths; see products/retail/backend/config.py).
         // Overridden per real build via -PownerSyncBaseUrl=..., never
         // hardcoded here. Empty means SyncCoordinator stays inert (no timer
-        // started), never a hidden default Owner instance.
-        buildConfigField "String", "OWNER_SYNC_BASE_URL",
-                "\"${project.findProperty('ownerSyncBaseUrl') ?: ''}\""
+        // started), never a hidden default Owner instance -- and, because
+        // nothing on screen reports that, it is release-blocking too (see
+        // releaseRequiredConfig above).
+        buildConfigField "String", "OWNER_SYNC_BASE_URL", asJavaStringLiteral(ownerSyncBaseUrl)
 
         // AI Assistant + WhatsApp reports -- same empty-by-default,
         // build-property-overridden pattern as the two fields above. Neither
@@ -72,14 +246,18 @@ android {
         // docstring); both features were silently off on every Android build
         // regardless of what Windows had configured. Overridden via
         // -PaiBearerToken=... / -PwhatsappPhoneNumberId=... /
-        // -PwhatsappAccessToken=..., never hardcoded here -- these are real
-        // secrets, must never be committed.
-        buildConfigField "String", "AURA_AI_BEARER_TOKEN",
-                "\"${project.findProperty('aiBearerToken') ?: ''}\""
-        buildConfigField "String", "AURA_WHATSAPP_PHONE_NUMBER_ID",
-                "\"${project.findProperty('whatsappPhoneNumberId') ?: ''}\""
-        buildConfigField "String", "AURA_WHATSAPP_ACCESS_TOKEN",
-                "\"${project.findProperty('whatsappAccessToken') ?: ''}\""
+        // -PwhatsappAccessToken=..., local.properties, or the matching env
+        // vars (see resolveSecret above) -- never hardcoded here; these are
+        // real secrets and must never be committed.
+        //
+        // "Empty by default" is a genuine fail-safe for WhatsApp (the feature
+        // simply stays off) but NOT for the AI assistant, which still renders
+        // a chat UI and then 401s on every question. Nothing in this build
+        // ever supplied the token, so every rebuilt APK shipped a dead
+        // assistant in silence -- hence the release-shaped build guard above.
+        buildConfigField "String", "AURA_AI_BEARER_TOKEN", asJavaStringLiteral(aiBearerToken)
+        buildConfigField "String", "AURA_WHATSAPP_PHONE_NUMBER_ID", asJavaStringLiteral(whatsappPhoneNumberId)
+        buildConfigField "String", "AURA_WHATSAPP_ACCESS_TOKEN", asJavaStringLiteral(whatsappAccessToken)
     }
 
     // ── Python (Chaquopy) ───────────────────────────────────────────────────────
@@ -107,6 +285,23 @@ android {
                 // resolves this to whichever version it has a real
                 // pre-built wheel for (42.0.8 as of this build).
                 install "cryptography"
+                // Business-date reporting (core/retail/metrics.py). Android
+                // ships no system tz database either, so without this
+                // `zoneinfo.ZoneInfo('Asia/Amman')` raises
+                // ZoneInfoNotFoundError and every shop with a configured
+                // business timezone silently degrades to device-local
+                // bucketing -- the exact defect the feature exists to fix,
+                // announced by a log line nobody reads.
+                //
+                // Measured on the build machine: `zoneinfo.TZPATH` is `()`.
+                // Same failure shape as the `cryptography` omission above:
+                // present in the desktop requirements, absent here, and only
+                // reproducible on a real device.
+                //
+                // Pure data, no compiled extension, universal wheel -- so it
+                // needs no pre-built ABI wheel and cannot hit the Rust
+                // cross-compiler problem described above.
+                install "tzdata==2026.1"
             }
         }
     }
@@ -175,6 +370,28 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests.all { test ->
+            // BuildGuardContractTest and LicensingWiringContractTest read this
+            // build script and the Kotlin sources at RUNTIME (there is no
+            // unit-testable seam for "is this timer started", "is this config
+            // release-blocking"). Gradle cannot infer a runtime File read, so
+            // without declaring these the test task stays UP-TO-DATE after the
+            // very edit it exists to catch -- the guard silently re-verifies a
+            // stale result. Found the hard way: editing the release guard left
+            // testDebugUnitTest up-to-date and reported BUILD SUCCESSFUL
+            // without running a single assertion against the new content.
+            test.inputs.file("build.gradle").withPathSensitivity(PathSensitivity.RELATIVE)
+            test.inputs.dir("src/main/java").withPathSensitivity(PathSensitivity.RELATIVE)
+            // CompiledTestSuiteRollCallTest reads the TEST tree at runtime for
+            // the same reason, and needs it declared for a subtler one: its
+            // whole job is to notice a test file that stopped being code. The
+            // edit that does that is comment-only in every other respect, and
+            // an undeclared input is how a comment-only edit gets to report
+            // UP-TO-DATE on the guard written to catch it.
+            test.inputs.dir("src/test/java").withPathSensitivity(PathSensitivity.RELATIVE)
+        }
     }
     kotlinOptions {
         jvmTarget = '17'
@@ -283,7 +500,94 @@ tasks.register('stageAuraAssets', Copy) {
 tasks.matching { it.name.startsWith('merge') && it.name.endsWith('PythonSources') }
         .configureEach { dependsOn 'stageAuraPython' }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  "0 SKIPPED" as an assertion, not as something a human reads off the console
+// ─────────────────────────────────────────────────────────────────────────────
+// A skipped test and a passing test are indistinguishable in an exit code, and
+// this module skips BY DESIGN: nineteen `assumeTrue(..., file.exists())` calls
+// across nine test classes turn "I cannot reach the file I check" into a SKIP
+// instead of a failure. That is right individually -- those guards read Python
+// and JavaScript out of sibling products and must not fail a build run from a
+// context with no repository around it -- and it is catastrophic collectively,
+// because one moved directory or one changed working directory silences all of
+// them at once.
+//
+// It has already happened here. A stale path took all four
+// BuildGuardContractTest tests to SKIPPED together -- including
+// a_release_build_with_no_licensing_url_is_refused, the one thing standing
+// between this repo and an APK that enforces no licensing whatsoever -- while
+// Gradle printed BUILD SUCCESSFUL and a sibling guard reported PASS. The only
+// reason anybody noticed was a person reading the console.
+//
+// No test inside the module can close this: a test cannot read the report of
+// the run it is part of. So the runner's own JUnit XML is parsed here, after
+// the fact, and any skip fails the build.
+//
+// Wired as a FINALIZER rather than a dependent task, so it still reports when
+// the test task itself fails -- which is the normal state on a machine whose
+// loopback address reverse-resolves to a public hostname (SyncRelayClientTest).
+def registerSkipVerifier = { Test unitTest ->
+    def taskName = unitTest.name
+    def resultsDir = unitTest.reports.junitXml.outputLocation
+    def verifier = tasks.register("assertNoSkipped${taskName.capitalize()}") {
+        group 'verification'
+        description "Fails the build if ${taskName} skipped any test, or ran none at all."
+        // Deliberately declares no inputs and is never up to date. An
+        // up-to-date check on the skip checker would be the same silence one
+        // level further out.
+        outputs.upToDateWhen { false }
+        doLast {
+            def dir = resultsDir.get().asFile
+            def reports = dir.isDirectory()
+                ? (dir.listFiles({ File f -> f.name.endsWith('.xml') } as java.io.FileFilter) as List).sort { it.name }
+                : []
+            // "No results" is exactly what a suite that never ran looks like,
+            // so it is a failure rather than a quiet pass -- the same mistake
+            // this whole check exists to stop being possible.
+            if (reports.isEmpty()) {
+                throw new GradleException(
+                    "${taskName} left no JUnit XML in ${dir}, so nothing here can tell whether a single " +
+                    "assertion ran. Refusing to report success on an unread suite.")
+            }
+            def slurper = new groovy.xml.XmlSlurper()
+            def asCount = { String raw -> raw.isInteger() ? raw.toInteger() : 0 }
+            int total = 0
+            int declaredSkips = 0
+            def named = []
+            reports.each { report ->
+                def suite = slurper.parse(report)
+                total += asCount(suite.@tests.toString())
+                declaredSkips += asCount(suite.@skipped.toString())
+                suite.testcase.each { testcase ->
+                    if (!testcase.skipped.isEmpty()) {
+                        named << "${testcase.@classname}#${testcase.@name}".toString()
+                    }
+                }
+            }
+            if (total == 0) {
+                throw new GradleException(
+                    "${taskName} reported ${reports.size()} result file(s) holding 0 tests. " +
+                    "A suite that runs nothing is not a suite that passed.")
+            }
+            if (declaredSkips > 0 || !named.isEmpty()) {
+                def detail = named.isEmpty() ? "(the XML counted them but named none)" : "\n  " + named.join("\n  ")
+                throw new GradleException(
+                    "${taskName} SKIPPED ${Math.max(declaredSkips, named.size())} of ${total} tests. " +
+                    "In this module a skip means a guard could not reach the file it checks, so its " +
+                    "assertions did not run -- which is the failure, not a lesser form of passing. " +
+                    "Skipped: ${detail}")
+            }
+            logger.lifecycle("${taskName}: ${total} tests, 0 skipped.")
+        }
+    }
+    unitTest.finalizedBy(verifier)
+}
+
 afterEvaluate {
+    // toList() first: the verifiers are registered while iterating the result,
+    // not while iterating the live task container.
+    tasks.withType(Test).toList().each { unitTest -> registerSkipVerifier(unitTest) }
+
     tasks.named('preBuild').configure { dependsOn 'stageAuraPython', 'stageAuraAssets' }
     android.applicationVariants.all { variant ->
         tasks.named("merge${variant.name.capitalize()}Assets").configure {

@@ -57,14 +57,84 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 
+# Re-exported below under their original names -- see the comment block where
+# the table used to be defined, further down, for why the HOME moved and
+# nothing else did.
+from commercial_runtime.currency import (
+    CURRENCY_DECIMALS,
+    CURRENCY_MINOR_UNITS,
+    CURRENCY_QUANT,
+    DEFAULT_BASE_CURRENCY,
+    currency_quantum,
+)
+
 TAX_AFTER_DISCOUNT = "after_discount"
 TAX_BEFORE_DISCOUNT = "before_discount"
 
 VALID_MODES = (TAX_AFTER_DISCOUNT, TAX_BEFORE_DISCOUNT)
 DEFAULT_MODE = TAX_AFTER_DISCOUNT
 
-CURRENCY_DECIMALS = 2
-CURRENCY_QUANT = Decimal('0.01')
+#: THE MINOR-UNIT TABLE MOVED HOME; IT DID NOT CHANGE.
+#:
+#: `CURRENCY_DECIMALS`, `CURRENCY_QUANT`, `DEFAULT_BASE_CURRENCY`,
+#: `CURRENCY_MINOR_UNITS` and `currency_quantum` are now defined in
+#: commercial_runtime/currency.py and imported at the top of this file. Every
+#: measurement and every word of reasoning that used to sit here moved with
+#: them, unedited; read that module for it. They keep their original names
+#: here because ~30 call sites reach them as `tax_engine.CURRENCY_MINOR_UNITS`
+#: / `tax_engine.currency_quantum` / `tax_engine.DEFAULT_BASE_CURRENCY`, and a
+#: Retail caller asking this module is still the right shape.
+#:
+#: WHY it moved: Clinic's billing (products/clinic/backend/api/clinic_api.py)
+#: and the UBL serializer that renders the document filed with the tax
+#: authority (commercial_runtime/einvoicing/ubl.py) need this same table, and
+#: commercial_runtime must not import products/. So while the table lived
+#: here, both of them hardcoded 2 decimals -- and both were measurably wrong
+#: for JOD, which is the home market. The only other way out was a SECOND copy
+#: of the table, which is exactly what the comment that used to occupy these
+#: lines warned against.
+
+#: What to PRINT in front of an amount, per ISO 4217 code.
+#:
+#: Deliberately short, and deliberately falling back to the CODE ITSELF rather
+#: than to any symbol. "SEK 120.00" is honest and unambiguous; guessing a symbol
+#: for a currency nobody entered is how a Swedish shop ends up displaying
+#: dollars. The fallback is the feature, not a gap.
+#:
+#: JOD renders as "JD" -- the form Jordanian shops actually print in English.
+#: The Arabic form is a translation concern and belongs in the locale
+#: catalogues, not here: this table is what the SERVER knows about money, and
+#: the server has no opinion about which language the till is showing.
+CURRENCY_SYMBOLS = {
+    'JOD': 'JD',
+    'USD': '$',
+    'EUR': '€',
+    'GBP': '£',
+    'SAR': 'SR',
+    'AED': 'AED',
+    'KWD': 'KD',
+    'BHD': 'BD',
+    'OMR': 'OMR',
+    'QAR': 'QR',
+    'EGP': 'EGP',
+    'ILS': '₪',
+    'TRY': '₺',
+    'JPY': '¥',
+}
+
+
+def currency_symbol(currency=None) -> str:
+    """The display mark for `currency`, falling back to the uppercased code.
+
+    Same never-raise posture as `currency_quantum`: a malformed setting must
+    degrade to something a cashier can still read, never break the screen.
+    """
+    try:
+        code = (currency or '').strip().upper()
+    except (AttributeError, TypeError):
+        return ''
+    return CURRENCY_SYMBOLS.get(code, code)
+
 
 MAX_DISCOUNT_PCT = 100
 MIN_DISCOUNT_PCT = 0
@@ -80,8 +150,21 @@ def _d(x) -> Decimal:
     return Decimal(str(x if x is not None else 0))
 
 
-def _money(x: Decimal) -> float:
-    return float(x.quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP))
+def _money(x: Decimal, quant: Decimal = CURRENCY_QUANT) -> float:
+    """Round one figure to a currency's minor unit, ROUND_HALF_UP.
+
+    `quant` defaults to the 2-decimal quantum, so every pre-existing caller --
+    and every test written against them -- behaves EXACTLY as it did before
+    currency awareness existed. Only a caller that passes a currency through
+    gets different arithmetic, which is what makes this change safe to land on
+    a module that computes every persisted total in the product.
+
+    ROUND_HALF_UP is unchanged and deliberate (AUDIT-006): Python's built-in
+    round() is banker's rounding and disagreed with api/retail_api.py's own
+    _money() at exact half-cent boundaries. Only the QUANTUM is now variable;
+    the rounding RULE is not.
+    """
+    return float(x.quantize(quant, rounding=ROUND_HALF_UP))
 
 
 def normalize_mode(value) -> str:
@@ -107,7 +190,8 @@ def clamp_discount_pct(value) -> float:
 
 
 def calculate_line(unit_price: float, quantity: float, discount_pct: float = 0,
-                    tax_rate: float = 0, mode: str = DEFAULT_MODE) -> dict:
+                    tax_rate: float = 0, mode: str = DEFAULT_MODE,
+                    currency: str = None) -> dict:
     """Compute one cart/sale line's figures under the given tax mode.
 
     `discount_pct` and `tax_rate` are percentages (0-100), matching the
@@ -140,17 +224,18 @@ def calculate_line(unit_price: float, quantity: float, discount_pct: float = 0,
         tax = taxable_amount * (rate / Decimal(100))
         total = taxable_amount + tax
 
+    q = currency_quantum(currency)
     return {
-        "gross": _money(gross),
-        "discount_amount": _money(discount_amount),
-        "taxable_amount": _money(taxable_amount),
-        "tax": _money(tax),
-        "total": _money(total),
+        "gross": _money(gross, q),
+        "discount_amount": _money(discount_amount, q),
+        "taxable_amount": _money(taxable_amount, q),
+        "tax": _money(tax, q),
+        "total": _money(total, q),
     }
 
 
 def calculate_invoice(subtotal: float, discount_amount: float, tax_rate_pct: float,
-                       mode: str = DEFAULT_MODE) -> dict:
+                       mode: str = DEFAULT_MODE, currency: str = None) -> dict:
     """Invoice/cart-level aggregate variant: `discount_amount` is already a
     currency amount (not a percentage) -- this mirrors the POS cart's
     invoice-level discount model (a single discount % applied to the whole
@@ -178,9 +263,10 @@ def calculate_invoice(subtotal: float, discount_amount: float, tax_rate_pct: flo
         tax = taxable_amount * (rate / Decimal(100))
         total = taxable_amount + tax
 
+    q = currency_quantum(currency)
     return {
-        "discount_amount": _money(disc),
-        "taxable_amount": _money(taxable_amount),
-        "tax": _money(tax),
-        "total": _money(total),
+        "discount_amount": _money(disc, q),
+        "taxable_amount": _money(taxable_amount, q),
+        "tax": _money(tax, q),
+        "total": _money(total, q),
     }

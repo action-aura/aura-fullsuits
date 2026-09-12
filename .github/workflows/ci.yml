@@ -22,9 +22,23 @@ on:
 
 env:
   # Real test-time-only values, never real secrets -- matches
-  # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default.
+  # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default. The
+  # `aura_owner` role this names is NOT the service container's bootstrap
+  # superuser: it is created by the "Unprivileged application role" step
+  # below with exactly the dev machine's privileges (NOSUPERUSER,
+  # NOCREATEROLE, CREATEDB), because test_phase9r_postgresql_hardening.py
+  # refuses a superuser connection and only CI's bootstrap role was one.
   OWNER_TEST_DATABASE_URL: postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_test
   OWNER_ENV: testing
+  # Explicit "opposite" of the local-developer escape hatch documented in
+  # products/run_all_tests.py: that script already fails loudly by default
+  # when *_test.js files are discovered but `node` isn't on PATH, but this
+  # is set here explicitly (rather than relying on that default) so CI's
+  # intent -- JS tests are never allowed to silently vanish -- is visible
+  # directly in this workflow file, not just inferred from a script default
+  # that could change later without anyone noticing it changed CI's
+  # behavior.
+  AURA_ALLOW_MISSING_NODE: "0"
 
 jobs:
   test-and-scan:
@@ -32,13 +46,336 @@ jobs:
     services:
       postgres:
         image: postgres:17
+        # The bootstrap role a postgres image creates is always a superuser,
+        # so it gets a name nothing under test ever connects as; the tests'
+        # `aura_owner` role is created unprivileged by a step below.
         env:
-          POSTGRES_USER: aura_owner
-          POSTGRES_PASSWORD: aura_owner_dev
+          POSTGRES_USER: aura_admin
+          POSTGRES_PASSWORD: aura_admin_dev  # pragma: allowlist secret -- throwaway service-container password, destroyed with the runner
           POSTGRES_DB: aura_owner_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U aura_owner -d aura_owner_test"
+          --health-cmd "pg_isready -U aura_admin -d aura_owner_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Source checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # development.txt alone is `-r base.txt` + `-r owner-server.txt` +
+      # pytest + pytest-cov -- it does NOT reach either product's own
+      # requirements file, so until 2026-09-08 the retail suite ran against a
+      # dependency set that is not the one the product ships.
+      #
+      # The concrete casualty was tzdata==2026.1 (requirements/retail.txt:33).
+      # ubuntu-latest carries /usr/share/zoneinfo, which satisfies
+      # zoneinfo.ZoneInfo whether or not the pin exists, so DELETING that pin
+      # would have kept CI fully green while business-date reporting silently
+      # degraded to device-local bucketing on Windows, on Android and in the
+      # packaged .exe -- a gate that cannot fail for the thing it is watching.
+      #
+      # Installing both product files also makes CI prove they are
+      # INSTALLABLE, which nothing else here did: a typo or a yanked pin in
+      # retail.txt/clinic.txt was previously discovered at packaging time.
+      # (Verified 2026-09-08 that the two resolve together:
+      # `pip install --dry-run -r requirements/retail.txt -r requirements/clinic.txt`
+      # exits 0. Both are `-r base.txt` plus, for retail, tzdata.)
+      - run: pip install -r requirements/development.txt -r requirements/retail.txt -r requirements/clinic.txt
+
+      # Node is required by products/run_all_tests.py: products/retail/tests
+      # (and, structurally, any other product's tests/) can contain
+      # standalone `*_test.js` files run one-per-`node`-subprocess. Without
+      # this step the runner now fails the job loudly (AURA_ALLOW_MISSING_NODE
+      # is "0" above) rather than silently reporting 0 JS files as green --
+      # provisioning Node explicitly, instead of hoping the runner image
+      # happens to have one, is what actually closes that gap.
+      - name: Node setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # pg_dump/pg_restore must match the postgres:17 service above: ubuntu-latest
+      # ships the PostgreSQL 16 client, and pg_dump refuses a newer server outright
+      # ("aborting because of server version mismatch") -- six backup/restore tests
+      # failed on exactly that on 2026-09-07, the first run to get past pip since
+      # 2026-08-06. Production is PostgreSQL 17 (docs/owner/phase5/), so the client
+      # is raised to 17 rather than the service lowered to 16. OWNER_PG_BIN_DIR is
+      # app/system/backup.py's explicit override, used instead of trusting Debian's
+      # pg_wrapper to pick the right major version off PATH.
+      - name: PostgreSQL 17 client tools
+        run: |
+          # A third-party repo we never install from must not decide whether
+          # PostgreSQL gets installed. On 2026-09-09 this step failed with
+          # "Failed to fetch .../chrome-stable/... Hash Sum mismatch" -- Google's
+          # mirror served a Packages.gz that did not match its own Release file,
+          # apt exited 100, and a green branch went red for a reason that had
+          # nothing to do with the code. The runner image carries that repo; no
+          # job in this workflow installs a browser.
+          #
+          # What this no longer catches: a stale index at UPDATE time. That is
+          # still caught one line later -- every apt-get install below is strict,
+          # so an index that genuinely failed to refresh fails this step at the
+          # install, naming the package it could not find.
+          sudo apt-get update -qq -o Acquire::Retries=3 \
+            || echo "apt-get update reported errors; the strict installs below still gate this step"
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          echo "OWNER_PG_BIN_DIR=/usr/lib/postgresql/17/bin" >> "$GITHUB_ENV"
+
+      # The Owner app must never connect as a superuser: test_phase9r_postgresql_hardening.py
+      # refuses it (rolsuper and rolcreaterole must both be false), and production never does.
+      # A postgres image's bootstrap role is a superuser by construction, so that role is
+      # named aura_admin above and used only here; the tests connect as `aura_owner`, created
+      # with exactly the dev machine's privileges (measured 2026-09-07 on the local Postgres
+      # 17.10: rolsuper=false, rolcreaterole=false, rolcreatedb=true). CREATEDB is not a
+      # relaxation of the hardening test -- test_database.py and test_phase6_migration.py
+      # each `CREATE DATABASE aura_owner_migration_scratch OWNER aura_owner` over a second
+      # connection to the `postgres` database, and naming yourself as OWNER needs nothing
+      # beyond CREATEDB. Owning aura_owner_test covers Alembic, TRUNCATE and
+      # pg_dump/pg_restore (`--clean --if-exists --no-owner`, app/system/backup.py).
+      - name: Unprivileged application role for the test database
+        run: |
+          psql "postgresql://aura_admin:aura_admin_dev@localhost:5432/aura_owner_test" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE aura_owner LOGIN PASSWORD 'aura_owner_dev' NOSUPERUSER NOCREATEROLE CREATEDB;" \
+            -c "ALTER DATABASE aura_owner_test OWNER TO aura_owner;" \
+            -c "SELECT rolname, rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname IN ('aura_admin', 'aura_owner');"
+
+      - name: Owner tests
+        run: python -m pytest owner/tests -q --no-header
+
+      # One pytest process per test FILE, never one process over the whole
+      # tree. Every identity test module sets AURA_APP_DATA to its own temp
+      # directory and calls init_app() at import time, and registry_db.py /
+      # mt_auth.py / schema.py resolve that path once per process -- by
+      # design, see products/run_all_tests.py's module docstring (AUDIT-010:
+      # process isolation was chosen over re-resolving the path in production
+      # modules for test convenience). Collected into one process, every
+      # module after the first operates on the FIRST module's registry.
+      # Measured 2026-09-07: `python -m pytest commercial_runtime/identity`
+      # in one process = 10 failed / 305 passed ("no such table: users",
+      # "An admin account already exists. Please login."); the same files
+      # one per process = 315 / 315. The old `python -m pytest
+      # commercial_runtime` step that stood here was exactly the fragile path
+      # the runner's own comments warned about, and the only reason it never
+      # showed was that CI had not got past the pip step since 2026-08-06
+      # (segno pin conflict, fixed in the commit before this one).
+      #
+      # Every `<package>/tests` directory under commercial_runtime is listed
+      # by name: the runner discovers ONLY the keys it is given (its
+      # `commercial_runtime` key means commercial_runtime/tests alone), so a
+      # new domain package needs a new key there AND here, or its tests run
+      # nowhere. The one `test_*.py` outside these directories,
+      # commercial_runtime/licensing_contracts/test_support.py, is a helper
+      # with no tests in it and is deliberately not collected.
+      - name: commercial_runtime tests (canonical runner, one process per file)
+        run: python products/run_all_tests.py commercial_runtime licensing_contracts sync einvoicing identity notifications
+
+      - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md; now includes the *_test.js files under products/retail/tests, see run_all_tests.py)
+        run: python products/run_all_tests.py retail
+
+      - name: Clinic tests (canonical runner)
+        run: python products/run_all_tests.py clinic
+
+      # Android tests now run in their own job (`android-tests`, below) --
+      # NOT here. They provision a JDK and the Android SDK, which the Python
+      # matrix above has no use for, and they must not be able to take the
+      # Python suites down with them (or vice versa).
+
+      - name: Artifact manifest + checksum generation
+        run: |
+          echo "commit=$(git rev-parse HEAD)" > build-manifest.txt
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build-manifest.txt
+          sha256sum requirements/*.txt >> build-manifest.txt
+
+      - name: SBOM generation
+        run: |
+          # Pinned, same rationale as the three gates in `security-gates`.
+          # No local install existed to measure on 2026-09-08, so this is
+          # the version an unpinned `pip install` resolved to that day
+          # (7.3.1) -- pinning it makes the SBOM reproducible rather than
+          # a function of the run date.
+          pip install cyclonedx-bom==7.3.1
+          python -m cyclonedx_py environment --output-format json --output-file sbom.json
+
+      # `docker compose config` resolves every `env_file:` before it will
+      # validate anything, and .env.staging is deliberately NOT in the repo --
+      # it holds the staging secrets, and the compose file's own header says to
+      # create it from the example. Without it the step died on
+      # "env file /home/runner/work/.../.env.staging not found" (run
+      # 34160439798, the first run ever to reach this step). Copying the
+      # committed example gives the resolver the KEYS it needs so the compose
+      # file's structure is really validated; the placeholder VALUES in it are
+      # never used to start anything -- this step only renders the config, and
+      # Non-Negotiable Principle 9 (see this file's header) keeps any real
+      # deployment out of CI entirely.
+      - name: Staging deployment package creation
+        run: |
+          cp deploy/staging/.env.staging.example .env.staging
+          docker compose -f docker-compose.staging.yml config > /dev/null
+          rm -f .env.staging
+          echo "docker-compose.staging.yml resolves and validates"
+
+      # bandit-results.json is NOT in this list any more: bandit moved to the
+      # `security-gates` job below, which uploads its own evidence. Two jobs
+      # cannot write one artifact name.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence
+          path: |
+            build-manifest.txt
+            sbom.json
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # WHY THESE ARE SEPARATE JOBS, AND WHY NEITHER CARRIES `needs:`
+  #
+  # Until 2026-09-08 this workflow was ONE job of sequential steps with no
+  # `if: always()` anywhere, so the first failing step took out everything
+  # after it. That is not a theory: on run 34239809481 step 11 ("Retail
+  # tests") failed and steps 12-21 were all SKIPPED -- Clinic tests,
+  # Localization checks, bandit, Migration check, Secret scanning, Dependency
+  # scanning, the artifact manifest, the SBOM and the staging package. A stale
+  # assertion in one retail test therefore disarmed every security and
+  # supply-chain gate in the repository, silently, and the run reported one
+  # red step rather than "we scanned nothing today".
+  #
+  # A gate that a broken test can switch off is not a gate. So the checks that
+  # answer "is this commit safe to have" now run on their own, in parallel,
+  # gated on nothing. The checks that answer "is this commit correct" stay in
+  # `test-and-scan`, and so do the artifact/SBOM/staging steps, which
+  # genuinely SHOULD not run for a red build -- packaging a failing tree is
+  # worse than not packaging it.
+  #
+  # `needs:` is deliberately absent from both jobs below rather than
+  # `if: always()` on a dependency: `always()` still serialises behind the
+  # test job's ~15 minutes, and a cancelled run would skip them anyway.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  security-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Source checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # This job needs no application dependencies: bandit reads source,
+      # detect-secrets reads the working tree, and pip-audit is pointed at
+      # requirements FILES rather than the installed environment. Installing
+      # nothing here also means a dependency-resolution failure cannot take
+      # the secret scanner down with it.
+
+      - name: Lint / static checks (bandit)
+        run: |
+          # Pinned for the same reason detect-secrets is pinned two steps
+          # down, and with the same one-line rationale so the next reader
+          # knows it is deliberate: this step backs a zero-HIGH/MEDIUM
+          # gate, so a new upstream check would turn the build red on a
+          # commit that changed nothing. 1.9.4 is the version measured in
+          # use locally on 2026-09-08.
+          pip install bandit==1.9.4
+          bandit -r owner/app -f json -o bandit-results.json || true
+          python -c "import json,sys; d=json.load(open('bandit-results.json')); h=[r for r in d['results'] if r['issue_severity'] in ('HIGH','MEDIUM')]; sys.exit(1 if h else 0)"
+
+      # The original step asserted the scan found NOTHING. Measured
+      # 2026-09-07, the first time it could run: 280 findings in 200 files,
+      # every one reviewed, none a live secret -- rehearsal/test passwords in
+      # tests and ops scripts, Ed25519 test vectors, public verification
+      # keys, the dev database URL, alembic's placeholder, "password" label
+      # strings in locale files. So a zero-findings gate can only ever be
+      # red. The standard shape instead: those known findings live in
+      # .secrets.baseline (regenerate with
+      #   python -X utf8 -m detect_secrets scan \
+      #     --exclude-files '^owner[\\\\/]migrations[\\\\/]versions[\\\\/]' \
+      #     --exclude-files '^\.secrets\.baseline$' > .secrets.baseline
+      # (four backslashes in the shell so the regex class holds a backslash
+      # AND a slash; `-X utf8` is REQUIRED on Windows -- without it
+      # detect-secrets opens files in the console codepage and silently skips
+      # every file with Arabic or a dash in it, which is how the first
+      # baseline missed 46 files that Linux then reported as new; and on
+      # Windows also turn the result's backslash paths into forward slashes or
+      # the hook here matches nothing) then re-review the diff, and the
+      # hook fails ONLY on a finding that is not in the baseline -- i.e.
+      # something newly committed. Migration files are excluded because every
+      # Alembic revision id is a hex string the entropy detector flags, and the
+      # pattern accepts either separator because detect-secrets reports OS
+      # paths (Windows dev machines see backslashes); nothing else is
+      # excluded. Version pinned because a newer detect-secrets can rewrite
+      # the baseline's `filters_used` and exit 3.
+      #
+      # Exit 3 is NOT a failure here, and that distinction is the whole point:
+      # the hook returns 1 when it finds a secret that is not in the baseline
+      # (the thing this gate exists to stop) and 3 when it merely rewrote the
+      # baseline's bookkeeping -- "probably to keep line numbers of secrets
+      # up-to-date", in its own words. Measured 2026-09-07 on run 34155921625:
+      # the job failed with exit 3 and ZERO findings, because one entry in
+      # THIS file had moved from line 211 to 216 when the step above it was
+      # edited. Failing the build for that teaches everyone to ignore the
+      # gate. New secrets are still checked first and still exit 1, so
+      # tolerating 3 costs no detection -- what it gives up is forcing the
+      # committed baseline to stay line-accurate, which the notice below asks
+      # for instead.
+      - name: Secret scanning
+        run: |
+          pip install detect-secrets==1.5.0
+          set +e
+          detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
+          status=$?
+          set -e
+          if [ "$status" = "3" ]; then
+            echo "::notice::.secrets.baseline drifted (line numbers moved, or an entry disappeared). No new secret was found. Regenerate it with the command in this workflow's comment and commit it."
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Dependency scanning
+        run: |
+          # Pinned, for the same reason bandit and detect-secrets are pinned -- an
+          # advisory-database client that changes its exit conventions or
+          # its resolver turns this gate red without a commit. 2.10.1 is
+          # the version measured in use locally on 2026-09-08.
+          pip install pip-audit==2.10.1
+          # retail.txt and clinic.txt were unscanned until 2026-09-08 --
+          # only base.txt and owner-server.txt were audited, so a
+          # vulnerable pin in either product file (tzdata today; anything
+          # added later) reached a shipped install without ever passing a
+          # dependency gate.
+          pip-audit -r requirements/base.txt -r requirements/owner-server.txt \
+                    -r requirements/retail.txt -r requirements/clinic.txt
+
+      # Separate artifact name from `test-and-scan`'s `ci-evidence`: two jobs
+      # cannot upload to one name, and this evidence must survive a red test
+      # job, which is the entire point of the split above.
+      - name: Security evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-evidence
+          path: bandit-results.json
+          if-no-files-found: warn
+
+  # Localization and the Alembic check both need the Owner database, so they
+  # get their own Postgres service rather than riding on the test job's.
+  # Duplicating a service block is the cost of these two not being switchable
+  # off by an unrelated retail assertion; that trade was made deliberately.
+  database-gates:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: aura_admin
+          POSTGRES_PASSWORD: aura_admin_dev  # pragma: allowlist secret -- throwaway service-container password, destroyed with the runner
+          POSTGRES_DB: aura_owner_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aura_admin -d aura_owner_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Source checkout
@@ -50,69 +387,109 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements/development.txt
 
-      - name: Owner tests
-        run: python -m pytest owner/tests -q --no-header
-
-      - name: commercial_runtime tests
-        run: python -m pytest commercial_runtime -q --no-header
-
-      - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md)
-        run: python products/run_all_tests.py retail
-
-      - name: Clinic tests (canonical runner)
-        run: python products/run_all_tests.py clinic
-
-      # Android tests: NOT run in this workflow -- no Android SDK/Gradle
-      # toolchain provisioning step exists in this repository's CI config
-      # this session (would need a self-hosted or actions/setup-java +
-      # android-actions/setup-android runner, not verified here). Real
-      # local evidence for Android unit/lint/build exists from Phase 8V-P9
-      # and was not re-run this phase (no product source changed).
-
-      - name: Localization checks
-        run: python -m pytest owner/tests -k localization -q --no-header
-
-      - name: Lint / static checks (bandit)
+      # Same unprivileged role as the test job creates, for the same reason
+      # (a postgres image's bootstrap role is always a superuser, and the Owner
+      # app must never connect as one) -- see that step's comment.
+      - name: Unprivileged application role for the test database
         run: |
-          pip install bandit
-          bandit -r owner/app -f json -o bandit-results.json || true
-          python -c "import json,sys; d=json.load(open('bandit-results.json')); h=[r for r in d['results'] if r['issue_severity'] in ('HIGH','MEDIUM')]; sys.exit(1 if h else 0)"
+          psql "postgresql://aura_admin:aura_admin_dev@localhost:5432/aura_owner_test" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE aura_owner LOGIN PASSWORD 'aura_owner_dev' NOSUPERUSER NOCREATEROLE CREATEDB;" \
+            -c "ALTER DATABASE aura_owner_test OWNER TO aura_owner;"
 
+      # `-k localization` selected nothing -- no Owner test carries that word
+      # -- so pytest exited 5 ("no tests collected") and the step failed the
+      # first time it ran (2026-09-07). The i18n/RTL suites are named
+      # i18n_preflight, locale_security, catalog_completeness, catalog_drift,
+      # domain_labels; this selector collects 70 of them (measured with
+      # --collect-only). They also run inside "Owner tests" above; this step
+      # keeps the localization gate visible on its own.
+      - name: Localization checks
+        run: python -m pytest owner/tests -k "i18n or locale or catalog or localization" -q --no-header
+
+      # owner/migrations/env.py reads OWNER_DATABASE_URL (or alembic.ini's
+      # `driver://` placeholder, which cannot load a dialect) -- the test suite
+      # sets it for its own alembic subprocess in conftest.py, this step has to
+      # do the same. Measured locally 2026-09-07 without it:
+      # "Can't load plugin: sqlalchemy.dialects:driver"; with it:
+      # "No new upgrade operations detected."
       - name: Migration check
+        env:
+          OWNER_DATABASE_URL: ${{ env.OWNER_TEST_DATABASE_URL }}
         run: |
           cd owner
           python -m alembic upgrade head
           python -m alembic check
 
-      - name: Secret scanning
-        run: |
-          pip install detect-secrets
-          detect-secrets scan --all-files > secrets-baseline.json
-          python -c "import json; d=json.load(open('secrets-baseline.json')); assert not d.get('results'), 'potential secret found -- see secrets-baseline.json'"
+  # ── Android unit tests ─────────────────────────────────────────────────────
+  # NEW 2026-09-08. Before this, `.github/workflows/` held only ci.yml and the
+  # line here said "Android tests: NOT run in this workflow", so the module's
+  # 366 unit tests never ran on any commit.
+  #
+  # One of them is the reason this job exists rather than staying a note.
+  # DesktopTokenParityContractTest reads
+  # products/retail/frontend/css/main.css AT TEST TIME
+  # (DesktopTokenParityContractTest.kt:69) and compares every one of the five
+  # palettes to its desktop token block. It is the ONLY automated tie between
+  # the phone's colours and the desktop's, and a desktop-only commit -- which
+  # is most design work -- could break it with nothing anywhere to say so.
+  #
+  # WHAT IS AND IS NOT PROVEN HERE, because this is the first Android job this
+  # repository has ever had and nothing in it has run on a runner:
+  #   * The COMMAND is verified. Measured on this machine 2026-09-08 with
+  #     JDK 17.0.18.8: `./gradlew :app:testDebugUnitTest --offline --rerun`
+  #     -> "testDebugUnitTest: 366 tests, 0 skipped. / BUILD SUCCESSFUL in
+  #     40s".
+  #   * The RUNNER PROVISIONING is not verified -- setup-java plus
+  #     setup-android is the standard pair, but no run of this file exists to
+  #     point at. If the first real run fails, it will fail in one of those
+  #     two steps, not in the tests.
+  #
+  # A caveat that matters for anyone reading a green local run: the same tree
+  # WITHOUT --rerun reports ":app:testDebugUnitTest UP-TO-DATE / 366 tests, 0
+  # skipped / BUILD SUCCESSFUL" even after main.css changes, because
+  # build.gradle:368-376 declares build.gradle, src/main/java and
+  # src/test/java as task inputs and NOT main.css. A fresh runner has no
+  # previous task output to be up to date against, so this job runs the tests
+  # either way -- but every LOCAL run after a desktop token edit is silently
+  # stale, and closing that needs a `test.inputs.file(...)` line in
+  # build.gradle, which is a different file and a different owner.
+  android-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Source checkout
+        uses: actions/checkout@v4
 
-      - name: Dependency scanning
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements/base.txt -r requirements/owner-server.txt
-
-      - name: Artifact manifest + checksum generation
-        run: |
-          echo "commit=$(git rev-parse HEAD)" > build-manifest.txt
-          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build-manifest.txt
-          sha256sum requirements/*.txt >> build-manifest.txt
-
-      - name: SBOM generation
-        run: |
-          pip install cyclonedx-bom
-          python -m cyclonedx_py environment --output-format json --output-file sbom.json
-
-      - name: Staging deployment package creation
-        run: docker compose -f docker-compose.staging.yml config
-
-      - uses: actions/upload-artifact@v4
+      # JDK 17 matches the toolchain the module is built with locally
+      # (Eclipse Adoptium 17.0.18.8), not merely "some JDK": the Android
+      # Gradle Plugin pins its own bytecode target and a JDK mismatch fails at
+      # configuration time rather than in a test.
+      - name: JDK setup
+        uses: actions/setup-java@v4
         with:
-          name: ci-evidence
-          path: |
-            bandit-results.json
-            build-manifest.txt
-            sbom.json
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Android SDK setup
+        uses: android-actions/setup-android@v3
+
+      # `chmod +x` first, and it is not defensive boilerplate: this repository
+      # is developed on Windows, and `git ls-files -s android/aura-retail/gradlew`
+      # reports mode 100644, not 100755. Checked out on ubuntu-latest that
+      # wrapper is NOT executable and `./gradlew` dies on "Permission denied"
+      # before Gradle is ever reached -- a failure that cannot reproduce on any
+      # machine here. Fixed in the step rather than by flipping the index bit,
+      # because android/ belongs to another area.
+      - name: Unit tests
+        working-directory: android/aura-retail
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-results
+          path: android/aura-retail/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn

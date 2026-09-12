@@ -4,7 +4,13 @@
 <div class="card">
   <h2>{{ _("Operational Reports") }}</h2>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Report") }}</th><th>{{ _("Period") }}</th><th>{{ _("Currency") }}</th><th>{{ _("Version") }}</th></tr></thead>
+    {# A snapshot could be generated but never REGENERATED from the UI --
+       regenerate_snapshot_route was complete and permission-gated with no
+       control (test_route_reachability.py's KNOWN_GAPS). It re-runs the same
+       report_type/period/currency as the existing row and supersedes it with a
+       new version, so the parameters come from the row itself, not a form. #}
+    <thead><tr><th>{{ _("Report") }}</th><th>{{ _("Period") }}</th><th>{{ _("Currency") }}</th><th>{{ _("Version") }}</th>
+      {% if has_permission("report_snapshots.regenerate") %}<th>{{ _("Regenerate") }}</th>{% endif %}</tr></thead>
     <tbody>
     {% for s in snapshots %}
     <tr>
@@ -12,8 +18,18 @@
       <td data-label="{{ _('Period') }}">{{ format_owner_date(s.period_start) }} &ndash; {{ format_owner_date(s.period_end) }}</td>
       <td data-label="{{ _('Currency') }}">{% if s.currency %}<bdi dir="ltr">{{ s.currency }}</bdi>{% else %}&mdash;{% endif %}</td>
       <td data-label="{{ _('Version') }}">v{{ s.snapshot_version }}</td>
+      {% if has_permission("report_snapshots.regenerate") %}
+      <td data-label="{{ _('Regenerate') }}">
+        <form method="post" action="{{ url_for('operations_ui.regenerate_snapshot_route', snapshot_id=s.id) }}"
+              data-confirm="{{ _('Regenerate this report? A new version supersedes the current one; the existing snapshot is kept.') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input name="reason" placeholder="{{ _('Reason') }}">
+          <button type="submit">{{ _("Regenerate") }}</button>
+        </form>
+      </td>
+      {% endif %}
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">{{ _("No report snapshots yet.") }}</td></tr>
+    {% else %}<tr><td colspan="{{ 5 if has_permission('report_snapshots.regenerate') else 4 }}" class="empty">{{ _("No report snapshots yet.") }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -33,6 +33,15 @@ param) so a captured pull request can't be replayed with a different
 `since` either. Downstream client tasks (5: desktop relay client, 9: mobile
 Ktor transport) must send `since` inside the signed JSON body, not as a
 `?since=` query string.
+
+Phase 5 prerequisites #2/#3 (docs/launch-readiness/phase5-prerequisites.md
+sections 2-3): pull() now persists each device's own cursor
+(app/models/sync.py::SyncDeviceCursor) so pruning.py has a durable,
+server-side answer to "how far has every device caught up", and
+_store_events() quarantines (rather than 400s the whole batch on) a
+single malformed event so one poison row from one client can never wedge
+a shop's sync permanently -- see _store_events's own docstring for the
+full reasoning.
 """
 from __future__ import annotations
 
@@ -40,14 +49,14 @@ import uuid
 from datetime import datetime
 
 from flask import Blueprint, current_app, jsonify, request
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 
 from app.extensions import db_session
 from app.licensing_service import device_identity, replay
 from app.licensing_service.canonical import canonicalize_bytes
 from app.models.installations import Installation
-from app.models.sync import SyncEvent
+from app.models.sync import SyncDeviceCursor, SyncEvent, SyncQuarantineEvent
 
 bp = Blueprint("sync", __name__, url_prefix="/api/sync/v1")
 
@@ -76,9 +85,24 @@ class SyncAuthError(Exception):
 
 
 class InvalidEventError(Exception):
-    """Raised for a malformed event in a push batch -- caught once by the
-    route handler, which rolls back and returns a clean 400 rather than
-    letting a KeyError/ValueError/DataError reach the client as a 500."""
+    """Raised for a malformed event in a push batch.
+
+    Pre-Phase-5-prerequisite-#3 behavior (superseded, kept here as history
+    because a test used to assert exactly this): caught once by the route
+    handler, which rolled back the ENTIRE batch and returned a clean 400
+    INVALID_EVENT -- correct only while the allowlist was narrow and one
+    bad row was rare. Phase 5 widens the allowlist to eight entity types
+    written by two clients on different release cadences
+    (phase5-prerequisites.md section 3), which makes "one malformed row
+    stops that shop syncing forever" a real, not theoretical, outage: every
+    retry hits the identical batch, fails on the identical row, rolls back.
+
+    Current behavior: caught PER-EVENT inside _store_events (see its own
+    docstring), which quarantines the offending row and continues the
+    batch -- this exception no longer propagates out of _store_events for
+    the malformed-input case. It is still caught at the route-handler level
+    below purely as defense-in-depth (belt-and-braces against a future code
+    path that raises it directly), never as the primary control anymore."""
 
 
 def _error(reason_code: str, http_status: int = 400):
@@ -189,6 +213,89 @@ def _build_event(raw) -> SyncEvent:
     )
 
 
+def _sanitize_nul_bytes(value):
+    """Postgres cannot store a literal NUL byte (\\x00) in ANY text-based
+    column -- json, jsonb, text, varchar -- it is a structural limitation
+    of Postgres's own internal C-string storage, not a choice this code
+    makes (confirmed against a live instance: `psycopg.errors.
+    UntranslatableCharacter`, SQLSTATE 22021, raised identically whether
+    the NUL lands in a plain text column or inside JSONB). Recursively
+    replaces every literal NUL with its visible escaped form so the
+    surrounding text is otherwise untouched. Only ever called from
+    _quarantine_event's fallback path -- see its own docstring for why."""
+    if isinstance(value, str):
+        return value.replace("\x00", "\\u0000")
+    if isinstance(value, dict):
+        return {k: _sanitize_nul_bytes(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_nul_bytes(v) for v in value]
+    return value
+
+
+def _quarantine_event(raw, *, license_id, device_id, batch_index: int, reason: str) -> None:
+    """Writes ONE rejected event to owner_sync_quarantine with its RAW
+    payload verbatim (never the partially-parsed SyncEvent -- _build_event
+    may have failed before ever constructing one) and does NOT re-raise --
+    the caller is expected to `continue` its loop, which is the whole point
+    (see _store_events's docstring).
+
+    MUTATION-FOUND BUG this function used to have, fixed here rather than
+    merely noted: when the REJECTION REASON is itself "Postgres refuses
+    this payload" (the DataError branch in _store_events -- concretely, an
+    embedded NUL byte), storing that SAME payload verbatim into
+    raw_payload (also JSONB) fails for the IDENTICAL reason. Uncaught, that
+    second DataError propagated out of this function, out of
+    _store_events' own except block (which was already busy handling the
+    first one), past push()'s `except (InvalidEventError, DataError)` --
+    which matched it and returned 400 INVALID_EVENT, rolling back the
+    WHOLE batch. That is precisely the wedged-shop outcome this entire
+    prerequisite exists to prevent, just reached through quarantine's own
+    write path instead of the original insert. A live NUL-byte push test
+    caught this for real (not a hypothetical), which is why it is fixed
+    here, not merely documented.
+
+    The fix: attempt the verbatim write first, inside its own SAVEPOINT;
+    if THAT specifically fails with a DataError, roll back to the
+    savepoint (cheap, always available -- see below) and retry once with
+    NUL bytes neutralized (_sanitize_nul_bytes), noting the substitution in
+    the stored rejection_reason so an operator/replay knows the payload is
+    not 100% byte-identical for this one specific reason. Any OTHER
+    exception from either attempt still propagates -- quarantining itself
+    failing for an unrelated reason is exactly the "genuinely unexpected"
+    case push()'s outer `except Exception` exists for.
+
+    Both attempts run inside their OWN begin_nested() (unlike the single
+    top-level flush() this function used before) specifically so a failed
+    first attempt leaves the surrounding per-event loop's outer transaction
+    -- which may already hold one or more successfully-quarantined/stored
+    events from earlier iterations -- fully intact, exactly like
+    _store_events' own IntegrityError/DataError handling for real
+    SyncEvent inserts. Still flushes (not just adds) before returning,
+    for the same "must be durably attached to the outer transaction before
+    the NEXT iteration's own SAVEPOINT can start" reason as before."""
+    try:
+        with db_session.begin_nested():
+            db_session.add(SyncQuarantineEvent(
+                license_id=license_id, device_id=device_id, batch_index=batch_index,
+                raw_payload=raw, rejection_reason=reason,
+            ))
+            db_session.flush()
+        return
+    except DataError:
+        pass  # fall through to the sanitized retry below
+
+    with db_session.begin_nested():
+        db_session.add(SyncQuarantineEvent(
+            license_id=license_id, device_id=device_id, batch_index=batch_index,
+            raw_payload=_sanitize_nul_bytes(raw),
+            rejection_reason=(
+                f"{reason} [NOTE: payload contained a character Postgres cannot store "
+                "verbatim (likely a NUL byte); stored with that character escaped, not byte-identical]"
+            ),
+        ))
+        db_session.flush()
+
+
 def _store_events(events: list, license_id, device_id) -> int:
     """Stores each event, idempotent on id. Two layers of idempotency:
     a fast-path existence check (handles the common case: a genuine client
@@ -196,12 +303,61 @@ def _store_events(events: list, license_id, device_id) -> int:
     catches IntegrityError from a concurrent push of the exact same id
     losing the race between that check and this flush -- converting what
     would otherwise be an uncaught IntegrityError/500 into the same clean
-    no-op outcome, never a duplicate row or a crash. Raises InvalidEventError
-    (malformed input) or DataError (unexpected DB-level rejection) up to the
-    caller, which rolls back the whole batch and returns a clean 400."""
+    no-op outcome, never a duplicate row or a crash.
+
+    Phase 5 prerequisite #3 (docs/launch-readiness/phase5-prerequisites.md
+    section 3) changed what happens to a REJECTED event. Before: any single
+    malformed or DB-rejected event raised InvalidEventError/DataError out
+    to push(), which rolled back the ENTIRE batch and returned 400
+    INVALID_EVENT -- so a client whose outbox retries the same batch (the
+    only thing a client CAN do after a failed push) would hit the identical
+    row and fail identically, forever. Now: a rejected event is written to
+    owner_sync_quarantine (see _quarantine_event) with its raw payload,
+    device, batch position and rejection reason, then SKIPPED -- the loop
+    continues, every other event in the batch still applies, and the
+    cursor the client advances to on its next pull moves past the bad
+    event too (it was never assigned a `seq` at all, so there is no gap to
+    "skip over" -- the surrounding good events simply get the next
+    available seq values).
+
+    This deliberately trades strict batch-level consistency for
+    availability: skipping a bad event means ONE replayable row is
+    temporarily missing from the ledger (visible and replayable from the
+    Owner console, see quarantine_routes.py) rather than the WHOLE shop
+    being unable to sync at all until an operator hand-edits production
+    Postgres. That is the right trade for this specific ledger because
+    owner_sync_events rows are append-only, independent business facts
+    (a sale, a stock movement) with no cross-row dependency the skip could
+    corrupt -- it would be the WRONG trade for data where skipping one row
+    could silently change the meaning of the rows around it (e.g. a
+    multi-leg financial transaction that must apply atomically or not at
+    all). Two distinct rejection sources are quarantined, not just one:
+
+      1. InvalidEventError from _build_event -- malformed BEFORE it ever
+         reaches the database (bad UUID, oversized entity_type, unknown
+         event_type, non-dict payload). Caught here, before any SAVEPOINT
+         is even opened.
+      2. DataError from the flush itself -- a payload that is valid JSON
+         and passes _build_event's own checks but Postgres genuinely
+         refuses at insert time (the concrete, real example: a NUL byte
+         embedded in a JSONB string value, which Postgres's UTF8 encoding
+         rejects outright). Caught inside the per-event SAVEPOINT, exactly
+         alongside the existing IntegrityError handling.
+
+    Any OTHER exception (i.e. not InvalidEventError, not IntegrityError,
+    not DataError) still propagates all the way out to push()'s own
+    `except Exception` -- a genuinely unexpected failure still rolls back
+    the whole batch and returns 500, on purpose: quarantine is for known,
+    named rejection reasons, never a catch-all that could paper over a
+    real bug by silently discarding events it doesn't understand."""
     stored = 0
-    for raw in events:
-        event = _build_event(raw)
+    for batch_index, raw in enumerate(events):
+        try:
+            event = _build_event(raw)
+        except InvalidEventError as exc:
+            _quarantine_event(raw, license_id=license_id, device_id=device_id, batch_index=batch_index, reason=str(exc))
+            continue
+
         if db_session.get(SyncEvent, event.id) is not None:
             continue  # fast-path idempotent no-op: this id already exists
 
@@ -219,6 +375,14 @@ def _store_events(events: list, license_id, device_id) -> int:
             # intact. Lost a race with a concurrent push of this exact id;
             # same outcome as the fast-path no-op above, never a 500.
             pass
+        except DataError as exc:
+            # Same SAVEPOINT-rollback guarantee as IntegrityError above --
+            # this event's failed insert is undone, everything before it
+            # stays intact. exc.orig is the underlying psycopg error (a
+            # concise driver message); falling back to str(exc) covers the
+            # unlikely case a DataError arrives with no .orig at all.
+            reason = str(exc.orig) if exc.orig is not None else str(exc)
+            _quarantine_event(raw, license_id=license_id, device_id=device_id, batch_index=batch_index, reason=reason)
     return stored
 
 
@@ -312,6 +476,40 @@ def _lock_license_stream(license_id: uuid.UUID) -> None:
     db_session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:license_id))"), {"license_id": str(license_id)})
 
 
+def _advance_device_cursor(device_id: uuid.UUID, license_id: uuid.UUID, new_cursor: int) -> None:
+    """Upserts SyncDeviceCursor for this device -- called ONLY from pull()
+    (see SyncDeviceCursor's own docstring for why push() must never call
+    this). GREATEST-style guard: never lets an already-higher persisted
+    cursor regress, regardless of what value is passed in.
+
+    This matters even though `since` is itself a client-supplied, signed
+    value that ordinarily only increases: nonce/timestamp replay
+    protection stops a captured request from being REPLAYED, but does not
+    stop a genuinely fresh, validly-signed pull request that happens to
+    carry a lower `since` than a previous one (e.g. a client bug, a
+    restored-from-backup client resending an old cursor, or simply two
+    requests reordered in flight) from arriving after a higher one already
+    landed. Silently regressing the persisted watermark in that case would
+    make pruning.py think events between the lower and higher values are
+    still needed forever, or -- worse, if pruning already ran using the
+    higher watermark -- would make a later prune run compute a watermark
+    the DB no longer has full history for. Never letting the stored value
+    move backward closes that off entirely; the caller (this device) can
+    always still catch up by pulling forward again.
+
+    This helper is deliberately a PURE upsert-with-GREATEST: it stores what
+    it is given (never regressing) and makes no judgement about whether the
+    value is plausible. Bounding an untrusted, client-supplied `since`
+    against server truth is pull()'s job, at the point that untrusted value
+    enters -- see the clamp in pull() and the reasoning there."""
+    existing = db_session.get(SyncDeviceCursor, device_id)
+    if existing is None:
+        db_session.add(SyncDeviceCursor(installation_id=device_id, license_id=license_id, last_acked_seq=new_cursor))
+    elif new_cursor > existing.last_acked_seq:
+        existing.last_acked_seq = new_cursor
+    # else: new_cursor <= existing.last_acked_seq -- no-op, by design.
+
+
 @bp.route("/push", methods=["POST"])
 def push():
     body = request.get_json(silent=True)
@@ -331,11 +529,30 @@ def push():
     # closes. _authenticate() above already committed its own nonce-consumption
     # transaction (replay.consume_nonce), so this starts a fresh transaction
     # that naturally extends through _store_events and the commit() below.
+    #
+    # _store_events' quarantine writes (Phase 5 prerequisite #3) run inside
+    # this SAME held-lock window, unavoidably -- they happen interleaved
+    # with the real SyncEvent inserts the lock exists to protect, in the
+    # same per-event loop, in the same transaction. This does not touch
+    # `seq` at all (SyncQuarantineEvent has no seq column, no identity
+    # sequence, no ordering claim whatsoever) and does not change WHEN the
+    # lock is acquired or released, so it neither extends, weakens, nor
+    # reorders the guarantee _lock_license_stream's own docstring documents
+    # -- it is simply more work done during an interval the lock already
+    # spans, touching a table the race that lock closes has no opinion
+    # about.
     _lock_license_stream(license_id)
 
     try:
         stored = _store_events(events, license_id, installation.id)
     except (InvalidEventError, DataError):
+        # Defense-in-depth only, as of Phase 5 prerequisite #3 -- see
+        # InvalidEventError's own docstring. _store_events no longer raises
+        # either of these for the malformed-input/DB-rejection cases it
+        # used to (both are now quarantined-and-skipped inline); this
+        # branch exists only to fail closed (a clean, understood 400
+        # instead of an uncaught-exception 500) if some future code path
+        # still raises one of them directly.
         db_session.rollback()
         return _error("INVALID_EVENT")
     except Exception:
@@ -393,6 +610,67 @@ def pull():
             .order_by(SyncEvent.seq)
             .limit(500)
         ).scalars().all()
+        if rows:
+            # A real seq from a row that genuinely exists -- nothing to bound.
+            cursor = rows[-1].seq
+        else:
+            # ZERO ROWS MATCHED, so `since` would otherwise become the cursor
+            # VERBATIM -- and `since` is untrusted. It is validated above only
+            # as a NON-NEGATIVE int, deliberately with no upper bound, because
+            # a client genuinely cannot know the server's current max seq and
+            # a fixed ceiling would be wrong for every license.
+            #
+            # Unbounded, though, an absurd `since` becomes an absurd persisted
+            # last_acked_seq: a device on record as having acknowledged events
+            # THAT DO NOT EXIST YET. This is not hypothetical -- a
+            # restored-from-backup client, a version-skewed client, or a plain
+            # integer bug all produce it, and the request is validly signed by
+            # the device's own key, so no authentication check can reject it.
+            # (Found by exercising this path against a live database, not by
+            # review: a single pull with since=10**15 really did destroy a
+            # license's entire event history.)
+            #
+            # The damage is to events written AFTERWARDS. pruning.py's
+            # watermark is MIN(last_acked_seq) over active devices and deletes
+            # `WHERE seq <= watermark`, so a bogus cursor pre-acknowledges the
+            # whole FUTURE of the stream: every new event becomes instantly
+            # prunable the moment it is written, deleted before the device
+            # that over-claimed ever receives it. And because
+            # _advance_device_cursor never regresses (correctly, for its own
+            # reasons), the bogus high-water mark can never be walked back
+            # down -- it is unrecoverable through the protocol.
+            #
+            # So `since` is bounded by the license's real MAX(seq): server
+            # truth a device cannot legitimately exceed, since it cannot have
+            # acknowledged an event that was never written. COALESCE to 0
+            # covers a license with no events at all. This is a single indexed
+            # lookup on ix_owner_sync_events_license_seq (license_id, seq),
+            # and only on the zero-rows path -- a caught-up device's pull.
+            #
+            # The clamped value is also what is RETURNED, not just what is
+            # stored. Returning the raw over-large `since` would leave that
+            # client permanently blind: it would keep asking from a point the
+            # stream never reaches and never receive another event again.
+            # Handing back the true high-water mark lets it self-heal on its
+            # next pull. Well-behaved clients are unaffected -- for them
+            # `since` is already <= MAX(seq), so this changes nothing.
+            max_seq = db_session.execute(
+                select(func.coalesce(func.max(SyncEvent.seq), 0)).where(SyncEvent.license_id == license_id)
+            ).scalar_one()
+            cursor = min(since, max_seq)
+        # Phase 5 prerequisite #2: persist this device's own claim of "how
+        # far it has caught up" -- see _advance_device_cursor's docstring
+        # and app/models/sync.py::SyncDeviceCursor's docstring for why this
+        # exists at all and why it must happen even when `rows` is empty
+        # (a device catching itself up to a seq with nothing new to
+        # receive still needs its cursor recorded, or pruning.py can never
+        # consider that seq safe to delete). Same transaction as the read
+        # above, committed together right below -- if the commit fails for
+        # any reason, the whole response falls through to the generic
+        # except/500 below rather than ever reporting a cursor the server
+        # didn't actually persist.
+        _advance_device_cursor(installation.id, license_id, cursor)
+        db_session.commit()
     except Exception:
         db_session.rollback()
         current_app.logger.exception("Internal failure during sync pull.")
@@ -408,5 +686,5 @@ def pull():
             "created_at": r.client_created_at.isoformat(),
             "seq": r.seq,
         } for r in rows],
-        "cursor": rows[-1].seq if rows else since,
+        "cursor": cursor,
     }), 200

@@ -15,9 +15,16 @@
     them across multiple <form> elements (breaking combined submission --
     a browser GET only serializes the fields inside the submitted form).
     This hand-written form reuses the exact same "filters aura-list-filters"
-    classes and auto-submit-on-change convention filter_bar() itself uses,
-    for visual parity, without pretending the shared macro's narrower shape
-    fits. See docs/owner/ui-modernization/employee-permission-ui-contract.md.
+    classes and single-submit-button convention filter_bar() itself uses, for
+    visual parity, without pretending the shared macro's narrower shape fits.
+    See docs/owner/ui-modernization/employee-permission-ui-contract.md.
+
+    None of the seven controls below carries an inline auto-submit handler
+    any more: Owner's script-src 'self' CSP refused those attributes outright,
+    so they never fired. The Search button at the end of this form is (and,
+    given seven interdependent fields, should be) the only way to submit --
+    auto-submitting on the first select change would apply a half-set filter
+    and discard whatever was typed into the search box but not yet committed.
   #}
   <form method="get" class="filters aura-list-filters">
     <div class="aura-list-filters__search">
@@ -25,13 +32,13 @@
       <input type="search" id="aura-filter-q" name="q" value="{{ filters.search or '' }}" placeholder="{{ _('Name or employee number') }}">
     </div>
     <div><label for="department">{{ _('Department') }}</label>
-      <select id="department" name="department" onchange="this.form.submit()">
+      <select id="department" name="department">
         <option value="">{{ _('All') }}</option>
         {% for d in departments %}<option value="{{ d }}" {% if filters.department == d %}selected{% endif %}>{{ d }}</option>{% endfor %}
       </select>
     </div>
     <div><label for="employment_status">{{ _('Status') }}</label>
-      <select id="employment_status" name="employment_status" onchange="this.form.submit()">
+      <select id="employment_status" name="employment_status">
         <option value="">{{ _('All') }}</option>
         {% for s in ["PENDING","ACTIVE","SUSPENDED","TERMINATED","ARCHIVED"] %}
         <option value="{{ s }}" {% if filters.employment_status == s %}selected{% endif %}>{{ employment_status_label(s) }}</option>
@@ -39,13 +46,13 @@
       </select>
     </div>
     <div><label for="role_code">{{ _('Role') }}</label>
-      <select id="role_code" name="role_code" onchange="this.form.submit()">
+      <select id="role_code" name="role_code">
         <option value="">{{ _('All') }}</option>
         {% for r in roles %}<option value="{{ r.code }}" {% if filters.role_code == r.code %}selected{% endif %}>{{ role_label(r.code) }}</option>{% endfor %}
       </select>
     </div>
     <div><label for="presence">{{ _('Presence') }}</label>
-      <select id="presence" name="presence" onchange="this.form.submit()">
+      <select id="presence" name="presence">
         <option value="">{{ _('All') }}</option>
         {% for p in ["ONLINE","RECENTLY_ACTIVE","OFFLINE"] %}
         <option value="{{ p }}" {% if filters.presence == p %}selected{% endif %}>{{ presence_label(p) }}</option>
@@ -53,7 +60,7 @@
       </select>
     </div>
     <div><label for="sort">{{ _('Sort by') }}</label>
-      <select id="sort" name="sort" onchange="this.form.submit()">
+      <select id="sort" name="sort">
         <option value="full_name" {% if filters.sort == "full_name" %}selected{% endif %}>{{ _('Name') }}</option>
         <option value="employee_number" {% if filters.sort == "employee_number" %}selected{% endif %}>{{ _('Employee #') }}</option>
         <option value="employment_start_date" {% if filters.sort == "employment_start_date" %}selected{% endif %}>{{ _('Start date') }}</option>
@@ -63,7 +70,7 @@
     <div>
       <label for="include_archived" style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;color:inherit;">
         <input type="checkbox" id="include_archived" name="include_archived" value="1" style="width:auto;"
-          {% if filters.include_archived %}checked{% endif %} onchange="this.form.submit()">
+          {% if filters.include_archived %}checked{% endif %}>
         {{ _('Include archived') }}
       </label>
     </div>

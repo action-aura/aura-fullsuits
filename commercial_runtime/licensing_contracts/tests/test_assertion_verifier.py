@@ -251,3 +251,25 @@ def test_naive_dates_rejected(owner_key, trust_store):
     env = _envelope(owner_key, "owner-1", payload)
     with pytest.raises(AssertionVerificationError):
         _verify(env, trust_store)
+
+
+def test_null_device_fingerprint_rejected(owner_key, trust_store):
+    """The client half of the Owner-side DEVICE_KEY_REVOKED fix
+    (owner/app/licensing_service/activation.py, 2026-09-04).
+
+    Owner used to sign a perfectly valid, correctly-signed assertion whose
+    device_key_fingerprint was null whenever an installation's device key had
+    been revoked. It verified, it was in date, it was for the right product,
+    platform and installation -- and it was still unusable, because a device
+    compares that field against its own real fingerprint. Owner reported
+    SUCCESS and recorded the installation ACTIVE while the device could never
+    activate, no matter how many times it retried.
+
+    Pinned here so the two halves cannot drift: this is the exact reason_code
+    an operator will see in licensing_events if the server-side guard is ever
+    lost.
+    """
+    env = _envelope(owner_key, "owner-1", _payload(device_key_fingerprint=None))
+    with pytest.raises(AssertionVerificationError) as exc:
+        _verify(env, trust_store)
+    assert exc.value.reason_code == "ASSERTION_DEVICE_MISMATCH"

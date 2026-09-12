@@ -249,3 +249,46 @@ def test_static_commands_gates_quick_create_lead_on_create_permission(app, seede
         with_perm = get_static_commands({"leads.create"})
         assert without["create"] == []
         assert any(item["label"] == "New Lead" for item in with_perm["create"])
+
+
+def test_static_commands_gates_quick_create_payment_on_create_permission(app, seeded):
+    with app.test_request_context():
+        from app.command_palette.service import get_static_commands
+
+        without = get_static_commands(set())
+        with_perm = get_static_commands({"payments.create"})
+        assert without["create"] == []
+        assert any(item["label"] == "New Payment" and item["key"] == "new_payment" for item in with_perm["create"])
+
+
+def test_static_commands_gates_quick_create_expense_on_create_permission(app, seeded):
+    with app.test_request_context():
+        from app.command_palette.service import get_static_commands
+
+        without = get_static_commands(set())
+        with_perm = get_static_commands({"expenses.create"})
+        assert without["create"] == []
+        assert any(item["label"] == "New Expense" and item["key"] == "new_expense" for item in with_perm["create"])
+
+
+def test_static_commands_gates_quick_create_cash_closing_on_prepare_permission(app, seeded):
+    with app.test_request_context():
+        from app.command_palette.service import get_static_commands
+
+        without = get_static_commands(set())
+        with_perm = get_static_commands({"cash_closing.prepare"})
+        assert without["create"] == []
+        assert any(item["label"] == "New Cash Closing" and item["key"] == "new_cash_closing" for item in with_perm["create"])
+
+
+def test_static_commands_quick_create_entries_all_carry_a_stable_key(app, seeded):
+    with app.test_request_context():
+        from app.command_palette.service import get_static_commands
+
+        all_codes = {"leads.create", "customers.create", "quotes.create", "licenses.create",
+                     "installations.register", "payments.create", "expenses.create", "cash_closing.prepare"}
+        data = get_static_commands(all_codes)
+        keys = [item["key"] for item in data["create"]]
+        assert len(keys) == len(set(keys)), "quick-create keys must be unique"
+        assert {"new_lead", "new_customer", "new_quote", "new_license", "new_installation",
+                "new_payment", "new_expense", "new_cash_closing"} == set(keys)

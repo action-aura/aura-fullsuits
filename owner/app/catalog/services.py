@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 
@@ -44,6 +45,11 @@ _CANONICAL_ENTITLEMENTS = [
     ("sms_notifications_enabled", "boolean", "SMS notifications (not yet built)"),
     ("digital_receipts_enabled", "boolean", "Digital receipts (not yet built)"),
     ("owner_dashboard_enabled", "boolean", "Customer-facing Owner dashboard (not yet built)"),
+    # 2026-09-05 price list: a new branch is a paid add-on (EXTRA_BRANCH,
+    # 250 JOD). Enforced entirely by the retail till's create_branch, which
+    # reads this off the stored assertion (0/absent = no limit -- see
+    # retail_api.py's _branch_limit()).
+    ("max_branches", "integer", "Maximum branches the licence may run (0 = no limit; the till treats absent/0 as unlimited)"),
 ]
 # (addon_code, product_code, name, availability_status) -- status is never AVAILABLE
 # for a feature that has not actually been built anywhere in this codebase (Part J).
@@ -57,6 +63,13 @@ _CANONICAL_ADDONS = [
     ("CLOUD_BACKUP", "AURA_RETAIL", "Cloud Backup", "DRAFT"),
     ("EXTRA_DEVICE", "AURA_RETAIL", "Extra Device", "PLANNED"),
     ("PRIORITY_SUPPORT", "AURA_RETAIL", "Priority Support", "PLANNED"),
+    # The business owner's price list, 2026-09-05: a new branch is a paid
+    # add-on (250 JOD). Seeded PLANNED like everything else here -- nothing
+    # in either product enforces a branch limit yet (no `max_branches`
+    # entitlement, no gate on branch creation), so it must not read as
+    # sellable until that is built. Price and availability are data, set
+    # from the Owner UI, never here.
+    ("EXTRA_BRANCH", "AURA_RETAIL", "Extra Branch", "PLANNED"),
 ]
 
 
@@ -116,6 +129,118 @@ def seed_canonical_catalog() -> dict:
         if exists is None:
             db_session.add(Addon(addon_code=addon_code, product_id=products[product_code].id, name=name, availability_status=status))
             created["addons"] += 1
+
+    db_session.commit()
+    return created
+
+
+# Placeholder-pricing seed data (launch-readiness W0.3, Part A). $99.00
+# flat/ONE_TIME is NOT a real commercial price -- it exists only so a fresh
+# Owner deployment can cut its very first licence key. Set real pricing from
+# the Owner UI (catalog -> plan -> add price) before selling anything for
+# real; docs/release/go-live-runbook.md says the same thing.
+_CANONICAL_PLAN_SUFFIX = "STANDARD"
+_PLACEHOLDER_BASE_PRICE = Decimal("99.00")
+_PLACEHOLDER_CURRENCY = "USD"
+
+
+def seed_canonical_plans() -> dict:
+    """Idempotent. Seeds ONE minimal, immediately-sellable plan per canonical
+    product (<PRODUCT_CODE>_STANDARD) plus its current PlanPrice.
+
+    Without this, a brand-new Owner deployment cannot issue a single licence:
+    `seed-catalog` seeds products/platforms/channels/entitlement definitions/
+    DRAFT add-ons only -- `owner_plans` stays empty -- and
+    `issue_license_direct` issues against a `plan_id`
+    (`describe_plan_for_sale` requires an effective, priced plan, see
+    commercial_sales/catalog_for_sales.py). Before this function existed the
+    only way through was building a plan by hand through the UI, with
+    nothing telling an operator that step exists.
+
+    Deliberately NOT folded into seed_canonical_catalog(): that function is
+    invoked by nearly every Owner test via the `seeded` fixture (~700 call
+    sites), and its own established convention (see _CANONICAL_ADDONS above)
+    is to seed only inert, non-purchasable scaffolding -- add-ons are seeded
+    DRAFT/PLANNED, never AVAILABLE, specifically because "a feature that has
+    not actually been built" must never appear sellable. A plan this
+    function creates must be the opposite -- immediately live and
+    purchasable, by design -- so folding it into seed_canonical_catalog()
+    would silently inject a real, sellable plan into every one of that
+    fixture's call sites (catalog/dashboard/plan-listing counts and
+    read-models alike, with no way to audit the blast radius from here).
+    This is a separate, explicit release-engineering step instead, run once
+    per fresh deployment -- the same reason `create-superadmin` is its own
+    command rather than folded into `seed-rbac`.
+
+    Direct model construction (not create_plan()/add_plan_price()) to match
+    seed_canonical_catalog()'s own idiom immediately above -- those two
+    service functions are the staff-driven, audited UI-route path
+    (catalog/routes.py) and, notably, create_plan() unconditionally forces
+    lifecycle_status="DRAFT", which this function must NOT do (see below).
+
+    Requires seed_canonical_catalog() (i.e. `flask seed-catalog`) to have
+    already run -- raises rather than silently seeding nothing a caller
+    could mistake for success.
+    """
+    products = {
+        code: db_session.execute(select(Product).where(Product.product_code == code)).scalars().first()
+        for code, _name in _CANONICAL_PRODUCTS
+    }
+    if not any(products.values()):
+        raise ValueError("No canonical products found -- run 'flask seed-catalog' first.")
+
+    created = {"plans": 0, "prices": 0}
+    today = utcnow().date()
+
+    for code, name in _CANONICAL_PRODUCTS:
+        product = products.get(code)
+        if product is None:
+            continue  # seed-catalog seeded a different product list than this code currently knows about; skip rather than guess
+
+        plan_code = f"{code}_{_CANONICAL_PLAN_SUFFIX}"
+        plan = db_session.execute(select(Plan).where(Plan.plan_code == plan_code)).scalars().first()
+        if plan is None:
+            plan = Plan(
+                plan_code=plan_code,
+                product_id=product.id,
+                name=f"{name} Standard",
+                # AVAILABLE, not create_plan()'s DRAFT default (see docstring
+                # above) -- lifecycle_status is a display-only workflow label
+                # nothing in this codebase currently gates issuance on (that
+                # gate is effective_date/retirement_date/PlanPrice, enforced
+                # by describe_plan_for_sale below), but showing "Draft" for a
+                # plan that is, in fact, immediately purchasable would
+                # actively mislead staff reading the catalog screen.
+                lifecycle_status="AVAILABLE",
+                # docs/owner/one-time-pricing-design.md: every product prices
+                # as a single one-time device fee, never a subscription --
+                # see issuance.py::resolve_license_term's own docstring for
+                # why a ONE_TIME plan must never be given a retirement/end
+                # date.
+                billing_model="ONE_TIME",
+                currency=_PLACEHOLDER_CURRENCY,
+                # 2, not 1: the business owner's rule (2026-09-05) is that
+                # every licence includes two devices by default -- the
+                # manager's own device (usually a phone) and one cashier
+                # till -- and each device beyond that is a paid extra. A
+                # plan created from the UI can still choose otherwise.
+                included_device_count=2,
+                effective_date=today,
+            )
+            db_session.add(plan)
+            db_session.flush()
+            created["plans"] += 1
+
+        current_price = db_session.execute(
+            select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
+        ).scalars().first()
+        if current_price is None:
+            db_session.add(
+                PlanPrice(
+                    plan_id=plan.id, base_price=_PLACEHOLDER_BASE_PRICE, currency=_PLACEHOLDER_CURRENCY, effective_from=today
+                )
+            )
+            created["prices"] += 1
 
     db_session.commit()
     return created

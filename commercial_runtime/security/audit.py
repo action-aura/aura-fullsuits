@@ -26,6 +26,12 @@ LOGIN_SUCCESS = "LOGIN_SUCCESS"
 LOGIN_FAILED = "LOGIN_FAILED"
 ACCOUNT_LOCKOUT = "ACCOUNT_LOCKOUT"
 LOGOUT = "LOGOUT"
+#: A session that was valid has been torn down mid-flight because the
+#: account's `session_version` moved past it (password reset, enable/disable,
+#: role or permission change). Recorded once per revoked session -- the
+#: decorator clears the session on the same request, so a retry arrives
+#: unauthenticated instead of re-triggering this.
+SESSION_REVOKED = "SESSION_REVOKED"
 PASSWORD_HASH_UPGRADED = "PASSWORD_HASH_UPGRADED"
 PASSWORD_CHANGED = "PASSWORD_CHANGED"
 ADMIN_CREATED = "ADMIN_CREATED"
