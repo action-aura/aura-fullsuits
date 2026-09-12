@@ -2326,6 +2326,18 @@ const RetailSystem = {
            larger piece of that fix). */
         .pos-kbd-hints { display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;
           padding-block:4px 2px;padding-inline:16px;color:var(--text-faint);font-size:11px; }
+        /* A keyboard legend is worth nothing to a device with no keyboard, and on
+           a phone it is worth LESS than nothing: measured at 390x844 it wraps to
+           two rows and takes 49px off a till whose content is already 1,379px in
+           a 343px viewport. The shortcuts still work if a keyboard is attached --
+           only the advertisement goes.
+           Queried on the POINTER rather than the width: this is about whether the
+           device has a keyboard-and-mouse, not about how wide it is, and the
+           Android build and a touch-only till both want the same answer at any
+           size. */
+        @media (hover: none) and (pointer: coarse) {
+          .pos-kbd-hints { display:none; }
+        }
         .pos-kbd-item { display:inline-flex;align-items:center;gap:5px;white-space:nowrap; }
         .pos-kbd { display:inline-block;min-inline-size:20px;padding-block:1px;padding-inline:5px;
           border:1px solid var(--border-mid);border-radius:5px;background:var(--surface-soft);
