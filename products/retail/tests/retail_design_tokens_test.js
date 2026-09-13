@@ -59,7 +59,18 @@ const EXEMPTIONS = [
   { prefix: '.l-', reason: 'Landing page title/button fragments, over the dark canvas.' },
   { prefix: '.lp-', reason: 'Landing page chrome (language/theme pickers) shown before login.' },
   { prefix: '.ml-', reason: 'Modern login screen, over the dark canvas.' },
-  { prefix: '.auth-', reason: 'Auth overlay/card; pre-login, over the dark canvas.' },
+  // RETIRED 2026-09-13: the '.auth-' exemption. Its reason -- 'Auth
+  // overlay/card; pre-login, over the dark canvas' -- expired when the auth
+  // screen gained per-theme grounds (--surface-auth-ground in all five
+  // blocks), because on Day and Sand that card is a LIGHT surface. While it
+  // stood it was excusing .auth-error's color:#f87171, a light red over an
+  // 8% red tint, which composited to 2.38:1 on Day and 2.32:1 on Sand
+  // against a 4.5:1 text bar -- on the message shown when a sign-in fails,
+  // and on the default theme. That rule now renders through the
+  // --state-danger-* triad (7.45:1 and 6.76:1), and a scan of main.css finds
+  // no paint literal left under this prefix, so the entry is deleted rather
+  // than reworded: a reworded exemption documents the rule, a deleted one
+  // enforces it.
   { prefix: '#page-landing', reason: 'Landing page root element; sets the dark ground the canvas animation is composited against.' },
   { prefix: '#page-login', reason: 'Login page root element; same dark ground as the landing page, shown before any till surface exists.' },
   { prefix: '.subs-', reason: 'Subsystem chooser tiles shown between login and the till; brand moment over the dark canvas.' },

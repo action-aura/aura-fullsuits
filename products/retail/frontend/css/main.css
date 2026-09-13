@@ -3742,10 +3742,24 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
 
 /* JS contract preserved: _setupSubmit/_reloginSubmit toggle inline
    display:block/none on this element, which overrides the class default. */
+/* The message shown when a sign-in fails, so it is the one string a
+   locked-out user has to be able to read. It used to paint #f87171 -- a
+   LIGHT red, correct for a dark ground -- over an 8% red tint. Measured
+   2026-09-13 by compositing that over each theme's real card colour:
+   2.38:1 on Day and 2.32:1 on Sand against a 4.5:1 text bar, while
+   scoring 5.7-6.2:1 on the three dark themes it was designed against.
+   Day is the default, so most installs showed the failure message as
+   the least readable thing on the screen.
+
+   It survived because retail_design_tokens_test.js exempts the .auth-
+   prefix as 'pre-login, over the dark canvas' -- true once, but the auth
+   screen now has per-theme grounds (--surface-auth-ground), so on Day and
+   Sand the card is a LIGHT surface. Same triad treatment as .auth-note,
+   which already renders through --state-info-*. */
 .auth-error {
   display: none;
-  color: #f87171; font-size: 13px; margin-bottom: 14px;
-  background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.22);
+  color: var(--state-danger-text); font-size: 13px; margin-bottom: 14px;
+  background: var(--state-danger-surface); border: 1px solid var(--state-danger-border);
   border-radius: 8px; padding: 10px 14px;
   animation: authCardIn 0.25s ease both;
 }
