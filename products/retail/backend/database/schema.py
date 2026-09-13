@@ -711,7 +711,63 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # log's free text. See _migrate_add_loyalty_return_id's own docstring
 # below for the full column reasoning, the deliberate NO BACKFILL decision,
 # and the one narrow NULL ambiguity worth stating rather than discovering.
-RETAIL_SCHEMA_VERSION = 29
+#
+# v29 -> v30 (launch-readiness, "the LAN site relay (R-LAN)"; ROADMAP.md's
+# "2026-09-14 - retail schema v30 CLAIMED for the LAN site relay (R-LAN)"
+# entry), implementing docs/launch-readiness/lan-restaurant-design.md §3,
+# "A. Topology: the main till is the hub (embedded site relay)" and that
+# section's own "Mechanics of the site relay (hub side -- all new, all
+# product-side)" subsection, which names the tables below directly.
+#
+# Six new, self-contained tables -- CREATE TABLE IF NOT EXISTS only, exactly
+# the same shape as the einvoice_* tables at v6 -> v7 above (see that step's
+# own comment just below this one in _migrate_retail_schema: "no existing
+# table is ALTERed, no existing row is read or written, so an install that
+# never enables the feature gains only empty tables"). No column is added to
+# ANY existing table, and no existing row is read or written, so an install
+# that never becomes a LAN hub carries six permanently-empty tables and pays
+# nothing for them, per this codebase's invisible-unless-opted-in doctrine:
+#
+#   site_sync_events    -- the hub's own site-wide event log: every paired
+#                           device's ACCEPTED push, in this hub's own
+#                           monotone seq-space -- a local peer of Owner's
+#                           Postgres IDENTITY seq for the cloud relay
+#   site_sync_nonces    -- replay-burn store for the site relay's own
+#                           push/pull verification; the local port of the
+#                           cloud relay's nonce table, without which a
+#                           captured push would replay forever
+#   site_device_cursors -- how far each paired device has acked into the
+#                           site log, driving site-log pruning the same way
+#                           owner/app/sync/pruning.py drives cloud pruning
+#   site_paired_devices -- the devices paired to this hub, plus a LOCAL
+#                           revoke flag independent of the Owner roster
+#   site_forward_cursor -- single-row, BOTH-DIRECTIONS state for the hub's
+#                           own forwarder: how far it has pushed the site
+#                           log up to Owner's cloud relay, and how far it
+#                           has pulled the cloud stream back down
+#   site_roster         -- the cached, Owner-signed device roster this hub
+#                           enforces pairing/authorization against, plus its
+#                           signature and verification time
+#
+# THE ONE FACT THIS PARAGRAPH EXISTS TO NAIL DOWN, because getting it wrong
+# breaks the whole design: `site_sync_events` IS NOT A SECOND `sync_outbox`.
+# `sync_outbox` (see the CREATE TABLE beside `sync_cursor` further down this
+# file) holds THIS device's own committed-but-unsent rows and is deleted
+# once Owner has acked them -- it has no memory beyond "not yet relayed".
+# `site_sync_events` is the opposite lifetime and the opposite scope: it
+# holds EVERY paired device's ACCEPTED rows, permanently, in the hub's OWN
+# seq-space, and is pruned only once every paired device (per
+# `site_device_cursors`) has acked past a given seq. Conflating the two --
+# writing site-relayed events into `sync_outbox`, or treating `sync_outbox`
+# as though it already were a site log -- would break the single invariant
+# the whole LAN design rests on (lan-restaurant-design.md §6: "every device
+# talks to exactly ONE relay, ever"): a device would end up reconciling two
+# different orderings of the same facts, or the hub's own not-yet-relayed
+# rows would be pruned and forwarded under the site log's rules instead of
+# the cloud outbox's. See _migrate_add_site_relay's own docstring below for
+# the full column-by-column reasoning, including why `site_forward_cursor`
+# cannot reuse `sync_cursor` for the identical one-relay-per-device reason.
+RETAIL_SCHEMA_VERSION = 30
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1699,6 +1755,15 @@ def _migrate_retail_schema(conn):
     # including why there is deliberately no backfill for rows written
     # before this column existed.
     _migrate_add_loyalty_return_id(conn)
+    # v29 -> v30 (launch-readiness, "the LAN site relay (R-LAN)"): appended
+    # LAST, same convention as every step above. Six new, self-contained
+    # tables -- no existing table is ALTERed, read, or written, so ordering
+    # relative to every step above it does not matter functionally. See the
+    # RETAIL_SCHEMA_VERSION v30 comment above and _migrate_add_site_relay's
+    # own docstring for the full reasoning, including why `site_sync_events`
+    # is NOT a second `sync_outbox` and why `site_forward_cursor` cannot
+    # reuse `sync_cursor`.
+    _migrate_add_site_relay(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -6049,6 +6114,338 @@ def _migrate_add_loyalty_return_id(conn):
         'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_return '
         'ON loyalty_ledger(return_id) WHERE return_id IS NOT NULL'
     )
+
+
+def _migrate_add_site_relay(conn):
+    """One-time migration (schema v29 -> v30): launch-readiness "the LAN
+    site relay" (ROADMAP.md's "2026-09-14 - retail schema v30 CLAIMED for
+    the LAN site relay (R-LAN)" entry), implementing
+    docs/launch-readiness/lan-restaurant-design.md §3's "Mechanics of the
+    site relay (hub side -- all new, all product-side)". Six new,
+    self-contained tables plus two indexes and one seed row -- additive
+    only (CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / INSERT
+    OR IGNORE), no existing table is ALTERed, read, or written, so ordering
+    relative to every migration above it does not matter functionally. See
+    the RETAIL_SCHEMA_VERSION v30 comment above for the one-line purpose of
+    each table; this docstring is the column-by-column reasoning for all
+    six.
+
+    WHAT A "SITE RELAY" IS, in one sentence, so the tables below make sense
+    without re-reading the design doc: the main till's own backend embeds a
+    second, LAN-facing implementation of Owner's `/api/sync/v1/push|pull`
+    wire contract, so every other device on the LAN (waiter tablets, a
+    second till) syncs against THIS device instead of the internet, and a
+    "forwarder" on the hub relays the accumulated log up to Owner's real
+    cloud relay whenever internet is actually available. Every table here
+    exists to make that hub role possible without touching a single
+    existing table.
+
+    `site_sync_events` IS NOT A SECOND `sync_outbox` -- repeated here,
+    verbatim in spirit, because this is the single easiest thing about this
+    migration to get wrong by analogy. `sync_outbox` (see the CREATE TABLE
+    beside `sync_cursor` further down this file) holds THIS device's own
+    committed-but-unsent rows and is deleted once Owner has acked them: it
+    is a queue with no memory beyond "not yet relayed". `site_sync_events`
+    is a LOG, not a queue -- it holds EVERY paired device's ACCEPTED rows,
+    permanently, in the hub's OWN monotone seq-space (the local peer of
+    Owner's Postgres IDENTITY `seq`), and is pruned only once every paired
+    device has acked past a given point (`site_device_cursors`). Conflating
+    the two would break the one invariant lan-restaurant-design.md §6 says
+    the entire design rests on: "every device talks to exactly ONE relay,
+    ever." A device relaying through both an outbox-shaped table and a
+    log-shaped table would see two different orderings of the same facts;
+    routing site-relayed events into `sync_outbox` would have them pruned
+    and relayed under the wrong table's rules entirely.
+
+    `site_sync_events` COLUMN BY COLUMN:
+      * `seq INTEGER PRIMARY KEY AUTOINCREMENT` -- this hub's own ordering
+        authority, the local peer of Owner's Postgres IDENTITY `seq`.
+        AUTOINCREMENT specifically, not a bare `INTEGER PRIMARY KEY` rowid
+        alias: SQLite's AUTOINCREMENT keyword guarantees a deleted or
+        pruned row's number is never reissued to a later row, whereas a
+        plain rowid alias is free to reuse the highest number that has ever
+        been deleted. A device holding a cursor past a REUSED seq would
+        silently skip whatever event now occupies that number -- the exact
+        failure this column exists to make impossible. See the test file's
+        `test_seq_is_autoincrement_not_reused_after_delete` for the
+        mutation-proved version of this claim.
+      * `id TEXT NOT NULL UNIQUE` -- the client-generated event UUID, and
+        its `UNIQUE` constraint IS the dedup mechanism, not merely a nice
+        property: the cloud relay dedups incoming events on this identical
+        key (see lan-restaurant-design.md §6, `_store_events`'s "existence
+        check + SAVEPOINT"), so a retried push, a crash mid-batch, or an
+        event that reached this hub by two different paths all collapse to
+        a harmless no-op rather than a duplicate row.
+      * `entity_type` / `entity_id` / `event_type` / `payload` -- the same
+        four columns `sync_outbox` already carries for the identical
+        reason: this table plays the identical wire role on the LAN side
+        that `sync_outbox` plays on the cloud side, just with a different
+        lifetime (see above).
+      * `created_at TEXT NOT NULL` -- the ORIGIN device's own timestamp,
+        relayed verbatim and never rewritten by the hub. `received_at
+        TIMESTAMP DEFAULT CURRENT_TIMESTAMP` is a SEPARATE column: the
+        hub's own clock, stamped the moment the row lands here, used only
+        for local pruning and diagnosis. Collapsing the two into one column
+        would destroy the origin device's own ordering information, which
+        matters precisely because LAN devices may have clock skew relative
+        to the hub -- lan-restaurant-design.md §4 spends an entire
+        paragraph on exactly this ("clock skew -- a real LAN-offline
+        failure mode") for the verification protocol, and the same
+        skew-tolerance reasoning is why this table keeps both clocks rather
+        than trusting one.
+      * `origin_device_id TEXT NOT NULL` -- the `installation_id` of the
+        device that originally wrote this event (which may be the hub
+        itself). Two independent consumers need it: pull uses it to exclude
+        a device's own events from what it hands back to that device
+        (mirroring the cloud relay's own `WHERE device_id != installation.
+        id`), and the forwarder uses it to tell locally-originated rows
+        (which must go upstream) from rows the hub itself pulled DOWN from
+        the cloud (`origin_device_id = upstream`, per
+        lan-restaurant-design.md §6) -- forwarding the latter back up would
+        be an echo loop the cloud relay's own pull filtering would not
+        catch, because from the cloud's point of view it would look like a
+        second, distinct device pushing the same facts.
+      Idempotent by construction: CREATE TABLE IF NOT EXISTS, no ALTER, so
+      a repeated call is a no-op regardless of what the table already
+      contains.
+
+    `idx_site_sync_events_origin_seq ON (origin_device_id, seq)` -- serves
+    both consumers named above in one index: "this device's own events, in
+    order" (the forwarder's read) and "every event except this device's
+    own, in order" (an anti-join a caller still walks in seq order) both
+    want origin first, seq second, matching the scope-then-order shape this
+    file already uses elsewhere (e.g. `idx_stock_transfers_source`).
+
+    `site_sync_nonces` COLUMN BY COLUMN:
+      * `PRIMARY KEY (scope, nonce)`, scope FIRST -- mirrors the cloud
+        relay's own nonce scoping between `sync_push` and `sync_pull`
+        verification. Two independent scopes exist deliberately, not for
+        symmetry: a nonce burned verifying a PUSH must not also burn (and
+        therefore block) the same nonce value arriving on a PULL, and
+        `(scope, nonce)` as a compound key is what keeps those two burn
+        histories from colliding on a value a client happens to reuse
+        across both call sites.
+      * `seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- when the nonce was
+        burned, read only by whatever TTL-pruning sweep retires old rows
+        (mirroring the cloud relay's own nonce table) so this store does
+        not grow forever; `idx_site_sync_nonces_seen_at` exists purely to
+        make that sweep's own range scan cheap.
+
+    `site_device_cursors` COLUMN BY COLUMN:
+      * `installation_id TEXT PRIMARY KEY` -- one row per paired device.
+      * `last_seq INTEGER NOT NULL DEFAULT 0` -- the highest
+        `site_sync_events.seq` this device has acked. Read the same way
+        `owner/app/sync/pruning.py` reads its own per-device cursor table
+        on the cloud side: the MINIMUM `last_seq` across every row here is
+        the highest seq the site log can safely prune, because pruning
+        past it would delete a row a still-behind device has not seen yet.
+      * `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- diagnostic only
+        (staleness of a device's own sync activity), never read by the
+        pruning rule itself.
+
+    `site_paired_devices` COLUMN BY COLUMN:
+      * `installation_id TEXT PRIMARY KEY` / `device_public_key TEXT NOT
+        NULL` -- the pairing record itself: which device, and the Ed25519
+        public key it presented at pairing time (lan-restaurant-design.md
+        §4's QR-pairing step), needed for the same verify-then-resolve
+        signature check `_authenticate` already does on the cloud side.
+      * `label TEXT` -- an operator-facing name ("Waiter tablet 2"),
+        optional because the pairing flow can populate it after the fact.
+      * `revoked_at TIMESTAMP` -- NULL means the device is currently
+        accepted; a timestamp means it is not. This column is the design's
+        deliberate answer to suspension LATENCY, not a duplicate of the
+        Owner roster's own status: lan-restaurant-design.md §5 states
+        plainly that a device Owner suspends keeps LAN access "until the
+        hub next reaches Owner and refreshes the roster" -- a bound that is
+        unbounded while offline. The realistic urgent case is a fired
+        employee's tablet standing in the restaurant RIGHT NOW, so the
+        hub's own Settings can revoke it immediately, locally, ahead of any
+        roster refresh, exactly as §5's "Local mitigation for the local
+        threat" paragraph describes. `site_paired_devices` and the cached
+        `site_roster` below are therefore two independent gates a request
+        must pass, not one gate with two copies of the same fact.
+
+    `site_forward_cursor` COLUMN BY COLUMN, AND WHY IT IS NOT `sync_cursor`:
+      This table holds the forwarder's COMPLETE state, in both directions,
+      not merely an upstream watermark -- the hub is the one device in this
+      whole design that deliberately sees TWO sequence-spaces at once, and
+      this is the only row where that is true. Every ordinary device holds
+      exactly one cursor (`sync_cursor.last_seq`) against exactly one
+      relay, and that single-cursor invariant is what stops a device from
+      ever seeing two orderings of history and forking. On the hub,
+      `sync_cursor` tracks the SITE log instead (the hub's own SyncService
+      talks to its own site relay over loopback, per lan-restaurant-
+      design.md §3's topology diagram), so the hub's position in the CLOUD
+      stream has nowhere else to live. The forwarder owns both directions
+      of that bridge, so it owns both numbers, together, in one row:
+      * `id INTEGER PRIMARY KEY CHECK (id = 1)` -- the exact single-row
+        idiom `sync_cursor` itself already uses (see that CREATE TABLE
+        further down this file), deliberately copied rather than
+        reinvented.
+      * `forwarded_to_seq INTEGER NOT NULL DEFAULT 0` -- how far UP the
+        site log the forwarder has pushed to Owner's cloud relay, advanced
+        only on confirmed push -- mirroring `push_once`'s own
+        ack-after-success discipline (never advance a watermark for a
+        batch that has not actually been accepted).
+      * `cloud_pull_seq INTEGER NOT NULL DEFAULT 0` -- how far DOWN the
+        cloud stream the forwarder has pulled. Events pulled past this
+        point are (a) applied to the hub's own database and (b) inserted
+        into the site log with `origin_device_id = '__upstream__'`, which
+        is the mechanism that actually gets a cloud-originated event to
+        the LAN devices (they receive it on their next ordinary site-relay
+        pull) and, symmetrically, the fact `origin_device_id` above
+        exists to let the forwarder recognize on its NEXT upstream pass --
+        an upstream-origin row must never be forwarded straight back
+        up, which is exactly the echo loop `origin_device_id` is for.
+      Putting both numbers in ONE row, rather than a second table, is
+      deliberate, not merely convenient: they are two halves of a single
+      component's state, they advance on the same forwarder tick, and
+      splitting them across two tables would invite a future change to
+      advance one half without the other -- silently breaking the
+      forwarder's own bridge without either half's table looking wrong on
+      its own.
+      This CANNOT reuse `sync_cursor` for either number: that row is this
+      device's ONE cloud cursor for its OWN SyncService -- "how far THIS
+      device has pulled from Owner" in the device's OWN role as an
+      ordinary sync client. Widening `sync_cursor`'s meaning to also carry
+      the forwarder's upstream/downstream watermarks would conflate two
+      entirely different relationships behind one column: a hub is
+      simultaneously a site-relay SERVER (its `SyncService` is a LAN
+      device's client, tracked via `sync_cursor` against the LOOPBACK site
+      relay) and a cloud-relay bridge (the forwarder, tracked via
+      `site_forward_cursor` against the REAL cloud relay) -- the same
+      "every device talks to exactly ONE relay, ever" invariant cited
+      above for `site_sync_events` would break the moment those two
+      relationships shared one bookkeeping row.
+      Seeded with `INSERT OR IGNORE INTO site_forward_cursor (id,
+      forwarded_to_seq, cloud_pull_seq) VALUES (1, 0, 0)` so the forwarder
+      always has exactly one row to read and update, in both directions,
+      never a missing-row special case -- matching `sync_cursor`'s own
+      bootstrap in `_init_retail`.
+
+    `site_roster` COLUMN BY COLUMN:
+      * `id INTEGER PRIMARY KEY CHECK (id = 1)` -- another single-row
+        table, same idiom as `site_forward_cursor` immediately above: there
+        is exactly one licence's roster cached per hub, never more than
+        one.
+      * `roster_json TEXT NOT NULL` -- the roster payload itself (every
+        installation on this licence, its device public key, platform, and
+        status), cached so the hub can authorize LAN requests during an
+        offline stretch rather than requiring a live Owner round trip per
+        request.
+      * `signature TEXT NOT NULL` / `signing_key_id TEXT NOT NULL` -- the
+        roster is Owner-signed (lan-restaurant-design.md §5, "Layer 3 --
+        authorization: the Owner-signed site roster"), and is stored WITH
+        its signature rather than trusted because it is merely present on
+        disk -- it is re-verified against the trust anchor already bundled
+        in every install (the same trust anchor the licence assertion
+        itself verifies against) every time it matters, not once at
+        download time.
+      * `issued_at TEXT NOT NULL` -- Owner's own issuance timestamp,
+        carried verbatim (the identical "origin clock, never rewritten"
+        reasoning `site_sync_events.created_at` follows above), so
+        staleness can be judged against when OWNER signed it, not when
+        this hub happened to fetch it.
+      * `verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- this hub's own
+        clock, stamped when the signature was last successfully verified;
+        diagnostic, never part of the trust decision itself.
+
+    RE-RUNNABILITY, AND WHY IT MATTERS HERE SPECIFICALLY: every statement
+    below is CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT EXISTS, or
+    INSERT OR IGNORE, so this function is naturally idempotent with no
+    `PRAGMA table_info` probing anywhere in it -- unlike an ADD COLUMN step
+    (see _migrate_add_loyalty_return_id immediately above), there is no
+    "already exists" error shape a CREATE-IF-NOT-EXISTS statement can ever
+    raise. This is not incidental caution: `_migrate_retail_schema`'s own
+    docstring above notes that "a v1 install upgrading straight to v7 must
+    run ALL steps in one pass" and that this chain is also what runs
+    against a database restored from a backup taken mid-upgrade (see
+    `ensure_schema_version`'s own docstring in commercial_runtime/security/
+    migration_safety.py: on any failure the live database is left exactly
+    as the backup captured it and `user_version` is not advanced, so "the
+    next launch retries from the same safe starting point" -- which means
+    THIS function specifically must tolerate being invoked again against a
+    database where some or all of its six tables already exist from an
+    interrupted prior attempt). A migration that assumed a clean slate
+    would turn a safe, resumable retry into a hard crash on the second
+    attempt.
+
+    No data migration, no backfill: this is a genuinely new feature with no
+    existing rows to reconcile, the same "clean no-op" shape
+    _migrate_add_stock_transfers's own docstring closes with.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_sync_events (
+            seq              INTEGER PRIMARY KEY AUTOINCREMENT, -- this hub's own ordering authority; AUTOINCREMENT so a pruned seq is never reissued (see docstring)
+            id               TEXT NOT NULL UNIQUE,               -- client-generated event UUID; UNIQUE is the dedup mechanism itself
+            entity_type      TEXT NOT NULL,
+            entity_id        TEXT NOT NULL,
+            event_type       TEXT NOT NULL,
+            payload          TEXT NOT NULL,
+            created_at       TEXT NOT NULL,                      -- ORIGIN device's own clock, relayed verbatim, never rewritten
+            origin_device_id TEXT NOT NULL,                      -- excludes a device's own events on pull; tells the forwarder local vs. upstream-origin rows apart
+            received_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP -- this hub's OWN clock; pruning/diagnosis only, never origin ordering
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_site_sync_events_origin_seq '
+        'ON site_sync_events(origin_device_id, seq)'
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_sync_nonces (
+            scope   TEXT NOT NULL,                       -- 'push' | 'pull' -- two scopes so a nonce burned on one never blocks the other (see docstring)
+            nonce   TEXT NOT NULL,
+            seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope, nonce)
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_site_sync_nonces_seen_at '
+        'ON site_sync_nonces(seen_at)'
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_device_cursors (
+            installation_id TEXT PRIMARY KEY,
+            last_seq        INTEGER NOT NULL DEFAULT 0,          -- highest site_sync_events.seq this device has acked; MIN across rows drives pruning
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_paired_devices (
+            installation_id   TEXT PRIMARY KEY,
+            device_public_key TEXT NOT NULL,
+            label             TEXT,
+            paired_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at        TIMESTAMP                          -- NULL = active; the immediate-local-revoke answer to suspension latency (see docstring)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_forward_cursor (
+            id               INTEGER PRIMARY KEY CHECK (id = 1), -- single-row idiom, matches sync_cursor
+            forwarded_to_seq INTEGER NOT NULL DEFAULT 0,         -- UP: advanced only on confirmed upstream push (push_once's own ack-after-success discipline)
+            cloud_pull_seq   INTEGER NOT NULL DEFAULT 0,         -- DOWN: how far the forwarder has pulled from the cloud relay (see docstring)
+            updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        'INSERT OR IGNORE INTO site_forward_cursor (id, forwarded_to_seq, cloud_pull_seq) '
+        'VALUES (1, 0, 0)'
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_roster (
+            id             INTEGER PRIMARY KEY CHECK (id = 1),   -- single-row: one licence's roster cached per hub
+            roster_json    TEXT NOT NULL,
+            signature      TEXT NOT NULL,                        -- re-verified against the bundled trust anchor, never trusted merely for being on disk
+            signing_key_id TEXT NOT NULL,
+            issued_at      TEXT NOT NULL,                        -- Owner's own issuance clock, carried verbatim
+            verified_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP    -- this hub's own clock; diagnostic only
+        )
+    """)
 
 
 def load_sync_freshness(conn) -> dict:
