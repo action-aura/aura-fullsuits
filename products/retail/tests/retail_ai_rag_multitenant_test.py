@@ -62,6 +62,15 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_retail_ai_rag_mt_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
+# This suite drives /ai/chat with a monkeypatched requests.post, so the
+# upstream is never really contacted -- but the route now refuses BEFORE
+# opening a socket when AURA_AI_ENDPOINT_URL is unset. It used to default to
+# a demo droplet that no longer exists, which turned the documented graceful
+# 401 into a 45-second hang. These tests were relying, invisibly, on that
+# default merely being non-empty; declaring a fake endpoint here removes the
+# coupling to production config, exactly as the line below already does for
+# AURA_APP_DATA and AURA_BUNDLE_DIR.
+os.environ["AURA_AI_ENDPOINT_URL"] = "http://ai.test.local/api/generate"
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
 

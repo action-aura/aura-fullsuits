@@ -270,7 +270,18 @@ SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 # as "AI assistant is temporarily unavailable" -- fails closed and gracefully,
 # never a crash. Set AURA_AI_BEARER_TOKEN in the environment (see
 # .env.example) to actually enable the feature.
-AURA_AI_ENDPOINT_URL = os.environ.get('AURA_AI_ENDPOINT_URL', 'https://104-248-35-215.sslip.io/api/generate')
+# 2026-09-13: the default was the demo droplet's own URL
+# ('https://104-248-35-215.sslip.io/api/generate'). That droplet no longer
+# exists -- the account was locked and both droplets destroyed -- and the
+# paragraph above no longer held: sslip.io still resolves the IP out of the
+# hostname, so DNS succeeds and the TCP connect goes to an unrouted address.
+# No RST, no 401, just silence for the full 45s timeout. The documented
+# 'fails closed and gracefully' had quietly become a 45-second hang ending in
+# a generic 'temporarily unavailable'. Defaulting to EMPTY makes an
+# unconfigured install refuse in milliseconds with an honest message (see
+# the guard at the top of the /ai/chat route); setting this variable enables
+# the feature exactly as before.
+AURA_AI_ENDPOINT_URL = os.environ.get('AURA_AI_ENDPOINT_URL', '')
 AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '')
 # 2026-08-12: bumped from 15s after a real, realistic prompt (verified via
 # timed curl against the actual droplet, not assumed) took 36.5s -- the

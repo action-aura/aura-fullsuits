@@ -13180,6 +13180,26 @@ def ai_chat():
     if not message:
         return jsonify({'success': False, 'error': 'Message is required.'}), 400
 
+    # Refuse BEFORE building a prompt or opening a socket, and before the
+    # stream/non-stream split below so both branches are covered.
+    #
+    # Without this the route posts to whatever AURA_AI_ENDPOINT_URL holds and
+    # waits AURA_AI_TIMEOUT_SECONDS (45s) for an answer. When the configured
+    # host is simply gone -- which is exactly what happened to the demo
+    # droplet this default used to point at -- a TCP connect to an unrouted
+    # address never gets refused, it just goes quiet, so the user sat through
+    # 45 seconds before being told the assistant was 'temporarily
+    # unavailable'. Neither word was true: nothing was temporary and nothing
+    # was configured.
+    #
+    # Distinct message on purpose. 'Temporarily unavailable' tells an owner to
+    # wait for something that is never coming; this tells whoever installed
+    # the till that a setting is missing, which is the actionable fact.
+    if not AURA_AI_ENDPOINT_URL:
+        return jsonify({
+            'success': False,
+            'error': 'AI assistant is not configured on this install.',
+        }), 503
     history = data.get('history')
     if not isinstance(history, list):
         history = []
