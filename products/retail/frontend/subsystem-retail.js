@@ -434,6 +434,7 @@ const RetailSystem = {
       .ret-empty-actions { display:flex;gap:10px;flex-wrap:wrap;justify-content:center;
         margin-block-start:7px; }
       .ret-hdr { display:flex;justify-content:space-between;align-items:center;margin-bottom:22px; }
+      .ret-hdr > :only-child { margin-inline-start: auto; }
       .ret-title { color:var(--text);margin:0;font-size:24px;font-weight:700; }
       /* AUDIT -- this rule used to say color:#fff, a leftover from the dark HUD.
          With Operational Calm the panels behind it are WHITE, and .rdash was
@@ -5447,7 +5448,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Products & Inventory')}</h2>
         <div style="display:flex;gap:10px">
           <input class="ret-search" id="prod-search" data-i18n-ph="Search products…" placeholder="${t('Search products…')}" oninput="RetailSystem._filterProducts()" />
           <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">${this._icon('upload', 16, '⬆')} Import</button>
@@ -5815,7 +5815,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Categories')}</h2>
         <div style="display:flex;gap:10px">
           <button class="sub-btn-primary" onclick="RetailSystem._openAddCategory()">+ ${t('Add Category')}</button>
         </div>
@@ -5945,7 +5944,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">Customers</h2>
         <div style="display:flex;gap:10px">
           <input class="ret-search" id="cust-search" data-i18n-ph="Search name, phone, email…" placeholder="${t('Search name, phone, email…')}" oninput="RetailSystem._filterCustomers()" />
           <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','customers',()=>RetailSystem._loadCustomers())">${this._icon('upload', 16, '⬆')} Import</button>
@@ -6202,7 +6200,6 @@ const RetailSystem = {
     }
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Promotions')}</h2>
         <div style="display:flex;gap:10px">
           <button class="sub-btn-primary" onclick="RetailSystem._openAddPromotion()">+ ${t('Add Promotion')}</button>
         </div>
@@ -6436,7 +6433,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">Suppliers</h2>
         <div style="display:flex;gap:10px">
           <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','suppliers',()=>RetailSystem._loadSuppliers())">${this._icon('upload', 16, '⬆')} Import</button>
           <button class="sub-btn-primary" onclick="RetailSystem._openAddSupplier()">+ Add Supplier</button>
@@ -6759,7 +6755,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">Purchase Orders</h2>
         <button class="sub-btn-primary" onclick="RetailSystem._openCreatePO()">+ New PO</button>
       </div>
       <div class="sub-chart-card">
@@ -7146,7 +7141,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Stock Transfers')}</h2>
         <button class="sub-btn-primary" onclick="RetailSystem._openCreateTransfer()">+ ${t('New Transfer')}</button>
       </div>
       <div class="sub-chart-card">
@@ -7636,7 +7630,6 @@ const RetailSystem = {
     }
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Branches')}</h2>
         <div style="display:flex;gap:10px">
           <button class="sub-btn-primary" onclick="RetailSystem._openAddBranch()">+ ${t('Add Branch')}</button>
         </div>
@@ -7775,9 +7768,6 @@ const RetailSystem = {
   async _renderAdminCenter(c) {
     this._injectStyles();
     c.innerHTML = `
-      <div class="ret-hdr">
-        <h2 class="ret-title">${t('Settings')}</h2>
-      </div>
       <div class="sub-chart-card" id="branding-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Branding')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -8276,9 +8266,6 @@ const RetailSystem = {
       });
     }
     c.innerHTML = `
-      <div class="ret-hdr">
-        <h2 class="ret-title">${t('Email Notifications')}</h2>
-      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Status')}</h3>
         <div id="email-smtp-warning"></div>
@@ -8554,9 +8541,6 @@ const RetailSystem = {
     // page 1 with no filters, same as every other list page in this file.
     this._auditLog = { page: 1, limit: 50, date_from: '', date_to: '', action: '', entity: '', totalPages: 1 };
     c.innerHTML = `
-      <div class="ret-hdr">
-        <h2 class="ret-title">${t('Audit Log')}</h2>
-      </div>
       <div class="sub-chart-card">
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr 1.3fr 1.3fr auto;gap:10px;align-items:end;margin-bottom:18px">
           <div class="ret-field" style="margin:0"><label>${t('From')}</label>
@@ -8781,7 +8765,6 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Returns & Refunds')}</h2>
         <button class="sub-btn-primary" onclick="RetailSystem._openCreateReturn()">+ Process Return</button>
       </div>
       <div class="sub-chart-card">
@@ -9366,7 +9349,6 @@ const RetailSystem = {
 
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">Analytics & Reports</h2>
         <div style="display:flex;gap:8px;align-items:center">
           <!-- class, not an inline style copy of .ret-search's recipe. The
                inline version carried outline:none, and an inline style cannot
@@ -9544,9 +9526,6 @@ const RetailSystem = {
       registry: { state: 'checking', rows: [], error: '' },
     };
     c.innerHTML = `
-      <div class="ret-hdr">
-        <h2 class="ret-title">${t('Exceptions')}</h2>
-      </div>
       <p style="color:var(--text-muted);font-size:13px;margin:0 0 22px;max-width:780px;line-height:1.7">
         ${t('Three queues for things the software could not resolve on its own. A human decides what happens next.')}
       </p>
@@ -10182,7 +10161,6 @@ const RetailSystem = {
     this._stockAccuracy = { state: 'checking', data: null, repair: null, error: '' };
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Stock Accuracy')}</h2>
         <button class="ret-btn ret-btn-ghost" id="stka-recheck"
                 onclick="RetailSystem._loadStockAccuracy()">${t('Run the check again')}</button>
       </div>
@@ -11145,9 +11123,6 @@ const RetailSystem = {
     const toISO = (d) => d.toISOString().slice(0, 10);
 
     c.innerHTML = `
-      <div class="ret-hdr">
-        <h2 class="ret-title">${t('Backup & Export')}</h2>
-      </div>
       <div class="sub-chart-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <h3 style="color:var(--text-primary);margin:0;font-size:15px">${t('Backups')}</h3>
@@ -11360,7 +11335,6 @@ const RetailSystem = {
     const desktop = this._isDesktopScanner();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${this._icon('settings', 18, '⚙️')} Barcode Scanner</h2>
         <div style="display:flex;gap:10px">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._resetScannerSettings()">Reset</button>
           <button class="sub-btn-primary" onclick="RetailSystem._saveScannerSettings()">Save Settings</button>

@@ -543,9 +543,9 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # ------------------------------------------------------------------
     SCREENS = [
         ("dashboard", ".rdash-answer-value", None),
-        ("products", "#prod-table", "Products & Inventory"),
+        ("products", "#prod-table", "Products"),
         ("customers", "#cust-table", "Customers"),
-        ("reports", "#rep-rev", "Analytics & Reports"),
+        ("reports", "#rep-rev", "Reports"),
         ("admin-center", "#branding-card", "Settings"),
     ]
 
@@ -584,7 +584,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
                     timeout=DEFAULT_WAIT_MS,
                 )
             if title_text is not None:
-                actual = page.locator(".ret-title").first.inner_text()
+                actual = page.locator("#sub-header-section").first.inner_text()
                 assert actual == title_text, f"'{section_id}' screen title was {actual!r}, expected {title_text!r}"
             report.shot(page, shots, f"05_screen_{section_id}")
 
@@ -619,7 +619,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         )
         transfers_nav.click()
         page.locator("#transfer-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-        transfers_title = page.locator(".ret-title").first.inner_text()
+        transfers_title = page.locator("#sub-header-section").first.inner_text()
         assert transfers_title == "Stock Transfers", (
             f"transfers screen title was {transfers_title!r}, expected 'Stock Transfers' -- "
             "the nav entry exists but does not actually navigate/render"
