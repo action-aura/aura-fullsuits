@@ -1,0 +1,209 @@
+"""The hub's LAN-facing TLS listener: a SECOND server, serving ONLY the site
+relay's push/pull contract, on its own port, with its own pinned identity.
+
+See `docs/launch-readiness/lan-restaurant-design.md` sec3 ("Listener") and
+sec5 ("Layer 1 -- transport"). Two decisions in this file are load-bearing
+and both are easy to "simplify" into a serious security regression later, so
+both are argued here rather than left implicit.
+
+WHY A SEPARATE FLASK APP, NOT THE EXISTING ONE
+----------------------------------------------
+`products/retail/backend/app.py` builds one Flask app carrying the whole
+product: the POS UI, the session cookie, auth, every business route. It is
+served on 127.0.0.1 ONLY (`_run_server`), and that loopback binding is the
+sole thing standing between a shop's wifi and that entire surface.
+
+The tempting shortcut is to register the site-relay blueprint on that app and
+rebind it to 0.0.0.0. That would hand every device on the cafe wifi -- and
+every customer's phone on the same SSID -- the product's whole UI and session
+surface, in exchange for saving a few lines here. The design doc refuses it
+in as many words: "Do not silently rebind the existing 127.0.0.1 server --
+the UI surface stays loopback."
+
+So this module builds a MINIMAL Flask app whose entire route table is the
+site relay blueprint, and serves that. The LAN is offered the sync contract
+and nothing else. If someone later adds a route to this app, they are adding
+it to the LAN-exposed surface, and the narrowness of `build_site_relay_app`
+below is what makes that visible rather than accidental.
+
+WHY THE STANDARD LIBRARY'S WSGI SERVER AND NOT WAITRESS
+------------------------------------------------------
+This codebase is emphatic that a real shop must never be served by a
+development server -- see `app.py::_run_server`, which REFUSES to start a
+frozen build if waitress is missing rather than fall back to Flask's dev
+server. That rule is correct and is not being weakened here, so it is worth
+being precise about why it does not transfer to this listener.
+
+waitress cannot terminate TLS. It has no `ssl_context`; it is designed to sit
+behind a reverse proxy that does TLS for it. There is no reverse proxy on a
+till, and adding one (nginx, or a new Python TLS server dependency) to a
+shipped desktop product is a packaging and update decision that belongs to
+whoever owns releases, not to this module.
+
+What is left in the standard library is `wsgiref` plus `ssl`, which is what
+this uses, with `ThreadingMixIn` so one slow client cannot block the others.
+The reason that is adequate HERE and not for the UI is load class, and the
+numbers are worth writing down rather than asserting:
+
+    the UI server takes a request per barcode scan, per key press in search,
+    per screen -- sustained, bursty, concurrent, with a human waiting;
+
+    this listener takes one push and one pull per paired device per sync
+    tick, and the tick default is 10 seconds (`SyncService.start`'s
+    `interval_seconds=10.0`). A busy restaurant with a till, three tablets
+    and a kitchen device is five devices -- about one request per second,
+    total, with no human waiting on any individual one.
+
+If this listener ever grows a route that a human waits on, or starts serving
+the UI, that reasoning expires and it must move to a real server. Say so
+here so the next person does not discover the assumption by measuring it.
+
+WHAT THIS MODULE DELIBERATELY DOES NOT DO
+-----------------------------------------
+It does not decide WHETHER to run -- `products/retail/backend/app.py` does,
+from `SITE_RELAY_ENABLED`, which is off unless explicitly set to '1'. A hub
+is an opt-in role, and this module is inert until something calls `start`.
+"""
+from __future__ import annotations
+
+import logging
+import socket
+import ssl
+import threading
+from pathlib import Path
+from socketserver import ThreadingMixIn
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+
+from .routes import make_site_relay_blueprint
+from .tls_identity import load_or_create_site_tls_identity
+
+_log = logging.getLogger(__name__)
+
+# TLS 1.2 floor. The clients are our own -- desktop `requests`/urllib3 and
+# Android OkHttp, both of which have spoken 1.2+ for years -- so there is no
+# legacy peer to accommodate, and nothing is gained by allowing 1.0/1.1
+# beyond widening the attack surface of a listener that sits on shop wifi.
+_MINIMUM_TLS_VERSION = ssl.TLSVersion.TLSv1_2
+
+
+class _QuietHandler(WSGIRequestHandler):
+    """`wsgiref`'s default handler does two things that are actively wrong on
+    a POS till, both of which cost real wall-clock per request.
+
+    `address_string()` calls `socket.getfqdn()` on the peer address, i.e. a
+    reverse DNS lookup, per request. On a shop LAN with no working reverse
+    zone that blocks until the resolver gives up -- seconds, sometimes, for a
+    log line nobody reads. Returning the raw address is both faster and more
+    useful: an IP is what an operator can actually match against a device.
+
+    `log_message()` writes a line to stderr per request. At one request per
+    device per tick, forever, that is an unbounded write to a stream a
+    packaged build may not even have. Routed through the module logger
+    instead, at DEBUG, so it is available when someone is diagnosing and
+    silent when nobody is."""
+
+    def address_string(self):
+        return self.client_address[0]
+
+    def log_message(self, format, *args):  # noqa: A002 - signature is fixed by the base class
+        _log.debug("site relay %s - %s", self.address_string(), format % args)
+
+
+class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    """One thread per connection, and they are daemons deliberately: a paired
+    device that goes away mid-request (a tablet carried out of wifi range,
+    which happens constantly in a restaurant) must never keep the till's
+    process alive at shutdown. `allow_reuse_address` lets the hub restart
+    without waiting out TIME_WAIT on its own port, which otherwise turns
+    every restart into a minute of "the hub is down" for every device."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def build_site_relay_app(*, get_conn, **blueprint_kwargs):
+    """A Flask app whose ENTIRE route table is the site relay blueprint.
+
+    Imported lazily so this module can be imported (and unit-tested) without
+    Flask being importable, matching how `app.py` treats its own optional
+    subsystems.
+
+    Nothing else may be registered here. See the module docstring: every
+    route on this app is a route exposed to the shop's wifi."""
+    from flask import Flask
+
+    relay_app = Flask(__name__)
+    relay_app.register_blueprint(make_site_relay_blueprint(get_conn=get_conn, **blueprint_kwargs))
+    return relay_app
+
+
+def build_tls_context(cert_path, key_path):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = _MINIMUM_TLS_VERSION
+    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    return context
+
+
+def start_site_relay(*, get_conn, host, port, identity_dir, **blueprint_kwargs):
+    """Bind the LAN listener and serve it on a background daemon thread.
+
+    Returns `(server, pin)` -- the pin being the base64 SHA-256 SPKI a client
+    must pin to reach this hub, which is what the pairing QR carries. The
+    caller is responsible for showing it to an operator; this function just
+    makes sure the identity exists and hands it back.
+
+    The identity is created ONCE, on first call, and reused forever after
+    (`load_or_create_site_tls_identity`). That matters more than it looks:
+    regenerating the keypair would silently invalidate the pin every already-
+    paired device is holding, and the symptom on each of those devices is not
+    an error message but sync quietly ceasing to work.
+
+    `port=0` is honoured and is how tests bind an ephemeral port -- read the
+    real port back off `server.server_address[1]` afterwards.
+    """
+    identity_dir = Path(identity_dir)
+    key_path, cert_path, pin = load_or_create_site_tls_identity(identity_dir)
+
+    relay_app = build_site_relay_app(get_conn=get_conn, **blueprint_kwargs)
+    server = make_server(host, port, relay_app,
+                         server_class=_ThreadingWSGIServer,
+                         handler_class=_QuietHandler)
+
+    # The LISTENING socket is wrapped, so every socket returned by accept()
+    # is already a TLS socket -- there is no window in which a connection is
+    # served in the clear. Wrapping per-accepted-socket instead would leave
+    # exactly that window, and it is the classic way this recipe is got
+    # wrong.
+    server.socket = build_tls_context(cert_path, key_path).wrap_socket(server.socket, server_side=True)
+
+    thread = threading.Thread(target=server.serve_forever,
+                              name="aura-site-relay", daemon=True)
+    thread.start()
+
+    _log.info(
+        "Site relay listening on https://%s:%d (SPKI pin %s). This process is now "
+        "reachable from the local network on that port; the UI server is unaffected "
+        "and stays on loopback.",
+        host, server.server_address[1], pin,
+    )
+    return server, pin
+
+
+def local_lan_addresses():
+    """Best-effort list of this machine's non-loopback addresses, for showing
+    an operator where the hub actually is.
+
+    Deliberately NOT used to decide anything -- addressing is learned by
+    paired devices from the beacon and pinned by KEY, never by address (see
+    the design doc sec4: "Identity lives in keys, not addresses"). This exists
+    only so a setup screen can print something a human can sanity-check, and
+    so a support call has a starting point.
+
+    `gethostbyname_ex` is unreliable on machines with several interfaces and
+    returns nothing useful on some Windows configurations, so its failure is
+    not an error -- an empty list just means the screen shows no hint."""
+    try:
+        _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
+    except OSError:
+        return []
+    return [a for a in addresses if not a.startswith("127.")]
