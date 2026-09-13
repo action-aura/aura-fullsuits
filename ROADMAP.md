@@ -2921,3 +2921,85 @@ claim its own number when someone builds it.
 before and after, and only advances the marker on full success. Creating these
 tables outside that pattern would be the exact unconditional-DDL footgun
 `migration_safety.py`'s docstring exists to prevent.
+
+## 2026-09-14 - R-LAN SHIPPED (the parts listed), and what it deliberately did not build
+
+Cashes in the v30 claim above. `docs/launch-readiness/lan-restaurant-design.md`
+sec3-sec6 are built and wired; its status header now says so, because this repo
+has twice been burned by a status document outliving the code it described.
+
+**What a shop gets today.** Switch `AURA_SITE_RELAY_ENABLED=1` on the main till
+and it binds a LAN-facing TLS listener on its own port (5443 by default, a
+SEPARATE minimal Flask app - the POS UI stays on 127.0.0.1). Paired devices
+point their ordinary `SyncRelayClient` at it and converge with no internet at
+all. When internet returns, the forwarder carries the site log up to Owner and
+the cloud stream back down.
+
+**The thing most likely to be misread, so it is written down here too:** this is
+NOT a per-device "LAN when offline, cloud when online" switch. A device that
+talked to two relays would hold one `sync_cursor` against two sequence-spaces
+and fork its own history. LAN devices talk to the hub and ONLY the hub; the hub
+alone bridges. Design sec6: "every device talks to exactly ONE relay, ever."
+
+**Off by default, and that default is the security boundary.** Every Aura
+process binds loopback only; this flag is the one switch that makes it listen
+where a stranger on the same wifi can reach. It is compared against the exact
+string `'1'` - `true`/`yes`/`0`/`''` all mean off - and both directions are
+pinned by tests, because a drift to on would make every other test pass harder
+while quietly putting every till on the customer wifi.
+
+**Measured, not asserted.** 144 tests across 16 files, one process per file
+(AUDIT-010). Every guard was mutation-proved in both directions; the ones worth
+repeating here because each names a real failure mode:
+
+| Mutation | What went red |
+|---|---|
+| `AUTOINCREMENT` removed from `site_sync_events.seq` | a deleted seq was reissued (`assert 3 > 3`) - the reuse that makes a device silently skip an event |
+| `INSERT OR IGNORE` to `INSERT OR REPLACE` | dedup gone (`assert 2 == 0`) |
+| pull's `origin_device_id != ?` dropped | a device received its own events back |
+| `resolve_pull_cursor` returns `since` verbatim | `assert 1000000000 == 1` - the unrecoverable high-water mark that blinds a device permanently |
+| `consume_nonce` removed | a byte-for-byte replay succeeded (200, not 400) |
+| revoke check moved before signature check | `INSTALLATION_REVOKED` leaked to an unsigned request - an unauthenticated oracle over which devices exist |
+| events inserted before validation | a rejected batch left rows behind |
+| SPKI pin replaced with whole-cert hash | a cert reissued over the same key changed pin - i.e. every DHCP lease would break pairing |
+| pin check neutralised | a client holding the WRONG key reached the hub over a real socket |
+| forwarder's echo guard removed | cloud-origin rows were pushed back to the cloud |
+| forward watermark advanced before the push | a whole batch was lost when the push raised (`assert 9 == 0`) |
+| hub enable gate replaced with `if False` | a live `aura-site-relay` thread on an install that never opted in |
+
+**What was deliberately NOT built, stated so nobody assumes the wave is done:**
+
+* **The Owner-signed roster (sec5 Layer 3).** `site_roster` exists as a table
+  and nothing writes it. Authorization today rests on `site_paired_devices`
+  alone, which means a device Owner SUSPENDS keeps LAN access until someone
+  revokes it at the till. The till CAN, immediately - that is what
+  `revoked_at` is for, and sec5 argues the urgent case (a fired employee's
+  tablet) is standing in the shop anyway - but the Owner-side half is a real
+  gap and it is collaborator-area work (one signed endpoint reusing the
+  assertion-signing machinery, plus roster-aware pruning).
+* **Pairing UX and the UDP beacon (sec4).** There is no QR screen and no
+  addressing beacon; pairing is currently a `store.pair_device` call. Until
+  that lands, the hub's SPKI pin is only obtainable from its boot log line.
+* **Hub promotion** (sec3's manual-promotion recovery path) and **site-log
+  pruning** against `site_device_cursors` - the table is written, nothing
+  prunes yet, so a long-lived hub's log grows without bound.
+* **Per-row quarantine on push.** Owner quarantines one malformed event and
+  lets the batch through; v30 claimed no quarantine table, so a batch with any
+  invalid event is rejected whole (naming the offending index). Fails closed -
+  nothing is silently dropped - but a poison event blocks one device's outbox
+  until someone looks. `site_sync_quarantine` is the eventual fix.
+* **Android.** Everything above is desktop/Python. The phone's relay URL is
+  still a build-time `BuildConfig` constant with no runtime override and
+  OkHttp's `CertificatePinner` is not wired, so a phone cannot yet be pointed
+  at a hub. This is the single biggest remaining gap for the restaurant
+  picture, since the waiter tablets in sec7 are Android.
+
+**One dependency question deferred to the owner rather than decided here.** The
+listener uses the standard library's threaded WSGI server plus `ssl`, because
+waitress cannot terminate TLS and there is no reverse proxy on a till. That is
+sized honestly for this load class (one push and one pull per device per 10s
+tick - about 1 req/s for a five-device restaurant) versus the UI server's
+per-scan, per-keystroke traffic, and the assumption is written into
+`listener.py` so it expires loudly if this ever serves the UI. If a real
+production TLS server is wanted instead, that is a new shipped dependency and
+therefore a release decision, not a code one.

@@ -3,7 +3,22 @@
 **Status:** DESIGN, extends `docs/launch-readiness/restaurant-edition-plan.md`
 (d20d5ff). Written 2026-08-31 against `feat/launch-readiness` (worktree
 `ci-hardening-w0.3-continue`), while the v26 modifiers wave is being built
-concurrently in `products/retail`. No code is changed by this document.
+concurrently in `products/retail`. No code was changed by this document.
+
+**IMPLEMENTATION STATUS (2026-09-14): sec3-sec6 are BUILT.** The site relay,
+its verification path, the SPKI-pinned transport, the LAN TLS listener and
+the hub-to-cloud forwarder all exist and are wired into `products/retail`
+behind `AURA_SITE_RELAY_ENABLED` (off by default). Retail schema **v30**
+carries the six `site_*` tables. 144 tests, every guard mutation-proved in
+both directions, including a real two-device convergence over a real TLS
+socket (`commercial_runtime/sync/tests/test_site_relay_end_to_end.py`).
+
+STILL UNBUILT, and the parts a shop would notice first: the Owner-signed
+roster of sec5 Layer 3 (`site_roster` is created but nothing writes it, so
+authorization currently rests on local pairing alone), the QR pairing UX and
+UDP beacon of sec4, hub promotion, and site-log pruning against
+`site_device_cursors`. Read sec4/sec5 as specification, not as description,
+and re-verify sec0's anchors before building on them.
 
 **Owner's decision, verbatim:** *"the restaurant can work at both online and
 offline by being at the same local network as the other tablets or devices.
