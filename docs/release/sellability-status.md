@@ -789,11 +789,25 @@ were found.
 Found by doing it. None of these are in any runbook, and each fails in a way
 that points somewhere other than the cause.
 
-1. **A fresh Owner cannot issue a licence at all.** `flask seed-catalog` seeds
-   products, platforms, channels, entitlements and add-ons — and **zero
-   plans**. A licence is issued against a plan, and there is no `seed-plans`
-   command, so the catalogue must be populated through the UI before the first
-   key can exist.
+1. **A fresh Owner cannot issue a licence until a plan exists.** `flask
+   seed-catalog` seeds products, platforms, channels, entitlements and add-ons
+   — and **zero plans**. A licence is issued against a plan.
+
+   CORRECTED 2026-09-13: this used to say "there is no `seed-plans` command".
+   There is — `owner/app/cli.py:62`, `@app.cli.command("seed-plans")`. The
+   concern is still real, but the reason changed, and the corrected reason is
+   the more dangerous one. `seed_canonical_plans()` DOES give you a sellable
+   plan, priced **$99 USD**, which that function's own comment calls "NOT a
+   real commercial price" — a placeholder so a fresh deployment can cut its
+   first key. So the risk is no longer "you cannot issue a licence"; it is
+   "you can, against a placeholder price, without noticing". Run
+   `flask seed-plans`, then replace that plan with real pricing through the
+   catalogue UI BEFORE issuing anything to a paying customer.
+
+   Note it is also absent from `docker-compose.staging.yml`'s startup chain
+   (alembic → seed-rbac → seed-catalog → seed-offline-policy → gunicorn),
+   deliberately: auto-seeding a placeholder price into every deployment would
+   make the accident above the default rather than a mistake.
 2. **`AURA_OWNER_LICENSING_URL` and `AURA_SYNC_RELAY_URL` are NOT parallel,
    despite looking it.** The licensing client appends only `/activations`, so
    its variable must carry the full API base

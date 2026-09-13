@@ -1,12 +1,23 @@
 # Phase 9 -- staging reverse proxy config.
 # {$STAGING_DOMAIN} is set via docker-compose.staging.yml's env_file
 # (.env.staging, outside the repo -- see secrets-and-key-management.md).
-# Real deployment: Caddy obtains a Let's Encrypt certificate automatically
-# for a real public domain. This local-only session: STAGING_DOMAIN is a
-# hosts-file-mapped name and Caddy is configured with `tls internal` to use
-# its own local CA instead (see staging-deployment-report.md) -- clearly a
-# different trust root from a real deployment, never presented as
-# equivalent.
+# TLS: this file contains NO tls directive, so Caddy does the default thing
+# and obtains a real Let's Encrypt certificate automatically as soon as
+# {$STAGING_DOMAIN} resolves publicly to this host. That is what a real
+# deployment wants, and it needs no change.
+#
+# Corrected 2026-09-13: this comment used to state that Caddy "is configured
+# with `tls internal` to use its own local CA". It is not, and was not --
+# `tls` appeared nowhere in this file except that sentence. The sentence
+# described how one local-only session had been run, and then stayed here
+# describing the file. Left uncorrected it misleads in both directions: an
+# operator either believes their certificate is self-signed and goes looking
+# for the problem, or helpfully "restores" the missing `tls internal` and
+# breaks public TLS on the live host.
+#
+# If you DO want a local CA for a hosts-file-mapped name while testing, add
+# `tls internal` inside the site block below -- and take it out again before
+# the domain goes public.
 
 {$STAGING_DOMAIN} {
 	# Security headers (Milestone 4). CSP is intentionally permissive on
