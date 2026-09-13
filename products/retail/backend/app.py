@@ -45,6 +45,7 @@ from config import (
     LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
     SYNC_RELAY_BASE_URL, SYNC_RELAY_TIMEOUT_SECONDS, SYNC_RELAY_VERIFY_TLS,
     SYNC_RELAY_URL_PROBLEMS,
+    SITE_RELAY_ENABLED, SITE_RELAY_PORT, SITE_RELAY_BIND_HOST,
 )
 
 # Final-review Fix 2 (2026-08-07): a sync relay URL that fails config.py's
@@ -1040,6 +1041,76 @@ def _configure_file_logging():
         )
 
 
+_site_relay_server = None
+
+
+def _start_site_relay_if_enabled():
+    """Hub mode: bind the LAN-facing site relay, if this install is a hub.
+
+    See docs/launch-readiness/lan-restaurant-design.md §3 and
+    commercial_runtime/sync/site_relay/listener.py. A hub hosts a LAN
+    implementation of Owner's own push/pull contract so tablets and second
+    tills on the shop's wifi converge with no internet at all.
+
+    THIS IS THE ONLY PLACE IN THE PRODUCT THAT BINDS A NON-LOOPBACK SOCKET,
+    which is why the gate is an explicit opt-in and why the failure handling
+    below is what it is. `SITE_RELAY_ENABLED` is false unless the environment
+    says exactly '1' (see config.py's block and
+    retail_site_relay_config_test.py, which pins that default because nothing
+    else in the suite would notice if it drifted to on).
+
+    The UI server is untouched by all of this: it keeps its own 127.0.0.1
+    binding in `_run_server`, and the relay gets a SEPARATE port and a
+    SEPARATE, minimal Flask app carrying only the relay blueprint. The LAN is
+    offered the sync contract and nothing else.
+
+    NEVER FATAL, and deliberately so -- same rule as the sync relay's own
+    "misconfigured URL disables SYNC, not the app" handling above. A till
+    whose LAN port is already taken, or whose firewall refuses the bind, must
+    still boot and sell; it simply is not a hub this run. Logged at ERROR so
+    the condition is diagnosable rather than silent, because the symptom on
+    every OTHER device is just "sync stopped working" with nothing to point
+    at.
+
+    Guarded against a second start: `init_app()` is reachable more than once
+    (see its own docstring's note about timers that are not safe to start
+    twice), and starting a second listener would either raise on the bind or,
+    worse, leave an orphaned thread serving a stale connection factory."""
+    global _site_relay_server
+    if not SITE_RELAY_ENABLED or _site_relay_server is not None:
+        return
+    try:
+        from commercial_runtime.sync.site_relay.listener import (
+            local_lan_addresses, start_site_relay)
+        _site_relay_server, pin = start_site_relay(
+            get_conn=get_retail_conn,
+            host=SITE_RELAY_BIND_HOST,
+            port=SITE_RELAY_PORT,
+            identity_dir=Path(DATABASE_DIR).parent / 'site-relay',
+        )
+        # The pin is what a paired device must trust, so an operator has to be
+        # able to read it back off the hub -- it is the payload of the pairing
+        # QR the design describes, and until that screen exists this log line
+        # is the only way to get it. It is not a secret (design §4: "The
+        # beacon carries no secrets"); it is a public key fingerprint.
+        logging.getLogger(__name__).info(
+            'Site relay (hub mode) is ON. Devices pair to: %s -- SPKI pin %s',
+            ', '.join(f'https://{a}:{SITE_RELAY_PORT}' for a in local_lan_addresses())
+            or f'https://<this machine>:{SITE_RELAY_PORT}',
+            pin,
+        )
+    except Exception:
+        _site_relay_server = None
+        logging.getLogger(__name__).exception(
+            'Site relay (hub mode) FAILED to start on %s:%s -- this till is NOT '
+            'acting as a hub, so any device paired to it will stop converging '
+            'until this is fixed. The till itself is unaffected and keeps '
+            'selling. Usual causes: the port is already in use, or a firewall '
+            'rule is refusing the bind.',
+            SITE_RELAY_BIND_HOST, SITE_RELAY_PORT,
+        )
+
+
 def init_app():
     """Initialize the registry + retail schema, and start the background
     sync loop (if configured). Call once before serving.
@@ -1077,6 +1148,10 @@ def init_app():
         _sync_service.start()
     if _registry_sync_service is not None:
         _registry_sync_service.start()
+    # After init_retail() above, necessarily: the relay serves the six
+    # `site_*` tables that migration creates, and a hub that bound its port
+    # before they existed would answer its first push with a 500.
+    _start_site_relay_if_enabled()
     _resume_einvoicing_workers()
     _resume_notifications_workers()
     _resume_whatsapp_workers()
