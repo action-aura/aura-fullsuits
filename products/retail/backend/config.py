@@ -254,6 +254,46 @@ SYNC_RELAY_BASE_URL = _resolve_effective_sync_relay_base_url(_AURA_SYNC_RELAY_UR
 SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 
 
+# ── LAN site relay / hub mode (R-LAN) ───────────────────────────────────────
+# docs/launch-readiness/lan-restaurant-design.md §3. This install acting as
+# the shop's HUB: hosting a LAN-facing implementation of Owner's own
+# /api/sync/v1/push|pull wire contract, backed by SQLite, so waiter tablets
+# and second tills converge over the shop wifi with NO internet at all --
+# and a forwarder bridges the accumulated site log up to Owner's real cloud
+# relay whenever internet comes back.
+#
+# Note what this is NOT: it is not a per-device "sync over LAN when offline,
+# cloud when online" switch. A device that talked to two relays would hold
+# one `sync_cursor` against two different seq-spaces and would fork its own
+# history. LAN devices point at the hub and ONLY the hub; the hub alone
+# talks to the cloud. See the design doc §6, "the invariant that makes this
+# safe: every device talks to exactly ONE relay, ever."
+#
+# OFF unless explicitly switched on, and that default is the security
+# posture rather than laziness: every Aura process today binds 127.0.0.1
+# only (app.py's `_run_server`), so switching this on is the single change
+# in this whole product that makes it listen on an interface a stranger on
+# the same wifi can reach. A shop that never becomes a hub exposes exactly
+# nothing -- the same invisible-unless-opted-in rule licensing and
+# e-invoicing already follow.
+SITE_RELAY_ENABLED = os.environ.get('AURA_SITE_RELAY_ENABLED') == '1'
+# A SEPARATE port from the UI listener, deliberately. The existing loopback
+# UI server keeps its 127.0.0.1 binding completely untouched: the LAN is
+# offered the sync contract and NOTHING else. Rebinding the existing server
+# to 0.0.0.0 instead would hand every device on the café wifi the entire
+# Flask session and UI surface -- a different and far larger security
+# question than relaying already-device-signed sync events, and one the
+# design doc rejects explicitly ("Do not silently rebind the existing
+# 127.0.0.1 server -- the UI surface stays loopback").
+SITE_RELAY_PORT = int(os.environ.get('AURA_SITE_RELAY_PORT', '5443'))
+# 0.0.0.0 is the honest default FOR A HUB: a hub bound to loopback can serve
+# nobody, so the feature would be inert in exactly the configuration someone
+# switched it on to get. It is only ever reached because SITE_RELAY_ENABLED
+# above had to be set deliberately first. Overridable so an operator can pin
+# it to one interface on a machine with several.
+SITE_RELAY_BIND_HOST = os.environ.get('AURA_SITE_RELAY_BIND_HOST', '0.0.0.0')
+
+
 # ── AI Assistant (Retail sidebar chat) ──────────────────────────────────────
 # Proxies the sidebar "AI Assistant" button (see app-shell.js's `hasAI` /
 # `sub-ai.js`'s SubAI module) to a small hosted LLM (phi3.5:3.8b as of
