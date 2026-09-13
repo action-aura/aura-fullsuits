@@ -3060,14 +3060,6 @@ html[data-theme="light"] {
 .toggle-switch .slider.round:before {
   border-radius: 50%;
 }
-.sys-option.eip-glow {
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  background: rgba(56, 189, 248, 0.05);
-}
-.sys-option.eip-glow.selected {
-  border-color: #38bdf8;
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
-}
 
 
 /* ── Theme Picker Panel ──

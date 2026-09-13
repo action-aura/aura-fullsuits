@@ -86,7 +86,14 @@ const EXEMPTIONS = [
   { prefix: '.secondary-icon', reason: 'Landing feature icon; same marketing illustration palette as .primary-icon.' },
   { prefix: '.sleek-icon', reason: 'Landing decorative icon chrome sitting on the dark canvas.' },
   { prefix: '.eyebrow-', reason: 'Landing eyebrow rule above the hero headline; a hairline drawn on the dark canvas.' },
-  { prefix: '.sys-option', reason: 'E-invoicing system picker highlight; its cyan bloom is a deliberate one-off attention state on a dark configuration panel.' },
+  // RETIRED 2026-09-13: the '.sys-option' exemption, together with the two
+  // rules it covered. Its reason described an 'e-invoicing system picker' on
+  // a 'dark configuration panel'; searching products/ (frontend AND backend,
+  // retail and clinic), commercial_runtime/ and android/ finds `sys-option`
+  // and `eip-glow` nowhere but main.css and this list. No markup can produce
+  // either class, so the panel does not exist and the rules could never
+  // paint. Deleted by reachability, not by pixel diff -- a selector nothing
+  // can match renders nothing on any theme.
 ];
 
 /* Properties that actually paint a surface or text. box-shadow and gradients
