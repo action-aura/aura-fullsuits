@@ -2883,3 +2883,41 @@ against a control, not against zero.
 Three further exemptions (`.hero-`, `#page-landing`, `#page-login`) matched zero
 rules and were deleted on 2026-09-13, along with `.auth-` and `.sys-option`.
 EXEMPTIONS: 26 at the start of that session, 21 after.
+
+## 2026-09-14 - retail schema v30 CLAIMED for the LAN site relay (R-LAN)
+
+Same single-writer discipline as v18-v29: claimed in writing BEFORE any builder
+is dispatched, because `RETAIL_SCHEMA_VERSION` has exactly one next value and
+this project has already had two branches silently claim the same one.
+
+**Claiming retail v30 for the site relay's local tables**, implementing
+`docs/launch-readiness/lan-restaurant-design.md` (the R-LAN wave the owner
+decided on 2026-08-31). Head at the time of claiming: **v29**
+(`_migrate_add_loyalty_return_id`). v24 remains RESERVED BY NAME for
+inter-branch transfers and is deliberately skipped, as it has been since
+2026-08-30.
+
+The migration creates the hub-side tables and nothing else - no column is added
+to any existing table, so an install that never becomes a hub carries empty
+tables and pays nothing, per the invisible-unless-opted-in doctrine:
+
+| Table | Holds | Why it cannot live somewhere existing |
+|---|---|---|
+| `site_sync_events` | the site event log: AUTOINCREMENT `seq`, event UUID UNIQUE, entity/event/payload/created_at, `origin_device_id` | this is the hub's own seq-space, a peer of Owner's cloud log. It is NOT `sync_outbox` - the outbox is this device's *unsent* rows, the site log is *every* device's *accepted* rows, and the two have different lifetimes, different pruning rules and different readers |
+| `site_sync_nonces` | replay store, TTL-pruned | ports the cloud relay's nonce burn. Without it a captured push replays forever |
+| `site_device_cursors` | per-paired-device acked seq | drives site-log pruning the way `owner/app/sync/pruning.py` drives cloud pruning |
+| `site_paired_devices` | devices paired to this hub + their local revoke flag | the design's answer to suspension latency: the fired employee's tablet is revoked at the till immediately, ahead of the Owner roster refresh |
+| `site_forward_cursor` | single row: how far the forwarder has pushed upstream | mirrors `push_once`'s ack-after-success discipline. Cannot reuse `sync_cursor`, which is the device's ONE cloud cursor - conflating them would break the "every device talks to exactly one relay" invariant the whole design rests on |
+| `site_roster` | the cached Owner-signed roster blob + its verified-at time | verified against the trust anchor already bundled in every install |
+
+**What is deliberately NOT in this claim.** The Owner **endpoint** that mints and
+signs the roster is Owner-side work in the collaborator's area and takes no
+retail schema version. The restaurant `Plan` row, roster-aware pruning on the
+Owner side, and R2's open-order entity are all out of scope here and each will
+claim its own number when someone builds it.
+
+**Why a version is needed at all rather than a lazy CREATE TABLE IF NOT EXISTS:**
+`ensure_schema_version()` takes a live backup and runs `PRAGMA integrity_check`
+before and after, and only advances the marker on full success. Creating these
+tables outside that pattern would be the exact unconditional-DDL footgun
+`migration_safety.py`'s docstring exists to prevent.
