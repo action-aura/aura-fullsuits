@@ -2840,3 +2840,46 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   import (deliberately, to avoid a layering inversion — see
   `build_document`'s comment on why `core/retail` doesn't import
   `api.retail_api`).
+
+## Dead CSS behind the token-test exemptions (found 2026-09-13, NOT removed)
+
+`products/retail/frontend/css/main.css` still carries **37 rules** for screens
+that no longer exist anywhere in the product. Twelve exempted selector prefixes
+in `products/retail/tests/retail_design_tokens_test.js` have rules in main.css
+and **no producer anywhere in the repo** -- verified by reading all 2,962 tracked
+text files (not `git grep`), across `products/` frontend AND backend, retail and
+clinic, plus `commercial_runtime/`, `android/` and `owner/`:
+
+| prefix | rules | prefix | rules |
+|---|---|---|---|
+| `.subs-` | 16 | `.bh-` / `#bh-` | 2 |
+| `.b2c-` | 12 | `.ml-` | 2 |
+| `.lp-` | 1 | `.global-canvas` | 1 |
+| `.card-glass` | 1 | `.primary-icon` | 1 |
+| `.secondary-icon` | 1 | `.sleek-icon` | 1 |
+| `.eyebrow-` | 1 | | |
+
+`.subs-` looks live to a naive grep only because a PLAN DOCUMENT
+(`docs/superpowers/plans/2026-08-06-retail-standalone-ui-shell.md`) mentions it;
+no code file contains the string at all.
+
+**Why this was not just deleted.** Two of the 37 are not standalone rules. The
+shared `:focus-visible` rule lists ~75 selectors, of which 9 are dead and the
+rest are live and carry every focus outline in the product; the touch-target
+rule lists 10, of which 1 is dead. Removing those safely means editing a
+SELECTOR LIST, not deleting a rule, and an automated attempt got the rule
+boundaries wrong twice (it treated the comment block preceding a rule as part of
+its selector, so it would have deleted section headers and, on the second run,
+tripped its own "no live selector may disappear" invariant). The invariant
+blocked the write both times; nothing was committed.
+
+These rules cost nothing at runtime -- an unmatched selector paints nothing --
+so this is hygiene, not a defect. Whoever picks it up: do it per selector, keep
+the live-selector invariant, and pixel-diff before/after with
+`capture_all.py before | after | compare`, remembering that a control run varies
+on its own (till ids, timestamps) so the changed-frame set must be compared
+against a control, not against zero.
+
+Three further exemptions (`.hero-`, `#page-landing`, `#page-login`) matched zero
+rules and were deleted on 2026-09-13, along with `.auth-` and `.sys-option`.
+EXEMPTIONS: 26 at the start of that session, 21 after.

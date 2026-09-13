@@ -49,13 +49,18 @@ const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
 // justification was the reason ~110 lines of un-tokenised colour went
 // unchallenged. If an entry here ever stops being true, delete it; a stale
 // reason is worse than no exemption at all.
+  // RETIRED 2026-09-13: '.hero-', '#page-landing' and '#page-login'. Each was
+  // measured against main.css and matches ZERO rules, so none of them excused
+  // anything -- they only stood ready to excuse the next literal that happened
+  // to land on the prefix, which is precisely how the '.auth-' entry came to
+  // swallow a 2.38:1 login error message. See ROADMAP.md for the 37 rules
+  // belonging to screens that no longer exist, which are NOT removed here.
 const EXEMPTIONS = [
   { prefix: '.ws-', reason: 'Welcome splash: a timed intro over a full-screen animated black-hole canvas. Its palette is the canvas\'s, not the till\'s; light surfaces here would be white-on-white.' },
   { prefix: '.bh-', reason: 'Black-hole canvas layers themselves — colours are sampled by the WebGL/2D animation, not by the theme.' },
   { prefix: '#bh-', reason: 'Black-hole cursor glow; same animation, id-scoped.' },
   { prefix: '.global-canvas', reason: 'Container for the same background canvas.' },
   { prefix: '.modern-', reason: 'Landing/marketing surfaces rendered over the dark canvas before any shop data exists.' },
-  { prefix: '.hero-', reason: 'Landing hero, over the dark canvas.' },
   { prefix: '.l-', reason: 'Landing page title/button fragments, over the dark canvas.' },
   { prefix: '.lp-', reason: 'Landing page chrome (language/theme pickers) shown before login.' },
   { prefix: '.ml-', reason: 'Modern login screen, over the dark canvas.' },
@@ -71,8 +76,6 @@ const EXEMPTIONS = [
   // no paint literal left under this prefix, so the entry is deleted rather
   // than reworded: a reworded exemption documents the rule, a deleted one
   // enforces it.
-  { prefix: '#page-landing', reason: 'Landing page root element; sets the dark ground the canvas animation is composited against.' },
-  { prefix: '#page-login', reason: 'Login page root element; same dark ground as the landing page, shown before any till surface exists.' },
   { prefix: '.subs-', reason: 'Subsystem chooser tiles shown between login and the till; brand moment over the dark canvas.' },
   { prefix: '.domain-', reason: 'Per-domain brand tinting; --domain-* tokens are overwritten at runtime by JS per subsystem.' },
   { prefix: '.aura-logo', reason: 'Fixed brand mark; its colours are the company identity and must not shift with the product theme.' },
