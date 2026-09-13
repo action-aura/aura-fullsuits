@@ -46,6 +46,40 @@ const vm = require('vm');
 
 const FRONTEND_FILE = path.join(__dirname, '..', 'frontend', 'subsystem-retail.js');
 
+/**
+ * The real RETAIL_PAYMENT_METHOD_COLORS map, read out of the source.
+ *
+ * The per-tender colour assertion below used to carry a hand-typed copy of two
+ * of these values. That made a test about NEGATIVE BUCKETS also a palette
+ * freeze, and it broke on 2026-09-13 when four of the chart colours were
+ * darkened for a contrast fix -- a change this file has no opinion about.
+ *
+ * Reading the map keeps the property this file actually cares about: that the
+ * bar fallback still colours each tender from the NAMED map rather than letting
+ * Chart.js pick positionally, which is the bug the map was written to prevent.
+ * A wrong-colour fallback still fails here.
+ *
+ * WHAT IT CAN NO LONGER CATCH, stated rather than left to be discovered: a
+ * change to the palette VALUES themselves. That was never this file's job, and
+ * those values are now pinned on their own terms -- contrast against every
+ * theme's card and pairwise separability -- by
+ * retail_chart_series_contrast_test.js.
+ */
+function paymentMethodColors() {
+  const src = fs.readFileSync(FRONTEND_FILE, 'utf8');
+  const block = /RETAIL_PAYMENT_METHOD_COLORS\s*=\s*\{([\s\S]*?)\}/.exec(src);
+  assert.ok(block, 'RETAIL_PAYMENT_METHOD_COLORS not found in subsystem-retail.js');
+  const out = {};
+  const re = /(\w+)\s*:\s*'(#[0-9a-fA-F]{6})'/g;
+  let hit;
+  while ((hit = re.exec(block[1])) !== null) out[hit[1]] = hit[2];
+  // Anti-vacuity: an empty parse would make the assertion below compare [] to
+  // [] and pass while proving nothing at all.
+  assert.ok(Object.keys(out).length >= 6,
+    `parsed only ${Object.keys(out).length} payment colours -- the map parser has gone blind`);
+  return out;
+}
+
 function makeElementStub(id) {
   const el = {
     id: id || '',
@@ -155,10 +189,16 @@ function assertHonestNegativeChart(cfg, where) {
     'baseline instead of just rendering as a short positive-looking bar'
   );
 
-  // Named per-tender colors survive the switch to bars.
+  // Named per-tender colors survive the switch to bars. Expected values come
+  // from the real map (see paymentMethodColors) rather than a copy typed here,
+  // so this asserts "the fallback still uses the NAMED colour for each tender"
+  // -- the actual property -- instead of freezing whatever the palette happened
+  // to be the day this test was written.
+  const palette = paymentMethodColors();
   assert.deepStrictEqual(
-    Array.from(cfg.data.datasets[0].backgroundColor), ['#10b981', '#3b82f6'],
-    `${where}: cash/card must keep their usual colors in the bar fallback`
+    Array.from(cfg.data.datasets[0].backgroundColor), [palette.cash, palette.card],
+    `${where}: cash/card must keep their usual colors in the bar fallback ` +
+    `(expected ${palette.cash} and ${palette.card} from RETAIL_PAYMENT_METHOD_COLORS)`
   );
 }
 

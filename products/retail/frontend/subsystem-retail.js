@@ -8,9 +8,21 @@
 // which page's API call happens to order it differently (both endpoints
 // sort by revenue, so a positional palette flipped colors between pages for
 // the identical data). Covers all 6 POS payment methods (see pos-pay-btns).
+// Measured 2026-09-13 against every theme's chart-card ground
+// (--surface-panel, #ffffff through #0b111b) with a 3:1 floor, a
+// doughnut slice being a graphical object: cash (#10b981), mobile
+// (#f59e0b) and voucher (#06b6d4) sat at 2.0-2.5:1 on the two LIGHT
+// themes while scoring 6.9-8.8:1 on the three dark ones they were
+// picked against. Replaced with the same hues (0.5-0.6 deg drift)
+// darkened into the narrow band that clears the bar on the lightest
+// AND darkest card at once -- still ONE value per method, because a
+// method that changed colour per theme would defeat the point above.
+// Pairwise separability re-checked: the six stay 39.5-132.8 apart in
+// Lab dE76, so they still tell each other apart in one doughnut.
+// Pinned by retail_chart_series_contrast_test.js.
 const RETAIL_PAYMENT_METHOD_COLORS = {
-  cash: '#10b981', card: '#3b82f6', mobile: '#f59e0b',
-  transfer: '#a855f7', credit: '#ef4444', voucher: '#06b6d4',
+  cash: '#0c8b61', card: '#3b82f6', mobile: '#a96d08',
+  transfer: '#a855f7', credit: '#ef4444', voucher: '#04859b',
 };
 
 // Shared builder for BOTH payment-method charts (dashboard #r-dash-pay and
@@ -10994,11 +11006,19 @@ const RetailSystem = {
         const chartDefs = [
           ['rep-trend', { type:'line',
             data:{ labels:trend.labels||[], datasets:[
-              // Series colours below ('#38bdf8', '#a855f7', and the y1 axis
-              // ticks that deliberately match it) are categorical identity
-              // colours, not theme tokens -- left alone deliberately in this
-              // pass so the next reader does not mistake them for a miss.
-              { label:t('Revenue'), data:trend.data||[], borderColor:'#38bdf8', backgroundColor:'rgba(56,189,248,0.1)', fill:true, tension:.4, yAxisID:'y' },
+              // Series colours are CATEGORICAL identity colours, not theme
+              // tokens: one value each on every theme, so 'Revenue' is always
+              // the same colour. That stays. What it never asked is whether a
+              // categorical colour is VISIBLE on the card it is drawn on, and
+              // these render on five grounds from #ffffff to #0b111b. Measured
+              // 2026-09-13: #38bdf8 was 2.14:1 on Day and 2.01:1 on Sand
+              // against a 3:1 floor, while scoring 8.1-8.8:1 on the dark
+              // themes it was chosen against. #2782ab is the same hue (0.2
+              // deg) darkened into the band that clears the lightest and
+              // darkest card at once -- worst 4.04:1. #a855f7 was measured at
+              // 3.71:1 worst and deliberately left alone.
+              // Pinned by retail_chart_series_contrast_test.js.
+              { label:t('Revenue'), data:trend.data||[], borderColor:'#2782ab', backgroundColor:'rgba(39,130,171,0.1)', fill:true, tension:.4, yAxisID:'y' },
               { label:t('Transactions'), data:trend.transactions||[], borderColor:'#a855f7', backgroundColor:'transparent', borderDash:[4,4], type:'bar', yAxisID:'y1' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
@@ -11020,10 +11040,11 @@ const RetailSystem = {
           })(),
           ['rep-top', { type:'bar',
             data:{ labels:top.labels||[], datasets:[
-              // Series colours ('#8b5cf6', '#10b981') are categorical
-              // identity colours -- left alone deliberately, same as rep-trend.
+              // Categorical identity colours, same rule as rep-trend above.
+              // #8b5cf6 measured 3.97:1 worst and is untouched; #10b981 was
+              // 2.38:1 on Sand and is now #0c8b61 (same hue, worst 4.03:1).
               { label:t('Units Sold'), data:top.data||[], backgroundColor:'#8b5cf6' },
-              { label:this._revenueLabel(), data:top.revenue||[], backgroundColor:'#10b981' }
+              { label:this._revenueLabel(), data:top.revenue||[], backgroundColor:'#0c8b61' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{labels:{color:tickClr}} },
@@ -11032,10 +11053,10 @@ const RetailSystem = {
           }],
           ['rep-branch-chart', { type:'bar',
             data:{ labels:byBranch.labels||[], datasets:[
-              // Series colours below ('#38bdf8', '#a855f7', and the y1 axis
-              // ticks that deliberately match it) are categorical identity
-              // colours -- left alone deliberately, same as rep-trend above.
-              { label:t('Revenue'), data:byBranch.data||[], backgroundColor:'#38bdf8' },
+              // Categorical identity colours, same rule as rep-trend above.
+              // #2782ab replaces #38bdf8 for the contrast reason recorded
+              // there; #a855f7 and the y1 ticks that match it are untouched.
+              { label:t('Revenue'), data:byBranch.data||[], backgroundColor:'#2782ab' },
               { label:t('Transactions'), data:byBranch.transactions||[], backgroundColor:'#a855f7', yAxisID:'y1' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
