@@ -1288,5 +1288,7 @@
   "No entries match these filters": "No entries match these filters",
   "Widen the date range, or set Action and Entity back to All, to see more.": "Widen the date range, or set Action and Entity back to All, to see more.",
   "No activity recorded yet": "No activity recorded yet",
-  "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them."
+  "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.",
+  "No sales in this period": "No sales in this period",
+  "Nobody rang a sale in this period. Widen the date range above to look further back.": "Nobody rang a sale in this period. Widen the date range above to look further back."
 }

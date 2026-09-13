@@ -1288,5 +1288,7 @@
   "No entries match these filters": "لا توجد سجلات تطابق عوامل التصفية",
   "Widen the date range, or set Action and Entity back to All, to see more.": "وسّع نطاق التاريخ، أو أعد الإجراء والكيان إلى \"الكل\"، لعرض المزيد.",
   "No activity recorded yet": "لم يُسجَّل أي نشاط بعد",
-  "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "يمتلئ سجل التدقيق مع استخدام نقطة البيع: المبيعات والمرتجعات وتغييرات الأسعار وعمليات تسجيل الدخول تُسجَّل هنا مع اسم من قام بها."
+  "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "يمتلئ سجل التدقيق مع استخدام نقطة البيع: المبيعات والمرتجعات وتغييرات الأسعار وعمليات تسجيل الدخول تُسجَّل هنا مع اسم من قام بها.",
+  "No sales in this period": "لا توجد مبيعات في هذه الفترة",
+  "Nobody rang a sale in this period. Widen the date range above to look further back.": "لم يسجّل أحد أي عملية بيع في هذه الفترة. وسّع نطاق التاريخ بالأعلى للعودة إلى وقت أبعد."
 }

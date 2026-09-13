@@ -10797,7 +10797,20 @@ const RetailSystem = {
         // the failure branches above, which establish nothing about the shop
         // at all -- an empty table shown for a failed request tells an owner
         // their staff sold nothing, which is a worse lie than an error.
-        return fail(t('No sales in this period.'));
+        //
+        // Wording alone used to be the whole of that separation, and both
+        // still rendered as the same muted grey line in the same cell, so the
+        // difference only existed for someone reading carefully. This branch
+        // now gets the empty-state treatment the two chart panels on this very
+        // screen already use, and fail() keeps the bare line for genuine
+        // errors -- so "nothing happened" and "something broke" are told apart
+        // at a glance. fail() itself is unchanged.
+        tbody.innerHTML = `<tr><td colspan="4">${this._emptyState({
+          icon: 'users',
+          title: t('No sales in this period'),
+          hint: t('Nobody rang a sale in this period. Widen the date range above to look further back.'),
+        })}</td></tr>`;
+        return;
       }
 
       let sawUnattributed = false;
