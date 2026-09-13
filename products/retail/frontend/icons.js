@@ -1029,7 +1029,19 @@ window.AuraIcons = (function () {
           '<linearGradient id="' + ringId + '" x1="0.15" y1="0.9" x2="0.85" y2="0.1">' +
             '<stop offset="0" stop-color="#1745a9" />' +
             '<stop offset="0.55" stop-color="#3f7be6" />' +
-            '<stop offset="1" stop-color="#5fe3d0" />' +
+            // The ring's END STOP, and the only part of the mark that is not a
+            // fixed literal. #5fe3d0 scores 1.35:1 on Day's ground and 1.29:1
+            // on Sand's -- a graphical object needs 3:1, so the brightest third
+            // of the ring was simply absent on both light themes while scoring
+            // 11.9:1 on the dark ones it was designed against. --brand-ring-end
+            // carries the SAME teal darkened for light grounds (#3d9185, 0.3
+            // degrees away in Lab, 3.09:1 and 3.23:1) and the original on dark
+            // grounds. This is the light-ground/dark-ground pair brand/ already
+            // ships as two files for the ink -- NOT the mark following the
+            // theme accent, which retail_design_tokens_test.js's .aura-logo
+            // exemption rightly forbids. The literal fallback keeps the mark
+            // correct anywhere the stylesheet has not loaded.
+            '<stop offset="1" stop-color="var(--brand-ring-end, #5fe3d0)" />' +
           '</linearGradient>' +
         '</defs>' +
         '<circle cx="128" cy="128" r="94" fill="none" stroke="url(#' + ringId + ')" stroke-width="15" ' +

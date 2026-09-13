@@ -80,6 +80,7 @@
                                      DARKEST text-bearing surface -- every
                                      money token is solved against THIS one. */
   --surface-scrim:      rgba(16, 22, 33, 0.55); /* modal backdrop            */
+  --brand-ring-end: #3d9185; /* brand ring gradient end -- Day -- light ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(238, 241, 246, 0.94); /* full-bleed ground behind the pre-login auth card */
 
   /* ── TEXT ─────────────────────────────────────────────────────────────────
@@ -479,6 +480,7 @@ html[data-theme="dark"] {
   --surface-active:     #273140;  /* LIGHTEST text-bearing surface -- every
                                      text and money token is solved on THIS */
   --surface-scrim:      rgba(2, 6, 12, 0.72);
+  --brand-ring-end: #5fe3d0; /* brand ring gradient end -- Calm -- dark ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(4, 6, 16, 0.93);
 
   /* ── TEXT — off-white, three steps, AA-or-better on every surface ─────── */
@@ -633,6 +635,7 @@ html[data-theme="night"] {
   --border-strong: #3f5271;
   --focus-ring-color: #59aef8;
   --surface-scrim: rgba(1, 4, 9, 0.74);
+  --brand-ring-end: #5fe3d0; /* brand ring gradient end -- Night -- dark ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(3, 6, 12, 0.94);
   --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
   --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
@@ -703,6 +706,7 @@ html[data-theme="dusk"] {
   --border-strong: #4d4870;
   --focus-ring-color: #b9a6ff;
   --surface-scrim: rgba(6, 4, 14, 0.74);
+  --brand-ring-end: #5fe3d0; /* brand ring gradient end -- Dusk -- dark ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(11, 9, 20, 0.94);
   /* White, not black -- see the note in the Night block above. The halo's only
      job is the #080808 pre-login canvas, which does not change with the theme. */
@@ -795,6 +799,7 @@ html[data-theme="sand"] {
   --border-strong: #b7ab99;
   --focus-ring-color: #9a4f12;
   --surface-scrim: rgba(40, 30, 18, 0.45);
+  --brand-ring-end: #3d9185; /* brand ring gradient end -- Sand -- light ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(243, 237, 227, 0.94);
   --elevation-card:  0 1px 2px rgba(60, 45, 25, 0.10), 0 4px 12px rgba(60, 45, 25, 0.08);
   --elevation-panel: 0 8px 28px rgba(60, 45, 25, 0.14);

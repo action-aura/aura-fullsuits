@@ -5,7 +5,7 @@
     <linearGradient id="aura-ring" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
       <stop offset="0" stop-color="#1745a9"/>
       <stop offset="0.55" stop-color="#3f7be6"/>
-      <stop offset="1" stop-color="#5fe3d0"/>
+      <stop offset="1" stop-color="#3d9185"/>
     </linearGradient>
   </defs>
   <!-- The ring: one stroke, 300 degrees, thinning nowhere — the gap is the

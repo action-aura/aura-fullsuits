@@ -5,7 +5,7 @@
     <linearGradient id="lk-ring" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
       <stop offset="0" stop-color="#1745a9"/>
       <stop offset="0.55" stop-color="#3f7be6"/>
-      <stop offset="1" stop-color="#5fe3d0"/>
+      <stop offset="1" stop-color="#3d9185"/>
     </linearGradient>
   </defs>
   <g transform="translate(20 20) scale(0.625)">
