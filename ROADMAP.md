@@ -3162,3 +3162,89 @@ exactly the stale-cursor bug this version exists to close.
 
 This fixes BOTH platforms: Android's cursor lives in the same table, reached
 through `/_internal/cursor`, so no Android-side reset call is needed.
+
+## 2026-09-14 - the LAN hub PROVEN on a real network, and Android wired to reach one
+
+Two things landed after the R-LAN wave-2 entry above: Android can now be paired
+to a hub, and the hub itself was exercised over a real LAN address rather than
+loopback.
+
+### Proven on a real network, not 127.0.0.1
+
+Every site-relay test until now used loopback on an ephemeral port. That left
+the part a shop actually depends on unproven: a self-signed certificate
+presented on a real interface, at an address appearing nowhere in its SAN,
+reached by a client that trusts it only because of a pinned key.
+
+A hub was started on the machine's real interface (`https://0.0.0.0:5443`,
+SPKI pin `wU8MfSS...KOk=`, addressing beacon on) and driven from a separate
+client over **https://192.168.1.220:5443**:
+
+| Step | Result |
+|---|---|
+| operator issues a pairing code | QR carries the LAN URL, 300s expiry |
+| device pairs over the LAN | `200 {"paired": true}` |
+| device pushes an event | `{"received": 1, "stored": 1}` |
+| device pulls | 0 events -- its own push correctly excluded |
+| **client with the WRONG pin** | refused with `SpkiPinMismatch` |
+| operator revokes it | next request `400 INSTALLATION_REVOKED` |
+
+The revoke line is the one worth keeping: design sec5 argues the urgent case is
+a fired employee's tablet standing in the shop, and the Owner roster refresh
+that would carry a suspension needs internet the shop may not have for days.
+It took effect on the device's very next request, with no internet in the path
+at all.
+
+Incidental but useful: the machine's address had moved from 192.168.1.212 to
+192.168.1.220 since the test bundle was built. Exactly the DHCP drift that
+motivated pinning a KEY rather than an address, observed in the wild within a
+day of the design saying it would happen.
+
+### v30 and v31 migrated a REAL database, not a fixture
+
+The hub was pointed at the app-data the shipped portable build created during
+the two-device test -- a database at v29 carrying a live licence, a real admin,
+a real product. After boot:
+
+    PRAGMA user_version .... 31
+    sync_cursor columns .... id, last_seq, relay_url
+    sync_cursor row ........ last_seq=0, relay_url='http://127.0.0.1:5551'
+    site_* tables .......... all six present
+    products ............... still there
+
+`last_seq` reset to 0 because the pre-v31 NULL counts as "unknown, therefore
+different" -- the documented one-time harmless reset, observed working on real
+data rather than argued for in a docstring.
+
+### Android
+
+`SpkiPinning` + `HubPrefs` (pin computation, pinned SSLSocketFactory/
+TrustManager, pairing-payload parsing), the transport wiring, and a "Shop
+network" section in Settings. 421 Android tests, 0 skipped, forced fresh run.
+
+The load-bearing detail: `SyncRelayClient` has TWO independent TLS paths --
+`push()` through OkHttp and `pull()` through a hand-rolled raw socket. Pinning
+only the OkHttp client would have left `pull()`, which carries the entire event
+stream back, completely unpinned while looking finished. Both seams now receive
+the pinned pair and a contract test asserts it.
+
+Hostname verification is off for hub connections and that is not a weakening:
+the hub's certificate carries no LAN IP in its SAN by design, and the SPKI pin
+is a stricter check than hostname matching -- it names one exact key learned
+out-of-band, not "some CA-issued certificate for this name".
+
+### STILL NOT PROVEN, stated plainly
+
+**No phone has been paired to a hub on hardware.** The Kotlin client, the
+Settings screen, and the pinned OkHttp/raw-socket pair are covered by 421 unit
+and contract tests and compile clean, but the phone was unplugged before the
+rebuilt APK could be installed. Everything on the SERVER side of that
+conversation is proven over a real LAN; the CLIENT side of it is not.
+
+That test needs: the rebuilt APK installed, the phone on the same wifi as the
+hub, and a pairing code pasted into Settings -> Shop network.
+
+### Also still open, unchanged from the wave-2 entry
+
+The Owner-side endpoint that mints and signs the roster (so the suspension gate
+is inert), hub promotion, and rate limiting on `/pair`.
