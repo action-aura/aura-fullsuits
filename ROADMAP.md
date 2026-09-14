@@ -3248,3 +3248,32 @@ hub, and a pairing code pasted into Settings -> Shop network.
 
 The Owner-side endpoint that mints and signs the roster (so the suspension gate
 is inert), hub promotion, and rate limiting on `/pair`.
+
+### The pinning claim, measured rather than asserted (same day, later)
+
+The design's central sentence is "identity lives in keys, not addresses" -- a
+device that paired at one address must still trust the same hub at another,
+because what it pinned was the hub's public key. Easy to assert; the failure
+mode if it were false is invisible, because every device in the shop would
+simply stop syncing after a router reboot with no error anywhere.
+
+It got tested by accident. This machine's address moved THREE times in one
+session -- .212, then .220, then back to .212 -- and the hub was restarted at
+the last of those. Measured against the running hub:
+
+    hub is now at .......... https://192.168.1.212:5443
+    pin it reports now ..... wU8MfSSdz8aGPaboYYX1vGtm4G5e3ZpHyt3ot5C8KOk=
+    pin at .220 earlier .... wU8MfSSdz8aGPaboYYX1vGtm4G5e3ZpHyt3ot5C8KOk=
+
+    pairing at the NEW address, using the OLD pin -> 200
+    and it can sync                              -> 200
+
+The pin is unchanged because `load_or_create_site_tls_identity` reuses the
+identity from disk rather than minting a new one -- which is why that function
+is idempotent by design and says so in its docstring: regenerating would
+silently invalidate every paired device's pin at once, and the symptom on each
+device would not be an error but sync quietly ceasing to work.
+
+A client holding the OLD pin completed a TLS handshake, paired, and pushed at
+the NEW address. That is the claim, on real hardware, on a real network, from
+real DHCP movement rather than a simulated one.
