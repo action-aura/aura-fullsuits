@@ -3113,3 +3113,52 @@ decision rather than a code one.
 
 Totals for the two waves: **205 Python tests across 20 files plus 73 JS test
 files**, every guard mutation-proved in both directions.
+
+## 2026-09-14 - retail schema v31 CLAIMED: the sync cursor must know which relay it belongs to
+
+Same single-writer discipline as v18-v30, claimed in writing BEFORE anything is
+built. Head at claim time: **v30** (`_migrate_add_site_relay`).
+
+**This is a REAL, PRE-EXISTING BUG, found while wiring Android to the LAN hub,
+not a new feature.** `sync_cursor` is a single row holding `last_seq` and
+nothing else (`SyncService.read_cursor`, sync_service.py:713). It records how
+far this device has pulled, but not **from where**. Every relay has its own
+independent sequence space -- Owner's cloud relay counts per licence in
+Postgres, and each LAN hub counts in its own SQLite `site_sync_events` table.
+
+So the moment a device's relay changes, the cursor is a number from the wrong
+universe:
+
+    a till syncs with the cloud and reaches seq 500;
+    it is later paired to a LAN hub whose own log is at seq 12;
+    it pulls with `since=500`;
+    the hub has nothing above 500, and never will for a very long time;
+    the cursor stays 500. The device receives NOTHING, FOREVER, with no error
+    anywhere -- not a failed request, not a log line, just silence.
+
+That is the worst shape a defect can take in this codebase's own words: it
+looks exactly like "everything is up to date". It is reachable today by simply
+changing `AURA_SYNC_RELAY_URL` on a desktop till; the LAN work is what makes it
+likely rather than exotic.
+
+**v31 adds one nullable column, `sync_cursor.relay_url`**, and the rule that
+goes with it: before a pull, if the effective relay URL differs from the one
+recorded, `last_seq` resets to 0 and the new URL is recorded. Re-pulling from 0
+is SAFE and is the designed behaviour for a device meeting a relay for the
+first time -- apply is idempotent (creates are uid-keyed upserts, updates are
+guarded `WHERE excluded.row_version > row_version`, so an equal-version replay
+is a recorded no-op). The cost is one larger catch-up pull; the alternative is
+a device that silently stops receiving data.
+
+Deliberately a COLUMN on the existing single row rather than a new table: this
+is one more fact about the one cursor that already exists, and a second table
+would invite the two to disagree about which relay is current.
+
+NULL means "written before v31" and is treated as "unknown, therefore
+different" the first time it is checked -- which resets once, harmlessly, on
+the first pull after upgrade. Stating that explicitly because the alternative
+reading (NULL means "matches whatever we are pointed at") would preserve
+exactly the stale-cursor bug this version exists to close.
+
+This fixes BOTH platforms: Android's cursor lives in the same table, reached
+through `/_internal/cursor`, so no Android-side reset call is needed.
