@@ -179,6 +179,34 @@ def _admin_client():
     return client
 
 
+def test_the_shop_network_page_is_actually_served():
+    """The page and its script must be reachable at the path the Settings card
+    navigates to.
+
+    Worth its own test because the failure is silent in a specific way: the
+    Settings button would open a 404 page, the operator would conclude the
+    feature is broken, and nothing in the backend suite would notice, since
+    every backend test drives the API directly and never asks for the HTML.
+
+    The path is '/static/...' rather than a relative URL because this app's
+    documents are served from '/', so a relative link resolves to the wrong
+    place -- the same note subsystem-retail.js already carries for
+    customer-display.html and whatsapp.html."""
+    with app.test_client() as client:
+        page = client.get('/static/site-relay.html')
+        assert page.status_code == 200, 'the shop-network page is not being served'
+        body = page.data.decode('utf-8')
+        # Assert on the hooks the script actually binds to, not on prose: a
+        # page that renders but whose ids drifted is a screen that loads and
+        # does nothing.
+        for element_id in ('card-status', 'card-connect', 'btn-pair', 'devices-body'):
+            assert f'id="{element_id}"' in body, f'page is missing #{element_id}'
+        assert 'site-relay.js' in body
+
+        script = client.get('/static/site-relay.js')
+        assert script.status_code == 200, 'the shop-network script is not being served'
+
+
 def test_status_reports_the_running_hub_to_an_operator():
     client = _admin_client()
     resp = client.get('/api/site-relay/status')
