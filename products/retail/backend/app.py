@@ -45,7 +45,8 @@ from config import (
     LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
     SYNC_RELAY_BASE_URL, SYNC_RELAY_TIMEOUT_SECONDS, SYNC_RELAY_VERIFY_TLS,
     SYNC_RELAY_URL_PROBLEMS,
-    SITE_RELAY_ENABLED, SITE_RELAY_PORT, SITE_RELAY_BIND_HOST,
+    SITE_RELAY_ENABLE_OVERRIDE, SITE_RELAY_PORT, SITE_RELAY_BIND_HOST,
+    site_relay_should_start,
 )
 
 # Final-review Fix 2 (2026-08-07): a sync relay URL that fails config.py's
@@ -1072,12 +1073,27 @@ def _start_site_relay_if_enabled():
     implementation of Owner's own push/pull contract so tablets and second
     tills on the shop's wifi converge with no internet at all.
 
-    THIS IS THE ONLY PLACE IN THE PRODUCT THAT BINDS A NON-LOOPBACK SOCKET,
-    which is why the gate is an explicit opt-in and why the failure handling
-    below is what it is. `SITE_RELAY_ENABLED` is false unless the environment
-    says exactly '1' (see config.py's block and
-    retail_site_relay_config_test.py, which pins that default because nothing
-    else in the suite would notice if it drifted to on).
+    THIS IS THE ONLY PLACE IN THE PRODUCT THAT BINDS A NON-LOOPBACK SOCKET.
+    2026-09-14: the gate used to be a bare "did an operator set
+    AURA_SITE_RELAY_ENABLED=1" -- safe in theory, unreachable in practice,
+    because no shop owner was ever going to set an environment variable on
+    a till. The gate is now `site_relay_should_start()` (config.py), a
+    tri-state decision: '1' always starts the relay, '0' never does, and
+    anything else -- unset included -- is AUTOMATIC, gated on this
+    install's own licence state via ACTIVE_FAMILY. See config.py's "LAN
+    site relay / hub mode" block for the full reasoning, including the one
+    real cost this trade has (an unauthenticated `/identity` route becomes
+    reachable by default on a licensed till) and why it was judged
+    acceptable.
+
+    Reading the licence to make that decision must NEVER be able to stop
+    this till from booting -- same NEVER FATAL contract as the rest of this
+    function, applied one step earlier. Any failure reading licensing.db
+    here (locked file, corrupt row, a first-run race before the table
+    exists) is treated as "no active licence", which is the fail-closed
+    direction for a feature that binds a LAN-facing socket: worst case a
+    licensed shop's till takes one more restart to notice hub mode, never
+    an unlicensed shop's till becoming an unexpected LAN listener.
 
     The UI server is untouched by all of this: it keeps its own 127.0.0.1
     binding in `_run_server`, and the relay gets a SEPARATE port and a
@@ -1097,8 +1113,52 @@ def _start_site_relay_if_enabled():
     twice), and starting a second listener would either raise on the bind or,
     worse, leave an orphaned thread serving a stale connection factory."""
     global _site_relay_server
-    if not SITE_RELAY_ENABLED or _site_relay_server is not None:
+    if _site_relay_server is not None:
         return
+
+    # Built here, before the enable decision, rather than down in the try
+    # block below where the pre-2026-09-14 version of this function built
+    # it: the automatic-mode decision needs a licence read too, so the SAME
+    # repository object (and the SAME loaded record) now serves both the
+    # enable decision below and `_hub_installation_id` further down --
+    # one open of licensing.db per boot, not two.
+    from commercial_runtime.licensing_contracts.state_repository import (
+        LicenseStateRepository as _HubStateRepository)
+    from commercial_runtime.licensing_contracts.state_machine import LicenseState
+    _hub_state_repository = _HubStateRepository(
+        Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+    try:
+        _hub_license_record = _hub_state_repository.load()
+    except Exception:
+        # NEVER FATAL: a till that cannot read its own licence right now
+        # must still boot and sell. It just does not get to decide "active"
+        # for automatic hub mode this run -- see the docstring above for why
+        # that is the correct fail-closed direction here.
+        _hub_license_record = None
+        logging.getLogger(__name__).exception(
+            'Site relay: could not read licence state to decide automatic '
+            'hub mode; treating this install as unlicensed for this '
+            'decision. Hub mode stays off unless AURA_SITE_RELAY_ENABLED=1 '
+            'is set explicitly. Never fatal to boot.')
+
+    try:
+        _hub_license_state = (
+            LicenseState(_hub_license_record.current_state)
+            if _hub_license_record is not None else None
+        )
+    except ValueError:
+        # An unrecognized current_state (a downgrade, a restored backup, a
+        # partial write) is not a member of ACTIVE_FAMILY under any reading
+        # of it, so it fails closed exactly like a missing record -- this
+        # decision only needs "active or not", so it does not need its own
+        # LOCAL_STATE_CORRUPT bookkeeping the way flask_guard.py's
+        # _resolve_current_state does for the routes that are actually
+        # licence-gated.
+        _hub_license_state = None
+
+    if not site_relay_should_start(SITE_RELAY_ENABLE_OVERRIDE, _hub_license_state):
+        return
+
     try:
         from commercial_runtime.sync.site_relay.listener import (
             local_lan_addresses, start_site_relay)
@@ -1110,10 +1170,6 @@ def _start_site_relay_if_enabled():
         # which is precisely the offline case this whole feature exists for --
         # would hit a NameError and silently fail to become a hub. Hub mode
         # must not depend on cloud sync being configured.
-        from commercial_runtime.licensing_contracts.state_repository import (
-            LicenseStateRepository as _HubStateRepository)
-        _hub_state_repository = _HubStateRepository(
-            Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
         _hub_signer = _licensing_device_identity_factory(
             Path(DATABASE_DIR).parent / 'licensing')
 
@@ -1121,8 +1177,12 @@ def _start_site_relay_if_enabled():
         # which is a normal transient state on a first-run machine rather than
         # an error (see SiteRelayHandle's docstring). Pairing and the beacon
         # wait for an identity instead of the relay refusing to start.
-        _record = _hub_state_repository.load()
-        _hub_installation_id = _record.owner_installation_id if _record else None
+        #
+        # Reuses `_hub_license_record`, already loaded above to decide
+        # whether to start at all -- not a second load() of licensing.db.
+        _hub_installation_id = (
+            _hub_license_record.owner_installation_id if _hub_license_record else None
+        )
 
         # The hub's own Ed25519 DEVICE public key, which goes on the pairing QR
         # so a paired device can later verify this hub's signed addressing

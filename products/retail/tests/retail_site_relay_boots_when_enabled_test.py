@@ -85,6 +85,36 @@ def test_the_listener_is_really_bound_to_a_real_port():
     assert isinstance(port, int) and port > 0
 
 
+def test_the_relay_started_here_despite_no_active_licence():
+    """R-LAN (2026-09-14): hub mode is gated by config.py's
+    site_relay_should_start(), a tri-state decision -- '1' always starts
+    it, '0' never does, anything else (unset included) is automatic and
+    decided by this install's own licence state. This file sets
+    AURA_SITE_RELAY_ENABLED='1' at the top, which is the EXPLICIT-on case,
+    and this fixture never activates a licence at all -- the licensing.db
+    it creates has no row, so LicenseStateRepository.load() returns None
+    and this install is exactly the "unlicensed" case automatic mode would
+    refuse.
+
+    The relay is running anyway, and this test is what pins WHY: an
+    explicit '1' must win over automatic licence gating, which is also
+    what keeps an unlicensed dev/test box able to exercise hub mode at all.
+    Every other test in this file only checks THAT the relay is running,
+    never why -- so a future change that made the explicit override stop
+    beating an inactive licence would leave all of them green while
+    silently breaking every unlicensed dev machine's ability to test hub
+    mode."""
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+
+    repo = LicenseStateRepository(Path(DATA) / 'database' / 'subsystems' / 'licensing.db')
+    assert repo.load() is None, (
+        "this test's premise is a genuinely unlicensed install -- if this "
+        "assertion fails, something upstream started writing a licensing "
+        "row and the assertion below no longer proves what it claims to"
+    )
+    assert _app_module._site_relay_server is not None
+
+
 def test_a_pinned_client_gets_a_sync_protocol_answer_from_the_shipped_app():
     """End of the wire, through the product's own boot: TLS handshake against
     the hub's generated identity, SPKI pin enforced, and a real reason_code

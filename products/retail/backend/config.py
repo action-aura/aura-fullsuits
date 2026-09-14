@@ -12,6 +12,8 @@ is not ported -- see docs/migration/source-inventory.md #34, risk-register R12).
 import os
 import sys
 
+from commercial_runtime.licensing_contracts.state_machine import ACTIVE_FAMILY
+
 if os.environ.get('AURA_BUNDLE_DIR'):
     BASE_DIR = os.environ['AURA_BUNDLE_DIR']
 elif getattr(sys, 'frozen', False):
@@ -269,14 +271,110 @@ SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 # talks to the cloud. See the design doc §6, "the invariant that makes this
 # safe: every device talks to exactly ONE relay, ever."
 #
-# OFF unless explicitly switched on, and that default is the security
-# posture rather than laziness: every Aura process today binds 127.0.0.1
-# only (app.py's `_run_server`), so switching this on is the single change
-# in this whole product that makes it listen on an interface a stranger on
-# the same wifi can reach. A shop that never becomes a hub exposes exactly
-# nothing -- the same invisible-unless-opted-in rule licensing and
-# e-invoicing already follow.
-SITE_RELAY_ENABLED = os.environ.get('AURA_SITE_RELAY_ENABLED') == '1'
+# 2026-09-14 -- AUTOMATIC, LICENCE-GATED, replacing the old OFF-unless-
+# explicitly-switched-on default. The reasoning behind that old default is
+# still partly right and is not being thrown out: every Aura process today
+# binds 127.0.0.1 only (app.py's `_run_server`), and hub mode is still the
+# single feature in this whole product that makes it listen on an interface
+# a stranger on the same wifi can reach. What changed is not that argument --
+# it is that the product owner's actual requirement makes an env-var gate
+# unable to satisfy it at all: "the offline sync [should be] automatic...
+# i dont want to put an ip or ports or so... i dont want the advanced
+# networking stuff to be visible." No shop owner will ever set
+# AURA_SITE_RELAY_ENABLED=1 on a till, so gating hub mode behind it did not
+# make the feature safe-by-default -- it made the feature unreachable in the
+# field, full stop.
+#
+# What makes it safe to flip the default is that joining a hub is now
+# licence-proof end to end (commercial_runtime/sync/site_relay/join.py,
+# built after the paragraph above was first written): `/join` refuses any
+# device whose Owner-signed assertion names a different `license_public_id`,
+# and every mutating route (`/push`, `/pull`) requires a paired installation
+# and a valid per-request Ed25519 signature. So the gate that matters was
+# never really "did an operator set an env var" -- it was always "do the two
+# devices share a licence," and that check already happens regardless of
+# this flag. The env var was gating a step that adds no security of its own
+# once join.py exists, while making the actually-useful case (a licensed
+# shop's second till, converging automatically) require a support call.
+#
+# THE ONE REAL COST, WRITTEN DOWN RATHER THAN LEFT TO BE DISCOVERED: a
+# licensed shop with nothing configured now binds a LAN-facing socket by
+# default. Anyone on the same wifi can reach `/identity` (deliberately
+# unauthenticated -- see listener.py) and read this install's
+# `license_public_id` and `installation_id`. That is a small, real
+# information disclosure the old off-by-default posture did not have. It is
+# judged acceptable because neither value grants anything without the
+# matching Ed25519 PRIVATE key, which never leaves DPAPI/Keystore storage --
+# `/join` still verifies the caller's own signed assertion names the same
+# licence, and `/push`/`/pull` still verify a per-request signature. Nobody
+# who lacks the key gets in; what changed is only that a stranger on the
+# wifi can now learn which shop and which till they are looking at, not that
+# they can do anything with that knowledge.
+#
+# So the GATE moves from a boolean to a TRI-STATE override, decided by
+# site_relay_should_start() below:
+#
+#     AURA_SITE_RELAY_ENABLED=1   -> always start. An explicit operator
+#                                     choice, and also what keeps an
+#                                     unlicensed dev/test box able to
+#                                     exercise hub mode without a licence.
+#     AURA_SITE_RELAY_ENABLED=0   -> never start. The operator kill switch;
+#                                     wins even over an active licence.
+#     unset, or anything else     -> AUTOMATIC: start iff this install's own
+#                                     licence state is in ACTIVE_FAMILY
+#                                     (imported above from
+#                                     commercial_runtime/licensing_contracts/
+#                                     state_machine.py -- never a hand-typed
+#                                     list of active states; CLAUDE.md's
+#                                     "second device joins a shop" section
+#                                     calls out exactly this mistake by name
+#                                     -- "never a hand-typed list of active
+#                                     states, the backend never emits a bare
+#                                     ACTIVE").
+#                                     A typo ('tru', '2', ...) falls into
+#                                     this same case rather than crashing the
+#                                     till or being silently treated as '1'
+#                                     or '0' -- see site_relay_should_start's
+#                                     own docstring for why a cast would be
+#                                     the wrong fix here.
+SITE_RELAY_ENABLE_OVERRIDE = os.environ.get('AURA_SITE_RELAY_ENABLED')
+
+
+def site_relay_should_start(override, license_state):
+    """Pure decision: should THIS boot start the LAN site relay?
+
+    No I/O and no environment reads in here -- both `override` (the raw
+    AURA_SITE_RELAY_ENABLED string, or None if unset) and `license_state`
+    (this install's current commercial_runtime.licensing_contracts.
+    state_machine.LicenseState, or None when it could not be determined) are
+    passed in by the caller. That is what lets
+    retail_site_relay_config_test.py drive every LicenseState member through
+    this function with no Flask app, no socket, and no licensing database.
+
+    `license_state=None` covers two legitimate cases the caller cannot tell
+    apart and does not need to: a fresh install with no licensing.db row
+    yet, and app.py's own NEVER FATAL fallback after a licence-read failure.
+    Both must resolve to "not active" -- the fail-closed direction for a
+    function that gates a LAN-facing socket, since the two failure directions
+    are not symmetric (a licensed shop's till takes one extra restart to
+    notice hub mode vs. an unlicensed till becoming an unexpected network
+    listener).
+
+    '1' and '0' are compared as exact strings, not cast to bool, and that is
+    deliberate: a cast turns an ambiguous value into a guess about which
+    state a human meant, and guessing wrong here is expensive in whichever
+    direction it's wrong. Anything that is not exactly '1' or exactly '0' --
+    unset, '', 'true', 'TRUE', 'yes', a stray '2' -- falls through to
+    automatic instead of being guessed at, so a typo degrades to "decided by
+    licence state" rather than to a silently wrong explicit choice.
+    """
+    if override == '1':
+        return True
+    if override == '0':
+        return False
+    return license_state in ACTIVE_FAMILY
+
+
 # A SEPARATE port from the UI listener, deliberately. The existing loopback
 # UI server keeps its 127.0.0.1 binding completely untouched: the LAN is
 # offered the sync contract and NOTHING else. Rebinding the existing server
@@ -287,10 +385,11 @@ SITE_RELAY_ENABLED = os.environ.get('AURA_SITE_RELAY_ENABLED') == '1'
 # 127.0.0.1 server -- the UI surface stays loopback").
 SITE_RELAY_PORT = int(os.environ.get('AURA_SITE_RELAY_PORT', '5443'))
 # 0.0.0.0 is the honest default FOR A HUB: a hub bound to loopback can serve
-# nobody, so the feature would be inert in exactly the configuration someone
-# switched it on to get. It is only ever reached because SITE_RELAY_ENABLED
-# above had to be set deliberately first. Overridable so an operator can pin
-# it to one interface on a machine with several.
+# nobody, so the feature would be inert in exactly the configuration it is
+# reached in -- either an explicit AURA_SITE_RELAY_ENABLED=1, or automatic
+# mode having already decided this install's licence is active (see
+# site_relay_should_start above). Overridable so an operator can pin it to
+# one interface on a machine with several.
 SITE_RELAY_BIND_HOST = os.environ.get('AURA_SITE_RELAY_BIND_HOST', '0.0.0.0')
 
 

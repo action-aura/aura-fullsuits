@@ -1,35 +1,52 @@
-"""Aura Retail -- R-LAN (2026-09-14): the LAN site relay's config surface,
-and specifically that HUB MODE IS OFF UNLESS SOMEONE TURNED IT ON.
+"""Aura Retail -- R-LAN (2026-09-14): the LAN site relay's AUTOMATIC,
+licence-gated boot decision.
 
-See config.py's "LAN site relay / hub mode" block and
-docs/launch-readiness/lan-restaurant-design.md §3 for what a hub is. This
-file exists for one reason, and it is a security reason rather than a
-feature one:
+See config.py's "LAN site relay / hub mode" block for the full reasoning.
+This file used to pin a much simpler contract, and per this repo's
+ENGINEERING.md ("Never weaken a test to get green" / "when a test genuinely
+must change, state exactly what it can no longer catch"), that history is
+worth keeping rather than quietly overwriting:
 
-    Every Aura process today binds 127.0.0.1 only (app.py's `_run_server`).
-    SITE_RELAY_ENABLED is the single switch in this whole product that makes
-    it listen on an interface a stranger on the same wifi can reach.
+    THE OLD TEST pinned `config.SITE_RELAY_ENABLED` to a bare boolean,
+    default False, on the theory that nothing else in the suite would
+    notice a drift to an on-by-default boolean. That was the right test for
+    that contract: hub mode required an operator to type
+    AURA_SITE_RELAY_ENABLED=1, so "off unless told" was the whole feature's
+    safety story.
 
-A future edit that makes that default truthy -- an `os.environ.get(...,
-'1')`, a `!= '0'`, a bool() of a non-empty string -- would silently turn
-every till in every shop into a network listener, and nothing else in the
-suite would notice, because every OTHER test would keep passing: the
-feature would simply be on. That is exactly the shape of defect this repo's
-ENGINEERING.md calls "the pass condition IS the bug signature", so the
-default is pinned here explicitly rather than left to be inferred.
+    That contract was DELIBERATELY changed, not regressed: the product
+    owner's actual requirement ("i want the offline sync to be automatic...
+    i dont want to put an ip or ports or so... i dont want the advanced
+    networking stuff to be visible") cannot be satisfied by an env-var gate
+    at all -- no shop owner will ever set one on a till, so the old default
+    made the feature unreachable in the field, not merely off. Joining a
+    hub is now licence-proof end to end (commercial_runtime/sync/
+    site_relay/join.py), which is what makes flipping the default safe.
 
-`SITE_RELAY_ENABLED` is deliberately compared against the exact string '1'
-and nothing else, so the common near-misses a human actually types --
-'true', 'yes', 'TRUE', '0', '' -- all mean OFF. Failing closed on an
-ambiguous value is correct here: the cost of wrongly-off is "the LAN
-feature does not work and someone reads the runbook", and the cost of
-wrongly-on is "a POS till is serving a sync endpoint on café wifi without
-its owner knowing."
+    THIS FILE now pins the REPLACEMENT contract just as tightly: '1' and
+    '0' are still absolute overrides in either direction, and everything
+    else (including unset) is decided ONLY by this install's own licence
+    state (ACTIVE_FAMILY, commercial_runtime/licensing_contracts/
+    state_machine.py) -- driven through every LicenseState member by
+    iterating the enum, so a state added in the future is exercised here
+    automatically rather than silently slipping past a hand-picked subset.
 
-Pure config tests -- no database, no Flask, no network. config.py resolves
-environment variables once at import time, so the on/off cases are exercised
-via importlib.reload rather than by mutating an already-imported module's
-constants (which would prove nothing about what a real boot does).
+    WHAT THE OLD TEST COULD CATCH THAT THIS ONE CANNOT: a drift back to a
+    bare on-by-default boolean is no longer a meaningful thing to guard,
+    because there is no bare boolean left to drift -- config.py has no
+    attribute that is simply "is hub mode on" any more. What THIS file
+    guards instead, and the old one could not: an explicit '0' being
+    silently overridden by an active licence, and a licence state being
+    mis-classified against ACTIVE_FAMILY (which the exhaustive per-state
+    loop below would catch even for a state that does not exist yet at the
+    time this file was written).
+
+`site_relay_should_start()` is pure (config.py's docstring: "No I/O and no
+environment reads in here") -- it is a pure config test, no database, no
+Flask, no network, no importlib.reload of anything for the enable-decision
+tests below. The port/bind-host tests still use `_reload_with` because
+SITE_RELAY_PORT/SITE_RELAY_BIND_HOST genuinely are resolved from the
+environment at import time.
 
 Run:
     pytest products/retail/tests/retail_site_relay_config_test.py -v
@@ -55,6 +72,8 @@ for _var in ("AURA_SITE_RELAY_ENABLED", "AURA_SITE_RELAY_PORT", "AURA_SITE_RELAY
     os.environ.pop(_var, None)
 
 import config  # noqa: E402
+from commercial_runtime.licensing_contracts.state_machine import (  # noqa: E402
+    ACTIVE_FAMILY, LicenseState)
 
 
 def teardown_module(module):
@@ -77,27 +96,89 @@ def _reload_with(**env):
     return importlib.reload(config)
 
 
-def test_hub_mode_is_off_when_nothing_is_set():
-    """The out-of-the-box state. This is the assertion the whole file exists
-    for: an install nobody configured must not listen on the LAN."""
+# ── the tri-state enable decision (pure, no reload needed) ─────────────────
+
+def test_unset_and_inactive_licence_is_off():
+    """The out-of-the-box, unlicensed state: a fresh till with nothing
+    configured and no licence yet must not listen on the LAN."""
+    assert config.site_relay_should_start(None, None) is False
+    assert config.site_relay_should_start(None, LicenseState.NOT_CONFIGURED) is False
+    assert config.site_relay_should_start(None, LicenseState.ACTIVATION_REQUIRED) is False
+
+
+def test_unset_and_active_licence_is_on():
+    """The whole point of this change: a licensed shop needs NOTHING typed,
+    no environment variable, no IP, no port -- it just becomes a hub."""
+    assert config.site_relay_should_start(None, LicenseState.ACTIVE_ONLINE) is True
+    assert config.site_relay_should_start(None, LicenseState.ACTIVE_OFFLINE) is True
+
+
+def test_explicit_zero_wins_even_when_licence_is_active():
+    """The operator kill switch beats an active licence. This is the
+    override an operator reaches for specifically to guarantee a till never
+    becomes a hub, so an active licence must never second-guess it."""
+    for state in (LicenseState.ACTIVE_ONLINE, LicenseState.ACTIVE_OFFLINE,
+                  LicenseState.WARNING, LicenseState.GRACE_PERIOD):
+        assert config.site_relay_should_start('0', state) is False, (
+            f"'0' must win over {state}")
+
+
+def test_explicit_one_wins_even_when_licence_is_inactive():
+    """Explicit on, for a dev/test box with no licence configured at all --
+    kept working on purpose (config.py's comment) so hub mode stays
+    exercisable without going through activation first."""
+    for state in (None, LicenseState.NOT_CONFIGURED, LicenseState.REVOKED,
+                  LicenseState.EXPIRED, LicenseState.SUSPENDED):
+        assert config.site_relay_should_start('1', state) is True, (
+            f"'1' must win over {state}")
+
+
+def test_every_license_state_is_classified_by_active_family_membership():
+    """Driven by iterating the LicenseState enum, not a hand-picked subset
+    -- CLAUDE.md calls this exact mistake out by name ("never a hand-typed
+    list of active states"). A state added to the enum in the future is
+    exercised here automatically instead of silently slipping past."""
+    for state in LicenseState:
+        expected = state in ACTIVE_FAMILY
+        assert config.site_relay_should_start(None, state) is expected, (
+            f"{state} should {'start' if expected else 'not start'} the "
+            f"relay under automatic (unset) mode"
+        )
+
+
+def test_near_miss_values_fall_back_to_automatic_not_to_a_guess():
+    """'true', 'yes', '  1  ', an empty string -- none of these is the
+    exact string '1' or '0', so none of them is an explicit choice in
+    either direction. They must fall through to automatic (licence-gated),
+    exactly like unset -- never silently treated as though they were '1' or
+    '0'. This is what makes a typo safe: it degrades to "decided by
+    licence" instead of picking a state nobody actually asked for."""
+    near_misses = ("true", "TRUE", "yes", "on", "  1  ", "1 ", "0 ", "2", "")
+    for value in near_misses:
+        assert config.site_relay_should_start(value, None) is False, (
+            f"{value!r} with no active licence must stay off")
+        assert config.site_relay_should_start(value, LicenseState.ACTIVE_ONLINE) is True, (
+            f"{value!r} with an active licence must turn on automatically")
+
+
+def test_site_relay_enable_override_reflects_the_raw_environment_value():
+    """SITE_RELAY_ENABLE_OVERRIDE is the raw AURA_SITE_RELAY_ENABLED string
+    (or None), resolved once at import time like every other env-derived
+    constant in this file -- config.py's site_relay_should_start() takes it
+    as a parameter rather than reading the environment itself, so this is
+    the one place that actually exercises the environment-to-config wiring
+    rather than the pure decision alone."""
     cfg = _reload_with(AURA_SITE_RELAY_ENABLED=None)
-    assert cfg.SITE_RELAY_ENABLED is False
-
-
-def test_hub_mode_is_on_only_for_the_exact_string_one():
+    assert cfg.SITE_RELAY_ENABLE_OVERRIDE is None
     cfg = _reload_with(AURA_SITE_RELAY_ENABLED="1")
-    assert cfg.SITE_RELAY_ENABLED is True
+    assert cfg.SITE_RELAY_ENABLE_OVERRIDE == "1"
+    cfg = _reload_with(AURA_SITE_RELAY_ENABLED="0")
+    assert cfg.SITE_RELAY_ENABLE_OVERRIDE == "0"
+    cfg = _reload_with(AURA_SITE_RELAY_ENABLED="banana")
+    assert cfg.SITE_RELAY_ENABLE_OVERRIDE == "banana"
 
 
-def test_near_miss_values_all_mean_off():
-    """Fails closed on anything ambiguous. Each of these is a value a human
-    plausibly types meaning 'on'; none of them switches on a network
-    listener, because guessing wrong in that direction is the expensive
-    one."""
-    for value in ("true", "TRUE", "yes", "on", "0", "", "  1  ", "1 "):
-        cfg = _reload_with(AURA_SITE_RELAY_ENABLED=value)
-        assert cfg.SITE_RELAY_ENABLED is False, f"{value!r} must not enable hub mode"
-
+# ── port / bind-host (unaffected by the enable-decision change) ────────────
 
 def test_port_defaults_and_is_overridable():
     cfg = _reload_with(AURA_SITE_RELAY_ENABLED=None, AURA_SITE_RELAY_PORT=None)
@@ -108,10 +189,11 @@ def test_port_defaults_and_is_overridable():
 
 def test_bind_host_defaults_to_all_interfaces_and_is_overridable():
     """0.0.0.0 is the honest default FOR A HUB -- a hub bound to loopback can
-    serve nobody, so it would be inert in exactly the configuration someone
-    switched it on to get. It is only ever reached because the enable flag
-    above had to be set deliberately first; the two settings are a pair and
-    testing the default in isolation would misread it as permissive."""
+    serve nobody, so it would be inert in exactly the configuration it is
+    reached in. It is only ever reached because site_relay_should_start()
+    above already said yes -- explicitly or automatically -- so testing the
+    bind-host default in isolation would misread it as permissive on its
+    own."""
     cfg = _reload_with(AURA_SITE_RELAY_BIND_HOST=None)
     assert cfg.SITE_RELAY_BIND_HOST == "0.0.0.0"
     cfg = _reload_with(AURA_SITE_RELAY_BIND_HOST="192.168.1.50")
