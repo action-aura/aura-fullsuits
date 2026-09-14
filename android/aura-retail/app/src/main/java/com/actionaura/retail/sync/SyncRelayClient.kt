@@ -177,6 +177,32 @@ class SyncRelayClient(
      * plain OkHttpClient using the same trust store for `push()`. */
     sslSocketFactory: SSLSocketFactory? = null,
     private val sleepFn: (Long) -> Unit = { Thread.sleep(it) },
+    /** Gates the `endpointIdentificationAlgorithm = "HTTPS"` line inside
+     * [executeGetWithBody] below. Defaults to true so the cloud relay (a
+     * real hostname, a CA-issued certificate) is completely unaffected --
+     * this only ever goes false when [sslSocketFactory] above is a
+     * SpkiPinning-pinned factory (see SyncCoordinator.relayClient(), the
+     * only production caller that ever passes false here).
+     *
+     * Turning hostname verification OFF in that one case is NOT a
+     * weakening: the SPKI pin is a STRICTER identity check than hostname
+     * matching, because it names one exact key learned out-of-band (the
+     * pairing QR code) rather than trusting any CA-issued certificate that
+     * merely happens to carry the right name. A paired hub's certificate
+     * deliberately carries no LAN IP in its SAN at all -- its address
+     * changes with DHCP -- see commercial_runtime/sync/site_relay/
+     * tls_identity.py's module doc comment -- so ordinary hostname
+     * verification would reject a correctly-pinned hub outright. The
+     * desktop client draws the identical line for the identical reason:
+     * commercial_runtime/sync/site_relay/pinned_transport.py's
+     * SpkiPinnedAdapter disables ordinary chain and hostname verification
+     * specifically because its own _PinnedHTTPSConnection.connect()
+     * override enforces the pin unconditionally in its place. This flag is
+     * that same trade, mirrored onto the one Android TLS seam (this
+     * class's raw-Socket pull() path) that OkHttp's own
+     * pinned-but-permissive hostname verifier (see
+     * SyncCoordinator.relayClient()) does not reach. */
+    private val verifyHostname: Boolean = true,
 ) {
     private val http: OkHttpClient = httpClient ?: OkHttpClient.Builder()
         .connectTimeout(config.timeoutSeconds, TimeUnit.SECONDS)
@@ -318,15 +344,18 @@ class SyncRelayClient(
      * something `Connection: close` on the request suppresses.
      *
      * For https, `sslSocket.sslParameters.endpointIdentificationAlgorithm`
-     * is set to `"HTTPS"` before `startHandshake()`. Without this, a bare
-     * `SSLSocket` (unlike `HttpsURLConnection`/OkHttp, both of which do
-     * this internally) only validates the certificate chain against the
-     * trust store -- it does NOT check that the certificate's CN/SAN
-     * actually matches [host]. That gap would let anyone who can redirect
-     * traffic to a server holding ANY CA-trusted certificate (for a
-     * completely unrelated domain) complete the handshake undetected --
-     * a classic MITM vector. See SyncRelayClientTest's hostname-mismatch
-     * test, which fails without this line and passes with it. */
+     * is set to `"HTTPS"` before `startHandshake()` -- but ONLY when
+     * [verifyHostname] is true (see that constructor parameter's own doc
+     * comment for why skipping this check is not a weakening when the peer
+     * is instead pinned by exact key). Without this, a bare `SSLSocket`
+     * (unlike `HttpsURLConnection`/OkHttp, both of which do this
+     * internally) only validates the certificate chain against the trust
+     * store -- it does NOT check that the certificate's CN/SAN actually
+     * matches [host]. That gap would let anyone who can redirect traffic to
+     * a server holding ANY CA-trusted certificate (for a completely
+     * unrelated domain) complete the handshake undetected -- a classic MITM
+     * vector. See SyncRelayClientTest's hostname-mismatch test, which fails
+     * without this line and passes with it. */
     private fun executeGetWithBody(url: String, bodyJson: String): HttpResult {
         val uri = URI(url)
         val isHttps = uri.scheme == "https"
@@ -348,9 +377,11 @@ class SyncRelayClient(
             plainSocket.soTimeout = timeoutMillis
             if (isHttps) {
                 socket = (rawSslSocketFactory.createSocket(plainSocket, host, port, true) as SSLSocket).also {
-                    val params = it.sslParameters
-                    params.endpointIdentificationAlgorithm = "HTTPS"
-                    it.sslParameters = params
+                    if (verifyHostname) {
+                        val params = it.sslParameters
+                        params.endpointIdentificationAlgorithm = "HTTPS"
+                        it.sslParameters = params
+                    }
                     it.soTimeout = timeoutMillis
                     it.startHandshake()
                 }

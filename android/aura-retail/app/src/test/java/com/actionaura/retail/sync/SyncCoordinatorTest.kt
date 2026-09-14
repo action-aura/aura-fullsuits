@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLDecoder
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -288,6 +289,49 @@ class SyncCoordinatorTest {
         val registryAcks = server.requests.count { it.path == SyncStream.REGISTRY.prefix + "/_internal/outbox/ack" }
         assertThat(registryAcks).isEqualTo(0)
     }
+
+    // ── (f) relay_url query param on cursor requests -- schema v31's guard ──
+
+    /**
+     * `/_internal/cursor` requests must carry `relay_url` (URL-encoded),
+     * equal to the ACTUAL relay this coordinator is running against -- this
+     * is Android's entire share of retail schema v31's cursor-reset
+     * protection (`internal_routes.py`'s `/_internal/cursor` route calls
+     * `SyncService.ensure_cursor_matches_relay` when the parameter is
+     * present). Without it, a device that switches relays -- cloud to a
+     * paired LAN hub, or one hub to another -- keeps reading a cursor that
+     * belonged to the OLD relay's independent sequence space, and does not
+     * error: it just silently receives nothing from the new relay, forever,
+     * because the stale `since` value looks like a perfectly valid cursor to
+     * a relay it was never issued against.
+     *
+     * Asserted on the DECODED value equalling the relay the coordinator
+     * actually resolved, not a substring of the raw query -- a substring
+     * check would still pass on a truncated or wrongly-percent-encoded
+     * value, which is the failure this parameter's whole existence is
+     * supposed to catch.
+     */
+    @Test
+    fun `cursor requests carry relay_url matching the relay the coordinator is running against`() {
+        runOnce()
+
+        val cursorRequests = server.requests.filter { it.path.endsWith("/_internal/cursor") }
+        // Both streams' cursor calls, not just one -- see runOnce()'s own
+        // "both streams" reasoning; a per-stream regression here must not
+        // hide behind the other stream's request still carrying the param.
+        assertThat(cursorRequests).hasSize(SyncStream.ALL.size)
+
+        for (request in cursorRequests) {
+            val rawQuery = request.rawTarget.substringAfter('?', missingDelimiterValue = "")
+            assertThat(rawQuery).isNotEmpty()
+            val relayUrlParam = rawQuery.split('&')
+                .map { it.split('=', limit = 2) }
+                .firstOrNull { it.getOrNull(0) == "relay_url" }
+                ?.getOrNull(1)
+            assertThat(relayUrlParam).isNotNull()
+            assertThat(URLDecoder.decode(relayUrlParam, "UTF-8")).isEqualTo(baseUrl())
+        }
+    }
 }
 
 /** Minimal raw-socket HTTP test double, PATH-routed rather than a strict
@@ -303,7 +347,14 @@ private class RoutedFakeServer {
     private val serverSocket = ServerSocket(0)
     val port: Int get() = serverSocket.localPort
 
-    data class RecordedRequest(val method: String, val path: String, val body: String)
+    /** [path] is stripped of its query string (what routing/matching uses --
+     *  see [handleOneRequest]'s own doc comment); [rawTarget] is the exact
+     *  request-line target as sent, query string included, so a test that
+     *  needs to see a query parameter (e.g. `/_internal/cursor`'s
+     *  `relay_url`) still can, without weakening the stripped-`path`
+     *  matching every existing exact-path assertion in this file relies
+     *  on. */
+    data class RecordedRequest(val method: String, val path: String, val rawTarget: String, val body: String)
     private data class CannedResponse(val status: Int, val body: String)
 
     val requests = CopyOnWriteArrayList<RecordedRequest>()
@@ -355,7 +406,21 @@ private class RoutedFakeServer {
         val requestLine = readLine(input) ?: return
         val parts = requestLine.split(" ")
         val method = parts.getOrNull(0) ?: return
-        val path = parts.getOrNull(1) ?: return
+        // ROUTED by PATH ONLY, query string stripped -- a real HTTP router
+        // matches routes independently of their query string, and
+        // SyncCoordinator.pullOnce() now appends a `?relay_url=...` query
+        // parameter to its /_internal/cursor requests (retail schema v31's
+        // ensure_cursor_matches_relay -- see SyncCoordinator.resolveRelayBaseUrl's
+        // own doc comment for why the client cares which relay it's pointed
+        // at). Stripping it here keeps every existing exact-path assertion in
+        // this file meaningful; matching/recording the raw, query-bearing
+        // string as the sole record instead would fail every one of them on
+        // a change that carries no routing significance for this fake
+        // server. The raw target (with query) is still kept, separately, as
+        // RecordedRequest.rawTarget -- see that field's own doc comment --
+        // so a test that needs to see relay_url still can.
+        val rawTarget = parts.getOrNull(1) ?: return
+        val path = rawTarget.substringBefore('?')
 
         var contentLength = 0
         while (true) {
@@ -374,7 +439,7 @@ private class RoutedFakeServer {
             if (n == -1) break
             read += n
         }
-        requests.add(RecordedRequest(method, path, String(bodyBytes, Charsets.UTF_8)))
+        requests.add(RecordedRequest(method, path, rawTarget, String(bodyBytes, Charsets.UTF_8)))
 
         val canned = responses[path] ?: CannedResponse(404, """{"error":"RoutedFakeServer: no response configured for $path"}""")
         val bodyOut = canned.body.toByteArray(Charsets.UTF_8)

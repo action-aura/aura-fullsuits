@@ -575,6 +575,34 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "الإيصالات المطبوعة تكون بالإنجليزية فقط، حتى عند استخدام التطبيق بالعربية — وضع النص ESC/POS لا يمكنه عرض الحروف العربية.",
     "Save printer settings" to "حفظ إعدادات الطابعة",
 
+    // ── Retail settings → Shop network (retail-hardware-viewports) ─────────────
+    // Wording deliberately mirrors site-relay.js's philosophy: nothing here
+    // names a relay, a key type, or an installation id -- the person reading
+    // owns a shop and needs the consequence, not the mechanism.
+    "Shop network" to "شبكة المتجر",
+    "This phone syncs with your shop over its own network." to
+        "يتزامن هذا الهاتف مع متجرك عبر شبكته الخاصة.",
+    "Connected to" to "متصل بـ",
+    "Disconnect" to "قطع الاتصال",
+    "Disconnected" to "تم قطع الاتصال",
+    "Connect this phone to your shop's till network to keep sales in sync, even when the internet is down." to
+        "قم بتوصيل هذا الهاتف بشبكة صندوق متجرك لإبقاء المبيعات متزامنة، حتى عند انقطاع الإنترنت.",
+    "Paste the text from the till here" to "الصق النص من جهاز الصندوق هنا",
+    "Connect" to "اتصال",
+    "This device needs to be activated before it can connect to a shop." to
+        "يجب تفعيل هذا الجهاز قبل أن يتمكن من الاتصال بمتجر.",
+    "That code has already been used or is not valid" to "تم استخدام هذا الرمز من قبل أو أنه غير صالح",
+    "That code has expired — ask for a new one on the till" to
+        "انتهت صلاحية هذا الرمز — اطلب رمزًا جديدًا من جهاز الصندوق",
+    "Couldn't connect to the shop's till. Try again." to "تعذّر الاتصال بصندوق المتجر. حاول مرة أخرى.",
+    "Couldn't verify the till's identity. Get a fresh code from the till and try again." to
+        "تعذّر التحقق من هوية جهاز الصندوق. احصل على رمز جديد من الصندوق وحاول مرة أخرى.",
+    "Couldn't reach the till. Check the connection and try again." to
+        "تعذّر الوصول إلى جهاز الصندوق. تحقق من الاتصال وحاول مرة أخرى.",
+    "This device is connected and will sync with the shop's till." to
+        "تم توصيل هذا الجهاز وسيتم مزامنته مع صندوق المتجر.",
+    "That pairing text isn't valid." to "هذا النص غير صالح للاتصال.",
+
     // ── Purchase orders ───────────────────────────────────────────────────────
     "No purchase orders" to "لا توجد أوامر شراء",
     "Create a PO to restock from a supplier." to "أنشئ أمر شراء لإعادة التخزين من مورد.",

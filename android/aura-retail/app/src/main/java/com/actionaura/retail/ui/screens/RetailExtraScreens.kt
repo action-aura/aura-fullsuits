@@ -45,8 +45,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.actionaura.retail.licensing.DeviceIdentity
+import com.actionaura.retail.licensing.LicensingCoordinator
 import com.actionaura.retail.net.*
 import com.actionaura.retail.printer.PrinterPrefs
+import com.actionaura.retail.sync.HubPrefs
+import com.actionaura.retail.sync.PairingPayload
+import com.actionaura.retail.sync.SpkiPinMismatchException
+import com.actionaura.retail.sync.SpkiPinning
+import com.actionaura.retail.sync.parsePairingPayload
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SectionHeader
@@ -68,9 +75,20 @@ import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
+import com.google.gson.Gson
+import com.google.gson.JsonParser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
+import java.io.File
+import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 // Delegates to the ONE formatter (ui/i18n/Num.kt). This was a second, private
 // copy that hard-coded a dollar sign and two decimals -- so every amount on
@@ -1319,6 +1337,39 @@ private fun themeLabel(p: AuraColors): String = when (p) {
     else -> p.name
 }
 
+/**
+ * Outcome of one attempt to redeem a hub's pairing text (retail-hardware-
+ * viewports) -- see [PairingPayload] and `commercial_runtime/sync/
+ * site_relay/routes.py`'s `/pair` route for what is actually being
+ * redeemed. A sealed result rather than a thrown exception for every
+ * network/business outcome: each branch below is an EXPECTED shape of "the
+ * pairing didn't go through" (bad code, wrong hub, not yet activated), not
+ * a programming error, so the caller renders it as data instead of
+ * unwinding a stack.
+ */
+private sealed class HubConnectOutcome {
+    data class Connected(val payload: PairingPayload) : HubConnectOutcome()
+    data class Failed(val message: String) : HubConnectOutcome()
+}
+
+/**
+ * Turns the hub's `/pair` `reason_code` into a sentence a shop owner can
+ * act on -- see site-relay.js's own module doc for the wording philosophy
+ * this mirrors: "the person reading owns a shop... needs the consequence,
+ * not the mechanism." `PAIRING_CODE_INVALID` and `PAIRING_CODE_EXPIRED`
+ * (pairing.py's module doc) are the only two reason codes an operator can
+ * actually act on differently, so they alone get a distinct sentence;
+ * every other code (`PAIRING_NOT_AVAILABLE`, `INVALID_REQUEST`, or none at
+ * all -- a network failure never even reaches this function) collapses to
+ * one honest "try again" -- naming those to a cashier would not change
+ * what they do next.
+ */
+private fun pairingFailureMessage(reasonCode: String?): String = when (reasonCode) {
+    "PAIRING_CODE_INVALID" -> tr("That code has already been used or is not valid")
+    "PAIRING_CODE_EXPIRED" -> tr("That code has expired — ask for a new one on the till")
+    else -> tr("Couldn't connect to the shop's till. Try again.")
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  RETAIL SETTINGS — credit enforcement, defaults, currency, payment methods
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1360,6 +1411,108 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     var printerPort by remember { mutableStateOf(PrinterPrefs.getPort(ctx).toString()) }
     var printerWidth by remember { mutableStateOf(PrinterPrefs.getWidth(ctx)) }
     var printerAutoPrint by remember { mutableStateOf(PrinterPrefs.getAutoPrint(ctx)) }
+
+    // Shop network (retail-hardware-viewports): pairs this phone to another
+    // till acting as the shop's LAN hub, by redeeming the pairing text that
+    // hub's own "Connect a device" screen shows (site-relay.js/.html) --
+    // see HubPrefs' class doc for why its four stored values only ever
+    // move together, and PairingPayload's doc for the five fields the
+    // pasted text carries. Seeded once from HubPrefs, exactly like the
+    // printer settings above.
+    var hubBaseUrl by remember { mutableStateOf(HubPrefs.getBaseUrl(ctx)) }
+    var hubPaired by remember { mutableStateOf(HubPrefs.isConfigured(ctx)) }
+    var hubPairingText by remember { mutableStateOf("") }
+    var hubConnecting by remember { mutableStateOf(false) }
+
+    suspend fun attemptHubConnect(pastedText: String): HubConnectOutcome {
+        val payload = try {
+            parsePairingPayload(pastedText)
+        } catch (invalid: IllegalArgumentException) {
+            // The exact field-naming message HubPrefs.parsePairingPayload
+            // promises -- shown verbatim, never replaced with a generic
+            // one, so whoever pastes a bad payload learns what is actually
+            // wrong with it instead of just "that didn't work".
+            return HubConnectOutcome.Failed(invalid.message ?: tr("That pairing text isn't valid."))
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                // The SAME on-disk device key LicensingCoordinator and
+                // SyncCoordinator already use (File(filesDir, "data")) --
+                // deliberately NOT DeviceIdentity's plain Context
+                // convenience constructor, which resolves one directory
+                // higher. A differently-rooted DeviceIdentity would mint a
+                // key Owner never activated and that this device's own
+                // sync traffic never signs with, so pairing would silently
+                // hand the hub a public key nothing else on this device
+                // ever uses -- see SyncCoordinator.start()'s own comment on
+                // this exact hazard.
+                val identity = DeviceIdentity(File(ctx.filesDir, "data"))
+                val installationId = (LicensingCoordinator(ctx).status()["installation_id"] as? String)
+                    ?: return@withContext HubConnectOutcome.Failed(
+                        tr("This device needs to be activated before it can connect to a shop.")
+                    )
+
+                val requestJson = Gson().toJson(
+                    mapOf(
+                        "pairing_code" to payload.pairingCode,
+                        "installation_id" to installationId,
+                        "device_public_key" to identity.getPublicKeyB64(),
+                        "label" to android.os.Build.MODEL,
+                    )
+                )
+
+                // Pinned transport -- see SpkiPinning's class doc. The
+                // hub's self-signed certificate carries no LAN hostname or
+                // IP in its SAN (its address is DHCP-assigned and
+                // unstable), so ordinary hostname verification would
+                // reject a correctly pinned hub for that reason alone. The
+                // pin IS the identity here, and it is a STRICTER check
+                // than hostname matching -- it names one exact key learned
+                // out-of-band (the text just pasted), not merely "some
+                // cert for this hostname" -- so accepting every hostname
+                // below is not a weakening: SpkiPinning's trust manager is
+                // the actual gate deciding whether to trust this peer.
+                val (sslSocketFactory, trustManager) = SpkiPinning.pinnedPair(payload.spkiPin)
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .sslSocketFactory(sslSocketFactory, trustManager)
+                    .hostnameVerifier { _, _ -> true }
+                    .build()
+
+                val request = Request.Builder()
+                    .url(payload.baseUrl.trimEnd('/') + "/api/sync/v1/pair")
+                    .post(requestJson.toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.code == 200) {
+                        HubConnectOutcome.Connected(payload)
+                    } else {
+                        val responseBody = response.body?.string() ?: "{}"
+                        val reasonCode = try {
+                            JsonParser.parseString(responseBody).asJsonObject
+                                .get("reason_code")?.takeUnless { it.isJsonNull }?.asString
+                        } catch (_: Exception) { null }
+                        HubConnectOutcome.Failed(pairingFailureMessage(reasonCode))
+                    }
+                }
+            } catch (mismatch: SpkiPinMismatchException) {
+                // Never collapsed into the generic network-error message
+                // below -- see SpkiPinMismatchException's class doc: a pin
+                // mismatch is a security decision, not a transport
+                // hiccup, and must read as one, not as "flaky LAN, try
+                // again".
+                HubConnectOutcome.Failed(
+                    tr("Couldn't verify the till's identity. Get a fresh code from the till and try again.")
+                )
+            } catch (network: IOException) {
+                HubConnectOutcome.Failed(tr("Couldn't reach the till. Check the connection and try again."))
+            } catch (e: Exception) {
+                HubConnectOutcome.Failed(tr("Couldn't connect to the shop's till. Try again."))
+            }
+        }
+    }
 
     // ── This device's branch pin (Wave C1 -- see net/Models.kt's Branch/
     // DeviceBranch doc comments for the dc22b04 defect this closes on
@@ -1643,6 +1796,79 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             },
             modifier = Modifier.fillMaxWidth().height(50.dp),
         ) { Text(tr("Save printer settings")) }
+
+        // Shop network (retail-hardware-viewports): pairs this phone to the
+        // shop's till so it can sync over the shop's own network -- see
+        // site-relay.js's module doc for the wording philosophy this
+        // mirrors: nothing here names a relay, a key type, or an
+        // installation id, because the person reading owns a shop and
+        // needs the consequence, not the mechanism.
+        SectionHeader(tr("Shop network"))
+        if (hubPaired) {
+            Text(
+                tr("This phone syncs with your shop over its own network."),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(tr("Connected to"), Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                Text(hubBaseUrl, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedButton(
+                onClick = {
+                    HubPrefs.clear(ctx)
+                    hubBaseUrl = HubPrefs.getBaseUrl(ctx)
+                    hubPaired = false
+                    scope.launch { snackbar.showSnackbar(tr("Disconnected")) }
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+            ) { Text(tr("Disconnect")) }
+        } else {
+            Text(
+                tr("Connect this phone to your shop's till network to keep sales in sync, even when the internet is down."),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = hubPairingText,
+                onValueChange = { hubPairingText = it },
+                label = { Text(tr("Paste the text from the till here")) },
+                minLines = 4,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = {
+                    hubConnecting = true
+                    scope.launch {
+                        try {
+                            when (val outcome = attemptHubConnect(hubPairingText)) {
+                                is HubConnectOutcome.Connected -> {
+                                    HubPrefs.set(
+                                        ctx,
+                                        outcome.payload.baseUrl,
+                                        outcome.payload.spkiPin,
+                                        outcome.payload.hubDevicePublicKey,
+                                        outcome.payload.hubInstallationId,
+                                    )
+                                    hubBaseUrl = HubPrefs.getBaseUrl(ctx)
+                                    hubPaired = true
+                                    hubPairingText = ""
+                                    snackbar.showSnackbar(tr("This device is connected and will sync with the shop's till."))
+                                }
+                                is HubConnectOutcome.Failed -> snackbar.showSnackbar(outcome.message)
+                            }
+                        } finally {
+                            hubConnecting = false
+                        }
+                    }
+                },
+                enabled = !hubConnecting && hubPairingText.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+            ) {
+                if (hubConnecting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                else Text(tr("Connect"))
+            }
+        }
 
         if (com.actionaura.retail.ui.RetailSession.isAdmin) {
             SectionHeader(tr("Backup & restore"))

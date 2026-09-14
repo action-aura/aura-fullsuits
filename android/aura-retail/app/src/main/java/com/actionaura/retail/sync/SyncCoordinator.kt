@@ -13,6 +13,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.net.URLEncoder
 import java.util.Timer
 import java.util.TimerTask
 import java.util.concurrent.TimeUnit
@@ -154,6 +155,20 @@ object SyncCoordinator {
      *  one or the wrong one, since either candidate url in a precedence
      *  test is independently valid. */
     internal fun currentRelayBaseUrl(): String = effectiveRelayBaseUrl
+    /** The paired hub's SPKI pin (see [HubPrefs]/[SpkiPinning]), captured
+     *  ONCE at [start] time -- blank whenever [effectiveRelayBaseUrl] is not
+     *  actually the paired hub's URL (cloud relay, or a hub URL that failed
+     *  [requireTransportIsSafe] and lost precedence to BuildConfig/persisted
+     *  -- see [resolveRelayBaseUrl]). [relayClient] branches on this being
+     *  non-blank to build a pinned client instead of a plain one. A plain
+     *  `internal var`, not a Context reference: [SyncCoordinator] is a
+     *  singleton `object` that must never hold onto an Android `Context`,
+     *  so the one place it is ever available ([start]'s Context-taking
+     *  overload) reads what is needed from it and stores only the resulting
+     *  value here -- mirroring exactly how [identity] already stores a
+     *  [DeviceIdentity] built from a `File` rather than holding the
+     *  `Context` used to compute that `File`. */
+    @Volatile private var hubSpkiPin: String = ""
     /** Per-stream outbox size, keyed by [SyncStream.label] -- summed (never
      *  overwritten wholesale) so one stream's freshly-read count can never
      *  clobber the other's; see [recordPending] and [SyncHealth]'s doc. */
@@ -187,9 +202,22 @@ object SyncCoordinator {
      * unless `BuildConfig.OWNER_SYNC_BASE_URL` is set -- callers that have
      * no persisted value yet (never activated, licensing unconfigured, a
      * failed local lookup) are expected to pass null rather than omit a
-     * genuine failure. */
-    fun start(appContext: Context, persistedRelayBaseUrl: String? = null) {
-        start(File(appContext.filesDir, "data"), BuildConfig.OWNER_SYNC_BASE_URL, persistedRelayBaseUrl)
+     * genuine failure.
+     *
+     * [hubRelayBaseUrl] is a paired LAN hub's URL (see [HubPrefs]) -- it
+     * outranks even [persistedRelayBaseUrl] and `BuildConfig
+     * .OWNER_SYNC_BASE_URL` (see [resolveRelayBaseUrl]'s own doc comment for
+     * why). [com.actionaura.retail.ui.AppRoot] is expected to pass
+     * `HubPrefs.getBaseUrl(ctx).takeIf { HubPrefs.isConfigured(ctx) }` here
+     * -- non-null therefore means "this device IS paired", so the matching
+     * SPKI pin is read from [appContext] right here, at the one moment this
+     * singleton `object` ever holds a real `Context`, and stored as plain
+     * instance state ([hubSpkiPin]) rather than the `Context` itself --
+     * mirroring exactly how [identityDir] below is resolved from
+     * `appContext.filesDir` once and only the resulting `File` is kept. */
+    fun start(appContext: Context, persistedRelayBaseUrl: String? = null, hubRelayBaseUrl: String? = null) {
+        val hubSpkiPinValue = hubRelayBaseUrl?.let { HubPrefs.getSpkiPin(appContext) }
+        start(File(appContext.filesDir, "data"), BuildConfig.OWNER_SYNC_BASE_URL, persistedRelayBaseUrl, hubRelayBaseUrl, hubSpkiPinValue)
     }
 
     /** Context-free core of [start] -- [buildConfigValue] and
@@ -201,9 +229,18 @@ object SyncCoordinator {
      *  Robolectric nor Mockito, so `Context` cannot otherwise be
      *  constructed or faked here. Mirrors why the 4-arg [runOnce] overload
      *  takes `relayBaseUrl` as a parameter instead of reading BuildConfig
-     *  directly. `internal`, not `private`, for that one reason. */
-    internal fun start(identityDir: File, buildConfigValue: String, persistedRelayBaseUrl: String?) {
-        val resolved = resolveRelayBaseUrl(buildConfigValue, persistedRelayBaseUrl)
+     *  directly. `internal`, not `private`, for that one reason.
+     *
+     *  [hubBaseUrl]/[hubSpkiPinValue] default to null so every existing
+     *  3-arg call site (production and test) is unaffected. */
+    internal fun start(
+        identityDir: File,
+        buildConfigValue: String,
+        persistedRelayBaseUrl: String?,
+        hubBaseUrl: String? = null,
+        hubSpkiPinValue: String? = null,
+    ) {
+        val resolved = resolveRelayBaseUrl(buildConfigValue, persistedRelayBaseUrl, hubBaseUrl)
         if (resolved.isBlank()) return
         synchronized(lock) {
             if (running) return
@@ -216,13 +253,48 @@ object SyncCoordinator {
             // or DEVICE_KEY_REVOKED.
             identity = DeviceIdentity(identityDir)
             effectiveRelayBaseUrl = resolved
+            // Only pin when the hub URL is the candidate that actually WON
+            // precedence -- if it failed requireTransportIsSafe and
+            // resolveRelayBaseUrl fell through to BuildConfig/persisted
+            // instead, pinning against a hub key that isn't even the relay
+            // in use would be meaningless at best and misleading at worst.
+            hubSpkiPin = if (hubBaseUrl != null && resolved == hubBaseUrl.trim()) {
+                hubSpkiPinValue?.trim().orEmpty()
+            } else {
+                ""
+            }
             running = true
             scheduleNext()
         }
     }
 
     /** Precedence + validation for the relay base URL this coordinator
-     *  actually uses. [buildConfigValue] (an operator's explicit build-time
+     *  actually uses.
+     *
+     *  [hubValue] -- a paired LAN hub's URL (see [HubPrefs]) -- ALWAYS wins
+     *  over everything else, when non-blank and it passes
+     *  [requireTransportIsSafe] itself (the identical check every other
+     *  candidate here is held to; a hub URL is `https://` by construction --
+     *  see [parsePairingPayload] -- so this in practice never rejects a
+     *  genuinely-paired hub, but a candidate this function trusted
+     *  unconditionally is exactly the mistake [requireTransportIsSafe]
+     *  exists to catch everywhere else). A device paired to a hub MUST talk
+     *  to that hub and only that hub: Owner's cloud relay and each LAN hub
+     *  run INDEPENDENT `sync_cursor` sequence spaces, so a device that
+     *  switched between them mid-stream would hold one cursor against two
+     *  different orderings, silently skipping or replaying events depending
+     *  on which relay it asks next tick. (The Python side now guards this
+     *  too -- retail schema v31's `SyncService.ensure_cursor_matches_relay`
+     *  resets the cursor the moment the relay URL it's asked against changes
+     *  (`internal_routes.py`'s `/_internal/cursor` route) -- but that is a
+     *  server-side safety net for a client that already got this wrong, not
+     *  a reason for the client to stop picking exactly one relay and
+     *  staying on it.) A hub candidate that fails the safety check is never
+     *  partially trusted either: it is dropped and precedence continues to
+     *  [buildConfigValue]/[persistedValue] exactly as if no hub had been
+     *  supplied.
+     *
+     *  Failing that, [buildConfigValue] (an operator's explicit build-time
      *  value) ALWAYS wins when non-blank -- a shop built against a specific
      *  relay must never be silently redirected by whatever Owner told this
      *  device at activation, so [persistedValue] is never even inspected in
@@ -236,7 +308,22 @@ object SyncCoordinator {
      *  attempt. `internal`, not `private`, so a plain-JVM test can drive
      *  every branch directly -- mirrors why `requireTransportIsSafe` itself
      *  is `internal` in SyncRelayClient.kt. */
-    internal fun resolveRelayBaseUrl(buildConfigValue: String, persistedValue: String?): String {
+    internal fun resolveRelayBaseUrl(buildConfigValue: String, persistedValue: String?, hubValue: String? = null): String {
+        val hubCandidate = hubValue?.trim().orEmpty()
+        if (hubCandidate.isNotBlank()) {
+            try {
+                requireTransportIsSafe(hubCandidate)
+                return hubCandidate
+            } catch (exc: SyncRelayClientError) {
+                logError(
+                    "Paired hub URL failed the same transport-safety check every other " +
+                        "relay candidate is held to (${exc.reasonCode}); ignoring it and " +
+                        "falling back to the next precedence level rather than trusting an " +
+                        "unsafe hub URL.",
+                    exc,
+                )
+            }
+        }
         if (buildConfigValue.isNotBlank()) return buildConfigValue
         val candidate = persistedValue?.trim().orEmpty()
         if (candidate.isBlank()) return ""
@@ -468,12 +555,51 @@ object SyncCoordinator {
     private fun currentIdentity(): DeviceIdentity = identity
         ?: throw IllegalStateException("SyncCoordinator.start() was never called.")
 
-    private fun relayClient(installationId: String, relayBaseUrl: String, identity: DeviceIdentity): SyncRelayClient =
-        SyncRelayClient(
-            SyncRelayClientConfig(baseUrl = relayBaseUrl),
+    /** Builds the [SyncRelayClient] for one push/pull attempt. When this
+     *  device is paired to a LAN hub ([hubSpkiPin] non-blank, set at
+     *  [start]), the SAME pinned [SpkiPinning] factory/trust-manager pair is
+     *  threaded into BOTH of [SyncRelayClient]'s independent TLS seams --
+     *  `httpClient` (push(), OkHttp) AND `sslSocketFactory` (pull(), the raw
+     *  Socket path that never goes near OkHttp at all). Pinning only one of
+     *  the two would leave the other completely unpinned; see
+     *  [SpkiPinning]'s class doc for the full reasoning and why that
+     *  specific half-measure is the single most likely regression here --
+     *  [HubTransportContractTest]'s source-text test on this exact function
+     *  exists to catch it. Otherwise (no hub paired) this builds exactly the
+     *  same client as before this feature existed. */
+    private fun relayClient(installationId: String, relayBaseUrl: String, identity: DeviceIdentity): SyncRelayClient {
+        val config = SyncRelayClientConfig(baseUrl = relayBaseUrl)
+        val pin = hubSpkiPin
+        if (pin.isBlank()) {
+            return SyncRelayClient(config, identity, installationId)
+        }
+        val (factory, trustManager) = SpkiPinning.pinnedPair(pin)
+        val pinnedHttpClient = OkHttpClient.Builder()
+            .connectTimeout(config.timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(config.timeoutSeconds, TimeUnit.SECONDS)
+            // OkHttp requires both the factory AND the trust manager
+            // explicitly -- see SpkiPinning.pinnedPair's own doc comment.
+            .sslSocketFactory(factory, trustManager)
+            // Accepting every hostname here is NOT a weakening: the trust
+            // manager backing `factory`/`trustManager` above has already
+            // refused every peer except the one exact pinned key,
+            // unconditionally, before this verifier ever runs -- the pin IS
+            // the identity, not the name. Mirrors `verifyHostname = false`
+            // below; see that SyncRelayClient constructor parameter's own
+            // doc comment for the full reasoning, which mirrors
+            // commercial_runtime/sync/site_relay/pinned_transport.py's
+            // SpkiPinnedAdapter.
+            .hostnameVerifier { _, _ -> true }
+            .build()
+        return SyncRelayClient(
+            config,
             identity,
             installationId,
+            httpClient = pinnedHttpClient,
+            sslSocketFactory = factory,
+            verifyHostname = false,
         )
+    }
 
     private fun pushOnce(
         stream: SyncStream,
@@ -523,7 +649,20 @@ object SyncCoordinator {
         relayBaseUrl: String,
         identity: DeviceIdentity,
     ) {
-        val cursor = getLocal(stream.prefix + "/_internal/cursor", localBaseUrl, internalSecret)
+        // relay_url (URL-encoded) lets the local backend's own
+        // ensure_cursor_matches_relay (internal_routes.py's
+        // /_internal/cursor route, retail schema v31) reset the cursor the
+        // moment this device's effective relay actually changes -- e.g. a
+        // device that stops talking to Owner's cloud relay and starts
+        // talking to a paired LAN hub instead (or vice versa) must never
+        // read a cursor that belonged to the OTHER relay's independent
+        // sequence space (see resolveRelayBaseUrl's own doc comment for why
+        // that matters). Optional on the Python side -- absent means "no
+        // relay check, exactly the old behavior" -- so this is additive,
+        // never a breaking parameter.
+        val cursorPath = stream.prefix + "/_internal/cursor?relay_url=" +
+            URLEncoder.encode(relayBaseUrl, "UTF-8")
+        val cursor = getLocal(cursorPath, localBaseUrl, internalSecret)
         val installationId = cursor.stringOrNull("installation_id") ?: return
         val since = cursor.get("since")?.asLong ?: 0L
 

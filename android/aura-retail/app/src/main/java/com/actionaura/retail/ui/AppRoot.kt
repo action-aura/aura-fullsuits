@@ -39,6 +39,7 @@ import com.actionaura.retail.net.SessionResponse
 import com.actionaura.retail.net.TerminalIdentity
 import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.server.ServerBootstrap
+import com.actionaura.retail.sync.HubPrefs
 import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.ui.brand.AuraMark
 import com.actionaura.retail.ui.brand.AuraWordmark
@@ -171,7 +172,13 @@ fun AppRoot() {
             val persistedSyncRelayBaseUrl = try {
                 com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["sync_relay_base_url"] as? String
             } catch (e: Exception) { null }
-            SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl)
+            // A paired LAN hub outranks even this persisted cloud-relay value
+            // (see SyncCoordinator.resolveRelayBaseUrl's own doc comment for
+            // why) -- HubPrefs is a local SharedPreferences read, never a
+            // network call, so unlike the two try/catches above there is no
+            // failure path here to swallow.
+            val hubRelayBaseUrl = HubPrefs.getBaseUrl(ctx).takeIf { HubPrefs.isConfigured(ctx) }
+            SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl, hubRelayBaseUrl)
 
             // Periodic licence check-in. Before this, checkIn() was reachable
             // only from LicensingScreen's manual "Check Now" button, so
@@ -254,7 +261,8 @@ fun AppRoot() {
                                 val persistedSyncRelayBaseUrl = try {
                                     com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["sync_relay_base_url"] as? String
                                 } catch (e: Exception) { null }
-                                SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl)
+                                val hubRelayBaseUrl = HubPrefs.getBaseUrl(ctx).takeIf { HubPrefs.isConfigured(ctx) }
+                                SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl, hubRelayBaseUrl)
                                 phase = phaseAfterActivationGate(ctx, licensingConfigured)
                             }
                         },
