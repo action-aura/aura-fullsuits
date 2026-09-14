@@ -1124,12 +1124,95 @@ def _start_site_relay_if_enabled():
         _record = _hub_state_repository.load()
         _hub_installation_id = _record.owner_installation_id if _record else None
 
+        # The hub's own Ed25519 DEVICE public key, which goes on the pairing QR
+        # so a paired device can later verify this hub's signed addressing
+        # beacon. NOT the same thing as the SPKI pin sitting beside it: the pin
+        # authenticates the TLS connection, this key authenticates a UDP
+        # datagram. Two keys, two jobs.
+        #
+        # This was MISSING on the first cut of this wiring, and the payload went
+        # out with `"hub_device_public_key": null`. Android's
+        # `parsePairingPayload` requires the field, so the phone would have
+        # refused every QR this hub produced -- caught by reading a real payload
+        # rather than by any test, because nothing asserted the field was
+        # populated end to end.
+        #
+        # Tolerated as None for the same reason installation_id is: a hub can
+        # bind before this till has activated, and no device key exists until
+        # then. `get_public_key_b64` raises rather than returning empty in that
+        # state, so it is guarded rather than allowed to stop the relay.
+        try:
+            _hub_device_public_key = _hub_signer.get_public_key_b64()
+        except Exception:
+            _hub_device_public_key = None
+            logging.getLogger(__name__).info(
+                'Site relay: no device key yet (this till has not activated), so '
+                'pairing QRs will omit the beacon-verification key until it has.')
+
+        # ── Licence-proof automatic joining ─────────────────────────────────
+        # These three are what let a device join this hub with NOTHING typed by
+        # anyone: no QR, no code, no IP. Every activated device holds an
+        # Owner-signed assertion naming its `license_public_id`, so two devices
+        # are in the same shop exactly when those match -- checkable offline by
+        # both sides against the trust anchor bundled in every install.
+        #
+        # All three are CALLABLES, deliberately, not values. A hub can bind
+        # before its till has activated, and activation may happen minutes
+        # later in the same process; capturing values here would pin them to
+        # "not activated" for the lifetime of the run and the hub would refuse
+        # every join forever, with nothing on screen explaining why.
+        from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore
+
+        _hub_licensing_dir = Path(DATABASE_DIR).parent / 'licensing'
+
+        def _hub_assertion_payload():
+            """This device's own verified-at-activation assertion payload, or
+            None before activation."""
+            import json as _json
+
+            record = _hub_state_repository.load()
+            if record is None or not record.assertion_envelope_json:
+                return None
+            try:
+                envelope = _json.loads(record.assertion_envelope_json)
+            except (TypeError, ValueError):
+                return None
+            payload = envelope.get('payload')
+            return envelope if isinstance(payload, dict) else None
+
+        def _hub_identity_provider():
+            envelope = _hub_assertion_payload()
+            if envelope is None or not _hub_installation_id or not _hub_device_public_key:
+                return None
+            return {
+                'installation_id': _hub_installation_id,
+                'device_public_key': _hub_device_public_key,
+                'assertion': envelope,
+            }
+
+        def _hub_license_public_id_provider():
+            envelope = _hub_assertion_payload()
+            if envelope is None:
+                return None
+            return envelope['payload'].get('license_public_id')
+
+        def _hub_trust_store_provider():
+            # Read per call rather than cached: trust_store.json is seeded once
+            # at first run and can be rotated by an admitted key manifest, and a
+            # hub holding a stale in-memory copy would keep trusting a key the
+            # operator has since revoked.
+            return OwnerTrustStore(_hub_licensing_dir / 'trust_store.json')
+
         _site_relay_server = start_site_relay(
             get_conn=get_retail_conn,
+            hub_identity_provider=_hub_identity_provider,
+            license_public_id_provider=_hub_license_public_id_provider,
+            trust_store_provider=_hub_trust_store_provider,
             host=SITE_RELAY_BIND_HOST,
             port=SITE_RELAY_PORT,
             identity_dir=Path(DATABASE_DIR).parent / 'site-relay',
             installation_id=_hub_installation_id,
+            device_public_key=_hub_device_public_key,
             signer=_hub_signer,
         )
         pin = _site_relay_server.pin

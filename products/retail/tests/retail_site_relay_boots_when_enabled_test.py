@@ -231,6 +231,49 @@ def test_an_admin_can_mint_a_pairing_code_carrying_everything_a_device_needs():
         assert payload.get(field), f"pairing payload is missing {field}: {payload}"
 
 
+def test_the_hub_passes_its_device_key_into_the_relay():
+    """app.py must hand `device_public_key` to `start_site_relay`.
+
+    THIS IS A REGRESSION GUARD FOR A REAL OMISSION. The first version of that
+    wiring passed `installation_id` and `signer` but not the device public key,
+    so every pairing payload this hub produced carried
+    `"hub_device_public_key": null` -- and Android's `parsePairingPayload`
+    requires that field, meaning the phone would have refused every QR the hub
+    showed it.
+
+    Nothing caught it: the field is only consumed on the device, so the desktop
+    suite was perfectly happy and the payload looked plausible. It was found by
+    reading one real payload with human eyes, which is not a strategy.
+
+    Asserted against app.py's source rather than the payload, because the key
+    is only non-null on a hub whose till has ACTIVATED, and this test's hub
+    deliberately has not -- so a payload-level assertion here would pass on the
+    broken wiring for the wrong reason. What can be checked everywhere is that
+    the argument is threaded through at all."""
+    import re
+
+    source = (BACKEND_DIR / 'app.py').read_text(encoding='utf-8')
+    start = source.find('start_site_relay(')
+    assert start > -1, 'start_site_relay call not found -- this test cannot guard anything'
+    call = source[start:source.index(')', source.index('signer=', start))]
+    assert 'device_public_key=' in call, (
+        'app.py no longer passes device_public_key to start_site_relay; every '
+        'pairing QR will carry null for it and Android will refuse to pair')
+
+
+def test_the_pairing_payload_carries_every_field_a_device_needs():
+    """All five keys `pairing_payload` produces must be present.
+
+    A missing key is not a cosmetic problem: the device-side parser rejects the
+    whole payload, so the symptom is "pairing does not work" with nothing on
+    either screen explaining which field was absent."""
+    payload = _admin_client().post('/api/site-relay/pair-code').get_json()['payload']
+
+    for field in ('base_url', 'spki_pin', 'hub_installation_id',
+                  'hub_device_public_key', 'pairing_code'):
+        assert field in payload, f'pairing payload is missing the key {field!r}'
+
+
 def test_the_pairing_qr_is_rendered_server_side():
     """A phone pairs by SCANNING, and this product ships no frontend QR
     library (and a till is routinely offline, so a CDN is not an option). The
