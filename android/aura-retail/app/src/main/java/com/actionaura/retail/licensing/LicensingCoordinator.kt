@@ -148,6 +148,52 @@ class LicensingCoordinator(context: Context) {
         executeLocal(request)
     }
 
+    /**
+     * Reads this device's own verified `license_public_id` +
+     * Owner-signed assertion envelope from `GET /api/licensing/
+     * _internal/license-identity` -- the route `HubAutoJoinService.kt`
+     * needs to close the gap its own header used to document (search that
+     * file's git history for "THE GAP THIS TASK DID NOT CLOSE"). Kotlin
+     * deliberately never opens `licensing.db` itself: this class's own doc
+     * comment above already establishes that Python does "the only state
+     * mutation that counts", and the identical reasoning applies to
+     * READING the verified assertion, not just writing it -- a second,
+     * independent parse of the raw file from Kotlin would have no
+     * guarantee of matching the state machine's own verified copy.
+     *
+     * Same `executeLocal()`/gson-`Map` shape every other method here
+     * uses, deliberately: the route answers 403 ("Unauthorized") or 400
+     * (`NO_LOCAL_LICENSE`, for a missing/unparseable/incomplete stored
+     * assertion) on failure and 200 on success, but [executeLocal] -- like
+     * every other call in this class -- never inspects the status code,
+     * only parses whatever JSON body came back. So a `{"reason_code",
+     * "detail"}` failure body and a `{"license_public_id",
+     * "assertion_envelope_json"}` success body both arrive here as a plain
+     * `Map`, and a caller reads success or failure off ITS KEYS -- the
+     * same way [status] and [checkIn]'s fallback path already do -- rather
+     * than by branching on an HTTP status Kotlin would otherwise have to
+     * special-case.
+     *
+     * `assertion_envelope_json` comes back out of [executeLocal]'s Gson
+     * `Map<String, Any?>` parse as a plain `String` -- a JSON STRING
+     * field's decoded value, never a nested object Gson had to walk and
+     * that a caller might re-serialize -- so the exact bytes the route
+     * read off disk reach the caller unchanged. Callers (only
+     * [com.actionaura.retail.sync.HubAutoJoinService] has a legitimate
+     * reason to call this) must keep it that way: read the `String` out
+     * of the map directly and hand it onward verbatim, never round-trip
+     * it through a JSON parser and re-stringify, or the hub's own
+     * signature check over these exact bytes breaks silently.
+     */
+    suspend fun licenseIdentity(): Map<String, Any?> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(localUrl("/api/licensing/_internal/license-identity"))
+            .header("X-Aura-Internal-Secret", ServerBootstrap.internalSecret())
+            .get()
+            .build()
+        executeLocal(request)
+    }
+
     private fun localUrl(path: String): String = ServerBootstrap.baseUrl().trimEnd('/') + path
 
     private fun executeLocal(request: Request): Map<String, Any?> {
