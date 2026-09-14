@@ -144,7 +144,8 @@ def build_tls_context(cert_path, key_path):
     return context
 
 
-def start_site_relay(*, get_conn, host, port, identity_dir, **blueprint_kwargs):
+def start_site_relay(*, get_conn, host, port, identity_dir,
+                     housekeeping=True, nonce_ttl_seconds=None, **blueprint_kwargs):
     """Bind the LAN listener and serve it on a background daemon thread.
 
     Returns `(server, pin)` -- the pin being the base64 SHA-256 SPKI a client
@@ -180,6 +181,15 @@ def start_site_relay(*, get_conn, host, port, identity_dir, **blueprint_kwargs):
                               name="aura-site-relay", daemon=True)
     thread.start()
 
+    # Started here rather than left to the caller, deliberately: pruning that
+    # something has to remember to switch on is pruning that does not happen.
+    # A hub is exactly the install whose nonce store and site log grow, so the
+    # sweep belongs to the same act as binding the listener.
+    if housekeeping:
+        from .replay import DEFAULT_NONCE_TTL_SECONDS
+        start_housekeeping(get_conn=get_conn,
+                           nonce_ttl_seconds=nonce_ttl_seconds or DEFAULT_NONCE_TTL_SECONDS)
+
     _log.info(
         "Site relay listening on https://%s:%d (SPKI pin %s). This process is now "
         "reachable from the local network on that port; the UI server is unaffected "
@@ -187,6 +197,74 @@ def start_site_relay(*, get_conn, host, port, identity_dir, **blueprint_kwargs):
         host, server.server_address[1], pin,
     )
     return server, pin
+
+
+# Hourly. The two things this sweeps -- expired replay nonces and settled
+# site-log rows -- both grow with traffic and neither has a natural ceiling,
+# but neither grows fast enough to need attention sooner than this. Running it
+# more often would take the single-writer SQLite lock more often for no gain;
+# running it daily would let a busy shop accumulate a day of nonces it can
+# never match again.
+HOUSEKEEPING_INTERVAL_SECONDS = 3600.0
+
+
+def start_housekeeping(*, get_conn, nonce_ttl_seconds,
+                       interval_seconds=HOUSEKEEPING_INTERVAL_SECONDS):
+    """Periodically forget what the hub no longer needs. Returns a stop Event.
+
+    WITHOUT THIS, `pruning.py` IS DEAD CODE and both tables grow forever. That
+    is worth stating plainly because the failure is invisible for months: a
+    till works perfectly while `site_sync_events` climbs into the millions,
+    and the first symptom is a shop wondering why its database file is
+    gigabytes.
+
+    Every sweep is wrapped so an exception cannot kill the thread. Housekeeping
+    failing is not a reason to stop trying -- the usual cause is transient
+    (the write lock was held by a sale at that instant), and the correct
+    response is to try again next hour rather than to silently stop pruning
+    for the lifetime of the process. It is logged at WARNING so a sweep that
+    fails EVERY hour is still discoverable, rather than swallowed.
+
+    Counts are logged rather than a bare "housekeeping ran", because the
+    difference between "pruned 4,000 rows" and "pruned 0 rows, every hour,
+    since March" is the whole diagnostic value of the line.
+    """
+    from . import pruning
+
+    stop = threading.Event()
+
+    def _loop():
+        # An immediate first sweep would fire during boot, competing with
+        # migrations and the first sync tick for the write lock. Wait one
+        # interval: nothing here is urgent, and a hub that has just started
+        # has nothing to prune anyway.
+        while not stop.wait(interval_seconds):
+            conn = None
+            try:
+                conn = get_conn()
+                result = pruning.prune_nonces_and_log(
+                    conn, nonce_ttl_seconds=nonce_ttl_seconds)
+                conn.commit()
+                _log.info("Site relay housekeeping: pruned %d nonce(s), %d event(s).",
+                          result["nonces_pruned"], result["events_pruned"])
+            except Exception:
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                _log.warning("Site relay housekeeping sweep failed; will retry "
+                             "at the next interval.", exc_info=True)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    threading.Thread(target=_loop, name="aura-site-relay-housekeeping",
+                     daemon=True).start()
+    return stop
 
 
 def local_lan_addresses():

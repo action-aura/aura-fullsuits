@@ -44,10 +44,22 @@ What is here:
       both how they reach the LAN devices and how the next upstream pass
       knows never to send them back -- the echo guard.
 
-NOT BUILT YET (see the design doc sec9's effort table, and say so plainly
-rather than letting someone assume the feature is complete): the Owner-signed
-roster fetch/verify/enforce path (`site_roster` is created but nothing writes
-it yet, so authorization currently rests on local pairing alone), the QR
-pairing UX and the UDP addressing beacon, hub promotion, and site-log pruning
-against `site_device_cursors`.
+    * `pairing.py`    -- operator-issued, short-lived, single-use pairing
+      codes, and the payload that becomes the QR a device scans. The codes
+      live in memory deliberately: a hub restart SHOULD invalidate them.
+    * `beacon.py`     -- the signed UDP addressing beacon. Identity lives in
+      keys, not addresses, so a new DHCP lease is a non-event: devices learn
+      the hub's current URL from a datagram signed by the hub's device key.
+    * `pruning.py`    -- what is safe to forget. The watermark is the slowest
+      of every non-revoked paired device AND the forwarder, because a row
+      that has not yet reached Owner is still its only copy.
+
+NOT BUILT YET (say so plainly rather than letting someone assume the feature
+is complete): the Owner-signed roster fetch/verify/enforce path -- `site_roster`
+is created but nothing writes it, so authorization rests on local pairing
+alone, and a device Owner SUSPENDS keeps LAN access until someone revokes it
+at the till. Also absent: hub promotion (design sec3's manual recovery path),
+a UI for any of the pairing flow, and Android support -- the phone's relay URL
+is still a build-time constant with no runtime override and OkHttp's
+CertificatePinner is not wired, so a phone cannot yet be pointed at a hub.
 """
