@@ -11,7 +11,7 @@ from commercial_runtime.licensing_contracts.canonical import canonicalize_bytes
 from commercial_runtime.licensing_contracts.client import LicensingClient
 from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
-from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord, LicenseStateRepository
 from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore
 
 pytestmark = pytest.mark.skipif(
@@ -401,6 +401,215 @@ def test_neither_internal_sync_route_admits_a_never_trusted_signer(
         assert record.assertion_id == "a-1"  # the real one, untouched
 
     assert OwnerTrustStore(tmp_path / "appdata" / "licensing" / "trust_store.json").is_trusted("attacker-key") is False
+
+
+# ── GET /_internal/license-identity ───────────────────────────────────────
+# Closes the gap `HubAutoJoinService.kt` documents at its own call site
+# ("THE GAP THIS TASK DID NOT CLOSE"): Android's autojoin flow needs THIS
+# device's own license_public_id and its own Owner-signed assertion
+# envelope, and Kotlin never opens licensing.db directly. See routes.py's
+# own docstring on internal_license_identity for the full reasoning.
+
+
+def test_internal_license_identity_not_registered_without_shared_secret(app_without_secret):
+    # Windows-safety proof: this route must fall out of registration
+    # entirely when internal_shared_secret is None, exactly like every
+    # other /_internal/* route -- never merely 403 it at request time.
+    client = app_without_secret.test_client()
+    resp = client.get("/api/licensing/_internal/license-identity")
+    assert resp.status_code == 404
+
+
+def test_internal_license_identity_rejects_missing_secret(app_with_secret):
+    client = app_with_secret.test_client()
+    resp = client.get("/api/licensing/_internal/license-identity")
+    assert resp.status_code == 403
+    assert resp.get_json()["reason_code"] == "INVALID_REQUEST"
+
+
+def test_internal_license_identity_rejects_wrong_secret(app_with_secret):
+    client = app_with_secret.test_client()
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": "wrong-secret"},
+    )
+    assert resp.status_code == 403
+    assert resp.get_json()["reason_code"] == "INVALID_REQUEST"
+
+
+def test_internal_license_identity_succeeds_with_stored_assertion(app_with_secret, owner_key, tmp_path):
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    envelope = _envelope(
+        owner_key, "owner-1", _payload("owner-assigned-inst-1", meta.public_key_fingerprint, license_public_id="lic-xyz")
+    )
+    client = app_with_secret.test_client()
+    client.post(
+        "/api/licensing/_internal/sync-activation",
+        json={"result": "SUCCESS", "installation_id": "owner-assigned-inst-1", "signed_assertion": envelope},
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+
+    # The exact stored string, straight from the repository -- not whatever
+    # this test happens to think it posted -- so the byte-identity assertion
+    # below is against the real persisted value, not a tautology.
+    stored_record = LicenseStateRepository(
+        tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    ).load()
+    assert stored_record is not None
+    assert stored_record.assertion_envelope_json
+
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["license_public_id"] == "lic-xyz"
+    # BYTE-IDENTICAL to the stored column -- the hub verifies a signature
+    # over these exact bytes; any re-encoding risks changing them even if
+    # the JSON *value* would compare equal.
+    assert body["assertion_envelope_json"] == stored_record.assertion_envelope_json
+
+
+def test_internal_license_identity_returns_a_NON_CANONICAL_envelope_unchanged(
+    app_with_secret, tmp_path
+):
+    """The byte-identity test above cannot actually catch a re-encoding bug,
+    and this one can. Its envelope arrives through /_internal/sync-activation,
+    which canonicalises on the way in, so what lands in the column already has
+    sorted keys and no incidental whitespace -- meaning a route that rebuilt
+    the string with `json.dumps(..., sort_keys=True)` would reproduce it
+    byte-for-byte and the assertion would pass anyway. Measured, not assumed:
+    mutating the route to re-serialise left all 8 license-identity tests
+    green. That is this repo's failure shape 2 -- the fixture manufactures the
+    exact state that hides the bug.
+
+    So this one writes a DELIBERATELY NON-CANONICAL string straight to the
+    repository: keys out of alphabetical order, irregular whitespace, a
+    newline. It parses, and it carries a license_public_id, so the route must
+    return it -- and ANY re-encoding changes the bytes and fails here.
+
+    Why it matters beyond tidiness: the hub verifies an Ed25519 signature
+    computed over these exact bytes (`join.py`), so a string that is an equal
+    JSON *value* but different *bytes* fails verification, and the symptom is
+    a device that silently cannot join with nothing pointing at the cause.
+    """
+    _generate_device_key(app_with_secret, tmp_path)
+    # Not sorted, padded, and split across lines -- none of which json.dumps
+    # would ever emit, whatever its arguments.
+    non_canonical = (
+        '{"signing_key_id": "owner-1",   "payload": {"zz_trailing": 1,\n'
+        '  "license_public_id": "lic-noncanonical", "aa_leading": 2},\n'
+        '   "algorithm":  "ed25519", "signature": "AAAA"}'
+    )
+    repo = LicenseStateRepository(
+        tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    )
+    repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=2,
+            product_code="AURA_CLINIC",
+            platform="ANDROID",
+            current_state="ACTIVE_ONLINE",
+            assertion_envelope_json=non_canonical,
+        )
+    )
+
+    client = app_with_secret.test_client()
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["license_public_id"] == "lic-noncanonical"
+    assert body["assertion_envelope_json"] == non_canonical
+
+
+def test_internal_license_identity_rejects_no_license_record(app_with_secret):
+    # No activation has ever happened -- state_repository.load() returns
+    # None, distinct from "a record exists but the envelope is unusable"
+    # below, though this route reports both as NO_LOCAL_LICENSE.
+    client = app_with_secret.test_client()
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["reason_code"] == "NO_LOCAL_LICENSE"
+
+
+def test_internal_license_identity_rejects_null_envelope_on_existing_record(app_with_secret, tmp_path):
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    db_path = tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    repo = LicenseStateRepository(db_path)
+    # A record can exist with no assertion on it yet (e.g. mid-migration
+    # bookkeeping) -- assertion_envelope_json is NULL/empty rather than the
+    # table itself having no row at all.
+    repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=2,
+            product_code="AURA_CLINIC",
+            platform="ANDROID",
+            current_state="NOT_CONFIGURED",
+            assertion_envelope_json=None,
+        )
+    )
+    client = app_with_secret.test_client()
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["reason_code"] == "NO_LOCAL_LICENSE"
+
+
+def test_internal_license_identity_rejects_unparseable_envelope(app_with_secret, tmp_path):
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    db_path = tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    repo = LicenseStateRepository(db_path)
+    repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=2,
+            product_code="AURA_CLINIC",
+            platform="ANDROID",
+            current_state="ACTIVE_ONLINE",
+            assertion_envelope_json="{not valid json",
+        )
+    )
+    client = app_with_secret.test_client()
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    # Must be a clean 400, never a 500/traceback, on corrupted local data.
+    assert resp.status_code == 400
+    assert resp.get_json()["reason_code"] == "NO_LOCAL_LICENSE"
+
+
+def test_internal_license_identity_rejects_envelope_without_license_public_id(app_with_secret, owner_key, tmp_path):
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    payload = _payload("owner-assigned-inst-1", meta.public_key_fingerprint)
+    del payload["license_public_id"]
+    envelope = _envelope(owner_key, "owner-1", payload)
+    db_path = tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    repo = LicenseStateRepository(db_path)
+    repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=2,
+            product_code="AURA_CLINIC",
+            platform="ANDROID",
+            current_state="ACTIVE_ONLINE",
+            assertion_envelope_json=json.dumps(envelope),
+        )
+    )
+    client = app_with_secret.test_client()
+    resp = client.get(
+        "/api/licensing/_internal/license-identity",
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["reason_code"] == "NO_LOCAL_LICENSE"
 
 
 def test_internal_sync_deactivation_succeeds(app_with_secret, owner_key, tmp_path):

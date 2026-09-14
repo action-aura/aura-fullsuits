@@ -3277,3 +3277,64 @@ device would not be an error but sync quietly ceasing to work.
 A client holding the OLD pin completed a TLS handshake, paired, and pushed at
 the NEW address. That is the claim, on real hardware, on a real network, from
 real DHCP movement rather than a simulated one.
+
+
+## 2026-09-14 - zero-configuration join PROVEN on the shop network, and the probe that nearly proved nothing
+
+The owner's ruling: "i want the offline sync to be automatic when online is not
+available. the only thing decides which system to sync with if there is more
+than one is the license that they share. i dont want to put an ip or ports or
+so. i dont want the advanced networking stuff to be visible."
+
+The pieces for that shipped inert across three commits (79328112, 71dee93b,
+10a46328): `/identity`, `/join`, hub election, the desktop and Android
+discovery clients. Inert because nothing constructed the identity/licence/
+trust-store providers the hub answers `/identity` from. e8b203f8 wires them.
+
+WHAT WAS ACTUALLY MEASURED, on the real shop wifi against the running hub, by a
+probe holding nothing but the trust anchor every build already bundles -- no
+pairing, no pin, no address, nothing pre-shared:
+
+    beacon heard on UDP 45455, unprompted, after 4.4s
+      installation_id .... 063649a9-081c-4d6e-9d03-022bdbbbfdb4
+      url ................ https://192.168.1.212:5443
+      spki_pin ........... wU8MfSSdz8aGPaboYYX1vGtm4G5e3ZpHyt3ot5C8KOk=
+    GET /identity over that pin ....................... HTTP 200
+    assertion verified against the bundled anchor ..... SIGNATURE VERIFIED
+      license_public_id .. 28f918a9-b520-4f3c-8419-95f317eaa609
+    device_key_fingerprint vs the key actually presented ... MATCH
+
+THE PROBE WAS WRONG THE FIRST TIME, and it is worth writing down because it is
+this codebase's most expensive recurring test shape (ENGINEERING.md failure
+shape 1). It passed the assertion payload's OWN `device_key_fingerprint` back
+in as `expected_device_key_fingerprint` -- comparing the payload to itself.
+That passes for every well-formed assertion INCLUDING one replayed from another
+device, which is exactly the case the check exists to catch. It would have
+reported a clean pass while proving nothing. Corrected to compute the
+fingerprint from the key the hub actually presented, the way `join.py` does.
+
+ADVERSARY PASS against the same live hub -- all four directions, because three
+refusals alone would also be the score of a verifier that denies everything:
+
+    wrong SPKI pin .................................. REFUSED  SpkiPinMismatch
+    license_public_id flipped in the signed payload . REFUSED  ASSERTION_VERIFICATION_FAILED
+    genuine assertion + attacker's own device key ... REFUSED  ASSERTION_DEVICE_MISMATCH
+    genuine assertion + genuine key (CONTROL) ....... ACCEPTED
+
+The third is the one that matters. Assertions are not secret, so without the
+fingerprint comparison anyone who could read another device's assertion could
+present it alongside their own key and join the shop.
+
+STILL OPEN after this entry:
+  - The env-var gate. `AURA_SITE_RELAY_ENABLED=1` is itself the "advanced
+    networking stuff" the owner rejected; no shop owner sets an environment
+    variable on a till, so the feature is unreachable in the field. Being
+    changed to: the LICENCE is the switch (active licence -> hub; pre-activation
+    install -> binds nothing), with the env var demoted to a tri-state override.
+  - Android cannot read its own `license_public_id`. It lives only inside
+    `licensing.db`, which Kotlin never opens by design, and no HTTP surface
+    returned it -- so `HubAutoJoinService` passed blanks and auto-join failed
+    closed every tick. Being closed with an `X-Aura-Internal-Secret`-gated route.
+  - The manual paste/QR pairing UI is still the visible path on both clients.
+  - No rate limiting on `/pair` or `/join`.
+  - Owner-side roster signing endpoint: the suspension gate stays inert without it.

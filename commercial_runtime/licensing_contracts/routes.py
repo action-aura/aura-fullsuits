@@ -18,6 +18,7 @@ the one screen that lets them reactivate).
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -412,6 +413,78 @@ def _register_internal_sync_routes(
         except DeactivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
         return jsonify({"result": "SUCCESS", "state": new_state.value}), 200
+
+    @bp.route("/_internal/license-identity", methods=["GET"])
+    def internal_license_identity():
+        """Closes the exact gap `HubAutoJoinService.kt` documents at its own
+        call site (search that file for "THE GAP THIS TASK DID NOT CLOSE").
+
+        Automatic LAN sync (`commercial_runtime/sync/site_relay/
+        autojoin.py`) makes the shared LICENCE -- and nothing else -- decide
+        which shop a device belongs to (see that module's own "THE SHOP
+        BOUNDARY" section): a device joining its shop's hub must present
+        its OWN `license_public_id` and its OWN Owner-signed assertion
+        envelope. On Windows, `autojoin.py` reads both straight out of
+        `licensing.db` in the same process. On Android, Kotlin drives
+        discovery -- it is the only holder of the AndroidKeystore-wrapped
+        Ed25519 signing key, see this module's own docstring above -- but
+        deliberately never opens `licensing.db` itself: Python is the only
+        holder of the independently-VERIFIED copy of anything Owner ever
+        signed (`LicensingCoordinator`'s own class doc: Python does "the
+        only state mutation that counts").
+
+        No existing surface already returns this, by design, not oversight:
+          - GET /status -- `status_presenter.py`'s own `_SAFE_TOP_LEVEL_
+            FIELDS` deliberately excludes assertion material ("Only the
+            installation id, never any assertion/device secret material").
+          - POST /_internal/sync-activation|sync-checkin|reevaluate above --
+            each returns only `{result, state, installation_id}` or
+            `present_status()`, never the envelope.
+        Without this route, `HubAutoJoinService.attemptJoin` has no source
+        for either value and auto-join can never succeed on Android at all.
+
+        `license_public_id` has no column of its own on
+        `LicenseStateRecord` -- it lives only nested inside the envelope's
+        OWN signed `payload`, so it is parsed out exactly the way
+        `autojoin.py`'s own `_own_assertion_envelope` does it on desktop
+        (deliberately not a second, competing parsing scheme): an envelope
+        that is missing, unparseable, or whose payload carries no
+        non-empty `license_public_id` is -- for this route's purposes --
+        indistinguishable from having no usable licence at all.
+
+        `assertion_envelope_json` is returned as the RAW STORED STRING,
+        never round-tripped back through `json.dumps` here -- the hub
+        verifies a signature computed over specific bytes, and re-encoding
+        a JSON value that "looks the same" can still change key order or
+        whitespace and silently break that signature check. This route
+        only ever `json.loads`s a LOCAL COPY to peek at `license_public_id`
+        for the response; the string handed back to the caller is the
+        exact one `LicenseStateRepository` already had on file.
+        """
+        if not _authorized():
+            return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Unauthorized."}), 403
+
+        state_repository, *_rest = build_context()
+        record = state_repository.load()
+        envelope_json = record.assertion_envelope_json if record is not None else None
+        if not envelope_json:
+            return jsonify({"reason_code": "NO_LOCAL_LICENSE", "detail": "No local licence assertion on file."}), 400
+
+        try:
+            envelope = json.loads(envelope_json)
+        except ValueError:
+            return jsonify(
+                {"reason_code": "NO_LOCAL_LICENSE", "detail": "Stored assertion envelope is not valid JSON."}
+            ), 400
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        license_public_id = payload.get("license_public_id") if isinstance(payload, dict) else None
+        if not isinstance(license_public_id, str) or not license_public_id:
+            return jsonify(
+                {"reason_code": "NO_LOCAL_LICENSE", "detail": "Stored assertion carries no license_public_id."}
+            ), 400
+
+        # `envelope_json` is the RAW STORED STRING -- see docstring above.
+        return jsonify({"license_public_id": license_public_id, "assertion_envelope_json": envelope_json}), 200
 
 
 def _device_fingerprint(signer) -> str:
