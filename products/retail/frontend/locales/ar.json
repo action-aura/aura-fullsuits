@@ -1290,5 +1290,8 @@
   "No activity recorded yet": "لم يُسجَّل أي نشاط بعد",
   "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "يمتلئ سجل التدقيق مع استخدام نقطة البيع: المبيعات والمرتجعات وتغييرات الأسعار وعمليات تسجيل الدخول تُسجَّل هنا مع اسم من قام بها.",
   "No sales in this period": "لا توجد مبيعات في هذه الفترة",
-  "Nobody rang a sale in this period. Widen the date range above to look further back.": "لم يسجّل أحد أي عملية بيع في هذه الفترة. وسّع نطاق التاريخ بالأعلى للعودة إلى وقت أبعد."
+  "Nobody rang a sale in this period. Widen the date range above to look further back.": "لم يسجّل أحد أي عملية بيع في هذه الفترة. وسّع نطاق التاريخ بالأعلى للعودة إلى وقت أبعد.",
+  "Shop Network": "شبكة المتجر",
+  "Let your other tills and tablets work together over the shop's own wifi, including when the internet is down. One device acts as the hub the others connect to.": "اجعل نقاط البيع والأجهزة اللوحية الأخرى تعمل معًا عبر شبكة واي فاي المتجر، حتى عند انقطاع الإنترنت. يعمل جهاز واحد كمركز تتصل به الأجهزة الأخرى.",
+  "Manage Shop Network": "إدارة شبكة المتجر"
 }

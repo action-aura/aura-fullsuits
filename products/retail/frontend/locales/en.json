@@ -1290,5 +1290,8 @@
   "No activity recorded yet": "No activity recorded yet",
   "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.": "The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.",
   "No sales in this period": "No sales in this period",
-  "Nobody rang a sale in this period. Widen the date range above to look further back.": "Nobody rang a sale in this period. Widen the date range above to look further back."
+  "Nobody rang a sale in this period. Widen the date range above to look further back.": "Nobody rang a sale in this period. Widen the date range above to look further back.",
+  "Shop Network": "Shop Network",
+  "Let your other tills and tablets work together over the shop's own wifi, including when the internet is down. One device acts as the hub the others connect to.": "Let your other tills and tablets work together over the shop's own wifi, including when the internet is down. One device acts as the hub the others connect to.",
+  "Manage Shop Network": "Manage Shop Network"
 }

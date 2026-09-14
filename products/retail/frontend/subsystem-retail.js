@@ -7903,6 +7903,13 @@ const RetailSystem = {
           ${t('Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple phone numbers by role or branch. Off by default.')}
         </p>
         <button class="ret-btn ret-btn-primary" onclick="location.href='/static/whatsapp.html'">${t('Manage WhatsApp Reports')}</button>
+      </div>
+      <div class="sub-chart-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Shop Network')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Let your other tills and tablets work together over the shop\'s own wifi, including when the internet is down. One device acts as the hub the others connect to.')}
+        </p>
+        <button class="ret-btn ret-btn-primary" onclick="location.href='/static/site-relay.html'">${t('Manage Shop Network')}</button>
       </div>`;
     await this._loadReorderRequests();
     await this._loadBrandingForm();
