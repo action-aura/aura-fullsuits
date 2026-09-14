@@ -69,10 +69,12 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
 from commercial_runtime.sync.site_relay import auth as site_auth
+from commercial_runtime.sync.site_relay import join as site_join
 from commercial_runtime.sync.site_relay import pairing as site_pairing
 from commercial_runtime.sync.site_relay import replay, store
 
@@ -101,6 +103,9 @@ def make_site_relay_blueprint(
     skew_seconds: int = replay.DEFAULT_SKEW_SECONDS,
     nonce_ttl_seconds: int = replay.DEFAULT_NONCE_TTL_SECONDS,
     pairing_codes: "site_pairing.PairingCodeStore | None" = None,
+    hub_identity_provider=None,
+    license_public_id_provider=None,
+    trust_store_provider=None,
 ) -> Blueprint:
     """`blueprint_name`/`url_prefix` default to exactly Owner's own route
     prefix (`/api/sync/v1`) so `SyncRelayClient`'s hardcoded `/api/sync/v1/
@@ -130,6 +135,26 @@ def make_site_relay_blueprint(
     otherwise unauthenticated by anything except the pairing code itself,
     so a caller must opt in explicitly by constructing and passing a
     store, never get one implicitly).
+
+    `hub_identity_provider` is a zero-argument callable returning this hub's
+    own identity dict (`join.hub_identity(...)`'s shape), or `None` (the
+    default) -- backs `GET /identity` below. `None` means this hub has never
+    activated and has no assertion to show yet: a normal, transient state
+    (see that route's own docstring), not a misconfiguration, so it is not
+    treated the same way `license_public_id_provider`/`trust_store_provider`
+    missing is treated for `/join`.
+
+    `license_public_id_provider`/`trust_store_provider` are zero-argument
+    callables returning THIS hub's own licence's `license_public_id` and its
+    `trust_store.OwnerTrustStore` instance respectively, or `None` (the
+    default) for either -- back `POST /join` below, the automatic,
+    licence-proven equivalent of `/pair` (`commercial_runtime/sync/
+    site_relay/join.py`'s module docstring has the full design). With EITHER
+    missing, `/join` refuses every request with `JOIN_UNAVAILABLE` before
+    touching the request body or the database at all -- fail closed, exactly
+    like `pairing_codes=None` already does for `/pair` above: an install
+    that has not wired up automatic joining must not expose that endpoint's
+    real behaviour to anything probing it.
     """
     bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
 
@@ -384,5 +409,186 @@ def make_site_relay_blueprint(
             conn.close()
 
         return jsonify({"paired": True, "installation_id": installation_id}), 200
+
+    @bp.route("/identity", methods=["GET"])
+    def identity():
+        """UNAUTHENTICATED, DELIBERATELY -- this is the bootstrap step of
+        the automatic-join flow (`join.py`'s module docstring), and the
+        caller has nothing to authenticate itself with yet: a device that
+        just discovered this hub on the LAN (`beacon.py`, a separate
+        concern) has no shared secret, no pairing, nothing. It calls this
+        route FIRST, purely to learn who this hub claims to be, before it
+        ever considers calling `POST /join`.
+
+        THIS IS SAFE BECAUSE EVERYTHING RETURNED HERE IS ALREADY PUBLIC.
+        `installation_id` is not a secret (Owner already knows it and
+        assigned it). `device_public_key` is, by definition, a PUBLIC key.
+        And the `assertion` envelope is an Owner-signed document whose own
+        payload is worthless to anyone who does not also hold the PRIVATE
+        key it names (see `join.py`'s "THE DEVICE-KEY-FINGERPRINT CHECK"
+        section) -- exposing it here grants a caller no capability it did
+        not already have simply by being on the same LAN as a device that
+        already holds one. This route GRANTS NOTHING; it lets a device
+        being asked to trust this hub decide whether to, exactly the same
+        way `POST /join` (below) lets this hub decide whether to trust the
+        device asking to join it.
+
+        `hub_identity_provider() is None` means this hub has never
+        activated and has no assertion to show at all -- a normal,
+        transient state (a fresh install before its first activation), not
+        an error condition, hence `IDENTITY_UNAVAILABLE` rather than
+        something implying misconfiguration.
+        """
+        if hub_identity_provider is None:
+            return _error("IDENTITY_UNAVAILABLE", 400)
+        return jsonify(hub_identity_provider()), 200
+
+    @bp.route("/join", methods=["POST"])
+    def join():
+        """The automatic equivalent of `/pair` above: mutual licence proof
+        (`join.verify_membership`) instead of an operator-issued code. See
+        `commercial_runtime/sync/site_relay/join.py`'s module docstring for
+        the full mechanism and why each check is load-bearing.
+
+        Order of operations, each step gating the next -- mirrors `/pair`'s
+        own documented shape immediately above, with one deliberate
+        addition (step 4) that `/pair` has no equivalent of at all:
+
+          1. `license_public_id_provider`/`trust_store_provider` -- if
+             EITHER is `None` (not wired up on this blueprint instance at
+             all) -> `JOIN_UNAVAILABLE`, before touching the request body or
+             the database. Fail closed: an install that never configured
+             automatic joining must never pair a device this way, no matter
+             what it presents.
+          2. Body shape: `installation_id`/`device_public_key` non-empty
+             strings, `assertion` an object, optional `label` a string or
+             absent -> else `INVALID_REQUEST`.
+          3. `device_public_key` must be valid base64 decoding to EXACTLY 32
+             bytes (a raw Ed25519 public key) -> else `INVALID_REQUEST`,
+             checked here BEFORE any verification is attempted, the same
+             reasoning `/pair`'s own step 3 gives for checking this early.
+          4. `join.verify_membership(...)` against THIS HUB'S OWN
+             `license_public_id_provider()` -> propagates whichever
+             `JoinError.reason_code` it raises (`UNKNOWN_SIGNING_KEY`,
+             `LICENSE_MISMATCH`, `ASSERTION_INSTALLATION_MISMATCH`,
+             `ASSERTION_DEVICE_MISMATCH`, `ASSERTION_EXPIRED`, etc. -- see
+             `join.py`'s own docstring for the full, numbered check
+             sequence this single call enforces).
+          5. ONLY NOW -- after membership on the correct licence has
+             actually been PROVEN -- check whether THIS installation_id was
+             previously revoked LOCALLY at this hub
+             (`store.lookup_paired_device(...)["revoked_at"]`). THIS IS THE
+             ONE PLACE THIS ROUTE DELIBERATELY DIFFERS FROM `/pair`, AND THE
+             REASON IS THE WHOLE POINT OF THIS STEP EXISTING: a `/pair`
+             re-join requires an OPERATOR to issue a fresh code, and that
+             act of issuing a fresh code IS the operator's own, in-person
+             consent to re-authorize a previously-revoked device (see
+             `/pair`'s own docstring, "RE-PAIRING A REVOKED installation_id
+             ALSO CLEARS THE REVOKE"). `/join` has NO operator in the loop
+             at all -- it runs automatically, the moment two devices on a
+             LAN discover each other and share a licence. Without this
+             check, a device the shop owner deliberately revoked at the
+             till (design's own "fired employee's tablet" scenario, `auth.
+             py`'s module docstring) would silently re-admit ITSELF on its
+             very next automatic discovery sweep, because it still holds a
+             perfectly valid, same-licence assertion -- undoing the exact
+             local-revoke control this package was built to provide, with
+             no human ever asked and no way for an operator to stop it
+             short of physically taking the device off the network.
+             Refused with `INSTALLATION_REVOKED` (the SAME locally-minted
+             reason code `auth.py`'s step 7 already uses for the identical
+             situation on push/pull, not a new one -- see that module's own
+             docstring for why it is not one of Owner's public codes).
+          6. `store.pair_device(conn, installation_id, device_public_key=...,
+             label=...)`, then commit -- EXACTLY what `/pair` does on
+             success, including the identical upsert-and-clear-revoke
+             semantics for an installation_id that was already paired (see
+             `store.pair_device`'s own docstring): a device re-joining after
+             a wipe-and-reactivate, or simply re-discovered after a network
+             blip, re-joins cleanly with its current key.
+
+        Checked and rejected in this order so a request that fails at any
+        step can never leave a half-joined device behind, and so an
+        install that has not opted into automatic joining never reveals
+        this endpoint's real behaviour to anything probing it -- the exact
+        same reasoning `/pair`'s own docstring gives for its own ordering.
+        """
+        if license_public_id_provider is None or trust_store_provider is None:
+            return _error("JOIN_UNAVAILABLE", 400)
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return _error("INVALID_REQUEST", 400)
+
+        installation_id = body.get("installation_id")
+        device_public_key = body.get("device_public_key")
+        assertion = body.get("assertion")
+        label = body.get("label")
+
+        for value in (installation_id, device_public_key):
+            if not isinstance(value, str) or not value:
+                return _error("INVALID_REQUEST", 400)
+        if not isinstance(assertion, dict):
+            return _error("INVALID_REQUEST", 400)
+        if label is not None and not isinstance(label, str):
+            return _error("INVALID_REQUEST", 400)
+
+        # Step 3: a raw Ed25519 public key is always exactly 32 bytes --
+        # reject anything else before verify_membership is even attempted,
+        # mirroring /pair's own identical, identically-reasoned check.
+        try:
+            raw_public_key = base64.b64decode(device_public_key, validate=True)
+        except (TypeError, ValueError, binascii.Error):
+            return _error("INVALID_REQUEST", 400)
+        if len(raw_public_key) != 32:
+            return _error("INVALID_REQUEST", 400)
+
+        # Step 4: prove membership on THIS hub's own licence. `trusted_now`
+        # is resolved HERE, once, at the top of this check -- see join.py's
+        # module docstring for why this is the same idiom verify_assertion's
+        # own real production callers already use (activation.py,
+        # checkin_scheduler.py: trusted_now=datetime.now(timezone.utc)
+        # resolved at the call site, never reached for internally).
+        try:
+            # Return value intentionally discarded beyond the verification
+            # itself -- this route's only job on success is to admit the
+            # device; nothing the verified payload carries (entitlements,
+            # license_status, ...) is this hub's business to inspect or
+            # persist.
+            site_join.verify_membership(
+                assertion,
+                trust_store=trust_store_provider(),
+                expected_license_public_id=license_public_id_provider(),
+                claimed_installation_id=installation_id,
+                claimed_device_public_key=device_public_key,
+                trusted_now=datetime.now(timezone.utc),
+            )
+        except site_join.JoinError as exc:
+            return _error(exc.reason_code, 400)
+
+        conn = get_conn()
+        try:
+            # Step 5: THE DELIBERATE ASYMMETRY WITH /pair -- see this
+            # route's own docstring, step 5, for the full reasoning. Checked
+            # only now, AFTER membership has already been cryptographically
+            # proven, mirroring auth.py's own "prove identity before
+            # checking local status" ordering (that module's step 6 before
+            # its step 7) rather than turning this into an unauthenticated
+            # oracle over which installation_ids have ever been paired here.
+            existing = store.lookup_paired_device(conn, installation_id)
+            if existing is not None and existing["revoked_at"] is not None:
+                return _error("INSTALLATION_REVOKED", 400)
+
+            # Step 6: identical to /pair's own final step, including the
+            # identical upsert/clear-revoke semantics -- see store.pair_
+            # device's own docstring.
+            store.pair_device(
+                conn, installation_id, device_public_key=device_public_key, label=label,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return jsonify({"joined": True, "installation_id": installation_id}), 200
 
     return bp
