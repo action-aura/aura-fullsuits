@@ -1834,6 +1834,16 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 onValueChange = { hubPairingText = it },
                 label = { Text(tr("Paste the text from the till here")) },
                 minLines = 4,
+                // No autocapitalisation and no autocorrect. This field takes an
+                // EXACT token, not prose: the IME's default sentence-casing
+                // turned the pasted `https://` into `Https://` on a real phone,
+                // which fails the payload's own https check and reports as
+                // "pairing failed" with nothing on either screen pointing at a
+                // capital letter. Measured on hardware 2026-09-14.
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.None,
+                    autoCorrect = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
             Button(
