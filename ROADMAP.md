@@ -3003,3 +3003,113 @@ per-scan, per-keystroke traffic, and the assumption is written into
 `listener.py` so it expires loudly if this ever serves the UI. If a real
 production TLS server is wanted instead, that is a new shipped dependency and
 therefore a release decision, not a code one.
+
+## 2026-09-14 - R-LAN wave 2: a shop can now actually use it, and the two-device test ran on hardware
+
+The 2026-09-14 entry above shipped the site relay. It worked and no shop could
+have used it: pairing was a direct database call, nothing constructed the
+pairing store or the beacon, the log grew forever, and no screen existed. This
+closes that, and records the hardware test.
+
+### THE TWO-DEVICE TEST, run on real hardware
+
+Phone (Mi Note 10) over `adb reverse tcp:5551 tcp:5551`, desktop as the
+portable build, both against the local Owner. Proven in this order, each
+checked against Owner's own database rather than a UI message:
+
+1. phone activated -- `Licence activated`. This had NEVER worked before: the
+   previous APK was built with both `BuildConfig` URLs empty, so it could not
+   have reached Owner at all;
+2. desktop activated -- `{"result":"SUCCESS","state":"ACTIVE_ONLINE"}`;
+3. Owner shows **2 of 2 slots ACTIVE** on one licence, phone `c5a0452f`,
+   desktop `063649a9`;
+4. admin created on the DESKTOP reached Owner's relay -- `user create
+   admin@test.local role=admin` plus 8 permission rows;
+5. phone chose "connect to my shop", pulled those accounts, and **signed in
+   with credentials created on the desktop**. Currency showed JD, so company
+   settings crossed too;
+6. a product created on the desktop reached the relay within seconds
+   (`seq=215 product create`).
+
+NOT yet confirmed, and stated rather than implied: the cloud-to-phone leg for
+catalogue data (the phone demonstrably pulls -- it pulled the accounts -- but a
+product was not observed arriving on it), and the employee-invitation flow.
+Both need the phone plugged in again.
+
+The phone's local state had to be WIPED first: it was still bound to an older
+licence, which would have put it in a different shop from the desktop and made
+the whole test meaningless. That orphaned one row on a licence with spare
+capacity (7-limit/3-active), which costs nothing.
+
+### What wave 2 added
+
+* **Pairing.** Operator-issued, short-lived, single-use codes and a `/pair`
+  route; the QR payload a device scans. Codes live in memory on purpose -- a
+  hub restart SHOULD invalidate them. A code only exists because a human asked
+  for one, so with none outstanding the endpoint refuses everything. That
+  matters because TLS authenticates the SERVER to the client, not the client
+  to the server: the code is the actual authentication.
+* **Addressing beacon.** Signed UDP carrying the hub's current URL, so a new
+  DHCP lease stops being a silent sync outage. The signature covers the URL --
+  unsigned, anyone on the wifi could redirect every till at once.
+* **Pruning.** The watermark is the slowest of every non-revoked paired device
+  AND the forwarder. A paired device with no cursor pins it to 0 (that is the
+  tablet paired Monday, switched on Tuesday); a revoked device is excluded (one
+  fired employee's stale cursor would otherwise freeze pruning for the life of
+  the install).
+* **The Owner-signed roster, product half.** Verify against the bundled trust
+  anchor, cache, enforce after signature verification. Rosters carry their own
+  replay guard: an older one cannot overwrite a newer, because its signature
+  is still perfectly valid and nothing else would catch a replay used to
+  un-suspend a device.
+* **The operator's screen** (`site-relay.html`), reachable from Settings, with
+  the QR rendered SERVER-SIDE by segno -- already a dependency, and a till is
+  routinely offline so a CDN was never an option.
+
+### One deliberate deviation from the design, for the owner to confirm
+
+Design sec5 says "an installation not on the roster -> refused". Implemented
+narrower: **the roster may only DENY a device it explicitly lists as suspended;
+it never denies by absence.**
+
+Denying by absence breaks the ordinary case. A tablet paired on Tuesday against
+a roster fetched Monday is absent, and a rarely-online shop could have a
+weeks-stale roster, so that correctly-paired device would stay refused.
+Positive authorization is already local pairing, which needs an operator-issued
+single-use code. So pairing grants, the roster revokes, and a missing roster
+degrades to today's behaviour instead of a locked shop. A stale roster is still
+enforced for denials -- it is the last known truth about a suspended device.
+
+### What is still NOT built
+
+* **The Owner-side endpoint that mints and signs the roster.** The product half
+  verifies and enforces; nothing issues one, so the suspension gate is inert
+  until it ships. Contract is specified in `roster.py`'s docstring. It must
+  ship together with roster-aware pruning on the Owner side, or LAN-attached
+  devices' stale cursors freeze cloud pruning for that licence (design sec6,
+  item 2). Owner is the collaborator's area and was deliberately not touched.
+* **Android cannot be pointed at a hub at all.** Its relay URL is a build-time
+  `BuildConfig` constant with no runtime override, and OkHttp's
+  `CertificatePinner` is not wired. Since the waiter tablets in design sec7 are
+  Android, this is the largest remaining gap for the restaurant picture the
+  whole wave was decided for.
+* **Hub promotion** (design sec3's manual recovery when the hub till dies).
+* **Per-row push quarantine.** A batch with one malformed event is rejected
+  whole. Fails closed and names the offending index, but a poison event blocks
+  one device's outbox until someone looks.
+* **Rate limiting** on `/pair` and the relay, inheriting the cloud relay's
+  documented deferred-gap status.
+
+### Open question for the owner, not decided here
+
+The LAN listener uses the standard library's threaded WSGI server plus `ssl`,
+because waitress cannot terminate TLS and there is no reverse proxy on a till.
+It is sized for this load class -- one push and one pull per device per 10s
+tick, about 1 req/s for a five-device restaurant, versus the UI server's
+per-scan per-keystroke traffic -- and the assumption is written into
+`listener.py` so it expires loudly if this ever serves the UI. Moving to a
+production TLS server means adding a shipped dependency, which is a release
+decision rather than a code one.
+
+Totals for the two waves: **205 Python tests across 20 files plus 73 JS test
+files**, every guard mutation-proved in both directions.
