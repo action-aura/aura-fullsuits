@@ -124,6 +124,16 @@ class SyncRelayClient:
         # real time.sleep default. Same rationale as LicensingClient.
         self._sleep = sleep_fn
 
+    @property
+    def base_url(self) -> str:
+        # Read-only surface onto self._config.base_url -- the sync cursor
+        # must be bound to the relay it was actually pulled from (see
+        # SyncService.ensure_cursor_matches_relay), and that check lives in a
+        # different module. Exposing this narrowly typed property is the
+        # alternative to sync_service.py reaching into self._config, a
+        # private attribute of this class, from outside it.
+        return self._config.base_url
+
     def push(self, events: list) -> dict:
         body = self._signed_body({"events": events})
         result = self._request("POST", "/api/sync/v1/push", body)

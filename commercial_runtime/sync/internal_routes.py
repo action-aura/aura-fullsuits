@@ -129,12 +129,25 @@ def make_sync_internal_blueprint(
 
     @bp.route("/_internal/cursor", methods=["GET"])
     def internal_cursor():
+        """`relay_url` is an OPTIONAL query parameter (retail schema v31,
+        ROADMAP.md's 2026-09-14 "the sync cursor must know which relay it
+        belongs to" entry): when Kotlin passes it, this calls
+        SyncService.ensure_cursor_matches_relay BEFORE reading the cursor, so
+        Android gets the same relay-binding protection `pull_once()` gives
+        the Windows/Python pull loop, through this one seam, rather than a
+        second Kotlin-side mechanism. When absent -- every caller today --
+        this behaves exactly as before the parameter existed: no relay check,
+        no write, no commit, just the read `read_cursor` has always done."""
         if not _authorized():
             return _forbidden()
         installation_id = _installation_id()
+        relay_url = request.args.get("relay_url")
         conn = get_conn()
         try:
             with sync_service._lock:
+                if relay_url is not None:
+                    sync_service.ensure_cursor_matches_relay(conn, relay_url)
+                    conn.commit()
                 since = sync_service.read_cursor(conn)
         finally:
             conn.close()

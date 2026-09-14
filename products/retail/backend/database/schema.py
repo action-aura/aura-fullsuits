@@ -767,7 +767,78 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # the cloud outbox's. See _migrate_add_site_relay's own docstring below for
 # the full column-by-column reasoning, including why `site_forward_cursor`
 # cannot reuse `sync_cursor` for the identical one-relay-per-device reason.
-RETAIL_SCHEMA_VERSION = 30
+#
+# v30 -> v31 (launch-readiness, "the sync cursor must know which relay it
+# belongs to"; ROADMAP.md's "2026-09-14 - retail schema v31 CLAIMED: the sync
+# cursor must know which relay it belongs to" entry). One nullable column on
+# the existing `sync_cursor` table -- additive only, no other table touched,
+# so ordering relative to every step above it does not matter functionally.
+#
+#   sync_cursor.relay_url TEXT -- which relay `last_seq` is a high-water-mark
+#                                  INTO, not just how far this device has
+#                                  pulled
+#
+# THIS IS A REAL, PRE-EXISTING BUG, found while wiring Android to the LAN
+# hub (v30), not a new feature riding along with one. `sync_cursor` has
+# always been a single row holding `last_seq` and nothing else
+# (SyncService.read_cursor) -- it records how far this device has pulled,
+# but never FROM WHERE. Every relay this device could ever be pointed at
+# keeps its OWN independent sequence space: Owner's cloud relay counts per
+# licence in Postgres, and (as of v30) each LAN hub counts separately in its
+# own SQLite `site_sync_events` table. `last_seq` alone cannot tell one
+# relay's numbering from another's, so the moment a device's effective relay
+# changes, the stored number is a high-water-mark into a universe that no
+# longer exists:
+#
+#   a till syncs against the cloud relay and reaches seq 500;
+#   it is later re-pointed at a LAN hub (AURA_SYNC_RELAY_URL changes) whose
+#   own log is only at seq 12;
+#   it pulls with since=500;
+#   the hub has nothing above 500, and will not for a very long time;
+#   the cursor stays at 500 forever. The device receives NOTHING, with no
+#   error anywhere -- not a failed request, not a log line, nothing that
+#   distinguishes this from "already fully caught up".
+#
+# That silence is the worst failure shape this codebase's own conventions
+# call out: a defect that is indistinguishable from success. It was already
+# reachable before v30 simply by changing AURA_SYNC_RELAY_URL by hand; the
+# LAN site relay is what turns it from a hypothetical into something an
+# ordinary pairing flow triggers routinely.
+#
+# THE RULE THIS COLUMN EXISTS TO SERVE (SyncService.ensure_cursor_matches_
+# relay, called from pull_once() before the cursor is read): if the relay a
+# pull is about to hit differs from the one recorded here, `last_seq` resets
+# to 0 and the new URL is recorded. Re-pulling from 0 against a relay this
+# device has never (or not recently) read from is SAFE and is the intended
+# behaviour for "meeting a relay for the first time" -- apply is already
+# idempotent (creates are uid-keyed upserts, updates are guarded `WHERE
+# excluded.row_version > row_version`, so replaying an already-applied event
+# is a recorded no-op, not a duplicate). The cost is one larger catch-up
+# pull; the alternative, which this version exists to close, is a device
+# that silently stops receiving data forever.
+#
+# A COLUMN on the existing single row, deliberately not a new table: this is
+# one more fact about the one cursor that already exists, not a second
+# source of truth that could disagree with it about which relay is current
+# -- matching the reasoning `_migrate_add_site_relay`'s own docstring gives
+# for why `site_forward_cursor` cannot reuse `sync_cursor` either, applied
+# here in the opposite direction (one row growing a column, not a second row
+# being avoided).
+#
+# NULL MEANS "WRITTEN BEFORE v31" AND MUST BE TREATED AS "UNKNOWN, THEREFORE
+# DIFFERENT" -- stating this explicitly because it is the one place this
+# migration could quietly reintroduce the exact bug it exists to close. The
+# tempting alternative reading, "NULL matches whatever relay we are pointed
+# at right now", would mean every pre-v31 device keeps trusting a `last_seq`
+# that was never actually checked against any relay at all -- silently
+# preserving the stale-cursor bug for every install that upgrades straight
+# through v31 rather than fixing it for any of them. Treating NULL as
+# "different" instead means every device resets its cursor to 0 exactly
+# ONCE, the first time it pulls after upgrading to v31 -- a harmless,
+# one-time catch-up pull, not a recurring cost, since `ensure_cursor_
+# matches_relay` writes a real `relay_url` the moment that first reset runs
+# and every pull after that compares against a real value again.
+RETAIL_SCHEMA_VERSION = 31
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1764,6 +1835,15 @@ def _migrate_retail_schema(conn):
     # is NOT a second `sync_outbox` and why `site_forward_cursor` cannot
     # reuse `sync_cursor`.
     _migrate_add_site_relay(conn)
+    # v30 -> v31 (launch-readiness, "the sync cursor must know which relay it
+    # belongs to"): appended LAST, same convention as every step above. One
+    # nullable column on the existing `sync_cursor` table -- no other table
+    # is touched, so ordering relative to every step above it does not
+    # matter functionally. See the RETAIL_SCHEMA_VERSION v31 comment above
+    # and _migrate_add_sync_cursor_relay_url's own docstring for the full
+    # reasoning, including why NULL must be treated as "different" rather
+    # than "matches whatever relay we are pointed at".
+    _migrate_add_sync_cursor_relay_url(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -7449,3 +7529,90 @@ def _seed_retail(conn, cur, company_id=1):
         )
 
     conn.commit()
+
+
+def _migrate_add_sync_cursor_relay_url(conn):
+    """One-time migration (schema v30 -> v31): launch-readiness "the sync
+    cursor must know which relay it belongs to" (ROADMAP.md's "2026-09-14 -
+    retail schema v31 CLAIMED: the sync cursor must know which relay it
+    belongs to" entry). One nullable column on the existing `sync_cursor`
+    table -- additive only (column-existence-checked ADD COLUMN, the exact
+    idiom `_migrate_add_loyalty_return_id` already uses for `loyalty_ledger.
+    return_id`), no other table touched, so ordering relative to every step
+    above it does not matter functionally.
+
+        sync_cursor.relay_url TEXT -- which relay `last_seq` is a
+                                       high-water-mark INTO
+
+    THIS IS A REAL, PRE-EXISTING BUG, not a new feature -- see the
+    RETAIL_SCHEMA_VERSION v31 comment above for the full story of how it was
+    found (wiring Android to the v30 LAN hub) and why it is reachable simply
+    by changing AURA_SYNC_RELAY_URL. In short: `sync_cursor.last_seq` has
+    always recorded how far this device has pulled, but never FROM WHICH
+    relay -- and every relay (Owner's cloud relay in Postgres, each LAN hub
+    in its own SQLite `site_sync_events`) counts in its own independent
+    sequence space. A cursor left over from a relay this device is no longer
+    pointed at is a number from the wrong universe: it asks the new relay
+    for `since=<a number that happens to be far beyond that relay's own
+    log>`, the new relay has nothing to send back, and the device silently
+    stops receiving data forever -- no failed request, no error, nothing
+    that looks different from "already fully caught up". `relay_url` is what
+    lets `SyncService.ensure_cursor_matches_relay` (commercial_runtime/
+    sync/sync_service.py) tell "still the same relay" from "this cursor
+    means nothing here" before every pull, and reset `last_seq` to 0 -- a
+    safe, idempotent re-pull, never a data-loss risk -- the moment the two
+    stop matching.
+
+    WHY THIS RUNS AGAINST `sync_cursor` SPECIFICALLY, AND WHY IT GUARDS THE
+    TABLE'S EXISTENCE ANYWAY: `sync_cursor` is created (and its single row
+    seeded via `INSERT OR IGNORE`) by the raw `executescript` in
+    `_init_retail`, which runs on every install -- including a brand-new one
+    -- before `ensure_schema_version` ever calls this migration chain. So in
+    practice the table will always already exist by the time this step
+    runs. The guard below is written anyway, following this file's own
+    documented rule (see `_migrate_add_loyalty_return_id`'s docstring and
+    `_migrate_retail_schema`'s own docstring): a migration must never assume
+    the step before it in the chain, or the raw bootstrap SQL before the
+    whole chain, actually ran -- this chain also runs, unchanged, against a
+    database restored from a backup taken mid-upgrade, where any assumption
+    like that can be false.
+
+    NULL MEANS "WRITTEN BEFORE v31" AND MUST BE TREATED AS "UNKNOWN,
+    THEREFORE DIFFERENT" -- restating this here, not just in the
+    RETAIL_SCHEMA_VERSION comment, because it is the one behaviour this
+    migration's own shape could get wrong. This function does NOT backfill
+    `relay_url` for the pre-existing row -- it stays NULL until `ensure_
+    cursor_matches_relay` next runs and writes a real value. That NULL is
+    deliberately NOT read as "matches whatever relay this device is pointed
+    at right now": doing so would let every device that has ever synced
+    before v31 keep trusting a `last_seq` that was never actually checked
+    against any relay, which is exactly the bug this version exists to
+    close, just moved one layer down. Treating NULL as different from any
+    real relay URL means the first pull after upgrading resets `last_seq` to
+    0 exactly once, a harmless one-time catch-up pull -- see `ensure_cursor_
+    matches_relay`'s own docstring for why that one-time cost is accepted
+    over the alternative.
+
+    NO BACKFILL BEYOND THAT, and unlike `_migrate_add_loyalty_return_id`
+    there is no ambiguity left over from it either: a NULL `relay_url` means
+    exactly one thing (this row has never been checked against a relay since
+    this column started being read), not two different things needing a
+    second signal to tell apart.
+
+    Idempotent the same way `_migrate_add_loyalty_return_id` is idempotent:
+    the ALTER is column-existence-checked via `PRAGMA table_info`, so a
+    direct, repeated call against an already-migrated database -- including
+    replaying this whole chain against a database restored from a mid-
+    upgrade backup -- is a no-op rather than a "duplicate column name"
+    error."""
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'sync_cursor' not in live_tables:
+        return
+
+    cursor_cols = {row[1] for row in conn.execute('PRAGMA table_info(sync_cursor)').fetchall()}
+    if 'relay_url' not in cursor_cols:
+        conn.execute('ALTER TABLE sync_cursor ADD COLUMN relay_url TEXT')

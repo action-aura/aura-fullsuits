@@ -142,11 +142,22 @@ def _insert_event(conn, *, entity_id, origin_device_id='dev-a'):
 
 # ── 1. All six tables exist, PRAGMA user_version is 30 ─────────────────────
 
-def test_all_six_tables_exist_and_user_version_is_30():
+def test_all_six_tables_exist_and_the_version_advanced_past_v30():
+    """`>= 30`, not `== 30`, and not `== RETAIL_SCHEMA_VERSION` either.
+
+    v30 is the version at which these six tables appeared, so that is the floor
+    this file can meaningfully assert: anything below it means the site-relay
+    migration did not run. A hard `== 30` breaks on every future bump for no
+    gain -- v31 landed within a day and broke exactly this line. Comparing
+    against the live `RETAIL_SCHEMA_VERSION` constant instead would be worse
+    than either: two values that move together can no longer catch either one
+    drifting, which is the quiet test-weakening ENGINEERING.md names
+    specifically. The table existence checks below are what actually prove the
+    migration ran."""
     sch, db_path = _install()
     conn = _open(db_path)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 30
+        assert conn.execute('PRAGMA user_version').fetchone()[0] >= 30
 
         live_tables = {
             row[0] for row in conn.execute(

@@ -650,12 +650,41 @@ class SyncService:
         advances the cursor to Owner's returned cursor value -- all in the
         one local transaction, so a mid-apply failure leaves the cursor
         exactly where it was (next attempt re-pulls the same range, not a
-        gap)."""
+        gap).
+
+        Retail schema v31 (ROADMAP.md's 2026-09-14 "the sync cursor must know
+        which relay it belongs to" entry): the client is built FIRST, before
+        `read_cursor`, specifically so `ensure_cursor_matches_relay` can check
+        the cursor against the SAME relay `client.pull()` below is about to
+        hit -- not a relay resolved separately (and possibly differently) at
+        some other moment. The check-and-maybe-reset sits inside this same
+        transaction, ahead of the read, so a reset and the pull's own apply
+        either both land in the one `conn.commit()` below or neither does --
+        never a reset that commits alone while the pull that follows it
+        fails, which would leave the cursor at 0 with nothing applied."""
         with self._lock:
             conn = self._get_conn()
             try:
+                client = self._client_factory()
+                # `getattr`, not `client.base_url`, because this class's
+                # documented contract with its client is exactly `.push(events)`
+                # and `.pull(since)` -- see relay_client.py's module docstring.
+                # `base_url` is an ENRICHMENT on top of that contract, not part
+                # of it: the real SyncRelayClient has it and therefore gets the
+                # full protection below, while the several legitimate test
+                # doubles built to the documented surface (FakeRelayClient,
+                # FileRelay, InMemoryRelay) do not, and must not be forced to
+                # grow an attribute they have no business having.
+                #
+                # A client that cannot say which relay it is talking to lands on
+                # `ensure_cursor_matches_relay`'s own explicit "unknown relay ->
+                # change nothing" branch, which is the safe direction: resetting
+                # on an unknown URL would re-pull the entire history on every
+                # single tick. Widening the client contract instead would have
+                # been the tail wagging the dog.
+                self.ensure_cursor_matches_relay(conn, getattr(client, "base_url", None))
                 since = self.read_cursor(conn)
-                result = self._client_factory().pull(since)  # raises on failure
+                result = client.pull(since)  # raises on failure
                 self.apply_pull_result(conn, result)
                 conn.commit()
             finally:
@@ -713,6 +742,75 @@ class SyncService:
     def read_cursor(self, conn) -> int:
         cursor_row = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
         return cursor_row["last_seq"] if cursor_row else 0
+
+    def ensure_cursor_matches_relay(self, conn, relay_url) -> bool:
+        """Retail schema v31 (ROADMAP.md's 2026-09-14 "the sync cursor must
+        know which relay it belongs to" entry). `sync_cursor.last_seq` is a
+        high-water-mark into ONE relay's own sequence space -- Owner's cloud
+        relay counts per licence in Postgres, a LAN hub counts independently
+        in its own SQLite `site_sync_events` -- so a cursor carried over from
+        a relay switch is a number from the wrong universe: a till at seq 500
+        against the cloud, re-pointed at a hub whose own log is at seq 12,
+        would ask for `since=500` forever and receive nothing, with no error
+        anywhere. This is the guard that closes that: called BEFORE every
+        pull (see `pull_once`, which calls this ahead of `read_cursor` inside
+        the SAME transaction) to reset the cursor the moment the effective
+        relay stops matching the one it was last read against.
+
+        Returns True when it reset the cursor, False when it left it alone --
+        callers that only care about the log line above already exists don't
+        need the return value, but the mutation-proof tests in
+        retail_sync_cursor_relay_binding_test.py assert on it directly.
+
+        `relay_url` blank or None means "the caller does not know which relay
+        this is" (a pull path that has not been taught to pass one yet, or a
+        transient failure resolving it) -- this does NOTHING and returns
+        False rather than resetting. Fail SAFE toward not resetting: treating
+        an unknown URL as "different" would reset on EVERY tick for any
+        caller that never supplies one, which would re-pull the entire
+        history over and over instead of the one-time catch-up this guard is
+        meant to cost.
+
+        A NULL/absent stored `relay_url` (every row written before v31, or a
+        fresh row from `INSERT OR IGNORE ... VALUES (1, 0)`) counts as
+        DIFFERENT from any real `relay_url` argument, never as "matches
+        whatever we are pointed at" -- see the RETAIL_SCHEMA_VERSION v31
+        comment in products/retail/backend/database/schema.py for why the
+        opposite reading would preserve exactly the bug this version closes.
+        That makes the first pull after a v31 upgrade reset once, harmlessly,
+        even for a device whose relay never actually changed -- the
+        documented, accepted cost of not being able to tell "unknown" from
+        "same" for a value that did not exist before this column did.
+
+        Does NOT commit -- matches `read_cursor`'s own read-only convention
+        and `apply_pull_result`'s own cursor UPDATE just below, both of which
+        leave the transaction to their caller. `pull_once` relies on this: the
+        reset and the following pull's apply must land in one commit, or a
+        reset that committed alone while the pull itself then failed would
+        leave the cursor at 0 with nothing applied -- turning one bad tick
+        into a full re-pull instead of a retry of the same range."""
+        if not relay_url:
+            return False
+        cursor_row = conn.execute("SELECT relay_url FROM sync_cursor WHERE id=1").fetchone()
+        stored_relay_url = cursor_row["relay_url"] if cursor_row else None
+        if stored_relay_url == relay_url:
+            return False
+        conn.execute(
+            "UPDATE sync_cursor SET last_seq=0, relay_url=? WHERE id=1",
+            (relay_url,),
+        )
+        # WARNING, not INFO: a cursor reset re-pulls this device's entire
+        # history from this relay. That is the correct, designed behaviour
+        # (see the docstring above), but it is also a real, visible cost an
+        # operator watching sync health should be able to attribute to a
+        # relay change rather than mistake for a stuck or slow device.
+        logger.warning(
+            "sync: cursor relay_url changed from %r to %r -- resetting last_seq to 0 "
+            "so this device re-pulls the new relay's full stream instead of silently "
+            "stalling on a seq number from the old relay's sequence space.",
+            stored_relay_url, relay_url,
+        )
+        return True
 
     def apply_pull_result(self, conn, result: dict) -> None:
         """Applies a pull result (the exact shape SyncRelayClient.pull()
