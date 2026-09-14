@@ -688,6 +688,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Active" to "نشط",
     "Deactivated" to "معطّل",
     "Invite pending" to "بانتظار قبول الدعوة",
+    // Shown beside rows that are still worth reading when a background refresh
+    // failed -- the list is the last one this device could actually read, not
+    // a wrong one. See EmployeesScreen.refreshQuietly.
+    "Showing the last list this device could read — " to
+        "يتم عرض آخر قائمة تمكّن هذا الجهاز من قراءتها — ",
     "Owner access required" to "مطلوب حساب المالك",
     "Only the owner account can create employees or change what they can do. " +
         "Ask the owner to make the change on their account." to

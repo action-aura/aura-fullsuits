@@ -68,6 +68,26 @@ import kotlinx.coroutines.launch
  *  operation that exists. */
 private val ASSIGNABLE_ROLES = listOf("manager", "cashier")
 
+/**
+ * How often this screen re-reads the staff list while it is open.
+ *
+ * WHY THIS SCREEN POLLS AT ALL, since no other list here does. Every row on it
+ * can be changed by a DIFFERENT DEVICE: an owner invites a cashier on the
+ * desktop till, that cashier sets their password, and the row moves out of
+ * `pending_setup` into `active` -- all without this phone touching anything.
+ * The screen used to load once, on first composition, and never again, so an
+ * owner sitting on it watched a stale "Invite pending" badge for a cashier who
+ * had finished setting up minutes earlier, with nothing on screen admitting
+ * the data was old. Measured on real hardware 2026-09-14: the row read
+ * "Invite pending" while the device's own registry.db already said `active`.
+ *
+ * 10 seconds because that is `SyncService.start`'s own tick -- the rate at
+ * which the underlying rows can actually change. Polling faster would re-read
+ * a database that cannot have moved; slower would leave the screen wrong for
+ * longer than the data is.
+ */
+private const val EMPLOYEE_REFRESH_MILLIS = 10_000L
+
 /** English label for a stored role value. Falls through to `cashier` for the
  *  legacy 'employee' spelling and for anything unrecognised, matching
  *  `user_accounts.normalize_role()`'s least-privilege reading -- the server
@@ -118,6 +138,12 @@ fun EmployeesScreen(snackbar: SnackbarHostState) {
     // is how a screen ends up telling an owner they have no employees because
     // their session expired.
     var loadError by remember { mutableStateOf<String?>(null) }
+    // Distinct from `loadError` for the same reason `loadError` is distinct
+    // from an empty list: "I have never been able to read this" and "I read it
+    // ten seconds ago and could not re-read it just now" are different facts,
+    // and they deserve different screens. The first replaces the list; this
+    // one sits beside rows that are still worth showing.
+    var refreshError by remember { mutableStateOf<String?>(null) }
     var showCreate by remember { mutableStateOf(false) }
     var invite by remember { mutableStateOf<String?>(null) }
     var sheetFor by remember { mutableStateOf<Employee?>(null) }
@@ -152,7 +178,55 @@ fun EmployeesScreen(snackbar: SnackbarHostState) {
             employees = emptyList()
         }
     }
-    LaunchedEffect(Unit) { loading = true; load(); loading = false }
+    /**
+     * Re-read the list without disturbing the screen.
+     *
+     * Two deliberate differences from `load()`, both of which matter because
+     * this runs unattended every [EMPLOYEE_REFRESH_MILLIS]:
+     *
+     *  - it never touches `loading`, so the skeleton does not flash over a
+     *    list the owner is reading every ten seconds;
+     *  - a FAILURE changes nothing. `load()` correctly replaces the list with
+     *    an error, because a failed FIRST load genuinely means the owner has
+     *    no data. A failed background refresh means the last known list is
+     *    still the best thing to show -- swallowing a momentary blip and
+     *    keeping good rows on screen beats replacing them with an error
+     *    banner nobody asked for, and the next tick recovers on its own.
+     *    Real failures are still reported: the first load reports them, and
+     *    every mutating action on this screen reports its own.
+     */
+    suspend fun refreshQuietly() {
+        try {
+            val body = ApiClient.get().employees().employees ?: return
+            employees = body
+            loadError = null
+            refreshError = null
+        } catch (e: Exception) {
+            // Routed through the SAME shared mapping every other failure on
+            // this screen uses -- never swallowed. An earlier draft of this
+            // function discarded the exception entirely on the grounds that a
+            // background tick should not shout, and EmployeesWiringContractTest
+            // caught it. That test is right, and for a reason sharper than
+            // consistency: silently keeping stale rows on screen is a milder
+            // version of the exact bug this refresh exists to fix. The owner
+            // must be able to tell "this is current" from "this is the last
+            // thing I could read".
+            //
+            // So the rows STAY (a dropped request is not a reason to destroy a
+            // good list) and the failure is surfaced beside them instead.
+            refreshError = apiErrorMessage(e)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loading = true; load(); loading = false
+        // Cancelled automatically when the screen leaves composition, so this
+        // never outlives the screen it serves.
+        while (true) {
+            kotlinx.coroutines.delay(EMPLOYEE_REFRESH_MILLIS)
+            refreshQuietly()
+        }
+    }
 
     // Admin gate. RetailSession.isAdmin comes from the same /api/auth/session
     // check that gates navigation, and the backend independently re-checks
@@ -194,6 +268,19 @@ fun EmployeesScreen(snackbar: SnackbarHostState) {
                 }
                 item {
                     Spacer(Modifier.height(4.dp))
+                    // Only when the rows on screen might have stopped being
+                    // true. Says the rows are old rather than that they are
+                    // wrong, because they are the last thing this device could
+                    // actually read -- and names the real reason via the
+                    // shared mapping instead of a blanket sentence.
+                    refreshError?.let { why ->
+                        Text(
+                            tr("Showing the last list this device could read — ") + why,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
                     Text(
                         tr("Employee accounts live on this device until account sync is enabled."),
                         style = MaterialTheme.typography.labelSmall,
