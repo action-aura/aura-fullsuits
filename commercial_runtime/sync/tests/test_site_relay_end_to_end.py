@@ -151,9 +151,10 @@ def hub():
         conn.row_factory = sqlite3.Row
         return conn
 
-    server, pin = listener.start_site_relay(
+    hub = listener.start_site_relay(
         get_conn=get_conn, host="127.0.0.1", port=0, identity_dir=tmp)
-    base_url = f"https://127.0.0.1:{server.server_address[1]}"
+    pin = hub.pin
+    base_url = f"https://127.0.0.1:{hub.port}"
 
     try:
         yield {
@@ -161,8 +162,8 @@ def hub():
             "desk": desk_signer, "tablet": tablet_signer,
         }
     finally:
-        server.shutdown()
-        server.server_close()
+        hub.server.shutdown()
+        hub.server.server_close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 

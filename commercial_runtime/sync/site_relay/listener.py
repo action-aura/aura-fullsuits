@@ -121,6 +121,54 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     allow_reuse_address = True
 
 
+class SiteRelayHandle:
+    """Everything a caller needs to operate a running hub, in one object.
+
+    `start_site_relay` used to return a bare `(server, pin)` tuple. That was
+    enough to serve sync and nothing else -- it could not mint a pairing code
+    or tell an operator which devices are connected, so the pairing and beacon
+    machinery had no way to be reached and was, in practice, dead code. This
+    handle is what `admin_routes.py` is given.
+
+    `installation_id`, `device_public_key` and `signer` are OPTIONAL because a
+    hub can legitimately be running before the till has activated: the relay
+    binds at boot, activation may happen minutes later on a first-run machine.
+    Pairing needs the installation id (it goes in the QR) and the beacon needs
+    the signer, so both degrade rather than crash -- see `beacon_started`.
+    """
+
+    def __init__(self, *, server, pin, port, pairing_codes, get_conn,
+                 installation_id=None, device_public_key=None, beacon=None):
+        self.server = server
+        self.pin = pin
+        self.port = port
+        self.pairing_codes = pairing_codes
+        self.get_conn = get_conn
+        self.installation_id = installation_id
+        self.device_public_key = device_public_key
+        self.beacon = beacon
+
+    @property
+    def beacon_started(self) -> bool:
+        return self.beacon is not None
+
+    def addresses(self):
+        return local_lan_addresses()
+
+    def primary_url(self) -> str:
+        """The URL to put on a pairing QR.
+
+        Best-effort by design: the address is a CONVENIENCE, not the identity.
+        A device that later finds the hub has moved learns the new address from
+        the signed beacon and keeps trusting the same pinned key (design §4,
+        "Identity lives in keys, not addresses"). So picking the wrong
+        interface here costs a retry, not a broken pairing.
+        """
+        addresses = self.addresses()
+        host = addresses[0] if addresses else '127.0.0.1'
+        return f"https://{host}:{self.port}"
+
+
 def build_site_relay_app(*, get_conn, **blueprint_kwargs):
     """A Flask app whose ENTIRE route table is the site relay blueprint.
 
@@ -145,13 +193,15 @@ def build_tls_context(cert_path, key_path):
 
 
 def start_site_relay(*, get_conn, host, port, identity_dir,
-                     housekeeping=True, nonce_ttl_seconds=None, **blueprint_kwargs):
+                     housekeeping=True, nonce_ttl_seconds=None,
+                     installation_id=None, device_public_key=None, signer=None,
+                     beacon_enabled=True, **blueprint_kwargs):
     """Bind the LAN listener and serve it on a background daemon thread.
 
-    Returns `(server, pin)` -- the pin being the base64 SHA-256 SPKI a client
-    must pin to reach this hub, which is what the pairing QR carries. The
-    caller is responsible for showing it to an operator; this function just
-    makes sure the identity exists and hands it back.
+    Returns a `SiteRelayHandle` -- the server, the SPKI pin a client must pin
+    to reach this hub, the pairing-code store, and the beacon if one started.
+    The caller is responsible for surfacing any of it to an operator (see
+    `admin_routes.py`); this function just makes sure it all exists.
 
     The identity is created ONCE, on first call, and reused forever after
     (`load_or_create_site_tls_identity`). That matters more than it looks:
@@ -162,10 +212,19 @@ def start_site_relay(*, get_conn, host, port, identity_dir,
     `port=0` is honoured and is how tests bind an ephemeral port -- read the
     real port back off `server.server_address[1]` afterwards.
     """
+    from .pairing import PairingCodeStore
+
     identity_dir = Path(identity_dir)
     key_path, cert_path, pin = load_or_create_site_tls_identity(identity_dir)
 
-    relay_app = build_site_relay_app(get_conn=get_conn, **blueprint_kwargs)
+    # Constructed here, not by the caller, for the same reason housekeeping is
+    # started here: a pairing store the caller has to remember to create and
+    # thread through is a pairing store that ends up None in production while
+    # every test passes it explicitly.
+    pairing_codes = PairingCodeStore()
+    relay_app = build_site_relay_app(get_conn=get_conn,
+                                     pairing_codes=pairing_codes,
+                                     **blueprint_kwargs)
     server = make_server(host, port, relay_app,
                          server_class=_ThreadingWSGIServer,
                          handler_class=_QuietHandler)
@@ -190,13 +249,45 @@ def start_site_relay(*, get_conn, host, port, identity_dir,
         start_housekeeping(get_conn=get_conn,
                            nonce_ttl_seconds=nonce_ttl_seconds or DEFAULT_NONCE_TTL_SECONDS)
 
+    handle = SiteRelayHandle(
+        server=server, pin=pin, port=server.server_address[1],
+        pairing_codes=pairing_codes, get_conn=get_conn,
+        installation_id=installation_id, device_public_key=device_public_key,
+    )
+
+    # The beacon needs a signer and an identity to sign AS. A hub that has not
+    # activated yet has neither, and that is a normal transient state on a
+    # first-run machine rather than an error -- it simply does not broadcast
+    # until it has an identity, and paired devices fall back to their
+    # last-known address exactly as design §4 says they do when broadcast is
+    # unavailable for any other reason.
+    if beacon_enabled and signer is not None and installation_id:
+        try:
+            from .beacon import BeaconBroadcaster
+            broadcaster = BeaconBroadcaster(
+                installation_id=installation_id,
+                base_url_fn=handle.primary_url,
+                spki_pin=pin,
+                signer=signer,
+            )
+            broadcaster.start()
+            handle.beacon = broadcaster
+        except Exception:
+            # Never fatal. A machine that refuses broadcast still serves sync
+            # perfectly to any device that knows where it is; losing the
+            # beacon costs re-pairing after a DHCP change, not the shop.
+            _log.warning("Site relay: the addressing beacon failed to start. "
+                         "Sync is unaffected, but devices will not learn a new "
+                         "address automatically if this hub's IP changes.",
+                         exc_info=True)
+
     _log.info(
         "Site relay listening on https://%s:%d (SPKI pin %s). This process is now "
         "reachable from the local network on that port; the UI server is unaffected "
-        "and stays on loopback.",
-        host, server.server_address[1], pin,
+        "and stays on loopback. Addressing beacon: %s.",
+        host, handle.port, pin, "on" if handle.beacon_started else "off",
     )
-    return server, pin
+    return handle
 
 
 # Hourly. The two things this sweeps -- expired replay nonces and settled

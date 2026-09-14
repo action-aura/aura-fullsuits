@@ -53,13 +53,26 @@ What is here:
     * `pruning.py`    -- what is safe to forget. The watermark is the slowest
       of every non-revoked paired device AND the forwarder, because a row
       that has not yet reached Owner is still its only copy.
+    * `roster.py`     -- verifying, caching and enforcing the Owner-signed
+      device roster. Pairing GRANTS, the roster REVOKES: it may only deny a
+      device it explicitly lists as suspended, never deny by absence (see its
+      docstring for why absence-denial breaks every newly-paired device).
+    * `admin_routes.py` -- the operator's side ("Connect a device", who is
+      connected, revoke one). Registered on the product's LOOPBACK app only,
+      never on the LAN-facing relay app: these routes mint pairing codes.
 
-NOT BUILT YET (say so plainly rather than letting someone assume the feature
-is complete): the Owner-signed roster fetch/verify/enforce path -- `site_roster`
-is created but nothing writes it, so authorization rests on local pairing
-alone, and a device Owner SUSPENDS keeps LAN access until someone revokes it
-at the till. Also absent: hub promotion (design sec3's manual recovery path),
-a UI for any of the pairing flow, and Android support -- the phone's relay URL
-is still a build-time constant with no runtime override and OkHttp's
-CertificatePinner is not wired, so a phone cannot yet be pointed at a hub.
+TWO THINGS THAT SOUND LIKE THE SAME KEY AND ARE NOT. The SPKI pin authenticates
+the TLS connection to the hub; the hub's Ed25519 DEVICE key signs the
+addressing beacon. A device learns both at pairing and uses them for different
+jobs, so neither substitutes for the other.
+
+NOT BUILT YET (say so plainly rather than letting someone assume the feature is
+complete): the Owner-side endpoint that MINTS and signs the roster -- the
+product half verifies and enforces, but nothing issues one yet, so the
+suspension gate is inert until that ships (contract is specified in
+`roster.py`'s docstring). Also absent: hub promotion (design sec3's manual
+recovery path), any frontend screen for the pairing flow -- the API exists but
+no UI calls it -- and Android support: the phone's relay URL is still a
+build-time constant with no runtime override and OkHttp's CertificatePinner is
+not wired, so a phone cannot yet be pointed at a hub.
 """

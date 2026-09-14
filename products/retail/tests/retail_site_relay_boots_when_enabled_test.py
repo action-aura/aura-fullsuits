@@ -59,10 +59,10 @@ app.config["TESTING"] = True
 
 
 def teardown_module(module):
-    server = _app_module._site_relay_server
-    if server is not None:
-        server.shutdown()
-        server.server_close()
+    handle = _app_module._site_relay_server
+    if handle is not None:
+        handle.server.shutdown()
+        handle.server.server_close()
     if _app_module._sync_service is not None:
         _app_module._sync_service.stop()
     if _app_module._registry_sync_service is not None:
@@ -71,7 +71,7 @@ def teardown_module(module):
 
 
 def _relay_base_url():
-    return f"https://127.0.0.1:{_app_module._site_relay_server.server_address[1]}"
+    return f"https://127.0.0.1:{_app_module._site_relay_server.port}"
 
 
 def test_init_app_actually_started_the_site_relay():
@@ -81,7 +81,7 @@ def test_init_app_actually_started_the_site_relay():
 
 
 def test_the_listener_is_really_bound_to_a_real_port():
-    port = _app_module._site_relay_server.server_address[1]
+    port = _app_module._site_relay_server.port
     assert isinstance(port, int) and port > 0
 
 
@@ -151,3 +151,139 @@ def test_the_app_still_boots_and_serves_health_with_hub_mode_on():
     with app.test_client() as client:
         resp = client.get('/api/health')
         assert resp.status_code == 200
+
+
+# ── the operator's side: "Connect a device" ────────────────────────────────
+# These run against the LOOPBACK app (the one serving the POS UI), which is
+# where the pairing controls live and must live -- see admin_routes.py. A
+# pairing code admits a new device to the shop, so minting one has to be an
+# admin action on the till, never something reachable from the wifi.
+
+ADMIN_EMAIL = "hubadmin@test.local"
+ADMIN_PASSWORD = "HubAdmin123!"
+
+
+def _admin_client():
+    """A test client logged in as the shop admin, creating that admin first if
+    this is the first call. Onboarding is gated on "no valid admin exists yet",
+    not on licensing, so this works on an unactivated hub."""
+    client = app.test_client()
+    client.post('/api/onboarding/create-admin', json={
+        "name": "Hub Admin", "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD,
+        "company_name": "Hub Test Shop", "country": "JO",
+        "timezone": "Asia/Amman", "currency": "JOD", "language": "en",
+    })
+    resp = client.post('/api/auth/login',
+                       json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+    assert resp.status_code == 200, f"could not log in as admin: {resp.data[:200]}"
+    return client
+
+
+def test_status_reports_the_running_hub_to_an_operator():
+    client = _admin_client()
+    resp = client.get('/api/site-relay/status')
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['enabled'] is True
+    assert body['port'] == _app_module._site_relay_server.port
+    assert body['spki_pin'] == _app_module._site_relay_server.pin
+
+
+def test_an_admin_can_mint_a_pairing_code_carrying_everything_a_device_needs():
+    client = _admin_client()
+    resp = client.post('/api/site-relay/pair-code')
+
+    assert resp.status_code == 200
+    payload = resp.get_json()['payload']
+    # Everything the QR must carry for a device to both REACH the hub and
+    # later VERIFY its beacon. A missing field here is a pairing that appears
+    # to work and then cannot survive the shop's first router reboot.
+    for field in ('pairing_code', 'spki_pin', 'base_url'):
+        assert payload.get(field), f"pairing payload is missing {field}: {payload}"
+
+
+def test_the_whole_operator_story_works_end_to_end(tmp_path):
+    """THE POINT OF THIS FEATURE, in one test.
+
+    An admin presses "Connect a device"; a new device takes the resulting code
+    and pairs itself over the real TLS listener, verifying the hub by the
+    pinned key from the payload; and it can then actually sync. If any link in
+    that chain is broken the shop cannot add a till, no matter how green the
+    unit tests are.
+    """
+    import base64
+    import uuid
+    from datetime import datetime, timezone
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    from commercial_runtime.licensing_contracts.canonical import canonicalize_bytes
+    from commercial_runtime.sync.site_relay.pinned_transport import pinned_session
+
+    payload = _admin_client().post('/api/site-relay/pair-code').get_json()['payload']
+
+    device_key = Ed25519PrivateKey.generate()
+    device_id = str(uuid.uuid4())
+    public_raw = device_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    session = pinned_session(payload['spki_pin'])
+    base = _relay_base_url()
+
+    paired = session.post(f"{base}/api/sync/v1/pair", json={
+        "pairing_code": payload['pairing_code'],
+        "installation_id": device_id,
+        "device_public_key": base64.b64encode(public_raw).decode('ascii'),
+        "label": "Waiter tablet 1",
+    }, verify=False, timeout=10)
+    assert paired.status_code == 200, f"pairing failed: {paired.data[:300]}"
+
+    # ...and the pairing is USABLE, not merely recorded. A row in a table that
+    # cannot actually sync would pass a narrower test and help nobody.
+    body = {
+        "installation_id": device_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "nonce": uuid.uuid4().hex,
+        "events": [],
+    }
+    body["signature"] = base64.b64encode(
+        device_key.sign(canonicalize_bytes(body))).decode('ascii')
+
+    pushed = session.post(f"{base}/api/sync/v1/push", json=body, verify=False, timeout=10)
+    assert pushed.status_code == 200, f"a freshly paired device could not push: {pushed.data[:300]}"
+
+    # And the operator can see it.
+    devices = _admin_client().get('/api/site-relay/status').get_json()['devices']
+    assert any(d['installation_id'] == device_id and not d['revoked'] for d in devices)
+
+
+def test_a_pairing_code_cannot_be_used_twice():
+    """Single-use, proven through the real HTTP surface rather than against
+    the code store directly -- a device that replays a captured code must be
+    refused at the endpoint, which is where it would actually try."""
+    import base64
+    import uuid
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    from commercial_runtime.sync.site_relay.pinned_transport import pinned_session
+
+    payload = _admin_client().post('/api/site-relay/pair-code').get_json()['payload']
+    session = pinned_session(payload['spki_pin'])
+    base = _relay_base_url()
+
+    def _attempt():
+        key = Ed25519PrivateKey.generate()
+        raw = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        return session.post(f"{base}/api/sync/v1/pair", json={
+            "pairing_code": payload['pairing_code'],
+            "installation_id": str(uuid.uuid4()),
+            "device_public_key": base64.b64encode(raw).decode('ascii'),
+        }, verify=False, timeout=10)
+
+    assert _attempt().status_code == 200
+    second = _attempt()
+    assert second.status_code == 400
+    assert second.json()['reason_code'] == 'PAIRING_CODE_INVALID'

@@ -200,6 +200,26 @@ app.register_blueprint(import_bp)
 app.register_blueprint(make_backup_blueprint('retail', DATABASE_DIR, APP_VERSION))
 app.register_blueprint(device_bp)
 
+# R-LAN: the operator's side of hub mode ("Connect a device", who is
+# connected, revoke one). Registered on THIS app -- the loopback one already
+# serving the POS UI -- and deliberately NOT on the LAN-facing relay app that
+# listener.py builds. These routes mint pairing codes, which are the
+# credential that admits a new device to the shop, so they must be reachable
+# only by an admin already logged in at the till, never by anything on the
+# wifi. See admin_routes.py's module docstring.
+#
+# Registered UNCONDITIONALLY, even on the overwhelming majority of installs
+# that will never be hubs: the routes answer {"enabled": false} when this
+# install is not one, because the Settings screen asks on every load and a 404
+# there is a console error on a perfectly healthy till.
+#
+# The provider is a LAMBDA, not the handle: hub mode starts during init_app(),
+# after this line runs, so capturing the value here would pin it to None
+# forever and every route would report "not a hub" on a machine that is one.
+from commercial_runtime.sync.site_relay.admin_routes import make_site_relay_admin_blueprint
+app.register_blueprint(make_site_relay_admin_blueprint(
+    hub_provider=lambda: _site_relay_server))
+
 # docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Default OFF (see
 # commercial_runtime/einvoicing/settings.py's DEFAULTS); nothing here
 # changes behavior for an install that never turns it on.
@@ -1082,12 +1102,37 @@ def _start_site_relay_if_enabled():
     try:
         from commercial_runtime.sync.site_relay.listener import (
             local_lan_addresses, start_site_relay)
-        _site_relay_server, pin = start_site_relay(
+
+        # Identity for the pairing QR and the beacon, built HERE rather than
+        # reused from the sync block above, and that is deliberate: those names
+        # (`_sync_state_repository`, `_sync_signer`) only exist when a CLOUD
+        # relay URL is configured. A LAN-only shop -- no cloud relay at all,
+        # which is precisely the offline case this whole feature exists for --
+        # would hit a NameError and silently fail to become a hub. Hub mode
+        # must not depend on cloud sync being configured.
+        from commercial_runtime.licensing_contracts.state_repository import (
+            LicenseStateRepository as _HubStateRepository)
+        _hub_state_repository = _HubStateRepository(
+            Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+        _hub_signer = _licensing_device_identity_factory(
+            Path(DATABASE_DIR).parent / 'licensing')
+
+        # Tolerated as None: hub mode can bind before this till has activated,
+        # which is a normal transient state on a first-run machine rather than
+        # an error (see SiteRelayHandle's docstring). Pairing and the beacon
+        # wait for an identity instead of the relay refusing to start.
+        _record = _hub_state_repository.load()
+        _hub_installation_id = _record.owner_installation_id if _record else None
+
+        _site_relay_server = start_site_relay(
             get_conn=get_retail_conn,
             host=SITE_RELAY_BIND_HOST,
             port=SITE_RELAY_PORT,
             identity_dir=Path(DATABASE_DIR).parent / 'site-relay',
+            installation_id=_hub_installation_id,
+            signer=_hub_signer,
         )
+        pin = _site_relay_server.pin
         # The pin is what a paired device must trust, so an operator has to be
         # able to read it back off the hub -- it is the payload of the pairing
         # QR the design describes, and until that screen exists this log line

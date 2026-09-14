@@ -33,6 +33,15 @@ the original source of this exact ordering):
      -- INVALID_SIGNATURE on any mismatch, bad base64, or missing key.
   7. ONLY NOW check whether the device has been locally revoked --
      INSTALLATION_REVOKED if so.
+  8. ONLY NOW check this hub's cached, Owner-signed roster (`roster.py`,
+     this package's sibling module) for this installation_id's status --
+     INSTALLATION_SUSPENDED / INSTALLATION_DEACTIVATED / INSTALLATION_
+     REPLACED if the roster explicitly lists it under one of those denied
+     statuses. If there is no roster cached at all, OR the cached roster
+     simply does not mention this installation_id, this step denies
+     NOTHING and authentication proceeds exactly as it did before this step
+     existed -- see "THE ROSTER GATE DENIES BY EXPLICIT STATUS ONLY, NEVER
+     BY ABSENCE" below for why that is deliberate, not an oversight.
 
 Two of these orderings look like mistakes to a reader seeing this file cold,
 and both are deliberate. Getting either one backwards silently reopens a
@@ -75,6 +84,63 @@ spelled out here rather than left to be re-derived (or "fixed") later:
     happens to be paired from an anonymous prober. Immediate, not
     unauthenticated.
 
+THE ROSTER GATE DENIES BY EXPLICIT STATUS ONLY, NEVER BY ABSENCE -- A
+DELIBERATE, DOCUMENTED DEVIATION FROM `lan-restaurant-design.md` SEC5.
+Design sec5 states the rule as "an installation not on the roster ->
+refused." Step 8 above implements a DELIBERATELY NARROWER rule instead:
+this hub's roster check DENIES a device only when its cached roster
+EXPLICITLY lists that installation_id under `SUSPENDED`, `DEACTIVATED`, or
+`REPLACED` (`roster.DENIED_ROSTER_STATUSES`). A device that is simply
+ABSENT from the cached roster -- because it was never listed, because the
+roster predates its pairing, or because no roster has EVER been fetched at
+all -- is never denied by this step. Getting this backwards (implementing
+sec5's rule literally) would be a real, field-breaking regression, not a
+harmless stricter reading, so the reasoning is spelled out here in full
+rather than left to be "corrected" back to the design doc's wording by a
+future reader who has not seen why it changed:
+
+    Denying by absence breaks the ORDINARY case. A shop pairs a new tablet
+    on Tuesday; the hub's cached roster was fetched on Monday and does not
+    list it (it did not exist on Owner's registry yet, or the roster simply
+    has not been refreshed since). Under "absent -> refused," that
+    brand-new, correctly-paired device is refused -- and in a shop that is
+    rarely online (this design's own stated operating environment, see
+    `lan-restaurant-design.md` sec7's "how long may a LAN-only restaurant
+    run with no internet at all? -- Indefinitely, with warnings"), the
+    roster could be WEEKS stale, so the device would stay refused for as
+    long as the shop stays offline. The positive authorization for LAN
+    access is already local pairing (`site_paired_devices`), which requires
+    an operator-issued, single-use pairing code (`pairing.py`) -- a clone
+    or a stranger's laptop cannot obtain one; a device holding a valid
+    pairing is a device an operator physically walked through pairing. The
+    roster's job here is the NEGATIVE one only Owner can know: this
+    SPECIFIC device has been suspended, deactivated, or replaced. So
+    PAIRING GRANTS, the ROSTER REVOKES, and a MISSING (or merely
+    silent-about-this-device) roster degrades to exactly today's behaviour
+    -- local pairing alone -- rather than to a LOCKED SHOP. `auth.py`'s
+    own pre-existing local-revoke step (7, above) already gives an operator
+    an immediate, roster-independent way to cut off a device that DOES need
+    to be denied right now, which is what makes it safe for the roster gate
+    to fail open on absence rather than fail closed.
+
+    An EXPIRED or merely STALE roster is still enforced FOR DENIALS -- this
+    is the second half of the same design decision, not a separate one.
+    Staleness is a reason to distrust a roster's SILENCE about a device (it
+    might simply not have been refreshed since that device was paired), but
+    it is never a reason to stop honoring a denial the roster DOES contain:
+    an explicit `SUSPENDED` entry is the last truth Owner published about
+    that installation, and ignoring it because the roster is old would mean
+    a suspended device stays usable for exactly as long as the shop happens
+    to stay offline -- precisely the window an attacker (or a fired
+    employee who unplugs the router) would want. So this step never checks
+    the roster's own `issued_at` age before enforcing a denial it contains;
+    it only ever refuses to ACCEPT a roster older than the one already
+    cached (`roster.store_roster`'s own replay guard, a completely separate
+    concern from THIS step, which only ever reads whatever roster is
+    currently cached, however old it is). Staleness is logged at the point
+    the roster was last fetched/cached, never rechecked here as a reason to
+    skip a denial.
+
 REASON CODE FOR A LOCAL REVOKE: `INSTALLATION_REVOKED` is a NEW code, not
 one of Owner's public reason codes -- checked against
 `commercial_runtime/licensing_contracts/reason_codes.py` before minting it.
@@ -112,7 +178,7 @@ import sqlite3
 
 from commercial_runtime.licensing_contracts.canonical import canonicalize_bytes
 from commercial_runtime.licensing_contracts.device_identity import verify_signature
-from commercial_runtime.sync.site_relay import replay, store
+from commercial_runtime.sync.site_relay import replay, roster, store
 
 # Same four fields Owner's `_REQUIRED_AUTH_FIELDS` requires -- see this
 # module's docstring, step 1. Every push/pull request must carry all four,
@@ -239,5 +305,38 @@ def authenticate(
     # and/or revoked.
     if device["revoked_at"] is not None:
         raise SiteAuthError("INSTALLATION_REVOKED")
+
+    # ── Step 8: ONLY NOW -- after both the signature AND the local revoke
+    # check have already passed -- consult this hub's cached, Owner-signed
+    # roster (`roster.py`). Running this any earlier (in particular, before
+    # step 6's signature verification) would reopen the identical
+    # unauthenticated-oracle problem step 7's own comment describes for the
+    # local revoke check: an anonymous caller holding no key at all could
+    # learn a real installation_id's roster status from this hub's response
+    # alone. See the module docstring's "THE ROSTER GATE DENIES BY EXPLICIT
+    # STATUS ONLY, NEVER BY ABSENCE" section for the full reasoning behind
+    # what this check does and does not deny -- summarized here only to
+    # keep this comment from duplicating that whole essay:
+    #   * a cached roster that DENIES this installation_id explicitly
+    #     (SUSPENDED/DEACTIVATED/REPLACED) is enforced NO MATTER HOW STALE
+    #     that cached roster is -- staleness is never a reason to let a
+    #     known-suspended device back in.
+    #   * NO cached roster at all, or a cached roster that simply does not
+    #     mention this installation_id, denies NOTHING -- this step is a
+    #     pure no-op in both cases, and authentication proceeds exactly as
+    #     it did before this step existed.
+    denied_status = roster.roster_device_status(conn, installation_id)
+    if denied_status in roster.DENIED_ROSTER_STATUSES:
+        # SUSPENDED gets Owner's cloud-relay vocabulary verbatim
+        # (`owner/app/sync/routes.py::_authenticate`); every other denied
+        # status is spelled `INSTALLATION_{status}`, which for
+        # DEACTIVATED/REPLACED is *also* already one of Owner's own public
+        # reason codes (`licensing_contracts/reason_codes.py`'s
+        # `PUBLIC_REASON_CODES`) -- reused, not minted, so a client already
+        # knows how to react to a roster denial exactly as it would react
+        # to the identical rejection from the cloud relay.
+        if denied_status == "SUSPENDED":
+            raise SiteAuthError("INSTALLATION_SUSPENDED")
+        raise SiteAuthError(f"INSTALLATION_{denied_status}")
 
     return installation_id
