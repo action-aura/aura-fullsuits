@@ -91,8 +91,11 @@ def make_site_relay_admin_blueprint(*, hub_provider,
         if not_a_hub:
             return not_a_hub
 
-        from . import store  # local: keeps module import cheap and Android-safe
-
+        # Read inline rather than through `store`: this is a read-only
+        # listing for one screen, and `store.lookup_paired_device` answers
+        # about ONE device rather than all of them. If a second caller ever
+        # wants this list, it belongs in store.py -- one screen does not
+        # justify widening that module's surface.
         conn = hub.get_conn()
         try:
             rows = conn.execute(
