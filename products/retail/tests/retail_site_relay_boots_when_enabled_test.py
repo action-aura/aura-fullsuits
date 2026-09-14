@@ -203,6 +203,23 @@ def test_an_admin_can_mint_a_pairing_code_carrying_everything_a_device_needs():
         assert payload.get(field), f"pairing payload is missing {field}: {payload}"
 
 
+def test_the_pairing_qr_is_rendered_server_side():
+    """A phone pairs by SCANNING, and this product ships no frontend QR
+    library (and a till is routinely offline, so a CDN is not an option). The
+    QR is therefore rendered by the backend with segno -- already a dependency
+    for e-invoicing receipts -- and handed over as a data URI. Without it the
+    only way to pair a phone is to type a ~200-character payload by hand,
+    which is not a feature anyone would use."""
+    body = _admin_client().post('/api/site-relay/pair-code').get_json()
+
+    assert body['qr_svg'].startswith('data:image/svg+xml;base64,')
+    # The encoded text must be the payload itself, not a summary of it -- a QR
+    # that scans but omits the pin or the code pairs nothing.
+    import json as _json
+    decoded = _json.loads(body['qr_text'])
+    assert decoded == body['payload']
+
+
 def test_the_whole_operator_story_works_end_to_end(tmp_path):
     """THE POINT OF THIS FEATURE, in one test.
 

@@ -29,9 +29,10 @@ prevent.
 """
 from __future__ import annotations
 
+import json
 import logging
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, session
 
 from commercial_runtime.identity.mt_auth import mt_login_required
 
@@ -145,12 +146,31 @@ def make_site_relay_admin_blueprint(*, hub_provider,
             hub_device_public_key=hub.device_public_key,
             pairing_code=code,
         )
+        # The QR is rendered SERVER-SIDE rather than in the browser, because
+        # this product ships no frontend QR library and must not acquire one:
+        # a shop's till is routinely offline, so a CDN is not an option, and
+        # vendoring an encoder to do what a Python dependency we already ship
+        # does is pure duplication.
+        #
+        # `render_qr_svg_data_uri` lives under einvoicing/ only because that is
+        # what first needed it -- it is a pure payload-to-data-URI function
+        # with no e-invoicing semantics, and importing it enables nothing
+        # (e-invoicing stays off unless opted in). Reused rather than copied,
+        # because a second QR encoder in this repo would be a second thing to
+        # keep correct. Imported lazily for the Android import-safety rule in
+        # this module's docstring.
+        from commercial_runtime.einvoicing.qr import render_qr_svg_data_uri
+
+        qr_text = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+
         # Never logged, not even at debug: this value IS the credential, and
         # log files get pasted into support tickets.
         _log.info("Site relay: a pairing code was issued by an admin. "
                   "It is single-use and expires in %d seconds.",
                   pairing.PAIRING_CODE_TTL_SECONDS)
         return jsonify({'success': True, 'payload': payload,
+                        'qr_text': qr_text,
+                        'qr_svg': render_qr_svg_data_uri(qr_text, scale=5),
                         'expires_in_seconds': pairing.PAIRING_CODE_TTL_SECONDS})
 
     @bp.route('/devices/<installation_id>/revoke', methods=['POST'])

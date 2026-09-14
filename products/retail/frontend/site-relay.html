@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aura Retail — Shop Network</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    max-width: 720px; margin: 48px auto; padding: 0 20px;
+    color: #1a1a1a; background: #fafafa;
+  }
+  @media (prefers-color-scheme: dark) { body { color: #e8e8e8; background: #16181c; } }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 14px; }
+  .subtitle { color: #666; margin-bottom: 28px; font-size: 0.9rem; }
+  @media (prefers-color-scheme: dark) { .subtitle { color: #999; } }
+  .card {
+    background: #fff; border: 1px solid #e0e0e0; border-radius: 10px;
+    padding: 24px; margin-bottom: 16px;
+  }
+  @media (prefers-color-scheme: dark) { .card { background: #1e2127; border-color: #333; } }
+  .state-badge {
+    display: inline-block; padding: 4px 10px; border-radius: 20px;
+    font-size: 0.8rem; font-weight: 600; margin-bottom: 12px; margin-inline-end: 6px;
+  }
+  .state-active { background: #d4f4dd; color: #1a7a3d; }
+  .state-neutral { background: #e5e7eb; color: #444; }
+  .state-restricted { background: #fde2e2; color: #a3231f; }
+  @media (prefers-color-scheme: dark) {
+    .state-active { background: #123a24; color: #6fd88f; }
+    .state-neutral { background: #2a2d33; color: #ccc; }
+    .state-restricted { background: #4a1616; color: #ff8f8a; }
+  }
+  button {
+    background: #2563eb; color: #fff; border: none; border-radius: 6px;
+    padding: 10px 18px; font-size: 0.9rem; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: #93a3c0; cursor: not-allowed; }
+  button.secondary { background: transparent; color: #2563eb; border: 1px solid #2563eb; }
+  button.danger { background: transparent; color: #c0231f; border: 1px solid #c0231f; }
+  button.small { padding: 4px 10px; font-size: 0.78rem; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  .message { padding: 10px 12px; border-radius: 6px; font-size: 0.88rem; margin-bottom: 14px; }
+  .message-error { background: #fde2e2; color: #a3231f; }
+  .message-info { background: #e0edff; color: #1e429f; }
+  @media (prefers-color-scheme: dark) {
+    .message-error { background: #4a1616; color: #ff8f8a; }
+    .message-info { background: #14294a; color: #9ec2ff; }
+  }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; margin: 0; }
+  dl.facts dt { font-size: 0.82rem; color: #666; }
+  @media (prefers-color-scheme: dark) { dl.facts dt { color: #999; } }
+  dl.facts dd { margin: 0; font-size: 0.9rem; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.82rem; word-break: break-all;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { text-align: start; padding: 8px 6px; border-bottom: 1px solid #eee; }
+  @media (prefers-color-scheme: dark) { th, td { border-bottom-color: #2c2f36; } }
+  th { font-size: 0.78rem; color: #666; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { th { color: #999; } }
+  .empty { color: #777; font-size: 0.9rem; }
+  @media (prefers-color-scheme: dark) { .empty { color: #8b8f98; } }
+  .qr-wrap { text-align: center; padding: 12px 0; }
+  .qr-wrap img { width: 220px; height: 220px; background: #fff; padding: 10px; border-radius: 8px; }
+  .hint { font-size: 0.82rem; color: #666; margin-top: 10px; }
+  @media (prefers-color-scheme: dark) { .hint { color: #999; } }
+  .countdown { font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <h1>Shop network</h1>
+  <p class="subtitle">
+    Let your other tills and tablets work together over the shop's own wifi —
+    including when the internet is down.
+  </p>
+
+  <div id="message" class="message" hidden></div>
+
+  <!-- ── Not a hub ────────────────────────────────────────────────────── -->
+  <div class="card" id="card-disabled" hidden>
+    <h2>This device is not the shop hub</h2>
+    <p class="empty">
+      One device in the shop — normally the main till, the one with the cash
+      drawer — acts as the hub that the others connect to. This device is not
+      set up as the hub, so nothing is being shared over the network.
+    </p>
+    <p class="hint">
+      To make this the hub, set <code>AURA_SITE_RELAY_ENABLED=1</code> before
+      starting Aura Retail, then reopen this screen. Every device still sells
+      on its own either way — the hub only decides where they meet to catch up.
+    </p>
+  </div>
+
+  <!-- ── Hub status ───────────────────────────────────────────────────── -->
+  <div class="card" id="card-status" hidden>
+    <span class="state-badge state-active">Hub is running</span>
+    <h2>Other devices connect to this one</h2>
+    <dl class="facts">
+      <dt>Address</dt><dd id="fact-addresses" class="mono">—</dd>
+      <dt>Port</dt><dd id="fact-port" class="mono">—</dd>
+      <dt>Security key</dt><dd id="fact-pin" class="mono">—</dd>
+    </dl>
+    <p class="hint">
+      The security key is how each device recognises this hub. It is not a
+      password and it is safe to read out over the phone — but a device that
+      is shown the wrong one will refuse to connect, which is the point.
+    </p>
+  </div>
+
+  <!-- ── Connect a device ─────────────────────────────────────────────── -->
+  <div class="card" id="card-connect" hidden>
+    <h2>Connect a device</h2>
+    <p class="empty" id="connect-intro">
+      Press the button, then scan the code with the new device. The code works
+      once and expires in a few minutes.
+    </p>
+
+    <div id="pairing-output" hidden>
+      <div class="qr-wrap"><img id="pairing-qr" alt="Pairing code"></div>
+      <label for="pairing-text" style="font-size:0.82rem;font-weight:600;">
+        Can't scan? Copy this into the other device instead:
+      </label>
+      <textarea id="pairing-text" class="mono" rows="4" readonly
+                style="width:100%;box-sizing:border-box;padding:10px;border-radius:6px;"></textarea>
+      <p class="hint">
+        Expires in <span class="countdown" id="pairing-countdown">—</span>.
+        Anyone holding this code can add a device to your shop, so don't
+        photograph it or send it on.
+      </p>
+    </div>
+
+    <div class="row">
+      <button id="btn-pair">Connect a device</button>
+      <button id="btn-pair-done" class="secondary" hidden>Done</button>
+    </div>
+  </div>
+
+  <!-- ── Connected devices ────────────────────────────────────────────── -->
+  <div class="card" id="card-devices" hidden>
+    <h2>Connected devices</h2>
+    <p class="empty" id="devices-empty" hidden>
+      No devices are connected yet.
+    </p>
+    <table id="devices-table" hidden>
+      <thead>
+        <tr><th>Device</th><th>Connected</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody id="devices-body"></tbody>
+    </table>
+    <p class="hint">
+      Removing a device stops it syncing with this hub straight away — you do
+      not need to be online. It keeps whatever it already has and carries on
+      selling on its own.
+    </p>
+  </div>
+
+<script src="site-relay.js"></script>
+</body>
+</html>
