@@ -101,16 +101,16 @@ def _reload_with(**env):
 def test_unset_and_inactive_licence_is_off():
     """The out-of-the-box, unlicensed state: a fresh till with nothing
     configured and no licence yet must not listen on the LAN."""
-    assert config.site_relay_should_start(None, None) is False
-    assert config.site_relay_should_start(None, LicenseState.NOT_CONFIGURED) is False
-    assert config.site_relay_should_start(None, LicenseState.ACTIVATION_REQUIRED) is False
+    assert config.site_relay_should_start(None, None, 'WINDOWS') is False
+    assert config.site_relay_should_start(None, LicenseState.NOT_CONFIGURED, 'WINDOWS') is False
+    assert config.site_relay_should_start(None, LicenseState.ACTIVATION_REQUIRED, 'WINDOWS') is False
 
 
 def test_unset_and_active_licence_is_on():
     """The whole point of this change: a licensed shop needs NOTHING typed,
     no environment variable, no IP, no port -- it just becomes a hub."""
-    assert config.site_relay_should_start(None, LicenseState.ACTIVE_ONLINE) is True
-    assert config.site_relay_should_start(None, LicenseState.ACTIVE_OFFLINE) is True
+    assert config.site_relay_should_start(None, LicenseState.ACTIVE_ONLINE, 'WINDOWS') is True
+    assert config.site_relay_should_start(None, LicenseState.ACTIVE_OFFLINE, 'WINDOWS') is True
 
 
 def test_explicit_zero_wins_even_when_licence_is_active():
@@ -119,7 +119,7 @@ def test_explicit_zero_wins_even_when_licence_is_active():
     becomes a hub, so an active licence must never second-guess it."""
     for state in (LicenseState.ACTIVE_ONLINE, LicenseState.ACTIVE_OFFLINE,
                   LicenseState.WARNING, LicenseState.GRACE_PERIOD):
-        assert config.site_relay_should_start('0', state) is False, (
+        assert config.site_relay_should_start('0', state, 'WINDOWS') is False, (
             f"'0' must win over {state}")
 
 
@@ -129,7 +129,7 @@ def test_explicit_one_wins_even_when_licence_is_inactive():
     exercisable without going through activation first."""
     for state in (None, LicenseState.NOT_CONFIGURED, LicenseState.REVOKED,
                   LicenseState.EXPIRED, LicenseState.SUSPENDED):
-        assert config.site_relay_should_start('1', state) is True, (
+        assert config.site_relay_should_start('1', state, 'WINDOWS') is True, (
             f"'1' must win over {state}")
 
 
@@ -140,7 +140,7 @@ def test_every_license_state_is_classified_by_active_family_membership():
     exercised here automatically instead of silently slipping past."""
     for state in LicenseState:
         expected = state in ACTIVE_FAMILY
-        assert config.site_relay_should_start(None, state) is expected, (
+        assert config.site_relay_should_start(None, state, 'WINDOWS') is expected, (
             f"{state} should {'start' if expected else 'not start'} the "
             f"relay under automatic (unset) mode"
         )
@@ -155,9 +155,9 @@ def test_near_miss_values_fall_back_to_automatic_not_to_a_guess():
     licence" instead of picking a state nobody actually asked for."""
     near_misses = ("true", "TRUE", "yes", "on", "  1  ", "1 ", "0 ", "2", "")
     for value in near_misses:
-        assert config.site_relay_should_start(value, None) is False, (
+        assert config.site_relay_should_start(value, None, 'WINDOWS') is False, (
             f"{value!r} with no active licence must stay off")
-        assert config.site_relay_should_start(value, LicenseState.ACTIVE_ONLINE) is True, (
+        assert config.site_relay_should_start(value, LicenseState.ACTIVE_ONLINE, 'WINDOWS') is True, (
             f"{value!r} with an active licence must turn on automatically")
 
 
@@ -229,3 +229,59 @@ def test_the_site_relay_port_does_not_collide_with_the_ui_listener():
         f"site relay default port {cfg.SITE_RELAY_PORT} collides with the UI "
         f"listener's default {ui_port}"
     )
+
+
+def test_a_handset_never_self_elects_as_the_shops_hub():
+    """FOUND ON REAL HARDWARE, which is why this test exists at all.
+
+    The moment automatic mode landed, the Android phone read its own licence
+    as ACTIVE_OFFLINE and started a relay -- "Site relay (hub mode) is ON"
+    logged on a handset -- so the shop had TWO hubs broadcasting the same
+    licence (the Windows till and the phone), and devices would have split
+    between them. No unit test caught it because, until this one, no test
+    passed a platform at all.
+
+    docs/launch-readiness/lan-restaurant-design.md sec3 settles which device
+    should host the hub, and it is not a phone: "The hub is the device the
+    restaurant cannot run without anyway -- it is the main till with the cash
+    drawer." A handset inverts every clause of that: it sleeps, it leaves the
+    building in a pocket, and it is the device a shop can most easily spend a
+    day without.
+    """
+    for state in (LicenseState.ACTIVE_ONLINE, LicenseState.ACTIVE_OFFLINE,
+                  LicenseState.WARNING, LicenseState.GRACE_PERIOD):
+        assert config.site_relay_should_start(None, state, 'ANDROID') is False, (
+            f"ANDROID must not self-elect as hub on {state}")
+        # Case must not be a way around it, and neither must an unknown
+        # platform string -- anything that is not WINDOWS fails closed.
+        assert config.site_relay_should_start(None, state, 'android') is False
+        assert config.site_relay_should_start(None, state, 'IOS') is False
+        assert config.site_relay_should_start(None, state, '') is False
+        assert config.site_relay_should_start(None, state, None) is False
+
+
+def test_explicit_one_still_promotes_a_handset_on_purpose():
+    """The handset rule restricts AUTOMATIC election only. The design's
+    manual "make this the hub" promotion path (sec3, "Recovery: manual hub
+    promotion") must stay open on every platform, and an Android dev box must
+    still be able to exercise hub mode -- so an explicit '1' wins there
+    exactly as it does on Windows.
+
+    Without this half, a future "simplification" could turn the rule into a
+    blanket 'ANDROID is never a hub' and silently delete a documented
+    recovery path; a deny-only test would not notice."""
+    for platform in ('ANDROID', 'android', 'IOS'):
+        assert config.site_relay_should_start('1', LicenseState.ACTIVE_ONLINE, platform) is True
+        assert config.site_relay_should_start('1', None, platform) is True
+
+
+def test_platform_is_required_not_silently_permissive():
+    """A caller that forgets the platform must fail loudly at the call site.
+
+    This is the shape of the original bug: automatic mode shipped with no
+    platform concept at all, so every install was eligible. A default value
+    here -- permissive OR restrictive -- would let that recur silently, so
+    the argument is positional and required and this test pins that."""
+    import pytest
+    with pytest.raises(TypeError):
+        config.site_relay_should_start(None, LicenseState.ACTIVE_ONLINE)

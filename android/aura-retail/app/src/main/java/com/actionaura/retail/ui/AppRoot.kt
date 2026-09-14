@@ -39,6 +39,7 @@ import com.actionaura.retail.net.SessionResponse
 import com.actionaura.retail.net.TerminalIdentity
 import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.server.ServerBootstrap
+import com.actionaura.retail.sync.HubAutoJoinService
 import com.actionaura.retail.sync.HubPrefs
 import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.ui.brand.AuraMark
@@ -191,6 +192,29 @@ fun AppRoot() {
             // and it never blocks this phase transition (it only launches a
             // loop whose first tick is one interval away).
             LicenseCheckInCoordinator.start(ctx)
+
+            // Automatic LAN hub discovery. WITHOUT THIS LINE THE ENTIRE
+            // FEATURE IS DEAD CODE ON THE DEVICE, and it was: HubAutoJoin
+            // Service, HubDiscovery, HubTransport and SpkiPinning all
+            // shipped fully built and fully unit-tested, 447 tests green,
+            // and nothing anywhere called start(), so not one tick ever ran
+            // on real hardware. Measured, not guessed -- a phone on the shop
+            // wifi, holding the same licence as a live hub that was
+            // broadcasting a beacon it could hear, sat for 100 seconds and
+            // produced ZERO log lines from the tag, which is the shape of
+            // "never started" rather than "ran and declined".
+            //
+            // Placed here, beside the two coordinators above, for the same
+            // reason they are here and in this order: ServerBootstrap.start
+            // () must already have run, because the very first thing a tick
+            // does is call the embedded Python backend's /_internal/license-
+            // identity to learn which shop this device belongs to. It never
+            // blocks this phase transition -- start() only launches a loop
+            // and returns -- and it is a no-op on a device that is not
+            // activated or is already paired to a hub (see runOnce's own two
+            // short-circuits), so an unlicensed dev build behaves exactly as
+            // it did before this line existed.
+            HubAutoJoinService.start(ctx)
 
             // Device activation gate, checked first (before setup/login) so
             // an unactivated device on a real licensed build never reaches

@@ -340,7 +340,7 @@ SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 SITE_RELAY_ENABLE_OVERRIDE = os.environ.get('AURA_SITE_RELAY_ENABLED')
 
 
-def site_relay_should_start(override, license_state):
+def site_relay_should_start(override, license_state, platform):
     """Pure decision: should THIS boot start the LAN site relay?
 
     No I/O and no environment reads in here -- both `override` (the raw
@@ -371,6 +371,35 @@ def site_relay_should_start(override, license_state):
     if override == '1':
         return True
     if override == '0':
+        return False
+    # ── A HANDSET NEVER SELF-ELECTS AS THE SHOP'S HUB. ──────────────────
+    # Found on real hardware, not in a fixture: the moment automatic mode
+    # landed, the ANDROID phone read its own licence as ACTIVE_OFFLINE and
+    # started a relay, logging "Site relay (hub mode) is ON" on a handset --
+    # so the shop had TWO hubs broadcasting the same licence (the desktop
+    # till and the phone) and devices would have split between them.
+    #
+    # The design doc settles which device should host it, and it is not a
+    # phone: "The hub is the device the restaurant cannot run without
+    # anyway -- it is the main till with the cash drawer. Making the
+    # most-essential device the hub means 'hub down' is almost always a
+    # subset of 'restaurant already has a bigger problem'" (docs/launch-
+    # readiness/lan-restaurant-design.md §3). A handset is the exact
+    # inverse of that argument: it sleeps to save battery, it walks out of
+    # wifi range in someone's pocket, and it is the device a shop can most
+    # easily do without for an afternoon. Electing one as the thing every
+    # other device depends on inverts the whole rationale.
+    #
+    # This is a restriction on AUTOMATIC election ONLY. An explicit
+    # AURA_SITE_RELAY_ENABLED=1 is checked above and still wins, so the
+    # design's manual "make this the hub" promotion path stays open on any
+    # platform, and an Android dev box can still exercise hub mode.
+    #
+    # `platform` is REQUIRED rather than defaulting to something permissive:
+    # a caller that forgets it should fail loudly at the call site, not
+    # silently re-enable handset hubs -- which is precisely the bug this
+    # block exists to prevent, and it already happened once.
+    if str(platform).upper() != 'WINDOWS':
         return False
     return license_state in ACTIVE_FAMILY
 

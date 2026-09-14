@@ -1156,7 +1156,13 @@ def _start_site_relay_if_enabled():
         # licence-gated.
         _hub_license_state = None
 
-    if not site_relay_should_start(SITE_RELAY_ENABLE_OVERRIDE, _hub_license_state):
+    # LICENSING_PLATFORM, not a guess: automatic election is Windows-only,
+    # because a handset must never self-elect as the shop's hub (see
+    # site_relay_should_start's own block for the hardware finding behind
+    # that). An explicit AURA_SITE_RELAY_ENABLED=1 still wins on any
+    # platform.
+    if not site_relay_should_start(
+            SITE_RELAY_ENABLE_OVERRIDE, _hub_license_state, LICENSING_PLATFORM):
         return
 
     try:
