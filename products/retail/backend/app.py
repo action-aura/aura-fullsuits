@@ -1064,6 +1064,62 @@ def _configure_file_logging():
 
 _site_relay_server = None
 
+# The automatic hub election's driver (commercial_runtime/sync/site_relay/
+# coordinator.py's `SiteRelayCoordinator`), or None on any install not running
+# one -- which is every install that is not an activated Windows till, plus
+# every till whose operator pinned hub mode explicitly with
+# AURA_SITE_RELAY_ENABLED=1 (see `_start_site_relay_if_enabled` for why an
+# explicit pin deliberately skips the election instead of running it).
+#
+# A MODULE GLOBAL RATHER THAN A LOCAL, for one concrete reason: `init_app()` is
+# reachable more than once (see its own docstring's note about timers that are
+# not safe to start twice), and the guard at the top of
+# `_start_site_relay_if_enabled` can only refuse a second election driver if
+# there is somewhere for the first one to be recorded. Two drivers ticking on
+# one till can each start and stop the other's relay -- the two-hub bug this
+# whole feature exists to remove, reproduced inside a single process.
+_site_relay_coordinator = None
+
+
+def _observe_lan_beacons_paced(timeout_seconds):
+    """Production `observe_beacons` seam for `SiteRelayCoordinator`: the real
+    UDP listen coordinator.py already ships, plus ONE guarantee it does not
+    make on its own -- a FAILED listen still costs a full tick interval of
+    wall-clock time.
+
+    WHY A WRAPPER, when the underlying function is already the production
+    default. `SiteRelayCoordinator._run` is literally `while not stopped:
+    tick()`, with no sleep of its own, and that is correct by design:
+    coordinator.py states that "an unconditional `_default_observe_beacons(
+    timeout)` IS the tick cadence". That holds perfectly while the listen
+    SUCCEEDS. If the UDP bind raises instead -- port 45455 held by another
+    process that did not set SO_REUSEADDR, a local firewall refusing the bind
+    -- `_default_observe_beacons` returns in microseconds, `tick()` correctly
+    swallows the exception and logs it WITH A TRACEBACK, and the loop tries
+    again immediately, forever, as fast as the CPU allows. The symptom would
+    not read as "no hub": it reads as a till pegging a core and writing
+    tracebacks into backend.log as fast as the disk accepts them, while a
+    cashier is trying to ring a sale on that same machine.
+
+    Deliberately NOT fixed in coordinator.py: that module is finished, and its
+    never-throws contract ("tick() swallows, logs, and the next tick retries
+    from scratch") is right as written. The missing piece is a PACE for the
+    retry, and pacing a real-world seam is the wiring layer's job -- this file.
+    The exception is re-raised unchanged after the sleep, so the coordinator's
+    own logging and role bookkeeping are completely unaltered; all this adds is
+    the delay in front of the retry.
+    """
+    import time as _time
+
+    from commercial_runtime.sync.site_relay.coordinator import (
+        _default_observe_beacons)
+
+    try:
+        return _default_observe_beacons(timeout_seconds)
+    except Exception:
+        _time.sleep(max(0.0, timeout_seconds))
+        raise
+
 
 def _start_site_relay_if_enabled():
     """Hub mode: bind the LAN-facing site relay, if this install is a hub.
@@ -1108,12 +1164,28 @@ def _start_site_relay_if_enabled():
     every OTHER device is just "sync stopped working" with nothing to point
     at.
 
+    2026-09-15: ON THE AUTOMATIC PATH THIS FUNCTION NO LONGER BINDS ANYTHING
+    ITSELF. It builds `SiteRelayCoordinator` (commercial_runtime/sync/
+    site_relay/coordinator.py) and starts its tick loop; the ELECTION decides
+    whether this till becomes the hub, and calls back into the `start_relay`
+    seam below when it does. Automatic mode without an election was the
+    two-hub bug: every activated Windows till in a shop started a relay and
+    broadcast a beacon at boot, with nothing choosing between them, so a
+    two-till shop ran two hubs and its devices split across them. An explicit
+    AURA_SITE_RELAY_ENABLED=1 still binds immediately and holds no election --
+    see that branch's own comment for why an operator's explicit pin must not
+    be overrideable by a peer's lower installation id.
+
     Guarded against a second start: `init_app()` is reachable more than once
     (see its own docstring's note about timers that are not safe to start
     twice), and starting a second listener would either raise on the bind or,
-    worse, leave an orphaned thread serving a stale connection factory."""
-    global _site_relay_server
-    if _site_relay_server is not None:
+    worse, leave an orphaned thread serving a stale connection factory. The
+    guard covers the COORDINATOR as well as the listener, because on the
+    automatic path there is no bound listener yet to notice -- a second
+    `init_app()` would otherwise build a second election driver on the same
+    till, and two drivers can each stop the other's relay."""
+    global _site_relay_server, _site_relay_coordinator
+    if _site_relay_server is not None or _site_relay_coordinator is not None:
         return
 
     # Built here, before the enable decision, rather than down in the try
@@ -1269,32 +1341,251 @@ def _start_site_relay_if_enabled():
             # operator has since revoked.
             return OwnerTrustStore(_hub_licensing_dir / 'trust_store.json')
 
-        _site_relay_server = start_site_relay(
-            get_conn=get_retail_conn,
-            hub_identity_provider=_hub_identity_provider,
-            license_public_id_provider=_hub_license_public_id_provider,
-            trust_store_provider=_hub_trust_store_provider,
-            host=SITE_RELAY_BIND_HOST,
-            port=SITE_RELAY_PORT,
-            identity_dir=Path(DATABASE_DIR).parent / 'site-relay',
-            installation_id=_hub_installation_id,
-            device_public_key=_hub_device_public_key,
-            signer=_hub_signer,
+        # -- The three seams SiteRelayCoordinator cannot build for itself --
+        # coordinator.py's docstring is explicit that `start_relay`,
+        # `stop_relay` and `attempt_join` have NO production default inside
+        # that module, on purpose: each needs plumbing (`get_conn`, the
+        # licensing state repository, the device signer, a bind host/port, an
+        # identity directory) the coordinator has no way to obtain and must
+        # not guess at. Supplying them is THIS function's job. They are
+        # closures over the identity work immediately above rather than a
+        # second way to reach any of it: there is still exactly ONE
+        # `start_site_relay(...)` call in this product, and it is the one
+        # inside `_bind_relay_now`.
+
+        def _bind_relay_now():
+            """Bind the LAN listener. Serves as the coordinator's
+            `start_relay` seam AND as the whole body of the explicit-pin path
+            below -- one construction path, not two.
+
+            RE-CHECKS THE MODULE GLOBAL rather than trusting its caller.
+            `_site_relay_server` is what `admin_routes.py`'s hub provider
+            reads and what this function's own double-start guard tests, so it
+            must never hold anything but the ONE listener this process bound.
+            The coordinator has its own idempotence guard (`_relay_handle is
+            None`), but that protects the COORDINATOR's bookkeeping; this
+            global is what decides whether a second `init_app()` binds a
+            second socket. Returning the existing handle rather than raising
+            keeps the coordinator's HUB branch idempotent in the one case
+            where the two could ever disagree.
+            """
+            global _site_relay_server
+            if _site_relay_server is not None:
+                return _site_relay_server
+
+            handle = start_site_relay(
+                get_conn=get_retail_conn,
+                hub_identity_provider=_hub_identity_provider,
+                license_public_id_provider=_hub_license_public_id_provider,
+                trust_store_provider=_hub_trust_store_provider,
+                host=SITE_RELAY_BIND_HOST,
+                port=SITE_RELAY_PORT,
+                identity_dir=Path(DATABASE_DIR).parent / 'site-relay',
+                installation_id=_hub_installation_id,
+                device_public_key=_hub_device_public_key,
+                signer=_hub_signer,
+            )
+            _site_relay_server = handle
+            # The pin is what a paired device must trust, so an operator has to
+            # be able to read it back off the hub -- it is the payload of the
+            # pairing QR the design describes, and until that screen exists this
+            # log line is the only way to get it. It is not a secret (design §4:
+            # "The beacon carries no secrets"); it is a public key fingerprint.
+            logging.getLogger(__name__).info(
+                'Site relay (hub mode) is ON. Devices pair to: %s -- SPKI pin %s',
+                ', '.join(f'https://{a}:{SITE_RELAY_PORT}' for a in local_lan_addresses())
+                or f'https://<this machine>:{SITE_RELAY_PORT}',
+                handle.pin,
+            )
+            return handle
+
+        def _unbind_relay_now(handle):
+            """Stop being the hub. The coordinator's `stop_relay` seam, called
+            when this till hears a live peer holding a LOWER installation_id
+            and must stand down (election.py's rule 2).
+
+            CLEARS THE MODULE GLOBAL TOO, and that is the point of doing this
+            here rather than letting the coordinator merely forget its own
+            handle: `admin_routes.py`'s /api/site-relay/status answers off
+            `_site_relay_server`, so a till that stood down but left the global
+            populated would keep telling an operator it is the shop's hub while
+            no longer being one.
+
+            Stops the addressing BEACON first, then the listener. A till that
+            stopped serving but kept broadcasting would actively pull other
+            devices toward a hub that can no longer answer them -- strictly
+            worse than never having been a hub at all. The listener shutdown
+            sits in a `finally` so a beacon that refuses to stop can never
+            leave the socket bound: the socket is the part other devices
+            connect TO, and leaving it up is exactly how two answering hubs
+            happen.
+
+            Nothing already accepted is lost by standing down -- see
+            election.py's "WHY STANDING DOWN LOSES NOTHING": every event this
+            till took while it was hub is already in its own site log and is
+            forwarded upstream regardless of the role it holds now.
+
+            WHAT STANDING DOWN DOES *NOT* UNDO, written here rather than left
+            to be discovered, because both only bite on a till that flaps
+            between roles (a hub going in and out of wifi range) and neither is
+            visible on the first cycle:
+              * UNREDEEMED PAIRING CODES. `start_site_relay` builds a fresh
+                in-memory `PairingCodeStore` per call, so a code an operator
+                minted before the stand-down is gone if this till is later
+                re-elected. It shows up as "the QR I just made says invalid" --
+                minting another one is the whole fix, and codes are
+                single-use and short-lived by design anyway.
+              * THE HOURLY HOUSEKEEPING TIMER. `start_site_relay` starts one
+                and does not hand its stop Event back on the handle, so there
+                is nothing here to stop; a re-election starts a second. The
+                cost is duplicated pruning sweeps, not wrong data (the sweeps
+                are idempotent deletes), and fixing it properly means changing
+                listener.py's return shape -- deliberately not done from this
+                file, which owns the wiring and not that module.
+            The TLS identity is NOT in this list: it is created once and
+            reloaded on every subsequent call, so a re-elected hub keeps the
+            exact SPKI pin every already-paired device holds.
+            """
+            global _site_relay_server
+            try:
+                if getattr(handle, 'beacon', None) is not None:
+                    handle.beacon.stop()
+                    handle.beacon = None
+            finally:
+                handle.server.shutdown()
+                handle.server.server_close()
+                _site_relay_server = None
+            logging.getLogger(__name__).info(
+                'Site relay (hub mode) is OFF: this till stood down because '
+                'another till on this LAN holds the hub role. It keeps selling '
+                'exactly as before, and now syncs THROUGH that hub instead of '
+                'hosting it.')
+
+        def _attempt_join_now():
+            """The coordinator's `attempt_join` seam: one licence-proof
+            auto-join attempt against whatever hub this device can currently
+            hear. Safe to call on every CLIENT tick by `discover_and_join`'s
+            own design -- its ALREADY_JOINED short-circuit makes a repeat call
+            a pure no-op with no network traffic at all.
+
+            `trusted_now` is computed PER CALL and never captured at wiring
+            time: every real `verify_assertion` caller in this codebase threads
+            a fresh clock through for this reason, and a coordinator that has
+            been ticking for a week on a timestamp taken at boot would be
+            judging today's assertions against last Monday. Same for the trust
+            store, fetched through `_hub_trust_store_provider` on each call
+            (see its own comment -- trust_store.json can be rotated under a
+            running process).
+            """
+            from datetime import datetime as _datetime, timezone as _timezone
+
+            from commercial_runtime.sync.site_relay.autojoin import (
+                discover_and_join)
+
+            discover_and_join(
+                state_repository=_hub_state_repository,
+                signer=_hub_signer,
+                trust_store=_hub_trust_store_provider(),
+                trusted_now=_datetime.now(_timezone.utc),
+            )
+
+        # -- EXPLICIT OPERATOR PIN ('1'): bind now, hold NO election ---------
+        # AURA_SITE_RELAY_ENABLED=1 is a human saying "THIS machine is the
+        # hub" -- config.py documents it as exactly that, and it is also the
+        # only way an unlicensed dev/test box can exercise hub mode at all.
+        # Running an election on top of it would let a peer holding a
+        # lexicographically lower installation_id take the role away from the
+        # machine an operator deliberately pinned, which is the opposite of
+        # what they asked for, and it would break the synchronous contract
+        # retail_site_relay_boots_when_enabled_test.py pins: with '1' set, a
+        # relay is bound by the time `init_app()` returns.
+        #
+        # THIS BRANCH IS ALSO WHAT KEEPS AUTOMATIC ELECTION WINDOWS-ONLY
+        # WITHOUT A SECOND PLATFORM CHECK ANYWHERE IN THIS FILE. The only path
+        # that reaches the coordinator is the non-'1' path, and
+        # `site_relay_should_start` has already refused that path on every
+        # platform but Windows (its "A HANDSET NEVER SELF-ELECTS" block, added
+        # after a real phone elected itself on real hardware). So a handset
+        # cannot reach the election code at all, and an Android dev box that
+        # sets '1' explicitly still gets the same direct bind it always got.
+        if SITE_RELAY_ENABLE_OVERRIDE == '1':
+            _bind_relay_now()
+            return
+
+        # -- AUTOMATIC MODE: the ELECTION decides which till is the hub ------
+        # THE BUG THIS REPLACES, stated plainly because the code below reads
+        # like an optimisation otherwise: when hub mode became automatic
+        # (2026-09-14) every activated Windows till started a relay and
+        # broadcast a beacon at boot with NOTHING deciding between them, so a
+        # two-till shop ran two hubs and its devices split across them, each
+        # half seeing a different local ordering of the same day's sales.
+        # `SiteRelayCoordinator` is the thing that decides -- and until this
+        # wiring, NOTHING CONSTRUCTED IT. It shipped inert behind nine green
+        # unit tests, with not one tick ever running on a real till. That is
+        # the same failure, and the same shape of fix, as Android's
+        # `HubAutoJoinWiringContractTest` docstring records for
+        # `HubAutoJoinService` (447 green tests, zero log lines on hardware).
+        #
+        # NOTE WHAT IS NO LONGER STARTED HERE: on this path `init_app()` binds
+        # NOTHING. Nothing binds until the coordinator's first tick decides
+        # HUB, which cannot happen before election.py's HUB_LISTEN_SECONDS
+        # window has elapsed with no other hub heard. That delay IS the
+        # feature -- "listen before claiming" is the main defence against
+        # every till in a shop claiming the role in the same instant after one
+        # shared power cut.
+        if not _hub_installation_id:
+            # The election is a TOTAL ORDER over installation_ids; a device
+            # with no id cannot take part in one. Handing None to
+            # `should_stand_down` raises on the first peer comparison
+            # (TypeError: '<' not supported between 'str' and 'NoneType'),
+            # which `tick()` would dutifully swallow and log every five
+            # seconds forever -- an election that decides nothing, wearing the
+            # face of one that is running.
+            #
+            # FAILS CLOSED (no id -> no hub this run) rather than binding
+            # anyway, because an unidentifiable hub is precisely the two-hub
+            # state this path exists to prevent. This should be unreachable on
+            # a real till: automatic mode already required an ACTIVE_FAMILY
+            # licence above, and activation is what writes
+            # owner_installation_id. Logged at ERROR because if it IS reached,
+            # the shop silently has no hub and this line is the only evidence.
+            logging.getLogger(__name__).error(
+                'Site relay: this install reports an active licence but no '
+                'owner installation id, so it cannot take part in the hub '
+                'election and will NOT become a hub this run. Devices on this '
+                'LAN will not converge through this till. The till itself is '
+                'unaffected and keeps selling.')
+            return
+
+        from commercial_runtime.sync.site_relay.coordinator import (
+            SiteRelayCoordinator)
+        from commercial_runtime.sync.site_relay.election import HUB_LISTEN_SECONDS
+
+        _site_relay_coordinator = SiteRelayCoordinator(
+            my_installation_id=_hub_installation_id,
+            start_relay=_bind_relay_now,
+            stop_relay=_unbind_relay_now,
+            attempt_join=_attempt_join_now,
+            # The REAL LAN listener -- coordinator.py's own
+            # `_default_observe_beacons`, paced by `_observe_lan_beacons_paced`
+            # at the top of this module so a failing UDP bind cannot turn the
+            # tick loop into a hot spin. `monotonic` is deliberately left at
+            # its default of `time.monotonic`: every window this election
+            # measures is monotonic seconds, never wall-clock, so an NTP step
+            # or a DST change can never make a live hub look silent or an
+            # unelapsed listen window look elapsed.
+            observe_beacons=_observe_lan_beacons_paced,
         )
-        pin = _site_relay_server.pin
-        # The pin is what a paired device must trust, so an operator has to be
-        # able to read it back off the hub -- it is the payload of the pairing
-        # QR the design describes, and until that screen exists this log line
-        # is the only way to get it. It is not a secret (design §4: "The
-        # beacon carries no secrets"); it is a public key fingerprint.
+        _site_relay_coordinator.start()
         logging.getLogger(__name__).info(
-            'Site relay (hub mode) is ON. Devices pair to: %s -- SPKI pin %s',
-            ', '.join(f'https://{a}:{SITE_RELAY_PORT}' for a in local_lan_addresses())
-            or f'https://<this machine>:{SITE_RELAY_PORT}',
-            pin,
-        )
+            'Site relay: automatic hub election is RUNNING (installation %s). '
+            'This till listens for %.0fs before claiming the hub role, and '
+            'stands down immediately if it hears a till that already holds it. '
+            'No LAN socket is bound until it wins.',
+            _hub_installation_id, HUB_LISTEN_SECONDS)
     except Exception:
         _site_relay_server = None
+        _site_relay_coordinator = None
         logging.getLogger(__name__).exception(
             'Site relay (hub mode) FAILED to start on %s:%s -- this till is NOT '
             'acting as a hub, so any device paired to it will stop converging '
