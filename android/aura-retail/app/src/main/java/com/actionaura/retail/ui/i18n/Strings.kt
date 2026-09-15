@@ -135,7 +135,6 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Good morning" to "صباح الخير",
     "Good afternoon" to "نهارك سعيد",
     "Good evening" to "مساء الخير",
-    "Your store at a glance" to "متجرك في لمحة",
     "Quick actions" to "إجراءات سريعة",
     "New Sale" to "بيع جديد",
     "Share Receipt" to "مشاركة الإيصال",

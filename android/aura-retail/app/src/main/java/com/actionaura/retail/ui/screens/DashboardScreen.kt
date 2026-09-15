@@ -87,14 +87,36 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)) {
 
-        // Greeting header
-        Column {
-            Text(tr(greeting), style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(tr("Your store at a glance"),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.ExtraBold)
-        }
+        // Greeting header. ONE line, not two.
+        //
+        // This used to be the greeting in bodyLarge with "Your store at a
+        // glance" under it in headlineMedium/ExtraBold -- the second-loudest
+        // text on the whole screen, in the most valuable strip of the
+        // most-opened screen in the product, spent on zero information. It
+        // never changed, for anyone, and it ANNOUNCED what the screen does
+        // instead of doing it: the screen already delivers that promise two
+        // inches below, where SectionHeader("Today") is followed immediately
+        // by the real figures. That is a hierarchy problem, not a wording
+        // problem, so no replacement phrase would have fixed it.
+        //
+        // Deleting it alone would have left the greeting floating at
+        // bodyLarge with nothing anchoring the top of the screen, so the
+        // greeting takes over the weight the tagline had. Same visual
+        // anchor, one line instead of two, and the content starts higher.
+        //
+        // Nothing live goes here on purpose. Every candidate that carried a
+        // figure (today's takings, low stock) either repeats a tile rendered
+        // one screen-height below, or needs this block moved inside the
+        // metrics loading boundary AND its own cashier-safe fallback --
+        // cashiers get a deliberate 403 from /dashboard/stats. Promoting the
+        // low-stock signal here is the one genuinely worthwhile version of
+        // that (it is what the DESKTOP client already settled on, and the
+        // only thing on this screen an owner can act on), but it is a small
+        // feature rather than a copy change, so it is deliberately not
+        // smuggled in here.
+        Text(tr(greeting),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.ExtraBold)
 
         // Quick actions
         SectionHeader(tr("Quick actions"))
