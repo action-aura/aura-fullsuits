@@ -3338,3 +3338,74 @@ STILL OPEN after this entry:
   - The manual paste/QR pairing UI is still the visible path on both clients.
   - No rate limiting on `/pair` or `/join`.
   - Owner-side roster signing endpoint: the suspension gate stays inert without it.
+
+
+## 2026-09-15 - zero-configuration LAN sync WORKS ON HARDWARE, and the four bugs no test could see
+
+The owner's ruling is delivered. A phone on the shop wifi found a desktop hub
+and joined it with nothing typed -- no IP, no port, no QR, no pairing code:
+
+    01:36:03 I HubAutoJoin: Joined the shop hub at https://192.168.1.212:5443.
+    01:37:03 I HubAutoJoin: Already paired to a hub; nothing to do.
+
+    hub_base_url          https://192.168.1.212:5443
+    hub_spki_pin          wU8MfSSdz8aGPaboYYX1vGtm4G5e3ZpHyt3ot5C8KOk=
+    hub_installation_id   063649a9-081c-4d6e-9d03-022bdbbbfdb4
+    hub_device_public_key FBjb/wN2OfbXovoPxYgPt9DbI5gXQ/scfcLixXaz0jg=
+
+The licence is the only membership boundary, exactly as ruled.
+
+WHAT GOT IT THERE, and every one of these was invisible to a green suite of
+447 Android tests:
+
+  1. NOTHING CALLED `HubAutoJoinService.start()`. The entire feature --
+     discovery, pinned transport, the 60s tick -- was dead code on the device.
+     Found by grep, not by logs. Guarded now by a source-reading contract test,
+     the only test shape that can see a MISSING call.
+  2. `isActivated()` asked `/api/licensing/status`, which returns
+     NOT_CONFIGURED whenever no Owner URL is configured, BEFORE it opens the
+     licence database. A phone holding a genuine ACTIVE_OFFLINE assertion read
+     as unactivated forever. THE GENERAL LESSON: never ask a cloud-gated route
+     a purely local question. An offline-first feature must not depend on cloud
+     configuration it does not need.
+  3. ANDROID CANNOT RECEIVE UDP BROADCAST WITHOUT A `WifiManager.MulticastLock`.
+     The wifi stack filters packets not explicitly addressed to the device. The
+     socket was correct, the network was correct, the hub was broadcasting every
+     5s (a desktop listener heard it in 4.4s) -- and the phone heard nothing on
+     every tick. Needs `CHANGE_WIFI_MULTICAST_STATE`.
+  4. The installation id came from that same `/status` route, whose
+     NOT_CONFIGURED body has no `installation_id` at all, so the phone posted a
+     BLANK one. Proven by replaying the identical join from another machine and
+     changing only that field: phone got JOIN_REJECTED_400, replay got
+     `HTTP 200 {"joined":true}`. It now comes from the assertion payload -- the
+     only source that cannot disagree with the rest of the request, since the
+     hub feeds it into `verify_assertion` as `expected_installation_id`.
+
+AND THE META-LESSON, which cost more than any individual bug: every early
+return was silent and the discovery result was discarded, so "never started",
+"ran and looked unactivated", and "ran and heard nothing" all produced an
+identical empty log. Two rebuild-and-observe cycles went into telling them
+apart. I also asserted at one point that "zero log lines is the shape of never
+started" -- that was wrong, a silent declining tick looks the same. Each
+outcome now says what it decided, deduped so a permanent steady state is
+recorded once rather than once a minute forever.
+
+ALSO LANDED IN THIS WAVE:
+  * Hub mode is automatic when licensed (tri-state override; `=0` kill switch).
+  * A HANDSET NEVER SELF-ELECTS AS HUB. Automatic election is Windows-only.
+    Caught on hardware minutes after the default flipped: the phone read its own
+    ACTIVE_OFFLINE licence and started a relay, so the shop had two hubs
+    broadcasting the same licence. Design doc sec3 settles it -- "the hub is the
+    device the restaurant cannot run without anyway... the main till with the
+    cash drawer" -- and a handset inverts every clause of that.
+  * `SiteRelayCoordinator` drives `election.py`, which had been pure, tested,
+    and called by nothing.
+  * `/_internal/license-identity` so Android can read its own licence at all.
+
+STILL OPEN:
+  - Nothing constructs a `SiteRelayCoordinator` yet; app.py is the caller.
+  - Owner-side roster signing endpoint: the suspension gate stays inert.
+  - Beacon reception is intermittent on wifi (some sweeps hear nothing); the
+    60s retry covers it, but a shorter listen window may be worth measuring.
+  - The hub process was OOM-killed on this machine during the session. Worth
+    knowing that a till doubling as a hub competes for memory with a build.
