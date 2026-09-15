@@ -3409,3 +3409,50 @@ STILL OPEN:
     60s retry covers it, but a shorter listen window may be worth measuring.
   - The hub process was OOM-killed on this machine during the session. Worth
     knowing that a till doubling as a hub competes for memory with a build.
+
+
+## 2026-09-15 - schema versions v32-v35 RESERVED for the Aseel-parity wave (A-PAR)
+
+Claimed IN WRITING BEFORE dispatching parallel design work, per the standing
+rule this repo learned the hard way: a schema version integer is a
+single-writer resource with one authoritative next value, and two branches
+once claimed the same one with nothing objecting, because the migration gated
+on live shape rather than on the number.
+
+Current head is `RETAIL_SCHEMA_VERSION = 31` (schema.py:841).
+
+    v32   cheque lifecycle as a tracked instrument
+          States (issued/deposited/cleared/returned/endorsed), due dates, bank
+          fields, party linkage. The LIFECYCLE only -- no journal posting,
+          which is a v-later concern that needs a general ledger underneath.
+          Post-dated cheques are a primary B2B instrument in Jordan and today
+          "Cheque" is a free-text payment-method label with nothing behind it.
+
+    v33   quotations and sales orders as real documents
+          `held_sales` is a JSON cart snapshot with no approval step, no
+          expiry and no conversion tracking -- it is NOT a quotation, and
+          calling it one is how this gap stayed invisible. Needs a real
+          document, a conversion pipeline to sale/invoice, and status.
+
+    v34   per-document-type numbering series
+          The equivalent of Aseel's تعدد الدفاتر (multi-ledger), which is
+          really a numbering-series feature. MUST NOT disturb e-invoicing's
+          own dedicated sequence -- see docs/einvoicing/phase1/invoice-
+          numbering-audit.md, which exists precisely because that number is
+          never allowed to share a counter with a local document number.
+
+    v35   RESERVED, source-document back-references for drill-through
+          Only if the design says it needs schema; Aseel's drill-through
+          (jump from any money row to the invoice/cheque that produced it) is
+          one of the two genuinely good ideas worth taking from them. If the
+          design concludes existing columns suffice, v35 returns to the pool
+          and that is recorded here rather than left ambiguous.
+
+NOT RESERVED, deliberately: anything for a double-entry general ledger. That
+is a 4-7 month build whose real cost is retrofitting posting into every money
+path AND deciding how posting behaves under an outbox that replays events
+across devices -- a problem Aseel never had to solve (الشبكة appears twice in
+its entire 1.2MB manual; it is a single-machine product). Reserving versions
+for it now would imply a decision that has not been made.
+
+Keyboard ergonomics and the persistent shortcut legend need no schema at all.
