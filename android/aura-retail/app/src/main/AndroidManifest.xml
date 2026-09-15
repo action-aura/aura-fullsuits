@@ -6,6 +6,25 @@
 
     <!-- Phone-camera barcode scanning in Aura POS (optional; requested at runtime). -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+      Needed to HEAR the shop hub's addressing beacon on the LAN.
+
+      Android's wifi stack filters out packets that are not explicitly
+      addressed to this device, broadcast included, so a plain
+      DatagramSocket bound to the beacon port receives NOTHING no matter how
+      correctly it is written. Measured, not assumed: with the hub confirmed
+      broadcasting every 5s (a desktop listener on the same wifi heard it
+      immediately), the phone's own listener reported "No hub beacon heard
+      on this sweep" on every single tick.
+
+      A normal (non-dangerous) permission, granted at install and never
+      prompted for, and it does nothing on its own: it only makes
+      WifiManager.createMulticastLock() usable, which HubTransport acquires
+      solely for the few seconds of each beacon listen and always releases
+      (see its own comment on the battery cost).
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <application

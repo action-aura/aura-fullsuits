@@ -1,5 +1,8 @@
 package com.actionaura.retail.sync
 
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -33,7 +36,60 @@ import java.util.concurrent.TimeUnit
  * `SpkiPinnedAdapter` -- the identical reasoning applied a third time, never
  * restated differently.
  */
-class HubTransport : Transport {
+class HubTransport(private val appContext: Context? = null) : Transport {
+
+    /**
+     * WITHOUT THIS LOCK THE PHONE HEARS NOTHING, however correct the socket
+     * below is. Android's wifi stack filters out packets that are not
+     * explicitly addressed to this device -- broadcast included -- so the
+     * hub's beacon never reaches the app at all.
+     *
+     * Measured on real hardware rather than inferred: with the hub
+     * confirmed broadcasting to 255.255.255.255 every 5 seconds (a desktop
+     * listener on the same wifi heard it within 4s and printed the hub's
+     * url and pin), the phone logged "No hub beacon heard on this sweep" on
+     * every tick. Same network, same port, same datagram.
+     *
+     * Held for the FEW SECONDS OF ONE LISTEN and always released, never for
+     * the life of the process: the lock disables a wifi power-saving
+     * filter, and Android's own documentation calls out the battery cost of
+     * leaving it held. `setReferenceCounted(false)` so a release always
+     * really releases, even if a future caller acquires twice.
+     *
+     * `appContext` is nullable ONLY so tests and any caller without a
+     * Context can still construct this class; a null context means no lock,
+     * which degrades to exactly the pre-fix behaviour rather than crashing.
+     * Every real caller passes one.
+     */
+    private fun acquireBeaconLock(): WifiManager.MulticastLock? {
+        val ctx = appContext ?: return null
+        return try {
+            val wifi = ctx.applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+            wifi.createMulticastLock("aura-hub-beacon").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (exc: Exception) {
+            // Never fatal: a device that refuses the lock still tries the
+            // listen (it may work on that hardware), and a failed discovery
+            // sweep is routine -- the same posture as every other failure
+            // on this path.
+            Log.i(TAG, "Could not acquire the wifi multicast lock; listening anyway.")
+            null
+        }
+    }
+
+    private fun releaseBeaconLock(lock: WifiManager.MulticastLock?) {
+        try {
+            if (lock != null && lock.isHeld) lock.release()
+        } catch (exc: Exception) {
+            // Releasing a lock the system already tore down must never turn
+            // a successful discovery into a failure.
+        }
+    }
+
+
 
     /**
      * A real `DatagramSocket` bound to [BEACON_PORT], `SO_REUSEADDR` set
@@ -56,6 +112,10 @@ class HubTransport : Transport {
      * both give.
      */
     override fun listenForBeacon(timeoutMillis: Long): String? {
+        // Acquired BEFORE the socket is bound and released in the same
+        // finally -- see acquireBeaconLock for why the listen is dead
+        // without it.
+        val multicastLock = acquireBeaconLock()
         val socket = DatagramSocket(null)
         return try {
             socket.reuseAddress = true
@@ -78,6 +138,7 @@ class HubTransport : Transport {
             null
         } finally {
             socket.close()
+            releaseBeaconLock(multicastLock)
         }
     }
 
@@ -154,6 +215,10 @@ class HubTransport : Transport {
     }
 
     private companion object {
+        // Same tag HubAutoJoinService logs under, deliberately: this class is
+        // that loop's transport, and splitting one flow across two logcat
+        // tags is how a diagnosis gets missed.
+        const val TAG = "HubAutoJoin"
         const val IDENTITY_PATH = "/api/sync/v1/identity"
         const val JOIN_PATH = "/api/sync/v1/join"
         const val CONNECT_TIMEOUT_SECONDS = 5L
