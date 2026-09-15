@@ -5069,6 +5069,34 @@ const RetailSystem = {
         // Reset the cart/button FIRST so the till is ready for the next sale even
         // if the receipt modal hiccups — then show the receipt.
         this._clearCart();
+        // ...AND CLOSE THE CART SHEET. Resetting the cart's CONTENTS without
+        // resetting the cart sheet's LAYOUT STATE is what made a completed
+        // sale strand the till, and it was reported from the shop floor as
+        // "after making a sale the dashboard button doesn't click".
+        //
+        // On a narrow (<=640px) till the peek-bar "Charge" pill opens the
+        // cart as a fixed sheet at z-index 5002; the bottom tab bar that
+        // carries Dashboard/Stock/Customers sits at z-index 500. The ONLY
+        // thing that ever closed the sheet was the tap-outside handler, and
+        // it fires solely when the tap lands on the scrim itself -- so after
+        // checkout the (now empty) sheet stayed open, covering the tab bar
+        // completely. Every tap on Dashboard hit `.pos-summary` instead.
+        // Measured in a real browser at 390x844: `elementFromPoint` at the
+        // Dashboard tab's centre returned DIV.pos-summary, and a genuine
+        // unforced click failed with "<div class="pos-summary"> intercepts
+        // pointer events". Nothing in that state ever re-closed the sheet,
+        // so the till stayed stuck until the page was reloaded.
+        //
+        // Raising the tab bar's z-index instead would have been the wrong
+        // fix: the leftover EMPTY sheet and its scrim would still be sitting
+        // over the screen, just losing the fight. The sheet is state the
+        // sale opened, so the sale has to close it.
+        //
+        // Costs nothing above 640px -- `_toggleCartSheet` documents itself
+        // as inert there, and is already try/caught on the same reasoning
+        // ("a cosmetic sheet that fails to close is a UX bug, not a lost
+        // sale"), so it can never turn a completed sale into an error.
+        this._toggleCartSheet(false);
         // AUDIT [launch-readiness "the POS scale fix"]: this used to call
         // _loadPOSData() here, re-fetching the ENTIRE product catalogue
         // after every single sale -- at 50,000 SKUs that's ~25MB re-sent
