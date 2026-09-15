@@ -8900,7 +8900,32 @@ const RetailSystem = {
     const saleNum = document.getElementById('ret-sale-search')?.value.trim();
     if (!saleNum) { SubsystemApp.showToast(t('Enter a receipt number'),'error'); return; }
     try {
-      const recent = (await this._get('/api/sub/retail/sales/recent?limit=200')).data || [];
+      // SERVER-SIDE lookup, not a client-side scan of the last page.
+      //
+      // This used to fetch `?limit=200` and `.find()` over the result in JS,
+      // which meant a receipt older than the shop's last 200 sales could not
+      // be found AT ALL -- so a refund against it was impossible, and the
+      // cashier was told "Sale not found" about a sale that plainly exists.
+      // On a busy till 200 sales is a few days.
+      //
+      // `q` already existed on recent_sales for exactly this caller. It is a
+      // company-scoped `s.sale_number LIKE ?` added to the WHERE clause
+      // BEFORE ORDER BY/LIMIT (see the `conditions` block in recent_sales,
+      // backend/api/retail_api.py), so the age of the receipt stops
+      // mattering. It is also deliberately left open at any capability, and
+      // that route's docstring names THIS function as the reason -- "a
+      // receipt number is a single-sale question" -- because retail.refund is
+      // a cashier default, so the lookup still works for the cashier who is
+      // actually taking the return.
+      //
+      // URLSearchParams, matching _loadSalesHistory's call to the same route.
+      const params = new URLSearchParams({ q: saleNum, limit: '200' });
+      const recent = (await this._get(`/api/sub/retail/sales/recent?${params}`)).data || [];
+      // The EXACT match stays on the client, and must. `q` is a LIKE '%..%'
+      // over sale_number OR customer name, so it can legitimately return
+      // neighbours -- a longer receipt number that contains this one, or a
+      // customer whose name does -- and those come back newest-first. Taking
+      // `recent[0]` would refund against the wrong sale.
       const sale   = recent.find(s => s.sale_number.toLowerCase()===saleNum.toLowerCase());
       if (!sale) { SubsystemApp.showToast(t('Sale not found'),'error'); return; }
       const full = (await this._get(`/api/sub/retail/sales/${sale.id}`)).data || {};
@@ -8970,7 +8995,9 @@ const RetailSystem = {
   // GET /sales/recent is the one route a reports screen reads that is NOT
   // decorated @mt_require_capability(CAP_REPORTS), and deliberately so: the
   // returns counter resolves a receipt number through it before every refund
-  // (_findSaleForReturn, `?limit=200`), and retail.refund is a CASHIER DEFAULT.
+  // (_findSaleForReturn, now `?q=<receipt>` -- it used to be a bare
+  // `?limit=200` scanned in JS, which could not reach an old receipt at
+  // all), and retail.refund is a CASHIER DEFAULT.
   // Gating the route would refuse a cashier a lookup the product grants them.
   //
   // So recent_sales splits instead (read its docstring, it is the contract):
