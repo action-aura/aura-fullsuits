@@ -1579,12 +1579,36 @@ def _start_site_relay_if_enabled():
             observe_beacons=_observe_lan_beacons_paced,
         )
         _site_relay_coordinator.start()
+        # AUDIT (retail-hardware-viewports, 2026-09-16): this line used to
+        # interpolate `_hub_installation_id` into the message text, which
+        # leaked it into backend.log -- and from there straight into the
+        # diagnostics-export bundle's `log_tail`
+        # (retail_api.py::_diagnostics_log_tail), because that route's
+        # redaction passes cannot catch it: `_redact_diagnostics_log_line`'s
+        # regexes only recognise shapes with a fixed format (email/phone/
+        # licence-key), and an installation id has none -- it is an opaque
+        # value from the licensing system, same problem a customer NAME has.
+        # The name problem is solved by `_redact_known_pii_from_line`
+        # exact-matching against a live, per-company "known values" table
+        # (`customers`); an installation id has no equivalent authoritative
+        # list to match against at export time -- it is a single global
+        # value, and a stale one from before a licence re-issue
+        # (`rehearsal_reissue.py --keep-device` proved ids DO change) would
+        # still leak even if today's current id were added to such a set.
+        # Fixing it downstream would mean inventing a second, parallel
+        # "known sensitive values" source in the diagnostics module just for
+        # this one identifier, AND doing that for every other place that
+        # ever logs an installation id (e.g. admin_routes.py's "device %s
+        # revoked" line) -- fragile, and easy to miss for the next one.
+        # ROOT CAUSE FIX: never put the raw id into a free-text log line in
+        # the first place. Nothing downstream needs to guess a shape or
+        # maintain a value list for a leak that never happens.
         logging.getLogger(__name__).info(
-            'Site relay: automatic hub election is RUNNING (installation %s). '
+            'Site relay: automatic hub election is RUNNING. '
             'This till listens for %.0fs before claiming the hub role, and '
             'stands down immediately if it hears a till that already holds it. '
             'No LAN socket is bound until it wins.',
-            _hub_installation_id, HUB_LISTEN_SECONDS)
+            HUB_LISTEN_SECONDS)
     except Exception:
         _site_relay_server = None
         _site_relay_coordinator = None

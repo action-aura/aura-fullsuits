@@ -206,7 +206,24 @@ def make_site_relay_admin_blueprint(*, hub_provider,
         finally:
             conn.close()
 
-        _log.info("Site relay: device %s revoked locally by an admin.", installation_id)
+        # AUDIT (retail-hardware-viewports, 2026-09-16): this used to
+        # interpolate the revoked device's raw `installation_id` into the
+        # message, which lands in backend.log and from there in the
+        # diagnostics-export bundle's log_tail. Same leak class, and same
+        # root-cause fix, as the hub-election line in
+        # products/retail/backend/app.py -- and un-redactable downstream for
+        # the same reason: an installation id has no fixed shape for
+        # `_redact_diagnostics_log_line`'s regexes to recognise, and no
+        # per-company table of known values for `_redact_known_pii_from_line`
+        # to exact-match against the way it does for customer names.
+        #
+        # NOTHING IS LOST BY DROPPING IT. Which device was revoked is already
+        # recorded durably and queryably by `store.revoke_device`, which
+        # stamps `revoked_at` on that device's own `site_paired_devices` row.
+        # This line only ever restated in free text what the table already
+        # holds; the audit belongs there, where it is company-scoped, rather
+        # than in a log tail the shop can export and forward.
+        _log.info("Site relay: a paired device was revoked locally by an admin.")
         return jsonify({'success': True, 'installation_id': installation_id, 'revoked': True})
 
     return bp
