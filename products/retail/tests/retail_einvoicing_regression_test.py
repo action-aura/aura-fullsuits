@@ -37,7 +37,26 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_retail_einvoice_regression_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
-os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
+# AURA_SITE_RELAY_ENABLED="0" is the documented kill switch
+# (config.py::site_relay_should_start, tri-state override; "0" wins over
+# everything). It is set here because of an interaction that is not obvious:
+# this file seeds an ACTIVE licence on platform="WINDOWS" a few lines below,
+# since e-invoicing needs one -- and "licensed AND Windows" is EXACTLY the
+# condition that makes a till elect itself the LAN site-relay hub. So
+# init_app() was starting four real background threads (aura-site-relay,
+# -coordinator, -housekeeping, -beacon) and binding a TLS listener, inside a
+# regression test that is about e-invoicing worker threads and nothing else.
+#
+# That is what broke
+# test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot,
+# whose own assertion message says in writing: "do not widen
+# BASELINE_THREAD_NAMES". Widening it would have been the wrong fix twice
+# over -- it would blind that check to any OTHER unexpected thread (the only
+# thing it exists to catch), and it would leave a regression test opening a
+# network listener on the machine running it. Turning the relay off keeps the
+# baseline strict AND stops the test binding a port.
+os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA),
+                  AURA_SITE_RELAY_ENABLED="0")
 os.environ.pop("AURA_DEV", None)
 
 from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
@@ -105,9 +124,19 @@ SALE_RESPONSE_KEYS = [
     'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
+# The return-settlement split (fix(money) 78469b70) added FOUR keys on
+# purpose. This file's docstring allows updating a frozen literal when "the
+# underlying product behavior change was itself deliberate and reviewed" --
+# it was: create_return now reports how a refund was actually settled, split
+# across tender / AR forgiveness / store credit, because reporting only a
+# single `refund_amount` is what let a refund be counted as drawer cash AND
+# as debt forgiveness at the same time. `refund_amount` itself is UNCHANGED
+# in both name and meaning (the tax-inclusive value of the goods returned).
+# The set stays exact, so an ACCIDENTAL new key still fails this test.
 RETURN_RESPONSE_KEYS = [
-    'calculation_version', 'id', 'idempotency_key', 'items', 'refund_amount',
-    'return_number',
+    'ar_forgiven_amount', 'calculation_version', 'id', 'idempotency_key',
+    'items', 'refund_amount', 'refund_method', 'return_number',
+    'store_credit_amount', 'tender_refund_amount',
 ]
 DASHBOARD_DATA_KEYS = [
     'hourly_data', 'hourly_labels', 'low_stock_alerts', 'month_returns',
@@ -193,6 +222,18 @@ RETURNS_TABLE_COLUMNS = [
     # schema v13, same four columns and same ordering reasoning as
     # SALES_TABLE_COLUMNS above.
     'uid', 'actor_user_uid', 'terminal_id', 'created_at_utc',
+    # Return-settlement split (fix(money) 78469b70): how the refund was
+    # actually settled, so a refund is no longer counted as both drawer cash
+    # and debt forgiveness. Deliberate and reviewed, which is this file's own
+    # stated bar for touching a frozen literal.
+    #
+    # THESE SIT BEFORE `idempotency_key`, WHICH LOOKS WRONG AND IS NOT: they
+    # are added by the boot-time migration chain, whereas idempotency_key is
+    # a LAZY `_ensure_credit_schema` addcol that only runs on first use, so
+    # it lands last in PRAGMA table_info order no matter when it was
+    # introduced -- the same ordering note the session_id comment above
+    # already makes.
+    'tender_refund_amount', 'ar_forgiven_amount', 'store_credit_amount',
     'idempotency_key',
 ]
 BASELINE_THREAD_NAMES = {'MainThread'}
