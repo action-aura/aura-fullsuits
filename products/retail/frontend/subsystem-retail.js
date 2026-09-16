@@ -9627,6 +9627,7 @@ const RetailSystem = {
     overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
     this._returnItems = [];
     this._returnSaleId = null;
+    this._returnSaleOriginalMethod = null;
     document.getElementById('ret-sale-search')?.focus();
     document.getElementById('ret-sale-search')?.addEventListener('keydown', e => {
       if (e.key==='Enter') RetailSystem._findSaleForReturn();
@@ -9667,6 +9668,37 @@ const RetailSystem = {
       if (!sale) { SubsystemApp.showToast(t('Sale not found'),'error'); return; }
       const full = (await this._get(`/api/sub/retail/sales/${sale.id}`)).data || {};
       this._returnSaleId = sale.id;
+      // DEFECT 1 fix: pre-select the ORIGINAL sale's own payment method
+      // instead of leaving 'cash' picked by nothing more than being first
+      // in the <option> list. 'credit' -> 'cash' coercion mirrors
+      // create_sale's own `_record_payment(... method=(pm if pm != 'credit'
+      // else 'cash') ...)`: `sales.payment_method` stores the raw label
+      // 'credit', but any real cash deposit taken on a "credit" sale is
+      // recorded in `payments` with method='cash' -- the label describes
+      // the AR arrangement, not the tender channel. The server enforces the
+      // real refund cap regardless of what this select sends (see
+      // create_return's own default/coercion), so this is a UX fix, not
+      // the money-safety boundary -- but a careless click must no longer
+      // reproduce the bug that server-side default now closes.
+      let originalMethod = full.payment_method || 'cash';
+      if (originalMethod === 'credit') originalMethod = 'cash';
+      this._returnSaleOriginalMethod = originalMethod;
+      // `methodSel.options` guard: a stub DOM (this screen's own test
+      // harness, retail_return_lookup_server_search_test.js, uses a plain
+      // element stub with no `<select>` behaviour) has no `.options`
+      // collection at all -- skip the pre-fill rather than throw, exactly
+      // like every other `?.`-guarded DOM read in this function.
+      const methodSel = document.getElementById('ret-refund-method');
+      if (methodSel && methodSel.options) {
+        const hasOption = Array.prototype.some.call(methodSel.options, o => o.value === originalMethod);
+        if (!hasOption && typeof methodSel.add === 'function') {
+          // e.g. 'bank'/some other free-text method with no matching
+          // <option> -- add one so the select shows the TRUE original
+          // method instead of silently falling back to whatever is first.
+          methodSel.add(new Option(originalMethod, originalMethod));
+        }
+        methodSel.value = originalMethod;
+      }
       const items = full.items || [];
       const container = document.getElementById('ret-sale-items');
       if (!container) return;
@@ -9695,17 +9727,45 @@ const RetailSystem = {
       const price = +cb.dataset.price;
       return { product_id:cb.dataset.pid, quantity:qty, unit_price:price, line_total:qty*price };
     });
+    const chosenMethod = document.getElementById('ret-refund-method')?.value||'cash';
+    // DEFECT 1 fix: the select now pre-fills the TRUE original method (see
+    // _findSaleForReturn), so reaching here with something else means the
+    // operator deliberately changed it -- confirm rather than submit
+    // silently. The server still computes and caps the real amount either
+    // way (see create_return); this is a "are you sure" for an unusual
+    // action, not the money-safety boundary itself.
+    if (this._returnSaleOriginalMethod && chosenMethod !== this._returnSaleOriginalMethod) {
+      const proceed = confirm(
+        t(`This sale was paid by ${this._returnSaleOriginalMethod}. Refund via ${chosenMethod} instead?`)
+      );
+      if (!proceed) return;
+    }
     const btn = document.getElementById('ret-save-btn');
     if (btn) { btn.disabled=true; btn.textContent=t('Processing…'); }
     try {
       const d = await this._post('/api/sub/retail/returns', {
         sale_id: this._returnSaleId,
         reason: document.getElementById('ret-reason')?.value||'Customer return',
-        refund_method: document.getElementById('ret-refund-method')?.value||'cash',
+        refund_method: chosenMethod,
         items,
       });
       if (d.status==='success') {
-        SubsystemApp.showToast(`${t('Return processed')} — ${d.data.return_number} · ${t('Refund')}: ${this._fmt(d.data.refund_amount)}`,'success');
+        // DEFECT 1 fix: show the REAL payout (tender_refund_amount), not
+        // the full refund_amount -- the latter implies the whole value
+        // left the till even when part of it was AR forgiveness/store
+        // credit, which is exactly the confusion this whole fix closes.
+        // Fall back to refund_amount only if an older server response
+        // (pre-fix, or a receiving device mid-sync-upgrade) omits the new
+        // field, so this never renders 'undefined'.
+        const payout = d.data.tender_refund_amount != null ? d.data.tender_refund_amount : d.data.refund_amount;
+        let msg = `${t('Return processed')} — ${d.data.return_number} · ${t('Refund')}: ${this._fmt(payout)}`;
+        if (d.data.ar_forgiven_amount > 0.005) {
+          msg += ` (+${this._fmt(d.data.ar_forgiven_amount)} ${t('credit forgiven')})`;
+        }
+        if (d.data.store_credit_amount > 0.005) {
+          msg += ` (+${this._fmt(d.data.store_credit_amount)} ${t('store credit issued')})`;
+        }
+        SubsystemApp.showToast(msg,'success');
         document.getElementById('ret-return-modal')?.remove();
         this._loadReturns();
       } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent=t('Process Refund');} }

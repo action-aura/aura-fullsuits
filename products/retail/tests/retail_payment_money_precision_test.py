@@ -33,6 +33,12 @@ Converted in this pass (api/retail_api.py):
     would have looked fixed while still losing fils the moment a payment
     landed in `customers.credit_balance` / `suppliers.credit_balance`.
 
+DEFECT 2 (launch-readiness money-reconciliation pass): `_adjust_credit` had
+exactly TWO remaining un-converted callers -- create_sale's own balance_due
+credit and create_return's AR-forgiveness/store-credit calls -- named in an
+earlier revision of this file's own docstring (and `_adjust_credit`'s own)
+as "still out of scope for this pass". Section 8 below covers both.
+
 Every test below proves BOTH halves the file's own defect class requires:
   (a) DEFAULT install -- no explicit `base_currency` row. `_company_currency`
       answers 'JOD' from `tax_engine.DEFAULT_BASE_CURRENCY`, and this is the
@@ -460,7 +466,116 @@ def test_voiding_a_default_install_payment_reverses_its_exact_fils(client):
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 7. Sanity: the default-install currency really is JOD (3 decimals), not
+# 7. create_sale / create_return -- DEFECT 2's two remaining un-converted
+#    _adjust_credit callers (launch-readiness money-reconciliation pass).
+#    create_sale's balance_due credit and create_return's AR-forgiveness/
+#    store-credit calls were the ONLY two `_adjust_credit` call sites left
+#    omitting `currency` -- both now pass it. See _adjust_credit's own
+#    docstring and core/retail/returns_settlement.py's module docstring.
+# ═════════════════════════════════════════════════════════════════════════
+
+def _make_credit_customer(client):
+    """Direct DB write, matching retail_returns_wave0_test.py's own
+    `_make_credit_customer` pattern -- `POST /customers` leaves
+    `credit_mode` at its schema default ('none'), which create_sale's own
+    credit-sale gate refuses outright, so a credit-capable customer needs
+    the mode set directly."""
+    cust_id = _seed_customer(client)
+    conn = get_retail_conn()
+    conn.execute("UPDATE customers SET credit_mode='unlimited' WHERE id=?", (cust_id,))
+    conn.commit(); conn.close()
+    return cust_id
+
+
+def test_create_sale_credit_balance_default_install_keeps_fils(client):
+    """DEFECT 2 fix #1 (create_sale, ~line 6685): a credit sale's
+    balance_due must persist to `customers.credit_balance` at the shop's
+    real precision, not silently coarsened to 2dp the moment it reaches
+    `_adjust_credit`.
+
+    Mutation that must turn this red: drop `currency` from create_sale's
+    `_adjust_credit(conn, 'customers', customer_id, cid, balance_due,
+    currency)` call -- `credit_balance` would persist as 10.61, not 10.613.
+    """
+    cust = _make_credit_customer(client)
+    pid = _seed_product(client, sell_price=10.613, tax_rate=0, initial_stock=100)
+    r = client.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': cust, 'amount_paid': 0, 'payment_method': 'credit',
+        'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 200, r.get_json()
+    sale = r.get_json()['data']
+    assert sale['balance_due'] == 10.613
+    assert _party_balance('customers', cust) == 10.613, (
+        "a default-install (JOD) credit sale must persist fils on credit_balance, "
+        f"got {_party_balance('customers', cust)!r}")
+
+
+def test_create_sale_credit_balance_two_decimal_currency_still_gets_two(client):
+    """THE ALLOW-HALF: same input as the test above, this company's
+    base_currency is explicitly 'USD' -- credit_balance must round to 2dp
+    (10.61), NOT keep 10.613. Proves the fix is currency-DRIVEN."""
+    _set_currency(client.test_company_id, 'USD')
+    cust = _make_credit_customer(client)
+    pid = _seed_product(client, sell_price=10.613, tax_rate=0, initial_stock=100)
+    r = client.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': cust, 'amount_paid': 0, 'payment_method': 'credit',
+        'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 200, r.get_json()
+    assert _party_balance('customers', cust) == 10.61, (
+        "a USD credit sale must round credit_balance to cents, not keep fils, "
+        f"got {_party_balance('customers', cust)!r}")
+
+
+def test_return_ar_forgiven_keeps_fils_default_install(client):
+    """DEFECT 2 fix #2 (create_return's AR-forgiveness `_adjust_credit`
+    call): the residual `credit_balance` left after a PARTIAL return must
+    keep the shop's real precision. A full return landing exactly at 0.000
+    cannot distinguish 2dp from 3dp rounding (0.00 == 0.000) -- this test
+    deliberately leaves a genuine 3-decimal residue (10.613) so a
+    2dp-quantized reversal (10.61) is caught.
+
+    Mutation that must turn this red: drop `currency` from create_return's
+    `_adjust_credit(conn, 'customers', sale['customer_id'], cid,
+    -ar_forgiven, currency)` call -- the residual balance would persist as
+    10.61, not 10.613.
+    """
+    cust = _make_credit_customer(client)
+    pid = _seed_product(client, sell_price=10.613, tax_rate=0, initial_stock=100)
+    # Two units, fully on credit: total 21.226, balance_due 21.226.
+    r = client.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 2}],
+        'customer_id': cust, 'amount_paid': 0, 'payment_method': 'credit',
+        'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 200, r.get_json()
+    sale = r.get_json()['data']
+    assert sale['balance_due'] == 21.226
+    assert _party_balance('customers', cust) == 21.226
+
+    # Return only ONE of the two units -- refund = 10.613, leaving a
+    # genuinely 3-decimal residual balance of 21.226 - 10.613 = 10.613.
+    r2 = client.post(f'{API}/returns', json={
+        'sale_id': sale['id'],
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'reason': 'DEFECT 2 fils regression', 'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r2.status_code == 200, r2.get_json()
+    d = r2.get_json()['data']
+    assert d['ar_forgiven_amount'] == 10.613
+
+    assert _party_balance('customers', cust) == 10.613, (
+        "the residual credit_balance after a partial return must keep fils, "
+        f"got {_party_balance('customers', cust)!r} -- the AR-forgiveness reversal "
+        "was quantized at the wrong precision"
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 8. Sanity: the default-install currency really is JOD (3 decimals), not
 #    some other product default -- if this ever changes, every "keeps fils"
 #    assertion above needs re-deriving, and this is where that would show up
 #    first and cheaply, rather than as a wall of unrelated-looking failures.

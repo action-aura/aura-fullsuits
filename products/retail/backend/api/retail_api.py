@@ -132,6 +132,11 @@ from core.retail import cheques as cheque_engine
 # `REF_PREFIX` is aliased to `_REF_PREFIX` just below its own dict used to
 # live at, rather than copied -- see doc_series.py's own module docstring.
 from core.retail import doc_series
+# Money-reconciliation fix (DEFECT 1, launch-readiness): create_return's own
+# tender/AR/store-credit split -- see that module's own docstring for the
+# full reasoning. Pure module, no database access, same contract as every
+# other core.retail import on this list.
+from core.retail import returns_settlement
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -6682,7 +6687,13 @@ def create_sale():
                             method=(pm if pm != 'credit' else 'cash'),
                             related_type='sale', related_id=sale_id, doc_type='receipt')
         if is_credit and balance_due > 0.005 and customer_id:
-            _adjust_credit(conn, 'customers', customer_id, cid, balance_due)
+            # DEFECT 2 fix: `currency` (resolved once above, same variable
+            # create_return's identical call below now also passes) -- an
+            # omitted currency here quantized a JOD balance_due to 2dp
+            # (cents) instead of 3dp (fils), silently losing the fils on
+            # the very column credit-limit enforcement and the UI both
+            # read. See _adjust_credit's own docstring for the full history.
+            _adjust_credit(conn, 'customers', customer_id, cid, balance_due, currency)
 
         if quotation_id:
             # (f) Aseel-parity wave A-PAR (schema v33): after the sale row
@@ -7606,8 +7617,14 @@ def create_return():
         # to stamp onto the return's own sync_outbox payload below (see that
         # payload's `sale_uid` field); the local integer `id` this route uses
         # everywhere else means nothing on another device.
+        # `payment_method` added (review finding 1, DEFECT 1 fix): the new
+        # refund_method default a few hundred lines below reads
+        # `sale['payment_method']` -- omitting it here made sqlite3.Row
+        # raise on exactly the return this whole fix exists for (a return
+        # that omits refund_method, the task's own repro).
         sale = cur.execute(
-            "SELECT id, uid, branch_id, customer_id, total, amount_paid FROM sales WHERE id=? AND company_id=?",
+            "SELECT id, uid, branch_id, customer_id, total, amount_paid, payment_method "
+            "FROM sales WHERE id=? AND company_id=?",
             (sale_id, cid)
         ).fetchone()
         if not sale:
@@ -7807,6 +7824,128 @@ def create_return():
         # coarsened a JOD refund back to cents right after the per-line
         # `calc` above had computed it correctly to fils.
         refund = float(refund_total.quantize(tax_engine.currency_quantum(currency), rounding=ROUND_HALF_UP))
+
+        # ── THE MONEY-PATH FIX (DEFECT 1) -- tender/AR/store-credit split ───
+        # `refund` above is (correctly) the recomputed VALUE of the goods
+        # coming back -- metrics.py's revenue netting depends on that number
+        # never changing meaning. What this route used to get wrong is
+        # treating that SAME number as "cash that left the drawer": a return
+        # against a sale that was never fully paid (partial-cash, or fully
+        # credit) refunded the WHOLE value as cash-method by default AND
+        # separately (correctly) forgave the unpaid portion as AR, handing
+        # the unpaid part out twice. See core/retail/returns_settlement.py's
+        # module docstring for the full accounting reasoning.
+        #
+        # `tender_collected` reads the sale's own `payments` rows (net
+        # received), NOT `sales.amount_paid` -- `amount_paid` is the RAW
+        # tendered figure and includes money already handed back as change
+        # on an overpaid walk-in (tender 50 for a 42 total has amount_paid=50
+        # but only 42 ever stayed in the drawer). Using `amount_paid` here
+        # would let a "refund" hand the customer's own change back to them a
+        # second time as if it were shop money -- a narrower copy of DEFECT 1.
+        tender_collected = cur.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM payments "
+            "WHERE company_id=? AND sale_id=? AND direction='in' AND COALESCE(status,'active')='active'",
+            (cid, sale_id)
+        ).fetchone()[0]
+        # Prior partial returns against this SAME sale already claimed part
+        # of the tender pool and part of the AR forgiveness -- both must be
+        # subtracted so a second (or third) partial return can only draw
+        # what is actually left, in either bucket. `status='completed'` --
+        # this route never writes any other status, matching the guard
+        # every other query in this function already applies.
+        _prior = cur.execute(
+            "SELECT COALESCE(SUM(tender_refund_amount),0), COALESCE(SUM(ar_forgiven_amount),0) "
+            "FROM returns WHERE sale_id=? AND company_id=? AND status='completed'",
+            (sale_id, cid)
+        ).fetchone()
+        tender_available = float(tender_collected) - float(_prior[0])
+        # `original_balance_due` uses `sale['amount_paid']` -- the RAW
+        # tendered figure -- NOT `tender_collected`, even though the tender
+        # CAP two lines above deliberately uses the opposite. These answer
+        # two different questions: `tender_available` is "how much cash can
+        # physically be handed back", which must exclude change and a
+        # near-zero-value payment `_record_payment` itself never logged
+        # (its own `if net_received > 0.005` skip); `original_balance_due`
+        # is "how much of this sale did create_sale actually treat as AR",
+        # which is defined by create_sale's OWN gate (`balance_due > 0.005`
+        # computed off `amount_due_after_points - paid`, i.e. total minus
+        # RAW paid) -- and must match it exactly, epsilon and all, or the
+        # two functions disagree about whether a sale ever became a debt.
+        # A live regression this exact repo's own test caught: a 0.006 JOD
+        # sale with amount_paid=0.001 leaves balance_due=0.005, which is
+        # NOT > 0.005, so create_sale grants NO credit at all -- no
+        # payments row (net_received=0.001 is also not > 0.005) and no
+        # credit_balance entry. Computing this figure from `tender_
+        # collected` (0, since no payment row exists) instead of
+        # `amount_paid` gave `original_balance_due=0.006` here -- MORE than
+        # create_sale ever recorded -- and the leftover after the (zero)
+        # AR cap was paid out as phantom NEGATIVE store_credit on a return
+        # that should have been a complete no-op on credit_balance, exactly
+        # like the pre-fix code correctly left it (see
+        # retail_sale_money_precision_test.py's own
+        # test_create_return_original_balance_due_uses_currency_precision_
+        # not_hardcoded_2dp, which pins this same `total - amount_paid`
+        # formula and predates this whole fix). `amount_paid` and the net
+        # tender actually received are PROVABLY EQUAL whenever balance_due
+        # is non-negative (`net_received = min(paid, amount_due_after_
+        # points)`, which only clamps below `paid` when `paid` overshoots
+        # -- i.e. exactly the overpaid-change case where balance_due is
+        # negative and this whole calculation is moot), so this is not a
+        # narrower version of the change-refund bug the tender cap above
+        # exists to close -- it is a different figure, doing a different job.
+        original_balance_due = max(0.0, _money(float(sale['total']) - float(sale['amount_paid'] or 0), currency))
+        balance_due_remaining = max(0.0, original_balance_due - float(_prior[1]))
+        current_balance = float(cur.execute(
+            "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=? AND company_id=?",
+            (sale['customer_id'], cid)
+        ).fetchone()[0]) if sale['customer_id'] else 0.0
+
+        # refund_method default: the ORIGINAL sale's own payment_method, not
+        # a hardcoded 'cash' -- the hardcoded default was HALF of DEFECT 1:
+        # it fired on every return regardless of how the sale was paid,
+        # which is exactly how a card sale gets refunded as cash "by not
+        # touching the dropdown". The operator can still explicitly choose a
+        # different method; only its accidental, invisible exercise is
+        # removed -- the amount is server-computed either way (below), so a
+        # cashier can no longer create money by picking a method, only
+        # choose where already-capped money goes.
+        #
+        # 'credit' -> 'cash' coercion mirrors create_sale's OWN coercion at
+        # its `_record_payment(... method=(pm if pm != 'credit' else
+        # 'cash') ...)` call: `sales.payment_method` stores the raw label
+        # 'credit', but any real cash deposit taken on a "credit" sale is
+        # recorded in `payments` with method='cash' -- the label describes
+        # the AR arrangement, not the tender channel. Defaulting
+        # refund_method to the raw 'credit' label would make
+        # _cash_session_report's `refund_method='cash'` filter silently miss
+        # a real cash outflow whenever the original sale carried this label
+        # (review finding: verified against this file's own
+        # test_return_against_partially_paid_sale_reduces_ar_by_the_outstanding_portion_only
+        # fixture, a payment_method='credit' sale with a real $65 cash
+        # deposit).
+        _original_method = sale['payment_method'] or 'cash'
+        if _original_method == 'credit':
+            _original_method = 'cash'
+        refund_method = data.get('refund_method', _original_method)
+
+        tender_refund, ar_forgiven, store_credit = returns_settlement.split_return_settlement(
+            refund, tender_available, refund_method,
+            balance_due_remaining, current_balance, bool(sale['customer_id']), currency)
+
+        # Defensive, matches this file's "loud refusal beats a silent wrong
+        # number" convention (the modifiers ambiguous-line refusal a few
+        # hundred lines above): unreachable today because `is_credit` forces
+        # `customer_id` whenever `balance_due>0` (create_sale, ~line 6278),
+        # which forces `tender_collected == sale.total` for every walk-in --
+        # so `store_credit` can never be positive without a customer. Kept
+        # so a future change to that invariant fails LOUDLY instead of
+        # silently dropping value.
+        if store_credit > 0.005 and not sale['customer_id']:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message':
+                'This return leaves an uncollected balance with no customer to credit it to.'}), 409
+
         # returns.return_number carries a bare (not company-scoped, not
         # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
         # per company AND is a per-DEVICE table (`doc_sequences` is never
@@ -7842,11 +7981,14 @@ def create_return():
         ret_uid = _new_uid()
         cur.execute("""
             INSERT INTO returns (company_id,return_number,sale_id,branch_id,cashier,
-                                 reason,refund_method,refund_amount,status,idempotency_key,created_at,
+                                 reason,refund_method,refund_amount,
+                                 tender_refund_amount,ar_forgiven_amount,store_credit_amount,
+                                 status,idempotency_key,created_at,
                                  session_id,uid,actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
-              data.get('reason','Customer return'), data.get('refund_method','cash'), refund, idem, now_local,
+              data.get('reason','Customer return'), refund_method, refund,
+              tender_refund, ar_forgiven, store_credit, idem, now_local,
               cash_session_id, ret_uid, actor, terminal, utc_now))
         ret_id = cur.lastrowid
 
@@ -7862,7 +8004,12 @@ def create_return():
             'uid': ret_uid, 'sale_uid': sale['uid'], 'return_number': ret_num, 'branch_id': bid,
             'branch_uid': branch_uid,
             'cashier': _uid(), 'reason': data.get('reason', 'Customer return'),
-            'refund_method': data.get('refund_method', 'cash'), 'refund_amount': refund,
+            'refund_method': refund_method, 'refund_amount': refund,
+            # DEFECT 1 fix: a receiving device's own X/Z reports must agree
+            # with this one's -- same "sync-completeness" doctrine as
+            # void_payment's AUDIT-032A comment.
+            'tender_refund_amount': tender_refund, 'ar_forgiven_amount': ar_forgiven,
+            'store_credit_amount': store_credit,
             'status': 'completed', 'created_at': now_local,
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
         })
@@ -7933,38 +8080,28 @@ def create_return():
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
             })
 
-        # Real bug fixed here: a return against a sale that was never fully
-        # paid (credit sale, or a partial-payment cash sale) never touched
-        # the customer's credit_balance at all -- they'd still owe the full
-        # original amount after getting the item back. sale.total/
-        # amount_paid are the ORIGINAL sale's own immutable figures (never
-        # edited after the fact, per this file's "never edit/delete, only
-        # reverse" policy), so original_balance_due is exactly what was
-        # ever actually owed on this specific sale. Credited amount is
-        # capped at min(refund, original_balance_due, current
-        # credit_balance): the first cap keeps a return that's smaller than
-        # the outstanding balance from over-crediting; the second guards
-        # against multiple partial returns against the same credit sale
-        # ever driving credit_balance negative (this file has no per-return
-        # AR-credited ledger to attribute exactly, so the customer's live
-        # balance is the real, final backstop -- it can never go below what
-        # they'd otherwise be credited elsewhere).
-        if sale['customer_id']:
-            # `currency` is the SAME variable read once near the top of this
-            # function (~line 5578) -- the original sale's own total/paid
-            # figures were persisted in that same currency by create_sale's
-            # now-fixed quantization, so the balance derived from them here
-            # must be read back at the same precision, not silently
-            # coarsened to 2dp for a JOD company.
-            original_balance_due = max(0.0, _money(float(sale['total']) - float(sale['amount_paid'] or 0), currency))
-            if original_balance_due > 0.005:
-                current_balance = cur.execute(
-                    "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=? AND company_id=?",
-                    (sale['customer_id'], cid)
-                ).fetchone()[0]
-                ar_credit = min(refund, original_balance_due, float(current_balance))
-                if ar_credit > 0.005:
-                    _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_credit)
+        # AR forgiveness + store credit -- DEFECT 1 fix. `ar_forgiven` and
+        # `store_credit` were already computed above (before the INSERT, so
+        # they could be persisted on this return's own row) by
+        # returns_settlement.split_return_settlement, using `tender_
+        # available`/`balance_due_remaining`/`current_balance` derived from
+        # the sale's own `payments` rows -- see that call site's comment for
+        # the full accounting reasoning. Real bug this whole split fixes: a
+        # return against a sale that was never fully paid (credit sale, or a
+        # partial-payment cash sale) used to refund the FULL value as cash
+        # by default AND separately forgive the unpaid portion as AR,
+        # handing the unpaid part out twice (DEFECT 1). `ar_forgiven` alone
+        # is capped at what was actually still owed on THIS sale and at the
+        # customer's live balance (same two caps the pre-fix code already
+        # applied); `store_credit` is the previously-nonexistent third
+        # bucket for the leftover case where the customer already paid the
+        # debt down some other way before the return -- see module
+        # docstring's "Provable non-case" for why a walk-in can never reach
+        # either branch (the 409 guard above is the belt-and-braces for it).
+        if ar_forgiven > 0.005:
+            _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_forgiven, currency)
+        if store_credit > 0.005:
+            _adjust_credit(conn, 'customers', sale['customer_id'], cid, -store_credit, currency)
 
         # ── Loyalty reversal (ROADMAP.md's 2026-08-31 "RETURNS AGAINST A
         # SALE THAT USED POINTS -- decided, not yet built" entry, now
@@ -8091,6 +8228,13 @@ def create_return():
             # a few lines up for the one figure the cashier and the customer
             # actually see.
             'id': ret_id, 'return_number': ret_num, 'refund_amount': refund,
+            # DEFECT 1 fix: the real split, so the POS can show what
+            # actually left the till instead of implying the full
+            # `refund_amount` did (see returns_settlement's module
+            # docstring).
+            'refund_method': refund_method,
+            'tender_refund_amount': tender_refund, 'ar_forgiven_amount': ar_forgiven,
+            'store_credit_amount': store_credit,
             'idempotency_key': idem, 'items': resolved_items,
             'calculation_version': tax_engine.CALCULATION_VERSION,
         }})
@@ -8881,13 +9025,23 @@ def _cash_session_report(conn, cid, sess):
     -- create_sale's own _record_payment call feeds that ledger, including
     the cash portion of a partial-credit sale (see create_sale's own comment
     on why a credit sale's upfront deposit is recorded there with
-    method='cash'). cash_refunds is read directly from `returns.refund_amount`
+    method='cash'). cash_refunds is read from `returns.tender_refund_amount`
     /`refund_method` instead -- create_return has NO _record_payment call at
     all (refunds never touch the `payments` ledger in this codebase today),
     so querying `payments` for refunds would silently undercount to zero.
-    Both queries filter on sales.session_id/returns.session_id -- the direct
-    FK stamp _open_cash_session_id() writes -- not a time-range, per this
-    session_id column's own migration-docstring reasoning.
+    `tender_refund_amount`, NOT `refund_amount` (DEFECT 1 fix): `refund_
+    amount` is the full recomputed VALUE of the goods returned, used
+    unmodified by metrics.py's revenue netting -- it double-counts as a cash
+    outflow whenever part of that value was never actually collected (a
+    partial-credit or fully-credit sale), because the unpaid portion is
+    ALSO forgiven separately via `_adjust_credit`. `tender_refund_amount` is
+    the sale's-own-tender-capped figure that actually paid out through this
+    channel -- see core/retail/returns_settlement.py's module docstring for
+    the full three-way split (tender_refund/ar_forgiven/store_credit) this
+    column is one third of. Both queries filter on sales.session_id/
+    returns.session_id -- the direct FK stamp _open_cash_session_id()
+    writes -- not a time-range, per this session_id column's own
+    migration-docstring reasoning.
 
     paid_in/paid_out are folded into the same expected-cash total as
     float_in/float_out (not tracked-but-ignored): a paid_out (e.g. till cash
@@ -8913,8 +9067,17 @@ def _cash_session_report(conn, cid, sess):
           AND COALESCE(p.status,'active')='active'
     """, (cid, bid, session_id)).fetchone()[0]
 
+    # DEFECT 1 fix: `tender_refund_amount`, NOT `refund_amount`. `refund_
+    # amount` is the full recomputed VALUE of the goods returned (correct,
+    # and load-bearing for metrics.py's revenue netting -- never change its
+    # meaning); it is NOT "cash that left this drawer" when the original
+    # sale was never fully paid (an unpaid credit portion is forgiven via
+    # `_adjust_credit`, separately, and must not ALSO be counted as a cash
+    # outflow here). `tender_refund_amount` is the server-computed, sale's-
+    # own-tender-capped figure that actually paid out through this channel
+    # -- see core/retail/returns_settlement.py's module docstring.
     cash_refunds = conn.execute("""
-        SELECT COALESCE(SUM(refund_amount),0) FROM returns
+        SELECT COALESCE(SUM(tender_refund_amount),0) FROM returns
         WHERE company_id=? AND branch_id=? AND session_id=?
           AND refund_method='cash' AND status='completed'
     """, (cid, bid, session_id)).fetchone()[0]
@@ -10769,6 +10932,19 @@ def _ensure_credit_schema(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_returns_idempotency "
         "ON returns(idempotency_key) WHERE idempotency_key IS NOT NULL"
     )
+    # DEFECT 1 fix (returns settlement split, schema v35 / _migrate_add_
+    # return_settlement_split): same "second, independent guard" pattern
+    # this function already uses for points_redeemed_amount/loyalty_ledger.
+    # return_id above -- a process whose database has not yet run the
+    # versioned migration chain up to v35 by the time a request reaches
+    # create_return still gets these columns, gated only by the in-process
+    # `_CREDIT_SCHEMA_READY` flag, not by `user_version`. Idempotent with
+    # the versioned migration -- both check column existence first, so
+    # whichever runs first on a given database wins and the other is a
+    # no-op.
+    addcol('returns', 'tender_refund_amount', "REAL DEFAULT 0")
+    addcol('returns', 'ar_forgiven_amount', "REAL DEFAULT 0")
+    addcol('returns', 'store_credit_amount', "REAL DEFAULT 0")
     conn.commit()
     _CREDIT_SCHEMA_READY = True
 
@@ -10906,10 +11082,16 @@ def _adjust_credit(conn, table, pid, cid, delta, currency=None):
     correctly, and this function would still round the customer's/
     supplier's `credit_balance` it is computed from to 12.35 the moment it
     got here, because the quantum below never looked at the currency the
-    caller was working in. An un-converted caller (create_sale,
-    create_return -- still out of scope for this pass) keeps the historical
-    2dp behaviour byte for byte, same as everywhere else this contract is
-    used.
+    caller was working in.
+
+    DEFECT 2 (launch-readiness money-reconciliation pass): the two callers
+    named here as "still out of scope" in an earlier revision of this
+    docstring -- create_sale's own balance_due credit and create_return's
+    AR-forgiveness/store-credit calls -- now both pass `currency` too. Every
+    caller of this function is currency-aware as of that pass; there is no
+    longer a byte-for-byte-2dp caller left. See
+    retail_payment_money_precision_test.py's create_sale/create_return
+    section for the fils-precision regression tests this closes.
     """
     row = conn.execute(f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?", (pid, cid)).fetchone()
     base = Decimal(str(row['credit_balance'] if row and row['credit_balance'] is not None else 0))

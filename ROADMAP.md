@@ -3877,3 +3877,68 @@ export works in every country because each accountant uses their own local
 package; a GL is exactly where country rules bite (chart structures, statutory
 formats, tax treatment). See the ledger plan for the 23-33 engineer-week
 estimate that path avoids.
+
+
+## 2026-09-16 - retail v36 CLAIMED AND CASHED IN: return settlement split (DEFECT 1)
+
+Claimed IN WRITING before touching schema.py, per the standing "a schema
+version integer is a single-writer resource" rule this file already states at
+the v32/v33 comment blocks above. `RETAIL_SCHEMA_VERSION` is 34
+(schema.py:994) at the moment this is written. v35 is the ROADMAP's own
+"schema versions v32-v35 RESERVED for the Aseel-parity wave" entry (2026-09-15)
+-- source-document back-references for drill-through -- and has NOT been
+cashed in (no `_migrate_add_*` function for it exists anywhere in schema.py).
+This fix is unrelated to that reservation and does not need it, so per this
+file's own rule for exactly this situation ("whoever claims v34/v35 ... take
+the next number above the live head rather than disturb the other's
+reservation") it takes v36, leaving v35 open for the drill-through design.
+Whoever cashes in v35 next reads this note and knows the live head by the time
+they land is 36, not 34.
+
+THE DEFECT. `create_return` computed `refund_amount` as the full recomputed
+value of the returned goods regardless of how much of that value was ever
+actually COLLECTED in tender, recorded ALL of it under `refund_method`
+(defaulting to hardcoded 'cash', ignoring the original sale's own payment
+method) -- AND, separately and correctly, forgave the unpaid portion via
+`_adjust_credit`. Nothing tied the two together, so an unpaid balance left
+the books twice: once as AR forgiveness, once as a phantom cash refund.
+Reproduced on a live till: sale total 100.000 paid 20.000 cash (balance_due
+80.000 credit), full return with refund_method omitted -- `expected_cash`
+went NEGATIVE by 46 fils per JOD, and the same shape is a theft path (refund
+a card sale as cash, pocket the cash, books look balanced).
+
+THE FIX, `core/retail/returns_settlement.py` (pure function, no DB access,
+matching pricing.py/cheques.py in that package): splits a return's `refund`
+value into three parts that always sum back to it --
+`tender_refund` (real money paid back, hard-capped by the sale's own
+`payments` rows net of change, minus tender already paid out on earlier
+partial returns of the same sale), `ar_forgiven` (the existing, unchanged AR
+logic, now fed the LEFTOVER after the tender cap instead of the raw refund),
+and `store_credit` (the previously-nonexistent third bucket for the case
+where the customer already paid the debt down some other way before the
+return -- issued as negative `credit_balance` instead of vanishing or being
+paid out as phantom cash). `refund_method`'s default changed from hardcoded
+'cash' to the ORIGINAL sale's own payment_method (mirroring create_sale's own
+'credit'->'cash' tender-label coercion), so a careless click no longer
+reproduces the bug; the operator can still override it, but the AMOUNT is
+server-computed either way. `_cash_session_report`'s cash_refunds query reads
+the new `tender_refund_amount` column instead of `refund_amount` -- the
+column that was never wrong for revenue netting (metrics.py) stays
+untouched.
+
+Schema: three new REAL columns on `returns` (`tender_refund_amount`,
+`ar_forgiven_amount`, `store_credit_amount`, all DEFAULT 0), plus a one-time
+backfill (`_migrate_add_return_settlement_split`) that replays the split
+per historical row from immutable inputs (`sales.total`, each sale's own
+`payments` sum, each return's own already-stored `refund_amount`) -- stated
+plainly in that migration's own docstring as a BEST-EFFORT retroactive
+application of the new rule, not a forensic reconstruction of what
+`_adjust_credit` actually did at that historical instant. It does NOT touch
+`customers.credit_balance`/`suppliers.credit_balance`.
+
+Same wave, DEFECT 2 (`_adjust_credit`'s hardcoded 2dp quantum when no
+`currency` is passed -- the same money-rounding bug class
+`commercial_runtime/currency.py` documents as previously shipped): both
+remaining un-converted callers (`create_sale`'s balance_due credit,
+`create_return`'s AR-forgiveness/store-credit calls) now pass `currency`.
+No schema involved in that half of the fix.

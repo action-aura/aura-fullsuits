@@ -991,7 +991,22 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # (`assert RETAIL_SCHEMA_VERSION >= 34`,
 # retail_doc_series_migration_test.py) so a downward-resolved merge fails
 # CI before it ships to a till.
-RETAIL_SCHEMA_VERSION = 34
+# v34 -> v36 (v35 deliberately left a hole, NOT cashed in here). ROADMAP.md's
+# 2026-09-15 "schema versions v32-v35 RESERVED for the Aseel-parity wave"
+# entry reserved v35 for source-document back-references for drill-through,
+# and that feature has NOT shipped (no `_migrate_add_*` function for it
+# exists anywhere in this file). This wave -- return settlement split,
+# DEFECT 1 -- is unrelated to that reservation and does not need it, so per
+# this file's OWN rule for exactly this situation (see the v33 comment
+# above, "whoever claims v34/v35 ... take the next number above the live
+# head rather than disturb the other's reservation") it takes v36, leaving
+# v35 open. See ROADMAP.md's 2026-09-16 "retail v36 CLAIMED AND CASHED IN:
+# return settlement split (DEFECT 1)" entry, claimed in writing before this
+# constant was touched, and _migrate_add_return_settlement_split's own
+# docstring for the full reasoning (the tender/AR/store-credit split that
+# closes the double-count, and why the backfill is disclosed as best-effort
+# rather than a forensic reconstruction of historical credit_balance).
+RETAIL_SCHEMA_VERSION = 36
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2026,6 +2041,20 @@ def _migrate_retail_schema(conn):
     # reasoning, including the e-invoicing firewall this migration must not
     # weaken and the merge-order hazard's two shapes.
     _migrate_add_doc_series(conn)
+    # v34 -> v36 (v35 deliberately left a hole -- ROADMAP.md's 2026-09-16
+    # "retail v36 CLAIMED AND CASHED IN" entry): return settlement split
+    # (DEFECT 1) plus a best-effort backfill of every existing `returns`
+    # row. Appended LAST, same convention as every step above. Three new
+    # columns on `returns` ONLY -- no other table is ALTERed, so ordering
+    # relative to every step above it does not matter functionally, except
+    # that it must run AFTER whichever step first creates `sales`/`returns`/
+    # `payments` (all pre-v1 base tables, so always true in practice; the
+    # migration also guards their existence defensively -- see its own
+    # docstring). See the RETAIL_SCHEMA_VERSION comment above and
+    # _migrate_add_return_settlement_split's own docstring for the full
+    # reasoning, including why v35 stays open for source-document
+    # back-references and why the backfill is disclosed as best-effort.
+    _migrate_add_return_settlement_split(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -8776,3 +8805,169 @@ def _migrate_add_doc_series(conn):
             last_no   INTEGER NOT NULL DEFAULT 0
         )
     """)
+
+
+def _migrate_add_return_settlement_split(conn):
+    """One-time migration (schema v34 -> v36 -- v35 deliberately left a
+    hole; see ROADMAP.md's 2026-09-16 "retail v36 CLAIMED AND CASHED IN:
+    return settlement split (DEFECT 1)" entry for why this fix takes the
+    next number PAST the still-open "schema versions v32-v35 RESERVED"
+    entry rather than disturb v35's own reservation for source-document
+    back-references). Three new REAL columns on `returns`, additive only
+    (column-existence-checked ADD COLUMN), plus a one-time BEST-EFFORT
+    backfill of every existing row.
+
+        returns.tender_refund_amount REAL DEFAULT 0
+        returns.ar_forgiven_amount   REAL DEFAULT 0
+        returns.store_credit_amount  REAL DEFAULT 0
+
+    THE BUG THIS CLOSES: `returns.refund_amount` -- the correct, UNCHANGED,
+    tax-inclusive VALUE of the goods returned, load-bearing for metrics.py's
+    `revenue = SUM(sales.total) - SUM(returns.refund_amount)` -- was ALSO
+    trusted, unmodified, as "cash that physically left the drawer" by
+    api/retail_api.py's `_cash_session_report`. A return against a sale
+    that was never fully paid (partial-cash, or fully credit) forgave the
+    unpaid portion as AR (correctly, via `_adjust_credit`) AND separately
+    paid the SAME value out again as a phantom cash refund, because
+    `refund_method` defaulted to a hardcoded 'cash' regardless of how the
+    sale was actually paid. See core/retail/returns_settlement.py's module
+    docstring and api/retail_api.py's create_return for the full accounting
+    reasoning and the runtime half of this fix -- this migration is the
+    schema half plus a retroactive best-effort application of the same
+    rule to rows that already exist.
+
+    GUARDED ON TABLE EXISTENCE, same reasoning as the `session_id`
+    migration a few thousand lines above (search "existing_tables" in this
+    file): a minimal test fixture that hand-builds its own schema and calls
+    `_migrate_retail_schema` directly may not have `returns`/`sales`/
+    `payments` at all.
+
+    DUAL-GUARDED WITH retail_api.py's OWN LAZY ADDCOL, same "whichever of
+    the two sites runs first wins" contract every other column added both
+    ways in this chain already carries (`points_redeemed_amount`,
+    `loyalty_ledger.return_id` -- see their own migration docstrings): if
+    the columns already exist when this runs, NO backfill is attempted
+    again -- see the `added_any` guard below. This is deliberate, not an
+    oversight: a partial re-run after a genuine v36 backfill already ran
+    once must never re-derive figures from a database that has since
+    accepted NEW returns written by the (already-shipped) runtime fix,
+    which would double-process rows this same function already touched.
+
+    THE BACKFILL IS BEST-EFFORT, NOT A FORENSIC RECONSTRUCTION -- stated
+    plainly rather than left ambiguous, matching this file's own posture on
+    every backfill that touches money (see e.g. `_seed_retail`'s own Wave 0
+    money-arithmetic correction comment, several thousand lines above). It
+    replays `returns_settlement.split_return_settlement` per historical
+    row, in `(sale_id, id)` order, using ONLY immutable inputs available
+    today: `sales.total`, the sale's own `payments` rows (summed ONCE per
+    sale_id and cached -- see `_tender_collected_cache` below -- rather
+    than re-queried per return), and each return's own already-stored
+    `refund_amount`/`refund_method`. `current_balance` reads the
+    customer's LIVE `credit_balance` at migration time, not a historical
+    snapshot -- there is no historical snapshot to read, and this is the
+    SAME approximation `split_return_settlement`'s own `store_credit`
+    branch already makes at runtime for a sale whose debt was paid down
+    some other way before the return (see that module's docstring). This
+    migration does NOT reconstruct what `_adjust_credit` actually did to
+    `credit_balance` at each historical instant -- DEFECT 2's rounding and
+    per-customer balance pooling are both in play by the time an old row is
+    read back, so a from-scratch recomputation could as easily turn a
+    balance that happens to be right (for the wrong reason) into one that
+    is wrong. This migration therefore touches ONLY the three new `returns`
+    columns, never `customers.credit_balance`/`suppliers.credit_balance` --
+    see ROADMAP.md's entry for the read-only reconciliation-diagnostic path
+    recommended instead, applied through `_adjust_credit` one row at a
+    time, never a raw UPDATE, if a shop ever needs that correction.
+
+    LIVE-SESSION CONSEQUENCE, disclosed rather than hidden: `_cash_session_
+    report` recomputes live on every call (both the X-report GET and the
+    close route), so the very next X-report view for a session that is
+    OPEN at the moment this migration lands will read the freshly-
+    backfilled `tender_refund_amount` for any return that already happened
+    this shift -- `expected_cash` moves UP by whatever was wrongly counted
+    as a cash outflow before. This is a real, one-time, CORRECT change that
+    should be communicated as "the drawer math was corrected", not left as
+    an unexplained number jump. A session that is already CLOSED keeps its
+    own persisted `closing_float_expected`/`variance` exactly as it was
+    (this migration writes no `cash_sessions` row) -- but re-opening that
+    closed session's own X-report VIEW will show a different, corrected
+    number than what was printed/accepted as its Z-report at close time,
+    because that view has no status gate and always recomputes live
+    (`export_cash_sessions_csv`'s own docstring names this exact
+    distinction). Both cases are the honest cost of fixing a live formula
+    rather than a stored one, not a defect in this migration.
+    """
+    existing_tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'returns' not in existing_tables:
+        return
+
+    returns_cols = {row[1] for row in conn.execute('PRAGMA table_info(returns)').fetchall()}
+    added_any = False
+    for col in ('tender_refund_amount', 'ar_forgiven_amount', 'store_credit_amount'):
+        if col not in returns_cols:
+            conn.execute(f'ALTER TABLE returns ADD COLUMN {col} REAL DEFAULT 0')
+            added_any = True
+    if not added_any:
+        return  # already migrated -- see docstring's "dual-guarded" note
+
+    if 'sales' not in existing_tables or 'payments' not in existing_tables:
+        return  # nothing to backfill against; the ADD COLUMNs above still stand
+
+    customers_have_balance = (
+        'customers' in existing_tables
+        and 'credit_balance' in {row[1] for row in conn.execute('PRAGMA table_info(customers)').fetchall()}
+    )
+
+    # Local import, same precedent as `_seed_retail`'s own
+    # `from core.retail import pricing as _tax_engine` a few thousand lines
+    # above in this same file: schema.py otherwise imports nothing from
+    # core.retail (it is the pure DB/migration layer; business logic lives
+    # in api/retail_api.py and core/retail/*), and this keeps that boundary
+    # -- the import is scoped to the one function that genuinely needs the
+    # shared money-split rule, not hoisted to module level.
+    from core.retail import returns_settlement as _returns_settlement
+
+    rows = conn.execute("""
+        SELECT r.id, r.sale_id, r.refund_amount, r.refund_method,
+               s.total AS sale_total, s.customer_id AS sale_customer_id
+        FROM returns r JOIN sales s ON r.sale_id = s.id
+        ORDER BY r.sale_id, r.id
+    """).fetchall()
+
+    _tender_collected_cache = {}   # sale_id -> total tender ever collected
+    _running = {}                  # sale_id -> (tender_claimed, ar_claimed) so far
+    for rid, sale_id, refund_amount, refund_method, sale_total, customer_id in rows:
+        refund_amount = float(refund_amount or 0)
+        refund_method = refund_method or 'cash'
+        sale_total = float(sale_total or 0)
+
+        if sale_id not in _tender_collected_cache:
+            _tender_collected_cache[sale_id] = float(conn.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM payments "
+                "WHERE sale_id=? AND direction='in' AND COALESCE(status,'active')='active'",
+                (sale_id,)
+            ).fetchone()[0])
+        tender_collected = _tender_collected_cache[sale_id]
+
+        prior_tender, prior_ar = _running.get(sale_id, (0.0, 0.0))
+        tender_available = tender_collected - prior_tender
+        original_balance_due = max(0.0, sale_total - tender_collected)
+        balance_due_remaining = max(0.0, original_balance_due - prior_ar)
+
+        current_balance = 0.0
+        if customer_id and customers_have_balance:
+            _cb_row = conn.execute(
+                "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=?", (customer_id,)
+            ).fetchone()
+            current_balance = float(_cb_row[0]) if _cb_row else 0.0
+
+        tender_refund, ar_forgiven, store_credit = _returns_settlement.split_return_settlement(
+            refund_amount, tender_available, refund_method,
+            balance_due_remaining, current_balance, bool(customer_id))
+
+        conn.execute(
+            "UPDATE returns SET tender_refund_amount=?, ar_forgiven_amount=?, store_credit_amount=? WHERE id=?",
+            (tender_refund, ar_forgiven, store_credit, rid)
+        )
+        _running[sale_id] = (prior_tender + tender_refund, prior_ar + ar_forgiven)

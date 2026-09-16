@@ -99,9 +99,20 @@ SALE_RESPONSE_KEYS = [
     'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
+# DEFECT 1 fix (launch-readiness money-reconciliation pass) added FOUR keys
+# on purpose -- this is a deliberate, disclosed expansion of the closed set
+# this test pins, not a weakening of it: the test still fails on any
+# ACCIDENTAL new field beyond this list, exactly as before. `refund_method`
+# now echoes the server-resolved default (the original sale's own payment
+# method, no longer a hardcoded 'cash'); `tender_refund_amount`/
+# `ar_forgiven_amount`/`store_credit_amount` are the real tender/AR/store-
+# credit split -- see core/retail/returns_settlement.py's module docstring
+# and create_return's own comments. `refund_amount` keeps its pre-existing
+# meaning (the full recomputed value of the goods returned) unchanged.
 RETURN_RESPONSE_KEYS = [
-    'calculation_version', 'id', 'idempotency_key', 'items', 'refund_amount',
-    'return_number',
+    'ar_forgiven_amount', 'calculation_version', 'id', 'idempotency_key',
+    'items', 'refund_amount', 'refund_method', 'return_number',
+    'store_credit_amount', 'tender_refund_amount',
 ]
 
 

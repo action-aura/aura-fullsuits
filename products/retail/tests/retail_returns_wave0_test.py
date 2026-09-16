@@ -360,13 +360,40 @@ def test_return_against_unpaid_credit_sale_reduces_ar():
         "returning the only item on a fully-unpaid sale must zero out what's owed"
 
 
+def _open_cash_session(client, opening_float=0.0):
+    """Open this test client's cash session on its (sole) branch, matching
+    the live-till reproduction's own first step. Returns the session id."""
+    r = client.post('/api/sub/retail/cash-sessions/open', json={'opening_float': opening_float})
+    assert r.status_code == 200, r.get_json()
+    # `_cash_session_public` starts from `dict(sess)` -- the raw
+    # `cash_sessions` row -- so the primary key keeps its own column name,
+    # `id`, not a renamed `session_id`.
+    return r.get_json()['data']['id']
+
+
+def _x_report(client, session_id):
+    """GET the live X-report for one session -- the same route the close-out
+    modal and this task's own reproduction both read."""
+    r = client.get(f'/api/sub/retail/cash-sessions/{session_id}/x-report')
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']
+
+
 def test_return_against_partially_paid_sale_reduces_ar_by_the_outstanding_portion_only():
     """A sale that was PARTLY paid in cash, partly on credit -- the return
     must only credit back the still-outstanding portion, never more than
     what was actually left unpaid (the cash portion isn't AR to begin
-    with)."""
+    with).
+
+    DEFECT 1 fix: also pins the drawer side of this exact fixture -- this
+    is the review's own verified regression case (a nominally 'credit'
+    sale whose real cash deposit must still be counted as a cash outflow
+    on refund). See core/retail/returns_settlement.py / create_return's
+    'credit'->'cash' refund_method coercion.
+    """
     client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=15.0, stock=10)
     customer_id = _make_credit_customer(cid)
+    session_id = _open_cash_session(client, opening_float=0.0)
 
     # Total 115: $65 paid now, $50 left on credit.
     sale = client.post('/api/sub/retail/sales', json={
@@ -379,10 +406,35 @@ def test_return_against_partially_paid_sale_reduces_ar_by_the_outstanding_portio
 
     r = _return(client, sale['id'], pid, quantity=1)
     assert r.status_code == 200, r.get_json()
-    assert r.get_json()['data']['refund_amount'] == 115.0  # full refund figure, unrelated to AR crediting
+    d = r.get_json()['data']
+    assert d['refund_amount'] == 115.0  # full refund figure, unrelated to AR crediting
+    # DEFECT 1 fix: the real split. tender_refund_amount must be exactly the
+    # $65 that was actually collected in cash -- not the full $115 refund
+    # figure, and not 0 (refund_method defaults to the sale's raw 'credit'
+    # label only AFTER the create_sale-matching 'credit'->'cash' coercion;
+    # without that coercion this would default to 'cash_refunds' filtering
+    # on refund_method='credit', which never matches, silently undercounting
+    # the real cash outflow to 0 -- see the review's own finding).
+    assert d['tender_refund_amount'] == 65.0, \
+        f"expected the $65 actually collected in cash, got {d['tender_refund_amount']}"
+    assert d['ar_forgiven_amount'] == 50.0, \
+        f"expected exactly the $50 that was owed, got {d['ar_forgiven_amount']}"
+    assert d['store_credit_amount'] == 0.0
 
     assert _credit_balance(cid, customer_id) == 0.0, \
         "must credit exactly the $50 that was actually owed, not the full $115 refund"
+
+    # THE DRAWER ITSELF, not just the returns row -- DEFECT 1's exact shape.
+    # Before this fix, `_cash_session_report` summed `refund_amount` (115)
+    # under refund_method='cash', overstating the real cash outflow by the
+    # $50 that was ALSO separately forgiven as AR -- a double-count of the
+    # unpaid portion. `tender_refund_amount` (65) is the true figure.
+    report = _x_report(client, session_id)
+    assert report['cash_sales'] == 65.0
+    assert report['cash_refunds'] == 65.0, \
+        f"cash_refunds must read the real $65 collected, not the full $115 refund_amount, got {report['cash_refunds']}"
+    assert report['expected_cash'] == 0.0, \
+        f"a sale's own $65 cash deposit fully refunded in cash must net to 0, got {report['expected_cash']}"
 
 
 def test_return_against_fully_paid_cash_sale_never_touches_credit_balance():
@@ -403,3 +455,168 @@ def test_return_against_fully_paid_cash_sale_never_touches_credit_balance():
     assert r.status_code == 200, r.get_json()
 
     assert _credit_balance(cid, customer_id) == 0.0
+
+
+def test_return_cash_payout_never_exceeds_cash_actually_collected():
+    """DEFECT 1 -- THE TASK'S OWN LIVE-TILL REPRODUCTION, reproduced here at
+    the HTTP level: sale total 100.000, amount_paid 20.000 cash,
+    balance_due 80.000 credit; refund_method OMITTED on a full return (the
+    exact shape the POS's own pre-fix default -- hardcoded 'cash' -- used
+    to hand a cashier with one careless click). `expected_cash` must never
+    go negative, and the drawer must move by only the $20 actually
+    collected.
+
+    Mutation that must turn this red: restore the pre-fix code (refund the
+    FULL `refund_amount` as cash regardless of what was collected, and
+    default `refund_method` to a hardcoded 'cash') -- `tender_refund_amount`
+    would read 100.0 instead of 20.0, and `expected_cash` would go NEGATIVE
+    (opening 0 + cash_sales 20 - cash_refunds 100 = -80) exactly as in the
+    bug report, while `refund_amount` (unchanged) would still read 100.0.
+    """
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=0.0, stock=10)
+    # balance_due > 0 requires a named customer regardless of payment_method
+    # (create_sale's own credit-sale rule) even though this sale is tendered
+    # in cash, not 'credit' -- see is_credit's own `(pm=='credit') or
+    # (balance_due>0.005)` definition.
+    customer_id = _make_credit_customer(cid)
+    session_id = _open_cash_session(client, opening_float=0.0)
+
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': customer_id, 'amount_paid': 20.0, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['total'] == 100.0
+    assert sale['balance_due'] == 80.0
+    assert _credit_balance(cid, customer_id) == 80.0
+
+    # `refund_method` OMITTED, matching the task's own reproduction and the
+    # POS UI's pre-fix default.
+    r = client.post('/api/sub/retail/returns', json={
+        'sale_id': sale['id'],
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'reason': 'full return, method omitted',
+        'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()['data']
+    assert d['refund_amount'] == 100.0
+    assert d['tender_refund_amount'] == 20.0, \
+        f"cash payout must be capped at the $20 actually collected, got {d['tender_refund_amount']}"
+    assert d['ar_forgiven_amount'] == 80.0, \
+        f"the unpaid $80 must be forgiven as AR, got {d['ar_forgiven_amount']}"
+    assert d['store_credit_amount'] == 0.0
+    assert d['refund_method'] == 'cash'  # the sale's own method, defaulted correctly
+
+    assert _credit_balance(cid, customer_id) == 0.0
+
+    report = _x_report(client, session_id)
+    assert report['expected_cash'] >= 0.0, \
+        f"expected_cash must never go negative, got {report['expected_cash']}"
+    assert report['expected_cash'] == report['opening_float'] + report['cash_sales'] - 20.0, (
+        f"the drawer must move by only the $20 actually collected, not the full $100 refund. "
+        f"report={report}"
+    )
+    assert report['cash_refunds'] == 20.0
+
+
+def test_change_given_on_walk_in_sale_is_never_refundable():
+    """A walk-in tenders MORE than the total and gets change back -- the
+    refundable tender pool must be capped at what actually stayed in the
+    drawer (`payments.amount`, i.e. net_received), never at the raw
+    `amount_paid` figure, which includes the customer's own change.
+
+    Mutation that must turn this red: compute `tender_collected` from
+    `sales.amount_paid` instead of summing the sale's own `payments` rows
+    -- `tender_refund_amount` would read 50.0 (the raw tender) instead of
+    42.0 (what actually stayed in the drawer), handing the customer's own
+    change back to them a second time as if it were shop money.
+    """
+    client, cid, pid, bid = _make_admin_and_product(price=42.0, tax_rate=0.0, stock=10)
+    session_id = _open_cash_session(client, opening_float=0.0)
+
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'amount_paid': 50.0, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['total'] == 42.0
+    assert sale['change'] == 8.0
+    # Overpayment, not clamped at 0 (only `paid`/`change` are) -- negative
+    # `balance_due` means "overpaid", and `is_credit`'s own
+    # `balance_due > 0.005` check correctly reads this as NOT a credit sale.
+    assert sale['balance_due'] == -8.0
+
+    r = _return(client, sale['id'], pid, quantity=1, reason='overpaid walk-in return')
+    assert r.status_code == 200, r.get_json()
+    d = r.get_json()['data']
+    assert d['refund_amount'] == 42.0
+    assert d['tender_refund_amount'] == 42.0, \
+        f"must never refund the customer's own change (50.0), got {d['tender_refund_amount']}"
+
+    report = _x_report(client, session_id)
+    assert report['cash_sales'] == 42.0  # net_received, not the raw 50.0 tendered
+    assert report['cash_refunds'] == 42.0
+    assert report['expected_cash'] == 0.0
+
+
+def test_second_partial_return_only_draws_remaining_tender_pool():
+    """Two partial returns against the SAME sale must not each draw the
+    full tender pool -- the second return can only draw what the FIRST
+    left behind, both in the tender bucket and the AR bucket.
+
+    Mutation that must turn this red: compute `tender_available` from the
+    sale's raw tender collected WITHOUT subtracting prior returns'
+    `tender_refund_amount` (i.e. drop the `_prior` query/subtraction in
+    create_return) -- the second return would wrongly draw ANOTHER 20.0 of
+    tender (40.0 total across both returns, overpaying cash by 20.0),
+    instead of the correct 0.0.
+    """
+    client, cid, pid, bid = _make_admin_and_product(price=50.0, tax_rate=0.0, stock=10)
+    rconn = get_retail_conn()
+    rconn.execute(
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) "
+        "VALUES (?,?,'RT-9','Second Line',5,50,0)",
+        (str(uuid.uuid4()), cid),
+    )
+    pid2 = rconn.execute("SELECT id FROM products WHERE company_id=? AND sku='RT-9'", (cid,)).fetchone()[0]
+    rconn.execute(
+        "INSERT INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) VALUES (?,?,?,10)",
+        (cid, pid2, bid),
+    )
+    rconn.commit()
+    rconn.close()
+
+    customer_id = _make_credit_customer(cid)
+    session_id = _open_cash_session(client, opening_float=0.0)
+
+    # Total 100 (two 50-unit lines), $20 paid cash, $80 on credit.
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}, {'product_id': pid2, 'quantity': 1}],
+        'customer_id': customer_id, 'amount_paid': 20.0, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['total'] == 100.0
+    assert sale['balance_due'] == 80.0
+
+    r1 = _return(client, sale['id'], pid, quantity=1, reason='partial 1')
+    assert r1.status_code == 200, r1.get_json()
+    d1 = r1.get_json()['data']
+    assert d1['refund_amount'] == 50.0
+    assert d1['tender_refund_amount'] == 20.0, f"first return should drain the whole $20 pool, got {d1}"
+    assert d1['ar_forgiven_amount'] == 30.0, f"first return should forgive the remaining $30, got {d1}"
+    assert _credit_balance(cid, customer_id) == 50.0
+
+    r2 = _return(client, sale['id'], pid2, quantity=1, reason='partial 2')
+    assert r2.status_code == 200, r2.get_json()
+    d2 = r2.get_json()['data']
+    assert d2['refund_amount'] == 50.0
+    assert d2['tender_refund_amount'] == 0.0, \
+        f"the tender pool was already drained by the first return, got {d2}"
+    assert d2['ar_forgiven_amount'] == 50.0, f"second return should forgive the full remaining $50, got {d2}"
+    assert _credit_balance(cid, customer_id) == 0.0
+
+    report = _x_report(client, session_id)
+    assert report['cash_refunds'] == 20.0, \
+        f"across both returns combined, cash outflow must total exactly the $20 collected, got {report['cash_refunds']}"
+    assert report['expected_cash'] == 0.0
