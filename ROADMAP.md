@@ -3805,3 +3805,75 @@ NAMED DEFERRALS:
   bounds the count structurally, and a till with no claimed book falls
   back to legacy numbering rather than refusing to sell — refusing to
   sell is never this product's answer to a configuration gap.
+
+
+## 2026-09-16 - e-invoicing becomes REGIME-SCOPED, and the per-country roadmap
+
+Owner, 2026-09-16: "maybe some clients wont be in jordan so can we make both
+options... keep in the plan i will remind you later to add each country's own
+e-invoicing system. But for now make 2 -- the one for jordan and a one for
+anyone."
+
+THE DEFECT THIS FIXES. `commercial_runtime/einvoicing/settings.py` had
+`DEFAULTS = {'enabled': '1', ...}` -- e-invoicing ON for every install -- and
+the justification written above it is explicitly Jordanian ("Jordan has
+mandated e-invoicing since 2024-05-31, and a shop that has to go find a toggle
+is not a shop that's compliant"). Correct for Jordan, wrong everywhere else: a
+shop outside Jordan silently accrues JoFotara outbox rows for a tax authority
+with no claim on it. The three existing disable layers are all off switches
+someone must know to throw; the DEFAULT was the bug, not the absence of a
+fourth switch.
+
+SHIPPED NOW: a `tax_regime` setting with two values.
+
+    jordan   JoFotara / ISTD. Enabled by default -- unchanged behaviour.
+    none     No regime. The feature resolves OFF regardless of `enabled`.
+
+`tax_regime` defaults to `jordan` ON PURPOSE, and that default is not to be
+"tidied" later: an existing Jordanian install that has never touched a setting
+must stay compliant. Defaulting to `none` would silently switch off a live
+legal obligation for every shop already running, which is a much worse failure
+than a non-Jordan shop queuing documents it never files. The regime is a
+SEMANTIC layer in the disable ladder, not a fourth kill switch.
+
+No schema migration: `einvoice_settings` is key/value, so a regime is a key.
+
+WHAT IS PLANNED, NOT BUILT -- per-country regimes. The owner will raise these;
+recording them here so the sequence does not depend on anyone remembering.
+Each is a new regime value plus a provider implementing the same interface
+`providers/direct_istd.py` already defines (`submit_invoice`, `check_status`),
+which is what makes this a list rather than a rewrite:
+
+  * SAUDI ARABIA -- ZATCA / Fatoora. Phase 2 clearance model, so unlike
+    JoFotara it must obtain approval BEFORE the invoice is given to the buyer.
+    That is a different lifecycle, not just a different endpoint, and it is the
+    one that will most test whether the outbox shape generalises -- worth
+    designing against before assuming it does.
+  * EGYPT -- ETA. Its own signing/credential story.
+  * UAE -- mandate phasing in; watch the dates rather than build early.
+  * Anywhere else -- `none` is the honest answer until that country's regime
+    is actually built. `none` must never quietly mean "Jordan".
+
+THE PREREQUISITE NOBODY HAS PAID YET, and it blocks every regime above equally:
+JoFotara itself STILL CANNOT FILE. `providers/direct_istd.py`'s
+`submit_invoice` and `check_status` both `raise NotImplementedError`, and the
+shipped default provider is `UnconfiguredProvider`. Everything up to the wire
+call is real -- UBL 2.1 XML, QR, the dedicated sequence, an outbox with retry
+and backoff, audit trail, status UI. Reportedly blocked on ISTD portal
+registration, which is paperwork rather than engineering. Building a second
+country's provider before the first one has ever transmitted would be building
+on an untested interface.
+
+RELATED, AND ALREADY FINE: the money layer is NOT Jordan-locked.
+`commercial_runtime/currency.py` is ISO 4217-driven -- `DEFAULT_BASE_CURRENCY
+= 'JOD'` is only a default, `currency_quantum(code)` resolves per-currency
+decimals and already knows the 3-decimal set (KWD, BHD, OMR, TND, LYD, IQD),
+and an unknown code falls back to 2 decimals without raising. A Gulf or
+Egyptian shop rounds correctly today with no work.
+
+ALSO WORTH KNOWING FOR THE LEDGER DECISION: a mixed-country client base argues
+HARDER for the postable-journal-export path over a bespoke general ledger. An
+export works in every country because each accountant uses their own local
+package; a GL is exactly where country rules bite (chart structures, statutory
+formats, tax treatment). See the ledger plan for the 23-33 engineer-week
+estimate that path avoids.
