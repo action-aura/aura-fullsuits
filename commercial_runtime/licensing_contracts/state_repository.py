@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -121,13 +122,45 @@ class LicenseStateRepository:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """A connection that is actually CLOSED when the block ends.
+
+        This used to `return conn`, so every `with self._conn() as conn:` in
+        this module entered sqlite3.Connection's own context manager -- which
+        commits or rolls back the TRANSACTION and deliberately leaves the
+        connection OPEN (documented Python behaviour). Nothing here ever
+        called `conn.close()`, so each call leaked a handle and relied on the
+        garbage collector to release the file.
+
+        THAT IS NOT A TIDINESS PROBLEM. `flask_guard` builds a
+        LicenseStateRepository and calls `load()` on EVERY licence-gated
+        request, so a busy till leaks a handle per request. On Windows -- the
+        platform this product actually ships on -- an open handle blocks
+        deleting or replacing the file, which is how two identity tests fail
+        with `PermissionError: [WinError 32] The process cannot access the
+        file because it is being used by another process` when their teardown
+        unlinks licensing.db.
+
+        AND CI CANNOT SEE IT. CI runs ubuntu-latest, where `unlink()` succeeds
+        against an open handle, so this class of defect is structurally
+        invisible to it while being real for every customer. Worth
+        remembering the next time a green CI run is offered as evidence.
+
+        The `with conn:` below keeps the commit/rollback behaviour every call
+        site already depends on, byte for byte; the `finally` adds the close
+        that was always missing. No call site changes.
+        """
         conn = sqlite3.connect(str(self._db_path), timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA foreign_keys=ON")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _ensure_schema(self) -> None:
         with self._conn() as conn:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -121,12 +122,29 @@ class LicensingEventRecorder:
         with self._conn() as conn:
             conn.execute(_CREATE_TABLE_SQL)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
+        """A connection that is actually CLOSED when the block ends.
+
+        Same defect and same fix as `LicenseStateRepository._conn` -- read its
+        docstring for the full reasoning. In short: `with conn:` commits or
+        rolls back the transaction and leaves the connection OPEN, so every
+        call here leaked a handle until the garbage collector happened to run,
+        which on Windows can block deleting licensing.db.
+
+        The event recorder is written on the same request paths as the state
+        repository, so it leaks at the same rate and had to be fixed with it;
+        closing only one of the two would have left the file held anyway.
+        """
         conn = sqlite3.connect(str(self._db_path), timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def record(
         self,
