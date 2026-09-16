@@ -139,7 +139,17 @@ def currency_symbol(currency=None) -> str:
 MAX_DISCOUNT_PCT = 100
 MIN_DISCOUNT_PCT = 0
 
-CALCULATION_VERSION = "retail-pricing-v2-wave0"
+#: Bumped from "retail-pricing-v2-wave0" -- the money-arithmetic correction
+#: (calculate_line/calculate_invoice now round gross/discount_amount/tax
+#: EXACTLY ONCE and derive taxable_amount/total by exact Decimal arithmetic
+#: on those rounded primitives, instead of independently re-rounding total
+#: from a separate full-precision path) is an OUTPUT-CHANGING behavior
+#: change for any discounted line, which is precisely what this constant
+#: exists to let a differential-test harness (mobile/aura-retail-unified/
+#: differential/generate_python_reference.py stamps it into the golden
+#: output) notice rather than silently compare a stale ported formula
+#: against numbers this module no longer produces.
+CALCULATION_VERSION = "retail-pricing-v3-reconciled-total"
 
 
 def _d(x) -> Decimal:
@@ -199,10 +209,25 @@ def calculate_line(unit_price: float, quantity: float, discount_pct: float = 0,
     by the POS cart. `discount_pct` is clamped to [0, 100] before use
     (AUDIT-005) -- callers that need to reject an out-of-range discount
     outright rather than silently clamp it should validate before calling.
-    Returns a dict of 2-decimal Decimal-rounded floats (ROUND_HALF_UP);
-    callers that need currency-safe accumulation across many lines should
-    re-round the final sum rather than trust float addition of many
-    already-rounded lines to stay exact.
+
+    RECONCILIATION BY CONSTRUCTION (AUDIT-XXX, Wave 0 money-arithmetic
+    correction): `gross`, `discount_amount` and `tax` are each rounded
+    EXACTLY ONCE, from full precision. `taxable_amount` and `total` are never
+    independently rounded from their own full-precision source -- they are
+    EXACT Decimal arithmetic on those three already-rounded primitives. This
+    is what guarantees `gross - discount_amount + tax == total` ALWAYS, not
+    just when two independent roundings happen to agree (they didn't: a 7.5%
+    discount on a 2.50 JOD item persisted total=8.048 while
+    subtotal-discount+tax=8.047, measured on a real till). The previous
+    version rounded `total` from `taxable_amount_full_precision + tax_full_
+    precision` -- a SEPARATE full-precision path from the one that produced
+    the already-rounded `discount_amount` callers actually see and sum, so
+    the two could disagree by a fils. Returns a dict of currency-quantized
+    floats; callers that sum many lines should re-round the final sum with
+    the same currency quantum rather than trust float addition to stay
+    exact, but the per-line identity above now holds exactly, so a sum of
+    per-line identities is itself an identity (Sigma(gross_i - discount_i +
+    tax_i) == Sigma(gross_i) - Sigma(discount_i) + Sigma(tax_i)).
     """
     mode = normalize_mode(mode)
     discount_pct = clamp_discount_pct(discount_pct)
@@ -211,26 +236,27 @@ def calculate_line(unit_price: float, quantity: float, discount_pct: float = 0,
     qty = _d(quantity)
     disc_pct = _d(discount_pct)
     rate = _d(tax_rate)
+    q = currency_quantum(currency)
 
-    gross = price * qty
-    discount_amount = gross * (disc_pct / Decimal(100))
+    # Each of these three is rounded EXACTLY ONCE, from full precision.
+    gross = (price * qty).quantize(q, rounding=ROUND_HALF_UP)
+    discount_amount = (gross * (disc_pct / Decimal(100))).quantize(q, rounding=ROUND_HALF_UP)
 
     if mode == TAX_BEFORE_DISCOUNT:
         taxable_amount = gross
-        tax = gross * (rate / Decimal(100))
+        tax = (gross * (rate / Decimal(100))).quantize(q, rounding=ROUND_HALF_UP)
         total = gross - discount_amount + tax
     else:  # TAX_AFTER_DISCOUNT
         taxable_amount = gross - discount_amount
-        tax = taxable_amount * (rate / Decimal(100))
+        tax = (taxable_amount * (rate / Decimal(100))).quantize(q, rounding=ROUND_HALF_UP)
         total = taxable_amount + tax
 
-    q = currency_quantum(currency)
     return {
-        "gross": _money(gross, q),
-        "discount_amount": _money(discount_amount, q),
-        "taxable_amount": _money(taxable_amount, q),
-        "tax": _money(tax, q),
-        "total": _money(total, q),
+        "gross": float(gross),
+        "discount_amount": float(discount_amount),
+        "taxable_amount": float(taxable_amount),
+        "tax": float(tax),
+        "total": float(total),
     }
 
 
@@ -244,29 +270,38 @@ def calculate_invoice(subtotal: float, discount_amount: float, tax_rate_pct: flo
     where a caller has already summed line items into one subtotal rather
     than iterating lines through calculate_line(). `discount_amount` is
     clamped to [0, subtotal] (AUDIT-005).
+
+    RECONCILIATION BY CONSTRUCTION -- same correction as calculate_line
+    above, applied to this function's own formula (currently unused by any
+    Python route, but blessed by this module's own docstring as one of only
+    two formula-writers, so left broken it is a landmine for the next
+    caller): `sub`/`disc`/`tax` are each rounded exactly once; `taxable_
+    amount`/`total` are exact Decimal arithmetic on the rounded pieces, never
+    independently re-rounded.
     """
     mode = normalize_mode(mode)
-    sub = _d(subtotal)
+    q = currency_quantum(currency)
+    sub = _d(subtotal).quantize(q, rounding=ROUND_HALF_UP)
     disc = _d(discount_amount)
     if disc < 0:
         disc = Decimal(0)
     if disc > sub:
         disc = sub
+    disc = disc.quantize(q, rounding=ROUND_HALF_UP)
     rate = _d(tax_rate_pct)
 
     if mode == TAX_BEFORE_DISCOUNT:
         taxable_amount = sub
-        tax = sub * (rate / Decimal(100))
+        tax = (sub * (rate / Decimal(100))).quantize(q, rounding=ROUND_HALF_UP)
         total = sub - disc + tax
     else:  # TAX_AFTER_DISCOUNT
         taxable_amount = sub - disc
-        tax = taxable_amount * (rate / Decimal(100))
+        tax = (taxable_amount * (rate / Decimal(100))).quantize(q, rounding=ROUND_HALF_UP)
         total = taxable_amount + tax
 
-    q = currency_quantum(currency)
     return {
-        "discount_amount": _money(disc, q),
-        "taxable_amount": _money(taxable_amount, q),
-        "tax": _money(tax, q),
-        "total": _money(total, q),
+        "discount_amount": float(disc),
+        "taxable_amount": float(taxable_amount),
+        "tax": float(tax),
+        "total": float(total),
     }

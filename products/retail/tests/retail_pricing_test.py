@@ -120,6 +120,171 @@ def test_calculate_invoice_matches_calculate_line_for_a_single_line():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Part A2 -- money-arithmetic reconciliation (Wave 0 correction).
+#
+# THE DEFECT this section guards: `calculate_line` used to compute `total`
+# from FULL-PRECISION `taxable_amount`/`tax`, independently of the ALREADY-
+# ROUNDED `discount_amount` a caller actually sees and sums -- so
+# `gross - discount_amount + tax == total` was not guaranteed. Measured on a
+# real running till: a 7.5% discount on a 2.50 JOD item (3 units) persisted
+# total=8.048 while subtotal-discount+tax=8.047 -- an ordinary, not an edge,
+# transaction. Every test below uses Decimal-exact equality (no
+# pytest.approx/tolerance): the whole point is that the identity holds
+# EXACTLY, not approximately.
+# ═════════════════════════════════════════════════════════════════════════════
+from decimal import Decimal as _Decimal, ROUND_HALF_UP as _ROUND_HALF_UP  # noqa: E402
+
+
+def _reconciles(calc):
+    """gross - discount_amount + tax == total, as exact Decimals (never as
+    floats -- float subtraction of two already-rounded money values can
+    itself introduce a spurious last-bit mismatch that has nothing to do
+    with the defect under test)."""
+    lhs = (_Decimal(str(calc['gross'])) - _Decimal(str(calc['discount_amount']))
+           + _Decimal(str(calc['tax'])))
+    return lhs == _Decimal(str(calc['total']))
+
+
+def test_calculate_line_reconciles_with_discount():
+    """THE measured failing case (SALE-000018 in the live-till reproduction):
+    2.50 JOD x 3, 7.5% discount, 16% tax. Before the fix: gross=7.500,
+    discount=0.563, tax=1.110 (sum 8.047) but total was independently rounded
+    to 8.048."""
+    r = pricing.calculate_line(2.5, 3, discount_pct=7.5, tax_rate=16, currency='JOD')
+    assert r['gross'] == 7.5
+    assert r['discount_amount'] == 0.563
+    assert r['tax'] == 1.11
+    assert r['total'] == 8.047, f"got {r['total']!r}"
+    assert _reconciles(r)
+
+
+def test_calculate_line_reconciles_awkward_discount():
+    """THE measured +0.001 case (SALE-000019): 10.0 JOD x 1, 3.3333%
+    discount, 16% tax -- the opposite sign from the test above, proving the
+    fix is not a one-direction coincidence."""
+    r = pricing.calculate_line(10.0, 1, discount_pct=3.3333, tax_rate=16, currency='JOD')
+    assert r['discount_amount'] == 0.333
+    assert r['total'] == 11.214, f"got {r['total']!r}"
+    assert _reconciles(r)
+
+
+def test_calculate_line_many_lines_sum_reconciles():
+    """THE measured case (SALE-000020): two lines, each individually
+    reconciling (guards a fix applied only at the header) AND the SALE-level
+    sum reconciling too (guards a fix that reconciles each line but somehow
+    still breaks under summation -- this is the identity
+    create_sale()/`_resolve_quotation_lines_for_write` rely on to need no
+    code changes of their own: Sigma(gross_i - discount_i + tax_i) ==
+    Sigma(gross_i) - Sigma(discount_i) + Sigma(tax_i) when each line's own
+    identity holds exactly)."""
+    line1 = pricing.calculate_line(0.25, 11, discount_pct=5, tax_rate=16, currency='JOD')
+    line2 = pricing.calculate_line(0.75, 13, discount_pct=5, tax_rate=16, currency='JOD')
+    assert _reconciles(line1)
+    assert _reconciles(line2)
+
+    gross = _Decimal(str(line1['gross'])) + _Decimal(str(line2['gross']))
+    discount = _Decimal(str(line1['discount_amount'])) + _Decimal(str(line2['discount_amount']))
+    tax = _Decimal(str(line1['tax'])) + _Decimal(str(line2['tax']))
+    total = _Decimal(str(line1['total'])) + _Decimal(str(line2['total']))
+    assert gross - discount + tax == total
+    assert total == _Decimal('13.774'), f"got {total!r}"
+
+
+def test_calculate_line_undiscounted_unchanged():
+    """THE allow-half (ENGINEERING.md section 1's 'prove both directions of
+    anything that both denies and allows'): the fix must DENY (change) the
+    discounted case above while still ALLOWING (leaving untouched) the
+    already-correct undiscounted case for realistic catalogue prices (at or
+    under the currency's own decimal scale, which is what every real product
+    price actually is -- this is not the corner case of a price entered at
+    MORE precision than the shop's currency, which forces `gross` itself to
+    round and can perturb even a zero-discount total; that corner case is
+    pre-existing on the `gross`-rounding step and orthogonal to this
+    correction, which is why it's excluded here rather than silently
+    baked into this pin)."""
+    cases = [
+        (100, 1, 15, pricing.TAX_AFTER_DISCOUNT, None),
+        (19.99, 3, 8, pricing.TAX_AFTER_DISCOUNT, None),
+        (2.375, 1, 16, pricing.TAX_AFTER_DISCOUNT, 'JOD'),
+        (50, 2, 0, pricing.TAX_BEFORE_DISCOUNT, None),
+    ]
+    for price, qty, tax_rate, mode, currency in cases:
+        r = pricing.calculate_line(price, qty, discount_pct=0, tax_rate=tax_rate, mode=mode, currency=currency)
+        assert r['discount_amount'] == 0.0
+        assert r['taxable_amount'] == r['gross']
+        assert _reconciles(r)
+        # Byte-identical to the straightforward pre-fix formula for the
+        # zero-discount path: taxable_amount==gross exactly (no discount to
+        # subtract), so total is just gross+tax computed the ordinary way --
+        # unaffected by which of the two rounding orders is used, because
+        # there is no separate "already-rounded discount" for the two orders
+        # to disagree about. Each operand goes through Decimal(str(...))
+        # BEFORE multiplying, exactly like pricing.py's own `_d()` -- doing
+        # `price * qty` as raw floats first (19.99 has no exact binary
+        # representation) would make THIS TEST's own arithmetic diverge from
+        # what pricing.py computes, which is a bug in the test, not evidence
+        # of one in the fix.
+        q = pricing.currency_quantum(currency)
+        gross_full = _Decimal(str(price)) * _Decimal(str(qty))
+        expected_gross = float(gross_full.quantize(q, rounding=_ROUND_HALF_UP))
+        tax_full = _Decimal(str(expected_gross)) * _Decimal(str(tax_rate)) / 100
+        expected_tax = float(tax_full.quantize(q, rounding=_ROUND_HALF_UP))
+        assert r['gross'] == expected_gross
+        assert r['tax'] == expected_tax
+        expected_total = float((_Decimal(str(expected_gross)) + _Decimal(str(expected_tax))).quantize(q, rounding=_ROUND_HALF_UP))
+        assert r['total'] == expected_total
+
+
+def test_calculate_invoice_reconciles():
+    """Same reconciliation identity, applied to `calculate_invoice` -- no
+    current caller, but this module's own docstring blesses it as one of
+    only two formula-writers, so a landmine closed before the first caller
+    ever lands.
+
+    NOTE ON THE CHOICE OF NUMBERS: `discount_amount` here is already a
+    currency AMOUNT (not a percentage the function itself multiplies out),
+    so a "clean" discount like 7.5 against subtotal=100 never forces a
+    rounding step at all -- verified by running it against the reverted
+    pre-fix formula, where it reconciled anyway (the same coincidence-trap
+    noted on the other tests in this file). The divergence needs the
+    discount amount itself to carry more precision than the currency's own
+    scale (33.335 at a 2dp quantum) -- a caller can legitimately do this,
+    e.g. a already-summed multi-line discount total. Verified BY RUNNING IT
+    against the reverted pre-fix formula: taxable_amount=66.67, tax=10.67,
+    total=77.33 -- 66.67+10.67=77.34 != 77.33, a real reconciliation
+    failure in the OUTPUT DICT's own fields (the total itself happened to
+    still land on 77.33 either way here, which is exactly why the identity
+    check below -- not a hardcoded expected total -- is what this test
+    pins)."""
+    r = pricing.calculate_invoice(subtotal=100, discount_amount=33.335, tax_rate_pct=16,
+                                   mode=pricing.TAX_AFTER_DISCOUNT)
+    assert _Decimal(str(r['taxable_amount'])) + _Decimal(str(r['tax'])) == _Decimal(str(r['total'])), (
+        f"taxable_amount {r['taxable_amount']} + tax {r['tax']} != total {r['total']}")
+
+
+def test_calculate_line_reconciles_at_two_decimal_currency_too():
+    """The defect and the fix are not JOD-specific -- a plain 2dp (default,
+    no currency passed) quantum hits the identical independent-rounding gap.
+
+    NOTE ON THE CHOICE OF NUMBERS: an earlier version of this test used
+    (19.99, 3, discount_pct=5, tax_rate=8) -- values that, verified by
+    running them against the reverted pre-fix formula, happen to produce the
+    SAME total (61.53) both ways. A reconciliation test built on numbers
+    like that would pass whether or not the fix existed -- exactly
+    ENGINEERING.md's 'the pass condition is the bug signature' trap, and the
+    same coincidence the code-review noted about this file's OWN pre-
+    existing test_multi_quantity_line/test_float_precision_rounding cases.
+    (10.0, 1, discount_pct=33.3333, tax_rate=16) was verified BY RUNNING IT
+    against the reverted pre-fix formula to give total=7.73 while
+    taxable+tax=6.67+1.07=7.74 -- a genuine 2dp-scale mismatch -- before
+    being adopted here, specifically so this test cannot make the same
+    mistake."""
+    r = pricing.calculate_line(10.0, 1, discount_pct=33.3333, tax_rate=16)
+    assert r['total'] == 7.74, f"got {r['total']!r}"
+    assert _reconciles(r)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Part B -- integration (real HTTP routes, isolated temp DB)
 # ═════════════════════════════════════════════════════════════════════════════
 

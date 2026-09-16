@@ -138,9 +138,39 @@ def test_invoice_level_arithmetic_is_currency_aware_too():
 def test_a_zero_decimal_currency_rounds_to_whole_units():
     """Yen has no minor unit at all. Included because it is the other direction
     of the same bug: a table that only ever ADDS precision would get this
-    wrong."""
+    wrong.
+
+    CHANGED BY THE WAVE 0 MONEY-ARITHMETIC CORRECTION (calculate_line now
+    rounds gross/discount_amount/tax EXACTLY ONCE and derives total as exact
+    Decimal arithmetic on those already-rounded primitives -- see
+    core/retail/pricing.py's own docstring). This test's expected total
+    moved from 3.0 to 2.0, and the reason is worth stating precisely rather
+    than "the test needed updating":
+
+    WHAT THE OLD VALUE (3.0) ACTUALLY WAS: gross=2.375 rounded to JPY's 0dp
+    quantum is 2 -- and the pre-fix `calculate_line` returned exactly that
+    as `calc['gross']`. But it computed `total` from the UNROUNDED
+    2.375 + tax(0.38) = 2.755, independently rounded to 3. So the pre-fix
+    code's own five-field output was gross=2, discount=0, tax=0, total=3 --
+    2 - 0 + 0 = 2 != 3 = its own total. This test only ever pinned `total`
+    in isolation, so it could not see that the very output it was asserting
+    on did not reconcile with its own other fields -- the identical failure
+    shape this whole correction exists to close, just surfacing at JPY's
+    coarser (0dp) precision as a full 1-unit gap instead of JOD's few-fils
+    one.
+
+    WHAT THIS TEST CAN NO LONGER CATCH: a regression that rounds `total`
+    independently of the currency's OWN already-rounded gross/tax (the
+    exact old behavior) would need to be caught by a reconciliation
+    assertion, not a single hardcoded expected total -- which is why the
+    second assertion below checks gross-discount+tax==total directly,
+    rather than trusting the presence of a single "right-looking" number
+    the way this test used to. What this test still catches, unchanged: a
+    currency table that hardcodes 2dp regardless of currency (JPY's 0dp
+    would then show a nonzero decimal, e.g. 2.38 instead of 2.0)."""
     calc = tax_engine.calculate_line(2.375, 1, 0, 16, currency='JPY')
-    assert calc['total'] == 3.0
+    assert calc['total'] == 2.0, f"got {calc['total']!r}"
+    assert calc['gross'] - calc['discount_amount'] + calc['tax'] == calc['total']
 
 
 # ═════════════════════════════════════════════════════════════════════════════

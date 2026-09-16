@@ -93,12 +93,24 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     except Exception:
         tax_mode = tax_engine.DEFAULT_MODE  # retail_settings not created yet (fresh install) -- use the default
 
+    # Read once, ahead of the per-line loop, and pass into every calculate_
+    # line() call below. Without this, calculate_line() silently defaulted
+    # to a hardcoded 2dp quantum (currency=None) even for a JOD company,
+    # so EInvoiceLine.discount_amount/.tax_amount would round to the wrong
+    # precision for a 3-decimal-currency shop -- the same class of bug this
+    # module's tax_mode lookup above already guards against, just on the
+    # currency axis instead of the tax-mode axis. `ubl.py::_line_xml`
+    # currently renders neither field (only line_total/unit_price), so this
+    # was harmless to the actually-filed XML until the day something reads
+    # them -- fixed now rather than left as a landmine.
+    currency = settings.get_setting(conn, company_id, 'currency')
+
     lines = []
     for item in item_rows:
         calc = tax_engine.calculate_line(
             float(item['unit_price']), float(item['quantity']),
             float(item['discount_pct'] or 0), float(item['tax_rate'] or 0),
-            mode=tax_mode,
+            mode=tax_mode, currency=currency,
         )
         lines.append(EInvoiceLine(
             description=item['product_name'], quantity=float(item['quantity']),
@@ -120,7 +132,8 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     # docstring pattern and docs/einvoicing/phase1/invoice-numbering-audit.md
     # for why einvoice_no/invoice_family must never drift apart post-enqueue.
     invoice_family = outbox_row['invoice_family']
-    currency = settings.get_setting(conn, company_id, 'currency')
+    # `currency` already read above, ahead of the per-line calculate_line()
+    # loop -- reused here rather than queried a second time.
     seller_name = settings.get_setting(conn, company_id, 'seller_name') or 'Aura Retail Merchant'
     seller_tin = settings.get_setting(conn, company_id, 'seller_tin')
     payment_type = derive_payment_type(sale['payment_method'], float(sale['amount_paid']), float(sale['total']))

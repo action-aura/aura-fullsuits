@@ -18,6 +18,7 @@ import os
 import sqlite3
 import random
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 _app_data = os.environ.get('AURA_APP_DATA')
 if _app_data:
@@ -7610,6 +7611,38 @@ def _seed_retail(conn, cur, company_id=1):
         tax_mode = _tax_engine.normalize_mode(_row[0] if _row else None)
     except Exception:
         tax_mode = _tax_engine.DEFAULT_MODE  # retail_settings not created yet (fresh install) -- use the default
+
+    # Wave 0 money-arithmetic correction: this seeder used to hand-roll its
+    # own aggregation (round(gross-discount, 2), round(subtotal+tax, 2))
+    # instead of summing calculate_line()'s own already-reconciling per-line
+    # Decimals the way create_sale()/_resolve_quotation_lines_for_write() do
+    # -- see this module's docstring at the top of _seed_retail's caller
+    # chain. That hand-rolled path had THREE bugs at once: (1) it inherited
+    # none of calculate_line's reconciliation fix, so seeded totals could
+    # fail subtotal-discount+tax==total exactly like the real defect this
+    # correction closes; (2) `round(x, 2)` hardcoded 2dp, silently
+    # coarsening JOD's 3rd decimal -- the exact regression
+    # commercial_runtime/currency.py's own docstring warns about; (3) the
+    # UPDATE below never wrote `discount_amount` at all, so a seeded sale
+    # with a random discount left that column at its default while
+    # `subtotal` had already had the discount folded out of it under the
+    # wrong name (it was actually the post-discount taxable amount, not the
+    # gross-of-discount figure `sales.subtotal` means everywhere else in
+    # this codebase). All three are fixed together below by mirroring
+    # create_sale's own accumulation pattern exactly, reading the shop's
+    # REAL currency key ('base_currency' -- see api/retail_api.py's
+    # _company_currency docstring for why 'currency' would silently read
+    # nothing and fall back to the default for every non-default-currency
+    # company) rather than a key this codebase never writes.
+    try:
+        _cur_row = cur.execute(
+            "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'", (cid,)
+        ).fetchone()
+        seed_currency = _cur_row[0] if _cur_row and _cur_row[0] else _tax_engine.DEFAULT_BASE_CURRENCY
+    except Exception:
+        seed_currency = _tax_engine.DEFAULT_BASE_CURRENCY
+    _seed_quant = _tax_engine.currency_quantum(seed_currency)
+
     sale_num = 1000
     methods = ['cash', 'cash', 'card', 'card', 'digital_wallet']
     for i in range(40):
@@ -7624,8 +7657,9 @@ def _seed_retail(conn, cur, company_id=1):
         cust_id = random.choice(customer_ids + [None])
         method = random.choice(methods)
         num_items = random.randint(1, 4)
-        subtotal = 0
-        tax_total = 0
+        subtotal = Decimal('0')
+        discount_total = Decimal('0')
+        tax_total = Decimal('0')
         sale_num += 1
         sn = f'S-{sale_num}'
         cur.execute(
@@ -7639,11 +7673,15 @@ def _seed_retail(conn, cur, company_id=1):
             price, trate = row[0], row[1]
             qty = random.randint(1, 3)
             disc = random.choice([0, 0, 0, 5, 10])
-            _calc = _tax_engine.calculate_line(price, qty, discount_pct=disc, tax_rate=trate, mode=tax_mode)
-            line = round(_calc['gross'] - _calc['discount_amount'], 2)
-            tax = _calc['tax']
-            subtotal += line
-            tax_total += tax
+            _calc = _tax_engine.calculate_line(
+                price, qty, discount_pct=disc, tax_rate=trate, mode=tax_mode, currency=seed_currency)
+            # sale_items.line_total is the post-discount, pre-tax figure --
+            # matches create_sale's own convention (`calc['taxable_amount']`),
+            # not the pre-discount `gross` the old code stored here.
+            line = _calc['taxable_amount']
+            subtotal += Decimal(str(_calc['gross']))
+            discount_total += Decimal(str(_calc['discount_amount']))
+            tax_total += Decimal(str(_calc['tax']))
             cur.execute(
                 "INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total) VALUES (?,?,?,?,?,?,?)",
                 (sid, pid, qty, price, disc, trate, line)
@@ -7652,10 +7690,13 @@ def _seed_retail(conn, cur, company_id=1):
                 "INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by) VALUES (?,?,?,?,?,?,?,?)",
                 (cid, pid, branch_id, 'sale_out', -qty, price * 0.6, sn, 'System')
             )
-        total = round(subtotal + tax_total, 2)
+        subtotal_f = float(subtotal.quantize(_seed_quant, rounding=ROUND_HALF_UP))
+        discount_f = float(discount_total.quantize(_seed_quant, rounding=ROUND_HALF_UP))
+        tax_f = float(tax_total.quantize(_seed_quant, rounding=ROUND_HALF_UP))
+        total_f = float((subtotal - discount_total + tax_total).quantize(_seed_quant, rounding=ROUND_HALF_UP))
         cur.execute(
-            "UPDATE sales SET subtotal=?,tax_amount=?,total=?,amount_paid=?,change_amount=0 WHERE id=?",
-            (round(subtotal, 2), round(tax_total, 2), total, total, sid)
+            "UPDATE sales SET subtotal=?,discount_amount=?,tax_amount=?,total=?,amount_paid=?,change_amount=0 WHERE id=?",
+            (subtotal_f, discount_f, tax_f, total_f, total_f, sid)
         )
 
     # ── the demo shop's opening declaration (Phase 3, schema v15) ───────────

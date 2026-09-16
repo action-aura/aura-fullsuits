@@ -1,6 +1,6 @@
 {
   "fixture_version": "1",
-  "pricing_calculation_version": "retail-pricing-v2-wave0",
+  "pricing_calculation_version": "retail-pricing-v3-reconciled-total",
   "calculate_line_results": [
     {
       "id": "cl-01",
