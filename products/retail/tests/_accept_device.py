@@ -87,6 +87,7 @@ def main() -> None:
     flask_app = _app_module.init_app()
     flask_app.config["TESTING"] = True
 
+    import api.retail_api as retail_api_module
     from api.retail_api import _ensure_credit_schema
     from commercial_runtime.identity.registry_db import get_conn as registry_conn
     from commercial_runtime.security.passwords import hash_password
@@ -350,6 +351,69 @@ def main() -> None:
             finally:
                 conn.close()
             results.append({"deleted": deleted})
+
+        elif op == "set_terminal_id":
+            # Aseel-parity wave A-PAR (schema v34): `local_terminal_id()`
+            # (database/schema.py, imported into retail_api as a bare
+            # name) resolves a REAL device identity file that a fresh
+            # process/AURA_APP_DATA dir typically has not established yet
+            # -- AUDIT-032D's whole point. Monkeypatched here exactly like
+            # retail_drawer_terminal_scope_test.py's own `at_terminal`
+            # helper, rather than relying on some real action to create
+            # the identity file as a side effect, so this device's
+            # "which till am I" answer is deterministic and under this
+            # test's own control across a real process boundary.
+            retail_api_module.local_terminal_id = (lambda tid=action["terminal_id"]: tid)
+            results.append({"ok": True})
+
+        elif op == "create_doc_series":
+            # Aseel-parity wave A-PAR (schema v34, retail-hardware-
+            # viewports): per-document-type numbering series. Added here
+            # rather than in a second device script, matching this file's
+            # own module docstring convention ("every existing op ...
+            # reproduced here UNCHANGED; this file only ADDS what [a] pass
+            # specifically needs") -- `create_po`'s optional `branch_id`
+            # is the precedent for extending an existing op set this way.
+            payload = {"doc_type": action["doc_type"], "code": action["code"],
+                       "label": action.get("label", action["code"])}
+            for k in ("branch_uid", "pad_width", "start_no"):
+                if action.get(k) is not None:
+                    payload[k] = action[k]
+            r = client.post(f"{API}/doc-series", json=payload)
+            results.append({"status_code": r.status_code, "body": r.get_json(),
+                             "series_id": (r.get_json().get("data") or {}).get("id") if r.status_code == 200 else None})
+
+        elif op == "claim_doc_series":
+            r = client.post(f"{API}/doc-series/{action['series_id']}/allocator-claim")
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "list_doc_series":
+            qs = f"?doc_type={action['doc_type']}" if action.get("doc_type") else ""
+            r = client.get(f"{API}/doc-series{qs}")
+            results.append({"status_code": r.status_code, "body": r.get_json(),
+                             "data": (r.get_json().get("data") or []) if r.status_code == 200 else []})
+
+        elif op == "quarantine_rows":
+            conn = get_retail_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT entity_id, entity_type, event_type, reason, detail FROM sync_apply_quarantine "
+                    "ORDER BY quarantined_at"
+                ).fetchall()
+            finally:
+                conn.close()
+            results.append({"rows": [dict(r) for r in rows]})
+
+        elif op == "sync_conflict_rows":
+            conn = get_retail_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT entity_id, entity_type, event_type, local_row_version, incoming_row_version "
+                    "FROM sync_conflicts ORDER BY detected_at_utc"
+                ).fetchall()
+            finally:
+                conn.close()
+            results.append({"rows": [dict(r) for r in rows]})
 
         elif op == "cash_session_open":
             r = client.post(f"{API}/cash-sessions/open", json={

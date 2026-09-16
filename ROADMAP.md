@@ -3456,3 +3456,352 @@ its entire 1.2MB manual; it is a single-machine product). Reserving versions
 for it now would imply a decision that has not been made.
 
 Keyboard ergonomics and the persistent shortcut legend need no schema at all.
+
+
+## 2026-09-15 — v32 CASHED IN: cheque lifecycle as a tracked instrument
+
+Implemented per the reviewed A-PAR design (`docs/launch-readiness/` design +
+adversarial review). `cheques` (immutable header) + `cheque_events` (append-
+only transition log), status a pure fold (`core/retail/cheques.py`), zero
+row_version/reject-stale machinery — two append-only sets converge by plain
+set union. Money moves at RECEIPT; a bounce/cancel writes a NEW opposite
+`payments` row, keyed on `uuid5(cheque_id, crossing_index)` so two devices
+that independently observe the same bank fact mint the identical uid and
+dedupe via the existing `ON CONFLICT(uid) DO NOTHING`. Ten routes, all
+`retail.employees` for writes / `retail.reports` for reads (cheques are
+back-office end to end this wave). `customer_statement`/`supplier_statement`
+now select both payment directions and label a reversal accordingly;
+`daily_cash` excludes cheque rows from `cash_in`/`cash_out` and reports them
+separately as `cheques_in`/`cheques_out`. Android's two statement screens
+(`RetailExtraScreens.kt`) gained the matching `kind == "reversal"` handling —
+the one client that actually renders this screen (the desktop has none).
+
+Proven with real mutation: schema shape (status/row_version absence, the
+v31-peer `sync_cursor` reset), the fold's permutation-invariance and the
+uuid5 determinism, the money leg both directions (receipt reduces AR, bounce
+restores it in full), illegal-transition refusal, the drawer's non-
+pollution, `daily_cash`'s exclusion, and — the B2 field case itself — two
+devices independently bouncing the same cheque before either syncs,
+collapsing to exactly one reversal on both sides. See
+`products/retail/tests/retail_v32_cheque_migration_test.py`,
+`retail_cheque_fold_test.py`, `retail_cheque_lifecycle_test.py` and
+`retail_cheque_sync_test.py`.
+
+NAMED DEFERRALS, so none of these get rediscovered as a "cheque bug" later:
+
+- **No v32 edit route.** A mistyped cheque is cancelled and re-recorded —
+  the immutable header is what makes the sync trivial. A future edit needs
+  either a mutable-header entity type (reopening the exact defect this
+  design closed) or a `corrected` event the fold can absorb; the second
+  shape is the one to build if this is ever asked for.
+- **Endorsement settles nothing automatically.** `endorse_cheque` records
+  the disposal only; the payable it discharges still goes through the
+  ordinary supplier-payment route. Auto-settling in one transition would
+  move two parties' balances from one write and make `endorsed -> bounced`
+  responsible for unwinding both atomically — deferred as the most
+  error-prone corner available for the least-used of the four Aseel stages.
+- **No Android cheque screen.** Cheques are an owner/back-office act and the
+  phone is a till in this wave; Android's ONLY change is the forced
+  statement-rendering fix. A read-only cheque list + drill-in on Android is
+  a separate ~3 days, estimated but not started.
+- **No desktop customer/supplier statement screen.** `customer_statement`/
+  `supplier_statement` have no desktop UI at all (verified: `grep -rn
+  statement products/retail/frontend/` matches only font licences) — a
+  customer's cheques are reachable from the Cheques screen via `?party_id=`
+  instead. Building the statement screen itself is separate work.
+- **Pre-existing, NOT created by this wave: `create_return` vs. the
+  statement.** `create_return` calls `_adjust_credit(..., -ar_credit)`
+  against a credit sale but writes no `payments` row, so a customer
+  statement's running balance and `customers.credit_balance` already
+  disagree after any return against a credit sale. The eventual fix is the
+  same shape this wave introduces (a dated opposite ledger row); applying it
+  now would touch `daily_cash` and the drawer for every existing install, so
+  it stays a named gap rather than a silent scope-creep fix.
+- **`payment-methods` reachability false negative.** Noted during the A-PAR
+  review's reachability re-check; a real gap, unrelated to cheques, tracked
+  here rather than folded into this wave's diff.
+- **Payment-method vocabulary split.** The POS writes its own hardcoded
+  method array (`subsystem-retail.js`) instead of reading `GET /payment-
+  methods`, so `by_method` already showed a split vocabulary before cheques
+  added `'check'` to it. Normalising the POS to read the real list is
+  separate work this wave joins rather than causes.
+- **Owner relay retention** is the one external fact the v31-peer catch-up
+  re-pull depends on (a device that upgrades long after the fleet gets only
+  what the relay still holds). Confirm retention against `owner/` before a
+  staged rollout; if bounded, upgrade every device in a shop within one
+  window as an operational note in the release process.
+
+
+## 2026-09-16 — v33 CASHED IN: quotations and sales orders as real documents
+
+Implemented per the reviewed A-PAR design (`C:\Users\MSI\.claude\jobs\215b2785\tmp\revised\quotations.md`,
+which itself survived an adversarial review round before implementation
+started). `sales_quotations` (mutable header, draft -> sent -> accepted/
+declined -> converted, or cancelled at any point before converted) +
+`sales_quotation_lines` (create-only, frozen at SEND). `held_sales` is
+byte-for-byte unchanged -- it is a device-local cart snapshot, not a
+quotation, and this wave adds nothing to it.
+
+Ten routes, all `retail.sell` (create/update/send/accept/decline/cancel/
+prepare-conversion mutating; list/get reads; `committed-demand` deliberately
+UNGATED — advisory quantity only, never money). ONE new licence capability,
+`retail.quotation.manage`. Conversion is a THREE optional-field addition to
+the existing `POST /sales` (`quotation_id`, `honour_quoted_prices`,
+`override_expiry`) — there is still exactly one sale writer in this product;
+no second one was created. Pricing at conversion compares EFFECTIVE per-unit
+prices (`unit_price * (1 - discount_pct/100)`) on both sides and lets the
+WHOLE winning side win — never a raw-price `min()` with one side's discount
+carried over, which would compound (measured: 12.00@10% vs 9.00@0% would
+give 8.10, below both real offers, if done the naive way). Tax is always
+live, never the quoted snapshot. Stock is checked with NO special case at
+conversion — a quote reserves nothing; `committed-demand` is advisory only,
+derived from accepted/unconverted/unexpired quotations, and never refuses a
+sale (four independent reasons recorded in the design doc: `quantity_
+reserved` was deliberately dropped in v17, balances are ledger-derived,
+reservations do not converge across devices, and a document must never
+refuse a sale — `create_sale`'s own stage 7d-iii precedent).
+
+Sync (Stage B) landed in the SAME pass as Stage A, not coordinated as a
+separate change: `quotation` joined `RETAIL_SYNC_ENTITY_TYPES` and
+`sync_service.py` gained the matching `_apply_event` branch in this same
+worktree/session, reviewed together rather than split across two people's
+work as the design's own risk R4 flagged as the safer default. Read the
+whole diff to `commercial_runtime/sync/sync_service.py` before merging, the
+same scrutiny R4 asked for even though it landed as one change here. DRAFTS
+DO NOT SYNC — no event is queued until SEND, which then carries the header
+AND the frozen line set as ONE `create` event; every later transition is an
+`update` carrying header fields only, so there is no line-replace event on
+the wire and no stale-line window. `branch_uid` rides the payload and is
+resolved via `_resolve_branch_id` on apply, NEVER the sender's raw
+`branch_id` integer (AUDIT-032C's own defect, not reintroduced here). A
+line's `product_id` is quarantined via `_row_exists` +
+`_quarantine_apply_event` (`missing_parent:product`) before any write, the
+identical mechanism `sale_item` already uses, so one product that has not
+arrived yet parks that one quotation rather than wedging the whole pull
+batch. A genuine cross-device double-conversion (two tills each convert the
+same quotation before either's event arrives) is DETECTED and RECORDED via
+`sync_conflicts` (`event_type='double_conversion'`), never silently
+overwritten — this is a real operational incident the shop has to resolve,
+not something sync can prevent on its own.
+
+Proven with real mutation, not merely read: the expires-TODAY boundary (a
+quote expiring today is still valid for the rest of the day), the N3
+compounding-discount defect the original submitted design shipped, the
+sequential-conversion status guard AND the flip UPDATE's own rowcount guard
+in genuine isolation from each other (not just from a hand-flipped status,
+which the pre-check would catch on its own and prove nothing about the
+rowcount path), the B4 pinned-branch resolution, branch_uid resolution on
+pull, the missing-parent quarantine's real `FOREIGN KEY constraint failed`
+failure mode, and the double-conversion conflict with an incoming row_
+version deliberately higher than local (equal row_versions let the ORDINARY
+reject-stale gate protect the row for an unrelated reason and would prove
+nothing about the double-conversion-specific code path). See
+`products/retail/tests/retail_v33_quotation_migration_test.py`,
+`retail_quotation_test.py`, `retail_quotation_sync_test.py`,
+`retail_quotation_ui_test.js` and `retail_capability_ratchet_ast.py`'s own
+consumption proof over the three inline CAP_DISCOUNT checks (create_
+quotation, update_quotation, create_sale's override-expiry branch).
+
+NAMED DEFERRALS, so none of these get rediscovered as a "quotations bug"
+later:
+
+- **Android has NO quotation screen at all.** Measured: `android/aura-
+  retail/.../net/AuraApi.kt` carries `purchase-orders` and has no stock-
+  transfers or promotions endpoints either — quotations join an existing,
+  already-named gap (Android is two document waves behind), not a new one.
+  When scheduled: READ + CONVERT an existing quotation first (the one thing
+  a phone-only shop cannot work around), CREATE second.
+- **No POS-screen "Convert quotation…" entry point (design point E8).**
+  Conversion is reachable today only from the Quotations screen's own
+  per-row Convert button on an accepted quotation. A cashier mid-sale on the
+  POS screen has no shortcut into it yet; the backend route needs nothing
+  further, this is a pure frontend addition.
+- **No committed-demand figure on the Products screen (design point E9).**
+  `GET /quotations/committed-demand` is wired into the quotation-composition
+  sheet (an inline "already promised on open quotations" hint while adding
+  a line) but not into the Products list itself, because doing that usefully
+  needs a resolved "this device's working branch" concept the Products
+  screen does not carry today (Products shows an aggregate `total_stock`
+  across all branches, not a per-branch figure) — a bigger change than this
+  wave's own scope.
+- **No WhatsApp/email delivery of a quotation.** Print is `window.print()`
+  against an A4-styled `.ret-modal` card — no backend renderer, no PDF
+  dependency, matching `escpos_receipt.py`'s own posture (a 58mm thermal
+  renderer is the wrong artefact for a B2B quotation, and neither is
+  appropriate as a substitute for the other). A fifth `core/retail/
+  whatsapp_hook.py` trigger point riding the existing notifications outbox
+  is the design's own recommended path when this is asked for.
+- **Quotations still mint through the legacy counter, and that is
+  deliberate, not a gap.** `doc_number` is minted through the same
+  `_next_ref`/`doc_sequences` counter every other pre-v34 document type
+  uses (`QUO-000042-<cid8>-<device8>`) — v34's numbering-series feature
+  (see the "v34 CASHED IN" entry below) added `doc_type='quotation'` to
+  NEITHER `DOC_SERIES_TYPES` nor its migration: a future wave may add it
+  with NO schema change of its own (`resolve_series`/`allocate` are
+  already doc_type-generic), but that is that wave's own call to make,
+  not smuggled in here.
+- **No deposits against an accepted order.** Money held against no sale yet
+  is an AR shape that needs its own design (v33's own review, residual risk
+  R11c) — deliberately out of scope rather than invented inline.
+- **The customer-protective pricing policy (R5) is a judgement call, not a
+  fact.** `honour_quoted_prices=true` charges the LOWER of quoted vs live —
+  never above today's shelf price, never above the quoted price. A shop
+  that wants "the quote is the contract, full stop, even above shelf price"
+  would need a different flip, one expression plus tests 4/5/6, not a
+  redesign. Confirm this reading is what the owner actually wants before
+  relying on it in a live shop.
+- **Cashiers can issue and convert quotations by default (R7).** `ROLE_
+  CASHIER` holds `retail.sell`, so a cashier can quote at list price,
+  cannot discount one, cannot honour an expired one without a manager's
+  CAP_DISCOUNT override, and CAN convert a manager-issued discounted quote.
+  If quotations should be manager-only at this shop: the nav entry's
+  `capability` key plus the seven mutating routes' own decorators, all one
+  code, mechanical — but decide before a cashier issues one, not after.
+
+
+## 2026-09-16 — v34 CASHED IN: per-document-type numbering series
+
+Implemented per the reviewed A-PAR design
+(`C:\Users\MSI\.claude\jobs\215b2785\tmp\revised\numbering.md`, itself the
+product of one full adversarial review round before implementation
+started — B1-B3/C1-C8/M1-M5 all accepted and folded into the spec this
+wave built against, verbatim). `doc_series` (the DEFINITION — SYNCS) +
+`doc_series_counter` (the COUNTER — device-local, NEVER rides the wire).
+THE ONE DECISION unchanged: a series names exactly one allocating
+terminal, and a device only ever allocates from a book it owns —
+`core/retail/doc_series.py::resolve_series` structurally cannot return
+another device's book, so cross-device document-number collision
+(AUDIT-032B) is prevented rather than merely policed.
+
+Three doc types (`sale`/`return`/`po`), the existing `REF_PREFIX`
+vocabulary MOVED (not copied) from retail_api.py into
+`core/retail/doc_series.py`, aliased back so `_next_ref`'s two call sites
+stay byte-identical. Four mint sites (`create_sale`, `create_return`,
+`create_purchase_order`, `accept_reorder_request`) each resolve a claimed
+series first and fall back to the UNCHANGED legacy `_next_ref()` +
+company/device-fragment path otherwise — an install that never configures
+a book mints the exact same string it minted yesterday; pinned by
+`retail_doc_series_test.py`'s own byte-identical-legacy tests at all four
+sites.
+
+**MANUAL NUMBER ENTRY IS CUT FROM v34**, deliberately, not discovered
+missing later: `create_sale`'s own idempotent-replay path returns the
+EXISTING `sale_number` on a retry and runs before any write lock is
+taken, so "what happens when a retry carries a DIFFERENT typed number" has
+no honest answer today; handing an auditor-visible number to whoever rings
+the sale also contradicts this feature's own CAP_EMPLOYEES argument. An
+unclaimed book needs no `mode` column at all — `allocator_terminal_uid IS
+NULL` already says it. If wanted later: its own CAP_EMPLOYEES route (never
+`create_sale`'s body) and a stated idempotency rule are the conditions,
+not a flag on this table.
+
+Five routes under `/api/sub/retail/doc-series`, all `retail.employees`
+(same tier as `tax_settings_set`/`business_day_settings_set`) except
+`GET /doc-series`, which carries no capability at all — the same
+"printing a receipt is not admin-only" posture `branding_settings_get`
+already established. The claim route is named `/doc-series/<id>/
+allocator-claim`, not `.../claim` — deliberately, so
+`retail_route_reachability_test.py`'s longest-literal-segment heuristic
+gives it its OWN reachability key instead of collapsing into the shared
+`doc-series` one, where a single frontend mention of the collection would
+have green-lit all five routes without proving claim was wired at all.
+
+**E-invoicing firewall (docs/einvoicing/phase1/invoice-numbering-audit.md,
+"Decision: option 2"):** `commercial_runtime/einvoicing/sequence.py`
+gained `RESERVED_LOCAL_PREFIXES`, implemented via module-level
+`__getattr__` (PEP 562) rather than a plain constant so it re-derives
+LIVE from `_PREFIX` on every access — a hardcoded copy of today's two
+values would have reopened the exact "two literals must match" bug shape
+`sync_service.py`'s own module docstring already names. The ORIGINAL
+firewall test's own premise ("`allocate_einvoice_number` has exactly ONE
+call site in the repo") was FALSE — two tracked production callers exist
+(retail's own adapter and Clinic's), plus 17 references in the sequence
+unit test — and would have been red before this feature existed. Fixed by
+naming all three as an explicit expected set and keeping the scan
+REPO-WIDE via `git ls-files` (never `Path.rglob`, which would also
+double-count the untracked Android Chaquopy build-tree copies of both
+packages this worktree happens to carry).
+
+**Sync — the defect neither the submitted design nor its own review
+caught:** two devices claiming the SAME unclaimed book while both offline
+both write `row_version=2` from an identical base of 1. The submitted
+design's "the later row_version wins on convergence" is false — a plain
+`>` gate is FALSE in both directions at a genuine tie, and the fleet is
+left PERMANENTLY divergent, each till minting `A-000001`. Fixed with a
+deterministic total order (row_version, then `claimed_at_utc`, then
+`allocator_terminal_uid`) computed identically on every device — proved
+in both arrival orders in `retail_doc_series_sync_test.py`. The loser
+stops automatically (`resolve_series` filters on this device's own
+terminal_uid; no special-case code needed) and any numbers it already
+minted before convergence land as `sync_apply_quarantine`
+(`duplicate_document_number`) / are simply the ones a genuinely reachable
+`idx_doc_series_code` collision (two offline devices coding the same book)
+parks as `duplicate_series_code` — both proved across two REAL processes
+in `retail_doc_series_device_isolation_test.py`, cursor advancing past
+each, a later same-batch event still landing.
+
+**A genuine gap found while writing the sync tests, left as a gap rather
+than silently patched (see that file's own test docstring for the full
+repro):** the claim-race tie-break was designed for two devices claiming
+the SAME unclaimed book from an identical base row_version, and it
+correctly converges that case. It was NOT designed for — and does not
+correctly resolve — two devices making genuinely CONCURRENT edits to
+DIFFERENT fields (e.g. one renames a label while another claims the same
+book) that happen to tie at the same row_version from the same base:
+SQLite's UPSERT `WHERE` clause is evaluated once per ROW, so when it
+resolves in one side's favour the other side's unrelated field change is
+dropped outright — delta-gating only controls which columns a PASSING
+write may touch, it cannot rescue a write the row-level gate itself
+rejects. The fleet still converges to one consistent state and the sync
+wedge is still prevented (this is not AUDIT-032B), but a true concurrent
+tie can silently drop one side's edit. Narrow (it requires two truly
+offline edits from an identical baseline, to DIFFERENT fields, that tie
+exactly), not fixed here because fixing it means changing the reviewed
+apply-branch SQL rather than testing it as specified — a future wave's
+call, recorded here so it is not rediscovered as a surprise.
+
+**Merge-order hazard, mechanically guarded, not just documented:** a
+`RETAIL_SCHEMA_VERSION >= 34` assertion lives in
+`retail_doc_series_migration_test.py` for the fleet-wide-outage shape (a
+later merge resolving the constant back down); the silent-missing-tables
+shape (a later wave merging first and being skipped by an already-
+upgraded database) has no guard inside this wave's own file set and can
+only be caught by whichever wave merges after v34 — **the A-PAR waves
+must merge in ascending version order, or the wave landing after v34 must
+bump `RETAIL_SCHEMA_VERSION` past the live head and record that here.**
+
+Tests: `retail_doc_series_migration_test.py` (7),
+`retail_doc_series_test.py` (25 — allocation/gaplessness-under-rollback at
+all three real mint sites/the legacy allow-half/create-route
+containment), `retail_doc_series_einvoice_firewall_test.py` (9),
+`retail_doc_series_sync_test.py` (6 — emit/apply/delta-gating/reject-stale/
+the tie-break proved in both arrival orders),
+`retail_doc_series_device_isolation_test.py` (2, two REAL OS processes).
+`retail_route_capability_matrix_test.py` (46) and
+`retail_route_reachability_test.py` (4) both re-run clean against the four
+new capability entries and five new routes.
+
+NAMED DEFERRALS:
+
+- **Android cannot claim a book.** The embedded Flask backend mints from a
+  claimed series with ZERO Kotlin changes once one exists, but there is no
+  Settings screen under `android/aura-retail/.../ui/screens/` to configure
+  or claim one from — an Android till stays on legacy numbering
+  indefinitely under a desktop-only reading. One Compose control on an
+  existing screen (`SyncStatusScreen.kt` or similar) calling the two
+  simplest routes closes this for roughly half a day; not built here.
+- **A duplicate-code collision between two offline devices permanently
+  strands the documents already numbered under the losing copy.** The
+  losing `doc_series` row itself self-heals once an owner renames one book
+  (the retry then converges cleanly); the sale/return numbers the losing
+  device already minted before convergence do not — a document number
+  already on a customer's receipt cannot be renumbered. Visible and
+  replayable via `sync_apply_quarantine`, never silent, and made rare by
+  `create_doc_series`'/`allocator-claim`'s own `_is_device_behind_on_sync()`
+  refusal (closes the both-devices-online case, leaving only genuinely-
+  both-offline) — not eliminated, an operator decision either way.
+- **No 20-book cap, no strict-refuse-until-claimed mode.** Neither was in
+  scope: "one active auto book per (company, doc_type, terminal)" already
+  bounds the count structurally, and a till with no claimed book falls
+  back to legacy numbering rather than refusing to sell — refusing to
+  sell is never this product's answer to a configuration gap.

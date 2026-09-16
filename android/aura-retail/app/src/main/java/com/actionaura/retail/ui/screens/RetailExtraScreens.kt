@@ -930,18 +930,47 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                 stmt == null -> Text(tr("Couldn't load statement."), color = MaterialTheme.colorScheme.error)
                 else -> {
                     stmt!!.events.forEach { e ->
+                        // Aseel-parity wave A-PAR (schema v32) FORCED FIX (H1).
+                        // customer_statement (retail_api.py) now selects BOTH
+                        // payment directions for this party -- a bounced
+                        // cheque writes the OPPOSITE direction on purpose, a
+                        // NEW row, never a retroactive void (see that route's
+                        // own comment) -- and labels it `kind='reversal'`.
+                        // Before this fix, this screen's sole discriminator
+                        // was `e.kind == "charge"`, so a reversal (debt going
+                        // BACK on, exactly like a charge) fell into the ELSE
+                        // branch and rendered as a green "Payment" with a
+                        // MINUS sign -- directly contradicting the
+                        // running_balance printed right beside it, which had
+                        // already gone UP. `isDebit` now covers both of the
+                        // TWO things that increase what the customer owes.
+                        val isDebit = e.kind == "charge" || e.kind == "reversal"
                         Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(if (e.kind == "charge") tr("Credit sale") + " ${e.ref ?: ""}" else tr("Payment") + " ${e.ref ?: ""}",
+                                Text(
+                                    when (e.kind) {
+                                        "charge" -> tr("Credit sale") + " ${e.ref ?: ""}"
+                                        "reversal" -> tr("Cheque returned") + " ${e.ref ?: ""}"
+                                        else -> tr("Payment") + " ${e.ref ?: ""}"
+                                    },
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(shortDate(e.date), style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Text((if (e.kind == "charge") "+" else "-") + money(e.amount),
-                                color = if (e.kind == "charge") Warning else Success, fontWeight = FontWeight.Medium)
+                            Text((if (isDebit) "+" else "-") + money(e.amount),
+                                color = if (isDebit) Warning else Success, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.width(8.dp))
                             Text(money(e.running_balance), fontWeight = FontWeight.Bold,
                                 modifier = Modifier.widthIn(min = 56.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                            // Void stays gated on "payment" ALONE -- never
+                            // widened to admit "reversal". The second defect
+                            // H1 names, found while fixing the first: keeping
+                            // a bounce-reversal row's kind as "payment" (the
+                            // cheap alternative to a new kind) would have put
+                            // a Void button on it, and voiding it would
+                            // silently re-reduce AR by the face value a
+                            // second time. Introducing `kind == "reversal"`
+                            // closes that by construction.
                             if (e.kind == "payment" && e.payment_id != null) {
                                 TextButton(onClick = {
                                     scope.launch {
@@ -1161,18 +1190,35 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                 stmt == null -> Text(tr("Couldn't load statement."), color = MaterialTheme.colorScheme.error)
                 else -> {
                     stmt!!.events.forEach { e ->
+                        // Aseel-parity wave A-PAR (schema v32) FORCED FIX (H1)
+                        // -- see StatementSheet's identical comment above for
+                        // the full reasoning. supplier_statement's own
+                        // settling direction is 'out' (paying the supplier),
+                        // so a returned ISSUED cheque reverses that as
+                        // `kind='reversal'` the same way a bounce does on the
+                        // customer side -- and must count as owing them more
+                        // again, exactly like a fresh PO charge does.
+                        val isDebit = e.kind == "charge" || e.kind == "reversal"
                         Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(if (e.kind == "charge") tr("PO") + " ${e.ref ?: ""}" else tr("Payment") + " ${e.ref ?: ""}",
+                                Text(
+                                    when (e.kind) {
+                                        "charge" -> tr("PO") + " ${e.ref ?: ""}"
+                                        "reversal" -> tr("Cheque returned") + " ${e.ref ?: ""}"
+                                        else -> tr("Payment") + " ${e.ref ?: ""}"
+                                    },
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(shortDate(e.date), style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Text((if (e.kind == "charge") "+" else "-") + money(e.amount),
-                                color = if (e.kind == "charge") MaterialTheme.colorScheme.error else Success, fontWeight = FontWeight.Medium)
+                            Text((if (isDebit) "+" else "-") + money(e.amount),
+                                color = if (isDebit) MaterialTheme.colorScheme.error else Success, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.width(8.dp))
                             Text(money(e.running_balance), fontWeight = FontWeight.Bold,
                                 modifier = Modifier.widthIn(min = 56.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                            // Void stays gated on "payment" ALONE -- see
+                            // StatementSheet's identical comment above for
+                            // why "reversal" must never also match here.
                             if (e.kind == "payment" && e.payment_id != null) {
                                 TextButton(onClick = {
                                     scope.launch {

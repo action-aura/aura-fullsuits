@@ -468,6 +468,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Balance" to "الرصيد",
     "Couldn't load statement." to "تعذّر تحميل كشف الحساب.",
     "Credit sale" to "بيع آجل",
+    // Aseel-parity wave A-PAR (schema v32): a bounced/cancelled cheque's
+    // reversal row on the customer/supplier statement (StatementSheet /
+    // SupplierStatementSheet in RetailExtraScreens.kt).
+    "Cheque returned" to "شيك مرتجع",
     "Payment" to "دفعة",
     "Void" to "إلغاء",
     "Record a payment" to "تسجيل دفعة",

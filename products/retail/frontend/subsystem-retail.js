@@ -364,6 +364,10 @@ const RetailSystem = {
       case 'products':  return this._renderProducts(c);
       case 'categories':return this._renderCategories(c);
       case 'customers': return this._renderCustomers(c);
+      // Aseel-parity wave A-PAR (schema v33): quotations and sales orders.
+      // See app-shell.js's nav entry comment and the QUOTATIONS AND SALES
+      // ORDERS section below for the full capability reasoning.
+      case 'quotations':return this._renderQuotations(c);
       // Launch-readiness 2026-08-30 (ROADMAP.md "retail schema v23",
       // promotions wave 1). See _renderPromotions for the capability guard.
       case 'promotions':return this._renderPromotions(c);
@@ -415,6 +419,12 @@ const RetailSystem = {
       // for the gating and for why the discarded-edits section carries no
       // action button.
       case 'exceptions': return this._renderExceptions(c);
+      // Aseel-parity wave A-PAR (schema v32): "Cheque" has always been a
+      // free-text payment-method label with nothing behind it. See
+      // _renderCheques below for the capability split (retail.reports to
+      // SEE the book, retail.employees to act on any row) and app-shell.js's
+      // nav entry for why the two differ.
+      case 'cheques':   return this._renderCheques(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -426,6 +436,34 @@ const RetailSystem = {
     const s = document.createElement('style');
     s.id = 'ret-styles';
     s.textContent = `
+      /* ── Quotation print (design point E10) ──────────────────────────
+         An A4 print stylesheet + window.print() -- NO backend renderer, NO
+         PDF dependency (escpos_receipt.py is a 58mm thermal renderer; a B2B
+         quotation on a till roll is the wrong artefact, and a PDF library is
+         a dependency this codebase does not have). Printing hides every
+         OTHER overlay/modal on the page and every .qt-no-print control
+         (Print/✕ buttons) inside the one being printed, showing only
+         #qt-print-area's own content -- the same "print exactly this card,
+         nothing else on screen" contract a browser print dialog needs to be
+         usable at all. */
+      @media print {
+        body > *:not(.ret-modal-overlay) { display:none !important; }
+        .ret-modal-overlay:not(:has(#qt-print-area)) { display:none !important; }
+        /* The token, never a literal. A raw white hex sat here and slipped
+           past retail_design_theme_safety_test.js because that guard scans
+           css/main.css and never sees CSS-in-JS injected from _injectStyles()
+           -- a real blind spot in the guard, not a licence to break the rule.
+           --surface-till is exactly white in the light theme, so print output
+           is unchanged, and a shop printing from the dark or night theme now
+           gets its own paper colour instead of one hard-coded here.
+           NOTE: no backticks in this block. This whole CSS lives inside a JS
+           template literal, so a backtick here ends the literal and the next
+           token becomes bare JavaScript -- which is exactly what happened on
+           the first attempt at this comment. */
+        .ret-modal-overlay:has(#qt-print-area) { position:static !important;background:var(--surface-till) !important; }
+        #qt-print-area { box-shadow:none !important;max-width:100% !important; }
+        .qt-no-print { display:none !important; }
+      }
       /* ── Empty states ─────────────────────────────────────────────────
          A blank card with one muted sentence in it reads as a broken screen
          rather than an empty one -- and on a fresh install that is most
@@ -7635,6 +7673,504 @@ const RetailSystem = {
     }
   },
 
+  // ── QUOTATIONS AND SALES ORDERS (Aseel-parity wave A-PAR, schema v33) ───────
+  // `held_sales` (this file's own Hold/Resume feature, POS section above) is a
+  // JSON cart snapshot with no approval step, no expiry and no conversion
+  // tracking -- "two devices don't need to see each other's in-progress
+  // carts" is true of a cart and false of a document a customer holds a
+  // printed copy of. This is its own screen, its own pair of backend tables
+  // (database/schema.py's `_migrate_add_sales_quotations`), not a bigger
+  // Hold/Resume.
+  //
+  // `capability: 'retail.sell'` on the nav entry (app-shell.js) matches
+  // every quotation route's own @mt_require_capability(CAP_SELL) decorator
+  // (retail_api.py) exactly -- "park/recall a cart" is already inside that
+  // code's own definition. The one authority this screen does NOT carry on
+  // its nav entry is retail.discount: a line's discount_pct is judged
+  // server-side, inline, on create/update (see create_quotation's own
+  // comment) -- a cashier without it can still open this screen and issue a
+  // zero-discount quote, and is refused only when they actually try to
+  // discount one, the identical shape create_sale's own manual-discount
+  // field already has at the till.
+  //
+  // CONVERSION IS THE SCREEN THAT MATTERS (design point E7): _openConvert
+  // Quotation calls prepare-conversion and renders the quoted-vs-live
+  // variance BEFORE any money moves, with two explicit buttons -- never a
+  // default -- then POSTs to the ORDINARY /sales endpoint with
+  // `quotation_id` (+ the chosen `honour_quoted_prices`/`override_expiry`),
+  // so receipt, e-invoice and drawer behaviour are byte-identical to any
+  // other sale. C8: the conversion response on an idempotent retry carries
+  // no `repriced_lines` at all, so `_convertQuotation` re-opens the
+  // quotation itself afterward rather than trusting that response for the
+  // variance display -- `sales_quotations.conversion_variance_json` is the
+  // one source of truth that survives a retry.
+
+  _QUOTATION_STATUS_LABEL: {
+    draft: 'Draft', sent: 'Sent', accepted: 'Accepted',
+    declined: 'Declined', cancelled: 'Cancelled', converted: 'Converted',
+  },
+
+  async _renderQuotations(c) {
+    this._injectStyles();
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <select id="qt-status-filter" onchange="RetailSystem._loadQuotations()" style="margin-inline-end:10px">
+          <option value="">${t('All statuses')}</option>
+          <option value="draft">${t('Draft')}</option>
+          <option value="sent">${t('Sent')}</option>
+          <option value="accepted">${t('Accepted')}</option>
+          <option value="declined">${t('Declined')}</option>
+          <option value="cancelled">${t('Cancelled')}</option>
+          <option value="converted">${t('Converted')}</option>
+        </select>
+        <button class="sub-btn-primary" onclick="RetailSystem._openCreateQuotation()">+ ${t('New Quotation')}</button>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="quotation-table">
+            <thead><tr><th>${t('Document')}</th><th>${t('Customer')}</th><th>${t('Status')}</th><th>${t('Valid Until')}</th><th>${t('Total')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadQuotations();
+  },
+
+  async _loadQuotations() {
+    try {
+      const status = document.getElementById('qt-status-filter')?.value || '';
+      const url = '/api/sub/retail/quotations' + (status ? `?status=${encodeURIComponent(status)}` : '');
+      const data = (await this._get(url)).data || [];
+      const tbody = document.querySelector('#quotation-table tbody');
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+          icon: 'file-text',
+          title: t('No quotations yet'),
+          hint: t('Issue a quotation or sales order for a customer -- convert it to a real sale once they accept.'),
+          actions: [{ label: t('New Quotation'), onclick: 'RetailSystem._openCreateQuotation()', primary: true }],
+        })}</td></tr>`;
+        return;
+      }
+      // Actions differ by status -- the identical "only the buttons this
+      // row's own state actually allows" discipline _loadTransfers already
+      // follows above: a cancelled/declined/converted row is View-only,
+      // there is no unwind route from this screen for any of the three.
+      const statusColor = { draft:'blue', sent:'yellow', accepted:'green', declined:'red', cancelled:'red', converted:'green' };
+      tbody.innerHTML = data.map(q => {
+        const label = t(this._QUOTATION_STATUS_LABEL[q.status] || q.status);
+        let actions = `<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._viewQuotation('${this._esc(q.id)}')">${t('View')}</button>`;
+        if (q.status === 'draft') {
+          actions += `<button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openEditQuotation('${this._esc(q.id)}')">${t('Edit')}</button>`;
+          actions += `<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._sendQuotation('${this._esc(q.id)}')">${t('Send')}</button>`;
+          actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelQuotation('${this._esc(q.id)}')">${t('Cancel')}</button>`;
+        } else if (q.status === 'sent') {
+          actions += `<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._acceptQuotation('${this._esc(q.id)}')">${t('Accept')}</button>`;
+          actions += `<button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._declineQuotation('${this._esc(q.id)}')">${t('Decline')}</button>`;
+          actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelQuotation('${this._esc(q.id)}')">${t('Cancel')}</button>`;
+        } else if (q.status === 'accepted') {
+          actions += `<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openConvertQuotation('${this._esc(q.id)}')">${t('Convert')}</button>`;
+          actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelQuotation('${this._esc(q.id)}')">${t('Cancel')}</button>`;
+        }
+        return `<tr>
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(q.doc_number)}</td>
+          <td>${this._esc(q.customer_name || t('Walk-in'))}</td>
+          <td>${this._badge(label, statusColor[q.status]||'blue')}</td>
+          <td style="color:var(--text-muted)">${this._esc(q.valid_until || '—')}</td>
+          <td style="color:var(--text-money);font-weight:600">${this._fmt(q.total)}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }).join('');
+    } catch (e) { console.error(e); }
+  },
+
+  _quotationItems: [],
+
+  // `existing`, when given, is `{id, doc_kind, customer_id, valid_until,
+  // notes, lines}` from GET /quotations/<id> -- _openEditQuotation's own
+  // shape below. `doc_kind`/`branch_id` are NOT editable through this
+  // sheet on an edit: `doc_kind` records how the document started (see
+  // update_quotation's own docstring) and the working branch is resolved
+  // server-side exactly the way create_sale resolves it, never re-typed
+  // here.
+  async _openCreateQuotation(existing) {
+    const [custs, brs] = await Promise.all([
+      this._get('/api/sub/retail/customers'),
+      this._get('/api/sub/retail/branches'),
+    ]).catch(() => [{ data: [] }, { data: [] }]);
+    const customers = custs.data || [];
+    const branches = brs.data || [];
+    // Best-effort resolution of THIS device's own working branch, purely
+    // for the committed-demand hint below -- create_quotation/update_
+    // quotation resolve their own branch server-side regardless (the exact
+    // same _resolve_working_branch every other write in this product uses)
+    // and never trust anything from this client-side guess.
+    let workingBranchId = branches[0] ? branches[0].id : null;
+    try {
+      const pin = (await this._get('/api/sub/retail/device/branch')).data || {};
+      const match = branches.find((b) => b.uid === pin.branch_uid);
+      if (match) workingBranchId = match.id;
+    } catch (e) { /* best-effort only */ }
+    this._quotationWorkingBranchId = workingBranchId;
+
+    this._quotationItems = existing ? (existing.lines || []).map((l) => ({
+      product_id: l.product_id, product_name: l.product_name_snapshot,
+      quantity: l.quantity, discount_pct: l.discount_pct,
+    })) : [];
+
+    if (!this._products || !this._products.length) {
+      this._products = (await this._get('/api/sub/retail/products').catch(() => ({ data: [] }))).data || [];
+    }
+    const custOpts = `<option value="">${t('Walk-in')}</option>` + customers.map((cu) =>
+      `<option value="${this._esc(cu.id)}" ${existing && existing.customer_id === cu.id ? 'selected' : ''}>${this._esc(cu.name)}</option>`).join('');
+    const prodOpts = this._products.map((p) =>
+      `<option value="${this._esc(p.id)}">${this._esc(p.name)} (${this._esc(p.sku)})</option>`).join('');
+
+    const editingId = existing ? existing.id : null;
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-quotation-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal ret-modal-wide">
+        <h3>${this._icon('file-text', 18, '📄')} ${editingId ? t('Edit Quotation') : t('New Quotation')}</h3>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div class="ret-field" style="margin:0"><label>${t('Document Type')}</label>
+            <select id="qt-doc-kind" ${editingId ? 'disabled' : ''}>
+              <option value="quotation" ${!existing || existing.doc_kind === 'quotation' ? 'selected' : ''}>${t('Quotation')}</option>
+              <option value="order" ${existing && existing.doc_kind === 'order' ? 'selected' : ''}>${t('Sales Order')}</option>
+            </select></div>
+          <div class="ret-field" style="margin:0"><label>${t('Customer')}</label>
+            <select id="qt-customer">${custOpts}</select></div>
+          <div class="ret-field" style="margin:0"><label>${t('Valid Until')}</label>
+            <input type="date" id="qt-valid-until" value="${existing && existing.valid_until ? this._esc(existing.valid_until) : ''}" /></div>
+        </div>
+        <div class="ret-field" style="margin:10px 0 0"><label>${t('Notes')}</label>
+          <textarea id="qt-notes" rows="2">${existing ? this._esc(existing.notes || '') : ''}</textarea></div>
+        <div style="margin:16px 0 8px;color:var(--text-primary);font-weight:600">${t('Items')}</div>
+        <div id="qt-items"></div>
+        <div style="margin:12px 0">
+          <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
+            <div class="ret-field" style="margin:0"><label>${t('Product')}</label>
+              <select id="qt-item-prod" onchange="RetailSystem._showQuotationCommittedDemand()"><option value="">${t('Select product…')}</option>${prodOpts}</select></div>
+            <div class="ret-field" style="margin:0"><label>${t('Qty')}</label>
+              <input type="number" id="qt-item-qty" value="1" min="0.001" step="any" /></div>
+            <div class="ret-field" style="margin:0"><label>${t('Discount %')}</label>
+              <input type="number" id="qt-item-discount" value="0" min="0" max="100" /></div>
+            <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addQuotationItem()">+ ${t('Add')}</button>
+          </div>
+          <div id="qt-item-committed" style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-quotation-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" onclick="RetailSystem._saveQuotation(${editingId ? `'${this._esc(editingId)}'` : 'null'})">${editingId ? t('Save Changes') : t('Create Quotation')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this._renderQuotationItems();
+  },
+
+  // ADVISORY ONLY (quotations_committed_demand is itself advisory -- see
+  // that route's own docstring): shown while composing a quote so an
+  // operator can see "12 on hand, 5 already promised" BEFORE issuing a
+  // sixth promise the shop cannot keep. Never refuses adding the item --
+  // the route this reads from never refuses anything either.
+  async _showQuotationCommittedDemand() {
+    const el = document.getElementById('qt-item-committed');
+    const prodSel = document.getElementById('qt-item-prod');
+    if (!el) return;
+    if (!prodSel || !prodSel.value || !this._quotationWorkingBranchId) { el.textContent = ''; return; }
+    try {
+      const data = (await this._get(
+        `/api/sub/retail/quotations/committed-demand?branch_id=${this._quotationWorkingBranchId}`)).data || [];
+      const row = data.find((r) => r.product_id === prodSel.value);
+      el.textContent = row ? `${t('Already promised on open quotations')}: ${row.committed}` : '';
+    } catch (e) { el.textContent = ''; }
+  },
+
+  _addQuotationItem() {
+    const prodSel = document.getElementById('qt-item-prod');
+    const prodId = prodSel?.value;
+    const prodName = prodSel?.options[prodSel.selectedIndex]?.text?.split(' (')[0]?.trim();
+    const qty = +document.getElementById('qt-item-qty')?.value || 0;
+    const discount = +document.getElementById('qt-item-discount')?.value || 0;
+    if (!prodId || qty <= 0) {
+      SubsystemApp.showToast(t('Select a product and a quantity greater than zero'), 'error');
+      return;
+    }
+    this._quotationItems.push({ product_id: prodId, product_name: prodName, quantity: qty, discount_pct: discount });
+    this._renderQuotationItems();
+    document.getElementById('qt-item-prod').value = '';
+    document.getElementById('qt-item-qty').value = 1;
+    document.getElementById('qt-item-discount').value = 0;
+    const committed = document.getElementById('qt-item-committed');
+    if (committed) committed.textContent = '';
+  },
+
+  // Mirrors _renderTransferItems above, plus the discount_pct column a
+  // stock transfer has no equivalent of -- a quotation moves MONEY, not
+  // just quantity.
+  _renderQuotationItems() {
+    const container = document.getElementById('qt-items');
+    if (!container) return;
+    if (!this._quotationItems.length) { container.innerHTML = ''; return; }
+    container.innerHTML = `<table class="ret-table" style="margin-bottom:10px">
+      <thead><tr><th>${t('Product')}</th><th>${t('Qty')}</th><th>${t('Discount %')}</th><th></th></tr></thead>
+      <tbody>${this._quotationItems.map((item, i) => `<tr>
+        <td>${this._esc(item.product_name)}</td>
+        <td><input type="number" value="${item.quantity}" min="0.001" step="any" style="width:70px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
+          oninput="RetailSystem._quotationItems[${i}].quantity=+this.value" /></td>
+        <td><input type="number" value="${item.discount_pct || 0}" min="0" max="100" style="width:70px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
+          oninput="RetailSystem._quotationItems[${i}].discount_pct=+this.value" /></td>
+        <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._quotationItems.splice(${i},1);RetailSystem._renderQuotationItems()">✕</button></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  },
+
+  async _saveQuotation(editingId) {
+    if (!this._quotationItems || !this._quotationItems.length) {
+      SubsystemApp.showToast(t('Add at least one item'), 'error');
+      return;
+    }
+    const body = {
+      doc_kind: document.getElementById('qt-doc-kind')?.value || 'quotation',
+      customer_id: document.getElementById('qt-customer')?.value || null,
+      valid_until: document.getElementById('qt-valid-until')?.value || null,
+      notes: document.getElementById('qt-notes')?.value || '',
+      items: this._quotationItems.map((i) => ({
+        product_id: i.product_id, quantity: i.quantity, discount_pct: i.discount_pct || 0,
+      })),
+    };
+    try {
+      const d = editingId
+        ? await this._put(`/api/sub/retail/quotations/${editingId}`, body)
+        : await this._post('/api/sub/retail/quotations', body);
+      if (d.status === 'success') {
+        document.getElementById('ret-quotation-modal')?.remove();
+        SubsystemApp.showToast(editingId ? t('Quotation updated') : t('Quotation created'), 'success');
+        this._loadQuotations();
+      } else {
+        // CRITICAL, the same reasoning _createTransfer's own comment gives
+        // for its identical branch: create_quotation's 403 (discount denied)
+        // and 400 (bad doc_kind/product) both name the exact reason, and
+        // swallowing that into a generic message leaves Save looking dead.
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _openEditQuotation(id) {
+    try {
+      const resp = (await this._get(`/api/sub/retail/quotations/${id}`)).data || {};
+      const q = resp.quotation || {};
+      q.lines = resp.lines || [];
+      q.id = id;
+      await this._openCreateQuotation(q);
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _sendQuotation(id) {
+    if (!(await this._confirm({
+      title: t('Send Quotation'),
+      message: t('Once sent, this document is locked -- its lines and prices can never change again, only the whole thing cancelled and re-issued.'),
+      confirmLabel: t('Send'), danger: false,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/quotations/${id}/send`, {});
+      if (d.status === 'success') { SubsystemApp.showToast(t('Quotation sent'), 'success'); this._loadQuotations(); }
+      else SubsystemApp.showToast(d.message || t('Error'), 'error');
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _acceptQuotation(id) {
+    try {
+      const d = await this._post(`/api/sub/retail/quotations/${id}/accept`, {});
+      if (d.status === 'success') { SubsystemApp.showToast(t('Quotation accepted'), 'success'); this._loadQuotations(); }
+      else SubsystemApp.showToast(d.message || t('Error'), 'error');
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _declineQuotation(id) {
+    if (!(await this._confirm({
+      title: t('Decline Quotation'), message: t('Mark this quotation as declined by the customer?'),
+      confirmLabel: t('Decline'), danger: true,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/quotations/${id}/decline`, {});
+      if (d.status === 'success') { SubsystemApp.showToast(t('Quotation declined'), 'success'); this._loadQuotations(); }
+      else SubsystemApp.showToast(d.message || t('Error'), 'error');
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _cancelQuotation(id) {
+    if (!(await this._confirm({
+      title: t('Cancel Quotation'), message: t('Withdraw this quotation? This cannot be undone.'),
+      confirmLabel: t('Cancel Quotation'), danger: true,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/quotations/${id}/cancel`, {});
+      if (d.status === 'success') { SubsystemApp.showToast(t('Quotation cancelled'), 'success'); this._loadQuotations(); }
+      else SubsystemApp.showToast(d.message || t('Error'), 'error');
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  // E10 (design): an A4 print stylesheet + window.print() -- NO backend
+  // renderer, NO PDF dependency. escpos_receipt.py is a 58mm thermal
+  // renderer and a B2B quotation on a till roll is the wrong artefact; a
+  // PDF library is a dependency this codebase does not have (CLAUDE.md:
+  // never introduce one without being asked). `#qt-print-area` is the
+  // whole modal card -- print CSS is injected once by _injectStyles below.
+  async _viewQuotation(id) {
+    try {
+      const resp = (await this._get(`/api/sub/retail/quotations/${id}`)).data || {};
+      const q = resp.quotation || {};
+      const lines = resp.lines || [];
+      const label = t(this._QUOTATION_STATUS_LABEL[q.status] || q.status);
+      let variance = null;
+      try { variance = q.conversion_variance_json ? JSON.parse(q.conversion_variance_json) : null; } catch (e) { /* malformed -- show nothing rather than throw */ }
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.id = 'ret-quotation-view-modal';
+      overlay.innerHTML = `
+        <div class="ret-modal ret-modal-wide" id="qt-print-area">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+            <h3 style="margin:0">${this._esc(q.doc_kind === 'order' ? t('Sales Order') : t('Quotation'))}: ${this._esc(q.doc_number)}</h3>
+            <div class="qt-no-print">
+              <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="window.print()">${t('Print')}</button>
+              <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+            </div>
+          </div>
+          ${q.is_expired ? `<div style="background:var(--state-warning-surface);color:var(--state-warning-text);border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:14px">${t('This quotation has expired.')}</div>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Customer')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(q.customer_name || t('Walk-in'))}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(label, 'blue')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Valid Until')}</div><div style="color:var(--text-muted)">${this._esc(q.valid_until || '—')}</div></div>
+          </div>
+          <table class="ret-table">
+            <thead><tr><th>${t('Product')}</th><th>${t('Qty')}</th><th>${t('Unit Price')}</th><th>${t('Discount %')}</th><th>${t('Line Total')}</th></tr></thead>
+            <tbody>${lines.map((l) => `<tr>
+              <td>${this._esc(l.product_name_snapshot)}</td>
+              <td>${this._esc(l.quantity)}</td>
+              <td>${this._fmt(l.unit_price)}</td>
+              <td>${this._esc(l.discount_pct)}</td>
+              <td style="font-weight:600">${this._fmt(l.line_total)}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+          <div style="text-align:end;margin-top:14px;color:var(--text-primary)">
+            <div>${t('Subtotal')}: ${this._fmt(q.subtotal)}</div>
+            <div>${t('Discount')}: ${this._fmt(q.discount_amount)}</div>
+            <div>${t('Tax')}: ${this._fmt(q.tax_amount)}</div>
+            <div style="font-weight:700;font-size:16px">${t('Total')}: ${this._fmt(q.total)}</div>
+          </div>
+          ${variance ? `<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-default)">
+            <div style="font-weight:600;margin-bottom:6px">${t('Conversion')}</div>
+            <div style="color:var(--text-muted);font-size:13px">${t('Mode')}: ${this._esc(variance.mode)} · ${t('Quoted total')}: ${this._fmt(variance.quoted_total)} · ${t('Charged total')}: ${this._fmt(variance.charged_total)}</div>
+          </div>` : ''}
+          ${q.notes ? `<p style="color:var(--text-muted);margin-top:14px;font-size:13px">${t('Notes')}: ${this._esc(q.notes)}</p>` : ''}
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  // design point E7, "THE CONVERSION SHEET IS THE SCREEN THAT MATTERS":
+  // calls prepare-conversion (writes nothing, no lock -- see that route's
+  // own docstring) and renders the variance BEFORE any money moves. TWO
+  // EXPLICIT BUTTONS, never a default -- an operator must choose, not
+  // inherit whichever this function happened to list first.
+  async _openConvertQuotation(id) {
+    try {
+      const resp = (await this._post(`/api/sub/retail/quotations/${id}/prepare-conversion`, {})).data;
+      if (!resp) { SubsystemApp.showToast(t('Could not prepare this conversion.'), 'error'); return; }
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.id = 'ret-quotation-convert-modal';
+      overlay.innerHTML = `
+        <div class="ret-modal ret-modal-wide">
+          <h3>${this._icon('exchange', 18, '🔄')} ${t('Convert Quotation')}</h3>
+          ${resp.is_expired ? `
+            <div style="background:var(--state-warning-surface);color:var(--state-warning-text);border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:10px">${t('This quotation has expired.')}</div>
+            <label style="display:flex;gap:8px;align-items:center;margin-bottom:14px;color:var(--text-primary)">
+              <input type="checkbox" id="qt-override-expiry" /> ${t('Override expiry (manager authority required)')}
+            </label>` : ''}
+          ${resp.blocking && resp.blocking.length ? `<div style="background:var(--state-danger-surface);color:var(--state-danger-text);border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:10px">${resp.blocking.map((b) => this._esc(b)).join('<br/>')}</div>` : ''}
+          ${resp.warnings && resp.warnings.length ? `<div class="ret-po-split-warning">${resp.warnings.map((w) => this._esc(w)).join('<br/>')}</div>` : ''}
+          <table class="ret-table">
+            <thead><tr><th>${t('Product')}</th><th>${t('Quoted')}</th><th>${t('Today')}</th><th>${t('Winner')}</th></tr></thead>
+            <tbody>${(resp.lines || []).map((l) => `<tr>
+              <td>${this._esc(l.product_name_snapshot)}</td>
+              <td>${l.quoted.effective_unit != null ? this._fmt(l.quoted.effective_unit) : '—'}</td>
+              <td>${l.live.effective_unit != null ? this._fmt(l.live.effective_unit) : '—'}</td>
+              <td>${this._badge(t(l.winner), l.winner === 'live' ? 'yellow' : 'green')}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+          <div style="text-align:end;margin-top:14px;color:var(--text-primary);font-size:13px">
+            <div>${t('Quoted total')}: ${this._fmt(resp.totals.quoted_total)}</div>
+            <div>${t('Live total')}: ${this._fmt(resp.totals.live_total)}</div>
+            <div style="font-weight:700">${t('If honoured')}: ${this._fmt(resp.totals.honour_total)}</div>
+          </div>
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-quotation-convert-modal').remove()">${t('Cancel')}</button>
+            <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._convertQuotation('${this._esc(id)}', false)">${t("Use Today's Prices")}</button>
+            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._convertQuotation('${this._esc(id)}', true)">${t('Honour Quoted Prices')}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _convertQuotation(id, honour) {
+    const overrideEl = document.getElementById('qt-override-expiry');
+    const body = {
+      quotation_id: id,
+      honour_quoted_prices: !!honour,
+      override_expiry: !!(overrideEl && overrideEl.checked),
+    };
+    try {
+      const d = await this._post('/api/sub/retail/sales', body);
+      if (d.status === 'success') {
+        document.getElementById('ret-quotation-convert-modal')?.remove();
+        const saleNumber = (d.data && d.data.sale_number) || '';
+        SubsystemApp.showToast(`${t('Quotation converted to sale')} ${saleNumber}`, 'success');
+        this._loadQuotations();
+        // C8: a retried conversion's response carries no `repriced_lines` at
+        // all -- re-opening the quotation reads its persisted
+        // conversion_variance_json instead, which survives a retry.
+        this._viewQuotation(id);
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
   // ── BRANCHES (ci-hardening-w0.3 continuation, "the doorway") ────────────────
   // create_branch (retail_api.py:7894) has been a complete, gated route
   // (CAP_EMPLOYEES + licence guard) since Phase 5 wave A -- nothing in this
@@ -7913,6 +8449,52 @@ const RetailSystem = {
         </p>
         <button class="ret-btn ret-btn-primary" style="margin-top:16px" onclick="RetailSystem._saveBusinessDay()">${t('Save')}</button>
       </div>
+      <div class="sub-chart-card" id="doc-series-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Document Numbering')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Give your sales, returns or purchase orders their own clean numbering "books" (like A-000001) instead of the default receipt number. A book belongs to exactly one till at a time -- claim it here to start numbering from it.')}
+        </p>
+        <div id="doc-series-identity-line" style="margin-bottom:12px;font-size:13px;color:var(--text-secondary)"></div>
+        <div id="doc-series-no-identity-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
+          ${t('This device has not established its identity yet. It will do so the first time someone signs in or opens a drawer here -- come back after that to claim a book.')}
+        </div>
+        <div id="doc-series-behind-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
+          ${t('This till is behind on sync. Creating or claiming a book now could duplicate a code another till already used -- reconnect and let it catch up first.')}
+        </div>
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="doc-series-table">
+            <thead><tr>
+              <th>${t('Type')}</th><th>${t('Code')}</th><th>${t('Label')}</th><th>${t('Branch')}</th>
+              <th>${t('Owner')}</th><th>${t('Next')}</th><th>${t('Status')}</th><th>${t('Actions')}</th>
+            </tr></thead>
+            <tbody><tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+        <p style="color:var(--text-muted);font-size:11px;margin:10px 0 0">
+          ${t('A gap in a book\'s numbers is not an error -- a voided or returned sale keeps its number, and a retired book\'s unused tail is expected.')}
+        </p>
+        <h4 style="color:var(--text-primary);margin:20px 0 10px;font-size:13px">${t('New Book')}</h4>
+        <div class="ret-field-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+          <div class="ret-field" style="margin:0"><label>${t('Document Type')}</label>
+            <select id="doc-series-new-type">
+              <option value="sale">${t('Sales')}</option>
+              <option value="return">${t('Returns')}</option>
+              <option value="po">${t('Purchase Orders')}</option>
+            </select>
+          </div>
+          <div class="ret-field" style="margin:0"><label>${t('Code')}</label>
+            <input id="doc-series-new-code" dir="ltr" maxlength="12" placeholder="A" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Label')}</label>
+            <input id="doc-series-new-label" maxlength="60" placeholder="${t('Main Book')}" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Branch (optional)')}</label>
+            <select id="doc-series-new-branch"><option value="">${t('Any branch')}</option></select></div>
+          <div class="ret-field" style="margin:0"><label>${t('Digits')}</label>
+            <input id="doc-series-new-pad" type="number" dir="ltr" min="3" max="10" value="6" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Starts at (the number the FIRST document will carry)')}</label>
+            <input id="doc-series-new-start" type="number" dir="ltr" min="1" value="1" /></div>
+        </div>
+        <button class="ret-btn ret-btn-primary" style="margin-top:14px" onclick="RetailSystem._createDocSeries()">${t('Create Book')}</button>
+      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -7943,6 +8525,7 @@ const RetailSystem = {
     await this._loadBrandingForm();
     await this._loadDeviceBranchForm();
     await this._loadBusinessDayForm();
+    await this._loadDocSeriesCard();
   },
 
   // ── Branding (Admin Center) ─────────────────────────────────────────────
@@ -8157,6 +8740,160 @@ const RetailSystem = {
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save the business day.'), 'error');
+    }
+  },
+
+  // ── Document Numbering (Aseel-parity wave A-PAR, schema v34) ────────────
+  // `doc_series` is a SYNCED entity type (sync_service.py): a book created
+  // on another till arrives here on this device's own next pull, with
+  // `label`/`code`/etc. authored by a device this one has no reason to
+  // trust more than any other synced record -- the SAME trust boundary
+  // Category/Branch/Supplier already cross, so every value below goes
+  // through `this._esc` before it reaches the DOM, matching those
+  // screens' own rendering discipline.
+  async _loadDocSeriesCard() {
+    try {
+      const [seriesResp, branchesResp] = await Promise.all([
+        this._get('/api/sub/retail/doc-series'),
+        this._get('/api/sub/retail/branches'),
+      ]);
+      const rows = (seriesResp && seriesResp.data) || [];
+      const branches = (branchesResp && branchesResp.data) || [];
+      this._docSeriesBranchByUid = {};
+      branches.forEach(b => { this._docSeriesBranchByUid[b.uid] = b.name; });
+
+      const branchSelect = document.getElementById('doc-series-new-branch');
+      if (branchSelect) {
+        branchSelect.innerHTML = `<option value="">${t('Any branch')}</option>` +
+          branches.map(b => `<option value="${this._esc(b.uid)}">${this._esc(b.name)}</option>`).join('');
+      }
+
+      const typeLabel = { sale: t('Sales'), return: t('Returns'), po: t('Purchase Orders') };
+      const tbody = document.querySelector('#doc-series-table tbody');
+      if (tbody) {
+        if (!rows.length) {
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px">${t('No numbering books configured yet -- sales use the default receipt number until you create one.')}</td></tr>`;
+        } else {
+          tbody.innerHTML = rows.map(r => {
+            const branchName = r.branch_uid ? (this._docSeriesBranchByUid[r.branch_uid] || t('Unknown branch')) : t('Any branch');
+            const owner = r.allocator_terminal_uid
+              ? (r.is_mine ? t('This till') : t('Another till'))
+              : t('Unclaimed');
+            const nextCell = r.next_no != null
+              ? `<strong>${this._esc(r.next_no)}</strong>`
+              : (r.is_mine ? '—' : `<span style="color:var(--text-muted)">${t('not this till')}</span>`);
+            const actions = [];
+            if (r.status === 'active' && !r.allocator_terminal_uid) {
+              actions.push(`<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._claimDocSeries('${this._esc(r.id)}')">${t('Claim for this till')}</button>`);
+            }
+            if (r.status === 'active') {
+              actions.push(`<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._retireDocSeries('${this._esc(r.id)}')">${t('Retire')}</button>`);
+            } else {
+              actions.push(`<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._reactivateDocSeries('${this._esc(r.id)}')">${t('Reactivate')}</button>`);
+            }
+            return `<tr>
+              <td>${this._esc(typeLabel[r.doc_type] || r.doc_type)}</td>
+              <td style="font-weight:600" dir="ltr">${this._esc(r.code)}</td>
+              <td>${this._esc(r.label)}</td>
+              <td style="color:var(--text-muted)">${this._esc(branchName)}</td>
+              <td>${this._esc(owner)}</td>
+              <td dir="ltr">${nextCell}</td>
+              <td>${this._badge(r.status === 'active' ? t('Active') : t('Retired'), r.status === 'active' ? 'green' : 'red')}</td>
+              <td>${actions.join(' ')}</td>
+            </tr>`;
+          }).join('');
+        }
+      }
+
+      // "This till numbers its sales A-000043 next" -- the one line that
+      // makes the ownership model legible without reading the table.
+      // Deliberately reports on 'sale' only (the till's own primary
+      // numbering concern); return/po ownership is visible in the table
+      // above for whoever configures those.
+      const mySale = rows.find(r => r.doc_type === 'sale' && r.is_mine && r.status === 'active');
+      const identityLine = document.getElementById('doc-series-identity-line');
+      if (identityLine) {
+        identityLine.textContent = mySale
+          ? t('This till numbers its sales {number} next.').replace('{number}', mySale.next_no)
+          : t('This till uses the default receipt numbering. Claim a book above to give it its own series.');
+      }
+    } catch (e) { console.error(e); }
+  },
+
+  async _createDocSeries() {
+    const doc_type = document.getElementById('doc-series-new-type')?.value;
+    const code = (document.getElementById('doc-series-new-code')?.value || '').trim();
+    const label = (document.getElementById('doc-series-new-label')?.value || '').trim();
+    const branch_uid = document.getElementById('doc-series-new-branch')?.value || null;
+    const pad_width = parseInt(document.getElementById('doc-series-new-pad')?.value, 10) || 6;
+    const start_no = parseInt(document.getElementById('doc-series-new-start')?.value, 10) || 1;
+    if (!code) {
+      SubsystemApp.showToast(t('A code is required, e.g. "A".'), 'error');
+      return;
+    }
+    try {
+      const resp = await this._post('/api/sub/retail/doc-series',
+        { doc_type, code, label, branch_uid, pad_width, start_no });
+      if (!resp || resp.status !== 'success') {
+        // The route's own message names WHICH constraint failed (a
+        // duplicate code, a reserved e-invoicing prefix, a stale device) --
+        // preferred over a generic toast for the same reason
+        // _saveBusinessDay's identical pattern gives.
+        SubsystemApp.showToast((resp && resp.message) || t('Could not create this book.'), 'error');
+        return;
+      }
+      document.getElementById('doc-series-new-code').value = '';
+      document.getElementById('doc-series-new-label').value = '';
+      SubsystemApp.showToast(t('Book created.'), 'success');
+      await this._loadDocSeriesCard();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not create this book.'), 'error');
+    }
+  },
+
+  async _claimDocSeries(id) {
+    try {
+      const resp = await this._post(`/api/sub/retail/doc-series/${encodeURIComponent(id)}/allocator-claim`, {});
+      if (!resp || resp.status !== 'success') {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not claim this book.'), 'error');
+        return;
+      }
+      SubsystemApp.showToast(t('Book claimed for this till.'), 'success');
+      await this._loadDocSeriesCard();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not claim this book.'), 'error');
+    }
+  },
+
+  async _retireDocSeries(id) {
+    try {
+      const resp = await this._del(`/api/sub/retail/doc-series/${encodeURIComponent(id)}`);
+      if (!resp || resp.status !== 'success') {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not retire this book.'), 'error');
+        return;
+      }
+      SubsystemApp.showToast(t('Book retired.'), 'success');
+      await this._loadDocSeriesCard();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not retire this book.'), 'error');
+    }
+  },
+
+  async _reactivateDocSeries(id) {
+    try {
+      const resp = await this._patch(`/api/sub/retail/doc-series/${encodeURIComponent(id)}`, { status: 'active' });
+      if (!resp || resp.status !== 'success') {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not reactivate this book.'), 'error');
+        return;
+      }
+      SubsystemApp.showToast(t('Book reactivated.'), 'success');
+      await this._loadDocSeriesCard();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reactivate this book.'), 'error');
     }
   },
 
@@ -11805,6 +12542,434 @@ const RetailSystem = {
       SubsystemApp.showToast(t('Printer test failed'), 'error');
     } finally {
       if (btn) btn.disabled = false;
+    }
+  },
+
+  // ── CHEQUES (Aseel-parity wave A-PAR, schema v32) ───────────────────────────
+  //
+  // "Cheque" has always been a free-text payment-method label with nothing
+  // behind it -- no due date, no bank fields, and, worst of all, no BOUNCE:
+  // a returned cheque left customers.credit_balance permanently understated
+  // with no code path that ever put the money back. Post-dated cheques are
+  // a primary B2B instrument in Jordan, so this screen gives them a real
+  // lifecycle.
+  //
+  // Back-office end to end (app-shell.js's nav entry comment): the READ is
+  // retail.reports (this screen's own gate, _renderCheques below); every
+  // WRITE action is retail.employees, gated PER BUTTON in _loadCheques so a
+  // manager who holds only retail.reports sees the whole cheque book with no
+  // action button that would 403 -- honest, per this file's own established
+  // convention (see _renderExceptions' identical split).
+  //
+  // The backend refuses independently (core/retail/cheques.py's
+  // LEGAL_TRANSITIONS is the ONE legality table, consumed by both the route
+  // and the fold) -- `_cheque_actions` below is a client-side MIRROR, an
+  // invitation so a user is not shown a button that always 409s, never the
+  // enforcement itself.
+
+  _CHEQUE_STATUS_LABEL: {
+    pending: 'Pending', deposited: 'Deposited', cleared: 'Cleared',
+    bounced: 'Bounced', endorsed: 'Endorsed', cancelled: 'Cancelled',
+    written_off: 'Written Off',
+  },
+  _CHEQUE_STATUS_COLOR: {
+    pending: 'yellow', deposited: 'blue', cleared: 'green', bounced: 'red',
+    endorsed: 'purple', cancelled: 'red', written_off: 'purple',
+  },
+
+  _cheque_actions(status, direction) {
+    const actions = [];
+    if (status === 'pending') {
+      // deposit_cheque/endorse_cheque both refuse direction='out' server-side
+      // (a shop cannot observe its own issued cheque being lodged, or
+      // endorse a cheque it never received) -- mirrored here so an issued
+      // cheque's row never offers either button.
+      if (direction === 'in') actions.push({ action: 'deposit', label: t('Deposit') });
+      actions.push({ action: 'clear', label: t('Clear') });
+      actions.push({ action: 'bounce', label: t('Bounce') });
+      if (direction === 'in') actions.push({ action: 'endorse', label: t('Endorse') });
+      actions.push({ action: 'cancel', label: t('Cancel Cheque') });
+    } else if (status === 'deposited') {
+      actions.push({ action: 'clear', label: t('Clear') });
+      actions.push({ action: 'bounce', label: t('Bounce') });
+    } else if (status === 'cleared' || status === 'endorsed') {
+      actions.push({ action: 'bounce', label: t('Bounce') });
+    } else if (status === 'bounced') {
+      actions.push({ action: 'reinstate', label: t('Reinstate') });
+      actions.push({ action: 'write_off', label: t('Write Off') });
+    }
+    return actions;
+  },
+
+  async _renderCheques(c) {
+    // Capability gate, same mechanism/reasoning as _renderReports/
+    // _renderBranches above -- read those comments first. This is the READ
+    // gate (retail.reports, matching list_cheques'/get_cheque's own
+    // @mt_require_capability(CAP_REPORTS)); every WRITE action is gated
+    // separately, per button, in _loadCheques below.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: '🧾',
+        title: t('Cheques'),
+        message: t('Managing cheques is limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    this._injectStyles();
+    this._chequeDirection = this._chequeDirection || 'in';
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <div class="ret-tabs">
+          <button class="ret-tab ${this._chequeDirection === 'in' ? 'active' : ''}" onclick="RetailSystem._setChequeDirection('in')">${t('Received')}</button>
+          <button class="ret-tab ${this._chequeDirection === 'out' ? 'active' : ''}" onclick="RetailSystem._setChequeDirection('out')">${t('Issued')}</button>
+        </div>
+        <button class="sub-btn-primary" onclick="RetailSystem._openRecordCheque()">+ ${t('Record Cheque')}</button>
+      </div>
+      <div class="ret-kpi-grid" id="cheque-totals" style="grid-template-columns:repeat(4,1fr)">
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('On Hand')}</div><div class="ret-kpi-value" data-k="on_hand_total">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('At Bank')}</div><div class="ret-kpi-value" data-k="at_bank_total">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('Matured & Unbanked')}</div><div class="ret-kpi-value" data-k="matured_unbanked_total" style="color:var(--state-warning-text)">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('Bounced')}</div><div class="ret-kpi-value" data-k="bounced_total" style="color:var(--state-danger-text)">—</div></div>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="cheque-table">
+            <thead><tr>
+              <th>${t('Due Date')}</th><th>${t('Party')}</th><th>${t('Cheque Number')}</th>
+              <th>${t('Bank')}</th><th>${t('Drawer')}</th><th>${t('Amount')}</th>
+              <th>${t('Status')}</th><th>${t('Actions')}</th>
+            </tr></thead>
+            <tbody><tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadCheques();
+  },
+
+  _setChequeDirection(direction) {
+    this._chequeDirection = direction;
+    SubsystemApp._navigate('cheques');
+  },
+
+  // Customer/supplier id -> name, cached per direction for the life of this
+  // tab so switching Received/Issued or reloading the table after an action
+  // does not re-fetch the whole party list on every row. list_cheques
+  // (retail_api.py) returns raw `cheques` rows with no join to customers/
+  // suppliers -- the same disclosure-tier reasoning list_stock_transfers'
+  // own comment gives for not joining a line count -- so the name lookup is
+  // resolved here, client-side, exactly once per direction.
+  async _chequePartyMap(direction) {
+    const cache = this._chequePartyCache || (this._chequePartyCache = {});
+    if (cache[direction]) return cache[direction];
+    const url = direction === 'in' ? '/api/sub/retail/customers' : '/api/sub/retail/suppliers';
+    try {
+      const resp = await this._get(url);
+      const map = {};
+      (resp.data || []).forEach(p => { map[p.id] = p.name; });
+      cache[direction] = map;
+      return map;
+    } catch (e) {
+      return {};
+    }
+  },
+
+  async _loadCheques() {
+    const direction = this._chequeDirection || 'in';
+    try {
+      const [resp, partyMap] = await Promise.all([
+        this._get(`/api/sub/retail/cheques?direction=${direction}&limit=200`),
+        this._chequePartyMap(direction),
+      ]);
+      const rows = resp.data || [];
+      const totals = resp.totals || {};
+      const totalsRoot = document.getElementById('cheque-totals');
+      if (totalsRoot) {
+        const currency = totals.currency || '';
+        totalsRoot.querySelectorAll('[data-k]').forEach(el => {
+          const v = totals[el.getAttribute('data-k')];
+          el.textContent = `${v != null ? v : 0} ${currency}`;
+        });
+      }
+      const tbody = document.querySelector('#cheque-table tbody');
+      if (!tbody) return;
+      if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="8">${this._emptyState({
+          icon: 'receipt',
+          title: t('No cheques yet'),
+          hint: t('Record cheques you receive from customers or issue to suppliers, and track them through deposit, clearing, or a bounce.'),
+          actions: [{ label: t('Record Cheque'), onclick: 'RetailSystem._openRecordCheque()', primary: true }],
+        })}</td></tr>`;
+        return;
+      }
+      // Every action button gated on retail.employees, not on the screen's
+      // own retail.reports gate above -- see this section's header comment.
+      const canManage = !window.SubsystemApp || SubsystemApp.hasCapability('retail.employees');
+      const today = new Date().toISOString().slice(0, 10);
+      tbody.innerHTML = rows.map(row => {
+        const label = t(this._CHEQUE_STATUS_LABEL[row.status] || row.status);
+        const color = this._CHEQUE_STATUS_COLOR[row.status] || 'blue';
+        const isPastDue = row.status === 'pending' && row.due_date && row.due_date <= today;
+        let actions = `<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._viewCheque('${this._esc(row.id)}')">${t('View')}</button>`;
+        if (canManage) {
+          for (const act of this._cheque_actions(row.status, row.direction)) {
+            actions += `<button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._chequeAction('${this._esc(row.id)}','${act.action}')">${act.label}</button>`;
+          }
+        }
+        return `<tr>
+          <td${isPastDue ? ' style="color:var(--state-danger-text);font-weight:600"' : ''}>${this._esc(row.due_date || '—')}${isPastDue ? ` · ${t('Past due')}` : ''}</td>
+          <td style="font-weight:600">${this._esc(partyMap[row.party_id] || row.party_id || '—')}</td>
+          <td style="font-family:monospace">${this._esc(row.cheque_number || '—')}</td>
+          <td>${this._esc(row.bank_name || '—')}</td>
+          <td>${this._esc(row.drawer_name || '—')}</td>
+          <td>${this._esc(row.amount)} ${this._esc(row.currency || '')}</td>
+          <td>${this._badge(label, color)}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }).join('');
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  async _chequeAction(id, action) {
+    if (action === 'bounce') return this._openBounceCheque(id);
+    if (action === 'endorse') return this._openEndorseCheque(id);
+    const CONFIRM = {
+      deposit: { title: t('Deposit'), message: t('Mark this cheque as deposited at the bank?') },
+      clear: { title: t('Clear'), message: t('Mark this cheque as cleared?') },
+      reinstate: { title: t('Reinstate'), message: t('Reinstate this bounced cheque as re-presented and honoured?') },
+      cancel: { title: t('Cancel Cheque'), message: t('Cancel this cheque? It has not been deposited yet.') },
+      // Moves NO money -- the bounce that preceded it already restored the
+      // debt (core/retail/cheques.py's LEGAL_TRANSITIONS: write_off only
+      // crosses out of 'bounced', a DEAD state, into 'written_off', also
+      // DEAD). Said plainly here so an operator does not expect a second
+      // reversal that this action correctly never makes.
+      write_off: { title: t('Write Off'), message: t('Write off this bounced cheque as uncollectable? This moves no money — the bounce already restored it.') },
+    };
+    const cfg = CONFIRM[action];
+    if (!cfg) return;
+    if (!(await this._confirm({ title: cfg.title, message: cfg.message, confirmLabel: cfg.title, danger: action === 'cancel' }))) return;
+    const routeSegment = action === 'write_off' ? 'write-off' : action;
+    await this._postChequeTransition(id, routeSegment);
+  },
+
+  async _postChequeTransition(id, segment, body) {
+    try {
+      const d = await this._post(`/api/sub/retail/cheques/${id}/${segment}`, body || {});
+      if (d.status === 'success') {
+        const newStatus = d.data && d.data.status;
+        SubsystemApp.showToast(
+          t(this._CHEQUE_STATUS_LABEL[newStatus] || newStatus || '') || t('Cheque recorded'), 'success');
+        this._loadCheques();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  _openBounceCheque(id) {
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.innerHTML = `
+      <div class="ret-modal">
+        <h3>${t('Bounce')}</h3>
+        <div class="ret-field"><label>${t('Reason')} *</label>
+          <input type="text" id="bounce-reason" placeholder="${this._esc(t('Reason for the bounce, e.g. insufficient funds'))}" /></div>
+        <div class="ret-field"><label>${t('Bank Reference')}</label><input type="text" id="bounce-ref" /></div>
+        <div class="ret-field"><label>${t('Occurred On')}</label><input type="date" id="bounce-date" /></div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-danger" onclick="RetailSystem._submitBounceCheque('${this._esc(id)}')">${t('Bounce')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const input = document.getElementById('bounce-reason');
+    if (input) input.focus();
+  },
+
+  async _submitBounceCheque(id) {
+    const reasonEl = document.getElementById('bounce-reason');
+    const reason = reasonEl ? reasonEl.value : '';
+    if (!reason.trim()) {
+      SubsystemApp.showToast(t('reason is required'), 'error');
+      return;
+    }
+    const bank_reference = (document.getElementById('bounce-ref') || {}).value || undefined;
+    const occurred_on = (document.getElementById('bounce-date') || {}).value || undefined;
+    const overlay = reasonEl && reasonEl.closest('.ret-modal-overlay');
+    if (overlay) overlay.remove();
+    await this._postChequeTransition(id, 'bounce', { reason, bank_reference, occurred_on });
+  },
+
+  async _openEndorseCheque(id) {
+    // Suppliers listed first — a shop endorses a received cheque on
+    // overwhelmingly to settle what IT owes, per create_cheque's own
+    // "Deliberately half-built" comment on the endorse route.
+    const [sups, custs] = await Promise.all([
+      this._get('/api/sub/retail/suppliers'), this._get('/api/sub/retail/customers'),
+    ]).catch(() => [{ data: [] }, { data: [] }]);
+    const supOpts = (sups.data || []).map(p => `<option value="supplier:${this._esc(p.id)}">${this._esc(p.name)}</option>`).join('');
+    const custOpts = (custs.data || []).map(p => `<option value="customer:${this._esc(p.id)}">${this._esc(p.name)}</option>`).join('');
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.innerHTML = `
+      <div class="ret-modal">
+        <h3>${t('Endorse')}</h3>
+        <div class="ret-field"><label>${t('Endorse To')} *</label>
+          <select id="endorse-target"><option value="">${t('Select party…')}</option>
+            <optgroup label="${this._esc(t('Supplier'))}">${supOpts}</optgroup>
+            <optgroup label="${this._esc(t('Customer'))}">${custOpts}</optgroup>
+          </select></div>
+        <div class="ret-field"><label>${t('Occurred On')}</label><input type="date" id="endorse-date" /></div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitEndorseCheque('${this._esc(id)}')">${t('Endorse')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  },
+
+  async _submitEndorseCheque(id) {
+    const sel = document.getElementById('endorse-target');
+    const val = sel ? sel.value : '';
+    if (!val) { SubsystemApp.showToast(t('Select party…'), 'error'); return; }
+    const [to_party_type, to_party_id] = val.split(':');
+    const occurred_on = (document.getElementById('endorse-date') || {}).value || undefined;
+    const overlay = sel && sel.closest('.ret-modal-overlay');
+    if (overlay) overlay.remove();
+    await this._postChequeTransition(id, 'endorse', { to_party_type, to_party_id, occurred_on });
+  },
+
+  async _openRecordCheque() {
+    const direction = this._chequeDirection || 'in';
+    const partyUrl = direction === 'in' ? '/api/sub/retail/customers' : '/api/sub/retail/suppliers';
+    const parties = (await this._get(partyUrl).catch(() => ({ data: [] }))).data || [];
+    const partyOpts = parties.map(p => `<option value="${this._esc(p.id)}">${this._esc(p.name)}</option>`).join('');
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-cheque-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal ret-modal-wide">
+        <h3>${this._icon('receipt', 18, '🧾')} ${t('Record a Cheque')}</h3>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="ret-field" style="margin:0"><label>${t(direction === 'in' ? 'Customer' : 'Supplier')} *</label>
+            <select id="chq-party"><option value="">${t('Select party…')}</option>${partyOpts}</select></div>
+          <div class="ret-field" style="margin:0"><label>${t('Amount')} *</label>
+            <input type="number" id="chq-amount" min="0.001" step="0.001" /></div>
+        </div>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="ret-field" style="margin:0"><label>${t('Cheque Number')} *</label><input type="text" id="chq-number" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Due Date')} *</label><input type="date" id="chq-due" /></div>
+        </div>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="ret-field" style="margin:0"><label>${t('Issue Date')}</label><input type="date" id="chq-issue" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Bank Name')}</label><input type="text" id="chq-bank" /></div>
+        </div>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="ret-field" style="margin:0"><label>${t('Bank Branch')}</label><input type="text" id="chq-bank-branch" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Drawer Name')}</label><input type="text" id="chq-drawer" /></div>
+        </div>
+        <div class="ret-field"><label>${t('Account Number')}</label><input type="text" id="chq-account" /></div>
+        <div class="ret-field"><label>${t('Notes')}</label><input type="text" id="chq-notes" /></div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitRecordCheque('${direction}')">${t('Record Cheque')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  },
+
+  async _submitRecordCheque(direction) {
+    const val = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const party_id = val('chq-party');
+    const amount = parseFloat(val('chq-amount'));
+    const cheque_number = val('chq-number');
+    const due_date = val('chq-due');
+    if (!party_id || !amount || amount <= 0 || !cheque_number || !due_date) {
+      SubsystemApp.showToast(t('Party, amount, cheque number and due date are required'), 'error');
+      return;
+    }
+    try {
+      const d = await this._post('/api/sub/retail/cheques', {
+        direction, party_id, amount, cheque_number, due_date,
+        issue_date: val('chq-issue') || undefined,
+        bank_name: val('chq-bank') || undefined,
+        bank_branch: val('chq-bank-branch') || undefined,
+        drawer_name: val('chq-drawer') || undefined,
+        account_number: val('chq-account') || undefined,
+        notes: val('chq-notes') || undefined,
+      });
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Cheque recorded'), 'success');
+        const overlay = document.getElementById('ret-cheque-modal');
+        if (overlay) overlay.remove();
+        this._loadCheques();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  // Header + the event timeline in fold order, each event annotated
+  // `effective`/`crossing_index` by the server (core/retail/cheques.py's
+  // fold()) -- an INERT event (a two-device race) renders greyed out with
+  // "superseded", never dropped, so the owner SEES the race instead of a
+  // sync_conflicts row nobody reads (this feature has none -- see
+  // database/schema.py's v32 comment: both cheque tables are append-only
+  // and converge by plain set union).
+  async _viewCheque(id) {
+    try {
+      const resp = (await this._get(`/api/sub/retail/cheques/${id}`)).data || {};
+      const cheque = resp.cheque || {};
+      const events = resp.events || [];
+      const label = t(this._CHEQUE_STATUS_LABEL[cheque.status] || cheque.status);
+      const color = this._CHEQUE_STATUS_COLOR[cheque.status] || 'blue';
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.innerHTML = `
+        <div class="ret-modal ret-modal-wide">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+            <h3 style="margin:0">${t('Cheque')} ${this._esc(cheque.cheque_number || '')}</h3>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Amount')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(cheque.amount)} ${this._esc(cheque.currency || '')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Due Date')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(cheque.due_date || '—')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(label, color)}</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Bank')}</div><div style="color:var(--text-muted)">${this._esc(cheque.bank_name || '—')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Drawer')}</div><div style="color:var(--text-muted)">${this._esc(cheque.drawer_name || '—')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Account Number')}</div><div style="color:var(--text-muted)">${this._esc(cheque.account_number || '—')}</div></div>
+          </div>
+          <div style="margin:16px 0 8px;color:var(--text-primary);font-weight:600">${t('Timeline')}</div>
+          <table class="ret-table">
+            <thead><tr><th>${t('Occurred On')}</th><th>${t('Status')}</th><th>${t('Reason')}</th><th>${t('Bank Reference')}</th></tr></thead>
+            <tbody>${events.map(e => {
+              const evLabel = t(this._CHEQUE_STATUS_LABEL[e.to_status] || e.to_status);
+              const superseded = e.effective === false;
+              return `<tr${superseded ? ' style="opacity:.55"' : ''}>
+                <td>${this._esc(e.occurred_on || (e.created_at_utc || '').slice(0, 10) || '—')}</td>
+                <td>${evLabel}${superseded ? ` — <em>${t('Superseded — recorded on another device')}</em>` : ''}</td>
+                <td>${this._esc(e.reason || '—')}</td>
+                <td>${this._esc(e.bank_reference || '—')}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
     }
   },
 };

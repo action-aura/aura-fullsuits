@@ -119,6 +119,19 @@ from core.retail import modifiers as modifier_engine
 # docstring). Aliased to match this file's own `_whatsapp_hook`/`_email_hook`
 # private-import convention immediately above.
 from core.retail import money_format as _money_format
+# Aseel-parity wave A-PAR, schema v32 -- the ONE legality table and the fold
+# that derives a cheque's status from its append-only event set. Aliased for
+# the identical reason `promo_engine`/`modifier_engine` above are: it cannot
+# collide with a `cheques`/`cheque` local variable name inside the routes
+# below. See core/retail/cheques.py's own module docstring for why this is a
+# pure module with no database access, imported here and nowhere else --
+# commercial_runtime/sync/sync_service.py deliberately does NOT import it.
+from core.retail import cheques as cheque_engine
+# Aseel-parity wave A-PAR (schema v34): per-document-type numbering series.
+# `resolve_series`/`allocate` are called from the four mint sites below;
+# `REF_PREFIX` is aliased to `_REF_PREFIX` just below its own dict used to
+# live at, rather than copied -- see doc_series.py's own module docstring.
+from core.retail import doc_series
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -3304,7 +3317,22 @@ def create_purchase_order():
         # keeps the sequential part human-readable/searchable while
         # guaranteeing global uniqueness without altering the shared
         # _next_ref helper or its format for other doc types.
-        po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
+        #
+        # Aseel-parity wave A-PAR (schema v34): if THIS terminal owns a
+        # configured 'po' book, its clean series number is minted instead
+        # -- `resolve_series` can only ever return a book this exact
+        # terminal_uid claimed (see doc_series.py's own docstring), so an
+        # install that never configures one takes the UNCHANGED legacy path
+        # below, byte for byte, fragments included. Identical treatment at
+        # accept_reorder_request's own second po_number mint site --
+        # retail_po_number_uniqueness_test.py exists precisely because
+        # fixing one PO mint site and not the other left a real bug fully
+        # live, and the same rule applies to this feature.
+        _po_series = doc_series.resolve_series(conn, cid, 'po', local_terminal_id())
+        if _po_series is not None:
+            po_number = doc_series.allocate(conn, _po_series)
+        else:
+            po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items), currency)
         # supplier_id was already resolved and validated above.
         payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
@@ -4441,7 +4469,18 @@ def accept_reorder_request(rid):
         # identical fix. Fixing only the obvious mint site above and
         # missing this one would leave the bug fully live through the
         # reorder-accept path (2026-08-28 ROADMAP entry).
-        po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
+        #
+        # Aseel-parity wave A-PAR (schema v34): identical treatment as
+        # create_purchase_order's own 'po' mint site above -- see that
+        # route's comment for the full reasoning. Both sites must resolve
+        # a configured series or neither may, which is exactly what
+        # retail_po_number_uniqueness_test.py's own two-mint-site coverage
+        # is extended to prove for this feature.
+        _po_series = doc_series.resolve_series(conn, cid, 'po', local_terminal_id())
+        if _po_series is not None:
+            po_number = doc_series.allocate(conn, _po_series)
+        else:
+            po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,
                                          ordered_at,amount_paid,payment_status)
@@ -4542,6 +4581,960 @@ def decline_reorder_request(rid):
     finally:
         conn.close()
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Quotations and Sales Orders (Aseel-parity wave A-PAR, schema v33)
+#
+#  THIS IS NOT `held_sales` WEARING A NEW NAME. `held_sales` (below, this
+#  file) is a device-local JSON cart snapshot with no approval step, no
+#  expiry and no conversion tracking -- "two devices don't need to see each
+#  other's in-progress carts" is true of a cart and false of a document a
+#  customer is holding a printed copy of. A quotation/sales-order is its own
+#  pair of real tables (database/schema.py's `_migrate_add_sales_quotations`
+#  -- read that docstring first), not a bigger held_sales.
+#
+#  STAGE A ONLY (this wave). Every route below reads/writes
+#  `sales_quotations`/`sales_quotation_lines` on THIS device and queues the
+#  matching sync_outbox events (see DRAFTS DO NOT SYNC below) -- and, as of
+#  this same change, `commercial_runtime/sync/sync_service.py`'s apply side
+#  now has the matching `quotation` branch, so a quotation issued on one
+#  device DOES converge to another once both have pulled. What it cannot do
+#  is retroactively fetch an event emitted before a peer's cursor learned
+#  the `quotation` entity type exists: `_apply_event` skips an unhandled
+#  type and the cursor still advances past it (sync_service.py's own
+#  module docstring), so a quotation sent before every device in a shop is
+#  running this build never backfills to the ones that were not. Named here
+#  rather than left for a two-till shop to discover.
+#
+#  DRAFTS DO NOT SYNC. No sync event is ever queued while `status='draft'`
+#  -- the `held_sales` argument restated: a draft is device-local,
+#  cart-shaped state nobody else needs to see. The FIRST event a quotation
+#  ever produces is queued at SEND, as `event_type='create'`, carrying the
+#  header AND the now-frozen line set in one payload (`payload['lines']`)
+#  -- `sent` is IMMUTABLE (database/schema.py's STATUS VALUES), so lines can
+#  never change again, and every LATER event (accept/decline/cancel/
+#  convert) is `event_type='update'` carrying header fields only. This is
+#  why update_quotation never queues a sync event at all (PUT is draft-only,
+#  and a draft never syncs) and why cancel_quotation only queues one when
+#  the quotation being cancelled was NOT still a draft.
+#
+#  NO NINTH CAPABILITY CODE. Every route below rides the existing CAP_SELL
+#  -- "park/recall a cart" is already inside that code's own definition
+#  (see the CAPABILITY GATING header far above), and a code with no seeded
+#  row is a code nobody holds. ONE new LICENCE capability string,
+#  `retail.quotation.manage`, matching `retail.promotion.manage`/
+#  `retail.modifier.manage`/`retail.reorder.manage` already in that separate
+#  vocabulary -- see docs/licensing/phase7/retail-restriction-capability-
+#  matrix.md. NOT added to RETAIL_RESTRICTED_ALLOWLIST: a lapsed licence
+#  must not issue new commercial promises.
+#
+#  A QUOTE RESERVES NO STOCK. `quotations_committed_demand` below is
+#  ADVISORY ONLY, derived on read from accepted/unconverted/unexpired
+#  quotations -- it never refuses a sale or a conversion. Four independent
+#  reasons this is deliberate, not an oversight: (1) `inventory_balances.
+#  quantity_reserved` already existed and was DROPPED in v17 as dead code;
+#  reinstating it would argue against that migration, not design around it.
+#  (2) Balances are DERIVED from `inventory_movements` (Phase 3's ledger-is-
+#  truth); a reservation has no ledger row, so it either widens the drift
+#  invariant v15 gates the whole migration chain on, or sits outside the one
+#  number this codebase treats as truth. (3) Reservations do not CONVERGE:
+#  two tills, five on hand, two quotes for five each, both locally legal --
+#  no merge rule is right, the identical reason `customers.credit_balance`
+#  is kept device-local. (4) It would let a document refuse a sale, which
+#  create_sale's own stage 7d-iii comment already adjudicated against.
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: `sales_quotations.status` values. No CHECK constraint (matching
+#: `movement_type`/`stock_transfers.status`'s own precedent in this file) --
+#: validated here, at the API layer.
+_QUOTATION_STATUSES = ('draft', 'sent', 'accepted', 'declined', 'cancelled', 'converted')
+_QUOTATION_DOC_KINDS = ('quotation', 'order')
+#: Mirrors create_sale's own line-count reasoning for `_MAX_PUSH_BATCH` --
+#: a SENT quotation carries its own frozen lines in ONE sync event, and the
+#: relay batches at most 200 events per push.
+_QUOTATION_MAX_LINES = 200
+
+
+def _wants_discount(items):
+    """Same predicate create_sale's own `wants_discount` uses (above,
+    `create_sale`'s definition further down this file): any line whose
+    CLAMPED discount_pct is > 0 asks for a discount. Deliberately PURE --
+    no capability call inside it -- so create_quotation/update_quotation
+    each keep their OWN inline `if ... and not session_has_capability(
+    CAP_DISCOUNT): return ...`, which is what the AST capability ratchet
+    (retail_capability_ratchet_ast.py) requires: the verdict must be
+    consumed inside the SAME handler function, not merely computed by a
+    shared helper two calls away."""
+    return any(
+        tax_engine.clamp_discount_pct(item.get('discount_pct', 0)) > 0
+        for item in items if isinstance(item, dict)
+    )
+
+
+def _quotation_is_expired(valid_until, today_local):
+    """`valid_until < today_local` -- a quote expiring TODAY is still valid
+    for the rest of that day (database/schema.py's "EXPIRY IS DERIVED, NOT
+    STORED" section). A NULL/empty `valid_until` never expires. Computed on
+    every read and re-evaluated on every conversion attempt -- there is no
+    stored 'expired' status to go stale."""
+    return bool(valid_until) and valid_until < today_local
+
+
+def _resolve_quotation_lines_for_write(conn, cid, bid, items, mode, currency):
+    """Shared by create_quotation/update_quotation: resolves server-
+    authoritative line data from client-submitted commercial intent, the
+    IDENTICAL AUDIT-002/003 sequence create_sale's own item loop uses --
+    promo_engine.load_active_promotions -> resolve_line_discount_pct ->
+    tax_engine.calculate_line -- so a quote issued inside a promotion window
+    is a real offer at the promoted price. Returns `(resolved_lines,
+    subtotal, discount, tax, total, error_response)`; `error_response` is
+    None on success and callers return it directly.
+
+    NO STOCK CHECK HERE, deliberately: a quotation is a future promise, not
+    a cart about to take money. The live stock check happens exactly once,
+    at CONVERSION, inside create_sale (design point (e): "NO SPECIAL CASE,
+    NONE") -- duplicating it here would be a SECOND oversell rule, the
+    thing the stock_transfers section banner (above) already argues
+    against.
+
+    Parent-product guard copied verbatim from create_sale's own item loop
+    (further down this file): a product with variants has no
+    `inventory_balances` row of its own that means anything, so it is
+    refused here exactly as it would be at the till.
+    """
+    if not items:
+        return None, 0, 0, 0, 0, (jsonify({'status': 'error', 'message': 'At least one item required'}), 400)
+    if len(items) > _QUOTATION_MAX_LINES:
+        return None, 0, 0, 0, 0, (jsonify({
+            'status': 'error',
+            'message': f'A quotation may carry at most {_QUOTATION_MAX_LINES} lines.',
+        }), 400)
+
+    now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    active_promotions = promo_engine.load_active_promotions(conn, cid, bid, now_local)
+
+    resolved_lines = []
+    subtotal = discount = tax = total = Decimal('0')
+    for line_no, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            return None, 0, 0, 0, 0, (jsonify({'status': 'error', 'message': 'Invalid item.'}), 400)
+        pid = item.get('product_id')
+        product = conn.execute(
+            "SELECT p.id, p.name, p.sell_price, p.tax_rate, p.status, p.category_id, "
+            "p.parent_product_id, EXISTS("
+            "  SELECT 1 FROM products c WHERE c.parent_product_id = p.id "
+            "  AND c.company_id = p.company_id AND c.deleted_at_utc IS NULL "
+            "  AND c.status='active'"
+            ") AS has_variants "
+            "FROM products p WHERE p.id=? AND p.company_id=? AND p.deleted_at_utc IS NULL",
+            (pid, cid)
+        ).fetchone()
+        if not product:
+            return None, 0, 0, 0, 0, (jsonify({'status': 'error', 'message': f'Product {pid} not found.'}), 400)
+        if product['status'] != 'active':
+            return None, 0, 0, 0, 0, (jsonify({
+                'status': 'error', 'message': f'Product "{product["name"]}" is not available for sale.'}), 400)
+        if product['has_variants']:
+            return None, 0, 0, 0, 0, (jsonify({
+                'status': 'error',
+                'message': f'"{product["name"]}" has variants -- choose a specific variant to sell.'}), 400)
+        try:
+            qty = float(item.get('quantity'))
+        except (TypeError, ValueError):
+            return None, 0, 0, 0, 0, (jsonify({'status': 'error', 'message': 'Invalid quantity.'}), 400)
+        if qty <= 0:
+            return None, 0, 0, 0, 0, (jsonify({'status': 'error', 'message': 'Quantity must be greater than zero.'}), 400)
+
+        manual_discount_pct = tax_engine.clamp_discount_pct(item.get('discount_pct', 0))
+        effective_discount_pct, applied_promotion = promo_engine.resolve_line_discount_pct(
+            active_promotions, pid, product['parent_product_id'], product['category_id'], manual_discount_pct
+        )
+        unit_price = float(product['sell_price'])
+        tax_rate = float(product['tax_rate'])
+        calc = tax_engine.calculate_line(unit_price, qty, effective_discount_pct, tax_rate, mode=mode, currency=currency)
+
+        resolved_lines.append({
+            'product_id': pid, 'product_name_snapshot': product['name'], 'quantity': qty,
+            'unit_price': unit_price, 'discount_pct': effective_discount_pct, 'tax_rate': tax_rate,
+            'line_total': calc['taxable_amount'],
+            'promotion_name_snapshot': applied_promotion['name'] if applied_promotion else None,
+            'line_no': line_no,
+        })
+        subtotal += Decimal(str(calc['gross']))
+        discount += Decimal(str(calc['discount_amount']))
+        tax += Decimal(str(calc['tax']))
+        total += Decimal(str(calc['total']))
+
+    quant = tax_engine.currency_quantum(currency)
+    subtotal = float(subtotal.quantize(quant, rounding=ROUND_HALF_UP))
+    discount = float(discount.quantize(quant, rounding=ROUND_HALF_UP))
+    tax = float(tax.quantize(quant, rounding=ROUND_HALF_UP))
+    total = float(total.quantize(quant, rounding=ROUND_HALF_UP))
+    return resolved_lines, subtotal, discount, tax, total, None
+
+
+def _quotation_sync_header_payload(conn, q, changed_fields=None):
+    """The FULL header snapshot every quotation sync event carries -- see
+    database/schema.py's "DRAFTS DO NOT SYNC" section. `q` is the ALREADY-
+    UPDATED row (callers re-SELECT after their own UPDATE commits its
+    values, rather than this function guessing what changed), so every
+    caller gets a byte-correct snapshot with no risk of drifting from the
+    write that just happened. `branch_uid` is resolved fresh every call --
+    AUDIT-032C, the identical fix `sale`'s own emission uses -- NEVER the
+    raw `branch_id` integer, which means nothing on a receiving device.
+    `changed_fields`, when given, is the delta contract (stage 6b-i) the
+    sync apply side's `_delta_set_clause` reads; omitted entirely for a
+    `create` event, which the apply side then reads as "every column
+    changed" -- correct, since a `create` event is this row's very first
+    appearance on the wire.
+    """
+    payload = {
+        'id': q['id'], 'branch_id': q['branch_id'], 'branch_uid': _branch_uid(conn, q['branch_id']),
+        'customer_id': q['customer_id'], 'doc_number': q['doc_number'], 'doc_kind': q['doc_kind'],
+        'status': q['status'], 'valid_until': q['valid_until'], 'currency': q['currency'],
+        'tax_mode': q['tax_mode'], 'subtotal': q['subtotal'], 'discount_amount': q['discount_amount'],
+        'tax_amount': q['tax_amount'], 'total': q['total'], 'notes': q['notes'],
+        'created_at': str(q['created_at']) if q['created_at'] is not None else None,
+        'created_by': q['created_by'],
+        'sent_at': q['sent_at'], 'accepted_at': q['accepted_at'], 'declined_at': q['declined_at'],
+        'cancelled_at': q['cancelled_at'], 'converted_at': q['converted_at'],
+        'converted_sale_uid': q['converted_sale_uid'],
+        'conversion_variance_json': q['conversion_variance_json'],
+        'row_version': q['row_version'], 'updated_at_utc': q['updated_at_utc'],
+    }
+    if changed_fields is not None:
+        payload['_changed_fields'] = changed_fields
+    return payload
+
+
+@retail_bp.route('/quotations', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def create_quotation():
+    """Body: `{branch_id?, customer_id?, doc_kind?, valid_until?, notes?,
+    items:[{product_id, quantity, discount_pct?}]}`. Creates `status='draft'`
+    -- see the section banner above for why a draft never syncs.
+
+    AUDIT-002/003 UNCHANGED: the client sends commercial intent only.
+    `unit_price`/`tax_rate`/`line_total` and all four header totals are
+    resolved server-side (see `_resolve_quotation_lines_for_write`).
+
+    INLINE CAP_DISCOUNT, judged AFTER `tax_engine.clamp_discount_pct` and
+    BEFORE any write -- create_sale's exact shape. THIS gate matters MORE
+    here than at the till: a quotation is a forward-dated discount. Without
+    it a cashier who cannot type 20% off today could put 20% off in writing
+    today and oblige the shop tomorrow.
+    """
+    data = request.json or {}
+    cid = _cid()
+    items = data.get('items') or []
+
+    if _wants_discount(items) and not session_has_capability(CAP_DISCOUNT):
+        return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+
+    doc_kind = data.get('doc_kind') or 'quotation'
+    if doc_kind not in _QUOTATION_DOC_KINDS:
+        return jsonify({'status': 'error', 'message': f'Invalid doc_kind: {doc_kind!r}'}), 400
+
+    conn = get_retail_conn()
+    # `_settings()` (below) and `_next_ref()` both read tables
+    # (`retail_settings`, `doc_sequences`) that only exist once this LAZY,
+    # route-triggered migration has run at least once on this database --
+    # create_sale's own top-of-function call does the identical thing for
+    # the identical reason (see sync_service.py's `apply_pull_result` "why
+    # this hook exists" comment for the general shape of this trap: a brand
+    # new device/company that has never hit a route which happens to call
+    # this can otherwise 500 the FIRST time anything here reads either
+    # table). Reproduced directly: a fresh company's first POST /quotations
+    # raised `sqlite3.OperationalError: no such table: retail_settings`
+    # before this call was added.
+    _ensure_credit_schema(conn)
+    try:
+        # Launch-readiness chain wave C1's own fix (create_sale/create_
+        # purchase_order/create_stock_transfer all resolve their branch
+        # through this SAME convergence point -- see its own docstring).
+        bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if branch_err:
+            return branch_err
+
+        _s = _settings(conn, cid)
+        mode = _s.get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        currency = _s.get('base_currency')
+
+        resolved_lines, subtotal, discount, tax, total, line_err = _resolve_quotation_lines_for_write(
+            conn, cid, bid, items, mode, currency)
+        if line_err:
+            return line_err
+
+        qid = _new_uid()
+        # AUDIT-032B, both mitigations mandatory from commit one -- create_
+        # purchase_order/create_sale's identical expression, minted BEFORE
+        # the INSERT and wrapped in the same IntegrityError containment
+        # below.
+        doc_number = f"{_next_ref(conn, cid, 'quotation')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
+        now_utc = now_utc_iso()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO sales_quotations
+                (id, company_id, branch_id, customer_id, doc_number, doc_kind, status,
+                 valid_until, currency, tax_mode, subtotal, discount_amount, tax_amount, total,
+                 notes, created_by, row_version, updated_at_utc)
+            VALUES (?,?,?,?,?,?,'draft',?,?,?,?,?,?,?,?,?,1,?)
+        """, (qid, cid, bid, data.get('customer_id'), doc_number, doc_kind,
+              data.get('valid_until'), currency, mode, subtotal, discount, tax, total,
+              data.get('notes', ''), data.get('cashier', _uid()), now_utc))
+
+        for line in resolved_lines:
+            cur.execute("""
+                INSERT INTO sales_quotation_lines
+                    (id, quotation_id, product_id, product_name_snapshot, quantity,
+                     unit_price, discount_pct, tax_rate, line_total, promotion_name_snapshot, line_no)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (_new_uid(), qid, line['product_id'], line['product_name_snapshot'], line['quantity'],
+                  line['unit_price'], line['discount_pct'], line['tax_rate'], line['line_total'],
+                  line['promotion_name_snapshot'], line['line_no']))
+        # DRAFTS DO NOT SYNC (section banner above) -- no _queue_sync_event
+        # call here. The first sync event this quotation ever produces is
+        # queued by send_quotation, below.
+        _audit(conn, 'QUOTATION_CREATED', 'quotation', qid, doc_number)
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("create_quotation failed on a database constraint: %s", exc)
+        return jsonify({
+            'status': 'error',
+            'message': 'This quotation could not be created because of a conflicting record. Please try again.',
+        }), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("create_quotation failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not create this quotation.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {'id': qid, 'doc_number': doc_number}}), 201
+
+
+@retail_bp.route('/quotations/<string:qid>', methods=['PUT'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def update_quotation(qid):
+    """DRAFT ONLY -- enforced by a conditional UPDATE whose `cur.rowcount`
+    is checked, 409 otherwise (receive_purchase_order/cancel_stock_
+    transfer's own guard shape). `doc_kind` and `branch_id` are IMMUTABLE
+    through this route: `doc_kind` by design (records how the document
+    STARTED -- see database/schema.py's own column comment), `branch_id`
+    because re-pricing a draft against a DIFFERENT branch's promotions is a
+    bigger change than "edit this quote" and is out of v33's scope -- both
+    are re-read from the stored row, never from the request body.
+
+    Lines are replaced WHOLESALE and every price is re-resolved server-side
+    -- the identical sequence create_quotation uses. Safe only because a
+    draft has never synced (see the section banner's DRAFTS DO NOT SYNC):
+    there is no peer device holding a stale copy of these lines to
+    reconcile, so a plain delete-then-reinsert has no wire consequence.
+    """
+    data = request.json or {}
+    cid = _cid()
+    items = data.get('items') or []
+
+    if _wants_discount(items) and not session_has_capability(CAP_DISCOUNT):
+        return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+
+    conn = get_retail_conn()
+    # See create_quotation's identical call/comment above -- this route also
+    # reads `retail_settings` via `_settings()` below.
+    _ensure_credit_schema(conn)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT branch_id, status FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+        if row['status'] != 'draft':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot edit a quotation that is {row['status']}."}), 409
+        bid = row['branch_id']
+
+        _s = _settings(conn, cid)
+        mode = _s.get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        currency = _s.get('base_currency')
+
+        resolved_lines, subtotal, discount, tax, total, line_err = _resolve_quotation_lines_for_write(
+            conn, cid, bid, items, mode, currency)
+        if line_err:
+            conn.rollback()
+            return line_err
+
+        now_utc = now_utc_iso()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE sales_quotations
+               SET customer_id=?, valid_until=?, notes=?, currency=?, tax_mode=?,
+                   subtotal=?, discount_amount=?, tax_amount=?, total=?,
+                   row_version=row_version+1, updated_at_utc=?
+             WHERE id=? AND company_id=? AND status='draft'
+        """, (data.get('customer_id'), data.get('valid_until'), data.get('notes', ''), currency, mode,
+              subtotal, discount, tax, total, now_utc, qid, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This quotation is no longer a draft.'}), 409
+
+        cur.execute("DELETE FROM sales_quotation_lines WHERE quotation_id=?", (qid,))
+        for line in resolved_lines:
+            cur.execute("""
+                INSERT INTO sales_quotation_lines
+                    (id, quotation_id, product_id, product_name_snapshot, quantity,
+                     unit_price, discount_pct, tax_rate, line_total, promotion_name_snapshot, line_no)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (_new_uid(), qid, line['product_id'], line['product_name_snapshot'], line['quantity'],
+                  line['unit_price'], line['discount_pct'], line['tax_rate'], line['line_total'],
+                  line['promotion_name_snapshot'], line['line_no']))
+        _audit(conn, 'QUOTATION_UPDATED', 'quotation', qid)
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("update_quotation(%s) failed: %s", qid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not update this quotation.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/quotations/<string:qid>/send', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def send_quotation(qid):
+    """draft -> sent. THE ONLY transition that ever embeds lines in a sync
+    event -- see the section banner's DRAFTS DO NOT SYNC. `sent` is
+    IMMUTABLE from this point on (database/schema.py's STATUS VALUES), so
+    the frozen line set embedded in THIS event is the only line data any
+    other device will ever see for this quotation.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        q = cur.execute(
+            "SELECT * FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+        ).fetchone()
+        if not q:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+        if q['status'] != 'draft':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot send a quotation that is {q['status']}."}), 409
+
+        now = now_utc_iso()
+        cur.execute("""
+            UPDATE sales_quotations
+               SET status='sent', sent_at=?, row_version=row_version+1, updated_at_utc=?
+             WHERE id=? AND company_id=? AND status='draft'
+        """, (now, now, qid, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This quotation is no longer a draft.'}), 409
+
+        lines = cur.execute(
+            "SELECT * FROM sales_quotation_lines WHERE quotation_id=? ORDER BY line_no", (qid,)
+        ).fetchall()
+        updated = cur.execute("SELECT * FROM sales_quotations WHERE id=?", (qid,)).fetchone()
+        payload = _quotation_sync_header_payload(conn, updated)
+        payload['lines'] = [
+            {'id': ln['id'], 'product_id': ln['product_id'],
+             'product_name_snapshot': ln['product_name_snapshot'], 'quantity': ln['quantity'],
+             'unit_price': ln['unit_price'], 'discount_pct': ln['discount_pct'],
+             'tax_rate': ln['tax_rate'], 'line_total': ln['line_total'],
+             'promotion_name_snapshot': ln['promotion_name_snapshot'], 'line_no': ln['line_no']}
+            for ln in lines
+        ]
+        _queue_sync_event(cur, 'quotation', qid, 'create', payload)
+        _audit(conn, 'QUOTATION_SENT', 'quotation', qid, q['doc_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("send_quotation(%s) failed: %s", qid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not send this quotation.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/quotations/<string:qid>/accept', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def accept_quotation(qid):
+    """sent -> accepted. Records that the CUSTOMER said yes; moves no money
+    and no stock -- conversion is a separate, explicit act
+    (`POST /sales` with `quotation_id`)."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        q = cur.execute(
+            "SELECT * FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+        ).fetchone()
+        if not q:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+        if q['status'] != 'sent':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot accept a quotation that is {q['status']}."}), 409
+
+        now = now_utc_iso()
+        cur.execute("""
+            UPDATE sales_quotations
+               SET status='accepted', accepted_at=?, row_version=row_version+1, updated_at_utc=?
+             WHERE id=? AND company_id=? AND status='sent'
+        """, (now, now, qid, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This quotation is no longer sent.'}), 409
+
+        updated = cur.execute("SELECT * FROM sales_quotations WHERE id=?", (qid,)).fetchone()
+        _queue_sync_event(cur, 'quotation', qid, 'update', _quotation_sync_header_payload(
+            conn, updated, changed_fields=['status', 'accepted_at', 'row_version', 'updated_at_utc']))
+        _audit(conn, 'QUOTATION_ACCEPTED', 'quotation', qid, q['doc_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("accept_quotation(%s) failed: %s", qid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not accept this quotation.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/quotations/<string:qid>/decline', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def decline_quotation(qid):
+    """sent -> declined. Terminal."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        q = cur.execute(
+            "SELECT * FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+        ).fetchone()
+        if not q:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+        if q['status'] != 'sent':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot decline a quotation that is {q['status']}."}), 409
+
+        now = now_utc_iso()
+        cur.execute("""
+            UPDATE sales_quotations
+               SET status='declined', declined_at=?, row_version=row_version+1, updated_at_utc=?
+             WHERE id=? AND company_id=? AND status='sent'
+        """, (now, now, qid, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This quotation is no longer sent.'}), 409
+
+        updated = cur.execute("SELECT * FROM sales_quotations WHERE id=?", (qid,)).fetchone()
+        _queue_sync_event(cur, 'quotation', qid, 'update', _quotation_sync_header_payload(
+            conn, updated, changed_fields=['status', 'declined_at', 'row_version', 'updated_at_utc']))
+        _audit(conn, 'QUOTATION_DECLINED', 'quotation', qid, q['doc_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("decline_quotation(%s) failed: %s", qid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not decline this quotation.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/quotations/<string:qid>/cancel', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def cancel_quotation(qid):
+    """draft|sent|accepted -> cancelled. The shop's own withdrawal channel
+    -- a commercial document is CANCELLED, never deleted (database/
+    schema.py's own column comment on why there is no `deleted_at_utc`)."""
+    cid = _cid()
+    conn = get_retail_conn()
+    was_draft = False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        q = cur.execute(
+            "SELECT * FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+        ).fetchone()
+        if not q:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+        if q['status'] not in ('draft', 'sent', 'accepted'):
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': f"Cannot cancel a quotation that is {q['status']}."}), 409
+        was_draft = (q['status'] == 'draft')
+
+        now = now_utc_iso()
+        cur.execute("""
+            UPDATE sales_quotations
+               SET status='cancelled', cancelled_at=?, row_version=row_version+1, updated_at_utc=?
+             WHERE id=? AND company_id=? AND status IN ('draft','sent','accepted')
+        """, (now, now, qid, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This quotation has already moved on.'}), 409
+
+        if not was_draft:
+            # DRAFTS DO NOT SYNC (section banner above): a quotation
+            # cancelled while still a draft was NEVER emitted in the first
+            # place, so there is nothing for a peer device to reconcile --
+            # emitting an `update` here would be an event for an entity_id
+            # no other device has ever heard of.
+            updated = cur.execute("SELECT * FROM sales_quotations WHERE id=?", (qid,)).fetchone()
+            _queue_sync_event(cur, 'quotation', qid, 'update', _quotation_sync_header_payload(
+                conn, updated, changed_fields=['status', 'cancelled_at', 'row_version', 'updated_at_utc']))
+        _audit(conn, 'QUOTATION_CANCELLED', 'quotation', qid, q['doc_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("cancel_quotation(%s) failed: %s", qid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not cancel this quotation.'}), 400
+    finally:
+        conn.close()
+    if not was_draft:
+        _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/quotations/<string:qid>/prepare-conversion', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.quotation.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def prepare_quotation_conversion(qid):
+    """WRITES NOTHING and takes NO LOCK -- a preview shown to the cashier
+    BEFORE any money moves. Gated anyway, for the reason preview_po_split
+    already states in writing (above, this file): leaving the one
+    non-writing POST in this section ungated would mean the guard test has
+    to carry an exemption, and an exemption is a shape the next new route
+    can quietly take.
+
+    Compares EFFECTIVE per-unit prices (`unit_price * (1 - discount_pct /
+    100)`) on each side and lets the WHOLE WINNING side win -- comparing raw
+    unit prices and then separately carrying over the quoted discount
+    compounds one side's discount onto the other side's price (12.00@10%
+    vs 9.00@0% -> 8.10, below BOTH real offers). See create_sale's own
+    conversion block for the actual charge; this route only PREVIEWS it.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    # See create_quotation's identical call/comment above -- this route also
+    # reads `retail_settings` via `_settings()` below.
+    _ensure_credit_schema(conn)
+    try:
+        q = conn.execute(
+            "SELECT * FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+        ).fetchone()
+        if not q:
+            return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+        lines = conn.execute(
+            "SELECT * FROM sales_quotation_lines WHERE quotation_id=? ORDER BY line_no", (qid,)
+        ).fetchall()
+
+        today_local = datetime.now().strftime('%Y-%m-%d')
+        is_expired = _quotation_is_expired(q['valid_until'], today_local)
+
+        _s = _settings(conn, cid)
+        mode = _s.get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        currency = _s.get('base_currency')
+        now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        active_promotions = promo_engine.load_active_promotions(conn, cid, q['branch_id'], now_local)
+
+        report_lines = []
+        blocking = []
+        warnings = []
+        quoted_total = Decimal('0')
+        live_total = Decimal('0')
+        honour_total = Decimal('0')
+
+        for ln in lines:
+            quoted_effective = float(ln['unit_price']) * (1 - float(ln['discount_pct']) / 100)
+            quoted_calc = tax_engine.calculate_line(
+                ln['unit_price'], ln['quantity'], ln['discount_pct'], ln['tax_rate'],
+                mode=mode, currency=currency)
+            quoted = {
+                'unit_price': ln['unit_price'], 'discount_pct': ln['discount_pct'],
+                'tax_rate': ln['tax_rate'], 'line_total': quoted_calc['taxable_amount'],
+                'effective_unit': quoted_effective,
+            }
+
+            product = conn.execute(
+                "SELECT p.id, p.name, p.sell_price, p.tax_rate, p.status, p.category_id, "
+                "p.parent_product_id, EXISTS("
+                "  SELECT 1 FROM products c WHERE c.parent_product_id = p.id "
+                "  AND c.company_id = p.company_id AND c.deleted_at_utc IS NULL "
+                "  AND c.status='active'"
+                ") AS has_variants "
+                "FROM products p WHERE p.id=? AND p.company_id=? AND p.deleted_at_utc IS NULL",
+                (ln['product_id'], cid)
+            ).fetchone()
+            product_missing = product is None
+            product_has_variants = bool(product['has_variants']) if product else False
+
+            live_calc = None
+            live_effective = None
+            live = {'unit_price': None, 'discount_pct': None, 'tax_rate': None,
+                    'line_total': None, 'effective_unit': None, 'promotion_name': None}
+            if product_missing:
+                blocking.append(f'"{ln["product_name_snapshot"]}" no longer exists.')
+            elif product_has_variants:
+                blocking.append(f'"{product["name"]}" now has variants -- choose a specific variant.')
+            else:
+                if product['status'] != 'active':
+                    blocking.append(f'"{product["name"]}" is not available for sale.')
+                live_discount_pct, live_promotion = promo_engine.resolve_line_discount_pct(
+                    active_promotions, ln['product_id'], product['parent_product_id'],
+                    product['category_id'], 0)
+                live_unit_price = float(product['sell_price'])
+                live_tax_rate = float(product['tax_rate'])
+                live_calc = tax_engine.calculate_line(
+                    live_unit_price, ln['quantity'], live_discount_pct, live_tax_rate,
+                    mode=mode, currency=currency)
+                live_effective = live_unit_price * (1 - live_discount_pct / 100)
+                live = {
+                    'unit_price': live_unit_price, 'discount_pct': live_discount_pct,
+                    'tax_rate': live_tax_rate, 'line_total': live_calc['taxable_amount'],
+                    'effective_unit': live_effective,
+                    'promotion_name': live_promotion['name'] if live_promotion else None,
+                }
+
+            on_hand = 0.0
+            if product:
+                balance = conn.execute(
+                    "SELECT quantity_on_hand FROM inventory_balances "
+                    "WHERE company_id=? AND product_id=? AND branch_id=?",
+                    (cid, ln['product_id'], q['branch_id'])
+                ).fetchone()
+                on_hand = float(balance['quantity_on_hand']) if balance else 0.0
+            short_by = max(0.0, float(ln['quantity']) - on_hand)
+            if product and short_by > 0:
+                warnings.append(
+                    f'"{ln["product_name_snapshot"]}": only {on_hand} on hand, {ln["quantity"]} requested.')
+
+            if live_effective is None:
+                winner = 'quoted'
+                charged_calc = quoted_calc
+            elif quoted_effective < live_effective:
+                winner = 'quoted'
+                charged_calc = quoted_calc
+            elif quoted_effective > live_effective:
+                winner = 'live'
+                charged_calc = live_calc
+            else:
+                winner = 'equal'
+                charged_calc = quoted_calc
+
+            price_delta = (live_effective - quoted_effective) if live_effective is not None else None
+            report_lines.append({
+                'line_id': ln['id'], 'product_id': ln['product_id'],
+                'product_name_snapshot': ln['product_name_snapshot'],
+                'quoted': quoted, 'live': live, 'winner': winner, 'price_delta': price_delta,
+                'on_hand': on_hand, 'short_by': short_by,
+                'product_missing': product_missing, 'product_has_variants': product_has_variants,
+            })
+            quoted_total += Decimal(str(quoted_calc['total']))
+            live_total += Decimal(str(live_calc['total'])) if live_calc else Decimal(str(quoted_calc['total']))
+            honour_total += Decimal(str(charged_calc['total']))
+
+        quant = tax_engine.currency_quantum(currency)
+        totals = {
+            'quoted_total': float(quoted_total.quantize(quant, rounding=ROUND_HALF_UP)),
+            'live_total': float(live_total.quantize(quant, rounding=ROUND_HALF_UP)),
+            'honour_total': float(honour_total.quantize(quant, rounding=ROUND_HALF_UP)),
+        }
+        totals['delta'] = float(
+            (Decimal(str(totals['honour_total'])) - Decimal(str(totals['quoted_total'])))
+            .quantize(quant, rounding=ROUND_HALF_UP)
+        )
+
+        return jsonify({'status': 'success', 'data': {
+            'quotation': dict(q), 'is_expired': is_expired, 'lines': report_lines,
+            'totals': totals, 'blocking': blocking, 'warnings': warnings,
+        }})
+    finally:
+        conn.close()
+
+
+@retail_bp.route('/quotations', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def list_quotations():
+    """Company-scoped, optionally filtered by `?status=&customer_id=&
+    branch_id=`. THE GATE IS FORCED, not a style choice: this handler's own
+    SQL returns subtotal/discount_amount/tax_amount/total, all four in
+    MONEY_COLUMNS (retail_report_clock_money_disclosure_test.py), so
+    `test_no_new_money_returning_route_is_ungated` fails without it --
+    MEASURED against that file's own regex, not assumed.
+    """
+    cid = _cid()
+    status = request.args.get('status')
+    customer_id = request.args.get('customer_id')
+    raw_branch_id = request.args.get('branch_id')
+    conn = get_retail_conn()
+    # A scoped caller's `?branch_id=` is COERCED to their own branch, never
+    # refused -- "they must not be able to probe" which branches exist by
+    # fishing for a 400/403 on each guess (B4's read half,
+    # `_coerce_branch_id_for_scope`'s own docstring, above this file).
+    branch_id, err = _coerce_branch_id_for_scope(conn, cid, raw_branch_id)
+    if err:
+        conn.close()
+        return err
+    # Company condition on the JOIN, not the WHERE -- the exact
+    # list_purchase_orders trap documented above in this file: a walk-in
+    # quotation (customer_id IS NULL, legitimate) must not vanish from this
+    # list.
+    query = """
+        SELECT q.*, c.name AS customer_name
+        FROM sales_quotations q LEFT JOIN customers c ON c.id=q.customer_id AND c.company_id=q.company_id
+        WHERE q.company_id=?
+    """
+    params = [cid]
+    if status:
+        query += " AND q.status=?"
+        params.append(status)
+    if customer_id:
+        query += " AND q.customer_id=?"
+        params.append(customer_id)
+    if branch_id:
+        query += " AND q.branch_id=?"
+        params.append(branch_id)
+    query += " ORDER BY q.created_at DESC LIMIT 200"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+
+@retail_bp.route('/quotations/<string:qid>', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def get_quotation(qid):
+    cid = _cid()
+    conn = get_retail_conn()
+    q = conn.execute(
+        "SELECT q.*, c.name AS customer_name "
+        "FROM sales_quotations q LEFT JOIN customers c ON c.id=q.customer_id AND c.company_id=q.company_id "
+        "WHERE q.id=? AND q.company_id=?", (qid, cid)
+    ).fetchone()
+    if not q:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Quotation not found'}), 404
+    lines = conn.execute(
+        "SELECT * FROM sales_quotation_lines WHERE quotation_id=? ORDER BY line_no", (qid,)
+    ).fetchall()
+    today_local = datetime.now().strftime('%Y-%m-%d')
+    is_expired = _quotation_is_expired(q['valid_until'], today_local)
+    conn.close()
+    data = dict(q)
+    data['is_expired'] = is_expired
+    return jsonify({'status': 'success', 'data': {'quotation': data, 'lines': [dict(l) for l in lines]}})
+
+
+@retail_bp.route('/quotations/committed-demand', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def quotations_committed_demand():
+    """UNGATED -- no entry in EXPECTED_READ_CAPABILITIES or EXPECTED_
+    MUTATION_CAPABILITIES (retail_route_capability_matrix_test.py), on
+    purpose. Returns `SUM(quantity)` per product for accepted, unconverted,
+    unexpired quotations at one branch -- a QUANTITY, never a money column,
+    never `SELECT *` against a money table, so the money-disclosure
+    ratchet's own regex (measured directly against this SQL) returns `[]`.
+    Same disclosure tier as `list_products` (pinned as deliberately open to
+    a till) and `list_stock_transfers` (no decorator either, above this
+    file). Advisory only: "12 on hand, 5 promised" on the Products/reorder
+    screens -- it never refuses anything, matching create_sale's own "NO
+    SPECIAL CASE, NONE" stock check for quotation conversions.
+    """
+    cid = _cid()
+    raw_branch_id = request.args.get('branch_id')
+    conn = get_retail_conn()
+    branch_id, err = _coerce_branch_id_for_scope(conn, cid, raw_branch_id)
+    if err:
+        conn.close()
+        return err
+    if not branch_id:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'branch_id is required'}), 400
+    today_local = datetime.now().strftime('%Y-%m-%d')
+    rows = conn.execute("""
+        SELECT l.product_id, SUM(l.quantity) AS committed
+          FROM sales_quotation_lines l JOIN sales_quotations q ON q.id = l.quotation_id
+         WHERE q.company_id=? AND q.branch_id=? AND q.status='accepted'
+           AND q.converted_sale_uid IS NULL
+           AND (q.valid_until IS NULL OR q.valid_until >= ?)
+         GROUP BY l.product_id
+    """, (cid, branch_id, today_local)).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+
+def _resolve_quotation_for_conversion(conn, cid, qid):
+    """Resolves and validates a quotation for `POST /sales`'s own
+    conversion block (create_sale, below). Returns `(quotation_row, lines,
+    is_expired, error_response)` -- `error_response` is `None` on success;
+    the caller `return`s it directly after rolling back/closing, exactly
+    like `_resolve_working_branch`'s own contract (above this file).
+
+    Deliberately does NOT itself decide the CAP_DISCOUNT override-expiry
+    question -- that verdict must be consumed directly inside create_sale's
+    OWN function body for the AST capability ratchet
+    (retail_capability_ratchet_ast.py) to recognise it as a real gate;
+    packaging it through this helper's return value would grade as
+    `packaged`, not `consumed` (see that module's own "honest limits").
+    create_sale reads the `is_expired` bool this function returns and makes
+    that decision itself, inline.
+    """
+    q = conn.execute(
+        "SELECT * FROM sales_quotations WHERE id=? AND company_id=?", (qid, cid)
+    ).fetchone()
+    if not q:
+        return None, None, False, (jsonify({'status': 'error', 'message': 'Quotation not found'}), 404)
+    if q['status'] not in ('sent', 'accepted'):
+        return None, None, False, (jsonify({
+            'status': 'error',
+            'message': f"Cannot convert a quotation that is {q['status']}.",
+        }), 409)
+    lines = conn.execute(
+        "SELECT * FROM sales_quotation_lines WHERE quotation_id=? ORDER BY line_no", (qid,)
+    ).fetchall()
+    today_local = datetime.now().strftime('%Y-%m-%d')
+    is_expired = _quotation_is_expired(q['valid_until'], today_local)
+    return q, lines, is_expired, None
+
+
 # ── POS / Sales ───────────────────────────────────────────────────────────────
 
 @retail_bp.route('/sales', methods=['POST'])
@@ -4593,7 +5586,16 @@ def create_sale():
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'sale_number': ex['sale_number']}})
 
         items_in = data.get('items') or []
-        if not items_in:
+        # Aseel-parity wave A-PAR (schema v33): quotation conversion. A
+        # conversion sends `quotation_id` and NO items -- the server builds
+        # the lines from the stored quotation (AUDIT-002/003's own rule: the
+        # client sends intent, the server resolves money). This is the ONLY
+        # relaxation of the guard below; a sale with no quotation still must
+        # carry lines.
+        quotation_id = data.get('quotation_id')
+        honour_quoted_prices = bool(data.get('honour_quoted_prices'))
+        override_expiry = bool(data.get('override_expiry'))
+        if not items_in and not quotation_id:
             conn.close()
             return jsonify({'status': 'error', 'message': 'No items in sale.'}), 400
 
@@ -4704,6 +5706,63 @@ def create_sale():
         if branch_err:
             conn.rollback(); conn.close()
             return branch_err
+
+        # ── Aseel-parity wave A-PAR (schema v33): quotation conversion ───────
+        # Inside the SAME BEGIN IMMEDIATE, after branch resolution, through
+        # ONE helper (_resolve_quotation_for_conversion, above this
+        # function) -- see that helper's own docstring and database/
+        # schema.py's `_migrate_add_sales_quotations` for the full design.
+        quotation_conversion_variance = []
+        expiry_overridden = False
+        if quotation_id:
+            quotation, quotation_lines_raw, quotation_is_expired, quotation_err = (
+                _resolve_quotation_for_conversion(conn, cid, quotation_id))
+            if quotation_err:
+                conn.rollback(); conn.close()
+                return quotation_err
+            # EXPIRY. `is_expired` -> 409 QUOTATION_EXPIRED, UNLESS
+            # `override_expiry` is true AND session_has_capability(
+            # CAP_DISCOUNT) -- the verdict consumed HERE, inline, by the
+            # branch that 403s, so the AST capability ratchet
+            # (retail_capability_ratchet_ast.py) recognises it as a real
+            # gate. N4: the check is `is_expired AND override_expiry`,
+            # NEVER `override_expiry` alone -- `override_expiry:true` on a
+            # quotation that is NOT expired asks for nothing, the exact
+            # mirror of this function's own `discount_pct=-5` subtlety
+            # (`wants_discount`'s comment, above). This is why the check
+            # sits INSIDE the transaction rather than the pre-lock block:
+            # the refusal depends on stored state (`quotation_is_expired`),
+            # and evaluating expiry twice on two paths is the "field
+            # present on one path, absent on another" shape sync_service.py's
+            # own module docstring names as a bug this codebase has already
+            # hit. Cost, stated: a 403 on this path holds the write lock for
+            # two SELECTs.
+            if quotation_is_expired:
+                if not override_expiry:
+                    conn.rollback(); conn.close()
+                    return jsonify({
+                        'status': 'error', 'message': 'This quotation has expired.',
+                        'code': 'QUOTATION_EXPIRED',
+                    }), 409
+                if not session_has_capability(CAP_DISCOUNT):
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+                expiry_overridden = True
+            # The lines this sale actually charges are BUILT FROM THE
+            # QUOTATION, never client-submitted -- `discount_pct: 0` here is
+            # deliberate: it feeds the loop below through the SAME "manual
+            # vs live promotion, best price wins" resolution an ordinary
+            # cart item gets (see `manual_discount_pct`/`effective_discount_
+            # pct` below), so `honour_quoted_prices=false` really is
+            # "ordinary cart behaviour, unchanged" -- the quotation's OWN
+            # discount is never smuggled in through this field. `_quote_line`
+            # carries the stored quotation line so the honour-vs-live
+            # comparison below (design point (d)) has both sides to compare.
+            items_in = [
+                {'product_id': ln['product_id'], 'quantity': ln['quantity'], 'discount_pct': 0,
+                 '_quote_line': ln}
+                for ln in quotation_lines_raw
+            ]
         # AUDIT-032C fix (DEFECT 3): `branches.id` is a plain per-device
         # autoincrement -- `branches` is in RETAIL_UID_TABLES for its `uid`
         # column alone, but `branch` is NOT one of Phase 5's five synced
@@ -4752,6 +5811,12 @@ def create_sale():
         # comment for why the gate is SALE-level, not per-line).
         sale_oversold_past_recorded_stock = False
         subtotal = discount = tax = total = Decimal('0')
+        # Quotation conversion only (§C design point (g)): the QUOTED side's
+        # own total, using each line's LIVE tax rate for an apples-to-apples
+        # comparison against the sale's own final `total` below. Stays at
+        # Decimal('0') and is never read for an ordinary, non-conversion
+        # sale.
+        quotation_quoted_total = Decimal('0')
         # Resolved ONCE, before the item loop -- reuses the SAME predicate
         # stage 7c-i already built (`_is_device_behind_on_sync`, above),
         # never a second staleness check, so the two silence rules that
@@ -4996,6 +6061,59 @@ def create_sale():
             # any modifier price deltas resolved immediately above.
             calc = tax_engine.calculate_line(unit_price, qty, effective_discount_pct, tax_rate, mode=mode, currency=currency)
 
+            # ── Aseel-parity wave A-PAR (schema v33), design point (d) ───────
+            # Quotation conversion PRICING: compare EFFECTIVE per-unit prices
+            # and let the WHOLE WINNING SIDE win. `tax_rate` above is ALREADY
+            # this line's LIVE rate -- tax is law, not the shop's to promise,
+            # so it is NEVER taken from the quotation's own snapshot, on
+            # either side of this comparison.
+            quote_line = item.get('_quote_line')
+            if quote_line is not None:
+                quoted_unit_price = float(quote_line['unit_price'])
+                quoted_discount_pct = float(quote_line['discount_pct'])
+                quoted_effective = quoted_unit_price * (1 - quoted_discount_pct / 100)
+                live_effective = unit_price * (1 - effective_discount_pct / 100)
+                if quoted_effective < live_effective:
+                    price_winner = 'quoted'
+                elif quoted_effective > live_effective:
+                    price_winner = 'live'
+                else:
+                    price_winner = 'equal'
+
+                quoted_line_calc = tax_engine.calculate_line(
+                    quoted_unit_price, qty, quoted_discount_pct, tax_rate, mode=mode, currency=currency)
+                quotation_quoted_total += Decimal(str(quoted_line_calc['total']))
+
+                if honour_quoted_prices and price_winner in ('quoted', 'equal'):
+                    # N3: comparing RAW unit prices and then applying the
+                    # quoted discount pct separately compounds one side's
+                    # discount onto the other side's price (12.00@10% vs
+                    # 9.00@0% -> 8.10, below BOTH real offers). Taking the
+                    # WHOLE winning side -- its own unit_price AND its own
+                    # discount_pct together -- means the charged price is
+                    # always exactly one of the two real offers.
+                    unit_price = quoted_unit_price
+                    effective_discount_pct = quoted_discount_pct
+                    calc = tax_engine.calculate_line(
+                        unit_price, qty, effective_discount_pct, tax_rate, mode=mode, currency=currency)
+                    charged_effective = quoted_effective
+                else:
+                    # honour_quoted_prices=false -> live, ordinary cart
+                    # behaviour, UNCHANGED: `unit_price`/`effective_discount_
+                    # pct`/`calc` above are left exactly as the ordinary
+                    # cart resolution already computed them. Also reached
+                    # when honouring but the LIVE side is the lower one --
+                    # the customer is never charged above today's price
+                    # either (R5: min(effective) is the customer-protective
+                    # reading of "honour the quote").
+                    charged_effective = live_effective
+
+                quotation_conversion_variance.append({
+                    'line_id': quote_line['id'], 'product_id': pid,
+                    'quoted_effective': quoted_effective, 'live_effective': live_effective,
+                    'charged_effective': charged_effective, 'winner': price_winner,
+                })
+
             resolved_lines.append({
                 'product_id': pid, 'quantity': qty, 'unit_price': unit_price,
                 'discount_pct': effective_discount_pct, 'tax_rate': tax_rate,
@@ -5230,7 +6348,22 @@ def create_sale():
         # human-readable/searchable while guaranteeing global uniqueness
         # without altering the shared _next_ref helper or its format for
         # other doc types.
-        sale_number = f"{_next_ref(conn, cid, 'sale')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
+        #
+        # Aseel-parity wave A-PAR (schema v34): if THIS terminal owns a
+        # configured 'sale' book, its clean series number is minted
+        # instead. `resolve_series` can only ever return a book THIS exact
+        # terminal_uid claimed (never another device's -- see
+        # doc_series.py's own docstring, "THE ONE DECISION"), so an install
+        # that never configures a series takes the UNCHANGED legacy path
+        # below, byte for byte, company/device fragments included --
+        # not "equivalent behaviour", the SAME code path, which is what
+        # keeps AUDIT-032B's fix intact for every shop that has not opted
+        # in. See retail_doc_series_test.py's allow-half proof.
+        _sale_series = doc_series.resolve_series(conn, cid, 'sale', local_terminal_id())
+        if _sale_series is not None:
+            sale_number = doc_series.allocate(conn, _sale_series)
+        else:
+            sale_number = f"{_next_ref(conn, cid, 'sale')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
 
         # `cashier` still takes data.get('cashier', _uid()) -- a caller-supplied
         # display name where one is given, the local user id otherwise. That is
@@ -5551,6 +6684,54 @@ def create_sale():
         if is_credit and balance_due > 0.005 and customer_id:
             _adjust_credit(conn, 'customers', customer_id, cid, balance_due)
 
+        if quotation_id:
+            # (f) Aseel-parity wave A-PAR (schema v33): after the sale row
+            # is written, in the SAME transaction. `converted_sale_uid` is
+            # `sale_uid` (the WIRE identity), NEVER `sale_id` -- see
+            # `sales_quotations.converted_sale_uid`'s own column comment
+            # (database/schema.py) for why the local autoincrement would
+            # point at a DIFFERENT sale on every other device.
+            quoted_total_rounded = float(quotation_quoted_total.quantize(_quant, rounding=ROUND_HALF_UP))
+            variance_payload = {
+                'mode': 'honour' if honour_quoted_prices else 'live',
+                'evaluated_at': now_utc_iso(),
+                'expiry_overridden': expiry_overridden,
+                'override_actor_uid': actor if expiry_overridden else None,
+                'lines': quotation_conversion_variance,
+                'quoted_total': quoted_total_rounded,
+                'charged_total': total,
+            }
+            variance_json = json.dumps(variance_payload)
+            conv_now_utc = now_utc_iso()
+            cur.execute("""
+                UPDATE sales_quotations
+                   SET status='converted', converted_at=?, converted_sale_uid=?,
+                       accepted_at=COALESCE(accepted_at, ?), conversion_variance_json=?,
+                       row_version=row_version+1, updated_at_utc=?
+                 WHERE id=? AND company_id=? AND status IN ('sent','accepted')
+            """, (conv_now_utc, sale_uid, conv_now_utc, variance_json, conv_now_utc, quotation_id, cid))
+            if cur.rowcount != 1:
+                # HONEST FRAMING (C5): on ONE database this can essentially
+                # never fire -- BEGIN IMMEDIATE serialises the two requests
+                # and _resolve_quotation_for_conversion's own status
+                # pre-check already refused the second one. This is
+                # defence-in-depth against a future edit that moves the
+                # pre-check or drops the lock. Rolls back the WHOLE sale,
+                # not just the quotation write -- a sale that believes it
+                # converted a quotation which in fact just lost this race
+                # must not exist.
+                conn.rollback(); conn.close()
+                return jsonify({
+                    'status': 'error',
+                    'message': 'This quotation was already converted or is no longer open.',
+                }), 409
+            updated_quotation = cur.execute(
+                "SELECT * FROM sales_quotations WHERE id=?", (quotation_id,)).fetchone()
+            _queue_sync_event(cur, 'quotation', quotation_id, 'update', _quotation_sync_header_payload(
+                conn, updated_quotation,
+                changed_fields=['status', 'accepted_at', 'converted_at', 'converted_sale_uid',
+                                 'conversion_variance_json', 'row_version', 'updated_at_utc']))
+
         conn.commit()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         _emit('SaleCompleted', {'sale_id': sale_id, 'sale_number': sale_number, 'total': total,
@@ -5631,6 +6812,18 @@ def create_sale():
             # subsystem-retail.js), not something this endpoint pre-filters.
             'employee_name': employee_name, 'customer_id': customer_id, 'customer_name': customer_name,
         }
+        if quotation_id:
+            # (d)/(g): every line where quoted and live differed, and which
+            # side won. C8: this is NOT the conversion sheet's source of
+            # truth for a RETRIED request -- the idempotent-replay path
+            # above (near the top of this function) returns only {id,
+            # sale_number} and never reaches this line at all, so a retry
+            # carries no `repriced_lines`. The UI re-reads `sales_
+            # quotations.conversion_variance_json` (persisted just above)
+            # instead, which survives a retry byte-for-byte.
+            response_data['repriced_lines'] = [
+                v for v in quotation_conversion_variance if v['winner'] != 'equal'
+            ]
 
         # docs/einvoicing/phase1/ -- best-effort, never blocks or fails the
         # sale that already committed above. Opened on its OWN connection
@@ -6629,7 +7822,15 @@ def create_return():
         # keeps the sequential part human-readable/searchable while
         # guaranteeing global uniqueness without altering the shared
         # _next_ref helper or its format for other doc types.
-        ret_num = f"{_next_ref(conn, cid, 'return')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
+        #
+        # Aseel-parity wave A-PAR (schema v34): identical treatment as
+        # create_sale's own 'sale' mint site -- see that route's comment
+        # for the full reasoning.
+        _return_series = doc_series.resolve_series(conn, cid, 'return', local_terminal_id())
+        if _return_series is not None:
+            ret_num = doc_series.allocate(conn, _return_series)
+        else:
+            ret_num = f"{_next_ref(conn, cid, 'return')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         # Write LOCAL time, not the UTC CURRENT_TIMESTAMP default: the dashboard nets
         # returns out of today's revenue by local date(created_at), so a UTC timestamp
         # would file a late-evening return under the wrong day and leave the KPI stale.
@@ -9225,7 +10426,14 @@ def _money(x, currency=None):
 def _now():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-_REF_PREFIX = {'sale': 'SALE', 'receipt': 'REC', 'po': 'PO', 'supplier_payment': 'PAY', 'return': 'RET', 'hold': 'HOLD'}
+# Aseel-parity wave A-PAR (schema v34): MOVED, not copied, into
+# core/retail/doc_series.py -- this alias keeps `_next_ref`'s two
+# references below byte-identical, and is what stops a hardcoded second
+# copy of this vocabulary from ever existing (the "two literals must
+# match" shape sync_service.py's own module docstring names as a bug this
+# codebase has already hit). See doc_series.py's own module docstring for
+# the full reasoning.
+_REF_PREFIX = doc_series.REF_PREFIX
 
 def _next_ref(conn, cid, doc_type):
     """Atomic, zero-padded, human-readable + searchable reference (e.g. REC-000053)."""
@@ -9585,7 +10793,7 @@ def _seed_methods(conn, cid):
 
 def _record_payment(conn, cid, party_type, party_id, direction, amount, method='cash',
                     related_type=None, related_id=None, notes='', device=None, doc_type='receipt',
-                    currency=None):
+                    currency=None, pay_uid=None):
     """Append one immutable money-movement row to the ledger. Returns its reference.
 
     `currency` is OPTIONAL and defaults to None, the same contract `_money`
@@ -9603,6 +10811,20 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     `_company_currency`'s own docstring on why `_settings()` must not be the
     thing standing between a client's number and this function's narrow
     `except Exception as e: ... 500` callers.
+
+    `pay_uid` is OPTIONAL and defaults to None, in which case this function
+    mints a fresh `_new_uid()` exactly as it always has -- byte-for-byte
+    identical behaviour for every pre-existing caller, the same "optional
+    parameter defaulting to the historical behaviour" idiom this function
+    already carries for `currency` above. Aseel-parity wave A-PAR (schema
+    v32) is the one caller that supplies it: the cheque write routes derive
+    a DETERMINISTIC uid from (cheque_id, crossing_index) via
+    `core/retail/cheques.py::money_uid` so that two devices which both
+    observe the SAME bank fact (the same cheque crossing the live/dead line)
+    mint the IDENTICAL uid and the `ON CONFLICT(uid) DO NOTHING` below
+    collapses the duplicate to one row everywhere -- see that module's own
+    docstring for the double-apply this closes. A caller that passes a uid
+    is responsible for its unique-ness; this function does not validate it.
     """
     amt = _money(amount, currency)
     if amt <= 0:
@@ -9618,7 +10840,7 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     # payment, a supplier payment, a PO down-payment and a void's reversal all
     # funnel through this single INSERT, so stamping it once covers the whole
     # ledger and no route can write an unnamed payment by going around it.
-    pay_uid = _new_uid()
+    pay_uid = pay_uid or _new_uid()
     created_by = _uid()
     created_at = _now()
     sale_id_fk = related_id if related_type == 'sale' else None
@@ -10626,6 +11848,409 @@ def business_day_settings_set():
                       'RETAIL_BUSINESS_DAY_CHANGED')
     return jsonify({'status': 'success', 'data': effective})
 
+# ── Settings (document numbering series, Aseel-parity wave A-PAR, schema
+#    v34) ─────────────────────────────────────────────────────────────────────
+# The Aseel تعدد الدفاتر ("multi-ledger") equivalent: a shop names its own
+# numbering "books" ('A', 'BR2', 'INV') for sale/return/po documents instead
+# of reading SALE-000042-<cid8>-<dev8> off a receipt. See database/schema.py's
+# `_migrate_add_doc_series` and core/retail/doc_series.py's own module
+# docstrings for the full design -- "THE ONE DECISION" (a series names
+# exactly one allocating terminal; a device only ever allocates from a book
+# it owns) is what makes cross-device document-number collision structural
+# rather than merely policed. NO manual number entry in v34 -- see
+# doc_series.py's own module docstring for why, and ROADMAP.md's "v34 CASHED
+# IN" entry for the record of that cut.
+
+def _doc_series_sync_payload(row, changed_fields=None):
+    """The header snapshot every `doc_series` sync event carries -- `row` is
+    the ALREADY-WRITTEN row (every caller below re-SELECTs after its own
+    UPDATE/INSERT commits its values), matching
+    `_quotation_sync_header_payload`'s identical "re-read, never guess"
+    discipline. `changed_fields`, when given, is the delta contract
+    sync_service.py's `_delta_set_clause` reads on the apply side; omitted
+    entirely for a `create` event, which the apply side then reads as
+    "every column changed" -- correct, since `create` is this row's first
+    appearance on the wire. `company_id` is deliberately ABSENT: the apply
+    side writes under the RECEIVING device's own local_company_id always,
+    never the sender's (module docstring, "Cross-device company_id bug
+    fix") -- carrying it here would only invite a future edit to read it
+    by mistake."""
+    payload = {
+        'id': row['id'], 'doc_type': row['doc_type'], 'code': row['code'],
+        'label': row['label'], 'branch_uid': row['branch_uid'],
+        'allocator_terminal_uid': row['allocator_terminal_uid'],
+        'claimed_at_utc': row['claimed_at_utc'], 'pad_width': row['pad_width'],
+        'start_no': row['start_no'], 'status': row['status'],
+        'created_at': str(row['created_at']) if row['created_at'] is not None else None,
+        'row_version': row['row_version'], 'updated_at_utc': row['updated_at_utc'],
+    }
+    if changed_fields is not None:
+        payload['_changed_fields'] = changed_fields
+    return payload
+
+
+_DOC_SERIES_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9-]{0,11}$')
+
+
+@retail_bp.route('/doc-series', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_doc_series():
+    """No `@mt_require_capability` at all, deliberately -- the till reads its
+    OWN book to render the number it is about to mint next, the same
+    posture `branding_settings_get`/`branding_logo_get` already carry
+    ("printing a receipt is not an admin-only action",
+    retail_route_capability_matrix_test.py). Not a CAP_REPORTS read either:
+    a book's name/owner is not the shop's financial position, and
+    `doc-series` is not in `MONEY_DISCLOSING_SEGMENTS`.
+
+    `next_no` is populated ONLY for a series THIS device owns -- a peer's
+    is `null`, never `0` (which would read as "starts tomorrow, nothing
+    sold yet" rather than "not this device's book"). `doc_type` is an
+    optional filter; omitted, every book this company has ever configured
+    is returned (active AND retired), matching `list_promotions`'s own
+    "management screen sees everything" posture."""
+    cid = _cid()
+    doc_type = request.args.get('doc_type')
+    conn = get_retail_conn()
+    my_terminal = local_terminal_id()
+    sql = "SELECT * FROM doc_series WHERE company_id=?"
+    params = [cid]
+    if doc_type:
+        sql += " AND doc_type=?"
+        params.append(doc_type)
+    sql += " ORDER BY doc_type, created_at"
+    rows = conn.execute(sql, params).fetchall()
+    data = []
+    for row in rows:
+        next_no = None
+        if my_terminal and row['allocator_terminal_uid'] == my_terminal:
+            next_no = doc_series.peek_next_no(conn, row)
+        data.append({
+            'id': row['id'], 'doc_type': row['doc_type'], 'code': row['code'],
+            'label': row['label'], 'branch_uid': row['branch_uid'],
+            'allocator_terminal_uid': row['allocator_terminal_uid'],
+            'claimed_at_utc': row['claimed_at_utc'], 'pad_width': row['pad_width'],
+            'start_no': row['start_no'], 'status': row['status'],
+            'is_mine': bool(my_terminal) and row['allocator_terminal_uid'] == my_terminal,
+            'next_no': next_no,
+        })
+    conn.close()
+    return jsonify({'status': 'success', 'data': data})
+
+
+@retail_bp.route('/doc-series', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def create_doc_series():
+    """CAP_EMPLOYEES, matching every settings sibling in this file
+    (credit_settings_set/tax_settings_set/business_day_settings_set/
+    branding_settings_set/set_device_branch) -- deciding what number a
+    shop's documents carry is the same authority as deciding its tax mode.
+    NOT `RETAIL_RESTRICTED_ALLOWLIST`-exempt: a lapsed licence does not get
+    to reconfigure numbering. Does NOT bind an allocator -- see
+    `claim_doc_series` below, a separate act."""
+    data = request.json or {}
+    cid = _cid()
+
+    doc_type = data.get('doc_type')
+    if doc_type not in doc_series.DOC_SERIES_TYPES:
+        return jsonify({'status': 'error',
+                         'message': f"doc_type must be one of {', '.join(doc_series.DOC_SERIES_TYPES)}."}), 400
+
+    code = (data.get('code') or '').strip().upper()
+    if not _DOC_SERIES_CODE_RE.match(code):
+        return jsonify({'status': 'error', 'message':
+            'code must be 1-12 characters: letters, digits or hyphens, starting with a letter or digit.'}), 400
+    # THE E-INVOICING FIREWALL, route-side half (docs/einvoicing/phase1/
+    # invoice-numbering-audit.md). Imported LAZILY, inside this function --
+    # never at module scope, and never inside core/retail/doc_series.py at
+    # all (that module must import NOTHING from commercial_runtime.
+    # einvoicing -- see its own module docstring). DERIVED from
+    # sequence._PREFIX rather than hardcoded, so a third ISTD family added
+    # there is refused here automatically instead of silently allowed --
+    # see retail_doc_series_einvoice_firewall_test.py's own derivation
+    # proof (monkeypatches _PREFIX and confirms the NEW value is refused).
+    from commercial_runtime.einvoicing.sequence import RESERVED_LOCAL_PREFIXES
+    if code in RESERVED_LOCAL_PREFIXES:
+        return jsonify({'status': 'error', 'message':
+            f"{code!r} is reserved for Jordan e-invoicing's own numbering and cannot be used here."}), 400
+
+    label = (data.get('label') or '').strip() or code
+    try:
+        pad_width = int(data.get('pad_width', 6))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'pad_width must be a whole number.'}), 400
+    if not (3 <= pad_width <= 10):
+        return jsonify({'status': 'error', 'message': 'pad_width must be between 3 and 10.'}), 400
+    try:
+        start_no = int(data.get('start_no', 1))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'start_no must be a whole number.'}), 400
+    if start_no < 1:
+        return jsonify({'status': 'error', 'message': 'start_no must be at least 1.'}), 400
+
+    # Launch-readiness chain wave C1's cross-tenant lesson (the supplier_id
+    # leak, retail_api.py's own create_purchase_order comment): branch_uid
+    # is validated as belonging to THIS company before it is trusted at
+    # all, never taken on faith from the request body.
+    branch_uid = data.get('branch_uid')
+    conn = get_retail_conn()
+    if branch_uid:
+        owned = conn.execute(
+            "SELECT 1 FROM branches WHERE uid=? AND company_id=?", (branch_uid, cid)
+        ).fetchone()
+        if not owned:
+            conn.close()
+            return jsonify({'status': 'error', 'message': f'Unknown branch_uid: {branch_uid}'}), 400
+
+    # Launch-readiness Phase 7's silence-aware guard, reused here for the
+    # duplicate-code case offline cannot fully eliminate (see
+    # database/schema.py's own `idx_doc_series_code` comment and
+    # sync_service.py's `doc_series` apply branch, "the defect neither the
+    # design nor the review caught"). A device that KNOWS it is stale is
+    # stopped from creating a book that might already exist under a
+    # different id on a peer it has not heard from yet -- a cheap
+    # preventer, not a complete one; the quarantine catch on the apply
+    # side is what makes the remaining offline-both-sides case survivable
+    # rather than a permanent sync wedge.
+    if _is_device_behind_on_sync():
+        conn.close()
+        return jsonify({'status': 'error', 'message':
+            'This till is behind on sync. Creating a book now could duplicate a code another '
+            'till already used. Reconnect and let it catch up first.'}), 409
+
+    series_id = _new_uid()
+    now = now_utc_iso()
+    cur = conn.cursor()
+    try:
+        # Same try/except/finally containment `create_purchase_order`
+        # learned the hard way (its own comment): an uncaught
+        # IntegrityError here would leak this connection holding the WAL
+        # write lock, and the NEXT write anywhere in this database would
+        # fail with "database is locked" -- one colliding code taking down
+        # the whole install, not just this request.
+        cur.execute("""
+            INSERT INTO doc_series (id, company_id, doc_type, code, label, branch_uid,
+                                     pad_width, start_no, status, created_at, updated_at_utc, row_version)
+            VALUES (?,?,?,?,?,?,?,?, 'active', ?, ?, 1)
+        """, (series_id, cid, doc_type, code, label, branch_uid, pad_width, start_no, now, now))
+        row = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
+        _queue_sync_event(cur, 'doc_series', series_id, 'create', _doc_series_sync_payload(row))
+        _audit(conn, 'DOC_SERIES_CREATED', 'doc_series', series_id, f"{doc_type}:{code}")
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("create_doc_series failed on a database constraint: %s", exc)
+        return jsonify({'status': 'error', 'message':
+            f"A {doc_type} book coded {code!r} already exists."}), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("create_doc_series failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not create this numbering series.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': {'id': series_id}})
+
+
+@retail_bp.route('/doc-series/<string:series_id>', methods=['PATCH'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def update_doc_series(series_id):
+    """Mutable: `label`, `status`, `branch_uid`. IMMUTABLE: `code`,
+    `doc_type`, `start_no`, `pad_width`, `allocator_terminal_uid` -- silently
+    ignored if sent, never a 400, matching update_quotation's own
+    "immutable fields are re-read from the stored row" posture.
+    `pad_width` is immutable for the SAME reason `code` is: `A-000042` and
+    `A-0042` are one sequence rendered two ways, and no shopkeeper reading
+    two receipts side by side can tell they are the same book.
+    `allocator_terminal_uid`/`claimed_at_utc` change ONLY through
+    `claim_doc_series` below -- a separate act with its own authorization
+    story (server-side terminal id), never a plain field edit."""
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    row = conn.execute("SELECT * FROM doc_series WHERE id=? AND company_id=?", (series_id, cid)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Numbering series not found.'}), 404
+
+    fields = {}
+    if 'label' in data:
+        label = (data.get('label') or '').strip()
+        if not label:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'label cannot be empty.'}), 400
+        fields['label'] = label
+    if 'status' in data:
+        status = data.get('status')
+        if status not in ('active', 'retired'):
+            conn.close()
+            return jsonify({'status': 'error', 'message': "status must be 'active' or 'retired'."}), 400
+        fields['status'] = status
+    if 'branch_uid' in data:
+        branch_uid = data.get('branch_uid')
+        if branch_uid:
+            owned = conn.execute(
+                "SELECT 1 FROM branches WHERE uid=? AND company_id=?", (branch_uid, cid)
+            ).fetchone()
+            if not owned:
+                conn.close()
+                return jsonify({'status': 'error', 'message': f'Unknown branch_uid: {branch_uid}'}), 400
+        fields['branch_uid'] = branch_uid
+
+    if not fields:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'No valid fields.'}), 400
+
+    now = now_utc_iso()
+    cur = conn.cursor()
+    set_clause = ', '.join(f"{k}=?" for k in fields) + ", row_version=row_version+1, updated_at_utc=?"
+    cur.execute(
+        f"UPDATE doc_series SET {set_clause} WHERE id=? AND company_id=?",
+        (*fields.values(), now, series_id, cid),
+    )
+    updated = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
+    _queue_sync_event(cur, 'doc_series', series_id, 'update',
+                       _doc_series_sync_payload(updated, changed_fields=sorted(fields)))
+    _audit(conn, 'DOC_SERIES_UPDATED', 'doc_series', series_id, ','.join(sorted(fields)))
+    conn.commit()
+    conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/doc-series/<string:series_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def retire_doc_series(series_id):
+    """Sets `status='retired'`. NO hard DELETE -- this row is the only
+    thing that can ever explain a number already sitting on a customer's
+    receipt (database/schema.py's own column comment). Retiring is
+    idempotent: retiring an already-retired book is a 200, not a 404 or a
+    409 -- there is no invariant a second retire could violate."""
+    cid = _cid()
+    conn = get_retail_conn()
+    row = conn.execute("SELECT * FROM doc_series WHERE id=? AND company_id=?", (series_id, cid)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Numbering series not found.'}), 404
+    now = now_utc_iso()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE doc_series SET status='retired', row_version=row_version+1, updated_at_utc=? "
+        "WHERE id=? AND company_id=?",
+        (now, series_id, cid),
+    )
+    updated = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
+    _queue_sync_event(cur, 'doc_series', series_id, 'update',
+                       _doc_series_sync_payload(updated, changed_fields=['status']))
+    _audit(conn, 'DOC_SERIES_RETIRED', 'doc_series', series_id)
+    conn.commit()
+    conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
+# THE PATH SEGMENT 'allocator-claim' IS DELIBERATE, NOT DECORATIVE.
+# retail_route_reachability_test.py's `_search_key` takes the LONGEST
+# literal segment of a route -- `/doc-series/<id>/claim` would collapse to
+# the key 'doc-series', already shared by all four routes above, so one
+# mention of "doc-series" anywhere in the frontend would green-light the
+# whole group and the guard could never see whether claim specifically was
+# wired to anything. 'allocator-claim' (15 chars) beats 'doc-series'
+# (10 chars) and gets its OWN reachability key.
+@retail_bp.route('/doc-series/<string:series_id>/allocator-claim', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def claim_doc_series(series_id):
+    """Binds `allocator_terminal_uid = local_terminal_id()`, read
+    SERVER-SIDE only -- NEVER from the request body. A client-supplied
+    terminal uid would let an admin signed in on till A bind a book to
+    till B by typing its id, which is exactly the two-allocators-one-book
+    state this whole feature exists to prevent structurally (see
+    doc_series.py's own module docstring, "THE ONE DECISION").
+
+    All four checks below run INSIDE one read-then-write pass so the
+    decision is made against a consistent snapshot of this row and this
+    company's other series:
+      * 400 if this device has no established identity yet
+        (`local_terminal_id()` returned None) -- AUDIT-032D means this
+        route must never call the CREATING twin to manufacture one on its
+        own behalf; it explains the condition and stops instead.
+      * 404 if the series does not exist for this company.
+      * 409 if the series already has a LIVE allocator (claim is not a
+        transfer -- retiring or losing a claim to sync's own tie-break is
+        how a book becomes claimable again, never a second claim call).
+      * 409 if `(company_id, doc_type, allocator_terminal_uid)` already
+        names another live series -- the scoping this feature's own design
+        review flagged as missing from an earlier draft: without it, one
+        till could claim TWO active 'sale' books at once, and
+        `resolve_series`'s `LIMIT 1` would then pick one non-deterministic
+        winner rather than refuse the second claim outright.
+      * 409 if `_is_device_behind_on_sync()` -- the same offline-race
+        preventer `create_doc_series` applies; see that route's comment.
+    """
+    terminal_uid = local_terminal_id()
+    if not terminal_uid:
+        return jsonify({'status': 'error', 'message':
+            'This device has not established its identity yet. It will do so the first time '
+            'someone signs in or opens a drawer here.'}), 400
+
+    cid = _cid()
+    conn = get_retail_conn()
+    row = conn.execute("SELECT * FROM doc_series WHERE id=? AND company_id=?", (series_id, cid)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Numbering series not found.'}), 404
+    if row['status'] != 'active':
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'A retired book cannot be claimed. Reactivate it first.'}), 409
+    if row['allocator_terminal_uid']:
+        conn.close()
+        return jsonify({'status': 'error', 'message':
+            'This book is already claimed by a till. Retire it or wait for it to become unclaimed.'}), 409
+    if _is_device_behind_on_sync():
+        conn.close()
+        return jsonify({'status': 'error', 'message':
+            'This till is behind on sync and cannot claim a book right now. Reconnect and let it '
+            'catch up first.'}), 409
+    other = conn.execute(
+        "SELECT id FROM doc_series WHERE company_id=? AND doc_type=? AND allocator_terminal_uid=? "
+        "AND status='active' AND id != ?",
+        (cid, row['doc_type'], terminal_uid, series_id),
+    ).fetchone()
+    if other:
+        conn.close()
+        return jsonify({'status': 'error', 'message':
+            f"This till already owns another active {row['doc_type']} book. Retire or release it first."}), 409
+
+    now = now_utc_iso()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE doc_series SET allocator_terminal_uid=?, claimed_at_utc=?, "
+        "row_version=row_version+1, updated_at_utc=? WHERE id=? AND company_id=?",
+        (terminal_uid, now, now, series_id, cid),
+    )
+    updated = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
+    _queue_sync_event(cur, 'doc_series', series_id, 'update', _doc_series_sync_payload(
+        updated, changed_fields=['allocator_terminal_uid', 'claimed_at_utc']))
+    _audit(conn, 'DOC_SERIES_CLAIMED', 'doc_series', series_id)
+    conn.commit()
+    conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success'})
+
+
 # ── Settings (branding) ───────────────────────────────────────────────────────
 # The product owner's ask, verbatim: "Make the system be brandable of
 # whatever institute or coop or foundation bought it -- for the invoice and
@@ -10886,9 +12511,26 @@ def customer_statement(cust_id):
     charges = conn.execute("SELECT sale_number AS ref, created_at, (total - amount_paid) AS amount, 'charge' AS kind "
                            "FROM sales WHERE company_id=? AND customer_id=? AND (total - amount_paid) > 0.005",
                            (cid, cust_id)).fetchall()
-    receipts = conn.execute("SELECT id, reference AS ref, created_at, amount, 'payment' AS kind "
-                            "FROM payments WHERE company_id=? AND party_type='customer' AND party_id=? "
-                            "AND direction='in' AND COALESCE(status,'active')='active'", (cid, cust_id)).fetchall()
+    # Aseel-parity wave A-PAR (schema v32) FORCED FIX, not a new feature: a
+    # cheque bounce writes the OPPOSITE `direction` on purpose (see
+    # _apply_cheque_event's own "THE MONEY LEG" comment -- a NEW row, never
+    # a retroactive void, so a closed trading day's daily_cash is never
+    # restated). Before this fix, this query's bare `AND direction='in'`
+    # made that reversal row INVISIBLE here while `customers.credit_balance`
+    # had already moved -- two screens, two different answers, exactly the
+    # failure void_payment's own comment warns against. Both directions are
+    # now selected for this party, and `kind` is derived from `direction`
+    # instead of being hardcoded to 'payment': 'in' (money received --
+    # settles the account) reads as 'payment', 'out' (a reversal moving the
+    # debt back onto the books) reads as 'reversal'. An ordinary
+    # customer_payment is always 'in', so this is additive for every
+    # existing statement -- it does not change what an ordinary receipt
+    # renders as.
+    receipts = conn.execute(
+        "SELECT id, reference AS ref, created_at, amount, direction, "
+        "CASE WHEN direction='in' THEN 'payment' ELSE 'reversal' END AS kind "
+        "FROM payments WHERE company_id=? AND party_type='customer' AND party_id=? "
+        "AND COALESCE(status,'active')='active'", (cid, cust_id)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in receipts]
     events.sort(key=lambda e: e.get('created_at') or '')
     # Read ONCE, applied to every figure this statement returns -- same rule
@@ -10903,10 +12545,24 @@ def customer_statement(cust_id):
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
-        run = (run + amt) if e['kind'] == 'charge' else (run - amt)
+        # 'charge' (a sale still owed) and 'reversal' (a bounced/cancelled
+        # cheque putting the debt BACK) both move the balance the same way
+        # a charge always has -- UP. Only 'payment' (money actually
+        # received) brings it down. See the comment on the `receipts` query
+        # above for why 'reversal' exists at all.
+        run = (run + amt) if e['kind'] in ('charge', 'reversal') else (run - amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
                     'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
     conn.close()
+    # NOTE, deliberately not asserted as an identity anywhere: `balance`
+    # (customers.credit_balance) and the final `running_balance` above can
+    # ALREADY disagree even without cheques -- create_return calls
+    # `_adjust_credit(..., -ar_credit)` for a return against a credit sale
+    # but writes no `payments` row, so this statement's running total never
+    # sees that adjustment. Pre-existing, not created or worsened by this
+    # wave; named here and in ROADMAP.md so it is not later "fixed" by
+    # tightening this statement into an identity a return-free fixture would
+    # only accidentally hold.
     return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency)}})
 
 @retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
@@ -10975,19 +12631,29 @@ def supplier_statement(sid):
     charges = conn.execute("SELECT po_number AS ref, created_at, (total - COALESCE(amount_paid,0)) AS amount, 'charge' AS kind "
                            "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total - COALESCE(amount_paid,0)) > 0.005",
                            (cid, sid)).fetchall()
-    payments = conn.execute("SELECT id, reference AS ref, created_at, amount, 'payment' AS kind "
-                            "FROM payments WHERE company_id=? AND party_type='supplier' AND party_id=? "
-                            "AND direction='out' AND COALESCE(status,'active')='active'", (cid, sid)).fetchall()
+    # Aseel-parity wave A-PAR (schema v32) FORCED FIX -- see
+    # customer_statement's identical comment above for the full reasoning.
+    # The settling direction is the MIRROR of the customer statement's: for
+    # a supplier, PAYING them ('out') reduces what the shop owes, so 'out'
+    # reads as 'payment' and a bounced/cancelled issued cheque ('in', the
+    # money coming back) reads as 'reversal'.
+    payments = conn.execute(
+        "SELECT id, reference AS ref, created_at, amount, direction, "
+        "CASE WHEN direction='out' THEN 'payment' ELSE 'reversal' END AS kind "
+        "FROM payments WHERE company_id=? AND party_type='supplier' AND party_id=? "
+        "AND COALESCE(status,'active')='active'", (cid, sid)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in payments]
     events.sort(key=lambda e: e.get('created_at') or '')
     # Same treatment as customer_statement's identical loop above -- see
-    # that function's comment.
+    # that function's comment, including why 'reversal' moves the balance
+    # the same way 'charge' does (a returned issued cheque restores what
+    # the shop owes).
     currency = _company_currency(conn, cid)
     quant = tax_engine.currency_quantum(currency)
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
-        run = (run + amt) if e['kind'] == 'charge' else (run - amt)
+        run = (run + amt) if e['kind'] in ('charge', 'reversal') else (run - amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
                     'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
     conn.close()
@@ -11068,6 +12734,584 @@ def pay_purchase_order(po_id):
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
 
+# ── Cheques (Aseel-parity wave A-PAR, schema v32) ───────────────────────────
+#
+# "Cheque" has always been a free-text payment-method label with nothing
+# behind it -- no due date, no bank fields, and, worst of all, no BOUNCE: a
+# returned cheque left `customers.credit_balance` permanently understated
+# with no code path that ever put the money back. Post-dated cheques are a
+# primary B2B instrument in Jordan, so this wave gives them a real lifecycle.
+#
+# `cheques` is an IMMUTABLE header (created once, NEVER updated -- there is
+# no v32 edit route; a mistyped cheque is cancelled and re-recorded) and
+# `cheque_events` is an APPEND-ONLY transition log. Status is not a stored
+# column on either table -- it is a pure FOLD over the event set
+# (core/retail/cheques.py::fold), because that is what lets two append-only
+# SETS converge across devices by plain set union, with no row_version, no
+# reject-stale gate and no sync_conflicts entry ever needed for either
+# table. See database/schema.py's RETAIL_SCHEMA_VERSION v32 comment for the
+# full story of the mutable-header design this replaced and exactly how it
+# double-applied a bounce's money leg across two devices.
+#
+# MONEY MOVES AT RECEIPT, NOT AT CLEARING: a shop handed a post-dated
+# cheque considers itself paid, so `create_cheque` reduces AR/AP
+# immediately, and every transition that crosses back to a DEAD state
+# (bounced/cancelled/written_off) WRITES A NEW OPPOSITE payments ROW rather
+# than voiding the original -- `void_payment`'s own comment documents why a
+# retroactive void would silently restate a closed trading day's
+# `daily_cash` (see this section's `daily_cash`/`customer_statement`/
+# `supplier_statement` fixes below THE MONEY LEG's own comment for the
+# statement-visibility half of this).
+#
+# EVERYTHING BELOW IS `retail.employees` (CAP_EMPLOYEES), INCLUDING CREATE.
+# Cheques are back-office end to end in v32: the nav entry that reaches this
+# screen is gated `retail.reports` (app-shell.js), which no cashier holds,
+# so a `retail.sell` gate on create would be a decorator no cashier could
+# ever reach -- decoration, not a real authority split. A cheque's state is
+# also a claim about what the BANK did, and `endorse` disposes of a
+# negotiable instrument at face value -- the same "owner authority over the
+# shop's own money" tier `retail.employees` already carries for supplier/PO
+# payments (see this file's CAPABILITY GATING header comment). "A cashier
+# captures a cheque at the till" is a named, deliberate deferral -- see
+# ROADMAP.md's A-PAR wave entry.
+#
+# NEITHER GET CARRIES A LICENCE DECORATOR (matching every other read in this
+# file) and NEITHER IS ON RETAIL_RESTRICTED_ALLOWLIST -- a shop must not
+# record NEW instruments while its licence is restricted, but the cheque
+# book stays visible. Every write route below IS gated with a licence
+# capability string and IS excluded from that allowlist for the same reason.
+
+
+def _cheque_or_404(conn, cid, cheque_id):
+    """Loads one cheque header, scoped to the caller's own company -- a
+    foreign company's cheque is indistinguishable from a missing one, the
+    same posture every other party-scoped GET/mutation in this file takes.
+    Returns `(row, None)` on success or `(None, error_response)` on
+    failure; callers `return` the second element directly after closing
+    their own connection, exactly like every other 404 in this file."""
+    row = conn.execute("SELECT * FROM cheques WHERE id=? AND company_id=?", (cheque_id, cid)).fetchone()
+    if not row:
+        return None, (jsonify({'status': 'error', 'message': 'Cheque not found'}), 404)
+    return row, None
+
+
+def _cheque_events(conn, cheque_id):
+    """This cheque's full APPEND-ONLY event set, in fold order. `fold()`
+    below re-sorts unconditionally (it never trusts caller order -- see its
+    own docstring), so this ORDER BY only saves it a redundant Python-side
+    sort in the common case; `idx_cheque_events_cheque` already carries
+    this exact column order."""
+    return conn.execute(
+        "SELECT id, event_type, from_status, to_status, occurred_on, bank_reference, reason, "
+        "to_party_type, to_party_id, created_by, created_at_utc "
+        "FROM cheque_events WHERE cheque_id=? ORDER BY created_at_utc, id",
+        (cheque_id,)
+    ).fetchall()
+
+
+def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank_reference=None,
+                        reason=None, to_party_type=None, to_party_id=None, device=None):
+    """THE shared transaction body for every cheque write route, INCLUDING
+    `create_cheque`'s own initial 'created' event -- one place implementing
+    THE MONEY LEG table and the legality check (core/retail/cheques.py's
+    ONE `LEGAL_TRANSITIONS`), so the routes differ only in which request
+    fields they accept and validate BEFORE calling this.
+
+    NEVER commits or rolls back -- the caller owns the transaction boundary,
+    exactly like every other write route in this file (commit + _sync_nudge()
+    on success, rollback otherwise). This function's own writes (the event
+    insert, and the money leg when the transition crosses the live/dead
+    line) are therefore only made durable by the CALLER's own commit, which
+    is what keeps a header insert (create_cheque) and its own first event
+    atomic with each other.
+
+    Returns `(status_code, body_dict)`. A non-200 status means this
+    function itself wrote nothing that survives -- an illegal transition is
+    refused before any statement runs, and the one write that CAN partially
+    apply (the money leg raising `sqlite3.IntegrityError` on the payments
+    partial-unique uid index -- two concurrent POSTs that both read the same
+    pre-state) is mapped to 409 here so the caller's rollback undoes it
+    cleanly rather than propagating a raw 500.
+    """
+    events = _cheque_events(conn, cheque['id'])
+    fold_before = cheque_engine.fold(events)
+    if not cheque_engine.is_legal(event_type, fold_before.status):
+        return 409, {'status': 'error',
+                     'message': f"Cannot apply '{event_type}' to a cheque at status '{fold_before.status}'",
+                     'code': 'ILLEGAL_TRANSITION'}
+
+    to_status = cheque_engine.resulting_status(event_type)
+    side_now = fold_before.is_live
+    side_to = to_status in cheque_engine.LIVE_STATES
+    is_crossing = side_to != side_now
+
+    if is_crossing:
+        # THE MONEY LEG. `cheque['direction']` picks the PARTY this cheque's
+        # money touches ('in' = a customer's cheque, 'out' = a supplier's);
+        # `side_to` (this transition's destination side) picks which way it
+        # moves. Both directions and both sides reduce to two lines because
+        # the underlying rule is symmetric: crossing INTO live money always
+        # means "this party now owes the shop `amount` less" (customer) or
+        # "the shop now owes this party `amount` less" (supplier) -- i.e.
+        # `_adjust_credit`'s delta is always `-amount` on an APPLY and
+        # `+amount` on a REVERSE, on EITHER party table.
+        party_type = 'customer' if cheque['direction'] == 'in' else 'supplier'
+        party_id = cheque['party_id']
+        pay_direction = 'in' if side_to == (cheque['direction'] == 'in') else 'out'
+        if side_to:
+            doc_type = 'receipt' if cheque['direction'] == 'in' else 'supplier_payment'
+        else:
+            # A bounce/cancel reversal, EITHER direction -- one label,
+            # deliberately: see _REF_PREFIX's own comment on 'cheque_reversal'.
+            doc_type = 'cheque_reversal'
+        # k = the crossing index this transition WOULD get, computed from
+        # the events that exist before this write. A freshly written
+        # event's own `from_status` always equals `fold_before.status` (this
+        # function reads both from the SAME fold), so it is always
+        # EFFECTIVE, and core/retail/cheques.py's own docstring proves this
+        # index never moves later even if another device's event is later
+        # found to sort before it -- see "THE CONVERGENCE PROOF" there.
+        k = len(fold_before.crossings)
+        uid = cheque_engine.money_uid(cheque['id'], k)
+        try:
+            ref = _record_payment(conn, cid, party_type, party_id, pay_direction, cheque['amount'],
+                                  method='check', related_type='cheque', related_id=None,
+                                  notes=f"Cheque {cheque['cheque_number']}", device=device,
+                                  doc_type=doc_type, currency=cheque['currency'], pay_uid=uid)
+        except sqlite3.IntegrityError:
+            # The deterministic uid doubles as the SAME-DEVICE idempotency
+            # guard against two concurrent POSTs that both read the same
+            # pre-state and both tried to write crossing k -- see this
+            # function's own docstring.
+            return 409, {'status': 'error', 'message': 'This cheque transition was already recorded.',
+                         'code': 'CHEQUE_ALREADY_TRANSITIONED'}
+        if ref is None:
+            # M4 (ENGINEERING.md failure shape 4): `_record_payment` silently
+            # returns None for amt<=0 (retail_api.py) -- unreachable in
+            # practice, since `amount` is validated >0 at create_cheque and
+            # is immutable thereafter, but a sentinel that "cannot happen"
+            # must still be checked rather than trusted: a swallowed None
+            # here would let this function report a status change that
+            # moved no money at all.
+            raise RuntimeError(f"cheque {cheque['id']}: money leg silently skipped for amount<=0")
+        table = 'customers' if party_type == 'customer' else 'suppliers'
+        delta = -cheque['amount'] if side_to else cheque['amount']
+        _adjust_credit(conn, table, party_id, cid, delta, cheque['currency'])
+
+    ev_id = _new_uid()
+    now_utc = now_utc_iso()
+    created_by = _uid()
+    conn.execute(
+        "INSERT INTO cheque_events (id, cheque_id, event_type, from_status, to_status, occurred_on, "
+        "bank_reference, reason, to_party_type, to_party_id, created_by, created_at_utc) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (ev_id, cheque['id'], event_type, fold_before.status, to_status, occurred_on, bank_reference,
+         reason, to_party_type, to_party_id, created_by, now_utc)
+    )
+    _queue_sync_event(conn, 'cheque_event', ev_id, 'create', {
+        'id': ev_id, 'cheque_id': cheque['id'], 'event_type': event_type,
+        'from_status': fold_before.status, 'to_status': to_status, 'occurred_on': occurred_on,
+        'bank_reference': bank_reference, 'reason': reason, 'to_party_type': to_party_type,
+        'to_party_id': to_party_id, 'created_by': created_by, 'created_at_utc': now_utc,
+    })
+    _audit(conn, 'CHEQUE_' + event_type.upper(), 'cheque', cheque['id'],
+          f"{event_type} amount={cheque['amount']}")
+    return 200, {'status': 'success', 'data': {'id': cheque['id'], 'status': to_status, 'event_id': ev_id}}
+
+
+@retail_bp.route('/cheques', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def list_cheques():
+    """The cheque book. DERIVED totals only (on_hand/at_bank/matured_
+    unbanked/bounced) -- summed at READ time from the folded status of every
+    row returned, never an accumulator column: `customers.credit_balance`/
+    `suppliers.credit_balance` are already a second, device-local
+    accumulator (see `_adjust_credit`'s own docstring), and a THIRD would
+    multiply that exact problem. Deriving means every cheque figure here is
+    correct on every device even where `credit_balance` is not (see THE
+    MONEY LEG comment above `_apply_cheque_event` and this module's own
+    sync-side "WHAT DOES NOT CONVERGE" reasoning)."""
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    direction = request.args.get('direction')
+    status_filter = request.args.get('status')
+    party_id = request.args.get('party_id')
+    due_before = request.args.get('due_before')
+    matured_only = request.args.get('matured') == '1'
+    limit = clamp_page_limit(request.args.get('limit', 200), 200, 1000)
+
+    query = "SELECT * FROM cheques WHERE company_id=?"
+    params = [cid]
+    if direction in ('in', 'out'):
+        query += " AND direction=?"; params.append(direction)
+    if party_id:
+        query += " AND party_id=?"; params.append(party_id)
+    if due_before:
+        query += " AND due_date<=?"; params.append(due_before)
+    query += " ORDER BY due_date ASC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+
+    currency = _company_currency(conn, cid)
+    # The SHOP's trading day, not the device's wall clock (metrics.py's
+    # business_now) -- a cheque banked one day early still bounces, so
+    # "matured" must agree with the clock the rest of the product uses for
+    # "today", not with whatever hour it happens to be on this machine.
+    # Stricter than aging_report's own bare datetime.now() (a live,
+    # pre-existing precedent this file already carries) -- named here
+    # rather than silently matched, since a cheque is the one figure in this
+    # file where the stricter clock actually matters.
+    today = metrics.business_now(conn, cid, datetime.now()).strftime('%Y-%m-%d')
+    out = []
+    on_hand_total = at_bank_total = matured_unbanked_total = bounced_total = 0.0
+    for r in rows:
+        result = cheque_engine.fold(_cheque_events(conn, r['id']))
+        status = result.status
+        if status_filter and status != status_filter:
+            continue
+        is_matured = bool(r['due_date']) and r['due_date'] <= today
+        if matured_only and not (status == 'pending' and is_matured):
+            continue
+        row = dict(r)
+        row['status'] = status
+        row['amount'] = _money(r['amount'], currency)
+        out.append(row)
+        amt = float(r['amount'] or 0)
+        if status == 'pending':
+            on_hand_total += amt
+            if is_matured:
+                matured_unbanked_total += amt
+        elif status in ('deposited', 'cleared', 'endorsed'):
+            at_bank_total += amt
+        elif status == 'bounced':
+            bounced_total += amt
+    conn.close()
+    return jsonify({'status': 'success', 'data': out, 'totals': {
+        'on_hand_total': _money(on_hand_total, currency), 'at_bank_total': _money(at_bank_total, currency),
+        'matured_unbanked_total': _money(matured_unbanked_total, currency),
+        'bounced_total': _money(bounced_total, currency), 'currency': currency,
+    }})
+
+
+@retail_bp.route('/cheques/<string:cheque_id>', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def get_cheque(cheque_id):
+    """Header + the event timeline in fold order, each event carrying
+    `effective`/`crossing_index` -- an INERT event (a two-device race) is
+    never dropped, only marked as not having changed anything, so the owner
+    SEES the race on the timeline instead of a `sync_conflicts` row nobody
+    reads (this table has none -- see database/schema.py's v32 comment)."""
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    events = _cheque_events(conn, cheque_id)
+    result = cheque_engine.fold(events)
+    currency = _company_currency(conn, cid)
+    out_events = []
+    for e in events:
+        out_events.append({
+            'id': e['id'], 'event_type': e['event_type'], 'from_status': e['from_status'],
+            'to_status': e['to_status'], 'occurred_on': e['occurred_on'], 'bank_reference': e['bank_reference'],
+            'reason': e['reason'], 'to_party_type': e['to_party_type'], 'to_party_id': e['to_party_id'],
+            'created_by': e['created_by'], 'created_at_utc': e['created_at_utc'],
+            'effective': result.effective.get(e['id'], False),
+            'crossing_index': result.crossing_index.get(e['id']),
+        })
+    header = dict(cheque)
+    header['amount'] = _money(cheque['amount'], currency)
+    header['status'] = result.status
+    conn.close()
+    return jsonify({'status': 'success', 'data': {'cheque': header, 'events': out_events}})
+
+
+@retail_bp.route('/cheques', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def create_cheque():
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    direction = data.get('direction')
+    if direction not in ('in', 'out'):
+        conn.close(); return jsonify({'status': 'error', 'message': "direction must be 'in' or 'out'"}), 400
+    party_type = 'customer' if direction == 'in' else 'supplier'
+    party_id = data.get('party_id')
+    party_table = 'customers' if party_type == 'customer' else 'suppliers'
+    party = conn.execute(f"SELECT id FROM {party_table} WHERE id=? AND company_id=?",
+                         (party_id, cid)).fetchone() if party_id else None
+    if not party:
+        conn.close(); return jsonify({'status': 'error', 'message': f'{party_type.capitalize()} not found'}), 404
+    currency = _company_currency(conn, cid)
+    amount = _money(data.get('amount', 0), currency)
+    if amount <= 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Amount must be positive', 'code': 'INVALID_AMOUNT'}), 400
+    due_date = (data.get('due_date') or '').strip()
+    if not due_date:
+        conn.close(); return jsonify({'status': 'error', 'message': 'due_date is required'}), 400
+    cheque_number = (data.get('cheque_number') or '').strip()
+    if not cheque_number:
+        conn.close(); return jsonify({'status': 'error', 'message': 'cheque_number is required'}), 400
+    bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+    if branch_err:
+        conn.close(); return branch_err
+
+    try:
+        cheque_id = _new_uid()
+        now_utc = now_utc_iso()
+        created_by = _uid()
+        conn.execute(
+            "INSERT INTO cheques (id, company_id, branch_id, direction, party_type, party_id, cheque_number, "
+            "bank_name, bank_branch, drawer_name, account_number, amount, currency, issue_date, due_date, "
+            "sale_id, related_type, related_id, notes, created_by, created_at_utc) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (cheque_id, cid, bid, direction, party_type, party_id, cheque_number,
+             data.get('bank_name'), data.get('bank_branch'), data.get('drawer_name'), data.get('account_number'),
+             amount, currency, data.get('issue_date'), due_date,
+             data.get('sale_id'), data.get('related_type'), data.get('related_id'), data.get('notes', ''),
+             created_by, now_utc)
+        )
+        # AUDIT-032C posture (cited to the SALE branch, sync_service.py, NOT
+        # to reorder_request -- see this file's own branch_uid comments on
+        # create_sale/create_return): `branch_id` is a per-device
+        # autoincrement, so the sync payload carries `branch_uid` and the
+        # receiving device resolves ITS OWN local branches.id via
+        # `_resolve_branch_id`, never the raw integer.
+        branch_uid = _branch_uid(conn, bid)
+        _queue_sync_event(conn, 'cheque', cheque_id, 'create', {
+            'id': cheque_id, 'branch_uid': branch_uid, 'direction': direction, 'party_type': party_type,
+            'party_id': party_id, 'cheque_number': cheque_number, 'bank_name': data.get('bank_name'),
+            'bank_branch': data.get('bank_branch'), 'drawer_name': data.get('drawer_name'),
+            'account_number': data.get('account_number'), 'amount': amount, 'currency': currency,
+            'issue_date': data.get('issue_date'), 'due_date': due_date, 'sale_id': data.get('sale_id'),
+            'related_type': data.get('related_type'), 'related_id': data.get('related_id'),
+            'notes': data.get('notes', ''), 'created_by': created_by, 'created_at_utc': now_utc,
+        })
+        cheque_row = conn.execute("SELECT * FROM cheques WHERE id=?", (cheque_id,)).fetchone()
+        status_code, body = _apply_cheque_event(conn, cid, cheque_row, 'created', device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close()
+            return jsonify(body), status_code
+        conn.commit(); conn.close()
+        _sync_nudge()
+        return jsonify(body), 201
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/deposit', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def deposit_cheque(cheque_id):
+    """Refused for `direction='out'`: a shop cannot observe its own issued
+    cheque being lodged at a bank it does not bank at -- a state nobody
+    could ever set truthfully must not exist."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    if cheque['direction'] != 'in':
+        conn.close()
+        return jsonify({'status': 'error', 'message': "Only a received cheque can be deposited"}), 400
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'deposited',
+                                                occurred_on=data.get('occurred_on'),
+                                                bank_reference=data.get('bank_reference'),
+                                                device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/clear', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def clear_cheque(cheque_id):
+    """Both directions. `pending -> cleared` is legal directly (not only via
+    `deposited -> cleared`) precisely so an ISSUED cheque can skip the
+    deposit step this shop can never observe for its own outgoing cheque."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'cleared',
+                                                occurred_on=data.get('occurred_on'),
+                                                bank_reference=data.get('bank_reference'),
+                                                device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/bounce', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def bounce_cheque(cheque_id):
+    """Both directions; `cleared -> bounced` is legal and is NOT a
+    workaround -- banks credit provisionally and debit back days later, a
+    real sequence this table must be able to record. `reason` is required:
+    a bounce with no reason recorded is the one event in this feature an
+    owner will need to explain to the counterparty later."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    reason = (data.get('reason') or '').strip()
+    if not reason:
+        conn.close(); return jsonify({'status': 'error', 'message': 'reason is required'}), 400
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'bounced',
+                                                occurred_on=data.get('occurred_on'),
+                                                bank_reference=data.get('bank_reference'),
+                                                reason=reason, device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/reinstate', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def reinstate_cheque(cheque_id):
+    """Both directions -- a bounced cheque re-presented by the bank and
+    honoured the second time round."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'reinstated',
+                                                occurred_on=data.get('occurred_on'),
+                                                bank_reference=data.get('bank_reference'),
+                                                device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/endorse', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def endorse_cheque(cheque_id):
+    """`direction='in'` only -- a shop endorses a cheque it RECEIVED on to a
+    third party (typically one of its own suppliers); it cannot endorse a
+    cheque it issued itself. Deliberately half-built (named in ROADMAP): this
+    records the disposal only. Settling the payable it discharges still goes
+    through the ordinary supplier-payment route -- auto-settling it in the
+    same transition would move TWO parties' balances from one write and make
+    `endorsed -> bounced` responsible for unwinding both atomically, the most
+    error-prone corner available in this wave for its least-used stage."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    if cheque['direction'] != 'in':
+        conn.close()
+        return jsonify({'status': 'error', 'message': "Only a received cheque can be endorsed"}), 400
+    to_party_type = data.get('to_party_type')
+    to_party_id = data.get('to_party_id')
+    if to_party_type not in ('customer', 'supplier') or not to_party_id:
+        conn.close(); return jsonify({'status': 'error', 'message': 'to_party_type and to_party_id are required'}), 400
+    to_table = 'customers' if to_party_type == 'customer' else 'suppliers'
+    target = conn.execute(f"SELECT id FROM {to_table} WHERE id=? AND company_id=?", (to_party_id, cid)).fetchone()
+    if not target:
+        conn.close(); return jsonify({'status': 'error', 'message': f'{to_party_type.capitalize()} not found'}), 404
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'endorsed',
+                                                occurred_on=data.get('occurred_on'),
+                                                to_party_type=to_party_type, to_party_id=to_party_id,
+                                                device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/cancel', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def cancel_cheque(cheque_id):
+    """`pending` only (enforced by LEGAL_TRANSITIONS, not re-checked here) --
+    a DEPOSITED cheque pulled back is a RETURN, i.e. a bounce; there is no
+    second path to the same effect."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'cancelled',
+                                                reason=data.get('reason'), device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cheques/<string:cheque_id>/write-off', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def write_off_cheque(cheque_id):
+    """`bounced` only (enforced by LEGAL_TRANSITIONS). Moves NO money -- the
+    bounce that preceded it already put the debt back; this only marks the
+    instrument itself as dead paper (uncollectable) rather than leaving it
+    sitting in 'bounced' as if collection were still being pursued."""
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cheque, err = _cheque_or_404(conn, cid, cheque_id)
+    if err:
+        conn.close(); return err
+    try:
+        status_code, body = _apply_cheque_event(conn, cid, cheque, 'written_off',
+                                                reason=data.get('reason'), device=data.get('device'))
+        if status_code != 200:
+            conn.rollback(); conn.close(); return jsonify(body), status_code
+        conn.commit(); conn.close(); _sync_nudge()
+        return jsonify(body)
+    except Exception as e:
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
 # ── Cash summary + aging (structured for future dashboard KPIs) ────────────────
 @retail_bp.route('/reports/daily-cash', methods=['GET'])
 @mt_login_required
@@ -11076,15 +13320,41 @@ def pay_purchase_order(po_id):
 def daily_cash():
     cid = _cid(); day = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
     conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # `by_method`'s own query and row shape are UNCHANGED -- still every
+    # method, cheques included -- so no existing client (or chart built on
+    # this response) breaks.
     rows = conn.execute("""SELECT direction, method, COALESCE(SUM(amount),0) AS amount, COUNT(*) AS count
         FROM payments WHERE company_id=? AND date(created_at)=? AND COALESCE(status,'active')='active'
         GROUP BY direction, method""", (cid, day)).fetchall()
     currency = _company_currency(conn, cid)
-    cash_in = _money(sum(r['amount'] for r in rows if r['direction'] == 'in'), currency)
-    cash_out = _money(sum(r['amount'] for r in rows if r['direction'] == 'out'), currency)
+    # Aseel-parity wave A-PAR (schema v32) FORCED FIX (M3): `cash_in`/
+    # `cash_out` used to sum EVERY payment method for the day, cheques
+    # included -- correct for a card tender (money genuinely received that
+    # day) and wrong for a post-dated cheque (`related_type='cheque'`,
+    # method='check'): its face value was already applied to the party's
+    # balance at RECEIPT (see `_apply_cheque_event`'s own "MONEY MOVES AT
+    # RECEIPT" comment), but the cash the cheque itself represents has not
+    # actually landed in the till that day, and won't until it clears -- and
+    # if it bounces, it reverses. Folding it into `cash_in` would print it
+    # as today's cash position in a CAP_REPORTS owner report and reverse it
+    # again on the bounce day, understating neither day honestly. Excluded
+    # from BOTH figures here and reported separately instead. Provably a
+    # no-op for every pre-v32 install: no existing `payments` row carries
+    # `related_type='cheque'`, so this WHERE clause changes nothing for a
+    # database that has never recorded one.
+    cheque_rows = conn.execute("""SELECT direction, COALESCE(SUM(amount),0) AS amount
+        FROM payments WHERE company_id=? AND date(created_at)=? AND COALESCE(status,'active')='active'
+        AND COALESCE(related_type,'') = 'cheque' GROUP BY direction""", (cid, day)).fetchall()
+    cheques_in = _money(sum(r['amount'] for r in cheque_rows if r['direction'] == 'in'), currency)
+    cheques_out = _money(sum(r['amount'] for r in cheque_rows if r['direction'] == 'out'), currency)
+    all_in = sum(r['amount'] for r in rows if r['direction'] == 'in')
+    all_out = sum(r['amount'] for r in rows if r['direction'] == 'out')
+    cash_in = _money(all_in - cheques_in, currency)
+    cash_out = _money(all_out - cheques_out, currency)
     conn.close()
     return jsonify({'status': 'success', 'data': {
         'date': day, 'cash_in': cash_in, 'cash_out': cash_out, 'net': _money(cash_in - cash_out, currency),
+        'cheques_in': cheques_in, 'cheques_out': cheques_out,
         'by_method': [dict(r) for r in rows],
     }})
 

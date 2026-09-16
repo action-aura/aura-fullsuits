@@ -838,7 +838,159 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # one-time catch-up pull, not a recurring cost, since `ensure_cursor_
 # matches_relay` writes a real `relay_url` the moment that first reset runs
 # and every pull after that compares against a real value again.
-RETAIL_SCHEMA_VERSION = 31
+#
+# v31 -> v32 (Aseel-parity wave A-PAR, "cheque lifecycle as a tracked
+# instrument"; ROADMAP.md's 2026-09-15 "schema versions v32-v35 RESERVED"
+# entry, cashing in v32). Two new, self-contained tables plus three indexes
+# -- additive only (CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT
+# EXISTS), no existing table is ALTERed, read or written except for ONE
+# UPDATE against the single `sync_cursor` row (see the v31-peer paragraph
+# below), so ordering relative to every migration above it does not matter
+# functionally.
+#
+#   cheques        -- one physical cheque, as an IMMUTABLE header (the facts
+#                      printed on the paper: who, bank, amount, due date)
+#   cheque_events  -- an APPEND-ONLY transition log for that cheque
+#                      (deposited/cleared/bounced/endorsed/cancelled/
+#                      written_off/reinstated)
+#
+# WHY NEITHER TABLE STORES A STATUS, AND WHY THAT IS THE WHOLE POINT. A
+# post-dated cheque is a primary B2B instrument in Jordan and today "Cheque"
+# is a free-text payment-method label with nothing behind it -- no due date,
+# no bank fields, and, worst of all, no BOUNCE: a returned cheque leaves
+# `customers.credit_balance` permanently understated with no code path that
+# ever puts the money back. A first pass at this design gave `cheques` a
+# mutable `status` column and synced it the `reorder_requests` way (a
+# `row_version` + `WHERE excluded.row_version > row_version` reject-stale
+# gate). An adversarial review caught that this converges `reorder_requests`
+# only because accepting/declining a reorder moves no money: two tills that
+# both observe the SAME bank bounce and both write `row_version=2` from a
+# shared base of 1 satisfy neither device's strictly-greater gate, so BOTH
+# keep believing their own status forever, both wrote their own reversal
+# `payments` row keyed on a fresh uuid4, and the shop's AR is now
+# over-restored by the face value of the cheque -- a real, silent, and
+# permanent money defect on the exact feature this migration exists to
+# correct. The fix is not a better version gate; it is removing the mutable
+# row that a version gate exists to protect. `cheques` is created once and
+# NEVER updated; `cheque_events` only ever grows. Two append-only SETS
+# converge by plain set union with no version gate, no reject-stale check
+# and no `sync_conflicts` entry, because there is no "which write wins"
+# question to ask. Status is computed by folding the event set in a
+# deterministic total order (`core/retail/cheques.py::fold`, the ONE
+# legality table, consumed by both the write routes and the fold) --
+# ordered by `(created_at_utc, id)`, both carried VERBATIM on the wire and
+# never re-derived at apply time, so every device folds the identical
+# sequence regardless of pull order. The money leg of a transition that
+# crosses the live/dead line (`_record_payment` + `_adjust_credit`) is made
+# idempotent across devices the same way: its `payments.uid` is
+# `uuid5(NS, f"{cheque_id}:{crossing_index}")`, a DETERMINISTIC function of
+# which crossing this is, not a fresh uuid4 per write -- two devices that
+# both observe the same bank fact mint the SAME uid, and the pre-existing
+# `ON CONFLICT(uid) DO NOTHING` on the `payment` apply branch
+# (sync_service.py) collapses the duplicate to one row everywhere, including
+# on the two originating devices. See core/retail/cheques.py's own docstring
+# for the convergence proof (crossings strictly alternate and an inserted
+# crossing consumes exactly one following crossing, so no EFFECTIVE
+# crossing's index ever moves) and _migrate_add_cheques's own docstring
+# below for the column-by-column reasoning.
+#
+# THE v31-PEER HAZARD, AND WHY THIS STEP ENDS WITH A `sync_cursor` UPDATE. A
+# device still running a build from before this version has no "cheque"/
+# "cheque_event" entry in its own `RETAIL_SYNC_ENTITY_TYPES`, so
+# `_apply_event` returns True (fully handled, never quarantined -- see that
+# method's own docstring) for every cheque event it pulls, and its cursor
+# ADVANCES PAST them. Upgrading that device to v32 does not retroactively
+# fetch what its cursor already skipped: nothing backfills it. This
+# migration reuses the mechanism v31 already shipped for exactly this shape
+# rather than inventing a second one -- `UPDATE sync_cursor SET
+# relay_url=NULL` -- so `ensure_cursor_matches_relay` (sync_service.py) reads
+# the stored NULL as "different from any real relay" on the very next pull
+# and resets `last_seq` to 0, a harmless one-time full re-pull (the same cost
+# the v31 comment above already argues is acceptable). The re-pull is
+# money-safe because every existing apply branch is either `ON CONFLICT DO
+# NOTHING` or `row_version`-gated, and none of them calls `_adjust_credit` a
+# second time for a row it has already applied.
+#
+# v32 -> v33 (Aseel-parity wave A-PAR, "quotations and sales orders as real
+# documents", ROADMAP.md's 2026-09-15 "schema versions v32-v35 RESERVED"
+# entry, v33). Two new, self-contained tables plus five indexes -- no
+# existing table is ALTERed. See _migrate_add_sales_quotations's own
+# docstring for the full reasoning; restating only the version-number story
+# here.
+#
+# `held_sales` is a JSON cart snapshot with no approval step, no expiry and
+# no conversion tracking -- it is NOT a quotation, and calling it one is how
+# this gap stayed invisible (ROADMAP.md's own words for this claim). A real
+# quotation/sales-order document needs a status lifecycle (draft -> sent ->
+# accepted/declined -> converted, or cancelled at any point before
+# converted), a customer-facing document number, an expiry date, and a
+# conversion pipeline into `sales` -- none of which `held_sales` has or was
+# ever meant to have (see retail_api.py's `held_sales` section banner for
+# what THAT table is actually for: a device-local cart parking lot).
+#
+# ID SHAPE, and why it matches `stock_transfers`/`cheques` rather than
+# `loyalty_ledger`/`inventory_movements`: `sales_quotations` is a MUTABLE
+# header (the same row transitions draft -> sent -> accepted/declined ->
+# converted, or -> cancelled), not an append-only ledger entry -- see
+# `_migrate_add_stock_transfers`'s own "THE ID CHOICE" section for the full
+# argument, restated identically here. `id TEXT PRIMARY KEY`, a
+# client-generated UUID -- Owner-relay-safe from day one (`entity_id` must
+# parse as a UUID; verified against owner/app/sync/routes.py).
+#
+# WHY V32 IS NOT LEFT OPEN. The A-PAR reservation entry (ROADMAP.md) assumed
+# a starting head of v31 and asked whoever landed second among v32/v33 to
+# take the next number above the live head rather than disturb the other's
+# reservation. By the time this migration was written, v32 (cheques) had
+# already landed and become the live head, so this step simply takes v33
+# as reserved -- there is no hole to leave and no renumbering story, unlike
+# `_migrate_add_stock_transfers`'s own v24 -> v28 slide. The general rule
+# this repo learned the hard way still holds for whoever claims v34/v35: a
+# schema version integer is a single-writer resource, claim it in ROADMAP.md
+# before dispatching parallel work, and take the next number above the live
+# head if you land second.
+#
+# v33 -> v34 (Aseel-parity wave A-PAR, "per-document-type numbering series",
+# ROADMAP.md's 2026-09-15 "schema versions v32-v35 RESERVED" entry, v34 --
+# the تعدد الدفاتر / "multi-ledger" equivalent). Two new, self-contained
+# tables plus two indexes -- no existing table is ALTERed, read, or written,
+# so ordering relative to every migration above it does not matter
+# functionally. See _migrate_add_doc_series's own docstring for the full
+# reasoning, including why the allocator constraint deliberately lives in
+# the CLAIM ROUTE rather than in a unique index on the synced `doc_series`
+# table.
+#
+# THE CONSTRAINT THAT DOMINATES THIS FEATURE, restated here because it is
+# the reason v34 exists at all rather than a side note: Jordan e-invoicing's
+# own dedicated sequence (`einvoice_sequence`, commercial_runtime/
+# einvoicing/sequence.py) MUST NEVER share a counter, a table, or a call
+# graph with the local document numbers this migration adds --
+# docs/einvoicing/phase1/invoice-numbering-audit.md, "Decision: option 2".
+# `doc_series_counter` and `einvoice_sequence` are two tables with two
+# allocators; `retail_doc_series_einvoice_firewall_test.py` proves this
+# structurally AND with one live, mixed-sequence sale.
+#
+# MERGE-ORDER HAZARD, TWO SHAPES -- read before merging any A-PAR wave out
+# of order. `commercial_runtime/security/migration_safety.py`'s
+# `ensure_schema_version`: `if current == target_version: return` (an
+# already-upgraded DB skips the WHOLE migrate_fn, not just "the steps it
+# hasn't seen yet" -- there is no notion of a partial re-run) and
+# `if current > target_version: raise MigrationError` ("no safe automatic
+# downgrade"). So:
+#   (a) v34 merges first; a later wave keeps 34 and appends its own function
+#       -> an already-upgraded DB returns early and NEVER creates that
+#       wave's tables -> silent `no such table` at runtime.
+#   (b) a later wave's merge resolves this constant back DOWN (a git
+#       conflict on the line below, losing side a coin toss) -> every
+#       already-upgraded till hits `current > target` and REFUSES TO BOOT.
+#       Fleet-wide outage.
+# Rule: merge the A-PAR waves in ascending version order, or the wave
+# merging after v34 must bump this constant PAST the current head (never
+# reuse or lower it) and record that in ROADMAP.md. Shape (b) additionally
+# carries a mechanical guard in this wave's own test file
+# (`assert RETAIL_SCHEMA_VERSION >= 34`,
+# retail_doc_series_migration_test.py) so a downward-resolved merge fails
+# CI before it ships to a till.
+RETAIL_SCHEMA_VERSION = 34
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1844,6 +1996,35 @@ def _migrate_retail_schema(conn):
     # reasoning, including why NULL must be treated as "different" rather
     # than "matches whatever relay we are pointed at".
     _migrate_add_sync_cursor_relay_url(conn)
+    # v31 -> v32 (Aseel-parity wave A-PAR, "cheque lifecycle as a tracked
+    # instrument"): appended LAST, same convention as every step above. Two
+    # new, self-contained tables and three indexes -- no existing table is
+    # ALTERed, so ordering relative to every step above it does not matter
+    # functionally, except for the one `sync_cursor` UPDATE this step ends
+    # with, which must run AFTER `_migrate_add_sync_cursor_relay_url` has
+    # guaranteed the `relay_url` column exists. See the RETAIL_SCHEMA_
+    # VERSION v32 comment above and _migrate_add_cheques's own docstring for
+    # the full reasoning, including why neither new table stores a status
+    # column and why that is what lets them converge across devices with no
+    # version gate at all.
+    _migrate_add_cheques(conn)
+    # v32 -> v33 (Aseel-parity wave A-PAR, "quotations and sales orders as
+    # real documents"): appended LAST, same convention as every step above.
+    # Two new, self-contained tables and five indexes -- no existing table is
+    # ALTERed, read, or written, so ordering relative to every step above it
+    # does not matter functionally. See the RETAIL_SCHEMA_VERSION v33 comment
+    # above and _migrate_add_sales_quotations's own docstring for the full
+    # reasoning, including why v32 is not left as a hole for this step.
+    _migrate_add_sales_quotations(conn)
+    # v33 -> v34 (Aseel-parity wave A-PAR, "per-document-type numbering
+    # series"): appended LAST, same convention as every step above. Two new,
+    # self-contained tables plus two indexes -- no existing table is
+    # ALTERed, read, or written, so ordering relative to every step above it
+    # does not matter functionally. See the RETAIL_SCHEMA_VERSION v34
+    # comment above and _migrate_add_doc_series's own docstring for the full
+    # reasoning, including the e-invoicing firewall this migration must not
+    # weaken and the merge-order hazard's two shapes.
+    _migrate_add_doc_series(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -7616,3 +7797,941 @@ def _migrate_add_sync_cursor_relay_url(conn):
     cursor_cols = {row[1] for row in conn.execute('PRAGMA table_info(sync_cursor)').fetchall()}
     if 'relay_url' not in cursor_cols:
         conn.execute('ALTER TABLE sync_cursor ADD COLUMN relay_url TEXT')
+
+
+def _migrate_add_cheques(conn):
+    """One-time migration (schema v31 -> v32): Aseel-parity wave A-PAR,
+    "cheque lifecycle as a tracked instrument" (ROADMAP.md's 2026-09-15
+    "schema versions v32-v35 RESERVED" entry, v32). Two new, self-contained
+    tables plus three indexes, and one UPDATE against the existing single
+    `sync_cursor` row -- see the RETAIL_SCHEMA_VERSION v32 comment above for
+    why this migration must reset it. No existing table is ALTERed.
+
+        cheques        -- IMMUTABLE header: one physical cheque
+        cheque_events  -- APPEND-ONLY transition log for that cheque
+
+    See the RETAIL_SCHEMA_VERSION v32 comment above for why status is not a
+    column on either table (it is a fold over `cheque_events`, computed in
+    core/retail/cheques.py) and why that is what makes two append-only SETS
+    converge with no version gate at all -- restating only what is
+    column-specific here.
+
+    `cheques` COLUMN BY COLUMN:
+      * `id TEXT PRIMARY KEY` -- client-generated UUID, the `cash_sessions`/
+        `reorder_requests`/`stock_transfers` shape (see
+        `_migrate_add_stock_transfers`'s own "THE ID CHOICE" section), NOT
+        the `loyalty_ledger`/`inventory_movements` autoincrement-plus-`uid`
+        shape: this row is read and re-read from every device across the
+        cheque's whole lifetime, not written once by whichever device
+        happens to own it. Owner's relay parses `entity_id` as a UUID and
+        400-rejects a whole push batch on the first one that fails to parse
+        (verified against `owner/app/sync/routes.py`), so a client-minted
+        UUID is also what makes this table Owner-relay-safe from day one.
+      * `company_id INTEGER NOT NULL` -- MANDATORY tenant scope, matching
+        every business table in this file. Discovered automatically by
+        `company_scoped_tables(conn)` from the live schema, so no
+        maintenance list needs a new entry for it.
+      * `branch_id INTEGER` -- `branches.id`. NO declared FOREIGN KEY,
+        matching `sales.branch_id`/`stock_transfers.source_branch_id`:
+        `branches.id` is a plain PER-DEVICE autoincrement (never part of the
+        UUID migration -- see the v11 `held_sales` comment above), so a
+        declared FK would refuse a cheque relayed in from a device whose
+        local `branches.id` numbering differs. Resolved on the wire via
+        `branch_uid`, the same `_resolve_branch_id` two-tier resolution
+        `sale`/`inventory_movement` already use (sync_service.py).
+      * `direction TEXT NOT NULL` -- 'in' (received from a customer) | 'out'
+        (issued to a supplier). Determines which of `_record_payment`'s two
+        parties the money leg touches and which statement route
+        (customer/supplier) the cheque appears on.
+      * `party_type TEXT NOT NULL` / `party_id TEXT NOT NULL` -- 'customer'|
+        'supplier' and the matching `customers.id`/`suppliers.id`. Both NOT
+        NULL: a cheque with no counterparty has nowhere to put its money
+        effect, and the credit path already requires a named customer
+        (retail_api.py's create_sale credit-mode validation). `party_id` is
+        TEXT, deliberately NOT the INTEGER `payments.party_id` carries
+        (`_ensure_credit_schema`'s `addcol`) -- `customers.id`/`suppliers.id`
+        have been TEXT UUIDs since `_migrate_customers_to_uuid`/
+        `_migrate_suppliers_to_uuid`, and `payments.party_id` only reads as
+        INTEGER because SQLite's type affinity leaves a non-numeric string
+        stored as TEXT anyway. A brand new table declares the real type.
+      * `cheque_number TEXT NOT NULL` -- printed on the paper by the payer's
+        bank. Deliberately carries NO unique index: two different banks
+        reuse numbers freely, so `cheque_number` is display data, never an
+        identity.
+      * `bank_name` / `bank_branch` / `drawer_name` / `account_number TEXT`
+        -- `drawer_name` is who actually SIGNED the cheque, which matters
+        for a third-party cheque (endorsed to this shop by someone other
+        than the account holder) -- all nullable, all display/reference
+        data with no business logic keyed on them.
+      * `amount REAL NOT NULL` -- the face value. Immutable, like every
+        other column here: a mistyped cheque is cancelled and re-recorded,
+        never edited (there is no v32 edit route -- see core/retail/
+        cheques.py's own docstring for why that is what keeps this table a
+        header rather than a second mutable row needing its own version
+        gate).
+      * `currency TEXT NOT NULL` -- stamped once at creation from this
+        company's own currency, never re-derived later, matching
+        `payments.currency`'s own "labelled once, not recomputed" contract.
+      * `issue_date` / `due_date TEXT` -- `due_date NOT NULL` (the date it
+        may first be lodged; every read that reports "matured & unbanked"
+        keys on it), `issue_date` nullable (not every shop records it).
+      * `endorsed_to_party_type` / `endorsed_to_party_id TEXT` -- present as
+        columns on the header for the CURRENT endorsement target only
+        (convenience for `list_cheques`' summary read); the authoritative,
+        historical record of an endorsement is the `cheque_events` row that
+        carries the same two fields on the event that caused it. Nullable;
+        only ever set by `endorse_cheque`, never by the migration.
+      * `sale_id INTEGER` -- a LOCAL `sales.id`, device-local reference only
+        (matching `payments.sale_id`'s own posture): a cheque recorded
+        against a credit sale on THIS device links back to it here for
+        convenience, but the link is never relied on across devices and
+        carries no declared FK for the identical reason `branch_id` above
+        does not.
+      * `related_type` / `related_id` -- opaque, device-local, the same
+        `payments.related_type`/`related_id` contract (`'sale'` | `'po'` |
+        NULL). Carried through to the money leg's own `related_type`/
+        `related_id` unchanged.
+      * `notes TEXT` -- free text, nullable.
+      * `created_by TEXT DEFAULT 'System'` -- matches `stock_transfers`'/
+        `inventory_movements`' own who-column, NOT the later `actor_user_
+        uid`/`terminal_id`/`created_at_utc` triple v13 retrofitted onto
+        RETAIL_ACTOR_TABLES (adding a v32 table to that tuple now would fire
+        for no database that has ever run it -- the identical reasoning
+        `_migrate_add_stock_transfers`'s own docstring already gives for the
+        identical choice).
+      * `created_at_utc TEXT NOT NULL` -- CARRIED VERBATIM ON THE WIRE, and
+        it is (together with `id`) part of the fold's total order for
+        `cheque_events` below. THE TRAP worth restating here even though
+        `cheques` itself is never folded: `created_at TIMESTAMP DEFAULT
+        CURRENT_TIMESTAMP` fires at APPLY time on whichever device inserts
+        the row, so it differs per device for the identical logical event --
+        every apply branch this migration's routes write inserts
+        `created_at_utc` explicitly from the payload and never lets the
+        column default supply it.
+      * `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- local wall-clock
+        stamp, display only, never compared across devices (see above).
+
+    `cheque_events` COLUMN BY COLUMN:
+      * `id TEXT PRIMARY KEY` -- client-generated UUID, matching the parent
+        (see THE ID CHOICE above); also the second half of the fold's total
+        order (`(created_at_utc, id)`), so ordering is TOTAL and identical
+        on every device even when two events share a timestamp.
+      * `cheque_id TEXT NOT NULL REFERENCES cheques(id)` -- a declared FK IS
+        safe here, unlike `branch_id` above: both `cheques.id` and this
+        column are client-generated UUIDs, and the identical reasoning
+        `stock_transfer_items.transfer_id`'s own FK relies on applies (no
+        cross-device remapping is possible for a UUID foreign key). This
+        table deliberately carries NO `company_id` of its own -- scoped
+        entirely through `cheque_id`, the `cash_movements`/`stock_transfer_
+        items` shape ("a movement has no meaning outside the session/
+        transfer it belongs to"), which is also why it is correctly
+        EXCLUDED from `company_scoped_tables`'s automatic discovery -- there
+        is no `company_id` column for `rebind_company_id` to find.
+      * `event_type TEXT NOT NULL` -- 'created'|'deposited'|'cleared'|
+        'bounced'|'endorsed'|'cancelled'|'written_off'|'reinstated'. No
+        CHECK constraint, matching this file's own established precedent
+        for enum-shaped text columns (`movement_type`/`entry_type`/
+        `stock_transfers.status`) -- validated at the API layer against the
+        single `LEGAL_TRANSITIONS` table in core/retail/cheques.py.
+      * `from_status TEXT` -- the writer's OWN OBSERVED status at the moment
+        it wrote this event (NULL only on the `created` event, which has no
+        prior status). Recorded, not trusted blindly: the fold recomputes
+        whether this event is EFFECTIVE from the full ordered set, so a
+        stale `from_status` from a device that raced another device cannot
+        corrupt the converged result -- see core/retail/cheques.py's
+        `fold()` docstring.
+      * `to_status TEXT NOT NULL` -- what this event claims the cheque
+        became. Never NULL: every event, including `created`, has one.
+      * `occurred_on TEXT` -- the BANK's own value date for this event
+        (when it was actually deposited/cleared/bounced), operator-supplied
+        and distinct from `created_at_utc` (when this device happened to
+        record it) -- a bounce entered a day late must still report the
+        bank's real return date on the statement and in aging.
+      * `bank_reference TEXT` -- deposit-slip or return-advice number,
+        nullable free text.
+      * `reason TEXT` -- nullable; populated on a `bounced` event
+        ('insufficient funds', 'signature mismatch', ...).
+      * `to_party_type` / `to_party_id TEXT` -- nullable; populated ONLY on
+        the `endorsed` event, naming who the cheque was handed to. Mirrors
+        `cheques.endorsed_to_party_type`/`endorsed_to_party_id` at the
+        moment of that specific event, so the historical record survives
+        even if a later event changes the header's convenience copy.
+      * `created_by TEXT DEFAULT 'System'` -- matches the parent table's own
+        choice, for the identical reason.
+      * `created_at_utc TEXT NOT NULL` -- SORT KEY 1 of the fold's total
+        order (see `id` above for SORT KEY 2), carried verbatim on the wire.
+        THE SAME TRAP as `cheques.created_at_utc` above applies with more
+        force here: a fold ordered by the local `created_at` column instead
+        would let two devices compute two DIFFERENT folds for the identical
+        event set, purely because of when each device happened to receive
+        each row -- silent divergence, the exact defect this whole
+        append-only design exists to rule out. Every write route and every
+        sync apply branch sets this explicitly from the payload and never
+        lets the column default supply it.
+      * `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- local wall-clock
+        stamp only, same posture as the parent table.
+
+    INDEXES:
+      * `idx_cheques_due ON cheques(company_id, direction, due_date)` -- the
+        "what is due/matured" read `list_cheques` exists to serve, scoped
+        tenant-first like every other business index in this file.
+      * `idx_cheques_party ON cheques(company_id, party_type, party_id)` --
+        "this party's cheques", the `?party_id=` filter and the drill-in
+        from a customer/supplier record.
+      * `idx_cheque_events_cheque ON cheque_events(cheque_id, created_at_utc,
+        id)` -- the ONLY read this table ever serves, "this cheque's events
+        in fold order", pre-sorted so the fold never needs a separate ORDER
+        BY at read time.
+
+    NO `row_version`/`updated_at_utc` on either table, and neither joins
+    RETAIL_ROW_VERSION_TABLES: both are append-only and never take an
+    `update` sync event, so there is no stale write to ever reject -- the
+    same posture `sales`/`sale_items`/`payments`/`inventory_movements`
+    already have for the identical reason. NO `uid` column and no
+    membership in RETAIL_UID_TABLES: `id` IS the wire identity on both
+    tables, so a second wire-identity column would be redundant. NO
+    backfill, no data migration: this is a genuinely new feature with no
+    existing rows to reconcile.
+
+    NOT SCHEMA, same commit: `_REF_PREFIX` in retail_api.py gains
+    `'cheque_reversal': 'CHQR'` -- `doc_sequences` is keyed
+    `(company_id, doc_type)`, so a new doc_type needs no DDL here.
+
+    Idempotent: every CREATE TABLE / CREATE INDEX above is IF NOT EXISTS, so
+    a second call -- including replaying this whole chain against a
+    database restored from a mid-upgrade backup -- is a clean no-op. The
+    `sync_cursor` UPDATE at the end is idempotent for a different reason:
+    setting an already-NULL `relay_url` to NULL again changes nothing, and
+    once a real pull has run once after upgrading, `ensure_cursor_matches_
+    relay` will have already written a real URL back -- a second run of
+    this migration (the mid-upgrade-backup replay case) would force exactly
+    one more harmless catch-up pull, never data loss, since every apply
+    branch either `ON CONFLICT DO NOTHING`s or is `row_version`-gated.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cheques (
+            id TEXT PRIMARY KEY,               -- client-generated UUID; IS the wire identity
+            company_id INTEGER NOT NULL,       -- MANDATORY tenant scope
+            branch_id INTEGER,                 -- branches.id; NO declared FK (see docstring)
+            direction TEXT NOT NULL,           -- 'in' (received) | 'out' (issued)
+            party_type TEXT NOT NULL,          -- 'customer' | 'supplier'
+            party_id TEXT NOT NULL,            -- customers.id / suppliers.id (UUIDs)
+            cheque_number TEXT NOT NULL,       -- printed on the paper; NOT ours, NOT unique
+            bank_name TEXT,
+            bank_branch TEXT,
+            drawer_name TEXT,                  -- who SIGNED it (third-party cheques)
+            account_number TEXT,
+            amount REAL NOT NULL,              -- face value; immutable
+            currency TEXT NOT NULL,            -- stamped at creation, never re-derived
+            issue_date TEXT,
+            due_date TEXT NOT NULL,            -- the date it may first be banked
+            endorsed_to_party_type TEXT,       -- current endorsement target (see docstring)
+            endorsed_to_party_id TEXT,
+            sale_id INTEGER,                   -- local sales.id, device-local reference only
+            related_type TEXT,                 -- 'sale' | 'po' | NULL
+            related_id INTEGER,                -- opaque, device-local (payments.related_id contract)
+            notes TEXT,
+            created_by TEXT DEFAULT 'System',
+            created_at_utc TEXT NOT NULL,      -- carried on the wire, NOT a local default
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_cheques_due '
+        'ON cheques(company_id, direction, due_date)'
+    )
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_cheques_party '
+        'ON cheques(company_id, party_type, party_id)'
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cheque_events (
+            id TEXT PRIMARY KEY,               -- client-generated UUID
+            cheque_id TEXT NOT NULL REFERENCES cheques(id),
+            event_type TEXT NOT NULL,          -- 'created'|'deposited'|'cleared'|'bounced'|
+                                                -- 'endorsed'|'cancelled'|'written_off'|'reinstated'
+            from_status TEXT,                  -- the writer's OBSERVED status; NULL on 'created'
+            to_status TEXT NOT NULL,
+            occurred_on TEXT,                  -- the BANK's value date, operator-supplied
+            bank_reference TEXT,               -- deposit slip / return-advice number
+            reason TEXT,                       -- bounce reason ('insufficient funds', 'signature')
+            to_party_type TEXT,                -- endorsement target, on the 'endorsed' event only
+            to_party_id TEXT,
+            created_by TEXT DEFAULT 'System',
+            created_at_utc TEXT NOT NULL,      -- SORT KEY 1. Carried verbatim on the wire.
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_cheque_events_cheque '
+        'ON cheque_events(cheque_id, created_at_utc, id)'
+    )
+
+    # THE v31-PEER ANSWER (see the RETAIL_SCHEMA_VERSION v32 comment above
+    # for the full hazard). A NULL `relay_url` reads as "different from any
+    # real relay" to `ensure_cursor_matches_relay`, so the very next pull
+    # resets `last_seq` to 0 and re-pulls everything this device's cursor
+    # had already skipped past while running a build with no cheque entity
+    # types -- a harmless, one-time catch-up pull, not a recurring cost.
+    # Guarded the same way `_migrate_add_sync_cursor_relay_url` guards its
+    # own ALTER: `sync_cursor` is created and seeded by `_init_retail`'s raw
+    # executescript before this chain ever runs, so in practice the row
+    # already exists -- but a migration must never assume the step before
+    # it, or the bootstrap SQL before the whole chain, actually ran.
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'sync_cursor' in live_tables:
+        conn.execute('UPDATE sync_cursor SET relay_url = NULL WHERE id = 1')
+
+
+def _migrate_add_sales_quotations(conn):
+    """One-time migration (schema v32 -> v33): Aseel-parity wave A-PAR,
+    "quotations and sales orders as real documents" (ROADMAP.md's
+    2026-09-15 "schema versions v32-v35 RESERVED" entry, v33). Two new,
+    self-contained tables plus five indexes -- additive only (CREATE TABLE
+    IF NOT EXISTS / CREATE INDEX IF NOT EXISTS), no existing table is
+    ALTERed, read, or written, so ordering relative to every migration
+    above it does not matter functionally.
+
+        sales_quotations       -- one customer-facing document (a quotation
+                                   or a sales order), its lifecycle, and its
+                                   link to the sale it eventually became
+        sales_quotation_lines  -- what was quoted, frozen at SEND (see
+                                   DRAFTS DO NOT SYNC below)
+
+    THIS IS NOT `held_sales` WEARING A NEW NAME. `held_sales` is a JSON cart
+    snapshot with no approval step, no expiry and no conversion tracking --
+    calling it a quotation is how this gap stayed invisible (ROADMAP.md's
+    own words). A real quotation needs a status lifecycle a customer can be
+    told about (draft -> sent -> accepted/declined -> converted, or
+    cancelled at any point before converted), a document number that
+    survives being printed and handed to that customer, an expiry date, and
+    a pipeline that turns an accepted quote into a real `sales` row without
+    a second sale writer. None of that is `held_sales`'s job, and this
+    migration adds nothing to it -- see retail_api.py's `held_sales` section
+    banner for what that table is actually for.
+
+    THE ID CHOICE: `id TEXT PRIMARY KEY`, a client-generated UUID, the
+    `cash_sessions`/`reorder_requests`/`stock_transfers`/`cheques` shape --
+    NOT the `loyalty_ledger`/`inventory_movements` autoincrement-plus-`uid`
+    shape. See `_migrate_add_stock_transfers`'s own "THE ID CHOICE" section
+    for the full argument, which applies here unchanged: `sales_quotations`
+    is a MUTABLE header (the same row is created once and then transitions
+    through several statuses over its lifetime), not an append-only ledger
+    entry. `id` IS the wire identity -- there is no separate `uid` column,
+    matching `cheques`/`stock_transfers` and unlike RETAIL_UID_TABLES'
+    autoincrement-id-plus-`uid` pair. Owner's relay parses `entity_id` as a
+    UUID and 400-rejects a whole push batch on the first one that fails to
+    parse (verified against owner/app/sync/routes.py), so a client-minted
+    UUID also makes this table Owner-relay-safe from day one, even though
+    (see DRAFTS DO NOT SYNC below) a draft never actually reaches the relay.
+
+    DO NOT add either table to RETAIL_UID_TABLES, RETAIL_ACTOR_TABLES or
+    RETAIL_ROW_VERSION_TABLES (module-level tuples above) -- those three
+    drive the v13 RETROFIT onto tables that existed BEFORE v13 shipped;
+    adding a table created at v33 to any of them "would fire for no
+    database" (the identical reasoning `_migrate_add_loyalty_ledger`'s own
+    docstring gives, re-quoted by `_migrate_add_stock_transfers`'s and
+    `_migrate_add_cheques`'s own docstrings for the identical choice).
+    `row_version`/`updated_at_utc` are declared directly in the CREATE TABLE
+    below instead.
+
+    `sales_quotations` COLUMN BY COLUMN:
+      * `id TEXT PRIMARY KEY` -- client-generated UUID; see THE ID CHOICE
+        above.
+      * `company_id INTEGER NOT NULL` -- MANDATORY tenant scope, matching
+        every business table in this file.
+      * `branch_id INTEGER NOT NULL` -- `branches.id`. NO declared FOREIGN
+        KEY, matching `sales.branch_id`/`stock_transfers.source_branch_id`/
+        `cheques.branch_id`: `branches.id` is a plain PER-DEVICE
+        autoincrement (never part of the UUID migration -- see the v11
+        `held_sales` comment above), so a declared FK would refuse a
+        quotation relayed in from a device whose local `branches.id`
+        numbering differs. `branch_uid` rides the sync PAYLOAD, never a
+        column on this table -- resolved on write via `_branch_uid()`
+        (retail_api.py) and on apply via `SyncService._resolve_branch_id`,
+        the SAME two-tier resolution `sale`/`inventory_movement`/`cheques`
+        already use. NOT NULL, unlike `cheques.branch_id`: every quotation
+        is filed at a specific branch from creation (it is priced and
+        stocked against that branch's own catalogue/promotions), whereas a
+        cheque's branch is incidental record-keeping.
+      * `customer_id TEXT` -- `customers.id` (UUID). NO declared FOREIGN
+        KEY, matching every other customer_id column in this file (a
+        tombstoned or not-yet-synced customer must not make an existing
+        quotation unreadable). NULL is a legitimate, common value: a
+        walk-in customer can still be quoted a price. See
+        `list_quotations`'s own comment (retail_api.py) for the
+        company-condition-on-the-JOIN trap this NULL-ability creates for
+        that specific read.
+      * `doc_number TEXT NOT NULL` -- bare UNIQUE (see the index below),
+        matching `sales.sale_number`/`purchase_orders.po_number`/
+        `returns.return_number`. Minted as `QUO-000042-<cid8>-<device8>`,
+        the identical `_next_ref()` + company-fragment + device-fragment
+        shape `create_purchase_order`/`create_sale` already use, for the
+        identical AUDIT-032B reason (two devices on the same company must
+        never mint the same bare-unique string).
+      * `doc_kind TEXT NOT NULL DEFAULT 'quotation'` -- 'quotation' |
+        'order'. Records how the document STARTED and never changes after
+        creation; "do we owe the customer this?" is a question answered by
+        `status`/`converted_sale_uid`, not by `doc_kind` -- a sales order
+        and a quotation follow the identical lifecycle below, they only
+        differ in what the shop calls the printed document and (per the
+        design this migration implements) in the default customer
+        expectation of firmness.
+      * `status TEXT NOT NULL DEFAULT 'draft'` -- see STATUS VALUES below.
+      * `valid_until TEXT` -- 'YYYY-MM-DD', LOCAL (not UTC -- the till that
+        quoted a price is the till whose calendar the expiry is judged
+        against; see EXPIRY IS DERIVED, NOT STORED below). NULL means no
+        expiry.
+      * `currency TEXT` / `tax_mode TEXT` -- snapshotted at creation so a
+        quotation printed and re-printed later, or a shop that changes its
+        base currency or tax mode after quoting, still shows what the
+        customer was actually quoted. Matches `payments.currency`'s own
+        "labelled once, not recomputed" contract (see
+        `_migrate_add_cheques`'s own docstring for the identical posture on
+        that table's `currency` column).
+      * `subtotal`/`discount_amount`/`tax_amount`/`total REAL NOT NULL
+        DEFAULT 0` -- named and typed EXACTLY as `sales`'s own four money
+        columns, computed the same way (`core.retail.pricing`), because
+        `list_quotations`/`get_quotation` must trip the money-disclosure
+        ratchet (`retail_report_clock_money_disclosure_test.py`) the same
+        way any other money-returning list/get route does -- see
+        retail_api.py's own comment on those two routes for the measured
+        regex match.
+      * `notes TEXT` -- free text, nullable, matching every other
+        `notes` column in this file.
+      * `created_by TEXT DEFAULT 'System'` -- matches `stock_transfers`'/
+        `cheques`'/`inventory_movements`' own who-column, NOT the later
+        `actor_user_uid`/`terminal_id`/`created_at_utc` triple v13
+        retrofitted onto RETAIL_ACTOR_TABLES (adding a v33 table to that
+        tuple now would fire for no database that has ever run it -- the
+        identical reasoning `_migrate_add_stock_transfers`'s own docstring
+        already gives for the identical choice).
+      * `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- local wall-clock
+        stamp.
+      * `sent_at` / `accepted_at` / `declined_at` / `cancelled_at` /
+        `converted_at TIMESTAMP` -- one column per transition, all NULL
+        until their own event happens, matching `stock_transfers`'s
+        `sent_at`/`received_at` pair's own "NULL until it happens, never
+        back-filled" discipline, extended to every transition this longer
+        lifecycle has.
+      * `converted_sale_uid TEXT` -- `sales.uid`, the WIRE identity --
+        DELIBERATELY NEVER `sales.id`. The local autoincrement `id` differs
+        per device; storing it here would point at a DIFFERENT sale on
+        every other device once this row syncs, invisible on a one-device
+        install and wrong on every second one. Matches the discipline
+        `payments.sale_id`/`loyalty_ledger.sale_id` do NOT follow (both are
+        deliberately device-local-only references, per their own
+        docstrings) -- `converted_sale_uid` is different because a
+        quotation's conversion outcome is exactly the kind of fact every
+        device that ever sees this quotation needs to agree on.
+      * `conversion_variance_json TEXT` -- the frozen quoted-vs-live pricing
+        comparison computed at conversion time (see retail_api.py's
+        create_sale conversion block), so the conversion sheet can read it
+        back even after create_sale's own idempotent-replay path returns
+        only `{id, sale_number}` on a retried request.
+      * `row_version INTEGER NOT NULL DEFAULT 1` / `updated_at_utc TEXT` --
+        declared directly here (see the RETAIL_ROW_VERSION_TABLES note
+        above), and -- unlike `cheques`, which deliberately carries
+        NEITHER column -- these ARE bumped by every writer from the very
+        first commit. `cheques` gets away with no version gate because it
+        is genuinely append-only (status is a fold, never a stored
+        transition); `sales_quotations` is a mutable header synced as
+        `create`-then-`update` events (see DRAFTS DO NOT SYNC below), so it
+        needs the same reject-stale gate `reorder_requests` already has.
+        v17's own lesson, restated because it is exactly the trap this
+        column exists to avoid: `row_version` "has existed on these five
+        tables since v13 and nothing has ever bumped it, so reject-stale on
+        top of it would silently discard every catalogue write from every
+        device on day one" (see the RETAIL_ROW_VERSION_TABLES v13 comment
+        above) -- a v33 table that declared this column and then had even
+        ONE writer forget to bump it would reopen that identical trap on
+        day one for ITSELF.
+      * NO `deleted_at_utc`. A commercial document handed to a customer is
+        CANCELLED, never deleted -- `status='cancelled'` is the withdrawal
+        channel, it is already filtered by every query that matters, and it
+        is the thing the customer's own printed copy has to be reconciled
+        against. A soft-delete column nothing filters is exactly how a
+        cancelled-but-still-counted row would keep contributing to
+        `quotations_committed_demand` -- declaring a channel and never
+        wiring a filter into it is a worse trap than not declaring one.
+
+    STATUS VALUES, AND WHY EACH EXISTS:
+      * 'draft' -- created, never shown to the customer yet. Can still be
+        edited (PUT) or cancelled freely; no sync event is ever emitted for
+        a draft (see DRAFTS DO NOT SYNC below) -- the identical `held_sales`
+        argument ("two devices don't need to see each other's in-progress
+        carts") applies to a document nobody outside this till has seen.
+      * 'sent' -- shown/handed to the customer. IMMUTABLE from this point:
+        lines and prices can never change again, only the whole document
+        cancelled and a fresh one re-issued. This is also the FIRST status
+        that syncs (as a `create` event carrying the frozen line set).
+      * 'accepted' -- the customer said yes. Does not by itself move any
+        money or stock; conversion is a separate, explicit act
+        (POST /sales with quotation_id).
+      * 'declined' -- the customer said no. Terminal.
+      * 'cancelled' -- the shop withdrew it (from 'draft', 'sent', or
+        'accepted' -- see cancel_quotation's own route comment). Terminal.
+      * 'converted' -- turned into a real sale; `converted_sale_uid` names
+        which one. Terminal.
+      No CHECK constraint on the six values above, matching
+      `movement_type`/`entry_type`/`stock_transfers.status`'s own
+      precedent in this file: validated at the API layer.
+
+    EXPIRY IS DERIVED, NOT STORED. There is deliberately no 'expired'
+    status value. `valid_until` is the fact; "is this quotation expired
+    right now" is computed on every read and re-evaluated on every
+    conversion attempt, never persisted as a status flip. A stored flip
+    needs a WRITER, and both candidates are wrong: a sweeper on a till that
+    is switched off overnight fires at unpredictable times relative to the
+    clock it is supposed to track, and two devices racing to write the same
+    transition carry no information the clock did not already carry for
+    free. Mirrors `_evaluate_offline_sales_stop` (retail_api.py), which
+    trusts the device's own clock for a refusal but RE-DERIVES it on every
+    request rather than persisting a verdict. The comparison is
+    `valid_until < today_local`, so a quote expiring TODAY is still valid
+    for the rest of that day.
+
+    FOREIGN KEYS, AND WHICH ONES ARE SAFE TO DECLARE: only where BOTH sides
+    are UUIDs that mean the same thing on every device -- the
+    `cash_movements.session_id` rule already established in this file.
+    `sales_quotation_lines.quotation_id REFERENCES sales_quotations(id)`
+    and `sales_quotation_lines.product_id REFERENCES products(id)` both
+    qualify (both sides are client-generated UUIDs meaning the same thing
+    everywhere) and ARE declared; `sales_quotations.branch_id` and
+    `sales_quotations.customer_id` do NOT (see their own column entries
+    above) and are NOT. `PRAGMA foreign_keys=ON` on every connection
+    (AUDIT-016) makes this a real, enforced constraint, not decoration --
+    which is exactly why the sync apply side must check `_row_exists`
+    before writing a line whose `product_id` has not arrived on this
+    device yet (missing-parent quarantine; see sync_service.py's
+    `quotation` apply branch), rather than let the INSERT raise.
+
+    `sales_quotation_lines` COLUMN BY COLUMN:
+      * `id TEXT PRIMARY KEY` -- client-generated UUID, matching the parent
+        (see THE ID CHOICE above).
+      * `quotation_id TEXT NOT NULL REFERENCES sales_quotations(id)` --
+        declared FK; see FOREIGN KEYS above.
+      * `product_id TEXT NOT NULL REFERENCES products(id)` -- declared FK;
+        see FOREIGN KEYS above. `products.id` has been a client-generated
+        UUID since `_migrate_products_to_uuid`, identical everywhere it is
+        used, matching `sale_items`/`stock_transfer_items`/
+        `inventory_movements`'s own identical declaration.
+      * `product_name_snapshot TEXT NOT NULL` -- the product's name AT
+        QUOTE TIME, so a quotation printed months ago (or read after the
+        product itself is tombstoned) still names what was actually
+        offered, matching the snapshot discipline `sale_item_promotions.
+        name_snapshot`/`sale_item_modifiers.name_snapshot` already
+        established for the identical reason.
+      * `quantity REAL NOT NULL` -- REAL, matching `sale_items.quantity`'s
+        own type (fractional/weight-priced units).
+      * `unit_price REAL NOT NULL` / `discount_pct REAL NOT NULL DEFAULT 0`
+        / `tax_rate REAL NOT NULL DEFAULT 0` / `line_total REAL NOT NULL`
+        -- named EXACTLY as `sale_items`'s own four line-money columns,
+        deliberately NOT `unit_price_quoted`/`line_total_quoted` or any
+        other `_quoted`-suffixed spelling. The money-disclosure ratchet
+        (`retail_report_clock_money_disclosure_test.py`) matches column
+        names against `MONEY_COLUMNS` with a `\b` word boundary, which does
+        NOT match between `line_total` and a `_quoted` suffix -- a
+        `_quoted`-suffixed spelling would make `prepare-conversion`
+        invisible to that ratchet while it returns real per-line money.
+        The table name `sales_quotation_lines` is what disambiguates these
+        columns from `sale_items`'s own, not a column suffix.
+      * `promotion_name_snapshot TEXT` -- NULL when a manual discount won
+        (including a tie) or nothing matched at all, matching
+        `sale_item_promotions`'s own "invisible unless opted in" contract;
+        present only when a live promotion actually won this line's price
+        at the moment the quotation was created.
+      * `line_no INTEGER NOT NULL` -- display order on the printed
+        document; SQLite does not guarantee row order on a bare SELECT.
+
+      `sales_quotation_lines` carries NO `company_id` of its own -- scoped
+      entirely through `quotation_id`, matching `sale_items`/
+      `stock_transfer_items`/`cash_movements`'s own "a line has no meaning
+      outside the header it belongs to" scoping (see
+      `_migrate_add_stock_transfers`'s own docstring, which quotes
+      `_migrate_add_shift_cash_drawer`'s identical reasoning for
+      `cash_movements.session_id`). `company_scoped_tables(conn)` discovers
+      tenant-scoped tables from the LIVE schema (a table carrying its own
+      `company_id` column), so `sales_quotation_lines`'s absence of one
+      needs no maintenance-list entry anywhere.
+
+    DRAFTS DO NOT SYNC. ONE synced entity type, `quotation` -- there is NO
+    `quotation_line` entity type, and this table's rows are never queued to
+    sync_outbox on their own. While `status='draft'`, retail_api.py queues
+    NO sync event at all for this quotation -- a draft is device-local,
+    cart-shaped state, exactly the `held_sales` argument restated at the
+    top of this docstring. The FIRST event a quotation ever produces is
+    queued at SEND, as an `event_type='create'` whose payload embeds the
+    full, now-frozen line set (`payload['lines']`) alongside the header --
+    because `sent` is IMMUTABLE (see STATUS VALUES above), lines can never
+    change again after that point, so every LATER event (accept/decline/
+    cancel/convert) is an `event_type='update'` carrying header fields
+    only, and the apply side inserts lines exactly once, on the `create`
+    path, and never replaces them. This is what makes a create-only
+    `sales_quotation_lines` table with no delete/replace machinery
+    correct rather than merely convenient: there is no line-replacement
+    event on the wire, so there is no stale-line window to leave open.
+    Wiring the emit/apply sides is retail_api.py's/sync_service.py's job,
+    not schema's -- this migration only gives both tables somewhere to
+    live.
+
+    Idempotent: every CREATE TABLE / CREATE INDEX above is IF NOT EXISTS,
+    so a second call -- or a fresh install migrating all the way from 0,
+    same as every step above -- is a clean no-op. No data migration, no
+    backfill: this is a genuinely new feature with no existing rows to
+    reconcile.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sales_quotations (
+            id TEXT PRIMARY KEY,                    -- client UUID; IS the wire identity (see THE ID CHOICE)
+            company_id INTEGER NOT NULL,            -- MANDATORY tenant scope
+            branch_id INTEGER NOT NULL,             -- branches.id, LOCAL; NO literal FK (see docstring); branch_uid rides the payload
+            customer_id TEXT,                       -- customers.id (UUID); NULL = walk-in; NO literal FK
+            doc_number TEXT NOT NULL,               -- QUO-000042-<cid8>-<device8>
+            doc_kind TEXT NOT NULL DEFAULT 'quotation',   -- 'quotation' | 'order'; IMMUTABLE after creation
+            status TEXT NOT NULL DEFAULT 'draft',   -- draft|sent|accepted|declined|cancelled|converted (see docstring)
+            valid_until TEXT,                       -- 'YYYY-MM-DD' LOCAL; NULL = no expiry (see EXPIRY IS DERIVED)
+            currency TEXT,                          -- snapshot, for the printed document
+            tax_mode TEXT,                          -- snapshot, ditto
+            subtotal REAL NOT NULL DEFAULT 0,
+            discount_amount REAL NOT NULL DEFAULT 0,
+            tax_amount REAL NOT NULL DEFAULT 0,
+            total REAL NOT NULL DEFAULT 0,
+            notes TEXT,
+            created_by TEXT DEFAULT 'System',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_at TIMESTAMP,
+            accepted_at TIMESTAMP,
+            declined_at TIMESTAMP,
+            cancelled_at TIMESTAMP,
+            converted_at TIMESTAMP,
+            converted_sale_uid TEXT,                -- sales.uid; NEVER sales.id (see docstring)
+            conversion_variance_json TEXT,
+            row_version INTEGER NOT NULL DEFAULT 1,
+            updated_at_utc TEXT
+            -- NO deleted_at_utc -- a commercial document is CANCELLED, never deleted (see docstring)
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sales_quotations_company_status '
+        'ON sales_quotations(company_id, status, created_at)'
+    )
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sales_quotations_customer '
+        'ON sales_quotations(company_id, customer_id, created_at)'
+    )
+    conn.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_quotations_doc_number '
+        'ON sales_quotations(doc_number)'
+    )
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sales_quotations_open_commit '
+        'ON sales_quotations(company_id, branch_id, status) '
+        'WHERE converted_sale_uid IS NULL'
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sales_quotation_lines (
+            id TEXT PRIMARY KEY,                    -- client-generated UUID; matches parent (see docstring)
+            quotation_id TEXT NOT NULL REFERENCES sales_quotations(id),
+            product_id TEXT NOT NULL REFERENCES products(id),
+            product_name_snapshot TEXT NOT NULL,    -- printable after a tombstone
+            quantity REAL NOT NULL,
+            unit_price REAL NOT NULL,               -- named EXACTLY as sale_items does (see docstring, the \\b ratchet trap)
+            discount_pct REAL NOT NULL DEFAULT 0,
+            tax_rate REAL NOT NULL DEFAULT 0,
+            line_total REAL NOT NULL,
+            promotion_name_snapshot TEXT,           -- NULL when manual discount won or nothing matched
+            line_no INTEGER NOT NULL
+        )
+    """)
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_sales_quotation_lines_quotation '
+        'ON sales_quotation_lines(quotation_id)'
+    )
+
+
+def _migrate_add_doc_series(conn):
+    """One-time migration (schema v33 -> v34): Aseel-parity wave A-PAR,
+    "per-document-type numbering series" (ROADMAP.md's 2026-09-15 "schema
+    versions v32-v35 RESERVED" entry, v34 -- the Aseel تعدد الدفاتر
+    equivalent). Two new, self-contained tables plus two indexes --
+    additive only (CREATE TABLE/INDEX IF NOT EXISTS), no existing table is
+    ALTERed, read, or written, so ordering relative to every migration
+    above it does not matter functionally.
+
+        doc_series          -- the DEFINITION. Shop configuration. SYNCS.
+        doc_series_counter  -- the COUNTER. Device-local. NEVER syncs.
+
+    THE ONE DECISION: a series names exactly one allocating terminal in its
+    own row, and a device only allocates from a series it owns.
+    Document-number collision across devices is prevented STRUCTURALLY
+    (a device's own query can never return another device's series), not
+    merely detected after the fact. Forced, not chosen: `doc_sequences`
+    (retail_api.py's pre-existing per-company counter) is per-device and
+    NEVER synced, so two devices both start their own book at 0; `sales.
+    sale_number`/`returns.return_number`/`purchase_orders.po_number` each
+    carry a bare (not device-scoped) UNIQUE index; and the `sale` INSERT in
+    `_apply_event` (commercial_runtime/sync/sync_service.py) has no
+    IntegrityError catch of its own, so a bare-unique collision there
+    raises, the cursor never advances, and every row from every device
+    stops arriving forever -- AUDIT-032B. The ONLY thing preventing that
+    today is `_device_doc_discriminator()` (retail_api.py) appended at
+    every mint site; a naive per-book counter with no ownership rule would
+    delete that protection the moment a shop configures its first book.
+
+    DOC TYPES IN SCOPE -- three, using retail_api.py's EXISTING `REF_PREFIX`
+    keys (moved into this feature's own core module; see
+    `core/retail/doc_series.py`): 'sale' (sales.sale_number), 'return'
+    (returns.return_number), 'po' (purchase_orders.po_number, minted at
+    BOTH create_purchase_order AND accept_reorder_request -- see
+    retail_po_number_uniqueness_test.py, which exists precisely because
+    fixing one mint site and not the other left a real bug fully live).
+    OUT of scope, with reasons: 'hold' (held_sales.hold_number carries no
+    UNIQUE and is not synced -- a parked cart is not an audited document);
+    'receipt'/'supplier_payment' (payments.reference carries only a
+    non-unique index); 'quotation' (sales_quotations.doc_number, schema
+    v33 -- a future wave may add 'quotation' to `DOC_SERIES_TYPES` and call
+    the same allocator with NO further migration; this one pre-creates
+    nothing for it). No `mode` column and no manual-number-entry path --
+    cut deliberately from v34 (see `core/retail/doc_series.py`'s module
+    docstring for the four reasons); an unclaimed book is expressed as
+    `allocator_terminal_uid IS NULL`, needing no separate vocabulary.
+
+    THE CONSTRAINT THAT DOMINATES THIS FEATURE:
+    docs/einvoicing/phase1/invoice-numbering-audit.md, "Decision: option 2"
+    -- the ISTD number submitted to Jordan's tax authority is a DEDICATED
+    sequence (`einvoice_sequence`, commercial_runtime/einvoicing/
+    sequence.py) and must never share a counter, a table, or a call graph
+    with a local document number. `doc_series_counter` is a wholly separate
+    table with a wholly separate allocator (`core/retail/doc_series.py`'s
+    `allocate()`); the only place the two ever touch is a STRING
+    (`local_document_no`, `core/retail/einvoice_adapter.py`), never parsed
+    downstream. `retail_doc_series_einvoice_firewall_test.py` proves this
+    both structurally (AST tripwires) and with one live sale that mints
+    from both sequences independently.
+
+    doc_series COLUMN BY COLUMN:
+      * `id TEXT PRIMARY KEY` -- client-generated uuid4, the
+        `reorder_requests`/`stock_transfers`/`cheques`/`sales_quotations`
+        shape: this is a MUTABLE header (label/status/allocator all change
+        over the row's life), not an append-only ledger entry.
+      * `company_id INTEGER NOT NULL` -- MANDATORY tenant scope, matching
+        every business table in this file.
+      * `doc_type TEXT NOT NULL` -- 'sale' | 'return' | 'po'
+        (`core.retail.doc_series.DOC_SERIES_TYPES`, a SUBSET of the
+        existing `REF_PREFIX` vocabulary -- see that module for why this is
+        a move, not a second copy, of retail_api.py's pre-existing dict).
+      * `code TEXT NOT NULL` -- the human prefix a shop chooses ('A', 'BR2',
+        'INV'). Bare UNIQUE on `(doc_type, code)`, NOT `(company_id,
+        doc_type, code)` -- see the index comment below for the full
+        cross-tenant argument, and NOT `UNIQUE(code)` alone -- a sale book
+        'A' and a return book 'A' render into two DIFFERENT columns
+        (sales.sale_number vs returns.return_number) and must be free to
+        coexist; forbidding it would block the first thing a shop tries.
+      * `label TEXT NOT NULL` -- display name. Mutable (see PATCH
+        `update_doc_series`, retail_api.py) -- unlike `code`, it never
+        appears inside a rendered document number.
+      * `branch_uid TEXT` -- `branches.uid`, NEVER `branches.id`.
+        `branches.id` is a PER-DEVICE autoincrement (`_default_branch`,
+        retail_api.py -- self-heals one per device with no guarantee the
+        SAME company's branch gets the SAME id on two installs), so a
+        SYNCED config row naming an integer branch would point at a
+        DIFFERENT branch on every other till -- the identical AUDIT-032C
+        shape `SyncService._resolve_branch_id` exists to close on
+        `sale`/`return`/`quotation`'s own `branch_id` columns. No literal
+        FOREIGN KEY (`branch_uid` is not even the same TYPE of reference
+        `branches.id` is) -- a series whose branch was later deleted must
+        never raise mid-sale; ownership is validated at write time by a
+        company-scoped SELECT in the route, the same posture
+        `_migrate_add_promotions`/`_migrate_add_sales_quotations` already
+        take on their own nullable branch/customer references.
+      * `allocator_terminal_uid TEXT` -- NULL means "created but
+        unclaimed", and an unclaimed book takes the legacy `_next_ref()` +
+        fragments path (see `core/retail/doc_series.py::resolve_series`).
+        Holds the SAME value `local_terminal_id()` (database/schema.py)
+        returns and `_stamp()` (retail_api.py) writes into
+        `sales.terminal_id` -- a book bound to a till and a drawer bound to
+        a till must mean the same till. `local_terminal_id()` may
+        legitimately return None on a till that has never established an
+        identity; the claim route refuses with an explanation and NEVER
+        calls the CREATING twin (`local_device_uuid()`) to manufacture one
+        on this column's behalf -- AUDIT-032D
+        (commercial_runtime/identity/device_context.py): minting an
+        identity as a side effect of a numbering decision once stamped a
+        drawer session `terminal_id=None`, the sale that followed
+        materialised the real uuid mid-shift, and that shift's own
+        float/close calls then compared against a terminal id that did not
+        exist yet when the drawer opened -- permanent 403, shift
+        unclosable. The identical lesson applies here unchanged.
+      * `claimed_at_utc TEXT` -- set ONLY by the claim route
+        (`POST /doc-series/<id>/allocator-claim`). Exists solely as the
+        deterministic tie-break input the sync apply branch needs when two
+        offline devices claim the SAME unclaimed book (see
+        commercial_runtime/sync/sync_service.py's `doc_series` branch) --
+        a NEW column rather than reusing `updated_at_utc`, because a plain
+        label edit must never re-arbitrate ownership.
+      * `pad_width INTEGER NOT NULL DEFAULT 6` -- IMMUTABLE after creation
+        (see `update_doc_series`'s own comment for why): `A-000042` and
+        `A-0042` are one sequence rendered two ways, and no shopkeeper
+        reading two receipts side by side can tell they are the same book.
+        Overflow needs no widening -- `pad_width=6` at 1,000,000 simply
+        renders seven digits.
+      * `start_no INTEGER NOT NULL DEFAULT 1` -- IMMUTABLE. THE NUMBER THE
+        FIRST DOCUMENT CARRIES, not an offset and not a "last used" value:
+        `start_no=500` mints `A-000500` first, `A-000501` second. Default
+        1 (never 0), so a fresh book's first number is `A-000001`. See
+        `core/retail/doc_series.py::allocate`'s own docstring for the
+        seed arithmetic this contract drives.
+      * `status TEXT NOT NULL DEFAULT 'active'` -- 'active' | 'retired'.
+        Retiring is the ONLY delete path (`DELETE /doc-series/<id>` sets
+        this, never a hard DELETE) -- the row is the only thing that can
+        ever explain a number already sitting on a customer's receipt.
+      * `created_at` / `updated_at_utc TEXT` -- ordinary bookkeeping stamps.
+      * `row_version INTEGER NOT NULL DEFAULT 1` -- bumped by every writer
+        from the first commit (create/update/retire/claim all bump it; see
+        each route's own comment). Declared directly here rather than via
+        the v13 RETROFIT tuples (RETAIL_UID_TABLES/RETAIL_ACTOR_TABLES/
+        RETAIL_ROW_VERSION_TABLES) -- those three drive the retrofit onto
+        tables that existed BEFORE v13 shipped; adding a v34 table to any
+        of them "would fire for no database" (the identical reasoning
+        `_migrate_add_loyalty_ledger`'s/`_migrate_add_stock_transfers`'s/
+        `_migrate_add_sales_quotations`'s own docstrings already give for
+        the identical choice).
+
+    NO `mode` COLUMN. The submitted design's first draft carried one
+    ('auto' | 'manual') so a shop could type a specific number by hand at
+    the till; manual entry was CUT before this migration was written
+    because create_sale's own idempotent-replay path (retail_api.py) reads
+    back the EXISTING `sale_number` on a retry and runs before any write
+    lock is taken, which leaves "what happens when a retry carries a
+    DIFFERENT typed number" genuinely undefined, and because a
+    CAP_SELL-reachable route is the wrong place to hand an auditor-visible
+    document number to whoever happens to be ringing the sale (see
+    `core/retail/doc_series.py`'s module docstring for the full four-reason
+    write-up, and ROADMAP.md's "v34 CASHED IN" entry for the record). An
+    unclaimed book already needs no vocabulary of its own --
+    `allocator_terminal_uid IS NULL` says the same thing a `mode='manual'`
+    column would have, for zero extra state.
+
+    INDEXES:
+      * `idx_doc_series_code` -- UNIQUE on `(doc_type, code)`. LOAD-BEARING,
+        and it stays a real DB constraint on a table that also travels on
+        the sync wire, on purpose: a duplicate code means two `doc_series`
+        rows rendering the SAME string into `sales.sale_number` (or its
+        return/PO siblings), which each carry a bare install-global
+        UNIQUE of their own (this file's `sales`/`returns`/
+        `purchase_orders` CREATE TABLEs) -- letting two codes collide here
+        would only move today's bare-UNIQUE collision one table over, not
+        remove it. `company_id` is DELIBERATELY ABSENT: two companies on
+        one install both coding a sale book 'A' would still collide inside
+        that SAME shared `sales.sale_number` column, mid-sale -- the
+        identical multi-tenant reasoning `_next_ref`'s own company
+        fragment already defends against. Because this index CAN be
+        violated by two devices that each create a book coded 'A' while
+        both offline, `SyncService._apply_event`'s `doc_series` branch
+        catches the collision BY NAME and quarantines it rather than
+        letting it raise and wedge every device's sync forever -- see that
+        branch's own comment for the full "IntegrityError escaping
+        `ON CONFLICT(id)` because a DIFFERENT unique index fired" shape,
+        first documented for the `user`/`email` collision this file's own
+        v-B2 comment already tells in full.
+      * `idx_doc_series_lookup` -- PLAIN, not unique, on `(company_id,
+        doc_type, allocator_terminal_uid, status)`. This is
+        `resolve_series`'s own lookup index, not a constraint. "One active
+        book per (company, doc_type, terminal)" is enforced in the CLAIM
+        ROUTE (`POST /doc-series/<id>/allocator-claim`), INSIDE the same
+        transaction as the write -- deliberately NOT as a second unique
+        index here. A unique index on this tuple would be enforced on
+        every RECEIVING device too, where it protects nothing (a device
+        never allocates from a series it does not own -- `resolve_series`
+        filters on `allocator_terminal_uid = this device's own`) and would
+        turn a transient, self-healing wire state (two devices claiming
+        the same book offline, converging via the sync apply branch's own
+        deterministic tie-break) into a PERMANENT wedge the moment the
+        loser's own claim event tried to apply -- the identical "a UNIQUE
+        index on a synced table forbidding a state a correct fleet can
+        transiently hold" trap this feature's own design review caught and
+        rejected. The submitted design's first draft made this index
+        UNIQUE and dropped `company_id` from it entirely (defending the
+        OTHER index's cross-tenant reach for pages while shipping this one
+        silently) -- both defects are why this index is now plain and
+        leads with `company_id`: on a multi-company install, one till may
+        legitimately own a sale book in company A AND a sale book in
+        company B, which a `(doc_type, allocator_terminal_uid)`-only
+        unique index (no `company_id` at all) would have made impossible.
+
+    doc_series_counter COLUMN BY COLUMN:
+      * `series_id TEXT PRIMARY KEY` -- one row per `doc_series.id`.
+      * `last_no INTEGER NOT NULL DEFAULT 0` -- the counter itself.
+        DEVICE-LOCAL, NEVER SYNCED, NEVER IN ANY sync_outbox PAYLOAD --
+        stronger than "not synced today", this is structurally correct
+        forever: because only the OWNING terminal ever allocates from a
+        given series (see THE ONE DECISION above), every OTHER device's
+        row for that series is permanently absent and never read, so there
+        is no divergence to converge and nothing a sync event could
+        usefully carry. Syncing it would be actively wrong -- a pulled
+        `last_no` could move the owning till's own counter BACKWARDS.
+        Precedent named rather than borrowed: `doc_sequences`
+        (retail_api.py's own pre-existing per-company counter) is in no
+        sync entity-type set at all, and `einvoice_sequence` is per-
+        database -- but the argument for `doc_series_counter` specifically
+        is stronger than either, which is why it is written out in full
+        here rather than assumed.
+
+    WHY `doc_series_counter` GOES IN THIS CHAIN rather than being created
+    lazily the way its closest analogue, `doc_sequences`, is (inside
+    retail_api.py's `_ensure_credit_schema`): that function hand-rolls
+    `ALTER TABLE ... except Exception: pass` behind a process-global
+    `_CREDIT_SCHEMA_READY` flag -- precisely the ad hoc pattern
+    `ensure_schema_version` exists to replace, and this repo mechanically
+    enforces "migrations go through the chain only". `doc_sequences`'s
+    laziness is legacy inherited from before that rule existed, not a
+    precedent to extend.
+
+    Idempotent: every CREATE TABLE / CREATE INDEX above is IF NOT EXISTS,
+    so a second call -- or a fresh install migrating all the way from 0,
+    same as every step above -- is a clean no-op. No data migration, no
+    backfill: this is a genuinely new feature with no existing rows to
+    reconcile, and an install that never configures a series keeps minting
+    the exact byte-identical `SALE-000042-<cid8>-<dev8>` string it minted
+    yesterday (see `core/retail/doc_series.py`'s call-site comments for
+    where that legacy path is preserved verbatim).
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS doc_series (
+            id                     TEXT PRIMARY KEY,   -- client-generated uuid4; IS the wire identity
+            company_id             INTEGER NOT NULL,   -- MANDATORY tenant scope
+            doc_type               TEXT NOT NULL,      -- 'sale' | 'return' | 'po' (DOC_SERIES_TYPES)
+            code                   TEXT NOT NULL,       -- human prefix: 'A', 'BR2', 'INV'; IMMUTABLE
+            label                  TEXT NOT NULL,
+            branch_uid             TEXT,                -- branches.uid, NEVER branches.id (see docstring)
+            allocator_terminal_uid TEXT,                -- NULL == created but unclaimed
+            claimed_at_utc         TEXT,                -- set only by the claim route; sync tie-break input
+            pad_width              INTEGER NOT NULL DEFAULT 6,   -- IMMUTABLE
+            start_no               INTEGER NOT NULL DEFAULT 1,   -- IMMUTABLE; the FIRST document's number
+            status                 TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'retired'
+            created_at             TEXT,
+            updated_at_utc         TEXT,
+            row_version            INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    conn.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_series_code ON doc_series(doc_type, code)'
+    )
+    conn.execute(
+        'CREATE INDEX IF NOT EXISTS idx_doc_series_lookup '
+        'ON doc_series(company_id, doc_type, allocator_terminal_uid, status)'
+    )
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS doc_series_counter (
+            series_id TEXT PRIMARY KEY,
+            last_no   INTEGER NOT NULL DEFAULT 0
+        )
+    """)

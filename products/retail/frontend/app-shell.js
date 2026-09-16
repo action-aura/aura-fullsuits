@@ -724,6 +724,18 @@ const SubsystemApp = {
         { id: 'products',   label: 'Products',          icon: '📦' },
         { id: 'categories', label: 'Categories',        icon: '🏷️' },
         { id: 'customers',  label: 'Customers',         icon: '👥' },
+        // Aseel-parity wave A-PAR (schema v33): quotations and sales orders
+        // as real documents -- `held_sales` is a JSON cart snapshot with no
+        // approval step, no expiry and no conversion tracking, and calling
+        // it a quotation is how this gap stayed invisible (ROADMAP.md's own
+        // words). `capability: 'retail.sell'` matches every quotation
+        // route's own @mt_require_capability(CAP_SELL) decorator (retail_
+        // api.py) -- "park/recall a cart" is already inside that code's own
+        // definition, and a quotation is exactly that: a document a cashier
+        // issues in the ordinary course of selling. Same "hiding the entry
+        // is not the enforcement" reasoning as every other capability-gated
+        // entry in this list.
+        { id: 'quotations', label: 'Quotations',        icon: '📄', capability: 'retail.sell' },
         // Launch-readiness 2026-08-30 (ROADMAP.md "retail schema v23"):
         // promotions wave 1 -- per-product/per-category discount rules the
         // POS resolves automatically at checkout. `capability: 'retail.discount'`
@@ -919,6 +931,19 @@ const SubsystemApp = {
         // _renderExceptions, not here, because that authority varies by
         // ROW section, not by whether the screen is reachable at all.
         { id: 'exceptions', label: 'Exceptions', icon: '⚠️', capability: 'retail.reports' },
+        // Aseel-parity wave A-PAR (schema v32): "Cheque" has always been a
+        // free-text payment-method label with nothing behind it. `capability:
+        // 'retail.reports'` matches list_cheques'/get_cheque's own
+        // @mt_require_capability(CAP_REPORTS) gate, so a user is not invited
+        // into a screen whose first read would 403 -- the same reasoning the
+        // Reports/Exceptions entries above already state. Every WRITE action
+        // inside the screen (record/deposit/clear/bounce/reinstate/endorse/
+        // cancel/write-off) needs the stricter retail.employees instead --
+        // cheques are back-office end to end in v32 -- gated inside
+        // _renderCheques via SubsystemApp.hasCapability('retail.employees'),
+        // not here, matching Exceptions' own "screen reachability vs. row
+        // action authority" split immediately above.
+        { id: 'cheques', label: 'Cheques', icon: '🧾', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -954,9 +979,9 @@ const SubsystemApp = {
       // render NO header at all -- see _renderShell's groupsHTML below. An
       // empty section header is worse than the flat list this replaces.
       navGroups: [
-        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
+        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },

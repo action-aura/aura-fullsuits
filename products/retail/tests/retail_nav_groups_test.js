@@ -58,6 +58,23 @@
  * holds every capability including retail.reports, so the stricter
  * (ownerOnly) axis never costs anyone the export half either.
  *
+ * UPDATED (Aseel-parity wave A-PAR, schema v32): Cheques is a 20th
+ * destination, appended to Insight. list_cheques/get_cheque carry
+ * `@mt_require_capability(CAP_REPORTS)`, matching `capability:
+ * 'retail.reports'` here the same way Reports/Exceptions/Audit Log (this
+ * group's other members) already do -- the eight cheque WRITE routes need
+ * the stricter retail.employees instead, gated inside the screen itself
+ * (SubsystemApp.hasCapability), not on this nav entry, matching Exceptions'
+ * own "screen reachability vs. row action authority" split.
+ *
+ * UPDATED (Aseel-parity wave A-PAR, schema v33): Quotations is a 21st
+ * destination, appended to Sell (after Customers). Every quotation route
+ * carries `@mt_require_capability(CAP_SELL)`, matching `capability:
+ * 'retail.sell'` here -- "park/recall a cart" is already inside that code's
+ * own definition, and a quotation is exactly that: a document a cashier
+ * issues in the ordinary course of selling. Same "hiding the entry is not
+ * the enforcement" reasoning as every other capability-gated entry here.
+ *
  * WHAT THIS FILE DOES NOT RE-TEST
  * The per-item visibility rule itself (capability / adminOnly / ownerOnly /
  * desktopOnly, and the fail-open/fail-closed contract around it) is already
@@ -87,9 +104,9 @@ const SHELL_FILE = path.join(FRONTEND_DIR, 'app-shell.js');
 // against the SAME expectation rather than five ad-hoc lists that could drift
 // from each other.
 const GROUPS = [
-  { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
+  { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
   { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques'] },
   { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
@@ -280,7 +297,7 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 20, 'sanity: this file\'s own expectation list drifted from 19 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 22, 'sanity: this file\'s own expectation list drifted from 21 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

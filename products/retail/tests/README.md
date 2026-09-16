@@ -64,7 +64,7 @@ Two things worth knowing before you trust a green run:
 
 ---
 
-## Money path — sales, returns, payments, cash drawer  (29 suites — 21 py, 8 js)
+## Money path — sales, returns, payments, cash drawer  (31 suites — 22 py, 9 js)
   - `retail_cash_drawer_test.py` — shift / cash-drawer management (feat/shift-cash-drawer,
   - `retail_changed_field_delta_test.py` — multi-device sync: changed-field deltas (launch-readiness
   - `retail_checkout_credit_walkin_guard_test.js` — Regression test for a missing client-side guard on Credit-method sales.
@@ -88,6 +88,8 @@ Two things worth knowing before you trust a green run:
   - `retail_pricing_test.py` — tax-calculation-policy and revenue-dashboard regression suite.
   - `retail_promotions_test.py` — promotions, wave 1 (schema v23, ROADMAP.md's 2026-08-30 retail schema v23 CLAIMED for promotions, wave 1" entry). Backend/API…
   - `retail_promotions_ui_test.js` — retail_promotions_ui_test.js — Promotions wave 1, frontend half (ROADMAP.md "retail schema v23 CLAIMED").
+  - `retail_quotation_test.py` — Aseel-parity wave A-PAR, "quotations and sales orders as real documents" (schema v33): lifecycle, pricing, capability and scoping regression coverage over the live HTTP routes.
+  - `retail_quotation_ui_test.js` — the Quotations screen actually wires up to the ten routes retail_api.py already ships (Aseel-parity wave A-PAR, schema v33).
   - `retail_report_clock_money_disclosure_test.py` — GET /sales/recent must not hand a cashier the book the report routes refuse them, and the sweep that is supposed to notice must…
   - `retail_return_loyalty_reversal_test.py` — loyalty reversal on returns (schema v27, ROADMAP.md's 2026-08-31 "RETURNS AGAINST A SALE THAT USED POINTS -- decided, not yet…
   - `retail_returns_wave0_test.py` — server-authoritative return/refund regression suite (Wave 0, AUDIT-004).
@@ -160,7 +162,7 @@ Two things worth knowing before you trust a green run:
   - `retail_signout_unsynced_guard_test.js` — signing out must not silently strand completed sales on a till.
   - `retail_v13_identity_columns_migration_test.py` — schema v13 migration regression coverage (identity and attribution columns; ROADMAP.md's 2026-08-21 reservation, Phase 2 of…
 
-## Sync & multi-device  (26 suites — 25 py, 1 js)
+## Sync & multi-device  (27 suites — 26 py, 1 js)
   - `_accept_branch_fallback_test.py` — ADVERSARIAL ACCEPTANCE PASS -- Phase 5 wave B1 (stock-moving sync).
   - `retail_branch_limit_test.py` — the `max_branches` licence entitlement (2026-09-05 price
   - `retail_branch_scope_enforcement_test.py` — branch-scope data-plane enforcement (launch-readiness account-hierarchy design §3.3/§4.2 D7, wave C2/Reading A).
@@ -171,6 +173,7 @@ Two things worth knowing before you trust a green run:
   - `retail_drawer_terminal_scope_test.py` — Phase 4: the cash drawer belongs to a TERMINAL, and every
   - `retail_email_outbox_test.py` — email outbox foundation (feat/email-outbox-foundation).
   - `retail_import_sync_test.py` — bulk import must feed the multi-device sync outbox.
+  - `retail_quotation_sync_test.py` — Aseel-parity wave A-PAR, "quotations and sales orders as real documents" (schema v33): TWO-DEVICE CONVERGENCE (Stage B) — branch_uid resolution, missing-parent quarantine, drafts do not sync, row_version bumps, double-conversion conflict recording.
   - `retail_registry_v4_rebind_precount_race_test.py` — schema v14's half of Defect 3 (launch-readiness Phase 5 verification, MEDIUM): `database/schema.py::rebind_company_id` used to…
   - `retail_report_branch_filter_test.py` — branch-comparison reports regression suite (feat/reports-branch-comparison).
   - `retail_settings_sync_emit_test.py` — the EMIT side of shop-level settings sync (2026-09-05).
@@ -203,7 +206,7 @@ Two things worth knowing before you trust a green run:
   - `retail_receipt_localization_test.js` — closes the seam between the i18n test suite (covers the live UI DOM) and the receipt/branding test suite (covers whether the…
   - `retail_receipt_payload_test.py` — GET /printer/receipt-payload, the real-sale ESC/POS byte payload (retail-hardware-viewports).
 
-## Schema & migrations  (7 suites — 7 py, 0 js)
+## Schema & migrations  (8 suites — 8 py, 0 js)
   - `retail_phase7_migration_test.py` — Phase 7 Part Y: rc.1 -> rc.2 migration safety.
   - `retail_po_split_migration_test.py` — schema v6 migration regression coverage (PO-preview-by- supplier foundation, Thursday demo Stream B -- see database/schema.py's…
   - `retail_v13_additive_only_behavioural_test.py` — the behavioural "additive only" guard for schema v13 and v14.
@@ -211,6 +214,7 @@ Two things worth knowing before you trust a green run:
   - `retail_v15_ledger_truth_migration_test.py` — schema v15 regression coverage: the ledger becomes able to reproduce the cache (launch-readiness Phase 3…
   - `retail_v17_catalogue_migration_test.py` — schema v17 regression coverage: launch-readiness Phase 6
   - `retail_v17_row_version_bump_test.py` — launch-readiness Phase 6 ("catalogue correctness"), stage
+  - `retail_v33_quotation_migration_test.py` — schema v33 regression coverage: Aseel-parity wave A-PAR, "quotations and sales orders as real documents". See database/schema.py's `_migrate_add_sales_quotations`.
 
 ## Design, UI & i18n  (16 suites — 1 py, 15 js)
   - `retail_branding_test.py` — branding (launch-readiness, "make the system be brandable

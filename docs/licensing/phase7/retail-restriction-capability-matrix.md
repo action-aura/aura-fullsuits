@@ -60,6 +60,25 @@ Built directly from every `@retail_bp.route` in `products/retail/backend/api/ret
 | `/payments/<id>/void` | POST | `retail.settings.update` (financial-correction action, admin-grade) | **No** |
 | `/demo-wipe` | DELETE | dev/onboarding only | **No** |
 | `/demo-seed` | POST | dev/onboarding only | **No** |
+| `/stock-transfers` | POST | `retail.stock.transfer.create` | **No** |
+| `/stock-transfers/<id>/send` | POST | `retail.stock.transfer.send` | **No** |
+| `/stock-transfers/<id>/receive` | POST | `retail.stock.transfer.receive` | **No** |
+| `/stock-transfers/<id>/cancel` | POST | `retail.stock.transfer.cancel` | **No** |
+| `/quotations` | POST/PUT | `retail.quotation.manage` | **No** -- a lapsed licence must not issue new commercial promises |
+| `/quotations/<id>/send`, `/accept`, `/decline`, `/cancel`, `/prepare-conversion` | POST | `retail.quotation.manage` | **No**, same reasoning |
+
+Retail schema v28 added inter-branch stock transfers with the four
+`retail.stock.transfer.*` codes above; measured 2026-09-15 (Aseel-parity wave
+A-PAR) that they had shipped without ever landing in this table -- corrected
+here rather than left silently absent, the same "the doc rotted, fix it
+while it's open" discipline this wave applies to itself for the quotation
+row immediately below. Aseel-parity wave A-PAR (schema v33) added
+`retail.quotation.manage`, matching the `.manage` shape already established
+by `retail.supplier.manage` above (and `retail.promotion.manage`/
+`retail.modifier.manage`/`retail.reorder.manage`, none of which are listed
+in this table either -- this fix is scoped to what the current wave touches,
+not a full backfill of every capability this document has fallen behind on
+since Phase 7).
 
 Not yet present as routes, reserved per the spec's suggested capability list for the guard decorator (`retail.shift.open`, `retail.shift.close`, `retail.receipt.reprint`, `retail.backup.create`, `retail.backup.restore`, `retail.data.export`, `retail.receipt.print`, `retail.barcode.scan`, `retail.license.manage`): no backend route currently models shift open/close as a distinct concept in `retail_api.py` (confirmed by the full route grep -- if shift lifecycle exists, it's client-side state, not a guarded backend mutation today; re-checked at Part R implementation time before assuming this capability is a no-op). Backup/restore again live in the separate `commercial_runtime.backup` blueprint. Barcode scanning and receipt printing/reprinting are Android/Windows client-side operations with no dedicated backend mutation route to guard (the scan result flows into `/sales` POST, already covered).
 

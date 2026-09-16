@@ -834,6 +834,79 @@ const TABLE_DATA = {
       status: 'cancelled', created_at: '2026-09-07 08:05:00', sent_at: null, received_at: null,
       source_branch_name: '', destination_branch_name: 'Main Branch' },
   ],
+  // Aseel-parity wave A-PAR (schema v33): quotations and sales orders. ONE
+  // ROW PER STATUS, the identical discipline stockTransfers above states in
+  // writing: status decides both the badge colour and which action buttons
+  // the row gets (draft -> Edit/Send/Cancel, sent -> Accept/Decline/Cancel,
+  // accepted -> Convert/Cancel, declined/cancelled/converted -> View alone),
+  // so a fixture with a single status would leave most of those buttons and
+  // three of six badge colours unmeasured. The draft and cancelled rows
+  // carry `customer_name: null` on purpose -- a walk-in quotation is a
+  // legitimate, common row (list_quotations' own LEFT JOIN, retail_api.py)
+  // and `_loadQuotations` falls back to the translated "Walk-in" text for
+  // it, which needs a real element to render at all.
+  quotations: [
+    { id: 'qq11aa22-bb33-4c44-8d55-66e77faa8899', doc_number: 'QUO-000001-a1b2c3d4-11112222',
+      doc_kind: 'quotation', customer_name: null, status: 'draft', valid_until: '2026-10-01', total: 120.00 },
+    { id: 'qq22bb33-cc44-4d55-9e66-77f88abb9900', doc_number: 'QUO-000002-a1b2c3d4-11112222',
+      doc_kind: 'quotation', customer_name: 'Ann Q', status: 'sent', valid_until: '2026-10-05', total: 340.50 },
+    { id: 'qq33cc44-dd55-4e66-af77-88a99bcc0011', doc_number: 'QUO-000003-a1b2c3d4-11112222',
+      doc_kind: 'order', customer_name: 'Ann Q', status: 'accepted', valid_until: '2026-10-10', total: 899.99 },
+    { id: 'qq44dd55-ee66-4f77-b088-99baaddd1122', doc_number: 'QUO-000004-a1b2c3d4-11112222',
+      doc_kind: 'quotation', customer_name: 'Ann Q', status: 'declined', valid_until: '2026-09-20', total: 55.00 },
+    { id: 'qq55ee66-ff77-4088-c199-aacbbeee2233', doc_number: 'QUO-000005-a1b2c3d4-11112222',
+      doc_kind: 'quotation', customer_name: null, status: 'cancelled', valid_until: null, total: 75.25 },
+    { id: 'qq66ff77-0088-4199-d200-bbdccfff3344', doc_number: 'QUO-000006-a1b2c3d4-11112222',
+      doc_kind: 'order', customer_name: 'Ann Q', status: 'converted', valid_until: '2026-09-15', total: 1500.00 },
+  ],
+  // Aseel-parity wave A-PAR (schema v32): the cheques register. ONE ROW PER
+  // FOLDED STATUS, the same discipline stockTransfers and quotations state
+  // above: status drives both the badge colour and which per-row actions
+  // exist (pending -> Deposit/Endorse/Cancel, deposited -> Clear/Bounce,
+  // bounced -> Reinstate/Write off, and the three dead states -> no action
+  // at all), so a single-status fixture would leave most of those buttons
+  // and four of seven badge colours unmeasured.
+  //
+  // `status` is present here even though the DATABASE never stores it -- the
+  // route folds it from cheque_events and puts it on the row before
+  // responding (list_cheques, retail_api.py). The fixture mirrors the wire,
+  // not the table, which is the whole point of fixing the response shape
+  // rather than the schema shape.
+  //
+  // The first row is deliberately PAST DUE (a 2026-09-01 due date against
+  // this suite's 2026-09 fixtures) because the renderer paints that case
+  // with --state-danger-text and appends a "Past due" suffix -- a distinct
+  // colour pairing that would otherwise never be measured.
+  cheques: [
+    { id: 'ch11aa22-bb33-4c44-8d55-66e77faa1111', direction: 'in', party_type: 'customer',
+      party_id: 'cust-0001', cheque_number: '000401', bank_name: 'Arab Bank',
+      drawer_name: 'Ann Q', amount: 250.000, currency: 'JOD',
+      due_date: '2026-09-01', status: 'pending' },
+    { id: 'ch22bb33-cc44-4d55-9e66-77f88abb2222', direction: 'in', party_type: 'customer',
+      party_id: 'cust-0001', cheque_number: '000402', bank_name: 'Housing Bank',
+      drawer_name: 'Ann Q', amount: 1100.500, currency: 'JOD',
+      due_date: '2026-10-02', status: 'deposited' },
+    { id: 'ch33cc44-dd55-4e66-af77-88a99bcc3333', direction: 'in', party_type: 'customer',
+      party_id: 'cust-0001', cheque_number: '000403', bank_name: 'Cairo Amman Bank',
+      drawer_name: 'Ann Q', amount: 90.250, currency: 'JOD',
+      due_date: '2026-10-03', status: 'cleared' },
+    { id: 'ch44dd55-ee66-4f77-b088-99baaddd4444', direction: 'in', party_type: 'customer',
+      party_id: 'cust-0001', cheque_number: '000404', bank_name: 'Arab Bank',
+      drawer_name: 'Ann Q', amount: 480.000, currency: 'JOD',
+      due_date: '2026-10-04', status: 'bounced' },
+    { id: 'ch55ee66-ff77-4088-c199-aacbbeee5555', direction: 'out', party_type: 'supplier',
+      party_id: 'supp-0001', cheque_number: '000405', bank_name: 'Jordan Islamic Bank',
+      drawer_name: 'Our Shop', amount: 2000.000, currency: 'JOD',
+      due_date: '2026-10-05', status: 'endorsed' },
+    { id: 'ch66ff77-0088-4199-d200-bbdccfff6666', direction: 'out', party_type: 'supplier',
+      party_id: 'supp-0001', cheque_number: '000406', bank_name: 'Bank of Jordan',
+      drawer_name: 'Our Shop', amount: 15.750, currency: 'JOD',
+      due_date: '2026-10-06', status: 'cancelled' },
+    { id: 'ch77008a-1199-42aa-e311-ccedd0007777', direction: 'in', party_type: 'customer',
+      party_id: 'cust-0001', cheque_number: '000407', bank_name: 'Arab Bank',
+      drawer_name: 'Ann Q', amount: 320.000, currency: 'JOD',
+      due_date: '2026-10-07', status: 'written_off' },
+  ],
   // ci-hardening-w0.3 continuation ("the doorway", third one on this
   // branch): GET /api/backup/list's own shape (commercial_runtime/backup/
   // routes.py's `_list`) -- {status:'ok', backups:[{filename,size,
@@ -951,6 +1024,19 @@ function apiResponseFor(url) {
   // /sales/<id> above its own list.
   if (/\/stock-transfers\/[A-Za-z0-9-]{6,}/.test(u)) return ok(TABLE_DATA.stockTransferDetail);
   if (/\/stock-transfers/.test(u)) return ok(TABLE_DATA.stockTransfers);
+  // Aseel-parity wave A-PAR (schema v33). `_renderQuotations`/
+  // `_loadQuotations` call GET /quotations only (with an optional
+  // `?status=` this corpus never sets) -- no detail-before-list ordering
+  // trap here, unlike /stock-transfers above, because the quotations corpus
+  // entry never opens the view/edit/convert modals that would call
+  // GET /quotations/<id>.
+  if (/\/quotations/.test(u)) return ok(TABLE_DATA.quotations);
+  // /cheques returns a totals strip alongside the rows, so it cannot go
+  // through ok() (which builds {status,data} only) -- the KPI strip reads
+  // `totals` off the envelope and would render blank without it.
+  if (/\/cheques/.test(u)) return { status: 'success', data: TABLE_DATA.cheques,
+    totals: { on_hand_total: 250.000, at_bank_total: 1100.500,
+      matured_unbanked_total: 250.000, bounced_total: 480.000, currency: 'JOD' } };
   if (/\/returns/.test(u)) return ok(TABLE_DATA.returns);
   if (/\/products/.test(u)) return ok(TABLE_DATA.products);
   if (/\/categories/.test(u)) return ok(TABLE_DATA.categories);
@@ -1314,6 +1400,21 @@ async function buildCorpus() {
     // it enters the corpus in the same breath so its contrast is measured
     // from the start rather than after somebody notices.
     ['transfers', (rs, c) => rs._renderTransfers(c)],
+    // Aseel-parity wave A-PAR (schema v33): quotations and sales orders.
+    // Enters the corpus in the same breath its doorway was built, matching
+    // the transfers precedent immediately above -- ROUTE_EXCLUSIONS is the
+    // fallback, never the plan, and the corpus is what enforces every
+    // contrast/opacity/touch-target rule this screen's six status-driven
+    // badge colours and action-button sets need measured.
+    ['quotations', (rs, c) => rs._renderQuotations(c)],
+    // Aseel-parity wave A-PAR (schema v32): the cheques register.
+    // It shipped its route and nav entry WITHOUT entering this corpus --
+    // the omission this very check exists to catch. Every contrast,
+    // opacity and touch-target assertion downstream is a loop over the
+    // corpus, so a whole screen of status badges (pending/deposited/
+    // cleared/bounced/endorsed/cancelled/written-off) and per-row action
+    // buttons was going green without being looked at once.
+    ['cheques', (rs, c) => rs._renderCheques(c)],
   ];
   // 'retail.employees' added alongside 'retail.reports' for the `branches`
   // entry above (create_branch's own @mt_require_capability(CAP_EMPLOYEES)
@@ -1558,7 +1659,8 @@ const DECLARED_SCREENS = [
   'dashboard', 'cashier-landing', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
-  'backup-export', 'scanner', 'stock-accuracy', 'transfers',
+  'backup-export', 'scanner', 'stock-accuracy', 'transfers', 'quotations',
+  'cheques',
   'customer-modal', 'sale-modal', 'held-sales-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
@@ -1612,6 +1714,8 @@ const SCREEN_ROUTES = {
   scanner: 'scanner',
   'stock-accuracy': 'stock-accuracy',
   transfers: 'transfers',
+  quotations: 'quotations',
+  cheques: 'cheques',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.

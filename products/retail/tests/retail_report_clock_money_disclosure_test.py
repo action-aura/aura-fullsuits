@@ -411,6 +411,14 @@ MONEY_COLUMNS = frozenset({
 MONEY_TABLES = frozenset({
     'sales', 'sale_items', 'payments', 'purchase_orders', 'po_items',
     'returns', 'return_items', 'cash_sessions', 'cash_movements',
+    # Aseel-parity wave A-PAR (schema v32). Belt-and-braces only: the cheque
+    # handlers use explicit column lists throughout (this file's own style),
+    # so this entry does not fire on any of them today -- the load-bearing
+    # fix is 'cheques' in retail_route_capability_matrix_test.py's
+    # MONEY_DISCLOSING_SEGMENTS, which is path vocabulary and fires
+    # regardless of SQL shape. This entry only matters if a future cheque
+    # route ever does `SELECT *`.
+    'cheques',
 })
 
 SCANNED_ROUTE_FILES = ('api/retail_api.py', 'api/import_api.py')

@@ -290,6 +290,65 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'delete_modifier_option': CAP_STOCK,
     'attach_product_modifier_group': CAP_STOCK,
     'detach_product_modifier_group': CAP_STOCK,
+
+    # ── Cheques, Aseel-parity wave A-PAR (schema v32): retail.employees ──────
+    # ALL EIGHT, including create -- deliberately uniform, unlike every tier
+    # above. Cheques are back-office end to end in v32: the nav entry that
+    # reaches this screen is gated retail.reports (app-shell.js), which no
+    # cashier holds, so a retail.sell gate on create would be a decorator no
+    # cashier could ever reach. A cheque's state is also a claim about what
+    # the BANK did, and `endorse` disposes of a negotiable instrument at face
+    # value -- the same "owner authority over the shop's own money" tier
+    # retail.employees already carries for supplier/PO payments above. See
+    # create_cheque's own comment for the full reasoning, including why an
+    # earlier draft's CAP_SELL-gated create was decorative (no cashier-
+    # reachable path exists to it at all).
+    'create_cheque': CAP_EMPLOYEES,
+    'deposit_cheque': CAP_EMPLOYEES,
+    'clear_cheque': CAP_EMPLOYEES,
+    'bounce_cheque': CAP_EMPLOYEES,
+    'reinstate_cheque': CAP_EMPLOYEES,
+    'endorse_cheque': CAP_EMPLOYEES,
+    'cancel_cheque': CAP_EMPLOYEES,
+    'write_off_cheque': CAP_EMPLOYEES,
+
+    # ── Quotations and sales orders, Aseel-parity wave A-PAR (schema v33):
+    # retail.sell ────────────────────────────────────────────────────────
+    # ALL SEVEN, uniformly CAP_SELL -- "park/recall a cart" is already
+    # inside that code's own definition (see the CAPABILITY GATING header
+    # in retail_api.py), and a quotation is exactly that: a document a
+    # cashier issues in the ordinary course of selling. `prepare_quotation_
+    # conversion` writes nothing and takes no lock, but is gated anyway --
+    # the same reasoning `preview_po_split` above states in writing: an
+    # ungated non-writing POST would mean this table's exact-set comparison
+    # has to carry an exemption, and an exemption is a shape the next new
+    # route can quietly take. See create_quotation's own comment for why
+    # CAP_DISCOUNT matters MORE here than at the till (a quotation is a
+    # forward-dated discount) -- that gate is inline, not a second
+    # decorator, so it lives in create_quotation's/update_quotation's own
+    # body, not this table.
+    'create_quotation': CAP_SELL,
+    'update_quotation': CAP_SELL,
+    'send_quotation': CAP_SELL,
+    'accept_quotation': CAP_SELL,
+    'decline_quotation': CAP_SELL,
+    'cancel_quotation': CAP_SELL,
+    'prepare_quotation_conversion': CAP_SELL,
+
+    # ── Document numbering series, Aseel-parity wave A-PAR (schema v34):
+    # retail.employees ──────────────────────────────────────────────────────
+    # Same authority as its settings siblings above (credit_settings_set/
+    # tax_settings_set/business_day_settings_set/branding_settings_set) --
+    # deciding what number a shop's invoices carry is the same tier as
+    # deciding its tax mode. `list_doc_series` (GET) is deliberately in
+    # NEITHER table below -- a till reading its own book to print the next
+    # number is not an admin-only action, the same posture
+    # branding_settings_get/branding_logo_get already carry (see this
+    # table's own comment on those two just above).
+    'create_doc_series': CAP_EMPLOYEES,
+    'update_doc_series': CAP_EMPLOYEES,
+    'retire_doc_series': CAP_EMPLOYEES,
+    'claim_doc_series': CAP_EMPLOYEES,
 }
 
 #: Read routes that deliberately DO carry a capability. Reads are not required
@@ -451,6 +510,33 @@ EXPECTED_READ_CAPABILITIES = {
     # file, not a cashier action (retail.sell) or a plain report
     # (retail.reports).
     'diagnostics_export': CAP_EMPLOYEES,
+
+    # ── Cheques, Aseel-parity wave A-PAR (schema v32) ────────────────────────
+    # Both reads: retail.reports, matching supplier_statement's own tier
+    # immediately above rather than customer_statement's deliberate
+    # exception -- the cheque book is not a single till operation the way
+    # "can this customer pay" is; it discloses the shop's whole cheque
+    # position (on-hand/at-bank/matured/bounced totals). See H4 in the A-PAR
+    # design review: an earlier draft left `get_cheque` ungated entirely,
+    # which escaped every money-disclosure guard in this file (see
+    # MONEY_DISCLOSING_SEGMENTS below, and
+    # retail_report_clock_money_disclosure_test.py's MONEY_TABLES) purely
+    # because it took an argument the runtime sweep's `_sweepable_get_rules`
+    # skips.
+    'list_cheques': CAP_REPORTS,
+    'get_cheque': CAP_REPORTS,
+
+    # ── Quotations, Aseel-parity wave A-PAR (schema v33) ─────────────────────
+    # THE GATE IS FORCED, MEASURED, not a style choice: both handlers'
+    # own SQL returns subtotal/discount_amount/tax_amount/total, all four in
+    # retail_report_clock_money_disclosure_test.py's MONEY_COLUMNS, so
+    # test_no_new_money_returning_route_is_ungated fails without a
+    # capability here. `quotations_committed_demand` deliberately carries
+    # NEITHER this nor a mutation-table entry -- it returns SUM(quantity),
+    # never a money column, same disclosure tier as list_products/
+    # list_stock_transfers (both above, this file).
+    'list_quotations': CAP_SELL,
+    'get_quotation': CAP_SELL,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each
@@ -1810,6 +1896,13 @@ MONEY_DISCLOSING_SEGMENTS = frozenset({
     'report', 'reports', 'x-report', 'z-report', 'dashboard',
     'receivables', 'payables', 'statement', 'aging', 'daily-cash',
     'audit-log', 'reconciliation',
+    # Aseel-parity wave A-PAR (schema v32), H4. Path vocabulary, so it fires
+    # on all ten cheque routes regardless of SQL shape -- unlike
+    # MONEY_TABLES in retail_report_clock_money_disclosure_test.py, which
+    # only matches a `SELECT *` and the cheque handlers use explicit column
+    # lists throughout. This segment is the load-bearing fix; MONEY_TABLES
+    # gains 'cheques' too, belt-and-braces for a future `SELECT *`.
+    'cheques',
 })
 
 #: Endpoint -> capability, derived from the AST scan, so the sweep asks the

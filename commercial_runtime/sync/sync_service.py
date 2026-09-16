@@ -306,6 +306,43 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # Shop-level settings (currency, tax mode, credit defaults, business day,
     # branding text) -- see retail_api.py's _queue_setting_sync_event.
     "retail_setting",
+    # Aseel-parity wave A-PAR (schema v32) -- "cheque" is the IMMUTABLE
+    # header, "cheque_event" the APPEND-ONLY transition log; see the
+    # `_apply_event` branches below and core/retail/cheques.py's own module
+    # docstring for why this pair carries no row_version / reject-stale gate
+    # at all (both are append-only sets, converging by plain set union).
+    "cheque", "cheque_event",
+    # Aseel-parity wave A-PAR (schema v33) -- "quotation" is the ONLY entity
+    # type this feature adds; there is no "quotation_line" type. UNLIKE
+    # cheques, this IS a mutable header (draft -> sent -> accepted/declined
+    # -> converted, or -> cancelled) and DOES carry row_version -- see the
+    # `_apply_event` branch below and database/schema.py's
+    # `_migrate_add_sales_quotations` docstring's "DRAFTS DO NOT SYNC"
+    # section for why a create-only `sales_quotation_lines` table with no
+    # delete/replace machinery is still correct: `sent` is immutable, so the
+    # frozen line set travels ONCE, embedded in the `create` event's own
+    # payload, and every later event is an `update` carrying header fields
+    # only.
+    "quotation",
+    # Aseel-parity wave A-PAR (schema v34) -- "doc_series" is the
+    # DEFINITION only (id, doc_type, code, label, branch_uid,
+    # allocator_terminal_uid, ...); the COUNTER it drives
+    # (`doc_series_counter.last_no`) is device-local and never rides the
+    # wire at all -- see database/schema.py's `_migrate_add_doc_series`
+    # docstring for why that is structurally correct rather than merely
+    # "not implemented yet". Same argument that forced `retail_setting`
+    # into this set on 2026-09-05 ("one licence, two devices, and the
+    # phone showed $ while the desktop showed JD"): a till that cannot see
+    # another till's books cannot render a coherent numbering list, cannot
+    # tell an owner which till a number came from, and cannot offer
+    # "move this book here" when the owning till dies. A MUTABLE header
+    # (label/status/allocator all change after creation), so -- like
+    # `quotation`, unlike `cheque`/`cheque_event` -- it DOES carry
+    # `row_version` and a reject-stale gate; see the `_apply_event` branch
+    # below for the tie-break this table needs that `quotation` does not
+    # (two offline devices can legitimately race to claim the SAME
+    # unclaimed book, which two devices editing the same quotation cannot).
+    "doc_series",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -341,7 +378,17 @@ REGISTRY_SYNC_ENTITY_TYPES = frozenset({"user", "user_permission"})
 #: "field present on one path, absent on another" duplication this file's
 #: own module docstring now calls out as a bug shape this codebase has hit
 #: before.
-_ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset({"sale_item", "return_item"})
+#: "cheque_event" joined this set in the Aseel-parity wave A-PAR (schema
+#: v32) -- `cheque_events` carries no `company_id` column of its own
+#: (scoped entirely through `cheque_id`, the `cash_movements`/
+#: `stock_transfer_items` shape -- see database/schema.py's
+#: `_migrate_add_cheques` docstring), so it is exactly the same shape as
+#: `sale_item`/`return_item` above: resolves its parent by id, has nothing
+#: of its own for `apply_pull_result`'s eager company fetch to stamp, and a
+#: `SyncService` wired with no `local_company_id_provider` at all would
+#: raise for no reason on a batch of only cheque_events if this entry were
+#: missing.
+_ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset({"sale_item", "return_item", "cheque_event"})
 
 
 def local_company_id_from_registry() -> Optional[str]:
@@ -1957,20 +2004,45 @@ class SyncService:
             # matching bullet above.
             resolved_branch_id = self._resolve_branch_id(
                 conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
-            conn.execute(
-                "INSERT INTO sales (company_id, sale_number, branch_id, customer_id, cashier, "
-                "subtotal, discount_amount, tax_amount, total, amount_paid, change_amount, "
-                "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
-                "uid, actor_user_uid, terminal_id, created_at_utc) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?) "
-                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
-                (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
-                 p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
-                 p.get("tax_amount", 0), p.get("total", 0), p.get("amount_paid", 0),
-                 p.get("change_amount", 0), p.get("payment_method", "cash"), p.get("status", "completed"),
-                 p.get("notes", ""), p.get("created_at"), p.get("due_date"),
-                 p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO sales (company_id, sale_number, branch_id, customer_id, cashier, "
+                    "subtotal, discount_amount, tax_amount, total, amount_paid, change_amount, "
+                    "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
+                    "uid, actor_user_uid, terminal_id, created_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?) "
+                    "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                    (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
+                     p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
+                     p.get("tax_amount", 0), p.get("total", 0), p.get("amount_paid", 0),
+                     p.get("change_amount", 0), p.get("payment_method", "cash"), p.get("status", "completed"),
+                     p.get("notes", ""), p.get("created_at"), p.get("due_date"),
+                     p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
+                )
+            except sqlite3.IntegrityError as exc:
+                # Aseel-parity wave A-PAR (schema v34), per-document-type
+                # numbering series: `ON CONFLICT(uid)` only ever suppresses
+                # a collision on `idx_sales_uid`. `sales.sale_number`
+                # carries its OWN bare UNIQUE, and a claim race on
+                # `doc_series` (see that entity type's own `_apply_event`
+                # branch, "THE CLAIM-RACE TIE-BREAK") can leave the LOSING
+                # device having already minted one or more numbers from a
+                # book it turns out not to own -- those numbers are already
+                # on paper by the time convergence resolves ownership.
+                # Uncaught, this raises straight out of `_apply_event`
+                # exactly the AUDIT-032B shape this feature exists to
+                # prevent everywhere else: cursor never advances, every
+                # row from every device stops arriving forever. Caught BY
+                # NAME, matching the identical discipline the `user`/
+                # `email` collision and the `doc_series`/`code` collision
+                # both already use -- never widened to bare
+                # IntegrityError.
+                if "sales.sale_number" in str(exc):
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="duplicate_document_number",
+                        detail=f"sale_number={p.get('sale_number')!r} already exists locally "
+                               f"under a different sale (incoming uid={p.get('uid')!r})")
+                raise
         elif entity_type == "sale_item":
             if event_type != "create":
                 return True
@@ -2034,17 +2106,30 @@ class SyncService:
             # branch's own `_resolve_branch_id` call above.
             resolved_branch_id = self._resolve_branch_id(
                 conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
-            conn.execute(
-                "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
-                "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
-                "uid, actor_user_uid, terminal_id, created_at_utc) "
-                "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?) "
-                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
-                (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
-                 p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
-                 p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
-                 p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
+                    "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
+                    "uid, actor_user_uid, terminal_id, created_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?) "
+                    "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                    (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
+                     p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
+                     p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
+                     p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
+                )
+            except sqlite3.IntegrityError as exc:
+                # Aseel-parity wave A-PAR (schema v34) -- identical
+                # reasoning to the "sale" branch's own catch above:
+                # `returns.return_number` carries its own bare UNIQUE, and
+                # a `doc_series` claim-race loser can have already minted
+                # one under a book it turns out not to own.
+                if "returns.return_number" in str(exc):
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="duplicate_document_number",
+                        detail=f"return_number={p.get('return_number')!r} already exists locally "
+                               f"under a different return (incoming uid={p.get('uid')!r})")
+                raise
         elif entity_type == "return_item":
             if event_type != "create":
                 return True
@@ -2544,6 +2629,341 @@ class SyncService:
                 "ON CONFLICT(user_id, subsystem) DO UPDATE SET access_level=excluded.access_level",
                 (str(uuid.uuid4()), local_user_id, subsystem, p.get("access_level", "none")),
             )
+        elif entity_type == "cheque":
+            # Aseel-parity wave A-PAR (schema v32). `cheques` is an
+            # IMMUTABLE header -- see core/retail/cheques.py's own module
+            # docstring for the full "why status is not a column" story.
+            # `create` ONLY, the sale/inventory_movement posture: nothing
+            # else is ever emitted for this entity type today, and refusing
+            # anything else is the safe default every other immutable-fact
+            # branch in this method already takes.
+            if event_type != "create":
+                return True
+            resolved_branch_id = self._resolve_branch_id(
+                conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+            conn.execute(
+                "INSERT INTO cheques (id, company_id, branch_id, direction, party_type, party_id, "
+                "cheque_number, bank_name, bank_branch, drawer_name, account_number, amount, currency, "
+                "issue_date, due_date, sale_id, related_type, related_id, notes, created_by, "
+                "created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO NOTHING",
+                (p.get("id"), local_company_id, resolved_branch_id, p.get("direction"),
+                 p.get("party_type"), p.get("party_id"), p.get("cheque_number"), p.get("bank_name"),
+                 p.get("bank_branch"), p.get("drawer_name"), p.get("account_number"), p.get("amount", 0),
+                 p.get("currency", "USD"), p.get("issue_date"), p.get("due_date"), p.get("sale_id"),
+                 p.get("related_type"), p.get("related_id"), p.get("notes", ""),
+                 p.get("created_by", "System"), p.get("created_at_utc")),
+            )
+        elif entity_type == "cheque_event":
+            # `cheque_events` is APPEND-ONLY -- `create` ONLY, same posture
+            # as `cheque` immediately above (and for the identical reason:
+            # nothing else is ever emitted). NEITHER branch contains any
+            # business logic -- no status, no legality check, no
+            # row_version, no `_record_sync_conflict` -- because the apply
+            # side stores no derived state to protect; `fold()`
+            # (core/retail/cheques.py) recomputes status from whatever set
+            # of events this device holds, on every read.
+            if event_type != "create":
+                return True
+            # The parent check is real, not defensive theatre: the header
+            # and its own first event are TWO separate outbox rows, and
+            # Owner's push-side quarantine (681b0fa) can split a parent from
+            # a child event just as easily as it can split a sale from its
+            # sale_items -- same "missing_parent" vocabulary, same
+            # `_row_exists`/`_quarantine_apply_event` pair the sale_item/
+            # return_item branches above already use, and the same
+            # `_retry_quarantined_events` tick replays a split pair once the
+            # header arrives.
+            if not self._row_exists(conn, "cheques", p.get("cheque_id")):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:cheque",
+                    detail=f"cheque_id={p.get('cheque_id')!r} not found locally")
+            conn.execute(
+                "INSERT INTO cheque_events (id, cheque_id, event_type, from_status, to_status, "
+                "occurred_on, bank_reference, reason, to_party_type, to_party_id, created_by, "
+                "created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO NOTHING",
+                (p.get("id"), p.get("cheque_id"), p.get("event_type"), p.get("from_status"),
+                 p.get("to_status"), p.get("occurred_on"), p.get("bank_reference"), p.get("reason"),
+                 p.get("to_party_type"), p.get("to_party_id"), p.get("created_by", "System"),
+                 p.get("created_at_utc")),
+            )
+        elif entity_type == "quotation":
+            # Aseel-parity wave A-PAR (schema v33). Shaped on `reorder_
+            # request` immediately above for its reject-stale gate (a
+            # MUTABLE header, unlike cheques) and on `sale`/`sale_item` for
+            # branch resolution and missing-parent quarantine. `create` AND
+            # `update` both arrive for this entity -- `create` at SEND only
+            # (carrying the frozen line set), every later transition
+            # (accept/decline/cancel/convert) as `update` -- see database/
+            # schema.py's `_migrate_add_sales_quotations` docstring's
+            # "DRAFTS DO NOT SYNC" section. There is no `delete` event type;
+            # a quotation is withdrawn via `status='cancelled'`, never
+            # removed.
+            if event_type not in ("create", "update"):
+                return True
+
+            # AUDIT-032C (DEFECT 3), the identical fix `sale`/`cheque` above
+            # already apply: `p.get("branch_id")` is the SENDING device's own
+            # local integer and means nothing here. `branch_uid` is resolved
+            # to THIS device's own local `branches.id` instead -- NEVER the
+            # raw payload integer (the `reorder_request` branch's own defect,
+            # closed here rather than repeated).
+            resolved_branch_id = self._resolve_branch_id(
+                conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+
+            # B2: missing-parent quarantine for the FROZEN line set a
+            # `create` event carries -- the identical helper and the
+            # identical `missing_parent:<thing>` vocabulary the `sale_item`
+            # branch above uses, checked BEFORE any write so an unresolvable
+            # product is PARKED (visible, replayable) rather than allowed to
+            # raise `sqlite3.IntegrityError` and wedge the whole batch behind
+            # it forever. An `update` event never carries a `lines` key at
+            # all (quotations are immutable past SEND, so nothing after
+            # `create` ever needs to touch a line) -- `p.get("lines") or []`
+            # makes this loop a genuine no-op for every update, not merely an
+            # empty one.
+            for ln in (p.get("lines") or []):
+                if not self._row_exists(conn, "products", ln.get("product_id")):
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="missing_parent:product",
+                        detail=f"product_id={ln.get('product_id')!r} not found locally")
+
+            # C5's REAL exposure (the submitted design's own test 7 was
+            # withdrawn as proof of a different thing -- see
+            # retail_quotation_test.py's test_second_conversion_is_refused_
+            # by_the_status_check for what THAT test actually proves).
+            # `BEGIN IMMEDIATE` + the status pre-check in create_sale's
+            # conversion block cover ONE database; they cannot cover two
+            # ONLINE tills that each convert the SAME quotation before
+            # either's event has arrived at the other. Both resulting sales
+            # are real, both took real money, and neither may be silently
+            # un-linked -- so a genuine double-conversion is made VISIBLE
+            # through the existing `sync_conflicts` table (a SECOND use of
+            # one mechanism, not a new one) rather than prevented, which is
+            # not something this code path can honestly do.
+            #
+            # Detected BEFORE the header upsert below: read the LOCAL row's
+            # own `converted_sale_uid` first, and if it is already non-NULL
+            # and the INCOMING payload names a DIFFERENT non-NULL sale, this
+            # is exactly that collision. The fix is not to drop the whole
+            # event -- the rest of this header (status/dates/etc.) may still
+            # be a legitimate, later write that must still apply -- it is to
+            # drop ONLY the three conversion-linked columns from what this
+            # event is allowed to overwrite, so the LOCAL sale keeps its own
+            # link forever.
+            header_columns = [
+                "status", "sent_at", "accepted_at", "declined_at", "cancelled_at", "converted_at",
+                "converted_sale_uid", "conversion_variance_json", "valid_until", "notes",
+                "subtotal", "discount_amount", "tax_amount", "total",
+            ]
+            changed_fields = p.get("_changed_fields")
+            local_conversion = conn.execute(
+                "SELECT converted_sale_uid, row_version FROM sales_quotations WHERE id=?",
+                (p.get("id"),)
+            ).fetchone()
+            incoming_sale_uid = p.get("converted_sale_uid")
+            conversion_columns = ("converted_sale_uid", "converted_at", "conversion_variance_json")
+            if (local_conversion is not None and local_conversion["converted_sale_uid"]
+                    and incoming_sale_uid and incoming_sale_uid != local_conversion["converted_sale_uid"]):
+                self._record_sync_conflict(
+                    conn, conflict_sink, local_company_id=local_company_id,
+                    entity_type="quotation", entity_id=p.get("id"), event_type="double_conversion",
+                    local_row_version=local_conversion["row_version"],
+                    incoming_row_version=p.get("row_version"), payload=p,
+                )
+                # `changed_fields is not None` -- a modern, delta-aware event
+                # -- simply drops the three conversion columns from the list
+                # it already names. `changed_fields is None` -- a legacy/
+                # full-snapshot event, which `_delta_set_clause` would
+                # otherwise read as "every column changed" -- names every
+                # OTHER column explicitly instead, which is the only way to
+                # keep the "carry everything except these three" contract
+                # when there is no delta list to subtract from.
+                if changed_fields is not None:
+                    changed_fields = [c for c in changed_fields if c not in conversion_columns]
+                else:
+                    changed_fields = [c for c in header_columns if c not in conversion_columns]
+
+            delta_frag, delta_binds = self._delta_set_clause(
+                "sales_quotations", header_columns, changed_fields)
+            raw_row_version = p.get("row_version")
+            insert_row_version = raw_row_version if raw_row_version is not None else 1
+            # `company_id` is ALWAYS `local_company_id`, never `p.get(
+            # "company_id")` -- the module docstring's "Cross-device
+            # company_id bug fix", restated here because it is exactly as
+            # load-bearing for this table as for every other one above.
+            cur = conn.execute(
+                "INSERT INTO sales_quotations (id, company_id, branch_id, customer_id, doc_number, "
+                "doc_kind, status, valid_until, currency, tax_mode, subtotal, discount_amount, "
+                "tax_amount, total, notes, created_by, created_at, sent_at, accepted_at, declined_at, "
+                "cancelled_at, converted_at, converted_sale_uid, conversion_variance_json, "
+                "row_version, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
+                "row_version=MAX(sales_quotations.row_version, excluded.row_version), "
+                "updated_at_utc=excluded.updated_at_utc "
+                "WHERE ? IS NULL OR ? > sales_quotations.row_version",
+                (p.get("id"), local_company_id, resolved_branch_id, p.get("customer_id"),
+                 p.get("doc_number"), p.get("doc_kind", "quotation"), p.get("status", "draft"),
+                 p.get("valid_until"), p.get("currency"), p.get("tax_mode"),
+                 p.get("subtotal", 0), p.get("discount_amount", 0), p.get("tax_amount", 0),
+                 p.get("total", 0), p.get("notes", ""), p.get("created_by", "System"),
+                 p.get("created_at"), p.get("sent_at"), p.get("accepted_at"), p.get("declined_at"),
+                 p.get("cancelled_at"), p.get("converted_at"), p.get("converted_sale_uid"),
+                 p.get("conversion_variance_json"), insert_row_version, p.get("updated_at_utc"),
+                 *delta_binds,
+                 raw_row_version, raw_row_version),
+            )
+            if cur.rowcount == 0:
+                local_row_version = self._local_row_version(conn, "sales_quotations", p.get("id"))
+                if local_row_version is not None:
+                    self._record_sync_conflict(
+                        conn, conflict_sink, local_company_id=local_company_id,
+                        entity_type="quotation", entity_id=p.get("id"), event_type=event_type,
+                        local_row_version=local_row_version,
+                        incoming_row_version=raw_row_version, payload=p,
+                    )
+                # STOP -- do not touch lines. A stale/rejected header write
+                # must not insert lines that belong to whatever payload just
+                # lost the reject-stale gate.
+                return True
+
+            # Lines are inserted ONCE, on the `create` path, and NEVER
+            # replaced -- there is no line-delete/line-replace event on the
+            # wire at all (see the branch's own opening comment). An
+            # `update` event carrying a `lines` key would be either a future
+            # bug on the emit side or a corrupt payload; `p.get("lines")`
+            # is always absent/empty for a real `update` today, so this
+            # is simply never reached for one.
+            if event_type == "create":
+                for ln in (p.get("lines") or []):
+                    conn.execute(
+                        "INSERT INTO sales_quotation_lines (id, quotation_id, product_id, "
+                        "product_name_snapshot, quantity, unit_price, discount_pct, tax_rate, "
+                        "line_total, promotion_name_snapshot, line_no) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(id) DO NOTHING",
+                        (ln.get("id"), p.get("id"), ln.get("product_id"),
+                         ln.get("product_name_snapshot"), ln.get("quantity"), ln.get("unit_price"),
+                         ln.get("discount_pct", 0), ln.get("tax_rate", 0), ln.get("line_total"),
+                         ln.get("promotion_name_snapshot"), ln.get("line_no")),
+                    )
+        elif entity_type == "doc_series":
+            # Aseel-parity wave A-PAR (schema v34). `create` and `update`
+            # both arrive; there is no `delete` -- a book is withdrawn via
+            # `status='retired'` (retire_doc_series), never removed, the
+            # same posture `quotation`/`branch` already take on their own
+            # rows.
+            if event_type not in ("create", "update"):
+                return True
+
+            # `company_id` is ALWAYS `local_company_id`, never
+            # `p.get("company_id")` -- the module docstring's "Cross-device
+            # company_id bug fix", identical reasoning to every other
+            # entity type in this file. `doc_series` carries no
+            # `branch_id` column at all (only `branch_uid`, which travels
+            # UNCHANGED -- see below), so unlike `sale`/`return`/
+            # `quotation` there is no `_resolve_branch_id` call here: this
+            # table simply has nothing for that helper to resolve.
+            header_columns = [
+                "label", "status", "branch_uid",
+                "allocator_terminal_uid", "claimed_at_utc",
+            ]
+            changed_fields = p.get("_changed_fields")
+            delta_frag, delta_binds = self._delta_set_clause(
+                "doc_series", header_columns, changed_fields)
+            raw_row_version = p.get("row_version")
+            insert_row_version = raw_row_version if raw_row_version is not None else 1
+
+            # THE CLAIM-RACE TIE-BREAK -- the defect neither the original
+            # design nor its own adversarial review caught. Two devices
+            # each claiming the SAME unclaimed book while both offline
+            # start from an identical synced row at row_version=1 and BOTH
+            # write row_version=2: the plain reject-stale gate every other
+            # mutable-header branch in this file uses
+            # (`WHERE excluded.row_version > table.row_version`) is FALSE
+            # in BOTH directions at equal row_version, so NEITHER claim
+            # applies and the fleet is left PERMANENTLY divergent -- two
+            # tills each believing they own the book, each minting
+            # `A-000001`. Those duplicate document numbers then hit the
+            # bare UNIQUE on `sales.sale_number`/`returns.return_number`
+            # on the receiving device, which is exactly the AUDIT-032B
+            # wedge this whole feature exists to prevent.
+            #
+            # The fix is a DETERMINISTIC TOTAL ORDER every device computes
+            # IDENTICALLY from payload data alone, so a tie at
+            # row_version is broken the SAME way on every device rather
+            # than left unresolved: higher row_version wins outright;
+            # at equal row_version, the LATER claimed_at_utc wins; at an
+            # equal (or absent, absent) claimed_at_utc, the
+            # lexicographically GREATER allocator_terminal_uid wins. Any
+            # one of these three legs deciding is enough -- the other two
+            # exist only to break a tie the leg before it could not.
+            # Written out as plain COALESCE/comparison SQL rather than a
+            # SQLite row-value comparison so it does not depend on the
+            # bundled sqlite3 version. The LOSER stops automatically with
+            # NO special-case code of its own: `resolve_series` (core/
+            # retail/doc_series.py) filters on
+            # `allocator_terminal_uid = this device's own terminal_uid`,
+            # so the instant this UPDATE's WHERE clause evaluates false on
+            # the losing device, its own row no longer names it as the
+            # owner and its very next sale silently falls back to the
+            # legacy numbering path.
+            try:
+                cur = conn.execute(
+                    "INSERT INTO doc_series (id, company_id, doc_type, code, label, branch_uid, "
+                    "allocator_terminal_uid, claimed_at_utc, pad_width, start_no, status, "
+                    "created_at, row_version, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
+                    "row_version=MAX(doc_series.row_version, excluded.row_version), "
+                    "updated_at_utc=excluded.updated_at_utc "
+                    "WHERE ? IS NULL OR excluded.row_version > doc_series.row_version "
+                    "OR (excluded.row_version = doc_series.row_version "
+                    "    AND (COALESCE(excluded.claimed_at_utc,'') > COALESCE(doc_series.claimed_at_utc,'') "
+                    "         OR (COALESCE(excluded.claimed_at_utc,'') = COALESCE(doc_series.claimed_at_utc,'') "
+                    "             AND COALESCE(excluded.allocator_terminal_uid,'') "
+                    "               > COALESCE(doc_series.allocator_terminal_uid,''))))",
+                    (p.get("id"), local_company_id, p.get("doc_type"), p.get("code"),
+                     p.get("label"), p.get("branch_uid"), p.get("allocator_terminal_uid"),
+                     p.get("claimed_at_utc"), p.get("pad_width", 6), p.get("start_no", 1),
+                     p.get("status", "active"), p.get("created_at"),
+                     insert_row_version, p.get("updated_at_utc"),
+                     *delta_binds,
+                     raw_row_version),
+                )
+            except sqlite3.IntegrityError as exc:
+                # `idx_doc_series_code` (UNIQUE on doc_type, code) is NOT
+                # the conflict target above (`id` is), so a collision on IT
+                # raises straight out of this statement exactly the way
+                # `sync_service.py`'s own `user`/`email` collision already
+                # documents in full: "ON CONFLICT(id) only ever suppresses
+                # a collision on the id primary key. A DIFFERENT unique
+                # index still raises a plain IntegrityError that escapes
+                # this statement entirely." Left uncaught, this would raise
+                # out of `_apply_event`, the cursor would never advance,
+                # and sync from every device would stop forever --
+                # trivially reachable here: two offline devices each
+                # creating a book coded 'A' for the same doc_type. Caught
+                # BY NAME, never widened to bare IntegrityError (that would
+                # park a NOT NULL/FK violation too, converting a real bug
+                # into quiet data loss instead of a loud, fixable one).
+                msg = str(exc)
+                if "doc_series.doc_type, doc_series.code" in msg:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="duplicate_series_code",
+                        detail=f"doc_type={p.get('doc_type')!r} code={p.get('code')!r} already "
+                               f"exists locally under a different series id "
+                               f"(incoming id={p.get('id')!r})")
+                raise
+            if cur.rowcount == 0:
+                local_row_version = self._local_row_version(conn, "doc_series", p.get("id"))
+                if local_row_version is not None:
+                    self._record_sync_conflict(
+                        conn, conflict_sink, local_company_id=local_company_id,
+                        entity_type="doc_series", entity_id=p.get("id"), event_type=event_type,
+                        local_row_version=local_row_version,
+                        incoming_row_version=raw_row_version, payload=p,
+                    )
+                return True
         return True
 
     @staticmethod
