@@ -9735,10 +9735,12 @@ const RetailSystem = {
     // way (see create_return); this is a "are you sure" for an unusual
     // action, not the money-safety boundary itself.
     if (this._returnSaleOriginalMethod && chosenMethod !== this._returnSaleOriginalMethod) {
-      const proceed = confirm(
-        t(`This sale was paid by ${this._returnSaleOriginalMethod}. Refund via ${chosenMethod} instead?`)
-      );
-      if (!proceed) return;
+      if (!(await this._confirm({
+        title: t('Change Refund Method'),
+        message: t(`This sale was paid by ${this._returnSaleOriginalMethod}. Refund via ${chosenMethod} instead?`),
+        confirmLabel: t('Refund'),
+        danger: false,
+      }))) return;
     }
     const btn = document.getElementById('ret-save-btn');
     if (btn) { btn.disabled=true; btn.textContent=t('Processing…'); }
