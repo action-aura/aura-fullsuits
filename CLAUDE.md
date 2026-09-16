@@ -70,12 +70,19 @@ coexist.
 - **Desktop app** = the same Flask backend + a `pywebview`-based launcher
   (`products/*/desktop/launcher_*.py`) with graceful fallback to Edge/Chrome
   `--app` mode, then default browser. Packaging via PyInstaller +
-  Inno Setup exists (`products/*/packaging/`) but is explicitly marked
-  **not build-verified** in the spec file itself.
-- **Every business table is `company_id`-scoped** (multi-tenant per
-  install — one install *can* host more than one company) and, for Retail,
-  further `branch_id`-scoped for physical locations. Any new table or query
-  that skips this scoping is a bug, not a simplification.
+  Inno Setup exists (`products/*/packaging/`) and **is now verified** — the
+  retail spec file records BUILD-VERIFIED (2026-08-30) and RUN-VERIFIED
+  (2026-09-08), and a real installer has been built and exercised end to end.
+  (This bullet said "not build-verified" long after that stopped being true.)
+- **Every business table is `company_id`-scoped** and, for Retail, further
+  `branch_id`-scoped for physical locations. Any new table or query that skips
+  this scoping is a bug, not a simplification. **It is a tenant-isolation key
+  across SEPARATE installs, NOT a feature for running two companies from one
+  login** — this bullet used to say "one install *can* host more than one
+  company", which overstates it: there is no `companies` registry table,
+  `company_settings.company_id` is UNIQUE, `rebind_company_id()` refuses to run
+  when more than one is present, and once any admin exists `create_admin` will
+  not onboard a second company.
 
 ## Licensing model
 
@@ -140,8 +147,20 @@ coexist.
 
 ## E-invoicing (Jordan JoFotara/ISTD)
 
-Opt-in, off by default, invisible to installs that never enable it
-(`commercial_runtime/einvoicing/`). Deliberately uses its own dedicated
+**READ THIS FIRST: the pipeline is complete and CANNOT ACTUALLY FILE.**
+`commercial_runtime/einvoicing/providers/direct_istd.py` has `submit_invoice`
+and `check_status` both `raise NotImplementedError`, and the shipped default
+provider is `UnconfiguredProvider`. Everything up to the wire call is real —
+UBL 2.1 XML, QR codes, the dedicated sequence, an outbox with retry/backoff,
+audit trail, credential storage, a status UI. Nothing reaches the tax
+authority. The per-company setting now **defaults ON** under the Jordan
+mandate (this section used to say "opt-in, off by default"), so a live install
+is minting gapless e-invoice numbers it never submits. That is a commercial
+exposure, not a TODO, and the remaining work is reportedly blocked on ISTD
+portal registration rather than on engineering.
+
+Invisible to installs that never enable it (`commercial_runtime/einvoicing/`).
+Deliberately uses its own dedicated
 sequence for the number submitted to the tax authority — never reuses
 either product's local document number — see
 `docs/einvoicing/phase1/invoice-numbering-audit.md` for the full reasoning.
@@ -154,13 +173,32 @@ Multi-device/multi-terminal sync is being built in
 `commercial_runtime/sync/` (outbox pattern: `sync_outbox`, `sync_cursor`
 tables) plus a UUID migration for `products`/`customers`/`suppliers`
 (moving off autoincrement IDs so records stay globally unique across
-devices). This is real, tested infrastructure, not a stub — but it's
-**mid-migration**: expect `*_new` staging tables alongside the originals
-until it completes. If you hit a schema/migration error, check whether
-you're running against a database that's been touched by more than one
-branch's schema version before assuming it's a real bug — mixed-schema-state
-from testing across branches produces misleading errors that don't
-reproduce on a clean install.
+devices). This is real, tested infrastructure, not a stub.
+
+**This section used to describe the outbox as the whole of sync, and called
+`*_new` evidence of being stuck "mid-migration". Both are wrong.** `*_new` is
+the standing one-shot rename idiom — created, filled, renamed and dropped
+inside a single transaction — not a half-finished state. And there is a second,
+larger half this document never mentioned:
+
+**THE LAN SITE RELAY.** `commercial_runtime/sync/site_relay/` is roughly 6,300
+lines across 18 files (election, coordinator, pairing, autojoin, beacon,
+forwarder, roster, pruning, pinned TLS identity) with its own test suite. A
+shop converges over its own wifi with no internet: devices find the hub by UDP
+beacon, pin it by SPKI, and join only if their Owner-signed assertion names the
+SAME `license_public_id` — the licence is the only membership boundary, and
+there is nothing to type (no IP, no port, no QR, no pairing code). Hub mode is
+automatic for a licensed **Windows** till (`config.py::site_relay_should_start`,
+tri-state override, `=0` is a kill switch); **a handset never self-elects**,
+because a device that sleeps and leaves the building must not be the thing
+everything else depends on. `SiteRelayCoordinator` runs the election so a
+two-till shop settles on one hub. Proven on real hardware 2026-09-15: a phone
+joined a desktop hub unattended.
+
+If you hit a schema/migration error, check whether you're running against a
+database touched by more than one branch's schema version before assuming it's
+a real bug — mixed-schema-state from testing across branches produces
+misleading errors that don't reproduce on a clean install.
 
 ## Team dynamics — read this before editing shared paths
 
@@ -246,20 +284,20 @@ saying differently because "absent" would send a reader to write code that
 already half-exists. Each re-verified 2026-09-01 against schema.py and
 retail_api.py, not from memory:
 
-- **Loyalty is ACCRUAL-ONLY, which is worse than absent.**
-  `customers.loyalty_points` is incremented on every sale (`create_sale`'s
-  accumulator UPDATE, retail_api.py) and **nothing anywhere can ever spend
-  it**: zero redemption routes, zero `redeem` in the whole backend, zero in
-  the frontend. So a shop accumulates a number that does nothing, and a
-  customer who asks what their points are worth has no answer. Treat this as
-  a half-feature to finish or hide, not as a gap to fill from scratch.
+- ~~**Loyalty is ACCRUAL-ONLY, which is worse than absent.**~~ **WRONG — see
+  the round-3 corrections below.** Redemption shipped (schema v27,
+  `loyalty_ledger`), and this bullet was still asserting "zero redemption
+  routes, zero `redeem` in the whole backend, zero in the frontend" long
+  afterwards. Left struck through rather than deleted because this document's
+  own history is the argument for distrusting it.
 - **No coupons, no customer-group pricing, no buy-X-get-Y.** These are the
   parts of "promotions" that are genuinely still missing — see the correction
   below, because the promotions ENGINE itself now exists and this bullet used
   to deny it.
-- **No inter-branch stock transfer workflow.** `branches` exist and stock is
-  branch-scoped, but the word `transfer` does not appear in retail's schema or
-  API at all.
+- ~~**No inter-branch stock transfer workflow.**~~ **WRONG — see the round-3
+  corrections below.** Schema v28 shipped the whole thing. This bullet claimed
+  "the word `transfer` does not appear in retail's schema or API at all"; it
+  appears dozens of times in both.
 - **A branch cannot be retired.** Rename/address/phone edits exist since
   2026-09-06 (`PUT /branches/<id>`, an Edit control on the desktop screen,
   the rename converges to other devices through the existing `branch`
@@ -324,6 +362,87 @@ so treat any claim in this document older than the code as unverified.
   behind `CAP_CASH_APPROVE`, and Phase 4 bound the drawer to a TERMINAL rather
   than a branch. A ratchet test refuses any new cash-session route that has not
   declared its terminal scope.
+
+### Corrections (round 3, 2026-09-16) — and the conclusion to draw from a THIRD round
+
+Written after an audit that checked every claim in this section against
+`schema.py`, the route modules and both clients, citing `file:line`, and was
+told explicitly not to trust this file. It found six more wrong claims plus two
+gaps this document never had. Round 1 corrected three, round 2 corrected two,
+this one corrects six.
+
+**So the honest instruction is now stronger than "verify before acting": treat
+every capability claim in this document as UNVERIFIED until you have opened the
+code. This section has been wrong in BOTH directions — denying features that
+shipped, and staying silent about absences that matter commercially. A wrong
+"missing" list is the most expensive error here, because it is exactly what
+makes a session rebuild something that already works.**
+
+- **Loyalty redemption SHIPPED.** Schema v27 added `loyalty_ledger`;
+  `create_sale` clamps a redemption against the ledger balance
+  (`points_applied = min(requested, max_affordable, ledger_balance)`),
+  `sales.points_redeemed_amount` persists it, returns give the points back, and
+  the desktop POS has a live redeem widget. Desktop only — **Android has no
+  redemption UI at all.**
+- **Inter-branch stock transfers SHIPPED.** Schema v28: `stock_transfers` /
+  `stock_transfer_items`, a full pending -> in_transit -> received/cancelled
+  lifecycle, race-guarded routes, and a nav-reachable desktop screen. Desktop
+  only — **Android has none of it.**
+- **The desktop build IS verified.** `packaging/aura_retail.spec` now records
+  BUILD-VERIFIED (2026-08-30) and RUN-VERIFIED (2026-09-08), and a real Inno
+  Setup installer has been built and exercised end to end.
+- **E-INVOICING IS NOT "opt-in, off by default" ANY MORE, AND — THE PART THIS
+  DOCUMENT NEVER SAID — IT CANNOT ACTUALLY FILE.** The per-company setting now
+  defaults ON under the Jordan mandate, so every sale mints a gapless
+  e-invoice number. But `commercial_runtime/einvoicing/providers/
+  direct_istd.py` has `submit_invoice` and `check_status` both
+  `raise NotImplementedError`, and the shipped default provider is
+  `UnconfiguredProvider`. The pipeline (UBL 2.1 XML, QR, dedicated sequence,
+  outbox with retry, audit trail, status UI) is real and complete up to the
+  wire call. **Nothing is transmitted to the tax authority.** No install
+  complies today. That is a live commercial exposure and belongs in this file.
+- **The Sync section is badly out of date.** Its `*_new` "mid-migration"
+  framing is misleading — that is the standing one-shot rename idiom, renamed
+  and dropped inside a single transaction, not stuck state. More importantly it
+  omits an entire subsystem: `commercial_runtime/sync/site_relay/` is a ~6,300
+  line, 18-file LAN hub (election, coordinator, pairing, autojoin, beacon,
+  forwarder, roster, pruning, pinned TLS) with its own tests, proven on real
+  hardware — a phone joins a desktop hub over the LAN with nothing typed. Hub
+  mode is automatic for a licensed **Windows** till; a handset never
+  self-elects.
+- **"One install *can* host more than one company" overstates it.** There is no
+  `companies` registry table, `company_settings.company_id` is UNIQUE,
+  `rebind_company_id()` refuses to run when more than one is present, and
+  `create_admin`'s existence check has no `company_id` filter — so once any
+  admin exists, a second company cannot be onboarded. `company_id` is a
+  tenant-isolation key across SEPARATE installs, not a feature one shopkeeper
+  uses to run two companies from one login.
+
+**Two things this document has never said, both of which change what you would
+build next:**
+
+- **THERE IS NO ACCOUNTING, AT ALL.** No chart of accounts, no general ledger,
+  no trial balance, no balance sheet, no P&L, no period close — zero
+  occurrences of any of those terms in the retail backend. `journal_entries`
+  exists in `schema.py` with free-text `debit_account`/`credit_account`
+  columns, no FK, no line model, and **has never had one INSERT or SELECT in
+  the codebase's history** — a fossil from the monolith extraction. The AR/AP
+  subledger is real and good, and `retail_api.py` says in its own comments that
+  "a future double-entry GL CONSUMES these records", which has never been
+  started. The "what's real and solid" list above praises AR/AP depth without
+  mentioning that nothing sits above it; against an accounting-first competitor
+  that omission matters more than any single wrong bullet.
+- **AR/AP IS ANDROID-ONLY, inverting the usual pattern.** Receivables,
+  payables, aging, statements and daily cash exist in full on Android and are
+  **absent from the desktop client** this document calls the most actively
+  developed one. Everywhere else desktop leads and Android lags; here it is the
+  reverse, and neither this file nor anything else recorded it.
+
+**Also new since the last edit (2026-09-15/16), so the schema-version line above
+is stale):** retail schema is at **v34**, not v31. v32 cheque lifecycle
+(immutable header + append-only event log, status folded not stored), v33
+quotations and sales orders, v34 per-document-type numbering series. All three
+came from a competitive teardown of Golden Aseel and are desktop-only so far.
 
 ## How to give a good suggestion here
 
