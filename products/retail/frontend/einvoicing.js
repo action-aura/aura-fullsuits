@@ -283,6 +283,52 @@
   function renderSettings(settings) {
     clearChildren(settingsContent);
 
+    // The shop's tax regime comes FIRST on this card, above the on/off
+    // toggle, because it is the question the toggle only makes sense inside:
+    // settings.py's is_enabled() checks tax_regime BEFORE `enabled`, and a
+    // regime of 'none' resolves the whole feature off no matter what the
+    // toggle below says. Built with the same label/select/option trio as the
+    // "Invoice type" picker below it -- no new class, no new CSS rule, no
+    // inline style, no colour: this page is standalone and carries its own
+    // literal-colour stylesheet (see einvoicing.html's own comment), so
+    // anything paintable added here would be a colour literal that
+    // retail_design_theme_safety_test.js cannot see (it reads css/main.css
+    // only). Adding nothing paintable is the guard.
+    settingsContent.appendChild(el('label', { text: t("The shop's tax regime"), htmlFor: 'einv-tax-regime' }));
+    const regimeSelect = el('select', { id: 'einv-tax-regime' });
+    const KNOWN_REGIMES = ['jordan', 'none'];
+    // Only the exact string 'jordan' is a real regime to the backend
+    // (settings.py::is_enabled). An unrecognised stored value must NOT
+    // pre-select the Jordan option -- a plain <select> with no option
+    // marked `selected` auto-selects index 0 in every browser, which would
+    // silently display "Jordan" for a typo/corrupt/future-build value the
+    // backend is actually treating as OFF (fail-closed). A hidden
+    // placeholder option, selected only in that case, is what actually
+    // prevents the misreport; a comment alone cannot change browser
+    // <select> semantics.
+    if (!KNOWN_REGIMES.includes(settings.tax_regime)) {
+      const placeholder = el('option', {
+        value: settings.tax_regime || '',
+        text: t('Unrecognised regime — filing is off'),
+      });
+      placeholder.selected = true;
+      placeholder.disabled = true;
+      placeholder.hidden = true;
+      regimeSelect.appendChild(placeholder);
+    }
+    [['jordan', 'Jordan — JoFotara (ISTD)'],
+     ['none', 'No e-invoicing regime — nothing is filed with any tax authority']]
+      .forEach(([value, label]) => {
+        const opt = el('option', { value: value, text: t(label) });
+        if (settings.tax_regime === value) opt.selected = true;
+        regimeSelect.appendChild(opt);
+      });
+    settingsContent.appendChild(regimeSelect);
+    settingsContent.appendChild(el('div', {
+      className: 'hint',
+      text: t('Choose the regime this shop actually files under. With no regime selected, Aura files nothing with any tax authority at all — this is not a pause, and nothing is queued to be sent later.'),
+    }));
+
     const toggleRow = el('div', { className: 'toggle-row' });
     const toggleLabel = el('label', { text: t('Enable Jordan e-invoicing for this business'), htmlFor: 'einv-enabled' });
     toggleLabel.style.margin = '0';
@@ -325,6 +371,7 @@
     clearMessage();
     btn.disabled = true;
     const payload = {
+      tax_regime: document.getElementById('einv-tax-regime').value,
       enabled: document.getElementById('einv-enabled').checked ? '1' : '0',
       invoice_family: document.getElementById('einv-family').value,
       seller_name: document.getElementById('einv-seller-name').value,

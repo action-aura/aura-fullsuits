@@ -170,8 +170,8 @@ def test_outbox_retry_requires_admin(app_and_db):
 # company come up disabled) -- pair it with
 # test_default_on_and_unconfigured.py's
 # test_company_with_no_settings_row_is_enabled_by_default (same claim,
-# against settings.py directly) and its three
-# ..._still_beats_the_new_default tests (the three disable layers each
+# against settings.py directly) and its four
+# ..._still_beats_the_new_default tests (the four disable layers each
 # still winning over this default), which together cover what this single
 # route-level assertion no longer can.
 
@@ -197,6 +197,18 @@ def test_enabling_via_settings_reflects_in_status(app_and_db):
     assert r.status_code == 200
     status = client.get('/api/einvoicing/status').get_json()['data']
     assert status['enabled'] is True
+
+
+def test_posting_tax_regime_none_reports_disabled_on_status(app_and_db):
+    """The fourth disable layer reaches the HTTP surface a real client (and
+    einvoicing.js's tax-regime picker) actually talks to, not just
+    settings.is_enabled() in isolation."""
+    client = _client(app_and_db)
+    _login(client)
+    assert client.get('/api/einvoicing/status').get_json()['data']['enabled'] is True
+    r = client.post('/api/einvoicing/settings', json={'tax_regime': 'none'})
+    assert r.status_code == 200
+    assert client.get('/api/einvoicing/status').get_json()['data']['enabled'] is False
 
 
 def test_settings_post_rejects_unknown_key(app_and_db):

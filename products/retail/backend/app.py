@@ -221,9 +221,11 @@ from commercial_runtime.sync.site_relay.admin_routes import make_site_relay_admi
 app.register_blueprint(make_site_relay_admin_blueprint(
     hub_provider=lambda: _site_relay_server))
 
-# docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Default OFF (see
-# commercial_runtime/einvoicing/settings.py's DEFAULTS); nothing here
-# changes behavior for an install that never turns it on.
+# docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Default ON for the
+# Jordan tax regime since 2026-09-08 (Jordan mandated e-invoicing from
+# 2024-05-31 -- see commercial_runtime/einvoicing/settings.py's DEFAULTS and
+# its four-layer is_enabled() resolution); a non-Jordan shop turns the whole
+# feature off by setting tax_regime='none', not by an 'enabled' toggle alone.
 #
 # This registry's DB is genuinely multi-tenant (commercial_runtime/identity/
 # registry_db.py -- one install CAN host more than one company), so there is

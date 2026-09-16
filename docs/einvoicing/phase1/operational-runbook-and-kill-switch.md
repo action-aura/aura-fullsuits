@@ -1,6 +1,6 @@
 # Operational runbook and kill switch
 
-## Three independent disable layers
+## Four independent disable layers
 
 Evaluated most-forceful first in `settings.py::is_enabled()`:
 
@@ -13,9 +13,14 @@ Evaluated most-forceful first in `settings.py::is_enabled()`:
    same auto-expiry, same fail-safe direction (a malformed/unreadable file
    counts as disabled, not ignored) — one operational pattern for "stop an
    automated background thing right now" across this repo, not two.
-3. **Per-company DB `enabled` setting.** The normal opt-in. Default `'0'`.
+3. **Per-company DB `tax_regime` setting.** An explicit per-company
+   `tax_regime` other than `'jordan'` — a shop that files with no tax
+   authority, or with one this build does not recognise — resolves the
+   feature off before `enabled` is even read. Default `'jordan'`.
+4. **Per-company DB `enabled` setting.** The normal opt-in. Default `'1'`
+   (Jordan has mandated e-invoicing since 2024-05-31).
 
-Any one of the three alone is sufficient to fully disable the feature.
+Any one of the four alone is sufficient to fully disable the feature.
 
 ## Rollback ladder (escalating)
 
@@ -119,13 +124,16 @@ outcome, fake QR) so existing integration tests exercising the full
 enqueue-to-clear pipeline keep working. **Never set this in production** —
 it is indistinguishable, from the receipt outward, from a real clearance.
 
-**The three disable layers are unchanged and still each independently
+**The four disable layers are unchanged and still each independently
 sufficient**, including against this new default:
 1. `AURA_EINVOICING_DISABLED=1` — still build/ops hard off, no DB or file
    I/O at all.
 2. `killswitch.py`'s `DISABLED` flag file — still the fastest per-install
    override, unaffected by what the DB default is.
-3. An explicit per-company `enabled='0'` — still beats the new default the
+3. An explicit per-company `tax_regime` other than `'jordan'` — a shop that
+   files with no tax authority, or with one this build does not recognise,
+   resolves off before `enabled` is even read.
+4. An explicit per-company `enabled='0'` — still beats the new default the
    same way it always beat `'1'`; the only change is that a company must
    now be explicitly turned off to stay off, instead of explicitly turned
    on to turn on.

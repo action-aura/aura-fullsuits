@@ -12,7 +12,7 @@ OFF, with zero effect on any install that doesn't turn it on.
 ```
 commercial_runtime/einvoicing/          ALL shared logic lives here, once
   schema.py         einvoice_* tables (lives inside each product's own DB)
-  settings.py       per-company config + three-layer enabled/disabled resolution
+  settings.py       per-company config + four-layer enabled/disabled resolution
   killswitch.py      file-based kill switch, clone of .autosync/PAUSED
   credentials.py     encrypted client_id/client_secret storage
   sequence.py        gapless per-company ISTD sequence number allocator

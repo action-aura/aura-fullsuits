@@ -6,10 +6,11 @@ format, same auto-expiry behavior, same "malformed file counts as active"
 fail-safe direction -- so this repo has one operational pattern for "stop an
 automated background thing right now" instead of two.
 
-This is the FASTEST of the three disable layers (see settings.py for the
-other two: the AURA_EINVOICING_DISABLED env var, and the per-company DB
-`enabled` setting). Dropping/removing this one file takes effect on the
-worker's very next tick -- no request round trip, no app restart.
+This is the FASTEST of the four disable layers (see settings.py for the
+other three: the AURA_EINVOICING_DISABLED env var, the per-company `tax_regime`
+setting, and the per-company DB `enabled` setting). Dropping/removing this one
+file takes effect on the worker's very next tick -- no request round trip, no
+app restart.
 
 File lives at <app_data_dir>/einvoicing/DISABLED. Format:
 

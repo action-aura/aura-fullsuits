@@ -69,6 +69,17 @@ def test_explicit_per_company_disable_still_beats_the_new_default(conn, tmp_path
     assert settings.is_enabled(conn, str(tmp_path), 1) is False
 
 
+def test_tax_regime_none_still_beats_the_new_default(conn, tmp_path, monkeypatch):
+    """The fourth disable layer, added when this comment/test set was
+    extended for the second tax regime (see settings.py's DEFAULTS and
+    is_enabled): a shop that states it files with no tax authority stays
+    off no matter how loudly `enabled` disagrees."""
+    monkeypatch.delenv('AURA_EINVOICING_DISABLED', raising=False)
+    settings.set_setting(conn, 1, 'enabled', '1')
+    settings.set_setting(conn, 1, 'tax_regime', 'none')
+    assert settings.is_enabled(conn, str(tmp_path), 1) is False
+
+
 # ─── providers/unconfigured.py ──────────────────────────────────────────
 
 def test_unconfigured_provider_is_not_configured():
