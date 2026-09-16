@@ -799,6 +799,24 @@ window.AuraIcons = (function () {
       "<path d=\"M12 8h.01\" />"
     ],
     heavy: [1, 2]
+  },
+  // 2026-09-16 -- retail_icons_test.js's call-site harvest caught
+  // subsystem-retail.js's Convert-Quotation modal heading asking for
+  // 'exchange' (fallback glyph is the raw 🔄 emoji), which fell through
+  // render()'s loud fallback to the circle-help placeholder because
+  // nothing in ICONS answered to that name. Real Lucide v0.469.0
+  // geometry for 'arrow-left-right', fetched verbatim from
+  // unpkg.com/lucide-static like every other icon in this file, never
+  // hand-drawn -- the conventional exchange glyph, two horizontal arrows
+  // pointing opposite ways.
+  'exchange': {  // both arrowheads -- one feature (the swap's two directions), split across 2 elements the same way 'repeat' splits its loop direction
+    el: [
+      "<path d=\"M8 3 4 7l4 4\" />",
+      "<path d=\"M4 7h16\" />",
+      "<path d=\"m16 21 4-4-4-4\" />",
+      "<path d=\"M20 17H4\" />"
+    ],
+    heavy: [0, 2]
   }
   };
 
