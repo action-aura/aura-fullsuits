@@ -4130,12 +4130,30 @@ button.sub-header-btn::after {
    also beats every stylesheet, so no rule written here could have corrected
    them while the copy existed. Both element-qualified spellings are listed for
    the same reason the others are: `select` and `input` are the two tags this
-   class lands on, and the extra point is what wins without an `!important`. */
+   class lands on, and the extra point is what wins without an `!important`.
+
+   TWO MORE JOIN THE SAME FLOOR, NEITHER THROUGH A CLASS. Quotations' status
+   filter (`#qt-status-filter`) is a bare `<select>` -- it never got the shared
+   `ret-input` class the Reports dropdowns above have, so it carried NO minimum
+   on EITHER axis. Giving it that class is a subsystem-retail.js edit and out of
+   scope here; the ID alone is already (1,0,0), which beats the injected sheet
+   without needing an element qualifier, so it is listed as-is rather than
+   invented a second mechanism for the same floor.
+
+   Cheques' Received/Issued toggle reuses `.ret-tab` -- the supplier modal's
+   Details/Contacts tab class -- which paints a colour and an `.active`
+   underline (see the focus-ring comment below) but, like `.ret-btn` before this
+   rule existed, sets neither axis. `button.ret-tab` is (0,1,1), the same
+   element-qualification trick as `button.ret-btn` two paragraphs up, so one
+   rule now covers both the active and resting tab -- `.active` only adds a
+   class, it does not change which selector matches. */
 button.ret-btn,
 input.ret-search,
 input.ret-date,
 input.ret-input,
-select.ret-input {
+select.ret-input,
+select#qt-status-filter,
+button.ret-tab {
   min-block-size: var(--touch-target-min);
   min-inline-size: var(--touch-target-min);
 }
