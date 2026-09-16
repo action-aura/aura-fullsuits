@@ -439,10 +439,15 @@ jobs:
   #     JDK 17.0.18.8: `./gradlew :app:testDebugUnitTest --offline --rerun`
   #     -> "testDebugUnitTest: 366 tests, 0 skipped. / BUILD SUCCESSFUL in
   #     40s".
-  #   * The RUNNER PROVISIONING is not verified -- setup-java plus
-  #     setup-android is the standard pair, but no run of this file exists to
-  #     point at. If the first real run fails, it will fail in one of those
-  #     two steps, not in the tests.
+  #   * The RUNNER PROVISIONING IS NOW VERIFIED, and this bullet used to say
+  #     the opposite -- "not verified ... no run of this file exists to point
+  #     at" -- which was true when written and stopped being true without the
+  #     comment being updated. Run 34663587647 (2026-09-11) reports
+  #     `android-tests: success` alongside the three other jobs, on
+  #     ubuntu-latest, so setup-java + setup-android + Chaquopy's auto-detected
+  #     buildPython do all resolve on a real runner. Corrected here rather than
+  #     deleted, because a stale "unverified" warning costs the next reader a
+  #     round of re-investigating something already settled.
   #
   # A caveat that matters for anyone reading a green local run: the same tree
   # WITHOUT --rerun reports ":app:testDebugUnitTest UP-TO-DATE / 366 tests, 0
@@ -480,16 +485,61 @@ jobs:
       # before Gradle is ever reached -- a failure that cannot reproduce on any
       # machine here. Fixed in the step rather than by flipping the index bit,
       # because android/ belongs to another area.
-      - name: Unit tests
+      - name: Unit tests (retail)
         working-directory: android/aura-retail
         run: |
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest --no-daemon
 
-      - name: Android test reports
+      # Clinic's Android tests existed and had NEVER RUN ANYWHERE. This job
+      # carried a single step hardcoded to `working-directory:
+      # android/aura-retail`, so the 11 test classes under
+      # android/aura-clinic/app/src/test were invoked by nothing, on any
+      # runner, for as long as they have existed -- a test file that no job
+      # names is indistinguishable from a deleted one, and this is the shape
+      # that hides it: not an excluded path, just an unmentioned one.
+      #
+      # Measured locally 2026-09-16 BEFORE adding this step, precisely so a
+      # known-red suite would not be pushed into shared CI:
+      #     ./gradlew :app:testDebugUnitTest  ->  BUILD SUCCESSFUL in 4m 6s
+      #     11 JUnit XMLs: 82 tests, 0 failures, 0 errors, 0 skipped
+      # So this adds real coverage; it does not turn the job red.
+      #
+      # `chmod +x` for the same reason spelled out on the retail step above,
+      # and it is the same file: `git ls-files -s` reports BOTH wrappers as
+      # mode 100644 with the identical blob (f5feea6d), so clinic's is just as
+      # non-executable on ubuntu-latest as retail's.
+      #
+      # `if: ${{ !cancelled() }}` SO A RED RETAIL SUITE CANNOT HIDE CLINIC.
+      # Without it the first failing product short-circuits the job and the
+      # second product's result is never measured -- which is the same
+      # invisibility this step exists to end, moved one step to the right.
+      # A clinic failure still fails the job; the condition only stops retail
+      # from deciding whether clinic gets to speak.
+      - name: Unit tests (clinic)
+        if: ${{ !cancelled() }}
+        working-directory: android/aura-clinic
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon
+
+      # Both reports upload unconditionally -- when a suite is red its report
+      # is the only artefact that says WHICH test failed, so `always()` is the
+      # point of the step rather than caution. The names gained a product
+      # suffix here: with two products reporting, a bare "android-test-results"
+      # names neither. Nothing consumed the old name (grepped the tree).
+      - name: Android test reports (retail)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-test-results
+          name: android-retail-test-results
           path: android/aura-retail/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn
+
+      - name: Android test reports (clinic)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-clinic-test-results
+          path: android/aura-clinic/app/build/reports/tests/testDebugUnitTest
           if-no-files-found: warn
