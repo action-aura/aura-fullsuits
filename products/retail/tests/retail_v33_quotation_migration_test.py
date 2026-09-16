@@ -350,13 +350,12 @@ def test_quotation_line_fk_to_products_is_enforced():
 
 # ── 5. Chain wiring: called, and called LAST ────────────────────────────────
 
-def test_migrate_add_sales_quotations_is_called_last_in_the_chain():
+def test_migrate_add_sales_quotations_is_appended_after_its_predecessor():
     """Matches retail_v14_migration_chain_wiring_test.py's own technique:
     read the SOURCE of _migrate_retail_schema and assert the call appears,
-    and appears after every other _migrate_add_* call already in the chain
-    -- this file's own append-last convention, enforced structurally rather
-    than merely by comment. MUTATION: move the call earlier in the function
-    body -> RED."""
+    and appears after the chain that already preceded it -- this file's own
+    append-last convention, enforced structurally rather than merely by
+    comment. MUTATION: move the call earlier in the function body -> RED."""
     import inspect
     import database.schema as sch
     src = inspect.getsource(sch._migrate_retail_schema)
@@ -364,6 +363,35 @@ def test_migrate_add_sales_quotations_is_called_last_in_the_chain():
     import re
     calls = re.findall(r'_migrate_add_\w+\(conn\)', src)
     assert calls, 'no _migrate_add_* calls found -- the source scan itself is broken'
-    assert calls[-1] == '_migrate_add_sales_quotations(conn)', (
-        f'_migrate_add_sales_quotations must be the LAST migration call in the chain; '
+    # THIS USED TO ASSERT `calls[-1] == '_migrate_add_sales_quotations(conn)'`
+    # -- that quotations is the LAST call in the chain. That form is
+    # self-obsoleting: it holds only while quotations happens to be the newest
+    # migration, so EVERY later migration turns it red even when the
+    # append-last convention was followed exactly. It went red on
+    # _migrate_add_doc_series (v34) and again on
+    # _migrate_add_return_settlement_split; neither did anything wrong.
+    #
+    # It also contradicted this test's OWN docstring, which says "after every
+    # other _migrate_add_* call ALREADY in the chain" -- i.e. the ones that
+    # preceded it, which is the real convention. The assertion over-reached
+    # past its own stated intent.
+    #
+    # Pinning against its immediate predecessor (_migrate_add_cheques, v32)
+    # keeps the guard this test exists for: the documented MUTATION -- moving
+    # the quotations call earlier in the function body -- still turns this
+    # RED. It simply no longer fails for migrations that arrive later and
+    # correctly append themselves.
+    #
+    # WHAT THIS CAN NO LONGER CATCH, plainly: a brand-new migration INSERTED
+    # into the middle of the chain instead of appended. The old form caught
+    # that only incidentally, and only until the next person bumped the
+    # literal. Nothing here replaces that guard -- it needs a check over the
+    # whole chain's declared order, which does not exist yet.
+    assert '_migrate_add_cheques(conn)' in calls, (
+        'the predecessor this ordering is pinned against has been renamed or '
+        'removed -- re-pin this assertion rather than deleting it')
+    assert (calls.index('_migrate_add_sales_quotations(conn)')
+            > calls.index('_migrate_add_cheques(conn)')), (
+        f'_migrate_add_sales_quotations must be appended AFTER '
+        f'_migrate_add_cheques, not inserted earlier in the chain; '
         f'found order: {calls}')

@@ -162,13 +162,30 @@ def _read_cursor_row(conn):
     return dict(row)
 
 
-# ── 1. relay_url column exists, PRAGMA user_version is 31 ──────────────────
+# ── 1. relay_url column exists, schema is at least v31 ──────────────────
 
-def test_relay_url_column_exists_and_user_version_is_31():
+def test_relay_url_column_exists_and_schema_is_at_least_v31():
     sch, db_path = _install()
     conn = _open(db_path)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 31
+        # THIS WAS `== 31`, and that literal is why it went red. It pins the
+        # WHOLE schema's version, so any unrelated migration shipping later
+        # breaks it: the value had drifted to 36 (v32 cheques, v33 quotations,
+        # v34 doc series, and two more) with nothing here being wrong.
+        #
+        # What the assertion is actually for is "the relay_url migration has
+        # run", and `>= 31` says exactly that -- any database at or past v31
+        # has run it, and one that has not still fails. The column check
+        # immediately below is the direct evidence; this is belt-and-braces.
+        #
+        # Deliberately NOT compared against the schema-version CONSTANT: that
+        # would compare two values that move together, and could no longer
+        # catch either of them drifting.
+        #
+        # WHAT THIS CAN NO LONGER CATCH: that v31 is the EXACT version this
+        # migration lands at. Nothing depended on that; the column is what the
+        # rest of this file tests.
+        assert conn.execute('PRAGMA user_version').fetchone()[0] >= 31
 
         cursor_cols = {row[1] for row in conn.execute('PRAGMA table_info(sync_cursor)').fetchall()}
         assert 'relay_url' in cursor_cols
