@@ -135,6 +135,74 @@ def client(app):
     return app.test_client()
 
 
+def _blueprint_without_owner_url(tmp_path, owner_key):
+    """The same app, but cut WITHOUT an Owner URL -- a dev build, a
+    misconfigured deployment, or any install whose Owner was never wired."""
+    import json as _json
+    from flask import Flask as _Flask
+    trust_anchor_path = tmp_path / "trust_anchor_no_owner.json"
+    trust_anchor_path.write_text(
+        _json.dumps({"keys": [{"key_id": "owner-1", "public_key": _b64_pub(owner_key),
+                               "algorithm": "ed25519"}]}), encoding="utf-8")
+    flask_app = _Flask(__name__)
+    flask_app.register_blueprint(make_licensing_blueprint(
+        product_code="AURA_RETAIL", platform="WINDOWS", app_version="1.0.0-rc.2",
+        app_data_dir=str(tmp_path / "appdata"),
+        owner_base_url="",                      # <-- the whole point
+        verify_tls=True, timeout_seconds=5.0, trust_anchor_path=trust_anchor_path,
+        device_identity_factory=lambda d: WindowsDpapiDeviceIdentityProvider(d),
+    ))
+    return flask_app.test_client()
+
+
+def test_status_reports_the_stored_licence_even_with_no_owner_url(tmp_path, owner_key):
+    """A LICENSED DEVICE MUST NOT BE TOLD IT IS UNLICENSED.
+
+    This route used to short-circuit on `if not owner_base_url` and answer
+    NOT_CONFIGURED before opening licensing.db. Measured in a real browser on
+    an install whose database said ACTIVE_ONLINE, the desktop shell rendered
+    "This device is not licensed to ring new sales" on every screen -- while
+    sales rang perfectly, because enforcement reads licensing.db and never
+    consults the Owner URL at all.
+
+    The mutation that turns this red is the old behaviour itself: restore the
+    early `return _not_configured_response()` and this fails, because the
+    route stops seeing a record it is sitting on top of.
+    """
+    from commercial_runtime.licensing_contracts.state_repository import (
+        LicenseStateRecord, LicenseStateRepository)
+
+    db = tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    LicenseStateRepository(db).save(LicenseStateRecord(
+        licensing_schema_version=2, product_code="AURA_RETAIL", platform="WINDOWS",
+        current_state="ACTIVE_ONLINE",
+    ))
+
+    body = _blueprint_without_owner_url(tmp_path, owner_key).get("/api/licensing/status").get_json()
+
+    assert body["current_state"] == "ACTIVE_ONLINE", (
+        "a device holding an ACTIVE_ONLINE licence reported "
+        f"{body['current_state']!r} because no Owner URL was configured -- the "
+        "route answered a question it was not asked")
+    # The Owner connection is still absent, and that is still worth reporting --
+    # as its OWN fact, not as a verdict on the licence.
+    assert body["owner_configured"] is False
+
+
+def test_status_still_says_not_configured_when_there_is_genuinely_no_licence(tmp_path, owner_key):
+    """THE ALLOW-HALF, and it is why the fix is not just 'delete the check'.
+
+    A fresh install with no licence record at all must still report
+    NOT_CONFIGURED. Without this, a fix that simply removed the early return
+    could have started reporting some other state for an unactivated device
+    and nothing would have caught it -- the deny-half above passes either way.
+    """
+    body = _blueprint_without_owner_url(tmp_path, owner_key).get("/api/licensing/status").get_json()
+    assert body["current_state"] == "NOT_CONFIGURED"
+    assert body["owner_configured"] is False
+
+
 def test_status_before_activation_is_not_configured_shape(client):
     resp = client.get("/api/licensing/status")
     assert resp.status_code == 200

@@ -131,10 +131,56 @@ def make_licensing_blueprint(
 
     @bp.route("/status", methods=["GET"])
     def status():
-        if not owner_base_url:
-            return _not_configured_response()
+        """THIS ROUTE REPORTS WHAT THIS DEVICE HOLDS, NOT WHETHER AN OWNER IS
+        CONFIGURED. Those are different questions and conflating them told
+        customers a lie.
+
+        It used to short-circuit on `if not owner_base_url` and answer
+        NOT_CONFIGURED **before opening the licence database at all**.
+        Measured in a real browser against a real install whose
+        `licensing.db` said ACTIVE_ONLINE:
+
+            GET /api/licensing/status -> {"current_state": "NOT_CONFIGURED",
+                                          "detail": "Owner licensing URL is
+                                          not configured."}
+            licensing.db              -> ACTIVE_ONLINE
+
+        The desktop shell renders a banner off this route, so every screen
+        read "This device is not licensed to ring new sales" -- while sales
+        rang perfectly, because `require_license_capability` never consults
+        `OWNER_LICENSING_BASE_URL`; it reads `licensing.db` (CLAUDE.md states
+        this explicitly). The UI and the enforcement layer disagreed, and the
+        UI was the wrong one.
+
+        THE SAME ROOT CAUSE HAS NOW BITTEN THREE TIMES, all in this session:
+        Android's auto-join read this route to decide "am I activated" and
+        concluded no, forever, on a device holding a valid assertion; then it
+        read the installation id from the same response and posted a blank
+        one; and now this banner. **A cloud-gated route must never be asked a
+        purely local question.** Whether this install holds an Owner-signed
+        licence is a fact in `licensing.db`, true or false regardless of
+        whether a build was cut with an Owner URL.
+
+        `present_status` already answers correctly for every case, including
+        an install that has genuinely never activated -- it returns
+        NOT_CONFIGURED when the record is None. So the fix is simply to let
+        it see the record.
+
+        `owner_configured` is reported separately, because "no Owner is
+        configured" is still true and still worth knowing -- an install in
+        that state cannot check in or renew. A caller that needs to
+        distinguish the two now can; before, it could not, because one value
+        was standing in for both.
+        """
         state_repository, *_ = _build_context()
-        return jsonify(present_status(state_repository.load())), 200
+        payload = present_status(state_repository.load())
+        payload["owner_configured"] = bool(owner_base_url)
+        if not owner_base_url:
+            # Kept verbatim from the old response so any client already
+            # surfacing this string keeps working -- it is now an ADDITIONAL
+            # fact about the Owner connection, not a verdict on the licence.
+            payload["detail"] = "Owner licensing URL is not configured."
+        return jsonify(payload), 200
 
     @bp.route("/activate", methods=["POST"])
     def activate():
