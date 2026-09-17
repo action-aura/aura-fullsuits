@@ -9590,6 +9590,21 @@ const RetailSystem = {
     } catch(e) { console.error(e); }
   },
 
+  // `store_credit` is deliberately NOT a static option below. It used to be
+  // one unconditionally, so a cashier could pick it on an ordinary walk-in
+  // cash return -- no customer attached -- and get a hard
+  //     409 {'message': 'This return leaves an uncollected balance with no
+  //          customer to credit it to.'}
+  // naming a customer they never chose. The backend guard's own comment
+  // reasoned this was unreachable because `is_credit` forces `customer_id`
+  // whenever `balance_due>0` -- but choosing `store_credit` forces the
+  // tender refund to zero BEFORE that walk-in invariant applies, so the
+  // whole refund falls through to store credit with nobody to credit. The
+  // fix is client-side: don't offer a payout channel this sale cannot use.
+  // `_findSaleForReturn` below adds the option back the moment it confirms
+  // the looked-up sale actually has a customer (`full.sale.customer_id`),
+  // and removes it again on a re-lookup that doesn't -- see that function's
+  // own comment for why hiding was chosen over a disabled option.
   async _openCreateReturn() {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -9607,7 +9622,6 @@ const RetailSystem = {
           <div class="ret-field"><label>Refund Method</label>
             <select id="ret-refund-method">
               <option value="cash">${t('Cash')}</option><option value="card">${t('Card')}</option>
-              <option value="store_credit">${t('Store Credit')}</option>
             </select>
           </div>
         </div>
@@ -9697,7 +9711,53 @@ const RetailSystem = {
           // method instead of silently falling back to whatever is first.
           methodSel.add(new Option(originalMethod, originalMethod));
         }
+        // Shipped-defect fix: `store_credit` only exists as an option when
+        // THIS sale has a customer to credit it to -- create_return (see
+        // returns_settlement.py) hard-refuses 409 otherwise, naming a
+        // customer the cashier never chose. `customer_id` is the same
+        // signal `_receiptIdentityBlock` already uses to tell a real
+        // customer from the walk-in fallback -- checked here rather than
+        // `customer_name`, which is COALESCE(...,'Walk-in') and therefore
+        // always non-empty. Re-checked on every lookup (not just once):
+        // this modal can look up a second receipt without being closed,
+        // and the previous receipt's customer must not leak onto this one.
+        //
+        // HIDE, not disabled+greyed-out: a cashier who never sees a payout
+        // channel this sale cannot use has no reason to wonder why it
+        // failed; a disabled option would need its own explanatory string
+        // to teach the rule, and this fix ships with none (see the i18n
+        // note in the report -- reusing the already-catalogued 'Store
+        // Credit' label needs no new string, hiding does not either).
+        const hasCustomer = !!(full.sale && full.sale.customer_id);
+        const scOption = Array.prototype.find.call(methodSel.options, o => o.value === 'store_credit');
+        if (hasCustomer) {
+          if (!scOption && typeof methodSel.add === 'function') {
+            methodSel.add(new Option(t('Store Credit'), 'store_credit'));
+          }
+        } else if (scOption && typeof scOption.remove === 'function') {
+          scOption.remove();
+        }
         methodSel.value = originalMethod;
+        // Structural safety net, not "probably unreachable" reasoning --
+        // that exact reasoning is what shipped the defect this whole fix
+        // closes. Ordering trap this closes: if `originalMethod` were ever
+        // 'store_credit' on a sale the gate above just decided has no
+        // customer (checked: no sale on today's write path carries
+        // payment_method='store_credit', so this is not known to be
+        // reachable today), the block above would have ADDED that option,
+        // this one would immediately REMOVE it again, and assigning
+        // `.value` to a value with no matching <option> does not throw --
+        // it silently leaves `selectedIndex` at -1 and `.value` at '',
+        // which would submit an EMPTY refund_method with nothing visibly
+        // wrong. Confirm the assignment actually took, and recover to the
+        // always-present 'cash' option if it did not -- and correct
+        // `_returnSaleOriginalMethod` to match, so `_saveReturn`'s "this
+        // sale was paid by X" confirmation never names a method that was
+        // never actually selectable.
+        if (methodSel.selectedIndex < 0) {
+          methodSel.value = 'cash';
+          this._returnSaleOriginalMethod = 'cash';
+        }
       }
       const items = full.items || [];
       const container = document.getElementById('ret-sale-items');

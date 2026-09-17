@@ -27,7 +27,15 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_retail_cashdrawer_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
-os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
+# AURA_SITE_RELAY_ENABLED="0" (added 2026-09-17, VACUOUS-COVERAGE close-out):
+# this file seeds a WINDOWS-platform active license below and boots the real
+# app -- without this, a licensed WINDOWS instance elects itself a LAN relay
+# hub and starts four background threads plus a TLS listener during test
+# collection (AUDIT-010 sibling concern).
+os.environ.update(
+    AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA),
+    AURA_SITE_RELAY_ENABLED="0",
+)
 os.environ.pop("AURA_DEV", None)
 
 from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
@@ -523,3 +531,74 @@ def test_cash_change_given_is_not_counted_as_still_in_the_drawer():
     close_resp = _close(client, sid, 100.0)
     assert close_resp.get_json()['data']['session']['variance'] == 0.0, \
         "counting the real $100 in the drawer must show zero variance, not a $50 phantom shortage"
+
+
+def test_full_return_of_partly_credit_sale_moves_only_the_tender_out_of_the_drawer():
+    """PROVEN VACUOUS gap this test closes (retail-hardware-viewports crew,
+    2026-09-17): `_cash_session_report`'s `cash_refunds` query sums
+    `returns.tender_refund_amount` -- the sale's-own-tender-capped figure
+    that actually left the drawer -- NOT `returns.refund_amount`, which is
+    the full recomputed VALUE of the goods returned (correct and load-
+    bearing for metrics.py's revenue netting, but NOT "cash that physically
+    left this till" whenever the sale was never fully paid in cash).
+
+    Reinstating the exact root cause this fix closed --
+
+        before: SELECT COALESCE(SUM(tender_refund_amount),0) FROM returns
+        after:  SELECT COALESCE(SUM(refund_amount),0) FROM returns
+
+    -- previously left THIS test file (this file's OWN frozen key list was
+    deliberately expanded for this feature) at 12/12 GREEN; only
+    retail_returns_wave0_test.py noticed. This is the scenario that
+    separates the two figures: a return whose refund VALUE exceeds the cash
+    actually paid out -- a partly-credit sale.
+    """
+    client, cid, pid = _make_admin_and_product(price=100.0)
+    customer_id = str(uuid.uuid4())
+    rconn = get_retail_conn()
+    rconn.execute(
+        "INSERT INTO customers (id,company_id,name,credit_mode,credit_limit,credit_balance) "
+        "VALUES (?,?,?,'unlimited',0,0)",
+        (customer_id, cid, 'Cash Drawer Credit Customer'),
+    )
+    rconn.commit()
+    rconn.close()
+
+    sid = _open_shift(client, 0.0).get_json()['data']['id']
+
+    # Sale of 100: 40 tendered in cash, 60 left on account (a named customer
+    # is required whenever balance_due > 0, regardless of payment_method).
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': customer_id, 'amount_paid': 40.0, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['total'] == 100.0
+    assert sale['balance_due'] == 60.0
+
+    # Full return.
+    ret = client.post('/api/sub/retail/returns', json={
+        'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': 1}],
+        'idempotency_key': str(uuid.uuid4()),
+    })
+    assert ret.status_code == 200, ret.get_json()
+    d = ret.get_json()['data']
+    assert d['refund_amount'] == 100.0  # the full VALUE of the goods returned
+    assert d['tender_refund_amount'] == 40.0  # only what was actually collected in cash
+    assert d['ar_forgiven_amount'] == 60.0
+
+    report = _x_report(client, sid).get_json()['data']
+    assert report['cash_sales'] == 40.0
+    assert report['cash_refunds'] == 40.0, (
+        "THE VACUOUS-COVERAGE gap: _cash_session_report must sum "
+        f"tender_refund_amount (40), not the full refund_amount VALUE (100). got {report['cash_refunds']}"
+    )
+    assert report['expected_cash'] == 0.0, \
+        f"opening 0 + cash_sales 40 - cash_refunds 40 must net to 0, got {report['expected_cash']}"
+
+    close_resp = _close(client, sid, 0.0)
+    assert close_resp.status_code == 200, close_resp.get_json()
+    data = close_resp.get_json()['data']
+    assert data['session']['closing_float_expected'] == 0.0
+    assert data['session']['variance'] == 0.0, \
+        f"counting the real $0 left in the drawer must show zero variance, not a $60 phantom shortage, got {data['session']['variance']}"

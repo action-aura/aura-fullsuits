@@ -6683,9 +6683,22 @@ def create_sale():
         # the Z-report by exactly the redeemed amount on every redemption.
         net_received = min(paid, amount_due_after_points)
         if net_received > 0.005:
+            # DEFECT 2 fix: `currency` (resolved once above at
+            # `currency = _s.get('base_currency')`, the same value
+            # `amount_due_after_points` uses) -- an omitted currency here
+            # quantized this payment's `net_received` to 2dp regardless of
+            # the shop's real precision. On JOD (3dp) a real tender of
+            # 4.007 persisted as 4.01 -- 3 fils CREATED in the `payments`
+            # table -- and create_return's tender cap (`tender_collected`,
+            # which sums exactly this column) then read back more cash than
+            # the drawer ever actually took, on every full return of an
+            # under-2dp-rounded JOD sale. See _record_payment's own
+            # docstring for the full history and the known limitation on
+            # rows already written before this fix.
             _record_payment(conn, cid, ('customer' if customer_id else None), customer_id, 'in', net_received,
                             method=(pm if pm != 'credit' else 'cash'),
-                            related_type='sale', related_id=sale_id, doc_type='receipt')
+                            related_type='sale', related_id=sale_id, doc_type='receipt',
+                            currency=currency)
         if is_credit and balance_due > 0.005 and customer_id:
             # DEFECT 2 fix: `currency` (resolved once above, same variable
             # create_return's identical call below now also passes) -- an
@@ -7622,8 +7635,13 @@ def create_return():
         # `sale['payment_method']` -- omitting it here made sqlite3.Row
         # raise on exactly the return this whole fix exists for (a return
         # that omits refund_method, the task's own repro).
+        # `points_redeemed_amount` added (DEFECT 1 fix): without it,
+        # `original_balance_due` below silently drops the points term
+        # from create_sale's own AR gate -- see that computation's
+        # comment for the full defect.
         sale = cur.execute(
-            "SELECT id, uid, branch_id, customer_id, total, amount_paid, payment_method "
+            "SELECT id, uid, branch_id, customer_id, total, amount_paid, payment_method, "
+            "points_redeemed_amount "
             "FROM sales WHERE id=? AND company_id=?",
             (sale_id, cid)
         ).fetchone()
@@ -7868,33 +7886,62 @@ def create_return():
         # near-zero-value payment `_record_payment` itself never logged
         # (its own `if net_received > 0.005` skip); `original_balance_due`
         # is "how much of this sale did create_sale actually treat as AR",
-        # which is defined by create_sale's OWN gate (`balance_due > 0.005`
-        # computed off `amount_due_after_points - paid`, i.e. total minus
-        # RAW paid) -- and must match it exactly, epsilon and all, or the
-        # two functions disagree about whether a sale ever became a debt.
-        # A live regression this exact repo's own test caught: a 0.006 JOD
-        # sale with amount_paid=0.001 leaves balance_due=0.005, which is
-        # NOT > 0.005, so create_sale grants NO credit at all -- no
-        # payments row (net_received=0.001 is also not > 0.005) and no
-        # credit_balance entry. Computing this figure from `tender_
-        # collected` (0, since no payment row exists) instead of
-        # `amount_paid` gave `original_balance_due=0.006` here -- MORE than
-        # create_sale ever recorded -- and the leftover after the (zero)
-        # AR cap was paid out as phantom NEGATIVE store_credit on a return
-        # that should have been a complete no-op on credit_balance, exactly
-        # like the pre-fix code correctly left it (see
-        # retail_sale_money_precision_test.py's own
+        # which is defined by create_sale's OWN gate: `balance_due =
+        # amount_due_after_points - paid` (create_sale ~line 6278, itself
+        # fed by `amount_due_after_points = total - points_redeemed_amount`
+        # at ~line 6264 -- NOT bare `total`). This figure must mirror that
+        # formula TERM FOR TERM -- points subtraction included -- or the two
+        # functions disagree about whether a sale ever became a debt.
+        #
+        # DEFECT 1 (fixed here): this line used to compute only `total -
+        # amount_paid`, silently dropping the points term. That matched
+        # create_sale's gate whenever `points_redeemed_amount == 0` and
+        # INVENTED that much phantom AR headroom whenever it was not -- a
+        # sale paid partly or fully with points left this figure exactly
+        # `points_redeemed_amount` HIGHER than what create_sale ever
+        # recorded as owed, because create_sale itself never treats
+        # points-covered value as a debt (`sales.total` stays whole so the
+        # invoice reads right, but `amount_due_after_points` -- what the
+        # customer actually still owed -- already had the points
+        # subtracted out). A full return then had that invented headroom to
+        # hand out: as `store_credit` conjured from nothing (a customer who
+        # paid entirely or partly in points got real store credit back on
+        # top of their points), or, worse, as `ar_forgiven` against a
+        # completely UNRELATED debt the same customer happened to owe on a
+        # different sale -- a real receivable written off by returning a
+        # sale that owed nothing at all. See
+        # retail_returns_points_settlement_test.py for the reproductions of
+        # both shapes. `or 0` guards pre-v27 rows, where the column is NULL.
+        #
+        # A second, independent regression this exact repo's own test
+        # caught on the NON-points path (`points_redeemed_amount == 0`, so
+        # unaffected by the fix above): a 0.006 JOD sale with
+        # amount_paid=0.001 leaves balance_due=0.005, which is NOT > 0.005,
+        # so create_sale grants NO credit at all -- no payments row
+        # (net_received=0.001 is also not > 0.005) and no credit_balance
+        # entry. Computing this figure from `tender_collected` (0, since no
+        # payment row exists) instead of `amount_paid` gave
+        # `original_balance_due=0.006` here -- MORE than create_sale ever
+        # recorded -- and the leftover after the (zero) AR cap was paid out
+        # as phantom NEGATIVE store_credit on a return that should have
+        # been a complete no-op on credit_balance, exactly like the pre-fix
+        # code correctly left it (see retail_sale_money_precision_test.py's
+        # own
         # test_create_return_original_balance_due_uses_currency_precision_
         # not_hardcoded_2dp, which pins this same `total - amount_paid`
-        # formula and predates this whole fix). `amount_paid` and the net
-        # tender actually received are PROVABLY EQUAL whenever balance_due
-        # is non-negative (`net_received = min(paid, amount_due_after_
-        # points)`, which only clamps below `paid` when `paid` overshoots
-        # -- i.e. exactly the overpaid-change case where balance_due is
-        # negative and this whole calculation is moot), so this is not a
-        # narrower version of the change-refund bug the tender cap above
-        # exists to close -- it is a different figure, doing a different job.
-        original_balance_due = max(0.0, _money(float(sale['total']) - float(sale['amount_paid'] or 0), currency))
+        # formula for the points-free case and predates points entirely --
+        # it does not, and was never meant to, cover the points term this
+        # fix adds). `amount_paid` and the net tender actually received are
+        # PROVABLY EQUAL whenever balance_due is non-negative
+        # (`net_received = min(paid, amount_due_after_points)`, which only
+        # clamps below `paid` when `paid` overshoots -- i.e. exactly the
+        # overpaid-change case where balance_due is negative and this whole
+        # calculation is moot), so this is not a narrower version of the
+        # change-refund bug the tender cap above exists to close -- it is a
+        # different figure, doing a different job.
+        original_balance_due = max(0.0, _money(
+            float(sale['total']) - float(sale['points_redeemed_amount'] or 0) - float(sale['amount_paid'] or 0),
+            currency))
         balance_due_remaining = max(0.0, original_balance_due - float(_prior[1]))
         current_balance = float(cur.execute(
             "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=? AND company_id=?",
@@ -7935,12 +7982,55 @@ def create_return():
 
         # Defensive, matches this file's "loud refusal beats a silent wrong
         # number" convention (the modifiers ambiguous-line refusal a few
-        # hundred lines above): unreachable today because `is_credit` forces
-        # `customer_id` whenever `balance_due>0` (create_sale, ~line 6278),
-        # which forces `tender_collected == sale.total` for every walk-in --
-        # so `store_credit` can never be positive without a customer. Kept
-        # so a future change to that invariant fails LOUDLY instead of
-        # silently dropping value.
+        # hundred lines above).
+        #
+        # CORRECTED: this comment used to claim the guard below is
+        # UNREACHABLE -- "`is_credit` forces `customer_id` whenever
+        # `balance_due>0`... so `store_credit` can never be positive without
+        # a customer." That reasoning is FALSE, and measured false: a plain
+        # walk-in (100 cash, full return) with `refund_method='store_credit'`
+        # hits this exact 409 today. The hole in the old proof:
+        # `returns_settlement.split_return_settlement` forces `tender_
+        # refund` to 0 whenever `requested_method == 'store_credit'` BEFORE
+        # the walk-in invariant the old comment reasoned from ever applies --
+        # so the whole refund falls through to store_credit with nobody to
+        # credit it to. The frontend ships a `store_credit` option in the
+        # refund-method dropdown with no guard against selecting it on a
+        # walk-in, so a cashier reaches this in one click today (a frontend
+        # fix to stop offering that option without a customer is tracked
+        # separately). This guard therefore stays as the BACKEND's own last
+        # line of defence -- reachable independently of that UI fix via any
+        # direct API caller -- not as dead defensive code.
+        #
+        # `0.005` IS a 2dp-era literal and IS wrong on a 3-decimal currency
+        # (on JOD it is FIVE fils, not half a fils, so it treats up to 4 real
+        # fils as zero). It stays anyway, DELIBERATELY, and this comment is
+        # here so the next person does not "fix" it in isolation the way we
+        # just did and then revert it the way we just did.
+        #
+        # It was changed to `currency_quantum(currency)/2` and reverted, because
+        # this epsilon is not a rounding tolerance -- it is a GATE, and its
+        # twin lives in create_sale:
+        #
+        #     create_sale:6283   is_credit = (pm == 'credit') or (balance_due > 0.005)
+        #
+        # The two must agree on the SAME question: "did this sale become a
+        # debt?" Measured consequence of disagreeing -- a 0.006 JOD sale with
+        # 0.001 paid leaves exactly 0.005 outstanding. create_sale's gate is
+        # `> 0.005`, so 0.005 is NOT greater and NO debt is recorded: the
+        # customer owes nothing. Make create_return's epsilon finer on its own
+        # and the return then hands that same customer 0.005 of store credit
+        # for a debt the shop never booked -- money created out of an
+        # asymmetry, caught by
+        # test_create_return_original_balance_due_uses_currency_precision_not_hardcoded_2dp.
+        #
+        # So this is one gate in a set of roughly twenty `0.005` literals
+        # spanning create_sale, create_return and the AR/AP aging queries, and
+        # they have to move TOGETHER or not at all. That sweep is real work
+        # with its own review; it is not a line-level cleanup, and doing it one
+        # site at a time is strictly worse than leaving it alone -- each
+        # individual site is MORE correct in isolation and the system is LESS
+        # correct as a whole.
         if store_credit > 0.005 and not sale['customer_id']:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message':
@@ -8096,8 +8186,17 @@ def create_return():
         # applied); `store_credit` is the previously-nonexistent third
         # bucket for the leftover case where the customer already paid the
         # debt down some other way before the return -- see module
-        # docstring's "Provable non-case" for why a walk-in can never reach
-        # either branch (the 409 guard above is the belt-and-braces for it).
+        # docstring's "Provable non-case" for the `ar_forgiven` half (a
+        # walk-in cannot carry AR at all); `store_credit` is NOT similarly
+        # unreachable for a walk-in -- see the 409 guard above (corrected)
+        # for the real, shipped-UI way a walk-in reaches it.
+        # Both `0.005` gates stay 2dp-era literals on purpose -- see the long
+        # note on the 409 guard above for why this one cannot be made
+        # currency-correct on its own, and why the whole set has to move at
+        # once. `ar_forgiven` was already 0.005 and is untouched; `store_credit`
+        # was briefly made finer here and is reverted to match it, so the two
+        # buckets of the SAME settlement cannot disagree about what counts as
+        # a non-zero amount.
         if ar_forgiven > 0.005:
             _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_forgiven, currency)
         if store_credit > 0.005:
@@ -10932,11 +11031,11 @@ def _ensure_credit_schema(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_returns_idempotency "
         "ON returns(idempotency_key) WHERE idempotency_key IS NOT NULL"
     )
-    # DEFECT 1 fix (returns settlement split, schema v35 / _migrate_add_
+    # DEFECT 1 fix (returns settlement split, schema v36 / _migrate_add_
     # return_settlement_split): same "second, independent guard" pattern
     # this function already uses for points_redeemed_amount/loyalty_ledger.
     # return_id above -- a process whose database has not yet run the
-    # versioned migration chain up to v35 by the time a request reaches
+    # versioned migration chain up to v36 by the time a request reaches
     # create_return still gets these columns, gated only by the in-process
     # `_CREDIT_SCHEMA_READY` flag, not by `user_version`. Idempotent with
     # the versioned migration -- both check column existence first, so
@@ -10973,13 +11072,34 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     """Append one immutable money-movement row to the ledger. Returns its reference.
 
     `currency` is OPTIONAL and defaults to None, the same contract `_money`
-    itself carries (see its docstring): an un-converted caller (create_sale's
-    own retained-cash entry, still out of scope for this pass) keeps the
-    historical 2dp behaviour byte for byte. The four converted callers --
+    itself carries (see its docstring). DEFECT 2 fix (returns/points-
+    settlement pass): create_sale's own retained-cash entry -- the `net_
+    received` write at its `_record_payment(..., related_type='sale', ...)`
+    call, ~line 6686 -- used to be the one caller left on the historical
+    2dp default, described here as "still out of scope for this pass" in an
+    earlier revision of this docstring. That omission is what let a JOD
+    sale's `payments` row round away real fils: `amount_paid=4.007`
+    persisted here as `4.01`, and create_return's tender cap (`tender_
+    collected`, which sums exactly this column) then read back 3 fils MORE
+    than the drawer ever actually took -- created on refund, not lost. It
+    now passes `currency` -- already resolved in create_sale's own scope
+    (`currency = _s.get('base_currency')`, the same value `amount_due_
+    after_points` uses) -- alongside the four previously-converted callers:
     customer_payment, supplier_payment, pay_purchase_order,
-    create_purchase_order -- pass `_company_currency(conn, cid)` so the
-    amount PERSISTED here carries the same precision as the balance it is
-    about to move via `_adjust_credit`. Deliberately NOT re-derived from
+    create_purchase_order, which pass `_company_currency(conn, cid)`. Five
+    converted callers now; there is no byte-for-byte-2dp caller left.
+
+    KNOWN LIMITATION, deliberately NOT fixed here: `payments` rows already
+    written at 2dp by every sale recorded before this fix stay at 2dp
+    forever -- this function only controls the precision a NEW row is
+    quantized to; retro-correcting old rows would need its own migration
+    and its own review, since the fils a pre-fix row already discarded
+    cannot be recovered from the row itself. The residual error on those
+    old rows is bounded by half of the 2dp quantum they were persisted at
+    (up to 0.005, in the base currency's own unit -- e.g. 0.005 JOD); every
+    row written by this fixed call site from now on is exact.
+
+    Deliberately NOT re-derived from
     `_settings()` in here: this function already reads `_settings(conn,
     cid)['base_currency']` below for the `payments.currency` LABEL column,
     but that call site is pre-existing and unrelated to this fix -- the

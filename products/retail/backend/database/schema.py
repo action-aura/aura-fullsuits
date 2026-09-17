@@ -8896,6 +8896,60 @@ def _migrate_add_return_settlement_split(conn):
     (`export_cash_sessions_csv`'s own docstring names this exact
     distinction). Both cases are the honest cost of fixing a live formula
     rather than a stored one, not a defect in this migration.
+
+    CORRECTED 2026-09-17 (two defects in THIS BACKFILL, found by a review
+    that actually ran it rather than reading it -- see
+    products/retail/tests/retail_returns_backfill_test.py):
+
+    DEFECT 1 -- `original_balance_due` used to be computed as
+    `max(0, sale_total - tender_collected)`, contradicting the very runtime
+    this migration exists to mirror: create_return computes it from
+    `sales.amount_paid` (the RAW tendered figure), NOT `tender_collected`
+    (net of change), and spends its own multi-paragraph comment explaining
+    why deriving it from `tender_collected` is exactly the regression this
+    codebase already shipped and fixed once. The two are only PROVABLY
+    equal when `balance_due` is non-negative; deriving from
+    `tender_collected` instead of `amount_paid` independently reintroduces
+    that regression for a historical row whose sale collected no `payments`
+    row at all (the sub-quantum gate -- `_record_payment`'s own `if
+    net_received > 0.005` skip -- see create_return's own comment for the
+    0.006/0.001 JOD worked example this backfill now matches exactly).
+    Fixed to `max(0, sale_total - points_redeemed_amount - amount_paid)`,
+    reading both new columns from `sales`. `points_redeemed_amount`
+    (schema v27) is subtracted for the same reason create_sale's own
+    `balance_due` is: `sales.total` stays pre-points, so a sale that
+    redeemed points owed less than `total` from the start, and omitting
+    the subtraction invents AR headroom (and, downstream, phantom
+    store_credit) that never existed. Guarded by `sales_have_points_
+    redeemed` below, same shape as `customers_have_balance` above, for a
+    fixture whose `sales` table predates v27 -- in every REAL upgrade the
+    column already exists by the time this step runs (`_migrate_add_
+    loyalty_ledger` runs unconditionally earlier in `_migrate_retail_
+    schema`, whenever `sales` exists).
+
+    DEFECT 2 -- `split_return_settlement` was called with SIX positional
+    args, omitting its SEVENTH, `currency`, so every historical return of
+    EVERY currency was quantized at the function's own `_FALLBACK_QUANTUM`
+    (2 decimal places) -- a brand-new 2dp artifact on JOD's three decimal
+    places (fils), introduced by the very commit meant to remove one. There
+    is no `company_id`-scoped currency column reachable on THIS connection:
+    the commercial identity layer's `company_settings.currency` (registry.db)
+    is a SEPARATE database file, not attached here, and is not even the
+    same column name a first draft of this fix assumed. The shop's actual
+    currency, on every path that already reads it correctly (api/
+    retail_api.py's `_company_currency`/`_settings`), is a row in THIS
+    database's own `retail_settings` table (`skey='base_currency'`) --
+    resolved once, before the loop (this install's `company_id` is a single
+    value shared by every row here, so one lookup is correct and cheap, and
+    the currency does not vary row to row either), never per return.
+    Defaults to `_tax_engine.DEFAULT_BASE_CURRENCY` ('JOD'), NEVER to the
+    2dp fallback, when `retail_settings` does not exist yet or carries no
+    `base_currency` row -- deliberately mirroring `_company_currency`'s own
+    contract ("RETURNS THE DEFAULT, NEVER None... a fresh Jordanian
+    install... is the COMMON case rather than an edge one"). Silently
+    falling back to 2dp for an unconfigured-currency install would
+    reintroduce this exact defect for precisely the shops most likely to
+    hit it.
     """
     existing_tables = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
@@ -8919,6 +8973,22 @@ def _migrate_add_return_settlement_split(conn):
         and 'credit_balance' in {row[1] for row in conn.execute('PRAGMA table_info(customers)').fetchall()}
     )
 
+    # DEFECT 1's points_redeemed_amount guard -- same shape as
+    # `customers_have_balance` immediately above, for the identical reason:
+    # a minimal test fixture may call this function directly against a
+    # hand-built `sales` table that predates schema v27. In every REAL
+    # upgrade this column already exists here -- `_migrate_add_loyalty_
+    # ledger` (v27) runs unconditionally, earlier in `_migrate_retail_
+    # schema`, whenever `sales` exists, and this function already required
+    # `sales` to exist a few lines above.
+    sales_have_points_redeemed = (
+        'points_redeemed_amount' in {row[1] for row in conn.execute('PRAGMA table_info(sales)').fetchall()}
+    )
+    # A hardcoded '0' literal, not a bind parameter, when the column is
+    # absent -- same "trusted internal constant, not user input" idiom the
+    # `ADD COLUMN {col}` f-string above already uses in this same function.
+    _points_redeemed_expr = 's.points_redeemed_amount' if sales_have_points_redeemed else '0'
+
     # Local import, same precedent as `_seed_retail`'s own
     # `from core.retail import pricing as _tax_engine` a few thousand lines
     # above in this same file: schema.py otherwise imports nothing from
@@ -8927,20 +8997,59 @@ def _migrate_add_return_settlement_split(conn):
     # -- the import is scoped to the one function that genuinely needs the
     # shared money-split rule, not hoisted to module level.
     from core.retail import returns_settlement as _returns_settlement
+    from core.retail import pricing as _tax_engine
 
-    rows = conn.execute("""
+    # DEFECT 2's currency resolution -- ONE lookup, before the loop, not per
+    # row: this install's `company_id` is a single shared value (see this
+    # function's own CORRECTED docstring paragraph for why `company_
+    # settings` itself is not reachable from this connection at all), and
+    # the currency does not vary row to row either. `retail_settings` is
+    # created lazily by api/retail_api.py's `_ensure_credit_schema`, not by
+    # this file's own migration chain (see e.g. `_v16_business_date`'s own
+    # "a `retail_settings` table that does not exist yet" guard a few
+    # thousand lines above for the same, already-established fact), so a
+    # migration can genuinely run before it exists -- guarded here the same
+    # defensive way, never raising mid-migration.
+    backfill_currency = None
+    if 'retail_settings' in existing_tables:
+        try:
+            _cid_row = conn.execute(
+                "SELECT company_id FROM sales WHERE company_id IS NOT NULL LIMIT 1"
+            ).fetchone()
+            if _cid_row and _cid_row[0] is not None:
+                _currency_row = conn.execute(
+                    "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+                    (_cid_row[0],)
+                ).fetchone()
+                if _currency_row and _currency_row[0]:
+                    backfill_currency = _currency_row[0]
+        except Exception:
+            backfill_currency = None  # degrade to the default below, never raise mid-migration
+    if not backfill_currency:
+        # Never the bare 2dp fallback here -- see the docstring's DEFECT 2
+        # paragraph for why that would silently reintroduce this exact bug
+        # for an unconfigured-currency (i.e. freshly-installed) JOD shop,
+        # the common case this whole migration is about.
+        backfill_currency = _tax_engine.DEFAULT_BASE_CURRENCY
+
+    rows = conn.execute(f"""
         SELECT r.id, r.sale_id, r.refund_amount, r.refund_method,
-               s.total AS sale_total, s.customer_id AS sale_customer_id
+               s.total AS sale_total, s.customer_id AS sale_customer_id,
+               s.amount_paid AS sale_amount_paid,
+               {_points_redeemed_expr} AS sale_points_redeemed
         FROM returns r JOIN sales s ON r.sale_id = s.id
         ORDER BY r.sale_id, r.id
     """).fetchall()
 
     _tender_collected_cache = {}   # sale_id -> total tender ever collected
     _running = {}                  # sale_id -> (tender_claimed, ar_claimed) so far
-    for rid, sale_id, refund_amount, refund_method, sale_total, customer_id in rows:
+    for (rid, sale_id, refund_amount, refund_method, sale_total, customer_id,
+         sale_amount_paid, sale_points_redeemed) in rows:
         refund_amount = float(refund_amount or 0)
         refund_method = refund_method or 'cash'
         sale_total = float(sale_total or 0)
+        sale_amount_paid = float(sale_amount_paid or 0)
+        sale_points_redeemed = float(sale_points_redeemed or 0)
 
         if sale_id not in _tender_collected_cache:
             _tender_collected_cache[sale_id] = float(conn.execute(
@@ -8952,7 +9061,13 @@ def _migrate_add_return_settlement_split(conn):
 
         prior_tender, prior_ar = _running.get(sale_id, (0.0, 0.0))
         tender_available = tender_collected - prior_tender
-        original_balance_due = max(0.0, sale_total - tender_collected)
+        # DEFECT 1 FIX -- mirrors create_return's OWN `original_balance_due`
+        # (`sale.total - sale.points_redeemed_amount - sale.amount_paid`),
+        # NOT this migration's own prior, DIFFERENT formula
+        # (`sale_total - tender_collected`). See this function's docstring,
+        # "CORRECTED 2026-09-17" / DEFECT 1, for why they diverge and why
+        # the points subtraction is not optional.
+        original_balance_due = max(0.0, sale_total - sale_points_redeemed - sale_amount_paid)
         balance_due_remaining = max(0.0, original_balance_due - prior_ar)
 
         current_balance = 0.0
@@ -8964,7 +9079,8 @@ def _migrate_add_return_settlement_split(conn):
 
         tender_refund, ar_forgiven, store_credit = _returns_settlement.split_return_settlement(
             refund_amount, tender_available, refund_method,
-            balance_due_remaining, current_balance, bool(customer_id))
+            balance_due_remaining, current_balance, bool(customer_id),
+            backfill_currency)
 
         conn.execute(
             "UPDATE returns SET tender_refund_amount=?, ar_forgiven_amount=?, store_credit_amount=? WHERE id=?",

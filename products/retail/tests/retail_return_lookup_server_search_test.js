@@ -1,8 +1,12 @@
 /**
  * Regression test: a receipt older than the till's recent page must still be
- * refundable.
+ * refundable. ALSO pins two later fixes to the same function -- see "Cases
+ * 4-5" below: the refund-method <select> must not offer `store_credit` on a
+ * sale with no customer to credit it to, and must never resolve to an empty
+ * `refund_method` if an original-method <option> is ever added then removed
+ * in the same pass.
  *
- * ── THE SHIPPED BUG ──────────────────────────────────────────────────────────
+ * ── THE SHIPPED BUG (cases 1-3) ────────────────────────────────────────────
  *
  * RetailSystem._findSaleForReturn() (products/retail/frontend/subsystem-retail.js)
  * resolved a typed receipt number by fetching
@@ -136,6 +140,12 @@ const SALE_ITEMS = {
 // Fake server: a model of recent_sales + get_sale, WHERE-then-ORDER-then-LIMIT.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Hoisted out of makeServer (was a closure-local duplicate) so cases 4/5's
+// own dedicated fetch models can share it without re-defining it.
+function jsonResponse(payload, httpStatus = 200) {
+  return Promise.resolve({ status: httpStatus, json: async () => payload });
+}
+
 function makeServer(book) {
   const requests = [];
 
@@ -175,10 +185,6 @@ function makeServer(book) {
     return jsonResponse({ status: 'success', data: [] });
   }
 
-  function jsonResponse(payload, httpStatus = 200) {
-    return Promise.resolve({ status: httpStatus, json: async () => payload });
-  }
-
   return { requests, fetchImpl, queryRecent };
 }
 
@@ -204,7 +210,78 @@ function makeElementStub(overrides) {
   }, overrides);
 }
 
-function loadRetailSystem({ fetchImpl, toasts, typedReceipt }) {
+// ── A REAL functioning <select> stub, deliberately NOT `makeElementStub`. ──
+//
+// Cases 1-2 above resolve `document.getElementById('ret-refund-method')` to
+// a bare `makeElementStub`, which has no `.options` at all -- that is a
+// documented, deliberate choice (see _findSaleForReturn's own
+// `methodSel.options` guard comment), and it means the option-toggle logic
+// in that function -- the pre-existing 'bank'-method handling AND the
+// store_credit gate this file's cases 4-5 exist to pin -- is SKIPPED
+// entirely by cases 1-2. A stub with no `.options` can never expose a
+// regression in code that only runs when `.options` exists, so cases 4-5
+// need a select that behaves like a real one: a live, array-backed
+// `.options`, `.add()`, and `.value`/`.selectedIndex` that track each other
+// exactly the way a browser's <select> does (assigning `.value` to
+// something with no matching <option> resolves to `selectedIndex === -1`
+// and `.value === ''`, not a thrown error -- that exact behaviour is what
+// case 5 depends on).
+// Every real <option> element has `.remove()` (inherited from
+// ChildNode/Element) regardless of whether it was parsed from static markup
+// or built with `new Option(...)` -- so this stub gives BOTH the same
+// `.remove()`, via the same function, rather than only the ones the test
+// happens to construct through `OptionCtor`. Case 4.1 failed against this
+// harness's FIRST draft precisely because the seeded initial options were
+// missing it: the fixed production code's `scOption.remove()` call was
+// silently no-op'd by the `typeof scOption.remove === 'function'` guard,
+// not by anything wrong in subsystem-retail.js -- a bug in the harness, not
+// the code under test, caught by actually running it rather than assuming
+// the stub was faithful.
+function makeOptionStub(value, owner, text) {
+  return {
+    value,
+    text: text !== undefined ? text : value,
+    _owner: owner,
+    get textContent() { return this.text; },
+    remove() {
+      if (this._owner) {
+        const i = this._owner.indexOf(this);
+        if (i !== -1) this._owner.splice(i, 1);
+      }
+    },
+  };
+}
+
+function makeSelectStub(initialOptionValues) {
+  const options = [];
+  for (const v of initialOptionValues) options.push(makeOptionStub(v, options));
+  let selectedIndex = options.length ? 0 : -1;
+  return {
+    id: 'ret-refund-method',
+    get options() { return options; },
+    get selectedIndex() { return selectedIndex; },
+    set selectedIndex(i) { selectedIndex = i; },
+    get value() { return selectedIndex >= 0 && options[selectedIndex] ? options[selectedIndex].value : ''; },
+    set value(v) { selectedIndex = options.findIndex(o => o.value === v); },
+    add(opt) { opt._owner = options; options.push(opt); },
+  };
+}
+
+// Stand-in for the browser global `new Option(text, value)` -- not present
+// in Node's `vm` sandbox by default, so it is injected explicitly (only for
+// cases 4-5; cases 1-2's stub-with-no-`.options` never reaches the code that
+// would call it, exactly like today). Built on the SAME `makeOptionStub` the
+// seeded initial options use, so a constructed option and a seeded one are
+// indistinguishable to `_findSaleForReturn` -- both get a working `.remove()`.
+// `_owner` is left unset until `methodSel.add()` assigns it, matching real
+// DOM semantics (an Option isn't owned by any <select> until inserted).
+function makeOptionCtor() {
+  return function Option(text, value) {
+    return makeOptionStub(value, null, text);
+  };
+}
+
+function loadRetailSystem({ fetchImpl, toasts, typedReceipt, methodSel, optionCtor }) {
   const code = fs.readFileSync(FRONTEND_FILE, 'utf8');
 
   const searchBox = makeElementStub({ id: 'ret-sale-search', value: typedReceipt });
@@ -213,6 +290,10 @@ function loadRetailSystem({ fetchImpl, toasts, typedReceipt }) {
     'ret-sale-search': searchBox,
     'ret-sale-items': itemsBox,
   };
+  // Only wired up when a caller (cases 4-5) passes one -- omitting it keeps
+  // cases 1-2 byte-for-byte the same as before this change: `getElementById`
+  // falls through to a fresh bare `makeElementStub`, exactly as it always did.
+  if (methodSel) els['ret-refund-method'] = methodSel;
 
   const sandbox = {
     console,
@@ -236,6 +317,9 @@ function loadRetailSystem({ fetchImpl, toasts, typedReceipt }) {
       checkAuthAndSetup() {},
     },
   };
+  // Same rationale as `methodSel` above: only present when a caller needs
+  // it, so cases 1-2 (which never call `new Option(...)`) are unaffected.
+  if (optionCtor) sandbox.Option = optionCtor;
   sandbox.window = sandbox;
 
   vm.createContext(sandbox);
@@ -366,6 +450,203 @@ async function main() {
       'The cashier must be told the receipt was not found rather than left with a ' +
       'silently empty item table. Toasts: ' + JSON.stringify(toasts)
     );
+  }
+
+  // ── Case 4: store_credit is only offered when the sale has a customer ───
+  //
+  // THE SHIPPED DEFECT THIS CASE PINS: `_openCreateReturn()`'s refund-method
+  // <select> used to ship a static `<option value="store_credit">` no
+  // matter what. Choosing it on an ordinary WALK-IN cash return -- no
+  // customer attached -- forces the tender refund to zero, and the whole
+  // refund falls through to store credit with nobody to credit it to:
+  //
+  //     409 {'message': 'This return leaves an uncollected balance with no
+  //          customer to credit it to.'}
+  //
+  // naming a customer the cashier never chose. See subsystem-retail.js's own
+  // comment above `_openCreateReturn` for the full reasoning (including why
+  // the backend guard's "provably unreachable" comment was wrong), and
+  // `returns_settlement.py` for the guard itself.
+  //
+  // THE FIX: `_findSaleForReturn` now adds/removes a `store_credit` <option>
+  // on every lookup, gated on `full.sale.customer_id` (get_sale's response
+  // nests the sale under `data.sale` -- confirmed against `_viewSale`'s own
+  // `resp.sale`/`resp.items` destructuring, and modelled that way by this
+  // file's own fake server above).
+  //
+  // WHY THIS NEEDS A DIFFERENT DOM STUB: cases 1-3 above resolve
+  // `ret-refund-method` to a bare `makeElementStub`, which has no `.options`
+  // -- _findSaleForReturn's own guard comment says this is deliberate, and
+  // it means the option-toggle code (old absence of it, or this fix's gate)
+  // is SKIPPED by every case above this one. `makeSelectStub` below is a
+  // REAL functioning <select> stub for exactly this reason.
+  //
+  // Seeded with `store_credit` ALREADY PRESENT (not the post-fix static
+  // markup's bare cash/card) so assertion 4.1 is a genuine mutation-proof:
+  // against the pre-fix code (which never touches this option at all), a
+  // walk-in lookup leaves it sitting there untouched -- reproducing the real
+  // defect -- where the fix must actively remove it.
+  {
+    const WALKIN_ID = 90001;
+    const WALKIN_NUMBER = `SALE-000090-${COMPANY_FRAGMENT}-22222222`;
+    const CUSTOMER_ID = 90002;
+    const CUSTOMER_NUMBER = `SALE-000091-${COMPANY_FRAGMENT}-22222222`;
+    const gateBook = {
+      [WALKIN_ID]: { id: WALKIN_ID, sale_number: WALKIN_NUMBER, customer_id: null, customer_name: 'Walk-in' },
+      [CUSTOMER_ID]: { id: CUSTOMER_ID, sale_number: CUSTOMER_NUMBER, customer_id: 'cust-uuid-abc123', customer_name: 'Nadia Haddad' },
+    };
+    const gateItems = {
+      [WALKIN_ID]: [{ product_id: 'p-widget', product_name: 'Widget', quantity: 1, unit_price: 12.5 }],
+      [CUSTOMER_ID]: [{ product_id: 'p-gadget', product_name: 'Gadget', quantity: 1, unit_price: 40 }],
+    };
+    function gateFetch(url) {
+      const u = new URL(url, 'http://till.local');
+      if (u.pathname === '/api/sub/retail/sales/recent') {
+        const q = (u.searchParams.get('q') || '').toLowerCase();
+        const all = Object.values(gateBook);
+        return jsonResponse({ status: 'success', data: q ? all.filter(s => s.sale_number.toLowerCase().includes(q)) : all });
+      }
+      const m = u.pathname.match(/^\/api\/sub\/retail\/sales\/(\d+)$/);
+      if (m) {
+        const sale = gateBook[Number(m[1])];
+        if (!sale) return jsonResponse({ status: 'error', message: 'Not found' }, 404);
+        return jsonResponse({ status: 'success', data: { sale, items: gateItems[sale.id] || [] } });
+      }
+      return jsonResponse({ status: 'success', data: [] });
+    }
+
+    // One <select> instance, reused across three lookups -- exactly like one
+    // still-open modal in which a cashier looks up more than one receipt.
+    const methodSel = makeSelectStub(['cash', 'card', 'store_credit']);
+    const optionCtor = makeOptionCtor();
+    function lookup(receiptNumber) {
+      const { RetailSystem } = loadRetailSystem({
+        fetchImpl: gateFetch, toasts: [], typedReceipt: receiptNumber, methodSel, optionCtor,
+      });
+      RetailSystem._returnSaleId = null; // as _openCreateReturn() leaves it
+      return RetailSystem._findSaleForReturn().then(() => RetailSystem);
+    }
+
+    // -- 4.1: walk-in lookup must remove store_credit, and leave cash/card
+    // selectable so the normal refund still works. --
+    let RetailSystem = await lookup(WALKIN_NUMBER);
+    let values = methodSel.options.map(o => o.value);
+    assert.strictEqual(RetailSystem._returnSaleId, WALKIN_ID,
+      'Case 4.1: the walk-in receipt must resolve. Options so far: ' + JSON.stringify(values));
+    assert.ok(!values.includes('store_credit'),
+      'Case 4.1 FAILED: store_credit must not be offered on a walk-in return (no customer to ' +
+      'credit it to -- this is the shipped 409 defect). Options: ' + JSON.stringify(values));
+    assert.ok(values.includes('cash') && values.includes('card'),
+      'Case 4.1 FAILED: cash/card must remain selectable for the normal refund. Options: ' +
+      JSON.stringify(values));
+
+    // -- 4.2: SAME open modal, re-look-up a sale WITH a customer -- the fix
+    // must not have removed the feature outright. --
+    RetailSystem = await lookup(CUSTOMER_NUMBER);
+    values = methodSel.options.map(o => o.value);
+    assert.strictEqual(RetailSystem._returnSaleId, CUSTOMER_ID,
+      'Case 4.2: the customer-sale receipt must resolve. Options so far: ' + JSON.stringify(values));
+    assert.ok(values.includes('store_credit'),
+      'Case 4.2 FAILED: store_credit must be offered when the sale has a customer to credit -- ' +
+      'a fix that removes the option for everyone would pass case 4.1 and fail this one. ' +
+      'Options: ' + JSON.stringify(values));
+
+    // -- 4.3 (the leak case): re-look-up BACK to the walk-in receipt, still
+    // the same open modal -- store_credit must disappear again rather than
+    // leaking the previous receipt's customer onto this one. --
+    RetailSystem = await lookup(WALKIN_NUMBER);
+    values = methodSel.options.map(o => o.value);
+    assert.ok(!values.includes('store_credit'),
+      'Case 4.3 FAILED: store_credit leaked from the previous customer lookup into a walk-in ' +
+      're-lookup inside the same still-open modal. Options: ' + JSON.stringify(values));
+  }
+
+  // ── Case 5: ordering-trap recovery -- an unselectable original method
+  // must not leave refund_method silently empty. ──────────────────────────
+  //
+  // _findSaleForReturn's sequence is: (a) add an <option> for `originalMethod`
+  // if the select doesn't already have a matching one (pre-existing 'bank'/
+  // free-text handling), (b) case 4's gate adds/removes `store_credit` based
+  // on `customer_id`, (c) `methodSel.value = originalMethod`. If
+  // `originalMethod` were ever 'store_credit' on a sale the gate in (b) just
+  // decided has no customer, (a) adds the option, (b) immediately removes it
+  // again, and (c) assigns a value with no matching <option> -- native
+  // <select> behaviour resolves that to `selectedIndex === -1` / `.value ===
+  // ''`, NOT a thrown error. A cashier would silently submit an EMPTY
+  // refund_method.
+  //
+  // REACHABILITY: `create_sale` does not write `payment_method =
+  // 'store_credit'` anywhere on today's sale-write path, so this exact trap
+  // is not known to be reachable in production. That is precisely the shape
+  // of reasoning that shipped the defect case 4 exists to catch ("provably
+  // unreachable" -- see the backend guard's own comment this task
+  // corrected), so it is closed structurally here rather than trusted.
+  //
+  // WHY THIS FIXTURE PUTS `payment_method` AT THE TOP LEVEL of the
+  // `/sales/<id>` response: `_findSaleForReturn` seeds `originalMethod` from
+  // `full.payment_method` -- NOT `full.sale.payment_method`, even though
+  // `get_sale`'s real response nests the sale under `data.sale` (see case 4's
+  // fixture, which correctly reads `full.sale.customer_id`). That mismatch is
+  // a separate, pre-existing bug outside this fix's scope: in production
+  // today `full.payment_method` is always `undefined`, so `originalMethod`
+  // always falls back to 'cash' regardless of a sale's real payment method,
+  // and this exact trap cannot be driven end-to-end through a real backend
+  // response today for a SECOND, independent reason. This fixture drives the
+  // exact field the shipped code actually reads, so it proves the recovery
+  // branch fires correctly if that field is ever populated -- not that this
+  // specific trap is reachable end-to-end today.
+  {
+    const TRAP_ID = 90099;
+    const TRAP_NUMBER = `SALE-000099-${COMPANY_FRAGMENT}-33333333`;
+    function trapFetch(url) {
+      const u = new URL(url, 'http://till.local');
+      if (u.pathname === '/api/sub/retail/sales/recent') {
+        const q = (u.searchParams.get('q') || '').toLowerCase();
+        const row = { id: TRAP_ID, sale_number: TRAP_NUMBER, customer_name: 'Walk-in' };
+        return jsonResponse({ status: 'success', data: q && !row.sale_number.toLowerCase().includes(q) ? [] : [row] });
+      }
+      if (u.pathname === `/api/sub/retail/sales/${TRAP_ID}`) {
+        return jsonResponse({
+          status: 'success',
+          data: {
+            sale: { id: TRAP_ID, customer_id: null, customer_name: 'Walk-in' },
+            // See the comment above: this is the top-level field the CURRENT
+            // shipped code actually reads (full.payment_method), not the
+            // real nested get_sale shape (full.sale.payment_method).
+            payment_method: 'store_credit',
+            items: [{ product_id: 'p-trap', product_name: 'Trap Widget', quantity: 1, unit_price: 5 }],
+          },
+        });
+      }
+      return jsonResponse({ status: 'success', data: [] });
+    }
+
+    const methodSel = makeSelectStub(['cash', 'card']);
+    const { RetailSystem } = loadRetailSystem({
+      fetchImpl: trapFetch, toasts: [], typedReceipt: TRAP_NUMBER,
+      methodSel, optionCtor: makeOptionCtor(),
+    });
+    RetailSystem._returnSaleId = null;
+
+    await RetailSystem._findSaleForReturn();
+
+    const values = methodSel.options.map(o => o.value);
+    assert.strictEqual(RetailSystem._returnSaleId, TRAP_ID,
+      'Case 5 setup: the trap sale must resolve. Options: ' + JSON.stringify(values));
+    assert.ok(!values.includes('store_credit'),
+      'Case 5 setup FAILED: the walk-in gate should have removed store_credit again after ' +
+      'adding it for the (fictitious) original method -- if it did not, this case is not ' +
+      'exercising the trap it exists to catch. Options: ' + JSON.stringify(values));
+    assert.notStrictEqual(methodSel.selectedIndex, -1,
+      'Case 5 FAILED: refund_method resolved to NO selected option (selectedIndex -1) -- the ' +
+      'form would submit an empty refund_method. Options: ' + JSON.stringify(values));
+    assert.strictEqual(methodSel.value, 'cash',
+      "Case 5 FAILED: expected recovery to 'cash' once the original method's option no longer " +
+      'existed. Got value: ' + JSON.stringify(methodSel.value));
+    assert.strictEqual(RetailSystem._returnSaleOriginalMethod, 'cash',
+      'Case 5 FAILED: _returnSaleOriginalMethod must be corrected to match what is actually ' +
+      'shown, or _saveReturn would later pop a "paid by store_credit" confirmation for a value ' +
+      'that was never actually selectable.');
   }
 
   console.log('PASS: retail_return_lookup_server_search_test.js');

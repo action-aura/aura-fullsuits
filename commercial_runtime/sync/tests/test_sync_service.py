@@ -251,6 +251,21 @@ CREATE TABLE returns (
     actor_user_uid TEXT,
     terminal_id TEXT,
     created_at_utc TEXT,
+    -- Retail schema v36 (_migrate_add_return_settlement_split). This fixture
+    -- hand-rolls a minimal `returns` rather than importing the product's real
+    -- schema, so it does not pick up a migration automatically and drifted the
+    -- moment those columns landed: the sync apply INSERT names them, and four
+    -- tests here failed with "table returns has no column named
+    -- tender_refund_amount".
+    --
+    -- Added to match the real table, NOT to make a failure go away -- the
+    -- INSERT naming them is the fix for a cross-device double payout (a return
+    -- that synced to a second till re-opened the whole tender pool, because
+    -- the split landed at 0 there and the prior-claims query saw nothing to
+    -- subtract). A fixture that cannot represent the columns cannot test that.
+    tender_refund_amount REAL DEFAULT 0,
+    ar_forgiven_amount REAL DEFAULT 0,
+    store_credit_amount REAL DEFAULT 0,
     FOREIGN KEY (sale_id) REFERENCES sales(id)
 );
 CREATE UNIQUE INDEX idx_returns_uid ON returns(uid) WHERE uid IS NOT NULL;

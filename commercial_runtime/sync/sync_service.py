@@ -2106,17 +2106,69 @@ class SyncService:
             # branch's own `_resolve_branch_id` call above.
             resolved_branch_id = self._resolve_branch_id(
                 conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+            # Cross-device double-payout fix -- the three-way split
+            # (`tender_refund_amount`/`ar_forgiven_amount`/
+            # `store_credit_amount`) exists precisely so a refund is never
+            # counted as BOTH drawer cash AND debt forgiveness -- see
+            # core/retail/returns_settlement.py's own module docstring.
+            # retail_api.py's create_return() already puts all three on the
+            # wire (`_queue_sync_event(cur, 'return', ...)`); this INSERT
+            # used to omit them from its column list entirely, so every
+            # SYNCED return landed at the column DEFAULT of 0 regardless of
+            # what the sending device actually recorded. create_return's own
+            # partial-return guard (`_prior` in retail_api.py) sums exactly
+            # this column across a sale's completed returns to know how much
+            # tender is still payable -- with it silently zeroed, a second
+            # device's own return against the same sale sees NO prior claim
+            # and reopens the WHOLE tender pool, doubling the cash payout
+            # (measured: sale 2x50=100, 40 cash/60 AR, return 1 claims 40
+            # tender; after syncing, a second till's return ALSO claims 40 --
+            # 80 paid out against 40 ever collected).
+            #
+            # A CURRENT device's payload carries all three keys, used as-is.
+            # An OLDER device's payload carries none of them, and the split
+            # is genuinely unknowable from the wire -- the fallback below
+            # treats the WHOLE refund as tender rather than guessing 0,
+            # because `_prior[0]` (the tender half) only ever answers "how
+            # much tender may still be paid out against this sale": guessing
+            # 0 PERMITS a double payout (exactly this defect), while guessing
+            # high merely REFUSES a later over-refund. Between paying twice
+            # and refusing once, refusing is the correct failure direction
+            # for money. `p.get(k)` alone, not `p.get(k, default)`, is
+            # deliberate: `dict.get(key, default)` returns `None` -- not
+            # `default` -- when `key` IS present with value `None`, so an
+            # explicit JSON null must be folded into the same fallback as an
+            # absent key via an explicit `is None` check, never silently
+            # written as a bare NULL into a money column.
+            #
+            # This fallback cannot distort any drawer report: this INSERT
+            # writes `session_id` as a literal NULL a few lines below (see
+            # the VALUES list), and `_cash_session_report` (retail_api.py)
+            # is session-scoped (`WHERE ... session_id=?`, and SQL NULL never
+            # equals a real session id) -- a synced return never enters
+            # another device's own X/Z report at all.
+            _tender_refund_amount = p.get("tender_refund_amount")
+            if _tender_refund_amount is None:
+                _tender_refund_amount = p.get("refund_amount", 0)
+            _ar_forgiven_amount = p.get("ar_forgiven_amount")
+            if _ar_forgiven_amount is None:
+                _ar_forgiven_amount = 0
+            _store_credit_amount = p.get("store_credit_amount")
+            if _store_credit_amount is None:
+                _store_credit_amount = 0
             try:
                 conn.execute(
                     "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
                     "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
-                    "uid, actor_user_uid, terminal_id, created_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?) "
+                    "uid, actor_user_uid, terminal_id, created_at_utc, "
+                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
                      p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
                      p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
-                     p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
+                     p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc"),
+                     _tender_refund_amount, _ar_forgiven_amount, _store_credit_amount),
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34) -- identical

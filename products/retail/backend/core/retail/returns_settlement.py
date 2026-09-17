@@ -128,9 +128,20 @@ def split_return_settlement(refund, tender_available, requested_method,
     case).
     `has_customer` -- False for a walk-in; forces ar_forgiven to 0 (a
     walk-in cannot carry AR at all, so any leftover after the tender cap
-    is store_credit, handled defensively by the caller -- see
-    create_return's own 409 guard for why this is provably unreachable
-    today).
+    is store_credit, refused by create_return's own 409 guard).
+
+    THAT GUARD IS REACHABLE, and this docstring used to claim the opposite
+    ("provably unreachable today"). It is corrected rather than deleted
+    because the wrong claim is the more instructive artefact: the reasoning
+    was that `is_credit` forces a `customer_id` whenever `balance_due>0`,
+    so store_credit could never be positive without a customer. The hole is
+    directly above -- `requested_method == 'store_credit'` zeroes
+    `tender_refund_d` BEFORE that invariant applies, so the entire refund
+    falls through to store_credit with nobody to credit. Measured on a
+    plain walk-in (100 cash, full return, method 'store_credit'): a hard
+    409 naming a customer the cashier never chose. The desktop client no
+    longer offers the option without a customer, but the API is reachable
+    independently of that client, so the guard stays.
     """
     quant = tax_engine.currency_quantum(currency) if currency else _FALLBACK_QUANTUM
     refund_d = Decimal(str(refund or 0))
