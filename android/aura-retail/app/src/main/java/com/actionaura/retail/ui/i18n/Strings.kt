@@ -472,6 +472,14 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // reversal row on the customer/supplier statement (StatementSheet /
     // SupplierStatementSheet in RetailExtraScreens.kt).
     "Cheque returned" to "شيك مرتجع",
+    // The two return-settlement buckets that move customers.credit_balance
+    // without a `payments` row -- customer_statement now emits them as
+    // kinds 'return_forgiven' and 'return_credit' (retail_api.py). Wording
+    // reuses this catalog's established terms rather than inventing any:
+    // مستحقات for receivables and رصيد لدى المتجر for store credit, both
+    // already used by the desktop catalog's own refund-settlement toasts.
+    "Credit forgiven" to "إعفاء من المستحقات",
+    "Store credit issued" to "رصيد صادر لدى المتجر",
     "Payment" to "دفعة",
     "Void" to "إلغاء",
     "Record a payment" to "تسجيل دفعة",

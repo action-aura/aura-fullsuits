@@ -12810,9 +12810,39 @@ def customer_statement(cust_id):
                         (cust_id, cid)).fetchone()
     if not cust:
         conn.close(); return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
-    charges = conn.execute("SELECT sale_number AS ref, created_at, (total - amount_paid) AS amount, 'charge' AS kind "
-                           "FROM sales WHERE company_id=? AND customer_id=? AND (total - amount_paid) > 0.005",
-                           (cid, cust_id)).fetchall()
+    # THE CHARGE IS THE AR THIS SALE ACTUALLY CREATED -- term for term the
+    # figure create_sale credited: `balance_due = amount_due_after_points -
+    # paid`, where `amount_due_after_points = total - points_redeemed_amount`
+    # (create_sale ~line 6264, and its own "THE CASH TRAP" comment for why
+    # `sales.total` deliberately stays whole so the invoice reads right).
+    #
+    # DEFECT FIXED HERE: this was `total - amount_paid`, dropping the points
+    # term, so a customer who spent 30 of their own loyalty points on a 100
+    # sale read 30 MORE owed here than create_sale ever put on their account.
+    # It is the same missing term ffa221a5 fixed inside create_return, in a
+    # second site nobody had checked -- and it is why "mirror create_sale's
+    # formula" is written out above rather than left to be re-derived.
+    #
+    # `sales.amount_paid` is IMMUTABLE (there is no `UPDATE sales SET`
+    # anywhere in this file -- a sale is corrected by a return, never edited),
+    # so this stays the creation-time figure. That is what makes it safe to
+    # also list the customer's later account payments as their own events
+    # below without double-counting; the supplier side's `purchase_orders.
+    # amount_paid` is NOT immutable, which is why supplier_statement resolves
+    # the same problem the other way round (see its own comment).
+    #
+    # `> 0.005` MIRRORS create_sale's own `balance_due > 0.005` gate rather
+    # than being chosen independently: the two have to agree about whether a
+    # sale became a debt at all, or this statement shows a charge the account
+    # never carried. It is a 2dp-era literal on a 3-decimal currency and is
+    # deliberately NOT made finer here alone -- see create_return's long note
+    # on the identical literal for why the whole set has to move at once.
+    charges = conn.execute(
+        "SELECT sale_number AS ref, created_at, "
+        "(total - COALESCE(points_redeemed_amount,0) - amount_paid) AS amount, 'charge' AS kind, 1 AS sign "
+        "FROM sales WHERE company_id=? AND customer_id=? "
+        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > 0.005",
+        (cid, cust_id)).fetchall()
     # Aseel-parity wave A-PAR (schema v32) FORCED FIX, not a new feature: a
     # cheque bounce writes the OPPOSITE `direction` on purpose (see
     # _apply_cheque_event's own "THE MONEY LEG" comment -- a NEW row, never
@@ -12828,12 +12858,88 @@ def customer_statement(cust_id):
     # customer_payment is always 'in', so this is additive for every
     # existing statement -- it does not change what an ordinary receipt
     # renders as.
+    #
+    # `COALESCE(related_type,'') <> 'sale'` -- SECOND DEFECT FIXED HERE, and
+    # the one that needed no credit, no return and no points to reproduce.
+    # create_sale writes a `payments` row for the cash it actually retained
+    # (`_record_payment(..., party_type='customer', party_id=customer_id,
+    # related_type='sale', ...)`, its `net_received` block), so an ordinary
+    # CASH sale to a named regular landed here as a "Payment" line. The
+    # `charges` query above is already net of that same tender, so the tender
+    # was subtracted TWICE -- and on a fully-paid cash sale, where `charges`
+    # drops the sale entirely, it was subtracted once against no charge at
+    # all. A customer who owes nothing and always pays cash accumulated one
+    # negative line per visit: measured at -100.000 after a single 100.000
+    # sale, printed beside a `balance` of 0.
+    #
+    # A sale's tender is drawer cash, never an AR movement -- it never
+    # touched `customers.credit_balance` (create_sale credits `balance_due`
+    # separately, which is exactly what `charges` reports). Excluding it is
+    # therefore not hiding a payment; it is declining to invent one.
+    #
+    # `COALESCE(related_type,'')` rather than a bare `<>`: a direct account
+    # payment (customer_payment) stores NULL there, and `NULL <> 'sale'` is
+    # NULL in SQL, i.e. NOT TRUE -- a bare comparison would have silently
+    # dropped every real account payment and left only cheques. Cheques carry
+    # related_type='cheque' and are unaffected either way.
+    #
+    # NOT reachable through void: void_payment refuses a receipt tied to a
+    # sale outright (409, "This receipt belongs to a sale. Process a return
+    # against that sale instead"), so no excluded row can later move
+    # `credit_balance` behind this statement's back. That refusal was
+    # verified before choosing this shape over the alternative of billing the
+    # whole sale and keeping the tender line.
     receipts = conn.execute(
         "SELECT id, reference AS ref, created_at, amount, direction, "
-        "CASE WHEN direction='in' THEN 'payment' ELSE 'reversal' END AS kind "
+        "CASE WHEN direction='in' THEN 'payment' ELSE 'reversal' END AS kind, "
+        "CASE WHEN direction='in' THEN -1 ELSE 1 END AS sign "
         "FROM payments WHERE company_id=? AND party_type='customer' AND party_id=? "
-        "AND COALESCE(status,'active')='active'", (cid, cust_id)).fetchall()
-    events = [dict(r) for r in charges] + [dict(r) for r in receipts]
+        "AND COALESCE(status,'active')='active' AND COALESCE(related_type,'') <> 'sale'",
+        (cid, cust_id)).fetchall()
+    # THIRD DEFECT FIXED HERE -- the one this route's own closing NOTE has
+    # named in writing since the A-PAR wave, and ffa221a5's commit message
+    # left "for its own pass": create_return settles a refund across three
+    # buckets, and TWO of them move `customers.credit_balance` through
+    # `_adjust_credit` while writing no `payments` row at all (see its "AR
+    # forgiveness + store credit" block). Neither has ever appeared here, so
+    # a customer whose account a return had just settled still read the
+    # original charge and a running balance of the full amount.
+    #
+    # Both are persisted columns on the return itself since schema v36, which
+    # is what makes them reportable rather than re-derivable: `ar_forgiven_
+    # amount` (debt written off against this sale) and `store_credit_amount`
+    # (value handed back as credit when the debt was already paid down some
+    # other way -- it drives the balance NEGATIVE, the shop owing the
+    # customer). They are kept as two event kinds rather than summed into
+    # one, because they mean different things to a shopkeeper reading the
+    # ledger and because collapsing two distinct meanings into a single kind
+    # is precisely the bug the A-PAR fix above had to undo.
+    #
+    # The THIRD bucket, `tender_refund_amount`, is deliberately absent: that
+    # is cash physically handed back at the till, and it never touched
+    # `credit_balance` -- the same reason the sale's own tender is excluded
+    # from `receipts` above. It belongs on the drawer report, which is where
+    # `_cash_session_report` already sums it.
+    #
+    # `> 0.005` on each bucket MIRRORS create_return's own two write gates
+    # (`if ar_forgiven > 0.005:` / `if store_credit > 0.005:`) exactly, so
+    # this statement reports an event if and only if the balance really
+    # moved. `status='completed'` matches the only status create_return ever
+    # writes, and the same filter its own prior-claims query applies.
+    settlements = conn.execute(
+        "SELECT r.return_number AS ref, r.created_at AS created_at, "
+        "COALESCE(r.ar_forgiven_amount,0) AS amount, 'return_forgiven' AS kind, -1 AS sign "
+        "FROM returns r JOIN sales s ON s.id = r.sale_id "
+        "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
+        "AND COALESCE(r.ar_forgiven_amount,0) > 0.005 "
+        "UNION ALL "
+        "SELECT r.return_number AS ref, r.created_at AS created_at, "
+        "COALESCE(r.store_credit_amount,0) AS amount, 'return_credit' AS kind, -1 AS sign "
+        "FROM returns r JOIN sales s ON s.id = r.sale_id "
+        "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
+        "AND COALESCE(r.store_credit_amount,0) > 0.005",
+        (cid, cid, cust_id, cid, cid, cust_id)).fetchall()
+    events = [dict(r) for r in charges] + [dict(r) for r in receipts] + [dict(r) for r in settlements]
     events.sort(key=lambda e: e.get('created_at') or '')
     # Read ONCE, applied to every figure this statement returns -- same rule
     # `_cash_session_report` and create_sale already follow: a running
@@ -12847,24 +12953,62 @@ def customer_statement(cust_id):
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
-        # 'charge' (a sale still owed) and 'reversal' (a bounced/cancelled
-        # cheque putting the debt BACK) both move the balance the same way
-        # a charge always has -- UP. Only 'payment' (money actually
-        # received) brings it down. See the comment on the `receipts` query
-        # above for why 'reversal' exists at all.
-        run = (run + amt) if e['kind'] in ('charge', 'reversal') else (run - amt)
+        # THE SIGN TRAVELS WITH THE ROW, from the query that knows what the
+        # row means -- it is NOT re-inferred here from `kind`.
+        #
+        # This used to read `(run + amt) if e['kind'] in ('charge',
+        # 'reversal') else (run - amt)`: a membership test with a catch-all
+        # else, so ANY kind not named in that tuple silently counted as
+        # money received. That is exactly how the A-PAR wave's bug happened
+        # one layer up on the client (a bounce reversal rendering as a green
+        # "Payment"), and adding the two return-settlement kinds below would
+        # have re-armed the identical trap for whoever adds the next kind --
+        # a new event type would default to reducing the customer's debt,
+        # which is the dangerous direction to be wrong in. Each SELECT above
+        # now emits its own `sign` (+1 increases what the party owes, -1
+        # reduces it) alongside `kind`, so `kind` is purely a LABEL and a new
+        # kind cannot acquire a direction by accident. `sign` is internal --
+        # it is deliberately not added to the response below, which keeps
+        # the wire shape Android's StatementEvent already parses.
+        run = run + (amt if int(e.get('sign', 1)) > 0 else -amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
                     'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
     conn.close()
-    # NOTE, deliberately not asserted as an identity anywhere: `balance`
-    # (customers.credit_balance) and the final `running_balance` above can
-    # ALREADY disagree even without cheques -- create_return calls
-    # `_adjust_credit(..., -ar_credit)` for a return against a credit sale
-    # but writes no `payments` row, so this statement's running total never
-    # sees that adjustment. Pre-existing, not created or worsened by this
-    # wave; named here and in ROADMAP.md so it is not later "fixed" by
-    # tightening this statement into an identity a return-free fixture would
-    # only accidentally hold.
+    # NOTE, REWRITTEN once the three defects above were fixed. The previous
+    # text said `balance` and the final `running_balance` "can ALREADY
+    # disagree", named the return-settlement gap as the reason, and warned
+    # against "tightening this statement into an identity a return-free
+    # fixture would only accidentally hold". That warning was right about the
+    # fixture and wrong about the conclusion: the cure for an event stream
+    # that does not add up to the balance is to emit the MISSING EVENTS, not
+    # to record that it does not add up. Two of the three causes it did not
+    # know about (the sale's own tender counted twice, and the dropped points
+    # term) had nothing to do with returns at all.
+    #
+    # Every writer of `customers.credit_balance` now has an event here. There
+    # are exactly five, enumerated by reading every `_adjust_credit(` call
+    # site in this file rather than from memory: create_sale's `balance_due`
+    # (-> `charges`), create_return's `ar_forgiven` and `store_credit` (->
+    # `settlements`), customer_payment (-> `receipts`), `_apply_cheque_event`'s
+    # money leg (-> `receipts`, both directions), and void_payment's reversal
+    # (-> a `receipts` row leaving `status='active'`). That is what makes the
+    # reconciliation assertable, and retail_customer_statement_reconciliation_
+    # test.py asserts it over all five through the real routes.
+    #
+    # WHAT CAN STILL DIVERGE, named rather than left to be rediscovered:
+    #   * A `credit_balance` written outside `_adjust_credit` -- a data
+    #     import's opening balance, or a fixture's direct UPDATE. There is no
+    #     event for a number nobody booked.
+    #   * A return recorded BEFORE schema v36, whose three settlement columns
+    #     were filled by `_migrate_add_return_settlement_split`. That
+    #     migration's own docstring calls itself a best-effort retroactive
+    #     application of the current rule, not a forensic reconstruction of
+    #     what `_adjust_credit` actually did at that historical instant.
+    #   * The `> 0.005` gates, which are 2dp-era literals in a 3-decimal
+    #     currency. They are mirrored from the write sites deliberately (see
+    #     each query above), so this statement is wrong in exactly the same
+    #     places `create_sale`/`create_return` are and never independently --
+    #     the whole set moves together or not at all.
     return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency)}})
 
 @retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
@@ -12930,20 +13074,49 @@ def supplier_statement(sid):
                        (sid, cid)).fetchone()
     if not sup:
         conn.close(); return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
-    charges = conn.execute("SELECT po_number AS ref, created_at, (total - COALESCE(amount_paid,0)) AS amount, 'charge' AS kind "
-                           "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total - COALESCE(amount_paid,0)) > 0.005",
-                           (cid, sid)).fetchall()
+    # `purchase_orders.amount_paid` is MUTABLE -- pay_purchase_order UPDATEs
+    # it on every instalment -- so unlike the customer side's immutable
+    # `sales.amount_paid`, this charge is the PO's LIVE outstanding balance
+    # and already reflects every payment made against it. That is why the
+    # duplicate-counting fix below excludes the PO's payment rows rather than
+    # widening this charge: the two statements reach the same invariant from
+    # opposite ends, and swapping the treatments would double-count on both.
+    charges = conn.execute(
+        "SELECT po_number AS ref, created_at, (total - COALESCE(amount_paid,0)) AS amount, 'charge' AS kind, 1 AS sign "
+        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total - COALESCE(amount_paid,0)) > 0.005",
+        (cid, sid)).fetchall()
     # Aseel-parity wave A-PAR (schema v32) FORCED FIX -- see
     # customer_statement's identical comment above for the full reasoning.
     # The settling direction is the MIRROR of the customer statement's: for
     # a supplier, PAYING them ('out') reduces what the shop owes, so 'out'
     # reads as 'payment' and a bounced/cancelled issued cheque ('in', the
     # money coming back) reads as 'reversal'.
+    #
+    # `COALESCE(related_type,'') <> 'po'` -- the SAME double-count
+    # customer_statement carries for a sale's own tender, in its supplier
+    # mirror. BOTH writers of a PO's money also move `purchase_orders.
+    # amount_paid`, which the `charges` query above reads live:
+    # create_purchase_order records its down-payment and stores it in
+    # `amount_paid`; pay_purchase_order UPDATEs `amount_paid` and writes a
+    # payment row. So every PO payment was subtracted twice -- once by
+    # shrinking the charge, once as its own line -- and a PO paid in full
+    # left no charge at all while its payment lines remained, driving the
+    # statement negative against a `credit_balance` of 0.
+    #
+    # A direct supplier payment (supplier_payment) stores related_type NULL
+    # and stays, which is correct: it reduces `credit_balance` without
+    # touching any PO's `amount_paid`, so nothing else here accounts for it.
+    # Cheques (related_type='cheque') stay for the same reason, in both
+    # directions. `COALESCE(...)` rather than a bare `<>` because `NULL <>
+    # 'po'` is NULL, not TRUE -- a bare comparison would have dropped every
+    # direct payment, which is the whole AP settlement path.
     payments = conn.execute(
         "SELECT id, reference AS ref, created_at, amount, direction, "
-        "CASE WHEN direction='out' THEN 'payment' ELSE 'reversal' END AS kind "
+        "CASE WHEN direction='out' THEN 'payment' ELSE 'reversal' END AS kind, "
+        "CASE WHEN direction='out' THEN -1 ELSE 1 END AS sign "
         "FROM payments WHERE company_id=? AND party_type='supplier' AND party_id=? "
-        "AND COALESCE(status,'active')='active'", (cid, sid)).fetchall()
+        "AND COALESCE(status,'active')='active' AND COALESCE(related_type,'') <> 'po'",
+        (cid, sid)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in payments]
     events.sort(key=lambda e: e.get('created_at') or '')
     # Same treatment as customer_statement's identical loop above -- see
@@ -12955,10 +13128,21 @@ def supplier_statement(sid):
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
-        run = (run + amt) if e['kind'] in ('charge', 'reversal') else (run - amt)
+        # Per-row `sign` from the query that knows what the row means, never
+        # re-inferred from `kind` here -- see customer_statement's identical
+        # loop for why the membership-test-with-catch-all-else this replaces
+        # is a trap rather than a style preference.
+        run = run + (amt if int(e.get('sign', 1)) > 0 else -amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
                     'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
     conn.close()
+    # There is no supplier mirror of customer_statement's `settlements` query:
+    # no route adjusts a SUPPLIER's credit_balance without a `payments` row
+    # (verified against every `_adjust_credit(conn, 'suppliers', ...)` call
+    # site -- create_purchase_order, supplier_payment, pay_purchase_order,
+    # the cheque money leg and void_payment, all five of which write or void
+    # one). A purchase-return path that forgave AP the way create_return
+    # forgives AR would need its own event kind here.
     return jsonify({'status': 'success', 'data': {'supplier': dict(sup), 'events': out, 'balance': _money(sup['credit_balance'], currency)}})
 
 @retail_bp.route('/suppliers/<string:sid>/payments', methods=['POST'])

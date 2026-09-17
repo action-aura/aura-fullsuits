@@ -951,6 +951,20 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                                     when (e.kind) {
                                         "charge" -> tr("Credit sale") + " ${e.ref ?: ""}"
                                         "reversal" -> tr("Cheque returned") + " ${e.ref ?: ""}"
+                                        // customer_statement's two new return-settlement
+                                        // kinds. Both REDUCE what the customer owes, so
+                                        // `isDebit` above correctly leaves them out and the
+                                        // green minus sign is already right -- what was
+                                        // wrong was the LABEL: without these two cases they
+                                        // fell into the `else` and a refund that forgave a
+                                        // debt, or issued store credit, both read as
+                                        // "Payment", claiming the customer handed money over
+                                        // when they had done the opposite. Same class of
+                                        // mistake as the A-PAR `reversal` fix above, which
+                                        // is why the backend gives each bucket its own kind
+                                        // instead of summing them into one.
+                                        "return_forgiven" -> tr("Credit forgiven") + " ${e.ref ?: ""}"
+                                        "return_credit" -> tr("Store credit issued") + " ${e.ref ?: ""}"
                                         else -> tr("Payment") + " ${e.ref ?: ""}"
                                     },
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)

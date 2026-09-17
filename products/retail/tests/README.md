@@ -64,11 +64,12 @@ Two things worth knowing before you trust a green run:
 
 ---
 
-## Money path — sales, returns, payments, cash drawer  (31 suites — 22 py, 9 js)
+## Money path — sales, returns, payments, cash drawer  (32 suites — 23 py, 9 js)
   - `retail_cash_drawer_test.py` — shift / cash-drawer management (feat/shift-cash-drawer,
   - `retail_changed_field_delta_test.py` — multi-device sync: changed-field deltas (launch-readiness
   - `retail_checkout_credit_walkin_guard_test.js` — Regression test for a missing client-side guard on Credit-method sales.
   - `retail_checkout_error_toast_test.js` — Regression test for a silent-failure bug on the Retail POS Charge button.
+  - `retail_customer_statement_reconciliation_test.py` — `customer_statement` must agree with `customers.credit_balance`.
   - `retail_dashboard_payment_colors_test.js` — Regression test for the Retail dashboard "Payment Methods" donut chart running out of colors on a day that uses every payment…
   - `retail_design_money_test.js` — OPERATIONAL CALM — money must be unambiguous.
   - `retail_drawer_money_sweep_test.py` — no route may hand anybody ANOTHER TILL's drawer money,

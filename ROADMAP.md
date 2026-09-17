@@ -3942,3 +3942,152 @@ Same wave, DEFECT 2 (`_adjust_credit`'s hardcoded 2dp quantum when no
 remaining un-converted callers (`create_sale`'s balance_due credit,
 `create_return`'s AR-forgiveness/store-credit calls) now pass `currency`.
 No schema involved in that half of the fix.
+
+
+## 2026-09-18 - the AR/AP STATEMENTS did not add up, for three separate reasons
+
+No schema change, no new route, no version claimed. Two existing GET routes
+(`customer_statement` / `supplier_statement` in retail_api.py) rendered a
+running balance that disagreed with the very number printed beside it.
+
+WHERE THIS CAME FROM. ffa221a5's commit message left three items "for their
+own passes", one of which was "returns do not appear on customer_statement AT
+ALL". That turned out to be the third-largest of three defects in the same
+route, and the other two were not about returns at all -- they needed no
+credit, no return and no loyalty points to reproduce.
+
+THE SCREEN THIS IS. Android's StatementSheet / SupplierStatementSheet
+(RetailExtraScreens.kt) prints each event, its running balance, and the live
+`credit_balance` as `balance`, all at once, to a named customer or supplier.
+AR/AP is ANDROID-ONLY (CLAUDE.md's own round-3 correction), so there is no
+desktop screen that would have shown the same contradiction to the shopkeeper
+first.
+
+DEFECT 1 -- A SALE'S OWN TENDER WAS COUNTED AS AN ACCOUNT PAYMENT. create_sale
+records the cash it actually retained through `_record_payment(...,
+party_type='customer', party_id=customer_id, related_type='sale', ...)`, and
+the statement's payments query had no filter on `related_type`. The charges
+query was `total - amount_paid` -- already net of that same tender. So the
+tender came off twice, and on a FULLY-paid cash sale (where the charge
+disappears entirely) it came off against no charge at all:
+
+    one 100.000 cash sale to a named regular
+      credit_balance   0.000
+      statement        -100.000, one "Payment" line, per visit, cumulative
+
+A customer who owes nothing, always pays cash, and is named on the receipt
+read that the shop owed them the sum of everything they had ever bought.
+
+DEFECT 2 -- THE CHARGE IGNORED REDEEMED LOYALTY POINTS. create_sale bills
+`amount_due_after_points = total - points_redeemed_amount` and deliberately
+leaves `sales.total` whole so the invoice reads right (its own "THE CASH TRAP"
+comment). `total - amount_paid` therefore overstated the charge by exactly the
+redeemed value: a 100 credit sale with 30 paid in the customer's own points
+showed 100 owed against a real `credit_balance` of 70. This is the SAME
+missing term ffa221a5 fixed inside create_return, in a second site nobody had
+checked -- the fix mirrors create_sale's formula term for term and says so at
+the line.
+
+DEFECT 3 -- THE RETURN SETTLEMENT NEVER APPEARED. create_return moves
+`credit_balance` through `_adjust_credit` for `ar_forgiven` and `store_credit`
+and writes no `payments` row for either. A customer whose account a full
+return had just settled still read the original charge and a running balance
+of the whole amount. Both buckets are now events of their own
+(`return_forgiven`, `return_credit`), kept separate rather than summed because
+they mean different things to a shopkeeper. The third bucket,
+`tender_refund_amount`, is deliberately NOT an event here: it is cash handed
+back at the till, it never touched `credit_balance`, and `_cash_session_report`
+already sums it on the drawer side.
+
+THE SUPPLIER MIRROR, which this pass found rather than was told about:
+supplier_statement carries DEFECT 1 in its own form. BOTH writers of a PO's
+money also move `purchase_orders.amount_paid` -- create_purchase_order stores
+its down-payment there, pay_purchase_order UPDATEs it -- and the charges query
+reads that live. So every PO payment was subtracted twice, and a PO paid off
+in full left its payment lines standing against no charge:
+
+    PO 100.000, 30.000 down       payable 70.000   statement  40.000
+    PO 100.000, paid off in full  payable  0.000   statement -100.000
+
+FIXED IN OPPOSITE DIRECTIONS ON PURPOSE, and the two routes' comments cite
+each other for it. `sales.amount_paid` is IMMUTABLE (there is no `UPDATE sales
+SET` anywhere in retail_api.py -- a sale is corrected by a return, never
+edited), so the customer charge is the creation-time AR and the sale's tender
+row is excluded. `purchase_orders.amount_paid` is MUTABLE, so the supplier
+charge is the PO's LIVE outstanding balance and the PO's payment rows are
+excluded. Swapping the two treatments double-counts on both sides.
+
+THE ALLOW-HALF, which is where this fix could have broken more than it fixed:
+the exclusion is `COALESCE(related_type,'') <> 'sale'`, not a bare `<>`. A
+direct account payment stores NULL there, and `NULL <> 'sale'` is NULL in SQL
+-- not TRUE -- so a bare comparison would have silently dropped every real
+customer payment and left only cheques. Mutation-proved in that direction too:
+the bare form turns exactly one test red.
+
+THE SIGN NOW TRAVELS WITH THE ROW. Both loops used to read `(run + amt) if
+e['kind'] in ('charge','reversal') else (run - amt)` -- a membership test with
+a catch-all else, so any kind not named in that tuple silently counted as
+money received. That is precisely how the A-PAR wave's client-side bug
+happened (a bounce reversal rendering as a green "Payment"), and adding two
+new kinds would have re-armed it for whoever adds the third. Each SELECT now
+emits its own `sign` (+1 increases what the party owes, -1 reduces it) and
+`kind` is purely a label. `sign` is internal and is NOT added to the response,
+so Android's `StatementEvent` parses the unchanged wire shape.
+
+A PREMISE THAT WAS WRONG, recorded because it decided the fix's shape. The
+alternative to excluding the sale's tender was to bill the WHOLE sale and keep
+the tender line; the argument for it was that void_payment reverses a customer
+payment with `_adjust_credit(+amount)`, so an excluded row could move
+`credit_balance` behind the statement's back. It cannot: void_payment refuses
+a receipt tied to a sale outright (409, "This receipt belongs to a sale.
+Process a return against that sale instead"). That refusal is what makes the
+exclusion safe, so it is now PINNED by a test rather than assumed -- relax it
+and the ledger stops reconciling, and that test is where it says so.
+
+VERIFICATION. `retail_customer_statement_reconciliation_test.py`, 9 tests,
+every scenario driven through the REAL routes (a real sale, a real return, a
+real payment, a real PO) and compared against the REAL `credit_balance` column
+-- never a hand-written row. All six guards mutation-proved in both
+directions; each mutation named the failing figure:
+
+    points term removed              1 red   "ends at 100.0, customer owes 70"
+    sale-tender exclusion removed    3 red   "ends at -100.0 for a customer who owes 0"
+    bare <> instead of COALESCE      1 red   direct customer payment vanishes
+    settlement events dropped        2 red   "ends at 100.0 after a full return settled"
+    PO-payment exclusion removed     2 red   "ends at 40.0, shop owes 70"
+    bare <> on the supplier side     1 red   only ['charge'] survives
+
+NOT independently provable, and stated as such rather than claimed: the
+`sign` refactor is behaviour-preserving by construction (the two new kinds
+would have fallen into the old `else` and subtracted correctly anyway), so no
+mutation of it turns these tests red. It is a trap removal, not a fix.
+
+Regression: retail_cheque_lifecycle (14), retail_sale_money_precision (21),
+retail_report_clock_money_disclosure (22), retail_stock_accuracy (20),
+retail_returns_prior_claims (2), retail_ar_ap_totals (2),
+retail_route_capability_matrix (46) -- all green, one file per process.
+
+ANDROID. The two new kinds fell into StatementSheet's `else` branch, which
+labels everything "Payment" -- the SIGN was already right (both reduce what
+the customer owes, so `isDebit` correctly excludes them and the minus is
+green), the LABEL claimed the customer had handed money over when they had
+done the opposite. Two `when` cases and two catalogue entries, reusing this
+catalogue's established terms rather than inventing any.
+
+WHAT THIS DOES NOT FIX, named rather than buried:
+
+- **An opening balance written outside `_adjust_credit`** -- a data import, or
+  a fixture's direct UPDATE -- has no event and never will. The route's
+  closing NOTE says so.
+- **Returns recorded before schema v36**, whose settlement columns came from
+  `_migrate_add_return_settlement_split`. That migration's own docstring calls
+  itself best-effort retroactive application of the current rule, not a
+  forensic reconstruction.
+- **The `> 0.005` gates.** Every one of them is MIRRORED from the write site
+  it has to agree with (create_sale's `balance_due > 0.005`, create_return's
+  two settlement gates), so the statement is now wrong in exactly the same
+  places the writers are and never independently. Still the same 2dp-era
+  literal in a 3-decimal currency, still part of the ~20-site sweep that has
+  to move together or not at all -- see ffa221a5 and the epsilon note.
+- **The other two items ffa221a5 left**: the epsilon sweep itself, and the
+  `payments` rows already written at 2dp before that commit's fix.
