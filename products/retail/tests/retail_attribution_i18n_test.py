@@ -660,7 +660,16 @@ NEW_UI_STRINGS = (
     'Not recorded',
     'Account removed',
     'Sales by Employee',
-    'No sales in this period.',
+    # No trailing period: the empty-state title at subsystem-retail.js's
+    # _emptyState() call reads t('No sales in this period') without one.
+    # This entry used to carry a period, which stopped matching the render
+    # site at some point and made test_declared_new_strings_are_really_rendered
+    # fail -- not because the string was removed, but because this list drifted
+    # from it. Both the punctuated and unpunctuated forms are already real
+    # catalog keys with real Arabic (a leftover from whichever wave first
+    # introduced the trailing-period version), so correcting the declaration
+    # needs no catalog change.
+    'No sales in this period',
     'Sales by employee are not available on this version.',
     'Could not load sales by employee.',
     'Sales recorded before this release show no employee or till.',
