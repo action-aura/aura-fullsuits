@@ -352,25 +352,62 @@ def test_create_return_two_decimal_currency_still_gets_two(client):
 
 
 def test_create_return_original_balance_due_uses_currency_precision_not_hardcoded_2dp(client):
-    """Isolates `original_balance_due` (~line 5867) from the two
-    `_adjust_credit` call sites this pass deliberately leaves alone (see
-    module docstring) -- neither of those accepts a currency, so any test
-    that reads the resulting `credit_balance` back would be proving THEIR
-    rounding, not this variable's.
+    """`original_balance_due` in create_return must be computed at the shop's
+    own currency precision, not a hardcoded 2dp.
 
-    The isolation: a sale total of 0.006 JOD with amount_paid=0.001 leaves a
-    real difference of EXACTLY 0.005. At JOD's real 3dp precision,
-    `_money(0.005, 'JOD') == 0.005`, which is NOT strictly greater than the
-    `if original_balance_due > 0.005:` gate immediately below it in
-    create_return -- so the AR-credit branch must not fire AT ALL, and the
-    customer's credit_balance must not move by even one unit. Under a
-    hardcoded-2dp bug, `_money(0.005)` (no currency) rounds HALF UP to 0.01,
-    which IS > 0.005 -- the branch fires, and the balance DOES move. Whether
-    it moves at all, not by how much, is what isolates this one variable's
-    own precision from the two untouched call sites downstream of it."""
+    ── THIS TEST'S DETECTOR WAS REPLACED, and what it can no longer catch ──
+    It used to prove the point at the exact boundary 0.005: a 0.006 JOD sale
+    with amount_paid=0.001 leaves EXACTLY 0.005, which is not strictly
+    greater than the then-hardcoded `> 0.005` gate, so the AR-credit branch
+    had to not fire at all -- whereas a 2dp `_money(0.005)` rounds HALF UP to
+    0.01, which IS greater, and the branch fires. "Did the branch fire" was a
+    clean isolator precisely because it did not depend on the downstream
+    `_adjust_credit` rounding.
+
+    That detector used the GATE'S THRESHOLD as its probe, and the epsilon
+    sweep moved every such threshold to `_money_epsilon(currency)` -- half
+    the shop's real minor unit, 0.0005 on JOD. 0.005 is now comfortably
+    greater than that, so the branch fires in BOTH the correct and the buggy
+    case and the old assertion could no longer tell them apart. It was
+    failing as a VACUOUS detector, not as a caught regression: the behaviour
+    it described (a five-fil debt recorded as nothing at all) was the bug the
+    sweep existed to remove.
+
+    Specifically lost: this file no longer pins anything about the exact
+    boundary value. Nothing real sits there any more -- the dead zone is now
+    below HALF A FIL, and a fil is the smallest amount that exists in this
+    currency -- so the coverage given up describes a state the money layer
+    can no longer reach.
+
+    ── THE REPLACEMENT, which does not depend on any threshold ──
+    It pins the persisted SPLIT instead of a fired branch, so it survives any
+    future change to the epsilon.
+
+    Sale 10.004 JOD, 0.001 tendered, on credit -> create_sale books a debt of
+    10.003. A full return then settles it:
+
+        original_balance_due = _money(10.004 - 0 - 0.001, 'JOD') = 10.003
+        tender_refund        = min(refund, tender collected) = 0.001
+        leftover             = 10.003
+        ar_forgiven          = min(10.003, 10.003, 10.003) = 10.003
+        store_credit         = 0.000
+
+    Drop the currency from that one `_money` call and it becomes
+    `_money(10.003)` = 10.00 (ROUND_HALF_UP at 2dp), which caps
+    `balance_due_remaining` three fils LOW, so the same settlement splits as
+    ar_forgiven 10.000 / store_credit 0.003.
+
+    The split is the right thing to assert and `credit_balance` is the wrong
+    thing: ar_forgiven and store_credit both reach it through the same
+    `_adjust_credit` call with the same sign, so the final balance is 0.000
+    either way -- ffa221a5 measured that over 200,000 randomized trials and
+    found ZERO divergence in the sum while the SPLIT diverged in 38,837 of
+    them. Both columns are persisted on the return and both are now read back
+    by customer_statement, so the split is observable product behaviour, not
+    an internal detail."""
     cust = _seed_customer(client)
     _set_customer_credit(cust, mode='unlimited')
-    pid = _seed_product(client, sell_price=0.006, tax_rate=0)
+    pid = _seed_product(client, sell_price=10.004, tax_rate=0)
 
     sale = client.post(f'{API}/sales', json={
         'items': [{'product_id': pid, 'quantity': 1}],
@@ -378,23 +415,35 @@ def test_create_return_original_balance_due_uses_currency_precision_not_hardcode
         'idempotency_key': str(uuid.uuid4())})
     assert sale.status_code == 200, sale.get_json()
     sale_body = sale.get_json()['data']
-    assert sale_body['total'] == 0.006 and sale_body['amount_paid'] == 0.001, (
+    assert sale_body['total'] == 10.004 and sale_body['amount_paid'] == 0.001, (
         "precondition: the original sale must itself carry the exact fils this "
         f"test depends on, got total={sale_body['total']!r} paid={sale_body['amount_paid']!r}")
-
-    balance_before_return = _party_balance('customers', cust)
+    assert _party_balance('customers', cust) == 10.003, (
+        "precondition: create_sale must have booked the 10.003 debt this return "
+        f"settles, got {_party_balance('customers', cust)!r}")
 
     r = client.post(f'{API}/returns', json={
         'sale_id': sale_body['id'], 'items': [{'product_id': pid, 'quantity': 1}]})
     assert r.status_code == 200, r.get_json()
 
-    balance_after_return = _party_balance('customers', cust)
-    assert balance_after_return == balance_before_return, (
-        "original_balance_due (0.005 at JOD's real 3dp precision) is not > 0.005, "
-        "so the AR-credit branch must not fire at all -- credit_balance changed from "
-        f"{balance_before_return!r} to {balance_after_return!r}, which means "
-        "original_balance_due was computed at a hardcoded 2dp (0.005 -> 0.01, "
-        "which IS > 0.005) instead of the shop's own currency precision")
+    conn = get_retail_conn()
+    try:
+        row = conn.execute(
+            "SELECT tender_refund_amount, ar_forgiven_amount, store_credit_amount "
+            "FROM returns WHERE sale_id=?", (sale_body['id'],)).fetchone()
+    finally:
+        conn.close()
+
+    assert row['ar_forgiven_amount'] == 10.003 and row['store_credit_amount'] == 0.0, (
+        "original_balance_due must be computed at JOD's 3dp -- 10.003, which caps "
+        "ar_forgiven at exactly the debt create_sale booked. Got ar_forgiven="
+        f"{row['ar_forgiven_amount']!r} store_credit={row['store_credit_amount']!r}; "
+        "ar_forgiven=10.0 with store_credit=0.003 means it was computed at a "
+        "hardcoded 2dp (10.003 -> 10.00), capping the AR forgiveness three fils "
+        "low and spilling the remainder into the store-credit bucket")
+    assert row['tender_refund_amount'] == 0.001, (
+        "control: the 0.001 actually tendered is refunded as tender, so the "
+        f"leftover the split divides is the debt alone -- got {row['tender_refund_amount']!r}")
 
 
 # ═════════════════════════════════════════════════════════════════════════

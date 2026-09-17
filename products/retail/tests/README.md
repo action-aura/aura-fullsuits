@@ -64,7 +64,7 @@ Two things worth knowing before you trust a green run:
 
 ---
 
-## Money path — sales, returns, payments, cash drawer  (32 suites — 23 py, 9 js)
+## Money path — sales, returns, payments, cash drawer  (33 suites — 24 py, 9 js)
   - `retail_cash_drawer_test.py` — shift / cash-drawer management (feat/shift-cash-drawer,
   - `retail_changed_field_delta_test.py` — multi-device sync: changed-field deltas (launch-readiness
   - `retail_checkout_credit_walkin_guard_test.js` — Regression test for a missing client-side guard on Credit-method sales.
@@ -77,6 +77,7 @@ Two things worth knowing before you trust a green run:
   - `retail_loyalty_redemption_test.py` — loyalty redemption, wave 1 (schema v27, ROADMAP.md's 2026-08-31 "retail schema v27 CLAIMED for loyalty redemption" entry).
   - `retail_loyalty_redemption_ui_test.js` — retail_loyalty_redemption_ui_test.js — the POS "Current Sale" loyalty-point redemption control (launch-readiness wave 1, schema…
   - `retail_loyalty_return_link_test.py` — the loyalty return link (schema v29, ROADMAP.md's CLAIMED: retail v29" entry).
+  - `retail_money_epsilon_test.py` — the "is this amount really zero" gates use the SHOP's own minor unit, not a hardcoded half-cent.
   - `retail_money_leak_runtime_sweep_test.py` — no route may hand a cashier transacted money, proved by CALLING every route as a cashier and reading what comes back.
   - `retail_money_sentence_precision_test.py` — money figures rendered into SENTENCES keep the shop's real
   - `retail_money_sync_test.py` — Phase 5 (launch-readiness): money-moving sync, end to end

@@ -4091,3 +4091,156 @@ WHAT THIS DOES NOT FIX, named rather than buried:
   to move together or not at all -- see ffa221a5 and the epsilon note.
 - **The other two items ffa221a5 left**: the epsilon sweep itself, and the
   `payments` rows already written at 2dp before that commit's fix.
+
+
+## 2026-09-18 - THE EPSILON SWEEP: every money gate now uses the shop's own minor unit
+
+No schema change, no new route, no version claimed. The last of the three
+items ffa221a5 named and left "for their own passes", and the one its own
+commit message said needed "its own planned pass with per-site reasoning".
+
+THE DEFECT. `products/retail/backend/api/retail_api.py` decided "is this
+amount really zero / is this really a debt" by comparing against a literal
+`0.005` in roughly twenty-five places -- `if amount_paid > 0.005`, `if
+balance_due > 0.005`, `payment_status = 'paid' if amount_paid >= total -
+0.005`, `WHERE COALESCE(credit_balance,0) > 0.005`, and so on.
+
+`0.005` is HALF A CENT. Exactly right on a 2-decimal currency; wrong on JOD,
+whose minor unit is a fil at 0.001. Every one of those gates treated anything
+up to FIVE FILS as zero. It hides better than the `round(x, 2)` family
+commercial_runtime/currency.py already documents as a shipped money bug:
+`round(x, 2)` looks wrong on sight, `> 0.005` reads as ordinary
+float-comparison hygiene.
+
+WHY SUCH SMALL AMOUNTS MATTER. These are GATES, not roundings. Each flips a
+boolean about whether money EXISTS. A sub-threshold debt is not recorded a
+fil short -- it is not recorded AT ALL, and every later read then reasons from
+"there was never a debt": no `payments` row, no `credit_balance` entry,
+nothing in the debtor book, nothing for a return to settle against.
+
+MEASURED, through the real routes, on a default (no explicit currency, i.e.
+JOD) install -- list price 10.000, customer tenders 9.996, on credit:
+
+    before   credit_balance 0.000   not in receivables   not in aging
+    after    credit_balance 0.004   listed, total 0.004  aged
+
+    PO 10.000 with a 0.004 down-payment
+    before   payment_status 'unpaid', NO payments row, payable 10.000
+    after    payment_status 'partial', payment row written, payable 9.996
+
+    PO 10.000, 9.996 paid through pay_purchase_order
+    before   'paid', payable 0.000      after  'partial', payable 0.004
+
+THE SHAPE OF THE FIX. One helper, `_money_epsilon(currency)`, returning half
+that currency's own quantum -- 0.0005 on JOD, 0.005 on USD -- and every gate
+reads it. Python-side sites resolve `_eps` once per request from the same
+`currency` every figure in that request is quantized at; SQL-side sites BIND
+it as a parameter, because SQLite cannot call the helper and a second
+hardcoded literal living inside a query string is exactly how this family
+drifted apart in the first place. `currency=None` reproduces the historical
+0.005 byte for byte, the same contract `_money` already carries.
+
+WHY EVERY SITE MOVED AT ONCE. These gates have to agree with EACH OTHER at
+least as much as they have to be individually right: create_return must
+decide "did this sale become a debt?" the same way create_sale decided it,
+epsilon and all. ffa221a5 made ONE site finer, and it handed a customer 0.005
+of store credit for a debt create_sale had never booked -- money created out
+of an asymmetry. That attempt was caught by an existing test, reverted rather
+than weakened, and written up at both sites. This pass is what that write-up
+said was owed.
+
+Sites converted (all in retail_api.py): create_purchase_order's capability
+gate, payment_status, payment write and AP credit; create_sale's `is_credit`,
+credit-limit check, `net_received` payment write and AR credit;
+create_return's walk-in 409 guard and both settlement writes;
+create_cash_movement's "greater than zero" refusal; pay_purchase_order's
+'paid' threshold; the WhatsApp AR-overdue alert's two queries;
+customers_receivables and suppliers_payables (rows AND total, which must
+match); customer_statement's charge and both settlement queries;
+supplier_statement's charge query; and aging_report's two queries for both
+directions.
+
+A TEST WAS REPLACED, NOT WEAKENED, and this is the part worth reading.
+
+`test_create_return_original_balance_due_uses_currency_precision_not_hardcoded_2dp`
+(retail_sale_money_precision_test.py) went red. It is the test that caught
+ffa221a5's premature single-site fix and was RIGHT then. It was not right
+here, and it was not wrong either -- it had become VACUOUS.
+
+Its detector used the GATE'S OWN THRESHOLD as its probe: a 0.006 JOD sale
+with 0.001 paid leaves exactly 0.005, which is not strictly greater than
+`> 0.005`, so the AR branch must not fire -- whereas a 2dp `_money(0.005)`
+rounds HALF UP to 0.01, which IS greater, and it fires. Move the threshold to
+0.0005 and the branch fires in BOTH cases, so the assertion could no longer
+tell them apart. It was failing as a broken detector, and the behaviour it
+described (a five-fil debt recorded as nothing) was the bug being removed.
+
+Replaced with a detector that does not depend on any threshold: sale 10.004
+JOD, 0.001 tendered, full return, asserting the persisted SPLIT --
+`ar_forgiven_amount` 10.003 / `store_credit_amount` 0.000. Drop the currency
+from that one `_money` call and it becomes 10.00, capping AR forgiveness
+three fils low and spilling the remainder into store credit: 10.000 / 0.003.
+Mutation-proved in exactly that way.
+
+The split is the right assertion and `credit_balance` is the wrong one: both
+buckets reach the balance through the same `_adjust_credit` call with the
+same sign, so the total is 0.000 either way -- ffa221a5 measured that over
+200,000 randomized trials, finding ZERO divergence in the sum while the SPLIT
+diverged in 38,837. Both columns are persisted and both are now read back by
+customer_statement, so this is observable product behaviour.
+
+STATED PLAINLY, per the "say what a changed test can no longer catch" rule:
+this file no longer pins anything about the exact boundary value 0.005.
+Nothing real sits there any more -- the dead zone is now below HALF A FIL, and
+a fil is the smallest amount this currency has -- so the coverage given up
+describes a state the money layer can no longer reach.
+
+VERIFICATION. New suite `retail_money_epsilon_test.py`, 10 tests, every
+scenario driven through the real routes. Its shape is a PAIR: the identical
+sale (list 10, tender 9.996) must behave OPPOSITELY in the two currencies and
+both answers must be right --
+
+    JOD   0.004 owed, a real debt
+    USD   9.996 IS 10.00, nothing owed
+
+-- because a fix that merely swapped one hardcoded constant for a smaller one
+would have made a 2-decimal shop start carrying sub-cent receivables, which is
+wrong in the other direction.
+
+Mutation-proved: reverting `_money_epsilon` to a bare `return 0.005` turns 8
+of the 10 red, and the 2 that stay green are EXACTLY the two USD controls --
+which is the result that proves they are controls rather than duplicates.
+Separately, putting the literal back into customers_receivables' row query
+alone turns that one test red, proving each SQL binding is load-bearing at its
+own site rather than only in aggregate.
+
+Regression, one file per process (AUDIT-010): retail_sale_money_precision
+(21), retail_payment_money_precision (15), retail_returns_wave0 (17),
+retail_returns_settlement (11), retail_returns_points_settlement (4),
+retail_returns_prior_claims (2), retail_returns_backfill (6),
+retail_cash_drawer (13), retail_ar_ap_totals (2), retail_pricing (33),
+retail_currency_precision (12), retail_money_sync (13),
+retail_money_leak_runtime_sweep (6), retail_drawer_money_sweep (11),
+retail_einvoicing_regression (6),
+retail_customer_statement_reconciliation (9). All green.
+
+WHAT CHANGES FOR A RUNNING SHOP, named rather than discovered later:
+
+- **Residual balances now persist instead of vanishing.** A JOD sale left
+  four fils short is a four-fil debt, and it shows in the debtor book and the
+  aging report. That is correct, and it is a visible behaviour change: tiny
+  balances that used to round themselves away no longer do.
+- **A 'limited' credit customer can no longer exceed their limit by five
+  fils on every sale.** The slack is now half a fil.
+- **Rows already on disk are untouched.** This changes how new decisions are
+  made, not historical data. A pre-sweep sale that recorded no debt still
+  records none; nothing backfills it, and nothing should -- the fils it
+  discarded are not recoverable from the row.
+- **2-decimal currencies are byte-for-byte unchanged.** Proved by the two USD
+  controls, which stay green under the mutation that reds everything else.
+
+STILL OPEN, and now the only item left from ffa221a5's list: the `payments`
+rows already written at 2dp before that commit made `_record_payment`
+currency-aware. Retro-correcting them needs its own migration and its own
+review, since the fils a pre-fix row discarded cannot be recovered from the
+row itself. Residual error is bounded by half the old quantum.

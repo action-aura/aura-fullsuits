@@ -3174,13 +3174,14 @@ def create_purchase_order():
     # through pay_purchase_order once CAP_EMPLOYEES is available.
     #
     # amount_paid is computed HERE, ONCE, via the same _money() coercion and
-    # the same > 0.005 threshold the real payment write uses further down --
+    # the same `> _money_epsilon(currency)` threshold the real payment write
+    # uses further down (a 2dp-era hardcoded 0.005 until the epsilon sweep) --
     # that single local is reused rather than recomputed, so no numeric
     # spelling (absent, 0, negative, a numeric string, a float that rounds
     # up under ROUND_HALF_UP) can reach _record_payment without first
     # passing through this exact check. Negative values fall out of scope
     # for the same reason they already fell out of the pre-existing
-    # `if amount_paid > 0.005:` guard below: they were never going to post a
+    # `if amount_paid > _eps:` guard below: they were never going to post a
     # payment either way.
     #
     # Checked BEFORE _ensure_credit_schema()/_next_ref() -- this route holds
@@ -3198,7 +3199,8 @@ def create_purchase_order():
     conn = get_retail_conn()
     currency = _company_currency(conn, cid)
     amount_paid = _money(data.get('amount_paid', 0), currency)
-    if amount_paid > 0.005 and not session_has_capability(CAP_EMPLOYEES):
+    _eps = _money_epsilon(currency)
+    if amount_paid > _eps and not session_has_capability(CAP_EMPLOYEES):
         conn.close()
         return jsonify({'status': 'error', 'message': SUPPLIER_PAYMENT_DENIED_MESSAGE}), 403
 
@@ -3340,7 +3342,16 @@ def create_purchase_order():
             po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items), currency)
         # supplier_id was already resolved and validated above.
-        payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
+        # `_eps` is `_money_epsilon(currency)`, resolved once at the top of
+        # this route from the SAME `currency` every figure here is quantized
+        # at -- half a fil on JOD, half a cent on USD. It replaced a
+        # hardcoded 0.005 which, on a 3-decimal currency, called a PO with
+        # five fils still outstanding fully 'paid' and a five-fil
+        # down-payment 'unpaid'. Both of this line's comparisons and the two
+        # money writes below use the one local, so 'paid'/'partial'/'unpaid',
+        # the payment row and the AP credit can never disagree about whether
+        # a figure is zero.
+        payment_status = 'paid' if amount_paid >= total - _eps else ('partial' if amount_paid > _eps else 'unpaid')
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
                                          amount_paid,payment_status,due_date)
@@ -3356,12 +3367,12 @@ def create_purchase_order():
                 VALUES (?,?,?,?,?)
             """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line))
         # AP ledger: record any down-payment now; push the unpaid balance onto supplier AP.
-        if amount_paid > 0.005:
+        if amount_paid > _eps:
             _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
                             method=data.get('method', 'cash'), related_type='po', related_id=po_id,
                             doc_type='supplier_payment', currency=currency)
         balance = _money(total - amount_paid, currency)
-        if balance > 0.005 and supplier_id:
+        if balance > _eps and supplier_id:
             _adjust_credit(conn, 'suppliers', supplier_id, cid, balance, currency)
         _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
         conn.commit()
@@ -6280,7 +6291,18 @@ def create_sale():
         # ── Credit-sale rules (Accounts Receivable) ──────────────────────────
         # A credit sale leaves an unpaid balance owed by a NAMED customer. Walk-ins
         # cannot buy on credit; per-customer credit mode/limit is enforced.
-        is_credit = (pm == 'credit') or (balance_due > 0.005)
+        #
+        # `_eps` -- half this shop's own minor unit, resolved ONCE here from
+        # the same `currency` every figure above was quantized at, and reused
+        # by every gate in this function and by the credit-limit check below.
+        # It was a hardcoded 0.005 (half a CENT) until the epsilon sweep, so
+        # on JOD a sale leaving up to five fils outstanding recorded NO debt
+        # at all -- not a debt a fil short, none, with no `payments` row
+        # either. This is THE gate create_return has to mirror term for term
+        # to agree about whether a sale ever became a debt; see its own
+        # `original_balance_due` comment, which cites this line by name.
+        _eps = _money_epsilon(currency)
+        is_credit = (pm == 'credit') or (balance_due > _eps)
         warning = None
         if is_credit:
             if not customer_id:
@@ -6321,7 +6343,11 @@ def create_sale():
             if credit_mode == 'none':
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'This customer is not allowed to buy on credit.'}), 400
-            if credit_mode == 'limited' and (cur_bal + balance_due) > limit + 0.005:
+            # `+ _eps` is slack against float noise, not a grace amount: on
+            # JOD it used to be five fils of credit a 'limited' customer
+            # could exceed their limit by on EVERY sale, which is the one
+            # direction a credit limit must not be generous in.
+            if credit_mode == 'limited' and (cur_bal + balance_due) > limit + _eps:
                 if settings['enforce_credit_limit'] == 'block':
                     conn.rollback(); conn.close()
                     # Same class of defect as `_ai_context_sales`/the report
@@ -6682,7 +6708,7 @@ def create_sale():
         # the customer's OWN points as cash the drawer received, failing
         # the Z-report by exactly the redeemed amount on every redemption.
         net_received = min(paid, amount_due_after_points)
-        if net_received > 0.005:
+        if net_received > _eps:
             # DEFECT 2 fix: `currency` (resolved once above at
             # `currency = _s.get('base_currency')`, the same value
             # `amount_due_after_points` uses) -- an omitted currency here
@@ -6699,7 +6725,7 @@ def create_sale():
                             method=(pm if pm != 'credit' else 'cash'),
                             related_type='sale', related_id=sale_id, doc_type='receipt',
                             currency=currency)
-        if is_credit and balance_due > 0.005 and customer_id:
+        if is_credit and balance_due > _eps and customer_id:
             # DEFECT 2 fix: `currency` (resolved once above, same variable
             # create_return's identical call below now also passes) -- an
             # omitted currency here quantized a JOD balance_due to 2dp
@@ -7693,6 +7719,11 @@ def create_return():
         # same _settings() call the mode already uses, so this costs no extra
         # query. See core/retail/pricing.py::currency_quantum.
         currency = _s.get('base_currency')
+        # Half this shop's own minor unit, from the SAME `currency` above --
+        # the one value every "is this amount really zero" gate in this
+        # function uses, and the same value create_sale resolves for the
+        # gates this function has to agree with. See `_money_epsilon`.
+        _eps = _money_epsilon(currency)
         # feat/shift-cash-drawer (schema v10): same best-effort session stamp
         # as create_sale above -- see _open_cash_session_id's docstring.
         cash_session_id = _open_cash_session_id(conn, cid, bid)
@@ -7884,7 +7915,7 @@ def create_return():
         # two different questions: `tender_available` is "how much cash can
         # physically be handed back", which must exclude change and a
         # near-zero-value payment `_record_payment` itself never logged
-        # (its own `if net_received > 0.005` skip); `original_balance_due`
+        # (its own `if net_received > _eps` skip); `original_balance_due`
         # is "how much of this sale did create_sale actually treat as AR",
         # which is defined by create_sale's OWN gate: `balance_due =
         # amount_due_after_points - paid` (create_sale ~line 6278, itself
@@ -7915,11 +7946,28 @@ def create_return():
         #
         # A second, independent regression this exact repo's own test
         # caught on the NON-points path (`points_redeemed_amount == 0`, so
-        # unaffected by the fix above): a 0.006 JOD sale with
-        # amount_paid=0.001 leaves balance_due=0.005, which is NOT > 0.005,
-        # so create_sale grants NO credit at all -- no payments row
-        # (net_received=0.001 is also not > 0.005) and no credit_balance
-        # entry. Computing this figure from `tender_collected` (0, since no
+        # unaffected by the fix above). It is written here in its ORIGINAL
+        # pre-epsilon-sweep numbers, because those are what the test was
+        # built from and the shape is what matters: a 0.006 JOD sale with
+        # amount_paid=0.001 leaves balance_due=0.005, which under the old
+        # hardcoded `> 0.005` was NOT greater, so create_sale granted NO
+        # credit at all -- no payments row (net_received=0.001 also failed
+        # the same gate) and no credit_balance entry.
+        #
+        # SINCE THE EPSILON SWEEP that particular sale is no longer in the
+        # dead zone at all: both gates now compare against
+        # `_money_epsilon('JOD')` = 0.0005, so 0.005 IS greater, the debt is
+        # recorded and the payment row is written. The dead zone did not
+        # disappear, it shrank to below half a fil -- where nothing real can
+        # sit, because a fil is the smallest amount that exists. The
+        # REASONING below is unaffected and is why this line still reads
+        # `amount_paid`: whatever the threshold, the two functions have to
+        # decide "did this sale become a debt" identically, and deriving
+        # this figure from `tender_collected` makes it depend on whether a
+        # payment row happened to be written rather than on the formula
+        # create_sale actually used.
+        #
+        # Computing this figure from `tender_collected` (0, since no
         # payment row exists) instead of `amount_paid` gave
         # `original_balance_due=0.006` here -- MORE than create_sale ever
         # recorded -- and the leftover after the (zero) AR cap was paid out
@@ -8002,36 +8050,38 @@ def create_return():
         # line of defence -- reachable independently of that UI fix via any
         # direct API caller -- not as dead defensive code.
         #
-        # `0.005` IS a 2dp-era literal and IS wrong on a 3-decimal currency
-        # (on JOD it is FIVE fils, not half a fils, so it treats up to 4 real
-        # fils as zero). It stays anyway, DELIBERATELY, and this comment is
-        # here so the next person does not "fix" it in isolation the way we
-        # just did and then revert it the way we just did.
+        # THE EPSILON. `_eps` is `_money_epsilon(currency)` -- half this
+        # shop's own minor unit, resolved once above from the same `currency`
+        # every figure in this function is quantized at.
         #
-        # It was changed to `currency_quantum(currency)/2` and reverted, because
-        # this epsilon is not a rounding tolerance -- it is a GATE, and its
-        # twin lives in create_sale:
+        # This comment used to say the opposite, at length: that the
+        # hardcoded `0.005` here "stays anyway, DELIBERATELY", having been
+        # changed to `currency_quantum(currency)/2` once and REVERTED. That
+        # reversion was correct at the time and the reasoning is kept here
+        # rather than deleted, because it is the argument for how this was
+        # eventually fixed. The epsilon is not a rounding tolerance, it is a
+        # GATE, and its twin lives in create_sale:
         #
-        #     create_sale:6283   is_credit = (pm == 'credit') or (balance_due > 0.005)
+        #     create_sale   is_credit = (pm == 'credit') or (balance_due > _eps)
         #
-        # The two must agree on the SAME question: "did this sale become a
-        # debt?" Measured consequence of disagreeing -- a 0.006 JOD sale with
-        # 0.001 paid leaves exactly 0.005 outstanding. create_sale's gate is
-        # `> 0.005`, so 0.005 is NOT greater and NO debt is recorded: the
-        # customer owes nothing. Make create_return's epsilon finer on its own
-        # and the return then hands that same customer 0.005 of store credit
-        # for a debt the shop never booked -- money created out of an
-        # asymmetry, caught by
-        # test_create_return_original_balance_due_uses_currency_precision_not_hardcoded_2dp.
+        # The two must answer the SAME question -- "did this sale become a
+        # debt?" -- and a 0.006 JOD sale with 0.001 paid leaves exactly 0.005
+        # outstanding, which sits on opposite sides of the two thresholds the
+        # moment they differ. Making this one finer ALONE handed that
+        # customer 0.005 of store credit for a debt create_sale had never
+        # booked: money created out of an asymmetry, caught by
+        # test_create_return_original_balance_due_uses_currency_precision_not_hardcoded_2dp,
+        # which was RIGHT and was not weakened.
         #
-        # So this is one gate in a set of roughly twenty `0.005` literals
-        # spanning create_sale, create_return and the AR/AP aging queries, and
-        # they have to move TOGETHER or not at all. That sweep is real work
-        # with its own review; it is not a line-level cleanup, and doing it one
-        # site at a time is strictly worse than leaving it alone -- each
-        # individual site is MORE correct in isolation and the system is LESS
-        # correct as a whole.
-        if store_credit > 0.005 and not sale['customer_id']:
+        # The conclusion that followed -- "roughly twenty `0.005` literals
+        # spanning create_sale, create_return and the AR/AP aging queries,
+        # and they have to move TOGETHER or not at all" -- is exactly what
+        # the epsilon sweep did. Every one of those sites now reads the same
+        # `_money_epsilon(currency)` for the same company's currency, so they
+        # cannot disagree; see that helper's own comment for the full
+        # inventory and reasoning. The rule this comment leaves behind is
+        # unchanged: never make ONE of these finer on its own.
+        if store_credit > _eps and not sale['customer_id']:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message':
                 'This return leaves an uncollected balance with no customer to credit it to.'}), 409
@@ -8190,16 +8240,21 @@ def create_return():
         # walk-in cannot carry AR at all); `store_credit` is NOT similarly
         # unreachable for a walk-in -- see the 409 guard above (corrected)
         # for the real, shipped-UI way a walk-in reaches it.
-        # Both `0.005` gates stay 2dp-era literals on purpose -- see the long
-        # note on the 409 guard above for why this one cannot be made
-        # currency-correct on its own, and why the whole set has to move at
-        # once. `ar_forgiven` was already 0.005 and is untouched; `store_credit`
-        # was briefly made finer here and is reverted to match it, so the two
-        # buckets of the SAME settlement cannot disagree about what counts as
-        # a non-zero amount.
-        if ar_forgiven > 0.005:
+        # Both gates read the SAME `_eps` as every other gate in this
+        # function and in create_sale -- the two buckets of one settlement
+        # must not disagree about what counts as a non-zero amount, and
+        # neither must disagree with the sale that created the debt. This
+        # comment previously recorded that both stayed hardcoded 2dp-era
+        # literals "on purpose", because making one finer alone was a bug;
+        # the epsilon sweep moved every site at once, which is what that note
+        # said was required. See `_money_epsilon` and the 409 guard above.
+        #
+        # customer_statement's `settlements` query mirrors these two gates so
+        # the statement reports an event if and only if the balance moved
+        # here; if either gate changes, that query changes with it.
+        if ar_forgiven > _eps:
             _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_forgiven, currency)
-        if store_credit > 0.005:
+        if store_credit > _eps:
             _adjust_credit(conn, 'customers', sale['customer_id'], cid, -store_credit, currency)
 
         # ── Loyalty reversal (ROADMAP.md's 2026-08-31 "RETURNS AGAINST A
@@ -9584,7 +9639,12 @@ def create_cash_movement(session_id):
         except Exception:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Invalid amount.'}), 400
-        if amount <= 0.005:
+        # `<= _money_epsilon(currency)` -- "greater than zero" has to mean
+        # greater than zero in THIS shop's money. The hardcoded 0.005 it
+        # replaces refused a JOD float_in/paid_out of up to five fils as if
+        # it were zero, with the message "Amount must be greater than zero"
+        # for an amount that plainly was.
+        if amount <= _money_epsilon(currency):
             conn.close()
             return jsonify({'status': 'error', 'message': 'Amount must be greater than zero.'}), 400
 
@@ -10399,9 +10459,17 @@ def report_whatsapp():
             # pressure; see aging_report() above for the reference version
             # this must stay in sync with if that route's math ever changes.
             _ensure_credit_schema(conn)
+            # Epsilon BOUND as a parameter rather than inlined: SQLite has no
+            # access to `_money_epsilon`, and a second hardcoded 0.005 living
+            # in a string is precisely how this family of gates drifted out
+            # of agreement in the first place. Read once for this company and
+            # reused by both queries below, which have to answer "does this
+            # customer owe anything" and "which of their sales is unpaid" the
+            # same way.
+            _eps = _money_epsilon(_company_currency(conn, cid))
             parties = conn.execute(
-                "SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>0.005",
-                (cid,),
+                "SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>?",
+                (cid, _eps),
             ).fetchall()
             today = datetime.now()
             overdue_total = 0.0
@@ -10410,8 +10478,8 @@ def report_whatsapp():
             for p in parties:
                 oldest = conn.execute(
                     "SELECT MIN(created_at) FROM sales WHERE company_id=? AND customer_id=? "
-                    "AND (total-amount_paid)>0.005",
-                    (cid, p['id']),
+                    "AND (total-amount_paid)>?",
+                    (cid, p['id'], _eps),
                 ).fetchone()[0]
                 days = 0
                 if oldest:
@@ -10684,6 +10752,59 @@ def _money(x, currency=None):
         return float(Decimal(str(x or 0)).quantize(quant, rounding=ROUND_HALF_UP))
     except Exception:
         return 0.0
+
+
+#: Half the currency's own minor unit -- the only correct slack for a gate
+#: that asks "is this amount really zero / is this really a debt".
+#:
+#: THE DEFECT THIS EXISTS TO CLOSE, and why it took until now. This file
+#: decided that question with a hardcoded `0.005` in roughly twenty-five
+#: places: `if amount_paid > 0.005`, `if balance_due > 0.005`,
+#: `payment_status = 'paid' if amount_paid >= total - 0.005`, `WHERE
+#: COALESCE(credit_balance,0) > 0.005`, and so on. `0.005` is HALF A CENT.
+#: It is exactly right for a 2-decimal currency and wrong for JOD, whose
+#: minor unit is a fil at 0.001 -- so every one of those gates treated
+#: anything up to FIVE FILS as zero.
+#:
+#: It hides better than the `round(x, 2)` family commercial_runtime/
+#: currency.py already documents as a shipped money bug: `round(x, 2)` looks
+#: wrong on sight, whereas `> 0.005` reads as ordinary float-comparison
+#: hygiene and is genuinely correct on USD.
+#:
+#: WHY THE AMOUNTS ARE SMALL AND THE BUG IS NOT. These are GATES, not
+#: roundings. Each one flips a boolean about whether money EXISTS. A
+#: sub-threshold debt is not recorded a fil short -- it is not recorded AT
+#: ALL, and every later read then reasons from "there was never a debt". The
+#: worked example, which is the one that surfaced this while tracing an
+#: unrelated return regression:
+#:
+#:     JOD sale total 0.006, amount_paid 0.001
+#:       balance_due is 0.005, which is NOT > 0.005
+#:       -> create_sale grants no credit, writes no `payments` row
+#:          (net_received=0.001 fails the same gate), and records the shop
+#:          as having received nothing and being owed nothing, for a sale
+#:          that really happened
+#:       -> a later return has no tender and no debt to settle against
+#:
+#: WHY EVERY SITE MOVED AT ONCE, rather than the obvious-looking ones first.
+#: These gates have to agree with EACH OTHER at least as much as they have
+#: to be individually right. create_return must decide "did this sale ever
+#: become a debt?" the SAME way create_sale decided it, epsilon and all, or
+#: the two functions disagree about whether a debt exists -- and a single
+#: site made finer in isolation is how ffa221a5 nearly shipped a customer
+#: 0.005 of store credit for a debt the shop had never booked. That attempt
+#: was caught by an existing test, reverted, and written up at both sites;
+#: this is the planned pass it said was owed.
+#:
+#: `currency=None` reproduces the historical 0.005 byte for byte, the same
+#: contract `_money` above carries and for the same reason: an unaudited
+#: caller keeps exactly the behaviour it had.
+def _money_epsilon(currency=None):
+    try:
+        quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
+        return float(quant) / 2.0
+    except Exception:
+        return 0.005
 
 def _now():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -12774,16 +12895,20 @@ def payment_methods_add():
 @mt_require_capability(CAP_REPORTS)
 def customers_receivables():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # One epsilon, read once, BOUND into both queries -- see `_money_epsilon`
+    # for why a hardcoded 0.005 in a 3-decimal currency hid up to five fils
+    # of real debt from the debtor book entirely.
+    _eps = _money_epsilon(_company_currency(conn, cid))
     rows = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers "
-                        "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005 ORDER BY credit_balance DESC", (cid,)).fetchall()
-    # Must use the same >0.005 filter as the rows query above. Without it, a
+                        "WHERE company_id=? AND COALESCE(credit_balance,0) > ? ORDER BY credit_balance DESC", (cid, _eps)).fetchall()
+    # Must use the same epsilon filter as the rows query above. Without it, a
     # customer with a negative (overpaid) credit_balance -- reachable because
     # customer_payment() below only validates amount>0 and never caps it at
     # the outstanding balance -- silently nets against and understates the
     # genuine receivables of every other customer, so total_receivable no
     # longer equals the sum of the rows actually shown to the user.
     total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM customers "
-                         "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005", (cid,)).fetchone()[0]
+                         "WHERE company_id=? AND COALESCE(credit_balance,0) > ?", (cid, _eps)).fetchone()[0]
     # Currency-aware since 2026-09-05: this total was the last family of
     # figures still quantized to 0.01 after the 2026-09-03 waves, so a JOD
     # shop's "what am I owed" was wrong by up to 5 fils while every row
@@ -12831,18 +12956,20 @@ def customer_statement(cust_id):
     # amount_paid` is NOT immutable, which is why supplier_statement resolves
     # the same problem the other way round (see its own comment).
     #
-    # `> 0.005` MIRRORS create_sale's own `balance_due > 0.005` gate rather
-    # than being chosen independently: the two have to agree about whether a
-    # sale became a debt at all, or this statement shows a charge the account
-    # never carried. It is a 2dp-era literal on a 3-decimal currency and is
-    # deliberately NOT made finer here alone -- see create_return's long note
-    # on the identical literal for why the whole set has to move at once.
+    # The threshold MIRRORS create_sale's own `balance_due > _eps` gate
+    # rather than being chosen independently: the two have to agree about
+    # whether a sale became a debt at all, or this statement shows a charge
+    # the account never carried. It is bound as a parameter, from the same
+    # `_money_epsilon(currency)` create_sale uses -- both were a hardcoded
+    # 0.005 (half a CENT, in a currency whose minor unit is a fil) until the
+    # epsilon sweep moved every such gate at once.
+    _eps = _money_epsilon(_company_currency(conn, cid))
     charges = conn.execute(
         "SELECT sale_number AS ref, created_at, "
         "(total - COALESCE(points_redeemed_amount,0) - amount_paid) AS amount, 'charge' AS kind, 1 AS sign "
         "FROM sales WHERE company_id=? AND customer_id=? "
-        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > 0.005",
-        (cid, cust_id)).fetchall()
+        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > ?",
+        (cid, cust_id, _eps)).fetchall()
     # Aseel-parity wave A-PAR (schema v32) FORCED FIX, not a new feature: a
     # cheque bounce writes the OPPOSITE `direction` on purpose (see
     # _apply_cheque_event's own "THE MONEY LEG" comment -- a NEW row, never
@@ -12921,24 +13048,25 @@ def customer_statement(cust_id):
     # from `receipts` above. It belongs on the drawer report, which is where
     # `_cash_session_report` already sums it.
     #
-    # `> 0.005` on each bucket MIRRORS create_return's own two write gates
-    # (`if ar_forgiven > 0.005:` / `if store_credit > 0.005:`) exactly, so
-    # this statement reports an event if and only if the balance really
-    # moved. `status='completed'` matches the only status create_return ever
-    # writes, and the same filter its own prior-claims query applies.
+    # The per-bucket threshold MIRRORS create_return's own two write gates
+    # (`if ar_forgiven > _eps:` / `if store_credit > _eps:`) exactly, from
+    # the same `_money_epsilon(currency)`, so this statement reports an event
+    # if and only if the balance really moved. `status='completed'` matches
+    # the only status create_return ever writes, and the same filter its own
+    # prior-claims query applies.
     settlements = conn.execute(
         "SELECT r.return_number AS ref, r.created_at AS created_at, "
         "COALESCE(r.ar_forgiven_amount,0) AS amount, 'return_forgiven' AS kind, -1 AS sign "
         "FROM returns r JOIN sales s ON s.id = r.sale_id "
         "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
-        "AND COALESCE(r.ar_forgiven_amount,0) > 0.005 "
+        "AND COALESCE(r.ar_forgiven_amount,0) > ? "
         "UNION ALL "
         "SELECT r.return_number AS ref, r.created_at AS created_at, "
         "COALESCE(r.store_credit_amount,0) AS amount, 'return_credit' AS kind, -1 AS sign "
         "FROM returns r JOIN sales s ON s.id = r.sale_id "
         "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
-        "AND COALESCE(r.store_credit_amount,0) > 0.005",
-        (cid, cid, cust_id, cid, cid, cust_id)).fetchall()
+        "AND COALESCE(r.store_credit_amount,0) > ?",
+        (cid, cid, cust_id, _eps, cid, cid, cust_id, _eps)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in receipts] + [dict(r) for r in settlements]
     events.sort(key=lambda e: e.get('created_at') or '')
     # Read ONCE, applied to every figure this statement returns -- same rule
@@ -13004,11 +13132,13 @@ def customer_statement(cust_id):
     #     migration's own docstring calls itself a best-effort retroactive
     #     application of the current rule, not a forensic reconstruction of
     #     what `_adjust_credit` actually did at that historical instant.
-    #   * The `> 0.005` gates, which are 2dp-era literals in a 3-decimal
-    #     currency. They are mirrored from the write sites deliberately (see
-    #     each query above), so this statement is wrong in exactly the same
-    #     places `create_sale`/`create_return` are and never independently --
-    #     the whole set moves together or not at all.
+    #   * The zero-thresholds, which are mirrored from the write sites
+    #     deliberately (see each query above) rather than chosen here, so
+    #     this statement can only ever be wrong in the same places
+    #     `create_sale`/`create_return` are and never independently. All of
+    #     them now read `_money_epsilon(currency)` -- half the shop's own
+    #     minor unit -- rather than the 2dp-era `0.005` they carried when
+    #     this NOTE was first written.
     return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency)}})
 
 @retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
@@ -13053,13 +13183,16 @@ def customer_payment(cust_id):
 @mt_require_capability(CAP_REPORTS)
 def suppliers_payables():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # One epsilon, read once, bound into both queries -- the supplier mirror
+    # of customers_receivables above. See `_money_epsilon`.
+    _eps = _money_epsilon(_company_currency(conn, cid))
     rows = conn.execute("SELECT id,name,phone,payment_terms,credit_balance FROM suppliers "
-                        "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005 ORDER BY credit_balance DESC", (cid,)).fetchall()
+                        "WHERE company_id=? AND COALESCE(credit_balance,0) > ? ORDER BY credit_balance DESC", (cid, _eps)).fetchall()
     # Same fix as customers_receivables() above -- filter the total the same
     # way as the listed rows so an overpaid (negative-balance) supplier can't
     # silently net against and understate the total_payable shown to the user.
     total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM suppliers "
-                         "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005", (cid,)).fetchone()[0]
+                         "WHERE company_id=? AND COALESCE(credit_balance,0) > ?", (cid, _eps)).fetchone()[0]
     currency = _company_currency(conn, cid)
     conn.close()
     return jsonify({'status': 'success', 'total_payable': _money(total, currency), 'data': [dict(r) for r in rows]})
@@ -13081,10 +13214,15 @@ def supplier_statement(sid):
     # duplicate-counting fix below excludes the PO's payment rows rather than
     # widening this charge: the two statements reach the same invariant from
     # opposite ends, and swapping the treatments would double-count on both.
+    # Threshold bound from `_money_epsilon(currency)`, the same value
+    # create_purchase_order / pay_purchase_order use to decide whether a PO
+    # still owes anything -- see `_money_epsilon` for the sweep that replaced
+    # the hardcoded 0.005 every one of these carried.
+    _eps = _money_epsilon(_company_currency(conn, cid))
     charges = conn.execute(
         "SELECT po_number AS ref, created_at, (total - COALESCE(amount_paid,0)) AS amount, 'charge' AS kind, 1 AS sign "
-        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total - COALESCE(amount_paid,0)) > 0.005",
-        (cid, sid)).fetchall()
+        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total - COALESCE(amount_paid,0)) > ?",
+        (cid, sid, _eps)).fetchall()
     # Aseel-parity wave A-PAR (schema v32) FORCED FIX -- see
     # customer_statement's identical comment above for the full reasoning.
     # The settling direction is the MIRROR of the customer statement's: for
@@ -13205,7 +13343,12 @@ def pay_purchase_order(po_id):
         conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
     try:
         new_paid = _money(po['amount_paid'] + amt, currency)
-        status = 'paid' if new_paid >= _money(po['total'], currency) - 0.005 else 'partial'
+        # The SAME epsilon create_purchase_order sets this column with -- the
+        # two writers of `payment_status` must agree on when a PO is settled,
+        # or an instalment route calls 'paid' what the create route would
+        # have called 'partial'. A hardcoded 0.005 here called a JOD PO with
+        # five fils outstanding fully paid.
+        status = 'paid' if new_paid >= _money(po['total'], currency) - _money_epsilon(currency) else 'partial'
         conn.execute("UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
                      (new_paid, status, po_id, cid))
         ref = _record_payment(conn, cid, 'supplier', po['supplier_id'], 'out', amt, method=data.get('method', 'cash'),
@@ -13855,14 +13998,22 @@ def aging_report():
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     buckets = {'current': 0.0, '1_30': 0.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
     today = datetime.now()
+    # One epsilon for both halves of this report and for BOTH of its queries:
+    # "does this party owe anything" and "which of their documents is still
+    # unpaid" have to be the same question, or a party appears in a bucket
+    # whose oldest unpaid document the second query cannot find and silently
+    # ages at 0 days. Bound as a parameter -- SQLite cannot call
+    # `_money_epsilon`, and a hardcoded 0.005 in a query string is how this
+    # family drifted apart before the sweep.
+    _eps = _money_epsilon(_company_currency(conn, cid))
     if kind == 'payable':
-        parties = conn.execute("SELECT id, credit_balance FROM suppliers WHERE company_id=? AND COALESCE(credit_balance,0)>0.005", (cid,)).fetchall()
-        oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>0.005"
+        parties = conn.execute("SELECT id, credit_balance FROM suppliers WHERE company_id=? AND COALESCE(credit_balance,0)>?", (cid, _eps)).fetchall()
+        oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>?"
     else:
-        parties = conn.execute("SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>0.005", (cid,)).fetchall()
-        oldest_sql = "SELECT MIN(created_at) FROM sales WHERE company_id=? AND customer_id=? AND (total-amount_paid)>0.005"
+        parties = conn.execute("SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>?", (cid, _eps)).fetchall()
+        oldest_sql = "SELECT MIN(created_at) FROM sales WHERE company_id=? AND customer_id=? AND (total-amount_paid)>?"
     for p in parties:
-        oldest = conn.execute(oldest_sql, (cid, p['id'])).fetchone()[0]
+        oldest = conn.execute(oldest_sql, (cid, p['id'], _eps)).fetchone()[0]
         days = 0
         if oldest:
             try:
@@ -14186,7 +14337,8 @@ def void_payment(pid):
     #     that _adjust_credit at least turns the paid sale back into a debt.
     #     It does not hold up. `sales.amount_paid` is left at the full
     #     amount, so customer_statement() -- which builds its charge list
-    #     from `sales WHERE (total - amount_paid) > 0.005` and its receipt
+    #     from `sales WHERE (total - points - amount_paid) > _money_epsilon`
+    #     and its receipt
     #     list from ACTIVE payments only -- now sees neither the charge nor
     #     the receipt and computes a running balance of zero, while
     #     `customers.credit_balance` says the customer owes the money. Two
