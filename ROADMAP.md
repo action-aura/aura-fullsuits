@@ -4244,3 +4244,84 @@ rows already written at 2dp before that commit made `_record_payment`
 currency-aware. Retro-correcting them needs its own migration and its own
 review, since the fils a pre-fix row discarded cannot be recovered from the
 row itself. Residual error is bounded by half the old quantum.
+
+
+## 2026-09-18 - retail v37 CLAIMED: requantize the 2dp sale-tender payments rows
+
+Claimed IN WRITING before touching schema.py, per this file's standing rule
+that a schema version integer is a single-writer resource.
+`RETAIL_SCHEMA_VERSION` is **36** at the moment this is written.
+
+v35 remains the ROADMAP's own "schema versions v32-v35 RESERVED for the
+Aseel-parity wave" hole -- source-document back-references for drill-through,
+still NOT cashed in (no `_migrate_add_*` for it exists anywhere in
+schema.py). This fix is unrelated to that reservation and does not need it,
+so per the rule the v36 entry already applied in exactly this situation it
+takes **v37** and leaves v35 open. Whoever cashes in v35 next reads this and
+knows the live head by the time they land is 37, not 36.
+
+WHAT IT FIXES -- the last of the three items ffa221a5 named and left "for
+their own passes", after the statement reconciliation (`c14c7c5a`) and the
+epsilon sweep (`0b7d5ade`).
+
+`_record_payment`'s `currency` argument was optional, defaulting to the
+historical 2dp behaviour. Every caller has been converted, create_sale's own
+retained-cash write last (ffa221a5). Until then, a JOD sale's `payments` row
+was quantized to CENTS: a real tender of 4.007 persisted as 4.01. Three fils
+CREATED in the ledger.
+
+That column is not decorative. `create_return` sums it as `tender_collected`
+to cap how much cash a refund may physically hand back, and
+`_cash_session_report` sums it for the drawer. So an over-stated row lets a
+return pay out fils that never entered the drawer -- the same shape DEFECT 3
+of ffa221a5 fixed for NEW rows, still sitting in the OLD ones.
+
+WHY THIS ONE IS EXACT, NOT BEST-EFFORT -- and why that is worth stating,
+since the v36 backfill immediately above had to disclose the opposite.
+
+Only ONE caller was ever affected. `_record_payment`'s own docstring names
+the other four as already converted before that pass (customer_payment,
+supplier_payment, pay_purchase_order, create_purchase_order), and the cheque
+money leg passes `cheque['currency']`. So the rows needing correction are
+exactly `payments` rows with `related_type='sale'`.
+
+And those are exactly recomputable, because create_sale's formula reads only
+columns that are still on the sale at full precision:
+
+    net_received = min(paid, amount_due_after_points)
+      paid                    = sales.amount_paid
+      amount_due_after_points = sales.total - sales.points_redeemed_amount
+
+`sales.amount_paid`/`total`/`points_redeemed_amount` were made
+currency-aware in the 2026-09-03 wave, BEFORE the `_record_payment` call was
+-- which is precisely why the payments row could disagree with the sale that
+produced it. The fils are recoverable from the sale, not lost. ffa221a5's own
+commit message said "the fils a pre-fix row already discarded cannot be
+recovered from the row itself", and that is true of THE ROW; it is not true
+of the sale beside it. That distinction is the whole reason this can be a
+correction rather than an estimate.
+
+DELIBERATE LIMITS, so the next reader does not mistake silence for oversight:
+
+- **Only `related_type='sale'` rows are touched.** A direct customer or
+  supplier payment records an amount that exists NOWHERE else -- if one of
+  those were ever written at the wrong precision it would be genuinely
+  unrecoverable. None were, but the migration still refuses to guess at them
+  rather than relying on that being true forever.
+- **Only `status='active'` rows.** A voided row is a historical fact about
+  what was voided; rewriting its amount would change what the void meant.
+- **A sale carrying MORE than one `related_type='sale'` payment row is
+  skipped**, not apportioned. create_sale writes at most one, so this cannot
+  happen today -- but if it ever does, the row-to-formula attribution is
+  ambiguous and a guess about money is worse than an untouched row.
+- **A payment whose sale is not present locally is skipped.** On a synced
+  till a peer's payment can arrive before (or without) its sale; there is
+  nothing to recompute from, and the peer will correct its own copy.
+- **`credit_balance` is not touched**, matching the v36 backfill's own rule.
+  This migration writes `payments.amount` and nothing else.
+
+LIVE CONSEQUENCE, disclosed rather than discovered: `_cash_session_report`
+recomputes live, so an OPEN session's next X-report will show `expected_cash`
+move by the corrected fils. That is the drawer math becoming right, and it
+should be communicated as such rather than left as an unexplained jump --
+the same disclosure the v36 backfill makes for the same reason.
