@@ -170,6 +170,7 @@ Two things worth knowing before you trust a green run:
 ## Sync & multi-device  (27 suites — 26 py, 1 js)
   - `_accept_branch_fallback_test.py` — ADVERSARIAL ACCEPTANCE PASS -- Phase 5 wave B1 (stock-moving sync).
   - `retail_branch_limit_test.py` — the `max_branches` licence entitlement (2026-09-05 price
+  - `retail_branch_retire_test.py` — retiring a branch, and the resolver guards that make it real.
   - `retail_branch_scope_enforcement_test.py` — branch-scope data-plane enforcement (launch-readiness account-hierarchy design §3.3/§4.2 D7, wave C2/Reading A).
   - `retail_branch_update_route_test.py` — PUT /api/sub/retail/branches/<id> (update_branch).
   - `retail_branches_test.js` — retail_branches_test.js — Branches screen (ci-hardening-w0.3 continuation, the doorway").

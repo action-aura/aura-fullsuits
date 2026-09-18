@@ -677,7 +677,18 @@ def _default_branch(conn, cid):
     keyed by (company_id, product_id, branch_id); a hardcoded branch_id=1 silently
     misses when a tenant's first branch isn't id 1 (multi-company / standalone installs),
     leaving sales that never decrement stock. Always derive the branch from the company."""
-    row = conn.execute("SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1", (cid,)).fetchone()
+    # `COALESCE(status,'active')='active'` -- THE guard that makes branch
+    # retirement real rather than cosmetic. Without it this returned the
+    # company's lowest-id branch regardless of status, so retiring the
+    # ORIGINAL branch (exactly the one a bare `ORDER BY id LIMIT 1` picks)
+    # left every unpinned device still filing sales and stock movements under
+    # it, invisibly, forever -- while it no longer appeared in the picker.
+    # `retire_branch` refuses to retire the LAST active branch, which is what
+    # guarantees this SELECT still finds one rather than falling through to
+    # the self-heal below and inventing a branch nobody asked for.
+    row = conn.execute(
+        "SELECT id FROM branches WHERE company_id=? AND COALESCE(status,'active')='active' "
+        "ORDER BY id LIMIT 1", (cid,)).fetchone()
     if row:
         return row['id']
     cur = conn.cursor()
@@ -818,8 +829,15 @@ def _resolve_working_branch(conn, cid, explicit_branch_id=None):
     would be exactly the new schema version this fix does not need.
     """
     if explicit_branch_id not in (None, ''):
+        # `COALESCE(status,'active')='active'` -- a RETIRED branch is not a
+        # place anything new may be filed. A caller naming one outright is
+        # TOLD (this same 400), never silently redirected: a sale that lands
+        # somewhere other than where the caller said is its own kind of
+        # wrong, and quietly rewriting an explicit instruction is how a
+        # multi-branch shop loses track of where its money went.
         row = conn.execute(
-            "SELECT id, uid FROM branches WHERE id=? AND company_id=?",
+            "SELECT id, uid FROM branches WHERE id=? AND company_id=? "
+            "AND COALESCE(status,'active')='active'",
             (explicit_branch_id, cid),
         ).fetchone()
         if not row:
@@ -10771,6 +10789,127 @@ def update_branch(branch_id):
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success', 'data': {'id': branch_id}})
+
+@retail_bp.route('/branches/<int:branch_id>/retire', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def retire_branch(branch_id):
+    """Close a branch. CAP_EMPLOYEES, the same authority create_branch and
+    update_branch already require.
+
+    A SOFT STATUS FLIP, NEVER A DELETE. Nothing FK-references `branches.id`
+    -- every referencing column says so in its own comment, because the id is
+    a per-device autoincrement rather than a wire identity -- so a DELETE
+    would silently strand every historical sale, movement, drawer and
+    transfer keyed to it. The row stays and history keeps reading: reports
+    and statements read `sales`/`returns` by branch_id and only join
+    `branches` for a display name.
+
+    THE COLUMN WAS NEVER THE HARD PART. `branches.status` has existed all
+    along and `list_branches` already filtered on it, so "add a route, flip
+    the flag" looks like the whole job. It is not: the three tiers of
+    `_resolve_working_branch`, `_default_branch` and sync's own
+    `_resolve_branch_id` did NOT filter on status, so a retired branch would
+    have vanished from the picker while every device already pinned to it --
+    and every unpinned device, if it were the company's lowest id -- kept
+    filing sales and stock under it, invisibly, forever. Those guards ship
+    with this route and are what make retirement real.
+
+    FOUR REFUSALS, each a 409 and each a refusal rather than a warning:
+
+      * STOCK STILL ON HAND. Inventory keyed to a branch nobody can select is
+        unreachable through the UI -- the same class of unrecoverable state
+        as a balance with no ledger row behind it. The remedy already ships:
+        transfer it out first (schema v28). Checked on QUANTITY, not on the
+        existence of an `inventory_balances` row: rows sit at 0 forever once
+        stock runs out, and blocking on their existence would make a branch
+        that genuinely holds nothing permanently un-retirable.
+      * AN OPEN CASH SESSION. A drawer nobody can reach cannot be counted or
+        closed, and its Z-report is how a shift is reconciled.
+      * A PENDING OR IN-TRANSIT TRANSFER naming it at EITHER end. Goods in
+        flight have to land somewhere that still exists.
+      * THE LAST ACTIVE BRANCH. A shop with no active branch has nowhere to
+        file the next sale, and `_default_branch` would silently INVENT a
+        replacement -- a new branch nobody asked for, which is not a closure.
+
+    Every check runs BEFORE the UPDATE, so a refusal changes nothing.
+
+    A REAL COMMERCIAL CONSEQUENCE, stated because it is deliberate rather
+    than incidental: `create_branch` counts only ACTIVE branches against the
+    licence's `max_branches`, so retiring one genuinely returns a slot.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    row = conn.execute(
+        "SELECT id, uid, name, address, phone, status FROM branches WHERE id=? AND company_id=?",
+        (branch_id, cid)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Branch not found.'}), 404
+    if (row['status'] or 'active') != 'active':
+        conn.close()
+        return jsonify({'status': 'success', 'data': {'id': branch_id, 'already_retired': True}})
+
+    active_count = conn.execute(
+        "SELECT COUNT(*) FROM branches WHERE company_id=? AND COALESCE(status,'active')='active'",
+        (cid,)).fetchone()[0]
+    if active_count <= 1:
+        conn.close()
+        return jsonify({'status': 'error', 'reason_code': 'BRANCH_LAST_ACTIVE',
+                        'message': 'This is the only active branch. A shop must keep at least one.'}), 409
+
+    on_hand = conn.execute(
+        "SELECT COALESCE(SUM(quantity_on_hand),0) FROM inventory_balances "
+        "WHERE company_id=? AND branch_id=? AND quantity_on_hand > 0",
+        (cid, branch_id)).fetchone()[0]
+    if float(on_hand or 0) > 0:
+        conn.close()
+        return jsonify({'status': 'error', 'reason_code': 'BRANCH_HAS_STOCK',
+                        'message': 'This branch still holds stock. Transfer it out before retiring the branch.'}), 409
+
+    open_drawers = conn.execute(
+        "SELECT COUNT(*) FROM cash_sessions WHERE company_id=? AND branch_id=? AND status=?",
+        (cid, branch_id, CASH_SESSION_STATUS_OPEN)).fetchone()[0]
+    if open_drawers:
+        conn.close()
+        return jsonify({'status': 'error', 'reason_code': 'BRANCH_OPEN_DRAWER',
+                        'message': 'This branch has an open cash session. Close the drawer first.'}), 409
+
+    try:
+        in_flight = conn.execute(
+            "SELECT COUNT(*) FROM stock_transfers WHERE company_id=? "
+            "AND (source_branch_id=? OR destination_branch_id=?) "
+            "AND status IN ('pending','in_transit')",
+            (cid, branch_id, branch_id)).fetchone()[0]
+    except sqlite3.OperationalError:
+        # `stock_transfers` arrived in v28; a database that predates it has
+        # no transfers to be in flight. Narrow on purpose -- see
+        # `_returns_query`'s own reasoning for why a missing TABLE is the
+        # only thing worth tolerating here.
+        in_flight = 0
+    if in_flight:
+        conn.close()
+        return jsonify({'status': 'error', 'reason_code': 'BRANCH_TRANSFER_IN_FLIGHT',
+                        'message': 'This branch has a transfer in flight. Finish or cancel it first.'}), 409
+
+    cur = conn.cursor()
+    cur.execute("UPDATE branches SET status='inactive' WHERE id=? AND company_id=?", (branch_id, cid))
+    # Wave B: retirement converges like any other branch edit. The apply side
+    # already upserts `status` (sync_service.py's branch handler), so a peer
+    # needs no new handler -- but it DOES need the same resolver guards,
+    # which is why they are not local to this route.
+    _queue_sync_event(cur, 'branch', row['uid'], 'update', {
+        'uid': row['uid'], 'name': row['name'], 'address': row['address'] or '',
+        'phone': row['phone'] or '', 'status': 'inactive',
+    })
+    _audit(conn, 'BRANCH_RETIRED', 'branch', branch_id, row['name'] or '')
+    conn.commit()
+    conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': {'id': branch_id}})
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CREDIT & PAYMENTS — lightweight AR/AP ledger (Phase 1)

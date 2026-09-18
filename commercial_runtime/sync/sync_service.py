@@ -3155,6 +3155,15 @@ class SyncService:
         default) preserves the original per-call WARNING -- every existing
         direct caller of this function (and of `_apply_event` outside
         `apply_pull_result`, e.g. tests) keeps its old behavior unchanged."""
+        # DELIBERATELY NOT status-filtered. A peer's event NAMES its branch by
+        # uid, and that branch may since have been retired on this device --
+        # but the event still belongs to it. Filtering here would drop through
+        # to the default below and file another till's sale under the WRONG
+        # branch, which is worse than recording it against a closed one:
+        # history has to converge where it actually happened. Retirement stops
+        # NEW local work being filed to a branch (see retail_api.py's
+        # `_default_branch` and `_resolve_working_branch`); it does not
+        # rewrite where a peer's existing work belongs.
         if branch_uid:
             row = conn.execute(
                 "SELECT id FROM branches WHERE uid=? AND company_id=?",
@@ -3162,7 +3171,16 @@ class SyncService:
             ).fetchone()
             if row:
                 return row["id"]
+        # The FALLBACK is status-filtered, for the same reason
+        # `_default_branch` is: an event that names no branch at all is new
+        # work being placed, and new work must not land on a retired branch.
+        # Falls back to the unfiltered pick when a shop has somehow retired
+        # everything, because filing it somewhere beats dropping it.
         row = conn.execute(
+            "SELECT id FROM branches WHERE company_id=? AND COALESCE(status,'active')='active' "
+            "ORDER BY id LIMIT 1",
+            (local_company_id,),
+        ).fetchone() or conn.execute(
             "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1",
             (local_company_id,),
         ).fetchone()

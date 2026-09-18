@@ -218,6 +218,11 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # ── Owner administration of the shop itself: retail.employees ────────────
     'create_branch': CAP_EMPLOYEES,
     'update_branch': CAP_EMPLOYEES,
+    # Closing a branch is the same authority as opening or renaming one --
+    # owner administration of the shop's own shape, not a till operation.
+    # Declared here because this table is the record: the ratchet caught the
+    # new route the moment it landed, which is exactly what it is for.
+    'retire_branch': CAP_EMPLOYEES,
     'credit_settings_set': CAP_EMPLOYEES,
     'tax_settings_set': CAP_EMPLOYEES,
     # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the

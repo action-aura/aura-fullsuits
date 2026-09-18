@@ -1475,5 +1475,9 @@
   "Store credit issued": "Store credit issued",
   "View statement": "View statement",
   "Tax Collected": "Tax Collected",
-  "Your licence is not part of a backup. On this same computer it is unaffected. On a new computer, activate again with your licence key after restoring.": "Your licence is not part of a backup. On this same computer it is unaffected. On a new computer, activate again with your licence key after restoring."
+  "Your licence is not part of a backup. On this same computer it is unaffected. On a new computer, activate again with your licence key after restoring.": "Your licence is not part of a backup. On this same computer it is unaffected. On a new computer, activate again with your licence key after restoring.",
+  "Retire This Branch?": "Retire This Branch?",
+  "It stops appearing when ringing sales or moving stock. Its past sales, drawers and reports stay exactly as they are, and it can be reopened by support.": "It stops appearing when ringing sales or moving stock. Its past sales, drawers and reports stay exactly as they are, and it can be reopened by support.",
+  "Branch retired.": "Branch retired.",
+  "Could not retire this branch.": "Could not retire this branch."
 }

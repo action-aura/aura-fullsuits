@@ -8273,9 +8273,48 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${b.address ? this._esc(b.address) : '—'}</td>
         <td style="color:var(--text-muted)">${b.phone ? this._esc(b.phone) : '—'}</td>
         <td>${this._badge(b.status === 'active' ? t('Active') : t('Inactive'), b.status === 'active' ? 'green' : 'red')}</td>
-        <td><button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditBranch('${this._esc(b.id)}')">${t('Edit')}</button></td>
+        <td>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditBranch('${this._esc(b.id)}')">${t('Edit')}</button>
+          <!-- Retire. Same id-only convention as Edit above: the record is
+               looked up from this._branches rather than splicing a
+               remote-authored name into an inline onclick string. Shown only
+               for an ACTIVE branch -- list_branches filters to active today,
+               so this is belt-and-braces against that ever widening. -->
+          ${b.status === 'active' ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px"
+            onclick="RetailSystem._confirmRetireBranch('${this._esc(b.id)}')">${t('Retire')}</button>` : ''}
+        </td>
       </tr>`).join('');
     } catch (e) { console.error(e); }
+  },
+
+  async _confirmRetireBranch(id) {
+    const b = (this._branches || []).find(x => String(x.id) === String(id));
+    if (!b) return;
+    // Through _confirm(), never a native confirm() -- the owner brief of
+    // 2026-09-08 converted the last of those out of this file.
+    const ok = await this._confirm({
+      title: t('Retire This Branch?'),
+      message: t('It stops appearing when ringing sales or moving stock. Its past sales, drawers and reports stay exactly as they are, and it can be reopened by support.'),
+      confirmLabel: t('Retire'),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const d = await this._post(`/api/sub/retail/branches/${encodeURIComponent(id)}/retire`, {});
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(t('Branch retired.'), 'success');
+        this._loadBranches();
+      } else {
+        // The server's own message is surfaced VERBATIM: the four refusals
+        // (stock on hand, an open drawer, a transfer in flight, the last
+        // active branch) each say exactly what to do about it, and
+        // rewriting them here would lose the instruction.
+        SubsystemApp.showToast((d && d.message) || t('Could not retire this branch.'), 'error');
+      }
+    } catch (e) {
+      const msg = (e && e.message) || t('Could not retire this branch.');
+      SubsystemApp.showToast(msg, 'error');
+    }
   },
 
   _openAddBranch() { this._showBranchModal(); },
