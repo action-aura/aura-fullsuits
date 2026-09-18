@@ -106,7 +106,11 @@ const SHELL_FILE = path.join(FRONTEND_DIR, 'app-shell.js');
 const GROUPS = [
   { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
   { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques'] },
+  // 'receivables'/'payables' appended when AR/AP reached the desktop client
+  // (it had existed only on Android). Both live in Insight for the same
+  // reason 'reports' and 'cheques' do: they disclose the shop's financial
+  // position and are gated on retail.reports.
+  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables'] },
   { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
@@ -297,7 +301,12 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 22, 'sanity: this file\'s own expectation list drifted from 21 destinations');
+  // 24 = dashboard + 23 grouped entries. Was 22 before AR/AP (receivables,
+  // payables) reached the desktop client. The message and the number are
+  // bumped TOGETHER on purpose: this assertion exists to catch GROUPS drifting
+  // from the product, so a count that disagrees with its own prose is the
+  // exact failure it is supposed to make loud.
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 24, 'sanity: this file\'s own expectation list drifted from 24 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

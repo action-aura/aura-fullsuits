@@ -425,6 +425,13 @@ const RetailSystem = {
       // SEE the book, retail.employees to act on any row) and app-shell.js's
       // nav entry for why the two differ.
       case 'cheques':   return this._renderCheques(c);
+      // Desktop parity gap (2026-09-18): AR/AP existed only on Android. See
+      // app-shell.js's nav entry comment for the full reasoning and the
+      // capability split; see the RECEIVABLES / PAYABLES section below for
+      // the implementation, which is one shared _renderPartyLedger rather
+      // than two near-identical copies.
+      case 'receivables': return this._renderReceivables(c);
+      case 'payables':    return this._renderPayables(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -13089,6 +13096,294 @@ const RetailSystem = {
         </div>`;
       document.body.appendChild(overlay);
       overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  // ── RECEIVABLES / PAYABLES (desktop parity gap, 2026-09-18) ─────────────────
+  //
+  // AR/AP has existed on Android with nothing on desktop calling any of the
+  // routes below -- the till that actually rings sales and opens the cash
+  // drawer could not collect a customer's debt, pay a supplier, or see an
+  // aging report at all. Every route this section calls (customers/
+  // receivables, suppliers/payables, <id>/statement x2, <id>/payments x2,
+  // reports/aging) already exists and is already correct; this is the
+  // desktop half of a feature that already shipped, not a new one, and no
+  // backend route is added, changed or renamed here.
+  //
+  // Receivables and Payables share one implementation
+  // (_renderPartyLedger/_loadPartyLedger/_openPartyStatement/
+  // _submitPartyPayment), parameterized by `kind` ('customer'|'supplier'),
+  // rather than two near-identical copies -- the same "pass the resource
+  // name as a parameter" shape ImportWizard.open('retail','products')
+  // already uses elsewhere in this file. The two router entries above and
+  // the two nav entries (app-shell.js) are the only kind-specific surface;
+  // everything below reads `kind` off the value the caller passed in.
+  //
+  // Every list/aging/statement element id carries the `kind` suffix (e.g.
+  // `pl-table-customer` / `pl-table-supplier`) rather than one shared id --
+  // a shop can navigate Receivables -> Payables faster than a slow fetch
+  // from the FIRST screen resolves, and a shared id would let that stale
+  // response paint a supplier's table with a customer's rows. The existing
+  // `if (!tbody) return` guard every _loadXxx in this file already carries
+  // (see _loadTransfers) then does the rest: the stale response's selector
+  // no longer matches anything once the other screen has rendered.
+
+  // STATEMENT KIND -> LABEL/DIRECTION, matching Android's StatementEvent
+  // rendering exactly (this feature's own task brief, mirrored from
+  // customer_statement's own server-side comment on the same five kinds):
+  // 'charge' and 'reversal' both INCREASE what is owed (a credit sale, or a
+  // cheque the bank bounced back); 'payment', 'return_forgiven' and
+  // 'return_credit' all DECREASE it. A kind this map does not name falls
+  // back to the server's own documented default -- 'Payment' / decrease --
+  // never silently treated as an increase, which is the dangerous direction
+  // to be wrong in (see customer_statement's identical reasoning for why
+  // `sign` travels with the row server-side rather than being re-inferred
+  // here from `kind`).
+  _PARTY_STATEMENT_KIND: {
+    charge:          { label: 'Credit sale',         sign: 1 },
+    reversal:        { label: 'Cheque returned',      sign: 1 },
+    payment:         { label: 'Payment',              sign: -1 },
+    return_forgiven: { label: 'Credit forgiven',      sign: -1 },
+    return_credit:   { label: 'Store credit issued',  sign: -1 },
+  },
+  _partyStatementKind(kind) {
+    return this._PARTY_STATEMENT_KIND[kind] || { label: 'Payment', sign: -1 };
+  },
+
+  // customers/receivables + suppliers/payables live under the plural
+  // collection name; <id>/statement and <id>/payments hang off the same
+  // base per party type. One base per kind, read once, so a route typo can
+  // only happen here instead of at every call site below.
+  _partyApiBase(kind) { return kind === 'supplier' ? '/api/sub/retail/suppliers' : '/api/sub/retail/customers'; },
+
+  async _renderReceivables(c) { return this._renderPartyLedger(c, 'customer'); },
+  async _renderPayables(c)    { return this._renderPartyLedger(c, 'supplier'); },
+
+  async _renderPartyLedger(c, kind) {
+    this._injectStyles();
+    const isSupplier = kind === 'supplier';
+    // Same defence-in-depth every other retail.reports screen carries (see
+    // _renderCheques'/_renderReports' identical guard immediately above) --
+    // hiding the nav entry (app-shell.js) is not the enforcement, and this
+    // section can be reached with no nav click in between.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, isSupplier ? {
+        icon: '📤',
+        title: t('Payables'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      } : {
+        icon: '💰',
+        title: t('Receivables'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    const title = isSupplier ? t('Payables') : t('Receivables');
+    const totalLabel = isSupplier ? t('Total Payable') : t('Total Receivable');
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title"><span aria-hidden="true">${this._icon(isSupplier ? 'send' : 'wallet', 18, isSupplier ? '📤' : '💰')}</span> <span>${title}</span></h2>
+      </div>
+      <div class="sub-chart-card" style="margin-bottom:16px">
+        <div id="pl-aging-${kind}" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">${t('Loading…')}</div>
+        <div style="margin-top:14px;display:flex;align-items:baseline;gap:8px">
+          <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${totalLabel}</span>
+          <span id="pl-total-${kind}" style="font-size:22px;font-weight:700;color:var(--text-money)">${this._fmt(0)}</span>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="pl-table-${kind}">
+            <thead><tr><th>${t('Name')}</th><th>${t('Phone')}</th><th>${t('Balance')}</th></tr></thead>
+            <tbody><tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadPartyLedger(kind);
+  },
+
+  async _loadPartyLedger(kind) {
+    const isSupplier = kind === 'supplier';
+    const listUrl = isSupplier ? '/api/sub/retail/suppliers/payables' : '/api/sub/retail/customers/receivables';
+    const agingUrl = `/api/sub/retail/reports/aging?type=${isSupplier ? 'payable' : 'receivable'}`;
+    try {
+      const [listResp, agingResp] = await Promise.all([this._get(listUrl), this._get(agingUrl)]);
+      const rows = listResp.data || [];
+      const total = isSupplier ? listResp.total_payable : listResp.total_receivable;
+      const buckets = agingResp.data || {};
+
+      const totalEl = document.getElementById(`pl-total-${kind}`);
+      if (totalEl) totalEl.textContent = this._fmt(total || 0);
+
+      const agingEl = document.getElementById(`pl-aging-${kind}`);
+      if (agingEl) {
+        // Same badge-chip shape _paintEmailOutboxCounts above already uses
+        // for a row of labelled counts -- one helper closure, five chips,
+        // rather than five near-identical template strings.
+        const chip = (label, amount, color) => this._badge(`${this._esc(label)}: ${this._fmt(amount || 0)}`, color);
+        agingEl.innerHTML = [
+          chip(t('Current'), buckets.current, 'green'),
+          chip(t('1-30 Days'), buckets['1_30'], 'blue'),
+          chip(t('31-60 Days'), buckets['31_60'], 'yellow'),
+          chip(t('61-90 Days'), buckets['61_90'], 'purple'),
+          chip(t('90+ Days'), buckets['90_plus'], 'red'),
+        ].join(' ');
+      }
+
+      const tbody = document.querySelector(`#pl-table-${kind} tbody`);
+      if (!tbody) return;
+      if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="3">${this._emptyState({
+          icon: isSupplier ? 'send' : 'wallet',
+          title: isSupplier ? t('No outstanding payables') : t('No outstanding receivables'),
+          hint: isSupplier
+            ? t('You have no open balances with suppliers. Purchases on credit and returned issued cheques will appear here.')
+            : t('Every customer is paid up. Credit sales and cheque returns will appear here as they happen.'),
+        })}</td></tr>`;
+        return;
+      }
+      // Every interpolated value here is escaped (see this._esc): a
+      // customer/supplier name or phone can arrive from another device over
+      // the sync relay, mirroring _loadCustomers' identical note above.
+      tbody.innerHTML = rows.map(row => `<tr onclick="RetailSystem._openPartyStatement('${kind}','${this._esc(row.id)}')">
+        <td style="font-weight:600">${this._partyOpenerButton(kind, row.id, row.name, row.phone)}</td>
+        <td style="color:var(--text-muted)">${row.phone ? this._esc(row.phone) : '—'}</td>
+        <td style="font-weight:600;color:var(--text-money)">${this._fmt(row.credit_balance)}</td>
+      </tr>`).join('');
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  // Same accessibility fix _customerOpenerButton/_saleOpenerButton already
+  // give their own lists (see that pair's long comment above `_bdi`): a
+  // `<tr onclick=...>` with nothing focusable inside it is mouse-only -- no
+  // Tab route, no Enter/Space, and a screen reader reads three cells and no
+  // control. One function for both ledgers, parameterized by `kind` the
+  // same way the row's own onclick already is; the phone joins the
+  // accessible name for the identical reason _customerOpenerButton's own
+  // comment gives (a shop can carry two same-named debtors/suppliers).
+  _partyOpenerButton(kind, id, name, phone) {
+    const nm = name == null ? '' : String(name);
+    const ph = phone == null ? '' : String(phone).trim();
+    const label = `${t('View statement')} ${nm}${ph ? ' ' + ph : ''}`;
+    return `<button type="button" class="ret-rowbtn"` +
+      ` onclick="event.stopPropagation();RetailSystem._openPartyStatement('${kind}','${this._esc(id)}')"` +
+      ` aria-label="${this._esc(label)}"` +
+      `>${this._esc(nm)}</button>`;
+  },
+
+  async _openPartyStatement(kind, id) {
+    try {
+      const resp = (await this._get(`${this._partyApiBase(kind)}/${id}/statement`)).data || {};
+      // customer_statement returns {customer,...}; supplier_statement
+      // returns {supplier,...} -- read whichever key the response actually
+      // carries rather than branching on `kind` a second time here.
+      const party = resp.customer || resp.supplier || {};
+      const events = resp.events || [];
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.id = 'ret-statement-modal';
+      overlay.innerHTML = this._partyStatementMarkup(kind, id, party, events, resp.balance);
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  _partyStatementMarkup(kind, id, party, events, balance) {
+    const isSupplier = kind === 'supplier';
+    const balanceLabel = isSupplier ? t('You Owe') : t('Owed to You');
+    const eventsHtml = events.length ? events.map(e => {
+      const meta = this._partyStatementKind(e.kind);
+      const sign = meta.sign > 0 ? '+' : '-';
+      const color = meta.sign > 0 ? 'var(--state-warning-text)' : 'var(--state-success-text)';
+      return `<tr>
+        <td style="color:var(--text-muted)">${this._bdi(e.date || '—')}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(e.ref || '—')}</td>
+        <td>${t(meta.label)}</td>
+        <td style="font-weight:600;color:${color}">${sign}${this._fmt(e.amount)}</td>
+        <td style="font-weight:600">${this._fmt(e.running_balance)}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="5">${this._emptyState({ icon: 'scroll-text', title: t('No activity yet') })}</td></tr>`;
+
+    // customer_payment carries @mt_require_capability(CAP_SELL)
+    // (retail.sell) -- "record a customer's receipt" is already inside the
+    // authority a cashier holds to ring a sale. supplier_payment carries
+    // CAP_EMPLOYEES (retail.employees) instead -- see that route's own
+    // comment on why paying a supplier needs the stricter authority ("the
+    // person who signs for the goods is not the person who signs the
+    // cheque"). Gated per control, not on the screen's own retail.reports
+    // gate above -- the same "screen reachability vs. row action authority"
+    // split Cheques already uses (see _loadCheques's `canManage`): the
+    // control is simply OMITTED, not shown disabled, when the viewer lacks
+    // it.
+    const canPay = !window.SubsystemApp || SubsystemApp.hasCapability(isSupplier ? 'retail.employees' : 'retail.sell');
+    const paymentBlock = canPay ? `
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-default)">
+          <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">${t('Record Payment')}</div>
+          <div class="ret-field-row" style="grid-template-columns:1fr 1fr 2fr auto;gap:8px;align-items:end">
+            <div class="ret-field" style="margin:0"><label>${t('Amount')}</label>
+              <input type="number" id="stmt-pay-amount" min="0" step="0.001" /></div>
+            <div class="ret-field" style="margin:0"><label>${t('Method')}</label>
+              <select id="stmt-pay-method">
+                <option value="cash">${t('Cash')}</option>
+                <option value="card">${t('Card')}</option>
+                <option value="transfer">${t('Transfer')}</option>
+                <option value="cheque">${t('Cheque')}</option>
+                <option value="other">${t('Other')}</option>
+              </select></div>
+            <div class="ret-field" style="margin:0"><label>${t('Notes')}</label>
+              <input type="text" id="stmt-pay-notes" /></div>
+            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitPartyPayment('${kind}','${this._esc(id)}')">${t('Record Payment')}</button>
+          </div>
+        </div>` : '';
+
+    return `
+      <div class="ret-modal ret-modal-wide">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+          <h3 style="margin:0">${t('Statement')}: ${this._esc(party.name || '—')}</h3>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
+          <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Phone')}</div><div style="color:var(--text-primary);font-weight:600">${party.phone ? this._esc(party.phone) : '—'}</div></div>
+          <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${balanceLabel}</div><div style="color:var(--text-money);font-weight:700;font-size:18px">${this._fmt(balance)}</div></div>
+        </div>
+        <table class="ret-table">
+          <thead><tr><th>${t('Date')}</th><th>${t('Reference')}</th><th>${t('Description')}</th><th>${t('Amount')}</th><th>${t('Running Balance')}</th></tr></thead>
+          <tbody>${eventsHtml}</tbody>
+        </table>${paymentBlock}
+      </div>`;
+  },
+
+  async _submitPartyPayment(kind, id) {
+    const amount = +(document.getElementById('stmt-pay-amount')?.value || 0);
+    if (!(amount > 0)) {
+      SubsystemApp.showToast(t('Enter an amount greater than zero'), 'error');
+      return;
+    }
+    const method = document.getElementById('stmt-pay-method')?.value || 'cash';
+    const notes = document.getElementById('stmt-pay-notes')?.value || '';
+    try {
+      const d = await this._post(`${this._partyApiBase(kind)}/${id}/payments`, { amount, method, notes });
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Payment recorded'), 'success');
+        document.getElementById('ret-statement-modal')?.remove();
+        // Refresh both surfaces that show this party's balance -- the
+        // statement the operator was just looking at, and the list behind
+        // it -- rather than trying to patch the DOM in place: both are
+        // stale the instant the payment above lands, the same "reload from
+        // the server" contract every write in this file already follows
+        // (see _createTransfer's identical `this._loadTransfers()` call).
+        this._openPartyStatement(kind, id);
+        this._loadPartyLedger(kind);
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');

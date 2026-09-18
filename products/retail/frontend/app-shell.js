@@ -944,6 +944,27 @@ const SubsystemApp = {
         // not here, matching Exceptions' own "screen reachability vs. row
         // action authority" split immediately above.
         { id: 'cheques', label: 'Cheques', icon: '🧾', capability: 'retail.reports' },
+        // Desktop parity gap (2026-09-18): AR/AP has existed on Android since
+        // the AR/AP wave with nothing on desktop -- the primary till, docs/
+        // launch-readiness calls Retail the most actively developed product,
+        // could not collect a customer's debt, pay a supplier, or see aging
+        // at all. Same routes the phone app already calls (customers/
+        // receivables, suppliers/payables, <id>/statement, <id>/payments,
+        // reports/aging); this only wires the desktop client to them.
+        // `capability: 'retail.reports'` matches customers_receivables'/
+        // suppliers_payables' own @mt_require_capability(CAP_REPORTS) gate,
+        // the same reasoning Cheques/Reports/Exceptions above already state
+        // -- a user is not invited into a screen whose first read would 403.
+        // The Record Payment control inside each screen needs its own
+        // stricter, DIFFERENT-per-direction capability (retail.sell for a
+        // customer receipt, retail.employees for a supplier payment --
+        // matching customer_payment's/supplier_payment's own decorators
+        // exactly), gated inside _renderPartyLedger's statement modal, not
+        // here -- the same "screen reachability vs. row action authority"
+        // split Cheques/Exceptions already use, applied to two different
+        // write authorities instead of one.
+        { id: 'receivables', label: 'Receivables', icon: '💰', capability: 'retail.reports' },
+        { id: 'payables',    label: 'Payables',    icon: '📤', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -981,7 +1002,7 @@ const SubsystemApp = {
       navGroups: [
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },

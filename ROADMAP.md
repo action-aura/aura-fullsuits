@@ -4616,3 +4616,92 @@ deliberate. A fully refunded 500 sale leaves `total_spent` at 500 forever --
 shown on the customer screen and used to ORDER the customers list, so a
 fully-refunded customer outranks a genuine repeat buyer. Not money moved, but a
 stored figure that silently diverges from what it claims to summarise.
+
+
+## 2026-09-18 - AR/AP reaches the DESKTOP client (the inverted parity gap, closed)
+
+No schema change, no new route, no version claimed. Frontend only.
+
+THE GAP. Receivables, payables, aging and the party statement existed ONLY on
+Android. CLAUDE.md's own round-3 correction flagged this as one of the two
+things the document had never said, and a read-only audit this session
+confirmed it by grep: `subsystem-retail.js` contained ZERO occurrences of
+`receivable` or `payable`.
+
+Everywhere else in this product desktop leads and Android lags. Here it was
+the reverse, on the client this repo calls the most actively developed one and
+the one a shop actually stands at. A desktop-only shop could not collect a
+customer's debt, pay a supplier, or see aging at all -- while the backend
+routes for all of it had been complete and correctly gated the whole time.
+
+That is the same "doorway" shape this codebase has now hit five times
+(transfers, quotations, cheques, branches, backup/export): routes shipped,
+gated, tested, and unreachable because nothing in the UI called them.
+
+WHAT SHIPPED. Two nav entries in the Insight group -- Receivables and Payables,
+both gated on `retail.reports`, the same capability
+`customers_receivables`/`suppliers_payables` already require -- and one shared
+implementation parameterised by party kind rather than two near-identical
+copies. Each screen carries the aging buckets, the total, and the debtor/
+creditor list; a row opens that party's statement with every event and its
+running balance, and a Record Payment control posts to the existing payment
+route and refreshes.
+
+THE CAPABILITY DETAIL WORTH KEEPING. The Record Payment control is gated
+per-direction, NOT on the screen's own read capability: `retail.sell` for a
+customer receipt, `retail.employees` for a supplier payment. That mirrors the
+routes' actual decorators -- `customer_payment` is `CAP_SELL` (a till
+operation) and `supplier_payment` is `CAP_EMPLOYEES` (procurement, money
+leaving) -- rather than assuming one gate covers both. Verified against the
+decorators, not assumed.
+
+The statement renders the two return-settlement kinds added earlier today
+(`return_forgiven`, `return_credit`) with their own labels and the correct
+sign, alongside charge/reversal/payment -- so the desktop screen reads the
+reconciled statement rather than the one that used to disagree with
+`credit_balance`.
+
+THE CORPUS, and why this entry mentions a test file at all.
+`retail_design_render_test.js` says in its own header that ROUTE_EXCLUSIONS is
+"the fallback, never the plan", and that a route outside its corpus is "a whole
+screen the suite goes green without looking at -- which is exactly how the
+Reports page shipped white-on-white through the round that was widening this
+corpus." Both new screens therefore entered the corpus IN THE SAME BREATH as
+the screens themselves, in all three places that file requires (buildCorpus,
+DECLARED_SCREENS, SCREEN_ROUTES), rather than taking the exclusion. The corpus
+goes 25 -> 27 screens, and the contrast/opacity/touch-target loops now cover
+two screens that are almost entirely money figures and a signed, colour-coded
+event list -- precisely the family of rules those loops exist to measure.
+
+VERIFICATION, all run on the final tree:
+
+    retail_design_render_test.js      9 checks, corpus renders all 27 screens
+    retail_design_contrast_test.js    44 checks
+    retail_design_focus_test.js       5 checks, 207 controls clear 44px BOTH axes
+    retail_design_rtl_test.js         6 checks
+    retail_nav_groups_test.js         6 cases, all 25 nav entries reachable
+    retail_surface_i18n_test.js       7 checks
+    retail_attribution_i18n_test.py   25 passed
+
+i18n: 28 new keys, both catalogues at 1475 keys with EXACT parity and ZERO
+byte-identical values -- i.e. nothing was "translated" by copying the English
+across, which is the usual way a parity test gets satisfied without anything
+being translated.
+
+TWO TEST FIXTURES WERE UPDATED, and the distinction matters. Neither assertion
+was weakened: `retail_nav_groups_test.js`'s GROUPS list and its sanity count
+(22 -> 24) and `retail_design_render_test.js`'s three registries are all
+hand-kept expectations OF the product, and their entire purpose is to fail when
+the product grows a screen and the list does not. Updating them together with
+the product is the contract; the count and its own prose were bumped in the
+same edit so the assertion cannot disagree with its own message.
+
+WHAT THIS DOES NOT DO, named rather than left to be found:
+
+- **Android keeps its own AR/AP screens.** Nothing was removed or unified; the
+  two clients now both have it, implemented separately.
+- **No new backend capability.** Everything here calls routes that already
+  existed; a user with `retail.reports` sees exactly what those routes already
+  disclosed to Android.
+- **Aging is shown, not drilled into.** The buckets render; there is no
+  per-bucket document list on either client.

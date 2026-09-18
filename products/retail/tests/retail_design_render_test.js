@@ -1415,6 +1415,22 @@ async function buildCorpus() {
     // cleared/bounced/endorsed/cancelled/written-off) and per-row action
     // buttons was going green without being looked at once.
     ['cheques', (rs, c) => rs._renderCheques(c)],
+    // AR/AP on the desktop client. Receivables/payables, aging and the
+    // party statement existed ONLY on Android -- the backend routes have
+    // been complete and gated the whole time with nothing on desktop
+    // calling them, which is the same "doorway" shape as transfers,
+    // quotations, cheques, branches and backup-export above.
+    //
+    // They enter the corpus in the SAME BREATH the screens were built,
+    // deliberately, because this file says in its own header that
+    // ROUTE_EXCLUSIONS is "the fallback, never the plan" -- and because
+    // these two screens are almost entirely money figures and a
+    // +/- signed, colour-coded event list (warning for what increases a
+    // debt, success for what settles it). That is exactly the family of
+    // rules a contrast/opacity loop exists to measure, and exactly what
+    // shipped unlooked-at when the cheques register skipped this step.
+    ['receivables', (rs, c) => rs._renderReceivables(c)],
+    ['payables', (rs, c) => rs._renderPayables(c)],
   ];
   // 'retail.employees' added alongside 'retail.reports' for the `branches`
   // entry above (create_branch's own @mt_require_capability(CAP_EMPLOYEES)
@@ -1661,6 +1677,10 @@ const DECLARED_SCREENS = [
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
   'backup-export', 'scanner', 'stock-accuracy', 'transfers', 'quotations',
   'cheques',
+  // AR/AP on desktop -- listed in BUILD order, immediately after 'cheques',
+  // because this assertion compares declared against rendered EXACTLY and in
+  // sequence, so position is part of the claim.
+  'receivables', 'payables',
   'customer-modal', 'sale-modal', 'held-sales-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
@@ -1716,6 +1736,8 @@ const SCREEN_ROUTES = {
   transfers: 'transfers',
   quotations: 'quotations',
   cheques: 'cheques',
+  receivables: 'receivables',
+  payables: 'payables',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.
