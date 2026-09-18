@@ -3176,14 +3176,31 @@ class SyncService:
         # work being placed, and new work must not land on a retired branch.
         # Falls back to the unfiltered pick when a shop has somehow retired
         # everything, because filing it somewhere beats dropping it.
-        row = conn.execute(
-            "SELECT id FROM branches WHERE company_id=? AND COALESCE(status,'active')='active' "
-            "ORDER BY id LIMIT 1",
-            (local_company_id,),
-        ).fetchone() or conn.execute(
-            "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1",
-            (local_company_id,),
-        ).fetchone()
+        #
+        # GUARDED ON THE COLUMN EXISTING, which it is not always. `branches.
+        # status` is part of the CURRENT schema, but this function also runs
+        # against hand-built minimal fixtures and against peers on older
+        # shapes -- an unguarded reference dies with "no such column: status"
+        # and takes 11 sync tests with it, which is exactly what it did when
+        # this guard was first written without the check. Same lesson, same
+        # day, as `payments.related_type` in schema.py's v37 migration: never
+        # assume a column this file does not itself create.
+        _branch_cols = {r[1] for r in conn.execute("PRAGMA table_info(branches)").fetchall()}
+        if 'status' in _branch_cols:
+            row = conn.execute(
+                "SELECT id FROM branches WHERE company_id=? AND COALESCE(status,'active')='active' "
+                "ORDER BY id LIMIT 1",
+                (local_company_id,),
+            ).fetchone()
+        else:
+            row = None
+        if row is None:
+            # Either the column does not exist, or every branch is retired.
+            # Filing the row somewhere beats dropping it.
+            row = conn.execute(
+                "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1",
+                (local_company_id,),
+            ).fetchone()
         if row is not None:
             default_id = row["id"]
         else:
