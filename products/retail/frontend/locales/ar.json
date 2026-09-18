@@ -1474,5 +1474,6 @@
   "Credit forgiven": "دين معفى",
   "Store credit issued": "رصيد متجر صادر",
   "View statement": "عرض كشف الحساب",
-  "Tax Collected": "الضريبة المحصّلة"
+  "Tax Collected": "الضريبة المحصّلة",
+  "Your licence is not part of a backup. On this same computer it is unaffected. On a new computer, activate again with your licence key after restoring.": "الترخيص ليس جزءًا من النسخة الاحتياطية. على هذا الكمبيوتر نفسه لن يتأثر. أما على كمبيوتر جديد، فعّل من جديد باستخدام مفتاح الترخيص بعد الاستعادة."
 }

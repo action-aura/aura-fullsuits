@@ -116,6 +116,28 @@ def create_backup(product_code, app_data_dir, dest_dir, app_version):
     paths = _product_db_paths(app_data_dir)
     registry_src = paths['registry']
     product_src = os.path.join(paths['subsystems_dir'], f'{product_code}.db')
+    # `licensing.db` sits in the SAME subsystems directory and is deliberately
+    # NOT captured. Recorded here because its absence looks exactly like an
+    # oversight to anyone reading this function, and an audit did read it that
+    # way before checking:
+    #
+    #   * A licence lease is bound to a DEVICE. The assertion payload carries
+    #     `device_key_fingerprint`, and `assertion_verifier` rejects with
+    #     ASSERTION_DEVICE_MISMATCH the moment it disagrees with the key this
+    #     install actually holds.
+    #   * That key is NEVER in any database -- `state_repository`'s own module
+    #     docstring says so ("the device private key ... lives in DPAPI/
+    #     Keystore storage, never here"), and on Windows it is DPAPI-protected
+    #     at CURRENT-USER scope, so it does not survive a move to new hardware
+    #     or even a Windows reinstall.
+    #
+    # So a restored `licensing.db` on new hardware would not merely be useless:
+    # it would carry the OLD installation/subscription identifiers and fail
+    # verification at the next check, misrepresenting the install in between.
+    # On the SAME machine it is untouched by a restore and needs no capture.
+    # The real recovery path for new hardware is re-activation with the licence
+    # key (`POST /api/licensing/activate`), which mints a fresh assertion bound
+    # to the fresh device key -- unrelated to backup entirely.
 
     stamp = _utc_stamp()
     final_name = f'aura-{product_code}-backup-{stamp}-app{app_version}-schema{SCHEMA_VERSION}.aurabak.zip'

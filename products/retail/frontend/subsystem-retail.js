@@ -12269,6 +12269,18 @@ const RetailSystem = {
         <p style="color:var(--text);font-size:14px;line-height:1.7;margin:0 0 14px">
           ${t('This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.')}
         </p>
+        <!-- The licensing note. A backup carries shop data and users; it does
+             NOT carry the licence, and cannot: a licence is bound to THIS
+             device's key, which lives in DPAPI/Keystore and never enters any
+             database (see commercial_runtime/backup/service.py's own comment
+             on why licensing.db is deliberately not captured). On the same
+             machine that is invisible -- the licence is simply untouched. On
+             NEW hardware it is the whole story, and a shopkeeper restoring
+             after a machine died is exactly the person who needs telling,
+             because until now this dialog said nothing about it at all. -->
+        <p style="color:var(--text-muted);font-size:12.5px;line-height:1.6;margin:0 0 14px">
+          ${t('Your licence is not part of a backup. On this same computer it is unaffected. On a new computer, activate again with your licence key after restoring.')}
+        </p>
         <p style="color:var(--text-muted);font-size:12px;margin:0 0 22px;word-break:break-all">${this._esc(filename)}</p>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-restore-modal').remove()">${t('Cancel')}</button>
