@@ -4440,3 +4440,91 @@ LIVE CONSEQUENCE, the same one v36 discloses: `_cash_session_report`
 recomputes live, so an OPEN session's next X-report will show `expected_cash`
 move by the corrected fils. That is the drawer math becoming right and should
 be communicated as such, not left as an unexplained jump.
+
+
+## 2026-09-18 - an IMPORTED loyalty balance could never be spent
+
+No schema change, no new route, no version claimed. Found by applying the
+method that found the statement defects earlier the same day: take a figure
+that is both STORED and DERIVED, and enumerate every writer of the stored one.
+
+`customers.loyalty_points` is an accumulator COLUMN. The spendable balance is
+the SUM of `loyalty_ledger`, and every read site says so in writing --
+schema.py's `_migrate_add_loyalty_ledger` explains the two-till double-spend a
+column-based balance would reopen, and `customer_loyalty_balance`
+(retail_api.py) states that what it returns is "exactly what the till itself
+will check".
+
+BOTH LIVE WRITERS KEEP THE TWO IN STEP. create_sale writes the 'earn' ledger
+row AND bumps the column in one transaction (retail_api.py ~6661);
+create_return writes the clawback rows AND decrements it (~8368).
+
+THE IMPORTER DID NOT. `api/import_api.py` wrote `customers.loyalty_points`
+directly on both the INSERT and the UPDATE branch and contained ZERO
+references to `loyalty_ledger` -- while `loyalty_points` is an advertised
+import field with an example value of '150' in that same file's schema
+definition. So:
+
+    import a customer with 150 points
+      Customers screen        "150 pts"   (renders the COLUMN directly,
+                                           subsystem-retail.js ~6084/~6213)
+      GET /customers/<id>/loyalty    0    (reads the LEDGER)
+      redeem at the till        400 "Insufficient loyalty point balance."
+
+Two screens, two answers, and the one saying no is the one holding the
+customer's goods.
+
+WHY IT STAYED INVISIBLE. v27's migration backfilled one 'opening' row per
+customer with `loyalty_points > 0`, so every balance that PREDATES the ledger
+is fine. The gap opens only for a customer imported AFTER that migration ran,
+and it never closes on its own, because the migration does not run again.
+
+THE FIX is a delta, not an append. `_sync_loyalty_ledger_to_column` writes the
+DIFFERENCE between the imported figure and the ledger's current sum, so an
+import SETS the balance to what the file says. That half matters as much as
+the first: re-importing a corrected customer list is an ordinary thing for a
+shop to do, and an unconditional 'opening' row would hand out the balance
+twice. Measured under mutation: the naive append gives 300 on a re-import of
+150, and 240 when a 150 list is corrected to 90.
+
+`entry_type` is 'opening' when the customer has no ledger history (matching
+v27's backfill for exactly this "balance that predates any transaction" case)
+and 'adjust' otherwise -- the value `_migrate_add_loyalty_ledger`'s own
+docstring names for a correction belonging to no sale. `sale_id` stays NULL
+for both. A zero delta writes nothing, mirroring v27's own `WHERE
+loyalty_points > 0`.
+
+NOT SYNCED, deliberately and for the same reason the column is not:
+`loyalty_points` is an accumulator that sync_service.py's customer apply
+branch does not carry (SYNCED_CUSTOMER_FIELDS), because last-write-wins on an
+accumulator loses points the way it would lose stock. An import is a local
+administrative act on the device that runs it, and the ledger rows it writes
+are local rows -- exactly like the ones v27's migration wrote on each device
+independently.
+
+VERIFICATION. `retail_import_loyalty_ledger_test.py`, 4 tests, driving the
+REAL `/api/import/execute` route with a real CSV -- not a direct call into
+import_api's internals -- and asserting through the balance route the till and
+the cashier both read, so a fix that wrote rows the read path disagreed with
+would still fail.
+
+    150 imported -> 150 spendable, ledger and API agree
+    re-import of the same figure   -> 150, not 300
+    150 corrected to 90            -> 90, deltas [150, -60] (append-only)
+    zero points                    -> no ledger row at all
+
+Mutation-proved in both directions:
+
+    delta replaced by an append     2 red   300.0 on re-import, 240.0 corrected
+    zero-delta guard removed        1 red   a meaningless zero row written
+
+Regression: retail_import_sync (11), retail_import_export (25),
+retail_loyalty_redemption (12). All green, one file per process.
+
+WHAT THIS DOES NOT FIX, named rather than buried: a customer imported before
+this shipped still has column-only points. There is no migration here to
+repair them, deliberately -- v27's backfill keys on `entry_type='opening'`
+already existing, so re-running that logic would be safe for those rows but
+would also silently re-open balances for anyone whose points were legitimately
+spent down to zero since. A repair pass needs its own reasoning about which of
+those two a zero ledger means, and that is not this change.

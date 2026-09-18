@@ -1989,6 +1989,7 @@ def _handle_retail_customers(records):
                 changed.add('deleted_at_utc')
             _queue_sync_event(cur, 'customer', existing['id'], 'update',
                                dict(crow) | {'id': existing['id'], '_changed_fields': sorted(changed)})
+            _sync_loyalty_ledger_to_column(cur, cid, existing['id'], lp)
             updated += 1
         else:
             nid = str(_uuid.uuid4())
@@ -2003,10 +2004,86 @@ def _handle_retail_customers(records):
                 'email': email, 'address': rec.get('address', ''),
                 'row_version': 1, 'updated_at_utc': utc_now,
             })
+            _sync_loyalty_ledger_to_column(cur, cid, nid, lp)
             imported += 1
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': updated, 'message': f'{imported} new customers, {updated} updated.'}
+
+
+def _sync_loyalty_ledger_to_column(cur, cid, customer_id, imported_points):
+    """Make the SPENDABLE loyalty balance equal the imported figure.
+
+    THE DEFECT THIS CLOSES. `customers.loyalty_points` is an accumulator
+    COLUMN; the spendable balance is the SUM of `loyalty_ledger`, and every
+    read site says so in writing -- schema.py's `_migrate_add_loyalty_ledger`
+    explains the two-till double-spend a column-based balance would reopen,
+    and `customer_loyalty_balance` (retail_api.py) states that what it returns
+    is "exactly what the till itself will check".
+
+    Both LIVE writers keep the two in step: create_sale writes the 'earn' row
+    AND bumps the column in one transaction, create_return writes the clawback
+    rows AND decrements it. This importer wrote ONLY the column, and had no
+    reference to `loyalty_ledger` anywhere -- while `loyalty_points` is an
+    advertised import field with an example value of '150' in this file's own
+    schema definition.
+
+    So an imported customer showed "150 pts" on the Customers screen (which
+    renders that column directly, subsystem-retail.js) and could redeem
+    nothing: create_sale reads the ledger, found no rows, and refused with
+    "Insufficient loyalty point balance." Two screens, two answers, and the
+    one saying no is the one holding the customer's goods.
+
+    Invisible before now because v27's migration seeded one 'opening' row per
+    customer with `loyalty_points > 0`. The gap only opens for a customer
+    imported AFTER that migration ran, and it never closes on its own, because
+    the migration does not run again.
+
+    A DELTA, NOT AN APPEND. The ledger is append-only ("never edit/delete,
+    only reverse"), so this writes the DIFFERENCE between the imported figure
+    and the ledger's current sum. That is what makes a re-import SET the
+    balance rather than double it -- re-importing a corrected customer list is
+    an ordinary thing for a shop to do, and an unconditional 'opening' row
+    would silently hand out the balance twice.
+
+    `entry_type` is 'opening' when the customer has no ledger history at all
+    (matching v27's backfill for exactly this "balance that predates any
+    transaction" case) and 'adjust' otherwise -- the value
+    `_migrate_add_loyalty_ledger`'s own docstring names for a correction that
+    belongs to no sale. `sale_id` stays NULL for both, per that same
+    docstring.
+
+    A zero delta writes nothing: a customer list with no loyalty column, or a
+    zero in it, is the common case and must not litter the ledger. This
+    mirrors v27's own `WHERE loyalty_points > 0`.
+
+    NOT SYNCED, deliberately, and for the same reason the column itself is
+    not: `loyalty_points` is an accumulator that sync_service.py's customer
+    apply branch does not carry (SYNCED_CUSTOMER_FIELDS), because
+    last-write-wins on an accumulator loses points the way it would lose
+    stock. An import is a local administrative act on the device that runs
+    it; the ledger rows it writes are local rows, exactly like the ones v27's
+    migration wrote on each device independently.
+    """
+    try:
+        points = float(imported_points or 0)
+    except (TypeError, ValueError):
+        return
+    rows = cur.execute(
+        "SELECT COALESCE(SUM(points_delta), 0), COUNT(*) FROM loyalty_ledger "
+        "WHERE company_id=? AND customer_id=?",
+        (cid, customer_id)
+    ).fetchone()
+    current = float(rows[0] or 0)
+    has_history = int(rows[1] or 0) > 0
+    delta = points - current
+    if delta == 0:
+        return
+    cur.execute(
+        "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type) "
+        "VALUES (?,?,?,?,?)",
+        (str(_uuid.uuid4()), cid, customer_id, delta, 'adjust' if has_history else 'opening'),
+    )
 
 
 def _handle_retail_suppliers(records):
