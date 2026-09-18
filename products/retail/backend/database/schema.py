@@ -1006,7 +1006,18 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # docstring for the full reasoning (the tender/AR/store-credit split that
 # closes the double-count, and why the backfill is disclosed as best-effort
 # rather than a forensic reconstruction of historical credit_balance).
-RETAIL_SCHEMA_VERSION = 36
+#
+# v37 (2026-09-18): requantize the `payments` rows create_sale wrote at 2dp
+# before its `_record_payment` call became currency-aware. v35 is STILL the
+# open Aseel-parity reservation -- unrelated to this fix and untouched by it,
+# exactly as v36 left it -- so this takes the next number above the live head
+# per the same rule. Claimed in writing in ROADMAP.md's 2026-09-18 "retail
+# v37 CLAIMED" entry before this constant was touched. Unlike v36's, this
+# backfill is EXACT rather than best-effort, and
+# _migrate_requantize_sale_tender_payments's own docstring says why: only one
+# caller was ever affected, and its formula reads only sale columns that are
+# still at full precision.
+RETAIL_SCHEMA_VERSION = 37
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2054,6 +2065,34 @@ def _migrate_retail_schema(conn):
     # _migrate_add_return_settlement_split's own docstring for the full
     # reasoning, including why v35 stays open for source-document
     # back-references and why the backfill is disclosed as best-effort.
+    #
+    # v37 RUNS BEFORE IT, deliberately, and this is the one ordering
+    # constraint in this chain that is about DATA rather than DDL.
+    # `_migrate_add_return_settlement_split` DERIVES each historical return's
+    # `tender_refund_amount` from `tender_collected` -- the SUM of that
+    # sale's `payments.amount`. v37 is what makes those amounts right. Run
+    # v37 second and v36 would bake the over-stated (2dp) tender straight
+    # into the very columns it exists to get right, which is the phantom-cash
+    # shape both migrations are here to remove. Appending v37 last -- the
+    # convention every other step in this chain follows -- would therefore
+    # have been wrong, so it is called above instead and this comment exists
+    # so nobody "tidies" it back to the end.
+    #
+    # Both orders converge on a fresh install (no rows to derive from). Only
+    # an UPGRADE that crosses both versions in one boot can tell them apart,
+    # which is exactly the case this ordering is for.
+    #
+    # KNOWN RESIDUE, stated rather than left to be found: an install that had
+    # ALREADY reached v36 before this shipped ran that backfill against
+    # uncorrected payments, and v36's own `added_any` guard correctly refuses
+    # to re-run it (re-deriving would double-process rows the live runtime
+    # has since written). v37 still corrects `payments.amount` there, but
+    # that install's `returns.tender_refund_amount` keeps its 2dp-derived
+    # value. Bounded by half the old quantum per affected return, and not
+    # repairable from here without the double-processing v36 forbids.
+    _migrate_requantize_sale_tender_payments(conn)
+    # v34 -> v36 -- see the block immediately above for why this now runs
+    # AFTER v37 rather than last.
     _migrate_add_return_settlement_split(conn)
 
 
@@ -9087,3 +9126,192 @@ def _migrate_add_return_settlement_split(conn):
             (tender_refund, ar_forgiven, store_credit, rid)
         )
         _running[sale_id] = (prior_tender + tender_refund, prior_ar + ar_forgiven)
+
+
+def _migrate_requantize_sale_tender_payments(conn):
+    """One-time migration (schema v36 -> v37). No DDL: this corrects the
+    VALUE of `payments.amount` for the rows create_sale wrote at 2dp before
+    its own `_record_payment` call became currency-aware.
+
+    THE BUG THIS CLOSES. `api/retail_api.py::_record_payment` takes an
+    OPTIONAL `currency`, defaulting to the historical 2-decimal behaviour
+    (see its docstring, and `_money`'s, for why that default is what made the
+    conversion safe to do caller by caller). create_sale's own retained-cash
+    write was the LAST caller left on that default. On JOD -- three decimals,
+    1000 fils -- a real tender of 4.007 therefore persisted here as 4.01.
+    Three fils CREATED in the ledger, silently.
+
+    That column is not decorative:
+
+      * `create_return` sums it as `tender_collected`, which CAPS how much
+        cash a refund may physically hand back. An over-stated row lets a
+        return pay out money that never entered the drawer -- the same shape
+        as the DEFECT 3 the runtime fix closed for NEW rows, still sitting in
+        the OLD ones.
+      * `_cash_session_report` sums it for the drawer's expected cash.
+
+    WHY THIS BACKFILL IS EXACT, where `_migrate_add_return_settlement_split`
+    immediately above had to disclose itself as best-effort. Two facts, both
+    checked rather than assumed:
+
+    1. ONLY ONE CALLER WAS EVER AFFECTED. `_record_payment`'s own docstring
+       names the other four as already converted before that pass
+       (customer_payment, supplier_payment, pay_purchase_order,
+       create_purchase_order), and `_apply_cheque_event`'s money leg passes
+       `cheque['currency']`. So the rows that can be wrong are exactly those
+       with `related_type='sale'`.
+    2. THOSE ARE RECOMPUTABLE FROM THE SALE. create_sale's formula reads only
+       columns still stored at full precision beside the payment:
+
+           net_received = min(paid, amount_due_after_points)
+             paid                    = sales.amount_paid
+             amount_due_after_points = sales.total - sales.points_redeemed_amount
+
+       `sales.amount_paid`/`total`/`points_redeemed_amount` were made
+       currency-aware in the 2026-09-03 wave, BEFORE this `_record_payment`
+       call was -- which is precisely how the payments row came to disagree
+       with the sale that produced it, and precisely why the sale can now be
+       used to correct it.
+
+    So the fils are unrecoverable from the payments ROW and fully recoverable
+    from the SALE beside it. ffa221a5's commit message said the former and was
+    right; this migration is the consequence of noticing it did not imply the
+    latter.
+
+    IDEMPOTENT BY CONSTRUCTION, with no "has this already run" flag. It
+    recomputes the correct value and writes it ONLY when it differs from what
+    is stored, so a row already correct -- including every row written since
+    the runtime fix -- is not touched at all. Re-running changes nothing. That
+    is deliberately unlike v36's `added_any` guard: v36 DERIVES figures that
+    depend on other rows it is also writing, so a second pass could
+    double-process; this one computes a value that depends on nothing it
+    writes.
+
+    GUARDED ON TABLE EXISTENCE, same reasoning as the migrations above: a
+    minimal test fixture that hand-builds its own schema and calls
+    `_migrate_retail_schema` directly may not have `payments`/`sales`.
+
+    WHAT IT DELIBERATELY DOES NOT TOUCH, so silence is not mistaken for
+    oversight:
+
+      * Any row that is not `related_type='sale'`. A direct customer or
+        supplier payment records an amount that exists NOWHERE else, so if one
+        were ever written at the wrong precision it would be genuinely
+        unrecoverable. None were -- but this refuses to guess rather than
+        depending on that staying true.
+      * Non-active rows. A voided row is a historical fact about what was
+        voided; rewriting its amount changes what the void meant.
+      * A sale carrying MORE than one `related_type='sale'` payment row.
+        create_sale writes at most one, so this cannot arise today; if it ever
+        does, attribution is ambiguous and a guess about money is worse than
+        an untouched row.
+      * A payment whose sale is not present locally. On a synced till a peer's
+        payment row can arrive before -- or without -- its sale. There is
+        nothing to recompute from, and the peer corrects its own copy when
+        this migration runs there.
+      * `customers.credit_balance` / `suppliers.credit_balance`, matching
+        v36's own rule. This migration writes `payments.amount` and nothing
+        else.
+
+    LIVE-SESSION CONSEQUENCE, disclosed rather than discovered, exactly as v36
+    discloses its own: `_cash_session_report` recomputes live on every call,
+    so the next X-report for a session that is OPEN when this lands will show
+    `expected_cash` move by the corrected fils. That is the drawer math
+    becoming right, and it should be communicated as "the drawer math was
+    corrected" rather than left as an unexplained number jump.
+    """
+    existing = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if not {'payments', 'sales'} <= existing:
+        return
+
+    # GUARDED ON `payments.related_type` EXISTING, which this chain does NOT
+    # create: it is one of the thirteen columns api/retail_api.py's
+    # `_ensure_credit_schema` adds LAZILY at runtime (alongside party_type,
+    # direction, currency, related_id and the rest), exactly like
+    # `retail_settings` itself. retail_returns_backfill_test.py documents the
+    # same fact for `direction`.
+    #
+    # Found by RUNNING this migration against a real init_retail() database
+    # rather than reading it: without this guard the SELECT below dies with
+    # "no such column: p.related_type" on any install whose runtime has never
+    # opened the credit schema, which `ensure_schema_version` would surface
+    # as a failed migration rather than a skipped one.
+    #
+    # Returning early is not merely defensive, it is exactly correct:
+    # `_record_payment` INSERTs `related_type` by name, so it cannot have run
+    # before the column existed. No column means no row this migration could
+    # have anything to say about.
+    payment_cols = {
+        r[1] for r in conn.execute("PRAGMA table_info(payments)").fetchall()
+    }
+    if 'related_type' not in payment_cols:
+        return
+
+    from core.retail import pricing as _tax_engine
+
+    # Per-company currency, resolved once each and cached. Same read, same
+    # fallback, as `_company_currency` in retail_api.py -- a company with no
+    # explicit row is JOD (the product default), which is the COMMON fresh-
+    # install state and therefore the state most likely to hold rows this
+    # migration exists to fix.
+    _quantum_cache = {}
+
+    def _quantum_for(company_id):
+        if company_id not in _quantum_cache:
+            code = _tax_engine.DEFAULT_BASE_CURRENCY
+            try:
+                row = conn.execute(
+                    "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+                    (company_id,)
+                ).fetchone()
+                if row and row[0]:
+                    code = row[0]
+            except Exception:
+                pass
+            _quantum_cache[company_id] = _tax_engine.currency_quantum(code)
+        return _quantum_cache[company_id]
+
+    # `points_redeemed_amount` is read through COALESCE: it arrived in v27, so
+    # a row written before that has NULL there and must read as 0 -- the same
+    # `or 0` guard create_return applies to the same column.
+    candidates = conn.execute(
+        "SELECT p.id AS pid, p.sale_id AS sale_id, p.company_id AS company_id, "
+        "       p.amount AS amount, s.total AS total, s.amount_paid AS amount_paid, "
+        "       COALESCE(s.points_redeemed_amount, 0) AS points "
+        "FROM payments p JOIN sales s ON s.id = p.sale_id "
+        "WHERE p.related_type='sale' AND p.sale_id IS NOT NULL "
+        "  AND COALESCE(p.status,'active')='active'"
+    ).fetchall()
+
+    # Ambiguity guard -- see the docstring. Counted over the SAME candidate
+    # set rather than by a second query, so the two can never disagree about
+    # which rows are in scope.
+    _per_sale = {}
+    for row in candidates:
+        _per_sale[row['sale_id']] = _per_sale.get(row['sale_id'], 0) + 1
+
+    for row in candidates:
+        if _per_sale.get(row['sale_id'], 0) != 1:
+            continue
+        quant = _quantum_for(row['company_id'])
+        try:
+            total = Decimal(str(row['total'] or 0))
+            points = Decimal(str(row['points'] or 0))
+            paid = Decimal(str(row['amount_paid'] or 0))
+            stored = Decimal(str(row['amount'] or 0))
+        except Exception:
+            # A non-numeric money column is a corruption this migration is not
+            # equipped to judge; leaving the row alone is the only honest
+            # answer, and integrity_check runs either side of this.
+            continue
+        amount_due_after_points = (total - points).quantize(quant, rounding=ROUND_HALF_UP)
+        net_received = min(paid, amount_due_after_points).quantize(quant, rounding=ROUND_HALF_UP)
+        if net_received != stored:
+            conn.execute(
+                "UPDATE payments SET amount=? WHERE id=?",
+                (float(net_received), row['pid'])
+            )

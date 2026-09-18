@@ -208,7 +208,8 @@ Two things worth knowing before you trust a green run:
   - `retail_receipt_localization_test.js` — closes the seam between the i18n test suite (covers the live UI DOM) and the receipt/branding test suite (covers whether the…
   - `retail_receipt_payload_test.py` — GET /printer/receipt-payload, the real-sale ESC/POS byte payload (retail-hardware-viewports).
 
-## Schema & migrations  (8 suites — 8 py, 0 js)
+## Schema & migrations  (9 suites — 9 py, 0 js)
+  - `retail_payment_requantize_migration_test.py` — schema v37: the `payments` rows create_sale wrote at 2dp before its own `_record_payment` call became currency-aware.
   - `retail_phase7_migration_test.py` — Phase 7 Part Y: rc.1 -> rc.2 migration safety.
   - `retail_po_split_migration_test.py` — schema v6 migration regression coverage (PO-preview-by- supplier foundation, Thursday demo Stream B -- see database/schema.py's…
   - `retail_v13_additive_only_behavioural_test.py` — the behavioural "additive only" guard for schema v13 and v14.

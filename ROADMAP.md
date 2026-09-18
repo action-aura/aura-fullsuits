@@ -4325,3 +4325,118 @@ recomputes live, so an OPEN session's next X-report will show `expected_cash`
 move by the corrected fils. That is the drawer math becoming right, and it
 should be communicated as such rather than left as an unexplained jump --
 the same disclosure the v36 backfill makes for the same reason.
+
+
+## 2026-09-18 - retail v37 CASHED IN: the 2dp sale-tender payments, corrected
+
+Claimed above, on the same day, before schema.py was touched. This is the
+implementation note. `RETAIL_SCHEMA_VERSION` is now **37**; v35 is still the
+untouched Aseel-parity hole.
+
+With this, all three items ffa221a5 named and left "for their own passes" are
+closed: the statement reconciliation (`c14c7c5a`), the epsilon sweep
+(`0b7d5ade`), and this.
+
+WHAT SHIPPED. `_migrate_requantize_sale_tender_payments` in schema.py. No
+DDL -- it corrects the VALUE of `payments.amount` for the rows create_sale
+wrote before its own `_record_payment` call became currency-aware, and
+nothing else. For each such row it recomputes create_sale's own formula from
+the sale beside it:
+
+    net_received = min(amount_paid, total - points_redeemed_amount)
+
+and writes it back ONLY if it differs from what is stored, which is what
+makes the migration idempotent with no "has this run" flag.
+
+TWO THINGS THE IMPLEMENTATION GOT WRONG FIRST, both worth recording because
+neither would have been found by reading the code.
+
+**1. IT RAN IN THE WRONG ORDER, and the first version of the chain comment
+argued confidently for the wrong one.** v37 was appended LAST, following the
+convention every other step in this chain follows. That is wrong here:
+`_migrate_add_return_settlement_split` (v36) DERIVES each historical return's
+`tender_refund_amount` from `tender_collected`, the SUM of that sale's
+`payments.amount`. Run v37 after it and v36 bakes the over-stated 2dp tender
+straight into the columns it exists to get right -- the phantom-cash shape
+both migrations are here to remove. v37 now runs BEFORE v36, and the chain
+carries a comment saying so, because "append last" is otherwise the obvious
+thing for the next person to restore.
+
+Both orders converge on a fresh install (no rows to derive from). Only an
+upgrade crossing both versions in one boot can tell them apart.
+
+**2. IT CRASHED ON A REAL DATABASE.** `payments.related_type` -- the column
+this migration's entire scope is defined by -- is NOT created by schema.py's
+chain. It is one of thirteen columns `api/retail_api.py::_ensure_credit_
+schema` adds LAZILY at runtime, exactly like `retail_settings` itself;
+retail_returns_backfill_test.py already documents the same fact for
+`payments.direction`. Without a guard the migration dies with
+
+    sqlite3.OperationalError: no such column: p.related_type
+
+on any install whose runtime has never opened the credit schema, which
+`ensure_schema_version` surfaces as a FAILED migration rather than a skipped
+one. Found by running it against a real `init_retail()` database, not by
+reading it. The guard is also exactly correct rather than merely defensive:
+`_record_payment` INSERTs `related_type` by name, so it cannot have written a
+row before the column existed -- no column means no row this migration could
+have anything to say about.
+
+WHY THIS BACKFILL IS EXACT where v36's had to be best-effort. Only ONE caller
+was ever affected: `_record_payment`'s own docstring names the other four as
+already converted (customer_payment, supplier_payment, pay_purchase_order,
+create_purchase_order), and the cheque money leg passes `cheque['currency']`.
+And that caller's formula reads only sale columns still stored at full
+precision -- `sales.amount_paid`/`total`/`points_redeemed_amount` were made
+currency-aware in the 2026-09-03 wave, BEFORE the `_record_payment` call was,
+which is precisely how the payment row came to disagree with the sale that
+produced it. ffa221a5's "the fils cannot be recovered from the row itself" is
+true of THE ROW and not of the SALE beside it; that distinction is the whole
+reason this is a correction rather than an estimate.
+
+VERIFICATION. `retail_payment_requantize_migration_test.py`, 9 tests, run
+against a REAL `init_retail()` database rather than a hand-built schema. Both
+halves are asserted, deliberately -- a migration that rewrites money needs
+the allow-half at least as much as the deny-half, because the rows it must
+NOT touch are the ones nobody would notice it had:
+
+    DENY   a JOD 4.01 row restored to the 4.007 the sale records
+           points subtracted, so a 9.000 tender on a 3.000-points sale
+             requantizes to the 7.000 actually retained
+           re-running three times changes nothing
+
+    ALLOW  a USD shop keeps 4.01
+           a direct account payment (related_type NULL) untouched
+           a voided row untouched
+           a sale with TWO tender rows skipped entirely, not apportioned
+           a payment whose sale is absent (synced peer) skipped
+
+    WIRING the REAL ensure_schema_version chain: integrity_check ok,
+           user_version advances to 37, and the correction applied
+
+All five guards mutation-proved, each naming the figure it let through:
+
+    points term dropped              1 red   got 9.0, expected 7.0
+    related_type scope removed       1 red   direct payment rewritten to 4.007
+    ambiguity guard disabled         1 red   BOTH rows rewritten to 4.007
+    currency lookup hardcoded JOD    1 red   USD row rewritten to 4.007
+    status filter removed            1 red   voided row rewritten to 4.007
+
+Regression: retail_returns_backfill (6), retail_doc_series_migration (7),
+retail_v13_additive_only_behavioural (5), retail_payment_money_precision
+(15). All green, one file per process.
+
+KNOWN RESIDUE, stated rather than left to be found: an install that had
+ALREADY reached v36 before this shipped ran that backfill against uncorrected
+payments, and v36's `added_any` guard correctly refuses to re-run it
+(re-deriving would double-process rows the live runtime has since written).
+v37 still corrects `payments.amount` there, but that install's
+`returns.tender_refund_amount` keeps its 2dp-derived value. Bounded by half
+the old quantum per affected return, and not repairable from here without the
+double-processing v36 forbids. In practice this is the dev and demo machines
+only -- v36 shipped two days before this.
+
+LIVE CONSEQUENCE, the same one v36 discloses: `_cash_session_report`
+recomputes live, so an OPEN session's next X-report will show `expected_cash`
+move by the corrected fils. That is the drawer math becoming right and should
+be communicated as such, not left as an unexplained jump.
