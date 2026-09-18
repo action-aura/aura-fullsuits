@@ -4528,3 +4528,91 @@ already existing, so re-running that logic would be safe for those rows but
 would also silently re-open balances for anyone whose points were legitimately
 spent down to zero since. A repair pass needs its own reasoning about which of
 those two a zero ledger means, and that is not this change.
+
+
+## 2026-09-18 - create_product could write a stock balance the ledger can never explain
+
+No schema change. Found by a parallel read-only audit crew applying the
+stored-vs-derived method that found the day's earlier defects, then verified by
+hand before acting on it.
+
+THE DEFECT. `create_product` (retail_api.py) passed the client's
+`initial_stock` STRAIGHT into the `inventory_balances` INSERT:
+
+    INSERT OR IGNORE INTO inventory_balances (...) VALUES (?,?,?,?)
+        ... data.get('initial_stock', 0)
+    if data.get('initial_stock', 0) > 0:
+        ... the ONLY path that writes an inventory_movements row
+
+`pid` is a freshly minted uuid4, so the `OR IGNORE` never ignores -- the row is
+always inserted, with no coercion, no sign check and no epsilon floor. The
+movement row is written only when the figure is > 0.
+
+    POST /products  {"initial_stock": -10}
+      inventory_balances.quantity_on_hand  -10
+      inventory_movements                  (none, ever)
+
+WHY THAT IS UNRECOVERABLE RATHER THAN MERELY WRONG, which is what moves it
+above an ordinary validation gap: `core/retail/stock_reconciliation.py` -- the
+thing that repairs a drifted balance FROM the ledger -- deliberately SKIPS any
+(product, branch) key with no ledger history at all (`_has_ledger_history`,
+`SKIP_NO_LEDGER_HISTORY`), on the stated grounds that a balance with no
+movement behind it is a key the ledger has never heard of. So this exact
+corruption is the one shape the repair path is designed not to touch. Silent,
+permanent, no audit trail, no route back.
+
+EVERY SIBLING WRITER ALREADY GUARDED IT. `adjust_stock`, `send_stock_transfer`
+/ `receive_stock_transfer`, `receive_purchase_order`, `create_sale`,
+`resolve_stock_exception` and `import_api.py`'s bulk stock declaration all
+floor or refuse a negative before writing -- import_api refuses this IDENTICAL
+input (`if declared < -_QTY_TOLERANCE`). create_product's opening-stock path
+was simply never given the same treatment.
+
+REACHABLE FROM THE UI, not only from a direct API call. The field is
+`<input type="number" id="pm-stock" value="0" min="0">`
+(subsystem-retail.js) and the submit handler reads `.value` with a unary `+`
+and never calls `checkValidity()`, so `min="0"` is advisory.
+
+THE FIX REFUSES RATHER THAN FLOORS. A shop cannot have started with less than
+nothing -- `RetailLedgerDriftError`'s own docstring makes exactly that argument
+-- so a negative opening count has no legitimate meaning, and flooring it to 0
+would hide an operator's typo behind a product that then looks fine. Validated
+BEFORE `cur` exists and before any row is written, so the refusal is total and
+leaves no half-created product.
+
+The `float()` coercion also turns a non-numeric value into a 400 instead of the
+500 it used to raise (`'abc' > 0` is a TypeError in Python 3).
+
+AND A SECOND DIVERGENCE FOUND WHILE FIXING THE FIRST: the movement row read
+`data.get('initial_stock', 0)` a SECOND time rather than reusing the validated
+local, so the balance and the movement were two independent reads of one client
+field -- the precise shape that lets two stored figures disagree about the same
+number. Both now use the one validated value.
+
+VERIFICATION. `retail_opening_stock_guard_test.py`, 6 tests through the real
+route. Both halves:
+
+    DENY   -10 refused (400), and no product row survives the refusal
+           a negative balance with no movement behind it cannot be written
+           'abc' is a 4xx, not a 500
+
+    ALLOW  25 still writes the balance AND its `opening_stock` movement
+           0 is allowed and correctly writes no movement
+           the field omitted entirely still works
+
+Mutation-proved: disabling the negative guard turns 2 red, and the decisive
+one names the state directly -- "a negative balance was written with
+movements=[] behind it".
+
+Regression: retail_stock_accuracy (20), retail_import_export (25),
+retail_route_capability_matrix (46). All green, one file per process. Full
+retail suite 247/247 green as of the preceding commit.
+
+STILL OPEN from the same audit, recorded rather than fixed here:
+`customers.total_spent` is never netted by `create_return`. create_sale is its
+only writer; create_return adjusts `loyalty_points` and `credit_balance` on a
+refund but never `total_spent`, and no comment marks that asymmetry as
+deliberate. A fully refunded 500 sale leaves `total_spent` at 500 forever --
+shown on the customer screen and used to ORDER the customers list, so a
+fully-refunded customer outranks a genuine repeat buyer. Not money moved, but a
+stored figure that silently diverges from what it claims to summarise.

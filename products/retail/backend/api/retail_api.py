@@ -1915,6 +1915,50 @@ def create_product():
         if parent_error:
             conn.close()
             return jsonify({'status': 'error', 'message': parent_error}), 400
+        # OPENING STOCK, validated HERE -- before `cur` exists and before any
+        # row is written -- so a refusal is total rather than leaving a
+        # half-created product behind, the same placement rule void_payment's
+        # and create_sale's own pre-write checks document.
+        #
+        # THE DEFECT THIS CLOSES. This route used to pass `data.get(
+        # 'initial_stock', 0)` STRAIGHT into the `inventory_balances` INSERT,
+        # with no coercion and no sign check, while writing the matching
+        # `inventory_movements` row only `if ... > 0`. `pid` is a fresh
+        # uuid4, so the `INSERT OR IGNORE` never ignores: send -10 and the
+        # balance became -10 with NO movement row behind it, ever.
+        #
+        # That is unrecoverable rather than merely wrong.
+        # `core/retail/stock_reconciliation.py` -- the thing that repairs a
+        # drifted balance FROM the ledger -- deliberately SKIPS any
+        # (product, branch) key with no ledger history at all
+        # (`_has_ledger_history`, `SKIP_NO_LEDGER_HISTORY`), because a
+        # balance with no movement behind it is a key the ledger has never
+        # heard of. So this exact corruption is the one shape the repair path
+        # is designed to refuse to touch: silent, permanent, no audit trail.
+        #
+        # REFUSED, NOT FLOORED. A shop cannot have started with less than
+        # nothing -- `RetailLedgerDriftError`'s own docstring makes exactly
+        # that argument -- so a negative opening count has no legitimate
+        # meaning, and flooring it to 0 would hide an operator's typo behind
+        # a product that then looks fine. import_api.py's bulk stock
+        # declaration already refuses this identical input
+        # (`if declared < -_QTY_TOLERANCE`); every other writer of
+        # `inventory_balances` floors or refuses too. This path was simply
+        # never given the same treatment.
+        #
+        # The `float()` also turns a non-numeric value into a 400 rather than
+        # the 500 it used to raise: `'abc' > 0` is a TypeError in Python 3,
+        # and a bad request is not a server error.
+        try:
+            initial_stock = float(data.get('initial_stock', 0) or 0)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'status': 'error',
+                            'message': 'Opening stock must be a number.'}), 400
+        if initial_stock < 0:
+            conn.close()
+            return jsonify({'status': 'error',
+                            'message': 'Opening stock cannot be negative.'}), 400
         cur = conn.cursor()
         pid = str(_uuid.uuid4())
         # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
@@ -1941,14 +1985,21 @@ def create_product():
         conn.execute("""
             INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
             VALUES (?,?,?,?)
-        """, (cid, pid, bid, data.get('initial_stock', 0)))
-        if data.get('initial_stock', 0) > 0:
+        """, (cid, pid, bid, initial_stock))
+        # `initial_stock` (validated above), never `data.get(...)` again --
+        # re-reading the raw client value here is what let the balance and
+        # the movement disagree about the same number in the first place.
+        if initial_stock > 0:
             # v13 stamp. `created_by` keeps the local id it has always held;
             # actor_user_uid/terminal_id/created_at_utc are the second,
             # structured channel beside it, never a replacement for it.
             actor, terminal, utc_now = _stamp()
             movement_uid = _new_uid()
-            movement_qty = data.get('initial_stock', 0)
+            # The SAME validated local the balance INSERT above uses, never a
+            # second read of `data`. Two reads of one client field is how the
+            # balance and the movement come to disagree about the quantity
+            # they are both supposed to be recording.
+            movement_qty = initial_stock
             conn.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)

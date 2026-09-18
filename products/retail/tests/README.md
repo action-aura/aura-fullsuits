@@ -100,7 +100,8 @@ Two things worth knowing before you trust a green run:
   - `retail_stock_sync_cash_drawer_test.py` — Phase 5 wave B (stock-moving sync): a Phase 4 cash drawer
   - `retail_v16_terminal_cash_drawer_test.py` — schema v16 regression coverage: the cash drawer stops belonging to a BRANCH and starts belonging to a TERMINAL (launch-readiness…
 
-## Stock — products, inventory, transfers, suppliers  (30 suites — 23 py, 7 js)
+## Stock — products, inventory, transfers, suppliers  (31 suites — 24 py, 7 js)
+  - `retail_opening_stock_guard_test.py` — `create_product`'s opening stock cannot write a balance the ledger has never heard of.
   - `retail_category_delete_fk_sync_test.py` — regression coverage for the schema v3 change
   - `retail_category_delete_route_test.py` — final-review Fix 4 (2026-08-07): `delete_category` error
   - `retail_modifiers_test.py` — restaurant modifiers, wave 1 (schema v26, ROADMAP.md's 2026-08-31 "retail schema v26 CLAIMED for restaurant modifiers, wave 1…
