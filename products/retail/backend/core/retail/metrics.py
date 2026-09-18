@@ -1041,6 +1041,78 @@ def refunds(conn, cid, period, branch_id=None, currency=None):
     return _money(rows[0][0], currency) if rows else 0.0
 
 
+def gross_tax(conn, cid, period, branch_id=None, currency=None):
+    """Tax rung up, BEFORE refunds. Exposed for the same reason
+    `gross_sales` is: so a caller that genuinely means gross says so out
+    loud. Almost nothing should want it -- see `tax_collected`."""
+    where, params = _scope(cid, period, business_day(conn, cid), branch_id)
+    row = conn.execute(f'SELECT COALESCE(SUM(tax_amount),0) FROM sales WHERE {where}', params).fetchone()
+    return _money(row[0], currency)
+
+
+def refunded_tax(conn, cid, period, branch_id=None, currency=None):
+    """The tax inside this period's refunds, apportioned on the returned
+    VALUE against the original sale's own figures.
+
+    IT HAS TO BE DERIVED. `return_items` carries quantity, unit_price and
+    line_total and NO tax column (schema.py), so the tax inside a refund is
+    not stored anywhere and cannot simply be summed.
+
+    THE BASIS, because this is a real decision and not an obvious one:
+
+        return_tax = refund_amount * (sales.tax_amount / sales.total)
+
+    That rule is not invented here. It is the SAME proportional-on-returned-
+    value rule create_return already applies to its loyalty reversal
+    ("Settled PROPORTIONALLY on the returned VALUE ... against the ORIGINAL
+    sale's `total`"), reused rather than a second basis nobody reconciles
+    with the first. Both inputs are immutable columns on the sale, so the
+    figure is stable however long after the sale the return happens -- which
+    the obvious alternative is not: deriving it line-exactly would read
+    `products.tax_rate` AS IT STANDS NOW, and a rate changed after the sale
+    would silently restate history. That is the same stale-rate trap this
+    module's own KNOWN GAP section documents for `cost_price`.
+
+    ITS LIMIT, stated rather than left to be found: for a sale whose lines
+    carry DIFFERENT tax rates and of which only SOME come back, apportioning
+    by value can differ from a line-exact computation. Value-basis on
+    immutable columns is still the more defensible of the two.
+
+    `s.total > 0` guards the division: a zero-value sale has no tax to
+    apportion, and a degenerate row must not make the whole report 500.
+    """
+    where, params = _scope(cid, period, business_day(conn, cid), branch_id, alias='r')
+    rows = _returns_query(conn, f"""
+        SELECT COALESCE(SUM(
+            r.refund_amount * CASE WHEN s.total > 0 THEN s.tax_amount / s.total ELSE 0 END
+        ), 0)
+        FROM returns r JOIN sales s ON s.id = r.sale_id
+        WHERE {where}""", params)
+    return _money(rows[0][0], currency) if rows else 0.0
+
+
+def tax_collected(conn, cid, period, branch_id=None, currency=None):
+    """THE tax figure -- net of returns, always, for the same reason revenue
+    is (#1).
+
+    NOTHING IN THIS PRODUCT COMPUTED THIS UNTIL NOW. A repo-wide grep for
+    `tax_collected` / `SUM(tax_amount)` returned zero hits in the retail
+    backend: tax existed per-line in the sales CSV export and nobody ever
+    summed it. So a shop under a sales-tax regime -- which in this product's
+    first market is every shop, Jordan having mandated e-invoicing since
+    2024 -- could not answer "how much tax did I collect this period"
+    without exporting a CSV and adding it up in a spreadsheet. That is the
+    one figure a periodic filing needs.
+
+    Netting returns is not a nicety here. A gross tax figure printed beside
+    this module's already-net `revenue` is precisely the cross-screen
+    contradiction metrics.py exists to kill -- and it would OVERSTATE a tax
+    liability, which is the expensive direction to be wrong in.
+    """
+    return _money(gross_tax(conn, cid, period, branch_id, currency) -
+                  refunded_tax(conn, cid, period, branch_id, currency), currency)
+
+
 def transactions(conn, cid, period, branch_id=None):
     """Sale count, never netted -- see #2. Not money -- a count has no
     currency precision to thread."""
@@ -1450,6 +1522,13 @@ def summary(conn, cid, period, branch_id=None, currency=None):
         'transactions': cur_txns,
         'avg_ticket': avg_ticket(cur_rev, cur_txns, currency),
         'cogs': cur_cost,
+        # The tax this shop collected in the window, net of returns. New
+        # here because nothing in the product computed it at all -- see
+        # `tax_collected`. It rides in `summary()` rather than a route of
+        # its own so it reaches all three of this dict's consumers at once
+        # (the Reports KPI cards, the emailed report, the WhatsApp daily
+        # summary) and cannot disagree with the revenue printed beside it.
+        'tax_collected': tax_collected(conn, cid, period, branch_id, currency),
         'gross_profit': gross_profit,
         # NOT money -- a percentage, no currency precision applies.
         'margin_pct': round(gross_profit / cur_rev * 100, 1) if cur_rev > 0 else 0,

@@ -10314,6 +10314,15 @@ const RetailSystem = {
         <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="rep-txn">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Avg Ticket</div><div class="ret-kpi-value" id="rep-avg">—</div></div>
+        <!-- Tax Collected: NET of returns, like every other figure on this
+             row (metrics.py's definition #1). Nothing in the product computed
+             this until 2026-09-18 -- tax existed per-line in the sales CSV
+             export and nobody summed it, so a shop under a sales-tax regime
+             had to export and total it by hand to file. Label left as bare
+             text like its four neighbours: i18n.js's exact-text DOM sweep
+             translates it from the catalogue, which is why the key is in
+             locales/*.json rather than wrapped in t() here. -->
+        <div class="ret-kpi"><div class="ret-kpi-label">Tax Collected</div><div class="ret-kpi-value" id="rep-tax">—</div></div>
       </div>
       <!-- This note used to warn that the branch filter reached the two charts
            but NOT the KPI tiles or Payment Methods -- a caveat for a real
@@ -11917,6 +11926,7 @@ const RetailSystem = {
           ` (${s.margin_pct||0}%)`;
       }
       setEl('rep-avg',    this._fmt(s.avg_ticket));
+      setEl('rep-tax',    this._fmt(s.tax_collected));
 
       if (window.Chart) {
         // Same migration the dashboard's charts already had -- see the

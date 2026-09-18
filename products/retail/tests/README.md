@@ -240,7 +240,8 @@ Two things worth knowing before you trust a green run:
   - `retail_surface_i18n_test.js` — retail_surface_i18n_test.js — every user-visible string on the reworked till and dashboard surfaces must exist in BOTH locale…
   - `retail_surface_pos_test.js` — retail_surface_pos_test.js — structural guards for the POS/till redesign ("Operational Calm").
 
-## Reports & analytics  (7 suites — 4 py, 3 js)
+## Reports & analytics  (8 suites — 5 py, 3 js)
+  - `retail_tax_collected_test.py` — TAX COLLECTED for a period, net of returns.
   - `retail_dashboard_error_propagation_test.js` — Regression test for the Retail dashboard "silent failure + fake LIVE badge" bug.
   - `retail_dashboard_recent_date_test.js` — Regression test for a date-ambiguity bug in the Retail dashboard's Recent Transactions" table.
   - `retail_metrics_business_date_test.py` — report bucketing runs on the SHOP's business date, not on whichever device's wall clock happened to ring the sale.
