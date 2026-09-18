@@ -8349,6 +8349,42 @@ def create_return():
         # COALESCE, so nothing is written and nothing crashes.
         loyalty_audit_note = ''
         if sale['customer_id']:
+            # `total_spent` netted by what actually came back. create_sale is
+            # this column's only other writer (the same UPDATE that bumps
+            # `loyalty_points`), and create_return used to adjust
+            # `loyalty_points` and `credit_balance` on a refund while leaving
+            # `total_spent` alone -- an asymmetry no comment ever claimed was
+            # deliberate. So a fully refunded 500 sale counted as 500 spent
+            # forever.
+            #
+            # That figure is not decorative: `customers_list` ORDERs by it
+            # (`ORDER BY c.total_spent DESC`), so a customer who returned
+            # everything outranked a genuine repeat buyer, and the customer
+            # detail screen prints it as a money figure.
+            #
+            # `refund` is the tax-inclusive value of the goods coming back,
+            # recomputed per line above -- the same basis `sales.total` used
+            # when create_sale added it, so the two agree term for term.
+            #
+            # FLOORED AT 0 via MAX(): a lifetime "total spent" below zero is
+            # not a number that means anything. This is a display and ranking
+            # accumulator, not a ledger -- the ledger figures
+            # (`credit_balance`, the settlement columns) are the ones that
+            # legitimately go negative, and they are floored nowhere.
+            #
+            # MUST NOT bump `row_version` and MUST NOT emit a sync event --
+            # the SAME rule create_sale's own comment spells out for the
+            # loyalty accumulator immediately below, for the same reason: a
+            # return rung on till A would otherwise advance this customer's
+            # version, and a genuine name/phone correction made on till B
+            # would then be rejected as stale. See
+            # retail_v17_row_version_bump_test.py's
+            # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`
+            # and retail_total_spent_return_test.py's own row_version test.
+            cur.execute(
+                "UPDATE customers SET total_spent = MAX(0, COALESCE(total_spent,0) - ?) "
+                "WHERE id=? AND company_id=?",
+                (refund, sale['customer_id'], cid))
             original_total = float(sale['total'] or 0)
             # Guards a division by zero for a (degenerate) zero-value
             # sale; such a sale earns/redeems nothing anyway (create_sale's

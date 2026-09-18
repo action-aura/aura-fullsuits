@@ -64,7 +64,7 @@ Two things worth knowing before you trust a green run:
 
 ---
 
-## Money path — sales, returns, payments, cash drawer  (34 suites — 25 py, 9 js)
+## Money path — sales, returns, payments, cash drawer  (35 suites — 26 py, 9 js)
   - `retail_cash_drawer_test.py` — shift / cash-drawer management (feat/shift-cash-drawer,
   - `retail_changed_field_delta_test.py` — multi-device sync: changed-field deltas (launch-readiness
   - `retail_checkout_credit_walkin_guard_test.js` — Regression test for a missing client-side guard on Credit-method sales.
@@ -95,6 +95,7 @@ Two things worth knowing before you trust a green run:
   - `retail_quotation_ui_test.js` — the Quotations screen actually wires up to the ten routes retail_api.py already ships (Aseel-parity wave A-PAR, schema v33).
   - `retail_report_clock_money_disclosure_test.py` — GET /sales/recent must not hand a cashier the book the report routes refuse them, and the sweep that is supposed to notice must…
   - `retail_return_loyalty_reversal_test.py` — loyalty reversal on returns (schema v27, ROADMAP.md's 2026-08-31 "RETURNS AGAINST A SALE THAT USED POINTS -- decided, not yet…
+  - `retail_total_spent_return_test.py` — `customers.total_spent` must be netted by a return.
   - `retail_returns_wave0_test.py` — server-authoritative return/refund regression suite (Wave 0, AUDIT-004).
   - `retail_sale_money_precision_test.py` — create_sale/create_return/hold_sale/cash-movement/statement
   - `retail_stock_sync_cash_drawer_test.py` — Phase 5 wave B (stock-moving sync): a Phase 4 cash drawer
