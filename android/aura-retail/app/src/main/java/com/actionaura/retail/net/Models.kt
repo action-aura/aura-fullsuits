@@ -339,6 +339,16 @@ data class CreateSaleRequest(
     val amount_paid: Double? = null, val payment_method: String = "cash",
     val items: List<SaleItemReq>, val idempotency_key: String,
     val customer_id: String? = null, val due_date: String? = null,
+    // Loyalty redemption, desktop parity (schema v27) -- CLIENT-SUBMITTED
+    // INTENT ONLY, an integer COUNT of points, never a money amount. The
+    // same "server is the sole financial authority" contract discount_pct
+    // already carries: create_sale (retail_api.py) resolves this into money
+    // itself via the ledger balance and the shop's loyalty_point_value
+    // setting, both read server-side, and re-clamps whatever this client
+    // sends. Always sent, 0 for the overwhelming majority of sales that
+    // never redeem -- the server already treats a missing/zero value the
+    // same way.
+    val points_redeemed: Int = 0,
 )
 
 // Mirrors the authoritative response contract in
@@ -352,6 +362,16 @@ data class SaleResult(
     val amount_paid: Double = 0.0, val change: Double = 0.0,
     val balance_due: Double = 0.0, val warning: String? = null,
     val calculation_version: String? = null,
+    // Loyalty redemption, desktop parity (schema v27) -- ALWAYS present
+    // (0/0 for the overwhelming majority of sales that never redeem), what
+    // create_sale ACTUALLY APPLIED, never the client's request:
+    // `points_redeemed` is the point COUNT taken off the ledger (server's
+    // own three-way clamp -- never more than requested, never more than
+    // this sale is worth, never more than the balance) and
+    // `points_redeemed_amount` is its money value. The client must read
+    // these back and display them verbatim rather than assume its own
+    // request was honoured in full.
+    val points_redeemed: Int = 0, val points_redeemed_amount: Double = 0.0,
 )
 data class SaleResponse(val status: String = "", val message: String? = null, val data: SaleResult? = null)
 
@@ -373,6 +393,19 @@ data class Customer(
     val credit_mode: String? = "none", val credit_limit: Double = 0.0, val credit_balance: Double = 0.0,
 )
 data class CustomersResponse(val status: String = "", val data: List<Customer> = emptyList())
+
+// ── Loyalty point redemption (retail-hardware-viewports Android wave;
+// desktop parity, schema v27) -- GET .../customers/{id}/loyalty
+// (retail_api.py::customer_loyalty_balance), deliberately UNGATED
+// server-side (no CAP_DISCOUNT check on this GET) so a cashier can see the
+// figure before deciding whether to offer a redemption at all. `balance`
+// is the LEDGER's SUM, never `Customer.loyalty_points` (the accumulator
+// column) -- see that route's own comment for the two-till double-spend a
+// column-based balance would reopen. `balance` is the ONLY figure this
+// client may ever treat as spendable. The route's own `entries` (recent
+// ledger history) is not modelled here; nothing on this client shows it.
+data class CustomerLoyaltyData(val customer_id: String = "", val balance: Double = 0.0)
+data class CustomerLoyaltyResponse(val status: String = "", val data: CustomerLoyaltyData? = null)
 data class ReceivablesResponse(val status: String = "", val total_receivable: Double = 0.0, val data: List<Customer> = emptyList())
 data class CreateCustomerRequest(val name: String, val phone: String = "", val email: String = "", val address: String = "")
 data class UpdateCustomerCreditRequest(val credit_mode: String, val credit_limit: Double)
@@ -478,6 +511,17 @@ data class CreditSettings(
     val default_credit_mode: String = "none",
     val default_credit_limit: String = "0",
     val enforce_credit_limit: String = "warn",
+    // Loyalty redemption, desktop parity (schema v27) -- the money value of
+    // ONE loyalty point, in the shop's own base_currency. Rides this same
+    // "shop money settings" endpoint rather than a dedicated one (see
+    // credit_settings_set's own comment in retail_api.py). DEFAULTS TO '0'
+    // DELIBERATELY: '0' means redemption is OFF, not "free" -- a customer's
+    // ledger balance still accrues from every sale (1 point per $10) even
+    // while this is 0, so PosScreen must check this BEFORE ever offering
+    // the control, or every tap would 400 with "not configured for this
+    // shop" on a shop that never opted in. String, matching the raw SQLite
+    // value the server hands every other settings field here as.
+    val loyalty_point_value: String = "0",
 )
 data class CreditSettingsResponse(val status: String = "", val data: CreditSettings? = null)
 

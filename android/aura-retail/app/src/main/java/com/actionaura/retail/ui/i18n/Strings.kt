@@ -197,6 +197,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Payment successful" to "تمت عملية الدفع بنجاح",
     "collected" to "تم تحصيله",
 
+    // ── POS: loyalty point redemption (retail-hardware-viewports Android
+    // wave; desktop parity, subsystem-retail.js's #pos-loyalty-redeem
+    // section, schema v27) ─────────────────────────────────────────────────
+    "Loyalty points" to "نقاط الولاء",
+    "%d points available" to "%d نقطة متاحة",
+    "Redeem points" to "استبدال النقاط",
+    "Max" to "الحد الأقصى",
+    "Redeemed value: %s off this sale" to "قيمة الاستبدال: %s خصم من هذا البيع",
+    "%d points redeemed (%s)" to "تم استبدال %d نقطة (%s)",
+
     // ── Shared API error mapping (net/ApiErrors.kt) ──────────────────────────
     // "This action is not available..." is flask_guard.py's fixed 403 message
     // text, translated verbatim so the licensing block reads natively in

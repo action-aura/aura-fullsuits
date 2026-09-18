@@ -65,6 +65,23 @@ const val CAP_EMPLOYEES = "retail.employees"
 const val CAP_STOCK_ADJUST = "retail.stock.adjust"
 
 /**
+ * "Give value away with no matching payment" -- discretionary manual
+ * discounts AND loyalty-point redemption both ride this ONE capability
+ * server-side (`commercial_runtime/identity/user_accounts.py::CAP_DISCOUNT`,
+ * `'retail.discount'`). `retail_api.py`'s `create_sale` reuses it verbatim
+ * for a `points_redeemed` request rather than minting a second gate --
+ * "a redemption is exactly what CAP_DISCOUNT's own authority already
+ * covers" is that route's own reasoning, in its own comment. `ROLE_MANAGER`
+ * and the owner hold it; `ROLE_CASHIER` does not.
+ *
+ * Spelled here as a constant for the same reason [CAP_REPORTS] is: a
+ * capability code that has drifted from the server's does not fail loudly --
+ * it silently shows a control to a role that can only watch it 403, or
+ * hides it from a role that should have it.
+ */
+const val CAP_DISCOUNT = "retail.discount"
+
+/**
  * True if `capabilities` grants `code`.
  *
  * RENDERING ADVICE ONLY, and a deliberate mirror of app-shell.js's

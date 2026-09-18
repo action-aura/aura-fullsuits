@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
 import com.actionaura.retail.printer.NetworkPrinterAdapter
 import com.actionaura.retail.printer.PrinterPrefs
+import com.actionaura.retail.ui.CAP_DISCOUNT
 import com.actionaura.retail.ui.CAP_STOCK_ADJUST
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
@@ -122,6 +123,22 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var customerMenu by remember { mutableStateOf(false) }
     var downPayment by remember { mutableStateOf("") }             // optional paid-now on a credit sale
     var payMethods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }  // configurable tenders
+    // ── Loyalty point redemption (retail-hardware-viewports Android wave;
+    // desktop has shipped this since schema v27 -- see subsystem-retail.js's
+    // `pos-loyalty-redeem`/`_computeLoyaltyRedeem`, the UX this mirrors).
+    // `loyaltyPointValue` is the shop's OWN opt-in setting
+    // (creditSettingsGet's `loyalty_point_value`, the same endpoint desktop
+    // reads it from -- see that screen's own `_loyaltyRedemptionEnabled()`):
+    // '0'/unset means the shop never turned redemption on, and the control
+    // below must not show at all in that case. A customer's ledger balance
+    // accrues from EVERY sale regardless of this setting (retail_api.py:
+    // 1 point per $10, unconditional), so gating on balance alone would
+    // show a control that always 400s "not configured for this shop".
+    var loyaltyPointValue by remember { mutableStateOf(0.0) }
+    // Customer-scoped: reset and refetched by the LaunchedEffect(customer)
+    // below on every change of `customer`, including back to Walk-in.
+    var loyaltyBalance by remember { mutableStateOf(0) }
+    var loyaltyRedeemInput by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     // Needed here (not just inside PaymentSuccess below) for auto-print:
     // PrinterPrefs is a per-device Context read, and the fire-and-forget
@@ -132,7 +149,32 @@ fun PosScreen(snackbar: SnackbarHostState) {
     suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
     suspend fun loadCustomers() { customers = try { ApiClient.get().customers().data } catch (e: Exception) { emptyList() } }
     suspend fun loadMethods() { payMethods = try { ApiClient.get().payMethods().data } catch (e: Exception) { emptyList() } }
-    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loading = false }
+    // '0' (the string straight off SQLite, same shape RetailExtraScreens.kt's
+    // credit-settings screen already reads) means the shop never opened this
+    // setting -- parseNum('0') = 0.0, and a missing/malformed value falls to
+    // 0.0 via `?: 0.0` the same way, so an older embedded backend that
+    // predates this key degrades to "redemption off" rather than crashing.
+    suspend fun loadLoyaltySetting() {
+        loyaltyPointValue = try {
+            parseNum(ApiClient.get().creditSettingsGet().data?.loyalty_point_value) ?: 0.0
+        } catch (e: Exception) { 0.0 }
+    }
+    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loadLoyaltySetting(); loading = false }
+
+    // Loyalty balance is CUSTOMER-scoped (a different customer has a
+    // different ledger), so it resets and refetches on every change of
+    // `customer` -- INCLUDING back to Walk-in -- mirroring
+    // subsystem-retail.js's _onCustomerChange(). Best-effort: a failed
+    // fetch leaves the control hidden (balance stays 0) rather than showing
+    // one against an unknown/stale figure; this must never block a sale.
+    LaunchedEffect(customer) {
+        loyaltyRedeemInput = ""
+        val cust = customer
+        loyaltyBalance = if (cust == null) 0 else try {
+            val resp = ApiClient.get().customerLoyalty(cust.id)
+            kotlin.math.max(0, kotlin.math.floor(resp.data?.balance ?: 0.0).toInt())
+        } catch (e: Exception) { 0 }
+    }
 
     val byId = products.associateBy { it.id }
     val total = cart.entries.sumOf { (id, qty) -> (byId[id]?.sell_price ?: 0.0) * qty }
@@ -217,6 +259,29 @@ fun PosScreen(snackbar: SnackbarHostState) {
         (category == "All" || it.category_name == category) &&
             (query.isBlank() || (it.name ?: "").contains(query, true) || (it.sku ?: "").contains(query, true))
     }
+
+    // Loyalty point redemption: hidden entirely (not merely disabled) unless
+    // ALL FOUR hold -- a named customer, the shop having opted in
+    // (loyaltyPointValue > 0), a real ledger balance, and CAP_DISCOUNT.
+    // Matches this codebase's "invisible unless opted in" rule for
+    // value-shaped settings (CLAUDE.md) the same way e-invoicing and
+    // licensing enforcement both already do.
+    val loyaltyEligible = customer != null && loyaltyPointValue > 0.0 &&
+        loyaltyBalance > 0 && RetailSession.hasCapability(CAP_DISCOUNT)
+    // Pure calc: how many points the CURRENT loyaltyRedeemInput value
+    // actually redeems against `total` (the same local pre-tax/pre-discount
+    // PREVIEW the Subtotal row and the credit down-payment clamp already
+    // use), clamped the same three ways create_sale (retail_api.py) clamps
+    // server-side: never more than requested, never more than this sale is
+    // worth in points, never more than the ledger balance. Reads 0 whenever
+    // the control cannot legitimately be showing at all, so a value left
+    // over from a previous customer can never silently ride into a sale --
+    // mirrors subsystem-retail.js's _loyaltyRedemptionPoints/_loyaltyRedeemPoints.
+    val loyaltyMaxAffordable = if (loyaltyPointValue > 0.0) kotlin.math.floor(total / loyaltyPointValue).toInt() else 0
+    val loyaltyMaxRedeemable = kotlin.math.min(loyaltyBalance, loyaltyMaxAffordable).coerceAtLeast(0)
+    val loyaltyRequestedPoints = if (loyaltyEligible) (parseIntFlexible(loyaltyRedeemInput) ?: 0).coerceAtLeast(0) else 0
+    val loyaltyPointsToSend = kotlin.math.min(loyaltyRequestedPoints, loyaltyMaxRedeemable)
+    val loyaltyValue = if (loyaltyPointsToSend > 0) kotlin.math.min(loyaltyPointsToSend * loyaltyPointValue, total) else 0.0
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -354,6 +419,56 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+                        )
+                    }
+                }
+                // Loyalty point redemption (retail-hardware-viewports Android
+                // wave; desktop parity, subsystem-retail.js's
+                // #pos-loyalty-redeem section, schema v27). Own block, own
+                // visibility -- see `loyaltyEligible` above for the four
+                // gates. GET .../loyalty is deliberately UNGATED
+                // server-side, so a cashier can see the balance before
+                // deciding whether to redeem; CAP_DISCOUNT is only enforced
+                // when a redemption is actually submitted on checkout.
+                if (loyaltyEligible) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(tr("Loyalty points"), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    Text(tr("%d points available").format(loyaltyBalance),
+                        style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = loyaltyRedeemInput, onValueChange = { loyaltyRedeemInput = it },
+                            label = { Text(tr("Redeem points")) }, singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Mirrors _useMaxLoyaltyPoints on the desktop:
+                        // min(balance, what THIS sale is worth in points) --
+                        // never a request the server would have to clamp.
+                        OutlinedButton(onClick = { loyaltyRedeemInput = loyaltyMaxRedeemable.toString() }) {
+                            Text(tr("Max"))
+                        }
+                    }
+                    // Own row, own visibility: shown only once a redemption is
+                    // actually previewed (loyaltyValue > 0) -- same
+                    // conditional-money-row shape the desktop's
+                    // #pos-loyalty-value-row uses. THE CASH TRAP
+                    // (retail_api.py's own heading for this): points are not
+                    // cash, so this is presented as a reduction of what's
+                    // owed, never as a second "Total" -- CartTotalHonestyContractTest
+                    // pins that only the server's own `sale.total` may carry
+                    // that label.
+                    if (loyaltyValue > 0.0) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            tr("Redeemed value: %s off this sale").format(money(loyaltyValue)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Success,
                         )
                     }
                 }
@@ -495,7 +610,14 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                 try {
                                     val r = ApiClient.get().createSale(CreateSaleRequest(
                                         amount_paid = paidNow, payment_method = pm, customer_id = cust?.id,
-                                        items = items, idempotency_key = UUID.randomUUID().toString()))
+                                        items = items, idempotency_key = UUID.randomUUID().toString(),
+                                        // The locally-clamped preview, not the raw typed
+                                        // value -- see `loyaltyPointsToSend`'s own comment
+                                        // above for why it is already bounded the same
+                                        // three ways create_sale clamps server-side. The
+                                        // server still re-derives and re-clamps this from
+                                        // the ledger itself (CLIENT-SUBMITTED INTENT ONLY).
+                                        points_redeemed = loyaltyPointsToSend))
                                     if (r.status == "success") {
                                         // Authoritative result: always the backend's own
                                         // response, never the local preview above -- this is
@@ -503,7 +625,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         // (AUDIT-002), since previewTotal never included tax
                                         // or a server-validated discount at all.
                                         cart.clear(); showCart = false; successSale = r.data
-                                        paymentMethod = "cash"; customer = null; downPayment = ""
+                                        paymentMethod = "cash"; customer = null; downPayment = ""; loyaltyRedeemInput = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         // Auto-print (Settings toggle, default off): fire-and-
                                         // forget, no blocking, no error dialog -- printReceipt's
@@ -694,6 +816,21 @@ private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale
             Spacer(Modifier.height(4.dp))
             sale.sale_number?.let {
                 Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // Server truth, not the request: `points_redeemed`/
+            // `points_redeemed_amount` are what create_sale ACTUALLY applied
+            // (retail_api.py's own clamp may have honoured fewer points than
+            // requested -- the sale total, or the ledger balance, could have
+            // left less room than the preview assumed), so this reads the
+            // response verbatim, the same rule every other figure on this
+            // screen already follows.
+            if (sale.points_redeemed_amount > 0.0) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    tr("%d points redeemed (%s)").format(sale.points_redeemed, money(sale.points_redeemed_amount)),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Success,
+                )
             }
             Spacer(Modifier.height(36.dp))
             // Wave 1B (Part O): no direct thermal-printer protocol on Android

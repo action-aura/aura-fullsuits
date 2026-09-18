@@ -164,6 +164,15 @@ interface AuraApi {
     @GET("api/sub/retail/customers/{id}/statement")
     suspend fun customerStatement(@Path("id") id: String): CustomerStatementResponse
 
+    // Loyalty ledger balance for ONE named customer -- deliberately UNGATED
+    // server-side (no CAP_DISCOUNT check on this GET; see
+    // customer_loyalty_balance's own comment in retail_api.py), so a
+    // cashier can see it before deciding whether to offer a redemption.
+    // CAP_DISCOUNT is enforced only when a redemption is actually
+    // submitted, on POST .../sales below (points_redeemed).
+    @GET("api/sub/retail/customers/{id}/loyalty")
+    suspend fun customerLoyalty(@Path("id") id: String): CustomerLoyaltyResponse
+
     @POST("api/sub/retail/customers/{id}/payments")
     suspend fun customerPayment(@Path("id") id: String, @Body body: PaymentRequest): PaymentResultResponse
 
