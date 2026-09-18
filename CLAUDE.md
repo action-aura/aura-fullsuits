@@ -439,10 +439,50 @@ build next:**
   reverse, and neither this file nor anything else recorded it.
 
 **Also new since the last edit (2026-09-15/16), so the schema-version line above
-is stale):** retail schema is at **v34**, not v31. v32 cheque lifecycle
+is stale):** retail schema was **v34**, not v31. v32 cheque lifecycle
 (immutable header + append-only event log, status folded not stored), v33
 quotations and sales orders, v34 per-document-type numbering series. All three
 came from a competitive teardown of Golden Aseel and are desktop-only so far.
+
+**AND THAT LINE IS ITSELF ALREADY STALE — retail schema is at v37 as of
+2026-09-18.** Which is the point this document keeps making about itself: it
+was corrected on 2026-09-16 to say v34, and was wrong again two days later.
+Read `RETAIL_SCHEMA_VERSION` in `products/retail/backend/database/schema.py`
+rather than any number written here. v35 is still an unclaimed hole (reserved
+for source-document drill-through, never cashed in), v36 is the return
+settlement split, v37 requantizes the `payments` rows create_sale wrote at 2dp.
+
+### Corrections (round 4, 2026-09-18) — the money path, measured
+
+A wave of money-correctness work. Each item was reproduced through the real
+routes before being fixed, and each is written up in ROADMAP.md with its
+measurements; they are summarised here only because this file is what a fresh
+session reads first.
+
+- **The AR/AP statements did not add up.** `customer_statement` /
+  `supplier_statement` printed a running balance beside the live
+  `credit_balance` and the two disagreed, for three independent reasons: a
+  sale's own tender was counted as an account payment *and* already netted
+  inside the charge (one 100.000 cash sale to a named regular read
+  **−100.000**, per visit, cumulatively); the charge ignored redeemed loyalty
+  points; and a return's AR-forgiveness/store-credit never appeared at all.
+  The supplier side had the first in mirror form through the mutable
+  `purchase_orders.amount_paid`. Fixed 2026-09-18.
+- **~25 money gates compared against a hardcoded `0.005`** — half a *cent*, in
+  a currency whose minor unit is a fil — so anything up to five fils counted
+  as zero. These are GATES, not roundings: a sub-threshold debt was not
+  recorded a fil short, it was not recorded AT ALL. All now read
+  `_money_epsilon(currency)`. **Never make one of these finer on its own**;
+  they have to agree with each other, and doing one in isolation already
+  caused a real defect once.
+- **An imported loyalty balance could never be spent.** The importer wrote
+  `customers.loyalty_points` and never `loyalty_ledger`, so the Customers
+  screen showed "150 pts" (it renders the column) while the till refused the
+  redemption (it reads the ledger). Fixed 2026-09-18.
+
+The pattern worth carrying forward, since it found all three: **take a figure
+that is both STORED and DERIVED, and enumerate every writer of the stored
+one.** Do not reason from the screen's own list of events.
 
 ## How to give a good suggestion here
 
