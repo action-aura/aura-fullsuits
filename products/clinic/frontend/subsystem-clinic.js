@@ -51,6 +51,111 @@ const ClinicSystem = {
     return res.json();
   },
 
+  // ── MODAL ACCESSIBILITY (dialog semantics, Escape, focus) ────────────────
+  //
+  // An audit found all eight hand-rolled `.cl-modal-overlay` dialogs in this
+  // file (patient add/detail, booking, doctor add, invoice, payment, lab
+  // expense, prescription) with no role="dialog", no aria-modal, no
+  // Escape-to-close, no focus-return, and only three of the eight setting
+  // initial focus. These are patient records, bookings, invoices and
+  // prescriptions -- a clinic's whole workload -- reachable by mouse only.
+  //
+  // Ported from products/retail/frontend/subsystem-retail.js's
+  // _wireModalA11y / _closeModalOverlay / _modalKeyStack trio (see that
+  // file's comments for the fuller history), in this file's own idiom
+  // (`.cl-modal-overlay` / `.cl-modal`, no import -- separate products, no
+  // shared frontend module system).
+  //
+  // Every dialog's Escape handler is registered on `document`, because the
+  // element focused at the moment a dialog opens is unknowable in advance.
+  // That is correct while exactly one dialog is open, and wrong the instant
+  // a second is ever layered on top of it: both handlers would be siblings
+  // on the SAME document node, so stopPropagation on one would NOT stop the
+  // other, and one Escape press would fire both -- see
+  // products/retail/tests/retail_modal_stack_test.js for the proof of
+  // exactly that failure on the retail side. This file has no such case
+  // TODAY (every custom overlay covers the full page, so nothing behind it
+  // is reachable to open a second one, and the one place a modal opens
+  // another -- Patient Detail's Book/New Invoice/New Prescription buttons --
+  // closes itself synchronously in the same click handler, before the event
+  // loop can ever deliver a keypress). The queue is still ported rather than
+  // a bare single-listener version, because wiring a future stacked dialog
+  // (a custom confirm(), say, replacing the native confirm() calls below)
+  // is what would otherwise INTRODUCE the bug, exactly as it would have on
+  // the retail side.
+  _modalKeyStack: [],
+
+  // Front of the queue, pruned of anything that left the document by a path
+  // that bypassed its own close() (a bare `.remove()`). A leaked layer would
+  // otherwise sit at the front forever and swallow every later Escape: the
+  // dialog you CAN see stops responding because of one you cannot.
+  //
+  // Pruned only on an EXPLICIT `false` -- `isConnected` is undefined on the
+  // plain stub elements a test sandbox builds, and treating undefined as
+  // "detached" would empty the queue on every keypress under test.
+  _topModalKeyLayer() {
+    const stack = this._modalKeyStack;
+    while (stack.length && stack[stack.length - 1].overlay
+           && stack[stack.length - 1].overlay.isConnected === false) stack.pop();
+    return stack.length ? stack[stack.length - 1] : null;
+  },
+
+  _dropModalKeyLayer(layer) {
+    const i = this._modalKeyStack.indexOf(layer);
+    if (i !== -1) this._modalKeyStack.splice(i, 1);
+  },
+
+  // Wires Escape-to-close, focus-into-dialog and focus-return-to-trigger onto
+  // a hand-rolled `.cl-modal-overlay` the caller already built and appended.
+  // role/aria-modal/aria-labelledby are set by the caller directly in the
+  // markup (paired with a matching id on the dialog's own heading) -- this
+  // only wires the KEYBOARD/FOCUS behaviour on top, via `dialogId` (the
+  // caller's own `.cl-modal` div id). Hands back a `close()` so a save
+  // handler that closes the same modal on success can tear it down the same
+  // way Escape and the backdrop do, instead of a bare `.remove()` that would
+  // leak this function's own document-level keydown listener.
+  _wireModalA11y(overlay, dialogId) {
+    const dialogEl = (typeof document !== 'undefined' && document.getElementById(dialogId)) || null;
+    const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
+    let closed = false;
+    const layer = { overlay };
+    const close = () => {
+      if (closed) return;           // backdrop click, Escape and a caller's
+      closed = true;                 // own success path can all race here
+      document.removeEventListener('keydown', onKeydown, true);
+      this._dropModalKeyLayer(layer);
+      overlay.remove();
+      if (trigger && typeof trigger.focus === 'function') trigger.focus();
+    };
+    const onKeydown = (e) => {
+      if (e.key !== 'Escape') return;
+      // Not the front of the queue: something opened on top of this modal
+      // owns this keypress.
+      if (this._topModalKeyLayer() !== layer) return;
+      e.preventDefault(); e.stopPropagation(); close();
+    };
+    this._modalKeyStack.push(layer);
+    document.addEventListener('keydown', onKeydown, true);
+    // Reachable from an inline `onclick="ClinicSystem._closeModalOverlay(this)"`
+    // on the markup's own Cancel/✕ button, which has no closure over `close`.
+    overlay._a11yClose = close;
+    if (dialogEl && typeof dialogEl.setAttribute === 'function') dialogEl.setAttribute('tabindex', '-1');
+    if (dialogEl && typeof dialogEl.focus === 'function') dialogEl.focus();
+    return close;
+  },
+
+  // What every hand-rolled modal's backdrop click, Cancel/✕ button and
+  // successful-save path now go through instead of a bare `.remove()` --
+  // routes through the close() _wireModalA11y registered (when present) so
+  // the Escape listener is torn down and focus returns to the trigger,
+  // exactly as if Escape itself had been pressed.
+  _closeModalOverlay(el) {
+    const overlay = el && typeof el.closest === 'function' ? el.closest('.cl-modal-overlay') : null;
+    if (!overlay) return;
+    if (typeof overlay._a11yClose === 'function') overlay._a11yClose();
+    else overlay.remove();
+  },
+
   render(sectionId) {
     const c = document.getElementById('sub-content');
     if (!c) return;
@@ -386,8 +491,8 @@ const ClinicSystem = {
     overlay.className = 'cl-modal-overlay';
     overlay.id = 'cl-add-pt-overlay';
     overlay.innerHTML = `
-      <div class="cl-modal">
-        <h3>➕ Add New Patient</h3>
+      <div class="cl-modal" id="cl-add-patient-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-add-patient-dialog-title">
+        <h3 id="cl-add-patient-dialog-title">➕ Add New Patient</h3>
         <div class="cl-field-row">
           <div class="cl-field"><label>Full Name *</label><input id="cl-pt-name" placeholder="John Doe" /></div>
           <div class="cl-field"><label>Gender</label>
@@ -412,12 +517,13 @@ const ClinicSystem = {
         <div class="cl-field"><label>Notes (Allergies, conditions…)</label>
           <textarea id="cl-pt-notes" rows="2" placeholder="Allergies, chronic conditions…"></textarea></div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-add-pt-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-pt-save-btn" onclick="ClinicSystem._savePatient()">Save Patient</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeAddPatient = this._wireModalA11y(overlay, 'cl-add-patient-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeAddPatient(); });
     document.getElementById('cl-pt-name')?.focus();
   },
 
@@ -442,7 +548,7 @@ const ClinicSystem = {
       const data = await this._post('/api/sub/clinic/patients', payload);
       if (data.status === 'success') {
         SubsystemApp.showToast(`Patient created — ${data.data.patient_code}`, 'success');
-        document.getElementById('cl-add-pt-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-add-pt-overlay'));
         this._loadPatients();
       } else {
         SubsystemApp.showToast(data.message || data.error || 'Error saving patient', 'error');
@@ -459,15 +565,16 @@ const ClinicSystem = {
     overlay.className = 'cl-modal-overlay';
     overlay.id = 'cl-pt-detail-overlay';
     overlay.innerHTML = `
-      <div class="cl-modal cl-modal-wide">
+      <div class="cl-modal cl-modal-wide" id="cl-patient-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-patient-detail-dialog-title">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-          <h3 style="margin:0">Patient File</h3>
-          <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="document.getElementById('cl-pt-detail-overlay').remove()">✕ Close</button>
+          <h3 style="margin:0" id="cl-patient-detail-dialog-title">Patient File</h3>
+          <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._closeModalOverlay(this)">✕ Close</button>
         </div>
         <div id="cl-pt-detail-content"><p class="cl-empty">Loading…</p></div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closePatientDetail = this._wireModalA11y(overlay, 'cl-patient-detail-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closePatientDetail(); });
 
     try {
       const d = (await this._get(`/api/sub/clinic/patients/${pid}`)).data || {};
@@ -491,9 +598,9 @@ const ClinicSystem = {
           ${p.notes ? `<div class="cl-detail-item" style="grid-column:1/-1"><label>Notes</label><span style="color:#fbbf24">${p.notes}</span></div>` : ''}
         </div>
         <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">
-          <button class="cl-btn cl-btn-primary cl-btn-sm" onclick="ClinicSystem._openBookModal(${p.id},'${this._esc(String(p.name||'').replace(/'/g,"\\'"))}');document.getElementById('cl-pt-detail-overlay').remove()">📅 Book Appointment</button>
-          <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._openInvoiceModal(${p.id});document.getElementById('cl-pt-detail-overlay').remove()">🧾 New Invoice</button>
-          <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._openPrescModalForPatient(${p.id});document.getElementById('cl-pt-detail-overlay').remove()">💊 New Prescription</button>
+          <button class="cl-btn cl-btn-primary cl-btn-sm" onclick="ClinicSystem._openBookModal(${p.id},'${this._esc(String(p.name||'').replace(/'/g,"\\'"))}');ClinicSystem._closeModalOverlay(document.getElementById('cl-pt-detail-overlay'))">📅 Book Appointment</button>
+          <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._openInvoiceModal(${p.id});ClinicSystem._closeModalOverlay(document.getElementById('cl-pt-detail-overlay'))">🧾 New Invoice</button>
+          <button class="cl-btn cl-btn-ghost cl-btn-sm" onclick="ClinicSystem._openPrescModalForPatient(${p.id});ClinicSystem._closeModalOverlay(document.getElementById('cl-pt-detail-overlay'))">💊 New Prescription</button>
         </div>
         <div class="cl-tab-bar" id="cl-pt-tabs">
           <button class="cl-tab active" onclick="ClinicSystem._ptTab(this,'visits-${pid}')">Visits (${visits.length})</button>
@@ -741,8 +848,8 @@ const ClinicSystem = {
     const docOptions = this._doctors.map(d =>
       `<option value="${d.id}">${d.name} — ${d.specialty||'General'}</option>`).join('');
     overlay.innerHTML = `
-      <div class="cl-modal">
-        <h3>📅 Book Appointment</h3>
+      <div class="cl-modal" id="cl-book-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-book-dialog-title">
+        <h3 id="cl-book-dialog-title">📅 Book Appointment</h3>
         <div class="cl-field"><label>Patient *</label>
           <select id="cl-bk-patient"><option value="">Select patient…</option>${ptOptions}</select></div>
         <div class="cl-field-row">
@@ -753,12 +860,13 @@ const ClinicSystem = {
         <div class="cl-field"><label>Reason for Visit</label>
           <input id="cl-bk-reason" placeholder="e.g. Annual checkup, fever, follow-up…" /></div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-book-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-bk-save" onclick="ClinicSystem._saveAppointment()">Book Appointment</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
+    const _closeBook = this._wireModalA11y(overlay, 'cl-book-dialog');
+    overlay.addEventListener('click', e => { if (e.target===overlay) _closeBook(); });
     // Pre-load doctors list for the dropdown
     if (!this._doctors.length) {
       this._get('/api/sub/clinic/doctors').then(d => {
@@ -786,7 +894,7 @@ const ClinicSystem = {
       });
       if (data.status==='success') {
         SubsystemApp.showToast('Appointment booked!','success');
-        document.getElementById('cl-book-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-book-overlay'));
       } else {
         SubsystemApp.showToast(data.message||data.error||'Booking failed','error');
         if(btn){btn.disabled=false;btn.textContent='Book Appointment';}
@@ -888,8 +996,8 @@ const ClinicSystem = {
     overlay.className = 'cl-modal-overlay';
     overlay.id = 'cl-add-doc-overlay';
     overlay.innerHTML = `
-      <div class="cl-modal">
-        <h3>🩺 Add Doctor</h3>
+      <div class="cl-modal" id="cl-add-doctor-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-add-doctor-dialog-title">
+        <h3 id="cl-add-doctor-dialog-title">🩺 Add Doctor</h3>
         <div class="cl-field"><label>Full Name *</label><input id="cl-doc-name" placeholder="Dr. Jane Smith" /></div>
         <div class="cl-field-row">
           <div class="cl-field"><label>Specialty</label>
@@ -904,12 +1012,13 @@ const ClinicSystem = {
         </div>
         <div class="cl-field"><label>Email</label><input id="cl-doc-email" placeholder="doctor@clinic.com" /></div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-add-doc-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-doc-save-btn" onclick="ClinicSystem._saveDoctor()">Save Doctor</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
+    const _closeAddDoctor = this._wireModalA11y(overlay, 'cl-add-doctor-dialog');
+    overlay.addEventListener('click', e => { if (e.target===overlay) _closeAddDoctor(); });
     document.getElementById('cl-doc-name')?.focus();
   },
 
@@ -927,7 +1036,7 @@ const ClinicSystem = {
       });
       if (data.status==='success') {
         SubsystemApp.showToast('Doctor added','success');
-        document.getElementById('cl-add-doc-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-add-doc-overlay'));
         this._loadDoctors();
       } else {
         SubsystemApp.showToast(data.message||data.error||'Error adding doctor','error');
@@ -991,8 +1100,8 @@ const ClinicSystem = {
     const ptOpts = this._patients.map(p =>
       `<option value="${p.id}" ${p.id===defaultPatientId?'selected':''}>${p.name} (${p.patient_code})</option>`).join('');
     overlay.innerHTML = `
-      <div class="cl-modal cl-modal-wide">
-        <h3>🧾 New Invoice</h3>
+      <div class="cl-modal cl-modal-wide" id="cl-invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-invoice-dialog-title">
+        <h3 id="cl-invoice-dialog-title">🧾 New Invoice</h3>
         <div class="cl-field"><label>Patient *</label>
           <select id="cl-inv-patient"><option value="">Select…</option>${ptOpts}</select></div>
         <label style="color:var(--text-muted);font-size:13px;display:block;margin:6px 0 4px">Line Items</label>
@@ -1006,12 +1115,13 @@ const ClinicSystem = {
           <textarea id="cl-inv-notes" rows="2" placeholder="Notes for this invoice…"></textarea></div>
         <div style="text-align:right;color:#fff;font-weight:700;margin:8px 0" id="cl-inv-totals">Total: $0.00</div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-inv-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-inv-save-btn" onclick="ClinicSystem._saveInvoice()">Create Invoice</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
+    const _closeInvoice = this._wireModalA11y(overlay, 'cl-invoice-dialog');
+    overlay.addEventListener('click', e => { if (e.target===overlay) _closeInvoice(); });
     this._addInvoiceLine();  // start with one blank line
   },
 
@@ -1064,7 +1174,7 @@ const ClinicSystem = {
       });
       if (data.status==='success') {
         SubsystemApp.showToast(`Invoice ${data.data.invoice_number} — $${data.data.total.toFixed(2)}`,'success');
-        document.getElementById('cl-inv-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-inv-overlay'));
         this._renderBilling(document.getElementById('sub-content'));
       } else {
         SubsystemApp.showToast(data.message||data.error||'Error creating invoice','error');
@@ -1079,8 +1189,8 @@ const ClinicSystem = {
     overlay.className = 'cl-modal-overlay';
     overlay.id = 'cl-pay-overlay';
     overlay.innerHTML = `
-      <div class="cl-modal" style="width:380px">
-        <h3>💳 Record Payment</h3>
+      <div class="cl-modal" style="width:380px" id="cl-payment-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-payment-dialog-title">
+        <h3 id="cl-payment-dialog-title">💳 Record Payment</h3>
         <p style="color:var(--text-muted);margin-bottom:20px">${invNo} — Balance due: <strong style="color:#fff">$${remaining}</strong></p>
         <div class="cl-field"><label>Amount ($)</label>
           <input type="number" id="cl-pay-amount" value="${remaining}" step="0.01" /></div>
@@ -1090,12 +1200,13 @@ const ClinicSystem = {
           </select></div>
         <div class="cl-field"><label>Reference / Notes</label><input id="cl-pay-ref" placeholder="Receipt #, card last 4…" /></div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-pay-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-pay-save-btn" onclick="ClinicSystem._savePayment(${invId})">Record Payment</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
+    const _closePayment = this._wireModalA11y(overlay, 'cl-payment-dialog');
+    overlay.addEventListener('click', e => { if (e.target===overlay) _closePayment(); });
   },
 
   async _savePayment(invId) {
@@ -1109,7 +1220,7 @@ const ClinicSystem = {
       const data = await this._post('/api/sub/clinic/payments', { invoice_id:invId, amount, method, reference });
       if (data.status==='success') {
         SubsystemApp.showToast(`Payment recorded — invoice is now ${data.data.invoice_status}`,'success');
-        document.getElementById('cl-pay-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-pay-overlay'));
         this._renderBilling(document.getElementById('sub-content'));
       } else {
         SubsystemApp.showToast(data.message||data.error||'Payment error','error');
@@ -1253,8 +1364,8 @@ const ClinicSystem = {
     overlay.className = 'cl-modal-overlay';
     overlay.id = 'cl-lab-overlay';
     overlay.innerHTML = `
-      <div class="cl-modal">
-        <h3>🧪 Record Lab Expense</h3>
+      <div class="cl-modal" id="cl-lab-expense-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-lab-expense-dialog-title">
+        <h3 id="cl-lab-expense-dialog-title">🧪 Record Lab Expense</h3>
         <div class="cl-field-row">
           <div class="cl-field"><label>Lab Name *</label><input id="cl-lab-name" placeholder="e.g. Acme Diagnostics" /></div>
           <div class="cl-field"><label>Test</label><input id="cl-lab-test" placeholder="e.g. CBC, MRI…" /></div>
@@ -1268,12 +1379,13 @@ const ClinicSystem = {
         <div class="cl-field"><label>Notes</label>
           <textarea id="cl-lab-notes" rows="2" placeholder="Reference, remarks…"></textarea></div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-lab-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-lab-save-btn" onclick="ClinicSystem._saveLabExpense()">Save Expense</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeLabExpense = this._wireModalA11y(overlay, 'cl-lab-expense-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeLabExpense(); });
     document.getElementById('cl-lab-name')?.focus();
   },
 
@@ -1295,7 +1407,7 @@ const ClinicSystem = {
       });
       if (data.status === 'success') {
         SubsystemApp.showToast('Lab expense recorded (posted to Accounting)', 'success');
-        document.getElementById('cl-lab-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-lab-overlay'));
         this._loadLabExpenses();
       } else {
         SubsystemApp.showToast(data.message || data.error || 'Error saving expense', 'error');
@@ -1366,8 +1478,8 @@ const ClinicSystem = {
     const ptOpts = this._patients.map(p =>
       `<option value="${p.id}" ${p.id===defaultPatientId?'selected':''}>${p.name} (${p.patient_code})</option>`).join('');
     overlay.innerHTML = `
-      <div class="cl-modal">
-        <h3>💊 New Prescription</h3>
+      <div class="cl-modal" id="cl-prescription-dialog" role="dialog" aria-modal="true" aria-labelledby="cl-prescription-dialog-title">
+        <h3 id="cl-prescription-dialog-title">💊 New Prescription</h3>
         <div class="cl-field"><label>Patient *</label>
           <select id="cl-rx-patient"><option value="">Select…</option>${ptOpts}</select></div>
         <div class="cl-field">
@@ -1377,12 +1489,13 @@ const ClinicSystem = {
         <div class="cl-field"><label>Clinical Notes / Instructions</label>
           <textarea id="cl-rx-notes" rows="2" placeholder="Take with food. Follow up in 7 days."></textarea></div>
         <div class="cl-modal-footer">
-          <button class="cl-btn cl-btn-ghost" onclick="document.getElementById('cl-rx-overlay').remove()">Cancel</button>
+          <button class="cl-btn cl-btn-ghost" onclick="ClinicSystem._closeModalOverlay(this)">Cancel</button>
           <button class="cl-btn cl-btn-primary" id="cl-rx-save-btn" onclick="ClinicSystem._savePrescription()">Save Prescription</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target===overlay) overlay.remove(); });
+    const _closePrescription = this._wireModalA11y(overlay, 'cl-prescription-dialog');
+    overlay.addEventListener('click', e => { if (e.target===overlay) _closePrescription(); });
   },
 
   async _savePrescription() {
@@ -1397,7 +1510,7 @@ const ClinicSystem = {
       const data = await this._post('/api/sub/clinic/prescriptions', { patient_id:+patient_id, items, notes });
       if (data.status==='success') {
         SubsystemApp.showToast('Prescription saved','success');
-        document.getElementById('cl-rx-overlay')?.remove();
+        this._closeModalOverlay(document.getElementById('cl-rx-overlay'));
         this._renderPrescriptions(document.getElementById('sub-content'));
       } else {
         SubsystemApp.showToast(data.message||'Error','error');
