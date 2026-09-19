@@ -96,6 +96,13 @@ function loadRetailSystem(opts) {
       body: { appendChild() {} },
       documentElement: { getAttribute: () => 'light', style: { setProperty() {} } },
       addEventListener() {},
+      // The PAIR, not just the half. This stub had addEventListener alone,
+      // which was enough while nothing ever tore a listener down; when
+      // _showPromotionModal gained dialog semantics (2026-09-19) its close()
+      // called removeEventListener and this fake died. A one-sided listener
+      // API is not a document — and a fake that can register but never
+      // unregister cannot model a leak either way.
+      removeEventListener() {},
     },
     SubsystemApp: {
       active: 'retail',

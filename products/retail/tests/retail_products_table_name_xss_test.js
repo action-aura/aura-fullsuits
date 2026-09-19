@@ -162,6 +162,24 @@ function testStockAdjustModalEscapesName() {
       head: { appendChild() {} },
       body: { appendChild() {} },
       documentElement: { getAttribute() { return null; } },
+      // A real document has always had these. This fake did not, and the
+      // moment _openStockAdjust started wiring dialog semantics (2026-09-19)
+      // it died here with "document.addEventListener is not a function" — an
+      // incomplete fake reporting a failure the product does not have.
+      //
+      // The stub is extended rather than the production code guarded:
+      // addEventListener exists in every browser, so `if (document.addEventListener)`
+      // would be cargo-cult defence that silently disables the keyboard path
+      // wherever it were ever false. Same fix, same reasoning, as the customer
+      // modal's XSS suite earlier the same day.
+      //
+      // No-ops rather than a real listener registry: this file asks ONE
+      // question — does _openStockAdjust escape a hostile product name — and a
+      // working Escape key is no part of it. Keyboard behaviour is driven and
+      // mutation-proved in retail_modal_stack_test.js instead.
+      addEventListener() {},
+      removeEventListener() {},
+      activeElement: null,
     },
   };
   sandbox.window = sandbox;

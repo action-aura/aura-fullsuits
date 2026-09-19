@@ -291,7 +291,28 @@ async function testSuccessfulSaveStillClosesModalAndReloadsList(src) {
   let renderProductsCalled = false;
   ctx.rs._renderProducts = () => { renderProductsCalled = true; };
   let modalRemoved = false;
-  ctx.els['ret-prod-modal'] = makeStub({ id: 'ret-prod-modal', remove() { modalRemoved = true; } });
+  // `closest` models the real Element.closest, which MATCHES THE ELEMENT
+  // ITSELF when it satisfies the selector. That detail is the whole reason
+  // this stub needs it: `#ret-prod-modal` IS the overlay
+  // (subsystem-retail.js sets `overlay.id = 'ret-prod-modal'`), and since
+  // 2026-09-19 the save path closes it through _closeModalOverlay(), which
+  // calls `el.closest('.ret-modal-overlay')` so that the wired Escape
+  // listener is torn down instead of leaked.
+  //
+  // Without closest() the helper found nothing and silently did nothing, and
+  // this check failed with "A successful save did not close the Add Product
+  // modal" — a true statement about the fake and a false one about the
+  // product. The assertion below is deliberately left as-is: it asks whether
+  // the modal CLOSED, which is the outcome that matters and is independent of
+  // which helper does the closing. Pinning `document.getElementById(...)
+  // .remove()` specifically would have been pinning the mechanism, and would
+  // have to be edited again the next time the close path is improved.
+  ctx.els['ret-prod-modal'] = makeStub({
+    id: 'ret-prod-modal',
+    className: 'ret-modal-overlay',
+    closest(sel) { return sel === '.ret-modal-overlay' ? this : null; },
+    remove() { modalRemoved = true; },
+  });
   fillAddProductForm(ctx);
 
   await ctx.rs._saveProduct(null);

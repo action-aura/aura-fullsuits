@@ -92,6 +92,17 @@ function loadRetailSystem(onCreateElement) {
       head: { appendChild() {} },
       body: { appendChild() {} },
       documentElement: { getAttribute() { return null; } },
+      // Added 2026-09-19, when _showSupplierModal gained dialog semantics and
+      // this fake died with "document.addEventListener is not a function".
+      // The STUB is extended, not the production code guarded: a real document
+      // always has these, so a `typeof` guard in the app would be cargo-cult
+      // defence that quietly disables Escape wherever it were false.
+      // No-ops on purpose — this file asks only whether a hostile supplier
+      // name is escaped; keyboard behaviour is proved in
+      // retail_modal_stack_test.js.
+      addEventListener() {},
+      removeEventListener() {},
+      activeElement: null,
     },
   };
   sandbox.window = sandbox; // enough for the `window.Chart` / `window.RetailSystem` refs used here

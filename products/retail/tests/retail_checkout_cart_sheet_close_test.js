@@ -142,6 +142,16 @@ function loadRetailSystem({ fetchImpl, toasts, posWrap }) {
       body: { appendChild() {} },
       head: { appendChild() {} },
       documentElement: { getAttribute() { return null; } },
+      // Checkout ends by opening the receipt modal, and on 2026-09-19 that
+      // modal gained dialog semantics — so the success path now registers a
+      // document-level keydown listener and this fake stopped being a
+      // document. The failure was especially misleading here: the checkout
+      // threw, the catch branch ran, and the suite reported "checkout hit its
+      // failure branch instead of the success branch", which reads like a
+      // money-path regression rather than a missing stub method.
+      addEventListener() {},
+      removeEventListener() {},
+      activeElement: null,
     },
     SubsystemApp: {
       showToast(msg, type) { toasts.push({ msg, type }); },
