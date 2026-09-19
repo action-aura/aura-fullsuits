@@ -395,6 +395,15 @@ val CategoryPalette: List<Color> = listOf(
 // colour (TextPrimary by default) so it stays visible on every ground, the
 // way the desktop's inline mark uses currentColor.
 //
+// ONE EXCEPTION, added 2026-09-20 (brand kit v2): [ShadowFacet] below is
+// not a single fixed value -- it is a getter that picks between two fixed
+// ones by [AuraPalette.current]'s own `isDark` flag. It is still not a
+// theme TOKEN in the [AuraColors] sense (it is one-per-surface-KIND, not
+// one-per-palette, and it lives here rather than in any [AuraColors]
+// instance because it is still the mark's own identity colour, not a
+// semantic UI colour). See [ShadowFacet]'s own doc comment for why a
+// single fixed shadow facet was a live defect on this app's dark palettes.
+//
 // SparkHalo/SparkFade (the old soft radial-gradient spark's glow + core)
 // were removed 2026-09-08: the mark evolution pass replaced that spark with
 // a flat geometric diamond ("beacon") drawn in the same ink as the A --
@@ -432,9 +441,63 @@ object AuraBrand {
     val RetailAccentMid: Color = Color(0xFFC97B3D)
     val RetailAccentLight: Color = Color(0xFFF0B87A)
 
-    /** The shared brand family's Navy (Action-Aura-Brand-Guide.md) -- the
-     *  pierced-A's right-facet shadow stop and the back-arc's starting stop. */
-    val Navy: Color = Color(0xFF16233D)
+    // ── 2026-09-20: SURFACE-AWARE SHADOW FACET (brand kit v2) ────────────────
+    // Action-Aura-Brand-Guide.md v2 added a second shadow-facet value the v1
+    // guide this mark was built against never had: the single fixed Navy
+    // (#16233D) reads correctly as a shadow ONLY on a light ground -- on a
+    // dark one it is nearly the ground itself. Measured against this app's
+    // own dark palettes' surfaceApp before this change:
+    //
+    //     CALM  #0A111E   1.21:1
+    //     NIGHT #070B12   1.26:1
+    //     DUSK  #13111C   1.19:1
+    //
+    // -- indistinguishable from the ground, the identical failure shape the
+    // desktop crew measured and fixed on aura-mark-on-dark.svg (see
+    // products/retail/frontend/brand/intro.html's header comment: "the A's
+    // entire right leg dissolved into the background and the mark read as
+    // lopsided and broken"). AuraMark.kt's right facet (the shadow stop of
+    // its gradient) and the back-arc's starting stop both read the single
+    // fixed [Navy] value regardless of theme -- a live defect, not a
+    // theoretical one, on every dark till (CALM, NIGHT, DUSK).
+    //
+    // Two named constants, not one that quietly changes meaning -- and
+    // named for their JOB, not their appearance ("Navy"/"lifted navy" stays
+    // out of the identifier, per this object's own naming rule): what each
+    // is FOR is "the shadow facet on a light surface" and "the shadow facet
+    // on a dark surface".
+    /** The shadow facet's colour when the active palette is LIGHT (DAY, SAND)
+     *  -- Action-Aura-Brand-Guide.md v2's own "Navy #16233D, shadow facet on
+     *  light surfaces". The pierced-A's right-facet shadow stop and the
+     *  back-arc's starting stop, on a light ground. Unchanged value from the
+     *  retired single-theme `Navy` constant this replaces. */
+    val ShadowFacetOnLight: Color = Color(0xFF16233D)
+
+    /** The shadow facet's colour when the active palette is DARK (CALM,
+     *  NIGHT, DUSK) -- Action-Aura-Brand-Guide.md v2's own "Lifted navy
+     *  #22304A, shadow facet on dark surfaces, so the letter doesn't sink".
+     *  The guide's own lift, not an invented value: against this app's dark
+     *  `surfaceApp` tokens it measures 1.41-1.49:1, versus
+     *  [ShadowFacetOnLight]'s 1.19-1.26:1 there -- a real move off
+     *  "identical to the ground", not a cosmetic one. It is not meant to
+     *  clear AA text contrast (this is a facet inside a solid mark, not
+     *  text) -- the desktop's own aura-mark-on-dark.svg precedent
+     *  (products/retail/frontend/brand/intro.html) documents its dark
+     *  shadow stop at "1.38:1 against the ground... which is fine and
+     *  deliberate: a faceted solid reads by its INTERNAL contrast against
+     *  the lit facet beside it, not by its silhouette against the page." */
+    val ShadowFacetOnDark: Color = Color(0xFF22304A)
+
+    /** The shadow facet for the CURRENTLY ACTIVE palette -- [AuraMark]'s
+     *  only consumer, and the only place this picks between the two
+     *  constants above. Reads [AuraPalette.current]'s own `isDark` flag
+     *  (already this app's exact "is the active ground dark" signal, per
+     *  every [AuraColors] instance) rather than testing luminance at
+     *  runtime or inventing a second signal. Mutation-proven in
+     *  ShadowFacetContractTest: a dark-surface fallback to the light value
+     *  fails that file's `the_picker_branches_by_the_active_palettes_isDark_
+     *  flag` test. */
+    val ShadowFacet: Color get() = if (AuraPalette.current.isDark) ShadowFacetOnDark else ShadowFacetOnLight
 
     /** The mark's bright ink: the ridge highlight down the A's spine and the
      *  ring's energy-node core (aura-mark.svg's `#FBE3C4`). */

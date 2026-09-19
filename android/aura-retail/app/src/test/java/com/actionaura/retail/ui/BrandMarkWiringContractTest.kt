@@ -132,16 +132,32 @@ class BrandMarkWiringContractTest {
         // ACTUALLY reads. GIVEN UP: nothing new -- the old form could never
         // actually prove the mark used RingStart/RingEnd; it is a truer
         // check, not a weaker one.
+        //
+        // UPDATED 2026-09-20 (brand kit v2, surface-aware shadow facet):
+        // this used to assert `auraMarkFunctionBody.contains("AuraBrand.
+        // Navy")` -- a SINGLE fixed shadow-facet colour read on every theme,
+        // which measured ~1.2:1 (indistinguishable) against this app's own
+        // dark surfaceApp tokens (CALM/NIGHT/DUSK). `AuraBrand.Navy` is
+        // retired in favour of `AuraBrand.ShadowFacet`, a getter that picks
+        // between `ShadowFacetOnLight` (#16233D, the old Navy value,
+        // unchanged) and `ShadowFacetOnDark` (#22304A) by
+        // `AuraPalette.current.isDark` -- see Color.kt's `AuraBrand` object
+        // for the full reasoning and the measured before/after contrast.
+        // This wiring test can only prove the mark reads
+        // `AuraBrand.ShadowFacet` by name, not that the picker branches
+        // correctly -- ShadowFacetContractTest (ui/theme package)
+        // mutation-proves that branch.
         assertThat(colorKt).contains("object AuraBrand")
         assertThat(colorKt).contains("A06030")
         assertThat(colorKt).contains("C97B3D")
         assertThat(colorKt).contains("F0B87A")
         assertThat(colorKt).contains("16233D")
+        assertThat(colorKt).contains("22304A")
         assertThat(auraMark).doesNotContain("Color(0x")
         assertThat(auraMarkFunctionBody).contains("AuraBrand.RetailAccentDark")
         assertThat(auraMarkFunctionBody).contains("AuraBrand.RetailAccentMid")
         assertThat(auraMarkFunctionBody).contains("AuraBrand.RetailAccentLight")
-        assertThat(auraMarkFunctionBody).contains("AuraBrand.Navy")
+        assertThat(auraMarkFunctionBody).contains("AuraBrand.ShadowFacet")
         // The A itself is not a fixed colour -- it follows the active
         // theme's text colour, exactly like the desktop's inline mark
         // follows currentColor.

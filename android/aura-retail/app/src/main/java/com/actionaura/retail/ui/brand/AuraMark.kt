@@ -57,20 +57,30 @@ import com.actionaura.retail.ui.theme.TextPrimary
 //
 // FIXED colour, not currentColor/`ink`. Per Action-Aura-Brand-Guide.md the
 // pierced-A is full-colour brand artwork -- Retail's own accent trio
-// (dark/mid/light) plus the shared brand Navy and a bright highlight ink --
-// and, unlike the old ring+A, was never a single-ink glyph that could take
-// the surrounding text colour; its colours are the identity and must not
-// shift with the product theme (see icons.js's `mark()` for the identical
-// reasoning on the desktop side, including why it too stopped reading a
-// theme-varying token for the ring). Every one of those colours is a named
-// constant in ui/theme/Color.kt's `AuraBrand` (RetailAccentDark/Mid/Light,
-// Navy, MarkHighlight) because ColorTokenContractTest allows no colour
-// literal outside that file and has no allowlist to widen -- this file
-// holds no hex. `ink` (defaulted to TextPrimary) is kept as a parameter for
-// source compatibility with every existing call site and because
-// BrandMarkWiringContractTest's wiring check pins its presence in this
-// signature, but the pierced-A no longer reads it: there is nothing left in
-// this geometry that takes the theme's text colour the way the old A did.
+// (dark/mid/light) plus the shared brand shadow facet and a bright
+// highlight ink -- and, unlike the old ring+A, was never a single-ink glyph
+// that could take the surrounding text colour; its colours are the
+// identity and must not shift with the product theme (see icons.js's
+// `mark()` for the identical reasoning on the desktop side, including why
+// it too stopped reading a theme-varying token for the ring). Every one of
+// those colours is a named constant in ui/theme/Color.kt's `AuraBrand`
+// (RetailAccentDark/Mid/Light, ShadowFacet, MarkHighlight) because
+// ColorTokenContractTest allows no colour literal outside that file and has
+// no allowlist to widen -- this file holds no hex. `ink` (defaulted to
+// TextPrimary) is kept as a parameter for source compatibility with every
+// existing call site and because BrandMarkWiringContractTest's wiring check
+// pins its presence in this signature, but the pierced-A no longer reads
+// it: there is nothing left in this geometry that takes the theme's text
+// colour the way the old A did.
+//
+// ONE OF THOSE "FIXED" COLOURS ISN'T QUITE, since 2026-09-20: `ShadowFacet`
+// (the right facet's shadow stop and the back-arc's starting stop) is a
+// getter in AuraBrand that picks between two fixed constants by
+// AuraPalette.current.isDark -- brand kit v2 added a dedicated dark-surface
+// value (a single fixed Navy measured at ~1.2:1, indistinguishable, against
+// this app's own dark surfaceApp tokens). See AuraBrand.ShadowFacet's doc
+// comment in Color.kt for the full reasoning and measurements. Everything
+// else in this composable is still genuinely theme-blind.
 //
 // THAT GAP IS CLOSED, and this note is kept only because the gap was real
 // for part of a day and the fix is worth knowing about.
@@ -94,7 +104,7 @@ import com.actionaura.retail.ui.theme.TextPrimary
 // moved AuraAurora onto Retail's own accent trio too (see its own doc
 // comment), which turned that accidental pass into a real failure and
 // forced the rewrite -- the assertion now checks the pierced-A's ACTUAL
-// colours (RetailAccentDark/Mid/Light, Navy).
+// colours (RetailAccentDark/Mid/Light, ShadowFacet).
 // ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -117,8 +127,10 @@ private fun systemAnimationsDisabled(context: Context): Boolean =
  *
  * `ink` is kept for source compatibility with every existing call site (see
  * this file's header comment) but is no longer read: the pierced-A is fixed
- * brand colour ([AuraBrand]'s Retail accent trio, Navy and MarkHighlight),
- * not a theme-following glyph. Callers pass whatever they already pass;
+ * brand colour ([AuraBrand]'s Retail accent trio, ShadowFacet and
+ * MarkHighlight), not a theme-following glyph -- with the one documented
+ * exception that ShadowFacet itself is surface-aware (light vs dark
+ * ground, NOT one value per theme); see its doc comment in Color.kt. Callers pass whatever they already pass;
  * nothing about how they call this composable changes.
  *
  * `animate` draws the mark in on first composition -- every fill and stroke
@@ -172,7 +184,7 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary, 
                 path = backArc,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        AuraBrand.Navy.copy(alpha = drawnFraction),
+                        AuraBrand.ShadowFacet.copy(alpha = drawnFraction),
                         AuraBrand.RetailAccentMid.copy(alpha = drawnFraction),
                     ),
                     start = Offset(24f * u, 69f * u),
@@ -207,7 +219,8 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary, 
         )
         // Right facet: same apex and shoulder, out to the right foot
         // (98,104) and its inner corner (80,104) -- the darker, shadowed
-        // side of the letter (Navy stop).
+        // side of the letter (ShadowFacet stop -- surface-aware since
+        // 2026-09-20, see AuraBrand.ShadowFacet's doc comment).
         val rightFacet = Path().apply {
             moveTo(60f * u, 12.6f * u)
             lineTo(98f * u, 104f * u)
@@ -220,7 +233,7 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary, 
             brush = Brush.linearGradient(
                 colors = listOf(
                     AuraBrand.RetailAccentDark.copy(alpha = drawnFraction),
-                    AuraBrand.Navy.copy(alpha = drawnFraction),
+                    AuraBrand.ShadowFacet.copy(alpha = drawnFraction),
                 ),
                 start = Offset(60f * u, 12.6f * u),
                 end = Offset(60f * u, 104f * u),
