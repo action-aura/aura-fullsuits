@@ -5026,3 +5026,99 @@ the reason to write a gap down is so nobody has to rediscover it by hand:
    stock transfers and the other desktop-only screens CLAUDE.md lists. See
    "What the desktop has and the phone does not" (2026-09-03) for the tracked
    shape of that gap — unchanged by this wave.
+
+## 2026-09-19 (later) - the Action Aura brand lands, and a keyboard finds what no test could
+
+The owner supplied a finished identity (`Action-Aura-Brand-Guide.md` plus SVG
+masters) and authorised changing backgrounds, themes and theme colours to suit
+it. Applying it turned into the most productive defect-finding of the whole
+branch, because it forced the first real-browser walk this client has had.
+
+### Shipped
+
+- **The identity, on all three surfaces.** Retail takes the burnt-amber trio
+  (`#A06030`/`#C97B3D`/`#F0B87A`) and a square counter glyph; Owner takes its
+  gold product variant (decided by evidence — every heading in Owner's
+  `base.html` reads "Aura Owner", never "Action Aura"); Android mirrors the
+  palette with `DesktopTokenParityContractTest` checking it against the real
+  CSS rather than against a transcription. Teal `#2F7B7B` is the MASTER accent
+  and has left the Retail client entirely.
+- **`MarkGeometryParityContractTest` no longer rots.** It always read
+  `aura-mark.svg` and still went stale, because it also hardcoded the numbers
+  it expected to find — it was comparing two copies of the same typed digits.
+  It now parses the SVG as a real XML DOM and derives every expectation.
+  Coverage went from 6 checks to 8.
+- **The lockup generator refuses to run.** `scripts/brand/lockup_to_paths.py`
+  regenerates the lockups with the old mark hardcoded and nothing imports it,
+  so it would have sat there until someone ran it and silently reverted the
+  brand in files they were not even looking at.
+
+### What the browser found that the suites could not
+
+Every item here passed every source-reading test, before and after.
+
+1. **THE SIDEBAR NAVIGATION WAS NOT REACHABLE BY KEYBOARD AT ALL.** Every
+   destination is `<a class="sub-nav-item" onclick="...">` with no `href`. An
+   anchor without `href` is not a link, has no implicit role, and never enters
+   the tab order. A keyboard-only or switch user could not change screens.
+   Measured: the first eight Tab stops on the dashboard were AI Assistant,
+   License, Log Out, language, theme, Open the till, Sales History, Full
+   Report — every destination absent, the only sidebar entries present being
+   the three real `<button>`s in the footer.
+   Fixed with `tabindex` + `role="button"` AND delegated Enter/Space
+   activation, because `onclick` does not fire on those keys for a non-button,
+   and `tabindex` alone hands a keyboard user a focus ring on a control they
+   still cannot operate.
+2. **`scrollIntoView` was eating the first Tab.** `_navigate` called it on the
+   active nav item with `block:'nearest'`, which scrolls nothing when the item
+   is already visible — but calling it at all moves Chromium's sequential
+   focus navigation starting point to that element. So the first Tab began
+   just after the active item, and the skip link AND the Dashboard destination
+   were both unreachable. Now guarded to fire only when it would actually
+   scroll.
+3. **Day and Sand had become the same theme.** The re-theme moved Day's ground
+   to the brand's warm Ivory, straight into Sand's territory: separation
+   halved, ΔE76 9.72 → 4.78 (panels 3.49). The accent-distinguishability check
+   passed throughout, because their accents were still 19.5 apart. An accent
+   is a few hundred pixels of button; for a light theme the paper is most of
+   the identity.
+4. **The mark was invisible on three themes.** The first cut of the brand mark
+   used a fixed navy fill; against the dark grounds that measures 1.13:1,
+   1.21:1 and 1.13:1. The flat variant is the MONO one by the guide's own
+   words, so it takes `currentColor`.
+
+### New guards, all mutation-proved
+
+- `retail_modal_e2e.py` — 7 scenarios in a real browser: modals open named,
+  take focus, close on Escape and return focus; the modal key queue proven
+  with two real capture-phase listeners on one document (one Escape closes
+  only the top, the next closes the one beneath); the sidebar reachable AND
+  operable; the skip link the first Tab stop on a page nothing has clicked.
+  NOT named `*_test.py`, for the reason `retail_smoke_e2e.py` documents.
+- `retail_design_contrast_test.js` gains light-ground distinguishability
+  (ΔE76 ≥ 8). The three dark themes are exempt **by arithmetic, not by
+  exception**: their grounds sit 3.5–6.2 apart because near-black has no room
+  left on the lightness axis, and they are separated by their accents instead.
+
+### Still open, named rather than dropped
+
+1. **The 3D mark renders nowhere.** Both real call sites pass `mark(40)`, and
+   the guide sets 64px as the floor for the 3D construction, so the flat mono
+   variant is the entire on-screen presence of the brand. Wiring the 3D master
+   into the splash is real work, not a tweak.
+2. **`brand/intro.html` still animates the retired geometry.** Its draw-on
+   animation assumes a stroked letterform; the new mark is filled facets, so
+   this is an animation rework rather than a colour swap.
+3. **Typography is not applied.** The guide asks for Space Grotesk 700 and
+   Work Sans; neither is in the repo — only Plus Jakarta Sans and IBM Plex
+   Sans Arabic are bundled (self-hosted woff2 + OFL) — and a smoke run shows
+   `fonts.googleapis.com` being ABORTED, so this app is expected to work
+   offline and no CDN dependency was introduced. `DESIGN.md` §5 carries the
+   exact steps to close it.
+4. **Owner's own pytest suite was not run** — it needs the repo-root venv,
+   which the worktree isolation guard will not reach. There is no existing
+   coverage of the changed asset either way.
+5. **The keyboard audit stopped at the shell.** The sidebar and tab bar are
+   fixed; nothing has yet pressed Tab through a POS sale, a return, or the
+   cash-drawer flow. Given what a single Tab press found in the shell, that is
+   the highest-value next pass in this area.
