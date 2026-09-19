@@ -1481,5 +1481,14 @@
   "Branch retired.": "Branch retired.",
   "Could not retire this branch.": "Could not retire this branch.",
   "Recording…": "Recording…",
-  "Could not load this list. Check the connection and try again.": "Could not load this list. Check the connection and try again."
+  "Could not load this list. Check the connection and try again.": "Could not load this list. Check the connection and try again.",
+  "Full Name": "Full Name",
+  "Company Name": "Company Name",
+  "Email Address": "Email Address",
+  "Confirm Password": "Confirm Password",
+  "This setup runs only once. Your credentials will be saved permanently.": "This setup runs only once. Your credentials will be saved permanently.",
+  "Your data is stored locally on this device. No cloud required.": "Your data is stored locally on this device. No cloud required.",
+  "Database wiped successfully!": "Database wiped successfully!",
+  "Error wiping database": "Error wiping database",
+  "required": "required"
 }

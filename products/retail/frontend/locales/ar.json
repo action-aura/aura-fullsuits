@@ -1481,5 +1481,14 @@
   "Branch retired.": "تم تعطيل الفرع.",
   "Could not retire this branch.": "تعذّر تعطيل هذا الفرع.",
   "Recording…": "جارٍ التسجيل…",
-  "Could not load this list. Check the connection and try again.": "تعذّر تحميل هذه القائمة. تحقّق من الاتصال ثم أعد المحاولة."
+  "Could not load this list. Check the connection and try again.": "تعذّر تحميل هذه القائمة. تحقّق من الاتصال ثم أعد المحاولة.",
+  "Full Name": "الاسم الكامل",
+  "Company Name": "اسم الشركة",
+  "Email Address": "البريد الإلكتروني",
+  "Confirm Password": "تأكيد كلمة المرور",
+  "This setup runs only once. Your credentials will be saved permanently.": "يُجرى هذا الإعداد مرة واحدة فقط. سيتم حفظ بيانات الدخول بشكل دائم.",
+  "Your data is stored locally on this device. No cloud required.": "تُحفظ بياناتك محليًا على هذا الجهاز. لا حاجة إلى الاتصال بالسحابة.",
+  "Database wiped successfully!": "تم مسح قاعدة البيانات بنجاح!",
+  "Error wiping database": "حدث خطأ أثناء مسح قاعدة البيانات",
+  "required": "مطلوب"
 }

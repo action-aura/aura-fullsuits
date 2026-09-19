@@ -1593,48 +1593,56 @@ const SubsystemApp = {
           <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
           <h2 class="auth-title" id="su-title">${t('Welcome to Action Aura')}</h2>
           <p class="auth-sub" id="su-sub">${t('Create your administrator account to get started.')}</p>
-          <p class="auth-note" data-role="setup-only">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
+          <!-- Translated. This is the FIRST screen a fresh install shows, and
+               it was the only auth surface still hard-coded to English while
+               the Login screen twenty lines away already used t() throughout.
+               An Arabic-only shopkeeper met the product in a language they
+               may not read, at the one moment they cannot skip. The <strong>
+               emphasis moved into the sentence rather than splitting it into
+               two translated halves: a concatenated sentence cannot be
+               ordered correctly in Arabic. -->
+          <p class="auth-note" data-role="setup-only">${t('This setup runs only once. Your credentials will be saved permanently.')}</p>
           ${needsKey ? `<p class="auth-foot" style="margin:4px 0 0"><a href="#" id="su-join-link" onclick="SubsystemApp._toggleJoinMode(event)">${t('Already have a shop? Join it with your licence key')}</a></p>` : ''}
         </div>
         <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
-            <label for="su-name">Full Name *</label>
-            <input id="su-name" type="text" data-i18n-ph="Your full name" placeholder="${t('Your full name')}" autocomplete="name"
+            <label for="su-name">${t('Full Name')}<span aria-hidden="true"> *</span></label>
+            <input required id="su-name" type="text" data-i18n-ph="Your full name" placeholder="${t('Your full name')}" autocomplete="name"
               onkeydown="if(event.key==='Enter')document.getElementById('su-company').focus()" />
           </div>
           <div class="auth-field">
-            <label for="su-company">Company Name</label>
+            <label for="su-company">${t('Company Name')}</label>
             <input id="su-company" type="text" data-i18n-ph="Your company" placeholder="${t('Your company')}" autocomplete="organization"
               onkeydown="if(event.key==='Enter')document.getElementById('su-email').focus()" />
           </div>
         </div>
         <div class="auth-field" data-role="setup-only">
-          <label for="su-email">Email Address *</label>
-          <input id="su-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
+          <label for="su-email">${t('Email Address')}<span aria-hidden="true"> *</span></label>
+          <input required id="su-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
             onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
         </div>
         ${needsKey ? `
         <div class="auth-field">
-          <label for="su-key">License Key *</label>
+          <label for="su-key">${t('License Key')}<span aria-hidden="true"> *</span></label>
           <input id="su-key" type="text" placeholder="AURA-RETAIL-XXXX-YYYY-ZZZZ" autocomplete="off"
             style="text-transform:uppercase" onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
           <p class="hint" id="su-key-hint" style="margin:4px 0 0;font-size:12px;color:var(--text-muted)">${t('From your Aura order confirmation. Activated together with your account below.')}</p>
         </div>` : ''}
         <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
-            <label for="su-pass">Password *</label>
-            <input id="su-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
+            <label for="su-pass">${t('Password')}<span aria-hidden="true"> *</span></label>
+            <input required id="su-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
               onkeydown="if(event.key==='Enter')document.getElementById('su-pass2').focus()" />
           </div>
           <div class="auth-field">
-            <label for="su-pass2">Confirm Password *</label>
-            <input id="su-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
+            <label for="su-pass2">${t('Confirm Password')}<span aria-hidden="true"> *</span></label>
+            <input required id="su-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
               onkeydown="if(event.key==='Enter')SubsystemApp._setupSubmit()" />
           </div>
         </div>
         <div id="su-error" class="auth-error"></div>
         <button id="su-btn" class="auth-submit" onclick="SubsystemApp._setupSubmit()">${t('Create Account & Launch')}</button>
-        <p class="auth-foot">Your data is stored locally on this device. No cloud required.</p>
+        <p class="auth-foot">${t('Your data is stored locally on this device. No cloud required.')}</p>
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => document.getElementById('su-name')?.focus(), 150);
@@ -3846,7 +3854,7 @@ const SubsystemApp = {
     try {
       const res = await fetch(`/api/sub/${this.active}/demo-wipe`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
-      this.showToast('Database wiped successfully!', 'success');
+      this.showToast(t('Database wiped successfully!'), 'success');
       
       // Emit data_update to instantly refresh dashboards on all clients
       const domain = window.Auth?.domain?.id || 'demo';
@@ -3857,7 +3865,7 @@ const SubsystemApp = {
       // Navigate back to dashboard to refresh view locally
       this._navigate('dashboard');
     } catch(e) {
-      this.showToast('Error wiping database', 'error');
+      this.showToast(t('Error wiping database'), 'error');
       console.error(e);
     }
   },
