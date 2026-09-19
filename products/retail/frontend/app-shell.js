@@ -2977,7 +2977,7 @@ const SubsystemApp = {
     shell.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
       const el = e.target && typeof e.target.closest === 'function'
-        ? e.target.closest('.sub-nav-item, .sub-tab')
+        ? e.target.closest('.sub-nav-item, .sub-tab, .sub-more-row')
         : null;
       if (!el) return;
       // Space scrolls the page by default; Enter on a focused element does
@@ -3201,8 +3201,15 @@ const SubsystemApp = {
     const icon = (val) => window.AuraIcons ? AuraIcons.render(val, 20) : val;
     const byId = new Map(sys.nav.map((item) => [item.id, item]));
 
+    // Same defect, same fix as the sidebar -- and this one is the PHONE's
+    // navigation. `<a onclick>` with no href is not focusable and carries no
+    // role, so the 15 destinations this sheet lists were reachable by touch
+    // only: a Bluetooth keyboard or a switch device could open the sheet and
+    // then not move within it. Found by scanning for the sidebar's shape
+    // everywhere else after a real browser found it there.
     const rowHTML = (item) => `
             <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
+               tabindex="0" role="button"
                onclick="SubsystemApp._navigate('${item.id}')">
               <span class="sub-more-row-icon">${icon(item.icon)}</span>
               <span>${t(item.label)}</span>
@@ -3293,6 +3300,10 @@ const SubsystemApp = {
 
     document.body.appendChild(scrim);
     document.body.appendChild(sheet);
+    // The sheet hangs off <body>, NOT off the shell, so the delegated handler
+    // _renderShell installed cannot see it. Wire this subtree separately or
+    // the rows take focus and still do nothing on Enter.
+    this._wireNavKeyboardActivation(sheet);
   },
 
   _closeMoreSheet() {
