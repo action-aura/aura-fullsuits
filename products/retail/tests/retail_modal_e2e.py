@@ -278,14 +278,6 @@ def _run(page, backend: Backend, report: Report, shots: Path) -> None:
         page.evaluate("SubsystemApp._navigate('products')")
         page.wait_for_timeout(400)
 
-        # DOM ORDER, not "the first Tab stop". Asserting the latter looked
-        # right and was wrong: the shell leaves Chromium's sequential focus
-        # navigation starting point inside the nav after boot, so the first
-        # Tab lands mid-sidebar regardless of what precedes it in the markup.
-        # That is a real and separate caveat -- recorded rather than asserted
-        # away -- but it is not something the skip link's own CSS can fix, and
-        # three different hiding techniques were tried against it before the
-        # cause turned out to be elsewhere entirely.
         first_focusable = page.evaluate(
             "() => { const all = [...document.querySelectorAll("
             "   'a[href],button,input,select,textarea,[tabindex]')]"
@@ -296,6 +288,33 @@ def _run(page, backend: Backend, report: Report, shots: Path) -> None:
             f"the first focusable element in the document is {first_focusable!r}, not the "
             "skip link. It has to come before the navigation it exists to skip."
         )
+
+        # AND IT MUST BE WHAT THE FIRST TAB ACTUALLY REACHES, on a page nothing
+        # has clicked. Being first in the DOM is not enough on its own: for a
+        # while it was first in the DOM and Tab still skipped it, because
+        # _navigate's scrollIntoView had moved Chromium's sequential focus
+        # navigation starting point past it. A fresh page in the same context
+        # is the only honest way to ask -- reload() plus any click would set
+        # that starting point itself and measure the harness instead.
+        fresh = page.context.new_page()
+        try:
+            fresh.set_default_timeout(DEFAULT_WAIT_MS)
+            fresh.goto(base_url, wait_until="domcontentloaded")
+            fresh.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            fresh.wait_for_timeout(1000)
+            fresh.keyboard.press("Tab")
+            fresh.wait_for_timeout(200)
+            landed_first = fresh.evaluate(
+                "() => { const a = document.activeElement;"
+                " return a ? (a.className || '') + '|' + (a.textContent || '').trim().slice(0,30) : ''; }"
+            )
+            assert "sub-skip-link" in landed_first, (
+                f"the first Tab on a freshly loaded page reaches {landed_first!r}, not the skip "
+                "link. A skip link that Tab cannot reach is inert -- and the cause is usually "
+                "NOT the link's own CSS but something moving the focus starting point past it."
+            )
+        finally:
+            fresh.close()
 
         # And it must actually work when reached.
         page.evaluate("() => document.querySelector('.sub-skip-link').focus()")
@@ -316,7 +335,7 @@ def _run(page, backend: Backend, report: Report, shots: Path) -> None:
             "Tab goes straight back into the nav and the link has done nothing."
         )
 
-    report.run("skip link precedes the nav and moves focus to main", scenario_skip_link)
+    report.run("skip link is the first Tab stop and moves focus to main", scenario_skip_link)
 
 
 def main() -> int:

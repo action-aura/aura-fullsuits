@@ -3042,9 +3042,35 @@ const SubsystemApp = {
     // wastes everyone's time -- which also means no reduced-motion exception is
     // needed. Wrapped because scrollIntoView options are ignored by very old
     // engines and the whole thing is cosmetic; navigation must never fail here.
+    // ONLY CALL IT WHEN IT WOULD ACTUALLY SCROLL. `block: 'nearest'` already
+    // means "move nothing if it is visible", so this guard changes no pixels --
+    // but it changes the KEYBOARD, because calling scrollIntoView at all moves
+    // Chromium's sequential focus navigation starting point to the element,
+    // whether or not any scrolling happens.
+    //
+    // Measured, on a freshly loaded dashboard with nothing ever clicked: the
+    // first Tab landed on "Point of Sale" -- the item immediately AFTER the
+    // active Dashboard -- so the skip link and the active destination were both
+    // unreachable by the first Tab. Not an artifact of the test harness; the
+    // same result with no click anywhere on the page.
+    //
+    // The rail scroll exists for a real reason (a short viewport clips the
+    // lower destinations) and is kept. It just no longer fires on the common
+    // case where the active item was already on screen.
     try {
       const activeNav = document.querySelector('.sub-nav-item.active');
-      if (activeNav && activeNav.scrollIntoView) {
+      const rail = document.getElementById('sub-nav');
+      if (activeNav && rail && activeNav.scrollIntoView
+          && typeof activeNav.getBoundingClientRect === 'function'
+          && typeof rail.getBoundingClientRect === 'function') {
+        const a = activeNav.getBoundingClientRect();
+        const r = rail.getBoundingClientRect();
+        const alreadyVisible = a.top >= r.top && a.bottom <= r.bottom;
+        if (!alreadyVisible) activeNav.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      } else if (activeNav && activeNav.scrollIntoView) {
+        // No rail to measure against (older engine, or a test stub without
+        // getBoundingClientRect): keep the previous unconditional behaviour
+        // rather than silently dropping the scroll.
         activeNav.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     } catch (e) { /* a rail that did not scroll is not a reason to stop navigating */ }
