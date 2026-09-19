@@ -16,6 +16,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+// AutoMirrored, not the plain Filled variant: this app runs RTL in Arabic and
+// the mirrored glyph is the one that points the right way there.
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -473,7 +477,7 @@ private fun MainShell(onLogout: () -> Unit) {
                         // longer exists -- a menu button that opens nothing is
                         // worse than no button.
                         if (!isTopLevel) IconButton(onClick = { nav.popBackStack() }) {
-                            Icon(Icons.Default.ArrowBack, tr("Back"))
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, tr("Back"))
                         }
                     },
                     actions = {
@@ -595,7 +599,13 @@ private fun AiSheet(onDismiss: () -> Unit) {
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
-        Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+        // imePadding() so the prompt field (the last item in this
+        // non-scrolling Column) and its send button stay above the
+        // keyboard instead of being covered by it -- ModalBottomSheet's
+        // default windowInsets covers navigationBars only, never ime.
+        // Additive with that inset (0dp while the keyboard is closed), so
+        // this does not double-pad the sheet's existing bottom inset.
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp).imePadding()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(10.dp))
@@ -648,7 +658,7 @@ private fun AiSheet(onDismiss: () -> Unit) {
                     // tap can never fire two overlapping requests.
                     if (thinking) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     else IconButton(onClick = { send() }) {
-                        Icon(Icons.Default.Send, tr("Send"), tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.AutoMirrored.Filled.Send, tr("Send"), tint = MaterialTheme.colorScheme.primary)
                     }
                 },
             )

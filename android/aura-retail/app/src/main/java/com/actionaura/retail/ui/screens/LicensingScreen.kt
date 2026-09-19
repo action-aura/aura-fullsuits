@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+// AutoMirrored, not the plain Filled variant: this app runs RTL in Arabic and
+// the mirrored glyph is the one that points the right way there.
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -262,7 +264,7 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
         topBar = {
             TopAppBar(
                 title = { Text(tr("Licensing")) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
             )
         },
     ) { padding ->

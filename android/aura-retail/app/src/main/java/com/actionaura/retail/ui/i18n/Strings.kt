@@ -160,6 +160,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Try another search or category." to "جرّب بحثًا أو فئة أخرى.",
     "Only %s in stock" to "%s فقط في المخزون",
     "Max stock: %s" to "الحد الأقصى للمخزون: %s",
+    // Cart qty stepper icons (RetailScreens.kt) -- TalkBack was reading the
+    // glyph ("−"/"+") instead of the action, since contentDescription carried
+    // the literal symbol rather than a real label.
+    "Decrease quantity" to "تقليل الكمية",
+    "Increase quantity" to "زيادة الكمية",
     "View cart" to "عرض السلة",
     "Current Sale" to "البيع الحالي",
     "Walk-in customer" to "عميل عابر",
@@ -205,6 +210,9 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Redeem points" to "استبدال النقاط",
     "Max" to "الحد الأقصى",
     "Redeemed value: %s off this sale" to "قيمة الاستبدال: %s خصم من هذا البيع",
+    // Surfaced the moment a typed request exceeds what's actually redeemable,
+    // instead of only being visible on the post-sale screen after the clamp.
+    "Only %d points can be applied to this sale" to "يمكن تطبيق %d نقطة فقط على هذا البيع",
     "%d points redeemed (%s)" to "تم استبدال %d نقطة (%s)",
 
     // ── Shared API error mapping (net/ApiErrors.kt) ──────────────────────────

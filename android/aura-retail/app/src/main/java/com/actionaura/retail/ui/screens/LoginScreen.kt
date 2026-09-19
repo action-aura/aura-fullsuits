@@ -111,6 +111,19 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                // imePadding() so a focused field never leaves the Sign In
+                // button stranded behind the keyboard. This screen is
+                // edge-to-edge (enableEdgeToEdge, MainActivity.kt) with no
+                // Scaffold/insets-consuming wrapper above it -- AppBackground
+                // (AppRoot.kt) is a bare Box -- so this is the only place in
+                // the tree consuming the ime inset; nothing double-pads it.
+                // The scroll above already exists, but without this the IME
+                // just overlays the content instead of shrinking the
+                // viewport, so verticalScroll never had anything to scroll:
+                // reproduced on a real 1080x2340 device, the login button
+                // was fully hidden behind the keyboard with no way to reach
+                // it short of dismissing the keyboard first.
+                .imePadding()
                 // Second pass (2026-09-08): top padding kept smaller than
                 // bottom (28dp vs 48dp) rather than the even 40dp/40dp the
                 // first pass used, so with `Arrangement.Center` below the

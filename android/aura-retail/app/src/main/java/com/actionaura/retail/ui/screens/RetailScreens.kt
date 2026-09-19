@@ -386,7 +386,15 @@ fun PosScreen(snackbar: SnackbarHostState) {
     if (showCart) {
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(onDismissRequest = { showCart = false }, sheetState = sheet) {
-            Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+            // imePadding() so the redeem-points and down-payment fields --
+            // and the Charge button below them -- stay reachable above the
+            // keyboard instead of being covered by it. This Column has no
+            // verticalScroll, so without this the IME can cover whichever
+            // field is focused and push Charge off-screen entirely.
+            // ModalBottomSheet's default windowInsets covers navigationBars
+            // only, never ime; imePadding() is additive (0dp while the
+            // keyboard is closed) so this does not double-pad that inset.
+            Column(Modifier.padding(20.dp).padding(bottom = 24.dp).imePadding()) {
                 Text(tr("Current Sale"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
                 // Customer (required for credit; walk-in otherwise)
@@ -454,6 +462,21 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             Text(tr("Max"))
                         }
                     }
+                    // Surfaces the clamp the MOMENT the typed request exceeds
+                    // what will actually apply, instead of leaving the field
+                    // showing a number that quietly gets reduced -- before this,
+                    // the cashier only learned the true redeemed amount on the
+                    // post-sale screen, after the sale had already gone through.
+                    // Own row, own visibility -- same conditional-row idiom as
+                    // "Redeemed value" right below.
+                    if (loyaltyRequestedPoints > loyaltyMaxRedeemable) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            tr("Only %d points can be applied to this sale").format(loyaltyMaxRedeemable),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Warning,
+                        )
+                    }
                     // Own row, own visibility: shown only once a redemption is
                     // actually previewed (loyaltyValue > 0) -- same
                     // conditional-money-row shape the desktop's
@@ -498,12 +521,12 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             // button here already relies on the Material default.
                             FilledTonalIconButton(onClick = {
                                 val n = qty - 1; if (n <= 0) cart.remove(id) else cart[id] = n
-                            }) { Icon(Icons.Default.Remove, "−") }
+                            }) { Icon(Icons.Default.Remove, tr("Decrease quantity")) }
                             Text(fmtQty(qty), fontWeight = FontWeight.Bold,
                                 modifier = Modifier.widthIn(min = 28.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             FilledTonalIconButton(onClick = {
                                 if (!addOne(p)) scope.launch { snackbar.showSnackbar(tr("Max stock: %s").format(fmtQty(p.total_stock))) }
-                            }) { Icon(Icons.Default.Add, "+") }
+                            }) { Icon(Icons.Default.Add, tr("Increase quantity")) }
                         }
                     }
                 }

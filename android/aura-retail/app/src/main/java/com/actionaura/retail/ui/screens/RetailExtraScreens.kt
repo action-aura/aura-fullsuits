@@ -15,12 +15,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+// AutoMirrored, not the plain Filled variant: this app runs RTL in Arabic and
+// the mirrored glyph is the one that points the right way there.
+import androidx.compose.material.icons.automirrored.filled.AssignmentReturn
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AssignmentReturn
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Inventory2
@@ -28,7 +32,6 @@ import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storefront
@@ -112,8 +115,8 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
         SectionHeader(tr("Records"))
         MoreItem(tr("Categories"), tr("Group products for filtering"), Icons.Default.Category) { onNavigate("categories") }
         MoreItem(tr("Reports"), tr("Sales stats by time period"), Icons.Default.BarChart) { onNavigate("reports") }
-        MoreItem(tr("Transactions"), tr("Past sales & invoices"), Icons.Default.ReceiptLong) { onNavigate("transactions") }
-        MoreItem(tr("Returns"), tr("Refund items from a sale"), Icons.Default.AssignmentReturn) { onNavigate("returns") }
+        MoreItem(tr("Transactions"), tr("Past sales & invoices"), Icons.AutoMirrored.Filled.ReceiptLong) { onNavigate("transactions") }
+        MoreItem(tr("Returns"), tr("Refund items from a sale"), Icons.AutoMirrored.Filled.AssignmentReturn) { onNavigate("returns") }
         // Customers is NOT listed here: it is a bottom-bar tab now. Repeating a
         // tab destination in the overflow list is the same duplication the
         // deleted drawer was guilty of with Settings, and OverflowNavigation-
@@ -183,6 +186,17 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
     }
 }
 
+// ChevronRight (used as a trailing "this row opens something" disclosure
+// glyph throughout this file) has no Icons.AutoMirrored variant in this
+// Compose BOM (2024.09.03) -- unlike ArrowBack/ExitToApp/HelpOutline
+// elsewhere in this app, which do. RTL is handled by hand: swap in the
+// pre-drawn ChevronLeft glyph rather than flipping ChevronRight with a
+// graphicsLayer transform, so every disclosure row in the app (Language,
+// Theme, branch, Licensing, the two PO pickers) points the way it actually
+// opens once the app is running in Arabic.
+private val disclosureChevron: ImageVector
+    @Composable get() = if (AppLocale.isRtl) Icons.Default.ChevronLeft else Icons.Default.ChevronRight
+
 @Composable
 private fun MoreItem(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
     TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
@@ -194,7 +208,7 @@ private fun MoreItem(title: String, subtitle: String, icon: ImageVector, onClick
                 Text(subtitle, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(disclosureChevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -381,7 +395,7 @@ fun TransactionsScreen(snackbar: SnackbarHostState) {
 
     when {
         loading -> SkeletonList()
-        sales.isEmpty() -> EmptyState(Icons.Default.ReceiptLong, tr("No transactions yet"),
+        sales.isEmpty() -> EmptyState(Icons.AutoMirrored.Filled.ReceiptLong, tr("No transactions yet"),
             tr("Sales you complete in POS will show up here as invoices."))
         else -> LazyColumn(
             contentPadding = PaddingValues(16.dp),
@@ -509,7 +523,7 @@ fun ReturnsScreen(snackbar: SnackbarHostState) {
     Box(Modifier.fillMaxSize()) {
         when {
             loading -> SkeletonList()
-            rows.isEmpty() -> EmptyState(Icons.Default.AssignmentReturn, tr("No returns yet"),
+            rows.isEmpty() -> EmptyState(Icons.AutoMirrored.Filled.AssignmentReturn, tr("No returns yet"),
                 tr("Refund items from a past sale; stock is added back automatically."),
                 ctaText = tr("Process return"), onCta = { showNew = true })
             else -> LazyColumn(
@@ -985,13 +999,25 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                             // silently re-reduce AR by the face value a
                             // second time. Introducing `kind == "reversal"`
                             // closes that by construction.
+                            // H1 fix: this button used to fire with no busy guard
+                            // and an empty catch, so a failed void gave the
+                            // cashier nothing and a double-tap could fire twice.
+                            // Reuses the SAME `paying`/`err` state as "Record a
+                            // payment" below -- both are money-mutating actions
+                            // on this one statement, and only one should be able
+                            // to be in flight at a time.
                             if (e.kind == "payment" && e.payment_id != null) {
                                 TextButton(onClick = {
+                                    paying = true; err = null
                                     scope.launch {
-                                        try { if (ApiClient.get().voidPayment(e.payment_id).status == "success") onPaid() } catch (ex: Exception) {}
+                                        try {
+                                            val r = ApiClient.get().voidPayment(e.payment_id)
+                                            if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
+                                        } catch (ex: Exception) { err = apiErrorMessage(ex); paying = false }
                                     }
-                                }, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                                    Text(tr("Void"), style = MaterialTheme.typography.labelSmall)
+                                }, enabled = !paying, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                    if (paying) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    else Text(tr("Void"), style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -1233,13 +1259,21 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                             // Void stays gated on "payment" ALONE -- see
                             // StatementSheet's identical comment above for
                             // why "reversal" must never also match here.
+                            // H1 fix: busy-guarded and error-surfaced the same
+                            // way as StatementSheet's Void button above -- see
+                            // that comment for the full reasoning.
                             if (e.kind == "payment" && e.payment_id != null) {
                                 TextButton(onClick = {
+                                    paying = true; err = null
                                     scope.launch {
-                                        try { if (ApiClient.get().voidPayment(e.payment_id).status == "success") onPaid() } catch (ex: Exception) {}
+                                        try {
+                                            val r = ApiClient.get().voidPayment(e.payment_id)
+                                            if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
+                                        } catch (ex: Exception) { err = apiErrorMessage(ex); paying = false }
                                     }
-                                }, contentPadding = PaddingValues(horizontal = 6.dp)) {
-                                    Text(tr("Void"), style = MaterialTheme.typography.labelSmall)
+                                }, enabled = !paying, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                                    if (paying) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    else Text(tr("Void"), style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -1632,7 +1666,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 Text(tr("Language"), Modifier.weight(1f))
                 Text(AppLocale.lang.nativeName, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
-                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(disclosureChevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
@@ -1649,7 +1683,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 Text(tr("Theme"), Modifier.weight(1f))
                 Text(themeLabel(AuraPalette.current), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
-                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(disclosureChevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
@@ -1716,7 +1750,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                                 )
                             }
                             if (canManageBranch) {
-                                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(disclosureChevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                         // Never a silent no-op: a cashier or manager sees exactly
@@ -1954,7 +1988,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(tr("Licensing"), Modifier.weight(1f))
-                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(disclosureChevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
@@ -2410,7 +2444,7 @@ private fun CreatePoSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
             Box {
                 OutlinedButton(onClick = { supplierMenu = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(supplier?.name ?: tr("Select supplier"), modifier = Modifier.weight(1f))
-                    Icon(Icons.Default.ChevronRight, null)
+                    Icon(disclosureChevron, null)
                 }
                 DropdownMenu(expanded = supplierMenu, onDismissRequest = { supplierMenu = false }) {
                     if (suppliers.isEmpty()) DropdownMenuItem(text = { Text(tr("No suppliers — add one first")) }, onClick = { supplierMenu = false })
@@ -2429,7 +2463,7 @@ private fun CreatePoSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                 OutlinedButton(onClick = { productMenu = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(product?.let { "${it.name} (${it.sku})" } ?: tr("Select product"), modifier = Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Icon(Icons.Default.ChevronRight, null)
+                    Icon(disclosureChevron, null)
                 }
                 DropdownMenu(expanded = productMenu, onDismissRequest = { productMenu = false }) {
                     products.forEach { p ->

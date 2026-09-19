@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+// AutoMirrored, not the plain Filled variant: this app runs RTL in Arabic and
+// the mirrored glyph is the one that points the right way there.
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.History
@@ -62,7 +64,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
         topBar = {
             TopAppBar(
                 title = { Text(tr("Backup & restore")) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
             )
         },
     ) { padding ->
