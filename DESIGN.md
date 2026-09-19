@@ -424,6 +424,34 @@ edit, per that file's own "closed list" design), and only then repointing
 `--font-base`/a new display-font token at them. None of that was attempted
 here -- it is sized like its own task, not a one-line font-family swap.
 
+**NARROWED 2026-09-19, because "both fonts are missing" was not accurate.**
+Measured on this machine rather than assumed:
+
+- **Work Sans IS already present**, installed system-wide as TrueType
+  (`C:\Windows\Fonts\WorkSans-*.ttf`, nine weights). Converting it is not
+  hypothetical either -- `WorkSans-Regular.ttf` was converted to woff2 with
+  fontTools as a test and came out at 47,088 bytes, the same order as the
+  Plus Jakarta Sans files already bundled. Its own embedded name table
+  (nameID 13/14) declares **SIL Open Font License 1.1**, the same licence as
+  everything else in `fonts/`, so redistribution inside the install is
+  permitted provided the OFL text ships with it.
+- **Space Grotesk is NOT present** -- no match anywhere in the system font
+  directory. It is the display/wordmark face, i.e. the half of the pairing
+  that carries the brand.
+
+So the real blocker is narrower than this section first recorded: it is
+**Space Grotesk's woff2, plus the OFL text for both faces**. Work Sans itself
+can be produced locally in minutes.
+
+**And it was still deliberately NOT half-applied.** Shipping Work Sans alone
+would put the body face on the brand and leave the wordmark on Plus Jakarta
+Sans -- a mixed pairing that reads as a mistake rather than as a decision,
+and one a later reader would have to undo before doing this properly. A
+typographic system is the one thing where doing half is worse than doing
+none. The licence text is a real constraint too, not paperwork: this repo
+already bundles `IBMPlexSansArabic-OFL.txt` alongside its fonts precisely
+because shipping an OFL face without its licence is a distribution defect.
+
 ## 6. Shape, space, motion, sound
 
 - Radii: controls 8 px, cards 12 px, pills 999 px.
