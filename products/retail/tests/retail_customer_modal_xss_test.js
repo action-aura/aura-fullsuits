@@ -92,6 +92,23 @@ function loadRetailSystem(onCreateElement) {
       head: { appendChild() {} },
       body: { appendChild() {} },
       documentElement: { getAttribute() { return null; } },
+      // A real document has always had these. This fake did not, and the
+      // moment _viewCustomer started wiring dialog semantics (Escape to
+      // close, focus restored to the trigger) it died here with
+      // "document.addEventListener is not a function" -- an incomplete fake
+      // reporting a failure the product does not have. Same lesson, same
+      // day, as the toast suite's element stub, which had no setAttribute.
+      //
+      // No-ops rather than a real listener registry: this file asks ONE
+      // question -- does _viewCustomer escape a hostile name/phone -- and a
+      // working Escape key is not part of it. retail_confirm_modal_test.js
+      // is where keyboard behaviour is actually driven and mutation-proved.
+      addEventListener() {},
+      removeEventListener() {},
+      // What _wireModalA11y reads to remember where focus came from, so it
+      // can hand it back on close. Null is the honest answer here: nothing
+      // in this sandbox ever held focus.
+      activeElement: null,
     },
   };
   sandbox.window = sandbox; // enough for the `window.Chart` / `window.RetailSystem` refs used here

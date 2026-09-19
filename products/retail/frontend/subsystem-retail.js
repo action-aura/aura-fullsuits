@@ -1548,6 +1548,58 @@ const RetailSystem = {
     });
   },
 
+  // Escape-to-close + focus-in/focus-restore half of the same a11y treatment
+  // _confirm() above gives its own dialog, for the hand-rolled
+  // `.ret-modal-overlay` modals that build and append their own markup
+  // instead of going through _confirm(). role/aria-modal/aria-label are set
+  // by the caller directly in that markup (the way pos-remove-btn's
+  // title/aria-label are baked into its template rather than patched on
+  // after the fact) -- this only wires the KEYBOARD/FOCUS behaviour on top,
+  // via `dialogId` (the caller's own `.ret-modal` div id) rather than
+  // `overlay.querySelector`, the same document.getElementById lookup
+  // _confirm() already uses for its buttons. Hands back a `close()` so a
+  // success path elsewhere (e.g. a payment that reopens the same modal) can
+  // tear it down the same way the mouse ✕ and Escape do, instead of a bare
+  // `.remove()` that would leak this function's own document-level keydown
+  // listener.
+  _wireModalA11y(overlay, dialogId) {
+    const dialogEl = (typeof document !== 'undefined' && document.getElementById(dialogId)) || null;
+    const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
+    let closed = false;
+    const close = () => {
+      if (closed) return;          // backdrop click, ✕, Escape and a caller's
+      closed = true;                // own success path can all race here
+      document.removeEventListener('keydown', onKeydown, true);
+      overlay.remove();
+      if (trigger && typeof trigger.focus === 'function') trigger.focus();
+    };
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    };
+    document.addEventListener('keydown', onKeydown, true);
+    // Reachable from the inline `onclick="RetailSystem._closeModalOverlay(this)"`
+    // on the markup's own ✕ button, which has no closure over `close` above.
+    overlay._a11yClose = close;
+    if (dialogEl && typeof dialogEl.setAttribute === 'function') dialogEl.setAttribute('tabindex', '-1');
+    if (dialogEl && typeof dialogEl.focus === 'function') dialogEl.focus();
+    return close;
+  },
+
+  // What every hand-rolled modal's mouse ✕ now calls instead of a bare
+  // `this.closest('.ret-modal-overlay').remove()` -- routes through the
+  // close() _wireModalA11y registered above (when present) so the Escape
+  // listener is torn down and focus returns to the trigger, exactly as if
+  // Escape itself had been pressed. Falls back to a plain remove() for any
+  // overlay that was never wired (this file has ~35 of them and only the
+  // highest-value few have been upgraded so far -- see subsystem-retail.js's
+  // owner notes on this pass).
+  _closeModalOverlay(el) {
+    const overlay = el && typeof el.closest === 'function' ? el.closest('.ret-modal-overlay') : null;
+    if (!overlay) return;
+    if (typeof overlay._a11yClose === 'function') overlay._a11yClose();
+    else overlay.remove();
+  },
+
   // ── ATTRIBUTION RENDERING (schema v13) ────────────────────────────────────
   //
   // v13 (_migrate_add_identity_and_attribution_columns, backend/database/
@@ -6220,10 +6272,16 @@ const RetailSystem = {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
+      <!-- aria-labelledby rather than a second, concatenated copy of the
+           heading -- see the sale dialog's own comment for why that shape is
+           forbidden here (a flat "Word Value" string is untranslatable and
+           direction-unsafe). The customer's NAME is the heading, and a name is
+           exactly the kind of user-controlled text that must not be re-pasted
+           into an attribute. -->
+      <div class="ret-modal ret-modal-wide" id="ret-customer-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-customer-dialog-title">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-          <h3 style="margin:0">${this._esc(cu.name)}</h3>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
+          <h3 id="ret-customer-dialog-title" style="margin:0">${this._esc(cu.name)}</h3>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)">✕ Close</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
           <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
@@ -6247,7 +6305,8 @@ const RetailSystem = {
         <div id="cu-hist-loading" style="color:var(--text-muted);text-align:center;padding:20px">Loading…</div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeCustomerModal = this._wireModalA11y(overlay, 'ret-customer-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeCustomerModal(); });
     try {
       const hist = (await this._get(`/api/sub/retail/customers/${cid}/sales`)).data || [];
       const el = document.getElementById('cu-hist-loading');
@@ -7011,7 +7070,7 @@ const RetailSystem = {
             oninput="RetailSystem._poItems[${i}].quantity=+this.value;RetailSystem._poItems[${i}].line_total=RetailSystem._poItems[${i}].quantity*RetailSystem._poItems[${i}].unit_cost;RetailSystem._renderPOItems()" /></td>
           <td>${this._fmt(item.unit_cost)}</td>
           <td style="font-weight:600">${this._fmt(lineTotal)}</td>
-          <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._poItems.splice(${i},1);RetailSystem._renderPOItems()">✕</button></td>
+          <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._poItems.splice(${i},1);RetailSystem._renderPOItems()" title="${this._esc(t('Remove line'))}" aria-label="${this._esc(t('Remove line'))}">✕</button></td>
         </tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -7201,7 +7260,7 @@ const RetailSystem = {
         <div class="ret-modal ret-modal-wide">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
             <h3 style="margin:0">PO: ${po.po_number}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Supplier</div><div style="color:var(--text-primary);font-weight:600">${po.supplier_name||'—'}</div></div>
@@ -7414,7 +7473,7 @@ const RetailSystem = {
         <td>${this._esc(item.product_name)}</td>
         <td><input type="number" value="${item.quantity}" min="1" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
           oninput="RetailSystem._transferItems[${i}].quantity=+this.value;RetailSystem._renderTransferItems()" /></td>
-        <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._transferItems.splice(${i},1);RetailSystem._renderTransferItems()">✕</button></td>
+        <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._transferItems.splice(${i},1);RetailSystem._renderTransferItems()" title="${this._esc(t('Remove line'))}" aria-label="${this._esc(t('Remove line'))}">✕</button></td>
       </tr>`).join('')}</tbody>
     </table>`;
   },
@@ -7651,7 +7710,7 @@ const RetailSystem = {
         <div class="ret-modal ret-modal-wide">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
             <h3 style="margin:0">${t('Transfer')}: ${this._bdi((xfer.id||'').slice(0,8), xfer.id)}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('From')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(xfer.source_branch_name||'—')}</div></div>
@@ -7948,7 +8007,7 @@ const RetailSystem = {
           oninput="RetailSystem._quotationItems[${i}].quantity=+this.value" /></td>
         <td><input type="number" value="${item.discount_pct || 0}" min="0" max="100" style="width:70px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
           oninput="RetailSystem._quotationItems[${i}].discount_pct=+this.value" /></td>
-        <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._quotationItems.splice(${i},1);RetailSystem._renderQuotationItems()">✕</button></td>
+        <td><button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._quotationItems.splice(${i},1);RetailSystem._renderQuotationItems()" title="${this._esc(t('Remove line'))}" aria-label="${this._esc(t('Remove line'))}">✕</button></td>
       </tr>`).join('')}</tbody>
     </table>`;
   },
@@ -8081,7 +8140,7 @@ const RetailSystem = {
             <h3 style="margin:0">${this._esc(q.doc_kind === 'order' ? t('Sales Order') : t('Quotation'))}: ${this._esc(q.doc_number)}</h3>
             <div class="qt-no-print">
               <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="window.print()">${t('Print')}</button>
-              <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+              <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
             </div>
           </div>
           ${q.is_expired ? `<div style="background:var(--state-warning-surface);color:var(--state-warning-text);border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:14px">${t('This quotation has expired.')}</div>` : ''}
@@ -10213,13 +10272,21 @@ const RetailSystem = {
       overlay.className = 'ret-modal-overlay';
       overlay.id = 'ret-sale-modal';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide">
+        <!-- aria-labelledby, NOT aria-label. The visible <h3> below is already
+             the right string: translated through t(), with the document number
+             bidi-isolated in a <bdi> so a Latin reference cannot flip the whole
+             heading under dir="rtl". Copying that into an aria-label rebuilt it
+             as one flat concatenated string -- which is exactly what
+             testInvoiceHeadingDoesNotConcatenateWordAndNumber exists to forbid,
+             and it caught it. Pointing at the heading reuses the correct string
+             instead of maintaining a second, worse copy of it. -->
+        <div class="ret-modal ret-modal-wide" id="ret-sale-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-sale-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
             <div>
-              <h3 style="margin:0">${t('Invoice')} ${this._bdi(sale.sale_number||'')}</h3>
+              <h3 id="ret-sale-dialog-title" style="margin:0">${t('Invoice')} ${this._bdi(sale.sale_number||'')}</h3>
               <p style="color:var(--text-muted);margin:4px 0 0;font-size:13px">${this._bdi((sale.created_at||'').slice(0,16))}</p>
             </div>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)">✕ Close</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Customer')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
@@ -10261,7 +10328,8 @@ const RetailSystem = {
           </div>
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+      const _closeSaleModal = this._wireModalA11y(overlay, 'ret-sale-dialog');
+      overlay.addEventListener('click', e => { if(e.target===overlay) _closeSaleModal(); });
     } catch(e) { SubsystemApp.showToast(t('Could not load invoice'),'error'); }
   },
 
@@ -13147,7 +13215,7 @@ const RetailSystem = {
         <div class="ret-modal ret-modal-wide">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
             <h3 style="margin:0">${t('Cheque')} ${this._esc(cheque.cheque_number || '')}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Amount')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(cheque.amount)} ${this._esc(cheque.currency || '')}</div></div>
@@ -13396,7 +13464,8 @@ const RetailSystem = {
       overlay.id = 'ret-statement-modal';
       overlay.innerHTML = this._partyStatementMarkup(kind, id, party, events, resp.balance);
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+      const _closeStatement = this._wireModalA11y(overlay, 'ret-statement-dialog');
+      overlay.addEventListener('click', e => { if (e.target === overlay) _closeStatement(); });
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
@@ -13452,10 +13521,11 @@ const RetailSystem = {
         </div>` : '';
 
     return `
-      <div class="ret-modal ret-modal-wide">
+      <!-- aria-labelledby, same reasoning as the sale and customer dialogs. -->
+      <div class="ret-modal ret-modal-wide" id="ret-statement-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-statement-dialog-title">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-          <h3 style="margin:0">${t('Statement')}: ${this._esc(party.name || '—')}</h3>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
+          <h3 id="ret-statement-dialog-title" style="margin:0">${t('Statement')}: ${this._esc(party.name || '—')}</h3>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
           <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Phone')}</div><div style="color:var(--text-primary);font-weight:600">${party.phone ? this._esc(party.phone) : '—'}</div></div>
@@ -13504,7 +13574,13 @@ const RetailSystem = {
       const d = await this._post(`${this._partyApiBase(kind)}/${id}/payments`, { amount, method, notes });
       if (d.status === 'success') {
         SubsystemApp.showToast(t('Payment recorded'), 'success');
-        document.getElementById('ret-statement-modal')?.remove();
+        // Routed through _closeModalOverlay (not a bare .remove()) so the
+        // Escape listener _wireModalA11y registered when this statement was
+        // opened is torn down here too -- otherwise it would keep listening
+        // on `document` after its overlay is gone, and _openPartyStatement
+        // below immediately reopens the same modal with a SECOND listener
+        // registered on top of it.
+        this._closeModalOverlay(document.getElementById('ret-statement-modal'));
         // Refresh both surfaces that show this party's balance -- the
         // statement the operator was just looking at, and the list behind
         // it -- rather than trying to patch the DOM in place: both are
