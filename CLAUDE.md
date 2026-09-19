@@ -598,13 +598,43 @@ refunded customer kept counting as a big spender.
 because the product ships Arabic-first to shops where the till operator may be
 using assistive tech.** As of 2026-09-19: the desktop shell has a skip link and
 named landmarks; `showToast` — the product's ONLY feedback surface — carries
-`role`/`aria-live` (assertive for errors, polite otherwise); four modals have
-full dialog semantics and **roughly 32 still do not**; and 124 of 128 form
+`role`/`aria-live` (assertive for errors, polite otherwise); ~~four modals have
+full dialog semantics and **roughly 32 still do not**~~; and 124 of 128 form
 labels are now programmatically associated with their inputs, up from 5. Two
 ratchet suites pin the last two (`retail_form_label_association_test.js`,
-`retail_locale_formatting_test.js`). The remaining modals are the known gap —
+`retail_locale_formatting_test.js`). ~~The remaining modals are the known gap —
 the shared `_wireModalA11y`/`_closeModalOverlay` helpers they need already
-exist, so closing it is calling them, not designing anything.
+exist, so closing it is calling them, not designing anything.~~
+
+**THE MODAL HALF IS CLOSED — struck through 2026-09-20, one day after it was
+written.** An independent audit of `subsystem-retail.js` (13,776 lines) counted
+it four ways so no naming convention could hide a miss: 31 `.ret-modal-overlay`
+construction sites, 31 `document.createElement` overlay builders, 31 elements
+carrying `role="dialog"`/`role="alertdialog"`, and 30 `_wireModalA11y(...)`
+calls matched one-to-one against the hand-rolled overlays — the 31st being
+`_confirm`, which carries its own equivalent Escape/focus/queue handling. So
+**31 of 31, with nothing left unwired.** Also checked for modal-shaped UI
+outside the convention (other `-modal`/`-dialog` ids, popover/tooltip/lightbox/
+backdrop/scrim literals, native `confirm()`/`alert()`/`prompt()`): none
+unaccounted for.
+
+One thing deliberately NOT in that count, so it does not read as an oversight
+later: the mobile POS cart bottom-sheet (`.pos-right` / `.pos-wrap.pos-sheet-
+open`). It is a persistent element that slides via CSS transform behind a
+generated `::before` scrim — not a `createElement` dialog — so the modal
+helpers do not apply to it and it needs its own answer.
+
+`retail_modal_a11y_coverage_test.js` is the ratchet holding this, and it is
+NOT vacuous: proven from scratch by removing `_wireModalA11y` from one modal
+("31 modal overlays are built in this file but only 29 call _wireModalA11y")
+and, separately, by pointing one `aria-labelledby` at an id that does not
+exist ("1 dialog(s) point aria-labelledby at an id that does not exist"). Both
+restored to green.
+
+**The lesson is the one this document keeps relearning**: the paragraph above
+was accurate when written on 2026-09-19 and wrong on 2026-09-20, because the
+work landed and the prose did not move. A session that trusted it would have
+spent its budget re-wiring 31 modals that were already wired.
 
 ## How to give a good suggestion here
 
