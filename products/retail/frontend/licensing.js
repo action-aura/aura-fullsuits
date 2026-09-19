@@ -617,8 +617,13 @@
       // Owner still hasn't ruled on it. Stay put, say so honestly, tick again.
       const line = document.getElementById('awaiting-status');
       if (line) {
+        // 'en-GB', not a bare call -- see the identical line in app-shell.js
+        // (_pollApprovalOnce). A bare toLocaleTimeString() follows the OS
+        // locale rather than the app's language, so this sentence mixed an
+        // English clock into an Arabic page, or Arabic-Indic digits into an
+        // English one, depending on how Windows was installed.
         line.textContent = t('Still waiting for approval. Last checked at')
-          + ' ' + new Date().toLocaleTimeString() + '.';
+          + ' ' + new Date().toLocaleTimeString('en-GB') + '.';
       }
       return;
     }

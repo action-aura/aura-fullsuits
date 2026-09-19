@@ -55,11 +55,22 @@
     });
   }
 
+  // Fixed YYYY-MM-DD HH:MM:SS in local time, never a bare toLocaleString().
+  // A bare call formats against the OPERATING SYSTEM's locale rather than the
+  // language chosen in the app, so the same relay timestamp read
+  // "9/19/2026, 3:45:00 PM" on one till and rendered in Eastern Arabic-Indic
+  // digits on another -- for a value whose whole job is letting two devices
+  // agree on when they last talked. Same reasoning, and the same format, as
+  // subsystem-retail.js's _auditTimestamp/_fixedDateTime; duplicated rather
+  // than shared because this frontend has no module system (see that file's
+  // _esc() for the established per-file-duplication convention).
   function formatWhen(value) {
     if (!value) { return '—'; }
     var d = new Date(value.indexOf('Z') === -1 ? value + 'Z' : value);
     if (isNaN(d.getTime())) { return value; }
-    return d.toLocaleString();
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+           ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
 
   function renderStatus(body) {

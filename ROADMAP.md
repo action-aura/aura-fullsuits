@@ -4705,3 +4705,222 @@ WHAT THIS DOES NOT DO, named rather than left to be found:
   disclosed to Android.
 - **Aging is shown, not drilled into.** The buckets render; there is no
   per-bucket document list on either client.
+
+## 2026-09-19 - a UI/UX and accessibility audit across both clients: shipped, and what's still open
+
+Found by running the ui-ux-pro-max skill's rubric over both clients with three
+parallel read-only auditors, then re-verified by hand against the source
+before anything was acted on. Two desktop passes (UX reflexes, then a11y
+dialog semantics), one i18n fix to the one screen a fresh install cannot
+skip, and one Android pass. Four commits, ordered below as shipped; the
+"Still open" list at the end exists because the audits found more than these
+four commits closed, and an unwritten gap is a trap while a written one is a
+decision.
+
+### Shipped
+
+- **Desktop: four UX defects, three of them in code that had shipped only
+  hours earlier the same day** (`ccab28d0`). The AR/AP payment form's submit
+  button was never disabled — a double-click (or one slow-LAN click on the
+  site-relay hub this product now ships) could post a payment twice, with no
+  idempotency key on the backend route to catch it, unlike `create_sale`/
+  `create_return`. The shared destructive-confirm dialog (`_confirm`) bound
+  bare Enter to its default button regardless of `danger` — a copy of
+  `app-shell.js`'s `SubsystemApp.confirm` that had lost the guard, so hitting
+  Enter out of habit could retire a branch or wipe JoFotara credentials with
+  no further prompt; both the Enter-ignore and the Cancel-default focus are
+  restored. `showToast` — the ONLY feedback surface in the product — carried
+  no `role`/`aria-live` at all, so every validation failure and save
+  confirmation was silent to a screen reader; now `role=alert`/
+  `aria-live=assertive` for errors and `role=status`/`aria-live=polite`
+  otherwise (deliberately different, so a success toast doesn't talk over a
+  cashier mid-read). The Android charge button quoted the raw cart total
+  instead of the redemption-adjusted figure shown one line above it. Plus two
+  AR/AP loading-state fixes matching a pattern this file had already fixed
+  once for sales history: the total tile seeded a formatted zero while
+  fetching (indistinguishable from "nobody owes me anything") and
+  `_loadPartyLedger`'s catch logged to a console no shopkeeper has open,
+  leaving the table on "Loading…" forever — both now behave like the Reports
+  KPI tiles. Mutation-proved: forcing every toast assertive turns the
+  suite red on the success case specifically. Verified: `retail_toast_tokens`
+  (14), `retail_confirm_modal` (7), `retail_design_render` (9 checks, 27
+  screens), `retail_design_contrast` (44), `retail_attribution_i18n` (25);
+  Android 449/449, catalogues at 1483 keys, exact parity.
+
+- **Desktop: dialog semantics and accessible names, second pass** (`eb6a308c`).
+  Eight icon-only buttons given accessible names — five modal closes and
+  three "Remove line" (a purchase-order/transfer/quotation line delete, which
+  needed a different label because a wrong one is worse than a missing one).
+  The audit reported ten; two already carried visible "✕ Close" text and
+  were never violations, corrected here rather than silently adjusted, "because
+  a count that drifts is how a finding stops being checkable." Three of the
+  ~35 modals that had no dialog semantics at all now carry `role="dialog"`,
+  `aria-modal="true"`, focus-on-open, Escape-to-close and focus-restore:
+  customer, sale/invoice, and the AR/AP party statement — chosen because the
+  statement hosts the money-entry form from the commit above and had the
+  least review of anything in the file. A shared `_wireModalA11y`/
+  `_closeModalOverlay` pair in `products/retail/frontend/subsystem-retail.js`
+  does the work, so the mouse ✕ tears down the Escape listener and restores
+  focus exactly as Escape would. Two test-driven corrections worth keeping:
+  the dialogs were initially given `aria-label="Invoice SALE-000012"` and the
+  existing `testInvoiceHeadingDoesNotConcatenateWordAndNumber` test correctly
+  refused it (a flat "Word Value" string can't be translated and drags an
+  Arabic page left-to-right under `dir="rtl"`), so all three now use
+  `aria-labelledby` pointing at the already-correct visible heading instead;
+  and a stub in `retail_customer_modal_xss_test.js` was extended with
+  no-op `addEventListener`/`activeElement` rather than guarding production
+  code that assumes a real DOM, for the same reason the toast suite's stub
+  was extended above. Verified: `retail_attribution_ui` (29),
+  `retail_customer_modal_xss`, `retail_confirm_modal` (7),
+  `retail_design_render` (9), `retail_design_focus` (5, 207 controls still
+  clear 44px), `retail_design_contrast` (44), `retail_surface_i18n` (7),
+  `retail_surface_dashboard` (12), `retail_list_reload_race` (34),
+  `retail_return_lookup_server_search`.
+
+- **Desktop: the first screen a fresh install shows was English-only**
+  (`7e79cb8d`). The one-time account setup screen had eight hard-coded
+  English strings — field labels plus two explanatory paragraphs — never
+  wrapped in `t()` and absent from both catalogues, so the en/ar parity test
+  had nothing to compare and reported clean. An Arabic-only shopkeeper met
+  the product in a language they might not read at the one moment they
+  cannot skip: creating the account. The required-field asterisk became
+  semantic (inputs now carry `required`; the visible asterisk is
+  `aria-hidden`, so assistive tech learns the requirement from the input
+  rather than a glyph that may not be announced). The "runs only once"
+  emphasis moved inside the translated sentence instead of splitting it
+  around a hand-placed `<strong>` — closing one instance of the concatenation
+  trap described in "Still open" below. Verified: `retail_attribution_i18n`
+  (25), `retail_toast_tokens` (14), `retail_shell_chrome` (14),
+  `retail_surface_i18n` (7), `retail_design_render` (9 checks — first-run-auth
+  is in that corpus, so the setup screen is contrast-measured). Catalogues at
+  1492 keys, exact parity, no byte-identical values.
+
+- **Android: five handheld UX defects, one reproduced on real hardware**
+  (`0f5fe102`). Both Void-payment buttons (customer AR, supplier AP) had no
+  busy guard and an empty `catch` on a call that reverses money — a
+  double-tap could fire it twice and a failure told the cashier nothing; both
+  now match the "Record a payment" pattern three lines below them exactly.
+  The IME covered the field being typed into: measured on a real 1080x2340
+  phone, not argued from source — on the LOGIN screen, the first screen every
+  session goes through, tapping the email field raised the keyboard and hid
+  the Sign In button completely, because `ModalBottomSheet`'s default insets
+  never consume the IME and nothing else in the tree did either.
+  `imePadding()` added to login, the POS cart sheet, and the AI prompt sheet.
+  Directional icons didn't mirror under RTL (`LocalLayoutDirection` is
+  genuinely overridden at the app root) — swapped to `Icons.AutoMirrored` at
+  three back arrows plus Send/AssignmentReturn/ReceiptLong; `ChevronRight` has
+  no AutoMirrored variant in this icon library at all, confirmed by listing
+  the actual class names in the material-icons AARs for this BOM rather than
+  assumed from docs, so the seven disclosure chevrons flip by hand through a
+  shared `AppLocale.isRtl` helper instead. The loyalty redemption input never
+  showed the clamp until the post-sale screen; an inline note now appears the
+  moment the request exceeds what's redeemable. Cart quantity buttons
+  announced the raw glyph to TalkBack instead of the action. Verified: 449
+  tests, 0 failures, 0 skipped, counted from the JUnit XML and re-run
+  independently after the agent reported — includes
+  `TranslationCatalogueCoverageTest` (3 new keys), `ColorTokenContractTest`
+  (no colour literal introduced), `CartTotalHonestyContractTest` (the local
+  preview still never wears the "Total" label).
+
+### Still open — named so they are decisions, not traps
+
+Each commit above already named its own leftovers; consolidated here because
+the reason to write a gap down is so nobody has to rediscover it by hand:
+
+1. **~32 desktop modals still have no dialog semantics** — no `role="dialog"`,
+   no `aria-modal`, no focus management, no Escape, mouse-only. Only
+   `_confirm()` (the original reference implementation) plus the 3 wired in
+   `eb6a308c` (customer, sale/invoice, AR/AP party statement) are correct.
+   The shared `_wireModalA11y`/`_closeModalOverlay` pair in
+   `products/retail/frontend/subsystem-retail.js` already does the work the
+   remaining ~32 need — closing this is calling it, not designing it again.
+2. ~~**~120 desktop form fields have a visible `<label>` not programmatically
+   associated with its input.**~~ **CLOSED later the same day, 2026-09-19.**
+   The estimate was close: measured, `subsystem-retail.js` held 128 `<label>`
+   elements of which only **5** were associated. 119 were given a `for=`, and
+   every one of them reused an id the sibling control ALREADY had — nothing
+   was renumbered, so no `getElementById` call anywhere changed meaning.
+   Verified independently of the crew that did it: all `for=` values distinct,
+   zero dangling, zero duplicated ids anywhere in the file.
+   The remaining 4 were correct as they stood and were deliberately left: 3
+   are wrapping labels (`<label><input> text</label>`), which the parser
+   already associates, and the 4th was a caption over a radio GROUP — not a
+   label's job at all, since pointing its `for=` at the first radio would have
+   renamed that radio "Applies To" instead of "Product", an accessible name
+   worse than none. That one became a `ret-field-label` span plus
+   `role="radiogroup" aria-labelledby`, keeping identical typography.
+   **The honest part:** not one of the eight existing suites could see any of
+   this — breaking a `for=` deliberately left every one of them green, which
+   means the fix shipped with zero coverage. `retail_form_label_association_test.js`
+   was written for that reason and is a derived rule, not a list: it demands
+   every `<label>` in `subsystem-retail.js` + `app-shell.js` either resolve a
+   `for=` to exactly one id or wrap its control, so a field added tomorrow
+   fails the day it is written. Mutation-proved in three directions (bare
+   label, dangling `for=`, lost radiogroup role); all three go red, restore
+   green. 141 labels currently pass.
+3. **Sentences assembled from two translated halves can't be ordered
+   correctly in Arabic, and a catalogue parity test structurally cannot see
+   this class of bug** — it compares key sets, never how a caller concatenates
+   them. `7e79cb8d` closed one instance (the setup screen's "runs only once"
+   emphasis); the audit did not enumerate the rest, so others are believed to
+   remain, unfound rather than fixed.
+4. ~~**`_formatClockTime` has a locale bug.**~~ **CLOSED 2026-09-19, and it
+   was not one site but six.** The diagnosis was exactly right —
+   `d.toLocaleTimeString([], …)` asks `Intl` for the RUNTIME's default, i.e.
+   the OS locale, never the in-app language. Measured for 15:45 UTC:
+   `[]` → `"03:45 PM"` (whatever the machine is), `'en-GB'` → `"15:45"`,
+   `'ar'` → `"٠٣:٤٥ م"`. So two tills in one shop rendered the same instant
+   differently depending on how each machine's Windows was installed, and an
+   Arabic-locale device emitted Eastern Arabic-Indic digits — which this same
+   file's `axisMoney()` comment already rules out for money, because Jordan's
+   shops read Western digits regardless of UI language.
+   Grepping for the pattern found **five more** call sites, all shipped:
+   the returns list, the backup list, the site-relay "last seen", the
+   licensing/approval poll clock, and — the one that matters most — the
+   **printed receipt's date fallback**, i.e. the copy the customer walks out
+   with. The formatting half of the existing `_auditTimestamp` (whose own
+   comment already argued this correctly, for audit rows only) was extracted
+   as `_fixedDateTime` and every display site now renders the same fixed,
+   sortable, catalogue-free `YYYY-MM-DD HH:MM:SS`; the two "last checked at"
+   clocks pin `'en-GB'` explicitly.
+   `retail_locale_formatting_test.js` bans the bare shape outright across all
+   13 frontend JS files (1.4 MB scanned), because a pinned locale is visible
+   in the source and a bare call is the only shape where no choice was made
+   at all. Mutation-proved in three directions, including re-introducing two
+   of the original defects; all go red, restore green.
+5. ~~**No landmark regions and no skip link on the desktop shell.**~~
+   **HALF WRONG, and the half that was right is CLOSED 2026-09-19.** The
+   landmarks were already there — `_renderShell` has emitted `<aside>`,
+   `<nav>`, `<header>` and `<main>` all along. What was missing was a way
+   PAST them, plus accessible names: the shell has TWO `<nav>` elements (the
+   sidebar and the phone tab bar) and neither was named, so assistive tech
+   announced two indistinguishable "navigation" regions. Both now carry an
+   `aria-label`, and a skip link is rendered first in the shell, off-screen
+   until focused (`translateY`, never `display:none` — that would take it out
+   of the tab order and it could never be reached to be revealed), landing
+   focus on `<main tabindex="-1">`. The count matters: `_renderShell` emits
+   one focusable per visible nav destination plus the tab bar's five, so the
+   nav was the majority of the page's tab order on every screen change.
+   `retail_design_focus_test.js`'s rendered-control census went 207 → 208,
+   which is the evidence the new control is actually in the corpus and clears
+   44px, rather than merely present in the source.
+6. **Android has no Compose UI test harness at all**, so none of the five
+   fixes in `0f5fe102` have unit coverage — `CartTotalHonestyContractTest`
+   says so in its own note. Verification there is the build, the existing
+   contract suites, and one hardware reproduction (the IME defect only) —
+   weaker than the mutation proofs the money-path work elsewhere in this
+   branch carries, and the commit says so plainly rather than dressing it up.
+   The `imePadding` fix specifically has since had that second hardware pass
+   and is **confirmed fixed on the device, 2026-09-19**: debug APK rebuilt and
+   installed on the same Mi Note 10, app driven to the login screen, email
+   field tapped, IME confirmed up (`mInputShown=true`), and the Sign In button
+   measured still fully visible above the keyboard — the login card shifted up
+   307px instead of being covered. Before the fix the same sequence hid the
+   button completely. The other two `imePadding` sites (POS cart sheet, AI
+   prompt sheet) are still compile-only; they sit behind an active licence and
+   a stocked cart, which this debug install does not have.
+7. **Client parity keeps moving, not converging.** `baad750a` (above) closed
+   the AR/AP gap onto desktop; Android still lacks the desktop's inter-branch
+   stock transfers and the other desktop-only screens CLAUDE.md lists. See
+   "What the desktop has and the phone does not" (2026-09-03) for the tracked
+   shape of that gap — unchanged by this wave.

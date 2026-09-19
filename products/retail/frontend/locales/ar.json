@@ -1490,5 +1490,8 @@
   "Your data is stored locally on this device. No cloud required.": "تُحفظ بياناتك محليًا على هذا الجهاز. لا حاجة إلى الاتصال بالسحابة.",
   "Database wiped successfully!": "تم مسح قاعدة البيانات بنجاح!",
   "Error wiping database": "حدث خطأ أثناء مسح قاعدة البيانات",
-  "required": "مطلوب"
+  "required": "مطلوب",
+  "Skip to main content": "تخطي إلى المحتوى الرئيسي",
+  "Main navigation": "التنقل الرئيسي",
+  "Quick navigation": "التنقل السريع"
 }

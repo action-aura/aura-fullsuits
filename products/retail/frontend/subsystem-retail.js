@@ -596,7 +596,14 @@ const RetailSystem = {
       .ret-modal-wide { width:680px; }
       .ret-modal h3 { color:var(--text);margin:0 0 24px;font-size:20px;font-weight:700; }
       .ret-field { margin-bottom:15px; }
-      .ret-field label { display:block;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px; }
+      /* .ret-field-label is the SAME caption typography for a caption that
+         is not a <label>. A <label> names exactly one control; a caption over
+         a radio GROUP names several, and pointing its for= at the first radio
+         would rename that radio "Applies To" instead of "Product" -- a worse
+         accessible name than none. So the group caption is a <span> carrying
+         an id, and the group div references it with role="radiogroup" +
+         aria-labelledby. Same pixels, correct semantics. */
+      .ret-field label, .ret-field .ret-field-label { display:block;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px; }
       .ret-field input,.ret-field select,.ret-field textarea {
         width:100%;background:var(--surface-sunken, #f2f5f8);border:1px solid var(--border-soft);
         border-radius:8px;color:var(--text);padding:10px 14px;font-size:14px;outline:none;
@@ -3607,11 +3614,29 @@ const RetailSystem = {
   // HH:MM in local time -- deliberately NOT "45m ago". A relative label
   // goes stale on the SCREEN the moment the cashier glances back at the
   // same tile a few minutes later; a clock time does not.
+  // EXPLICIT LOCALE, never a bare/empty one -- the same rule axisMoney() states
+  // at the top of this file, for the same reason, and this call was breaking it.
+  // `toLocaleTimeString([], ...)` does not mean "neutral": an empty locales list
+  // asks Intl for the RUNTIME's default, which is the OS/browser locale and has
+  // nothing to do with the language the shopkeeper picked inside the app.
+  // Measured on 2026-09-19 for one instant, 15:45 UTC:
+  //
+  //     []       -> "03:45 PM"      (whatever this machine happens to be)
+  //     'en-GB'  -> "15:45"
+  //     'ar'     -> "٠٣:٤٥ م"
+  //
+  // So two tills in the SAME shop rendered the same sync timestamp differently
+  // depending on how each machine's Windows was installed, and an Arabic-locale
+  // device printed Eastern Arabic-Indic digits -- which axisMoney's comment
+  // already rules out, because Jordan's shops read Western digits regardless of
+  // UI language. Pinned to en-GB for 24-hour Western digits: a till clock is a
+  // shift-log instant, and "15:45" is unambiguous where "03:45" needs a
+  // meridiem the surrounding tile has no room to show.
   _formatClockTime(isoString) {
     if (!isoString) return null;
     const d = new Date(isoString);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   },
 
   // Corrected scope for 7b (see the doc section named above): the figure is
@@ -3960,7 +3985,7 @@ const RetailSystem = {
           The cart is parked and cleared here so you can start a new sale. Resume it later from "Held Sales".
         </p>
         <div class="ret-field">
-          <label>Note (optional — e.g. "Table 4", customer name)</label>
+          <label for="hold-label">Note (optional — e.g. "Table 4", customer name)</label>
           <input id="hold-label" data-i18n-ph="Helps you find it later" placeholder="${t('Helps you find it later')}" maxlength="200" />
         </div>
         <div class="ret-modal-footer">
@@ -5569,7 +5594,7 @@ const RetailSystem = {
       </style></head><body>
       ${brandingBlock}
       <div class="rcpt-center">${rt('Receipt')} #${saleData.sale_number}</div>
-      <div class="rcpt-center">${saleData.created_at || new Date().toLocaleString()}</div>
+      <div class="rcpt-center">${saleData.created_at || this._fixedDateTime(new Date())}</div>
       ${identityBlock}
       <div class="rcpt-hr"></div>
       ${lines}
@@ -5788,33 +5813,33 @@ const RetailSystem = {
       <div class="ret-modal">
         <h3>${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} ${isEdit ? 'Edit Product' : 'Add Product'}</h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label>Product Name *</label><input id="pm-name" value="${p.name||''}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
-          <div class="ret-field"><label>SKU *</label><input id="pm-sku" value="${p.sku||''}" placeholder="SKU-001" /></div>
+          <div class="ret-field"><label for="pm-name">Product Name *</label><input id="pm-name" value="${p.name||''}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
+          <div class="ret-field"><label for="pm-sku">SKU *</label><input id="pm-sku" value="${p.sku||''}" placeholder="SKU-001" /></div>
         </div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>Barcode</label>
+          <div class="ret-field"><label for="pm-barcode">Barcode</label>
             <div style="display:flex;gap:8px">
               <input id="pm-barcode" value="${p.barcode||''}" data-i18n-ph="Type or scan…" placeholder="${t('Type or scan…')}" style="flex:1" />
               <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">${this._icon('camera', 16, '📷')} Scan</button>
             </div>
           </div>
-          <div class="ret-field"><label>${t('Category')}</label><select id="pm-cat"><option value="">${t('None')}</option>${catOpts}</select></div>
+          <div class="ret-field"><label for="pm-cat">${t('Category')}</label><select id="pm-cat"><option value="">${t('None')}</option>${catOpts}</select></div>
         </div>
         <div class="ret-field-row3">
-          <div class="ret-field"><label>Cost Price</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
-          <div class="ret-field"><label>Sell Price *</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
-          <div class="ret-field"><label>Tax Rate %</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
+          <div class="ret-field"><label for="pm-cost">Cost Price</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
+          <div class="ret-field"><label for="pm-sell">Sell Price *</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
+          <div class="ret-field"><label for="pm-tax">Tax Rate %</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
         </div>
         <div class="ret-field-row3">
-          <div class="ret-field"><label>${t('Supplier')}</label><select id="pm-sup"><option value="">${t('None')}</option>${supOpts}</select></div>
-          <div class="ret-field"><label>Unit</label>
+          <div class="ret-field"><label for="pm-sup">${t('Supplier')}</label><select id="pm-sup"><option value="">${t('None')}</option>${supOpts}</select></div>
+          <div class="ret-field"><label for="pm-unit">Unit</label>
             <select id="pm-unit">
               ${['pcs','kg','g','l','ml','box','pack','pair','m','cm'].map(u=>`<option ${p.unit===u?'selected':''}>${u}</option>`).join('')}
             </select>
           </div>
-          <div class="ret-field"><label>Reorder Level</label><input type="number" id="pm-reorder" value="${p.reorder_level||5}" min="0" /></div>
+          <div class="ret-field"><label for="pm-reorder">Reorder Level</label><input type="number" id="pm-reorder" value="${p.reorder_level||5}" min="0" /></div>
         </div>
-        ${!isEdit ? `<div class="ret-field"><label>Initial Stock</label><input type="number" id="pm-stock" value="0" min="0" /></div>` : ''}
+        ${!isEdit ? `<div class="ret-field"><label for="pm-stock">Initial Stock</label><input type="number" id="pm-stock" value="0" min="0" /></div>` : ''}
         <!-- launch-readiness "product variants, wave 1" (design section 3.1):
              a variant is created by reusing THIS SAME form -- pick a parent,
              give it a label ("Red / L"), everything else (SKU, barcode,
@@ -5822,10 +5847,10 @@ const RetailSystem = {
              product. Only non-variant products are offered as a parent
              (_eligibleParentOpts) -- one level only, no grandchildren. -->
         <div class="ret-field-row">
-          <div class="ret-field"><label>${this._esc(t('Variant of'))}</label>
+          <div class="ret-field"><label for="pm-parent">${this._esc(t('Variant of'))}</label>
             <select id="pm-parent"><option value="">${this._esc(t('None — a standalone product'))}</option>${parentOpts||''}</select>
           </div>
-          <div class="ret-field"><label>${this._esc(t('Variant label'))}</label>
+          <div class="ret-field"><label for="pm-variant-label">${this._esc(t('Variant label'))}</label>
             <input id="pm-variant-label" value="${p.variant_label||''}" placeholder="${this._esc(t('e.g. Red / L'))}" />
           </div>
         </div>
@@ -5906,9 +5931,9 @@ const RetailSystem = {
       <div class="ret-modal" style="width:380px">
         <h3>${this._icon('package', 18, '📦')} Adjust Stock — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:var(--text-primary)">${currentStock}</strong></p>
-        <div class="ret-field"><label>Adjustment Quantity (+ to add, − to deduct)</label>
+        <div class="ret-field"><label for="sa-qty">Adjustment Quantity (+ to add, − to deduct)</label>
           <input type="number" id="sa-qty" placeholder="${t('+10 or -5')}" step="1" /></div>
-        <div class="ret-field"><label>Reason</label>
+        <div class="ret-field"><label for="sa-reason">Reason</label>
           <select id="sa-reason">
             <option value="Stock received">${t('Stock received')}</option>
             <option value="Manual correction">${t('Manual correction')}</option>
@@ -6035,8 +6060,8 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
         <h3>${this._icon(isEdit ? 'square-pen' : 'tag', 18, isEdit ? '✏️' : '🏷️')} ${isEdit ? t('Edit Category') : t('Add Category')}</h3>
-        <div class="ret-field"><label>${t('Category Name')} *</label><input id="catm-name" value="${this._esc(cat.name)}" /></div>
-        <div class="ret-field"><label>${t('Description')}</label><textarea id="catm-desc" rows="3">${this._esc(cat.description)}</textarea></div>
+        <div class="ret-field"><label for="catm-name">${t('Category Name')} *</label><input id="catm-name" value="${this._esc(cat.name)}" /></div>
+        <div class="ret-field"><label for="catm-desc">${t('Description')}</label><textarea id="catm-desc" rows="3">${this._esc(cat.description)}</textarea></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cat-modal').remove()">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="catm-btn" onclick="RetailSystem._saveCategory(${isEdit ? `'${this._esc(cat.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Category')}</button>
@@ -6203,12 +6228,12 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
         <h3>${this._icon(isEdit ? 'square-pen' : 'user', 18, isEdit ? '✏️' : '👤')} ${isEdit ? 'Edit Customer' : 'Add Customer'}</h3>
-        <div class="ret-field"><label>Full Name *</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
+        <div class="ret-field"><label for="cm-name">Full Name *</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>Phone</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
-          <div class="ret-field"><label>Email</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
+          <div class="ret-field"><label for="cm-phone">Phone</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
+          <div class="ret-field"><label for="cm-email">Email</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
         </div>
-        <div class="ret-field"><label>Address</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
+        <div class="ret-field"><label for="cm-addr">Address</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cust-modal').remove()">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${isEdit?'Save':'Add Customer'}</button>
@@ -6489,12 +6514,12 @@ const RetailSystem = {
       <div class="ret-modal" style="width:480px">
         <h3>${this._icon(isEdit ? 'square-pen' : 'gift', 18, isEdit ? '✏️' : '🎁')} ${isEdit ? t('Edit Promotion') : t('Add Promotion')}</h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label>${t('Promotion Name')} *</label><input id="prm-name" value="${this._esc(promo.name||'')}" /></div>
-          <div class="ret-field"><label>${t('Discount %')} *</label><input type="number" id="prm-disc" value="${promo.discount_pct||0}" min="0" max="100" step="0.1" /></div>
+          <div class="ret-field"><label for="prm-name">${t('Promotion Name')} *</label><input id="prm-name" value="${this._esc(promo.name||'')}" /></div>
+          <div class="ret-field"><label for="prm-disc">${t('Discount %')} *</label><input type="number" id="prm-disc" value="${promo.discount_pct||0}" min="0" max="100" step="0.1" /></div>
         </div>
         <div class="ret-field">
-          <label>${t('Applies To')} *</label>
-          <div style="display:flex;gap:16px;margin-block-start:4px">
+          <span class="ret-field-label" id="prm-target-caption">${t('Applies To')} <span aria-hidden="true">*</span></span>
+          <div style="display:flex;gap:16px;margin-block-start:4px" role="radiogroup" aria-labelledby="prm-target-caption" aria-required="true">
             <label style="display:flex;align-items:center;gap:6px;font-weight:400">
               <input type="radio" name="prm-target-type" value="product" ${startsCategory?'':'checked'} onchange="RetailSystem._togglePromoTarget('product')" /> ${t('Product')}
             </label>
@@ -6504,15 +6529,15 @@ const RetailSystem = {
           </div>
         </div>
         <div class="ret-field" id="prm-target-product" style="${startsCategory?'display:none':''}">
-          <label>${t('Product')}</label><select id="prm-product"><option value="">${t('None')}</option>${prodOpts}</select>
+          <label for="prm-product">${t('Product')}</label><select id="prm-product"><option value="">${t('None')}</option>${prodOpts}</select>
         </div>
         <div class="ret-field" id="prm-target-category" style="${startsCategory?'':'display:none'}">
-          <label>${t('Category')}</label><select id="prm-category"><option value="">${t('None')}</option>${catOpts}</select>
+          <label for="prm-category">${t('Category')}</label><select id="prm-category"><option value="">${t('None')}</option>${catOpts}</select>
         </div>
-        <div class="ret-field"><label>${t('Branch')}</label><select id="prm-branch"><option value="">${t('All branches')}</option>${branchOpts}</select></div>
+        <div class="ret-field"><label for="prm-branch">${t('Branch')}</label><select id="prm-branch"><option value="">${t('All branches')}</option>${branchOpts}</select></div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>${t('Start Date')}</label><input type="date" id="prm-start" value="${promo.starts_at ? this._esc(String(promo.starts_at).slice(0,10)) : ''}" /></div>
-          <div class="ret-field"><label>${t('End Date')}</label><input type="date" id="prm-end" value="${promo.ends_at ? this._esc(String(promo.ends_at).slice(0,10)) : ''}" /></div>
+          <div class="ret-field"><label for="prm-start">${t('Start Date')}</label><input type="date" id="prm-start" value="${promo.starts_at ? this._esc(String(promo.starts_at).slice(0,10)) : ''}" /></div>
+          <div class="ret-field"><label for="prm-end">${t('End Date')}</label><input type="date" id="prm-end" value="${promo.ends_at ? this._esc(String(promo.ends_at).slice(0,10)) : ''}" /></div>
         </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-prm-modal').remove()">${t('Cancel')}</button>
@@ -6679,12 +6704,12 @@ const RetailSystem = {
           <button type="button" class="ret-tab" id="sm-tab-contacts" onclick="RetailSystem._switchSupplierTab('contacts')">${t('Contacts')}</button>
         </div>` : ''}
         <div id="sm-panel-details">
-          <div class="ret-field"><label>Company Name *</label><input id="sm-name" value="${this._esc(s.name||'')}" /></div>
+          <div class="ret-field"><label for="sm-name">Company Name *</label><input id="sm-name" value="${this._esc(s.name||'')}" /></div>
           <div class="ret-field-row">
-            <div class="ret-field"><label>Phone</label><input id="sm-phone" value="${this._esc(s.phone||'')}" /></div>
-            <div class="ret-field"><label>Email</label><input id="sm-email" value="${this._esc(s.email||'')}" /></div>
+            <div class="ret-field"><label for="sm-phone">Phone</label><input id="sm-phone" value="${this._esc(s.phone||'')}" /></div>
+            <div class="ret-field"><label for="sm-email">Email</label><input id="sm-email" value="${this._esc(s.email||'')}" /></div>
           </div>
-          <div class="ret-field"><label>Address</label><input id="sm-addr" value="${this._esc(s.address||'')}" /></div>
+          <div class="ret-field"><label for="sm-addr">Address</label><input id="sm-addr" value="${this._esc(s.address||'')}" /></div>
           <div class="ret-modal-footer">
             <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">Cancel</button>
             <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id ? `'${this._esc(s.id)}'` : 'null'})">${isEdit?'Save':'Add Supplier'}</button>
@@ -6777,8 +6802,8 @@ const RetailSystem = {
       <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-hairline)">
         <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">${isEdit ? t('Edit Contact') : t('Add Contact')}</div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>${t('Name')} *</label><input id="scf-name" value="${this._esc(c.name||'')}" /></div>
-          <div class="ret-field"><label>${t('Role')}</label>
+          <div class="ret-field"><label for="scf-name">${t('Name')} *</label><input id="scf-name" value="${this._esc(c.name||'')}" /></div>
+          <div class="ret-field"><label for="scf-role">${t('Role')}</label>
             <select id="scf-role">
               <option value="orders" ${!c.role||c.role==='orders'?'selected':''}>${t('Orders')}</option>
               <option value="accounts" ${c.role==='accounts'?'selected':''}>${t('Accounts')}</option>
@@ -6787,12 +6812,12 @@ const RetailSystem = {
           </div>
         </div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>${t('Email')}</label><input id="scf-email" value="${this._esc(c.email||'')}" /></div>
-          <div class="ret-field"><label>${t('Phone')}</label><input id="scf-phone" value="${this._esc(c.phone||'')}" /></div>
+          <div class="ret-field"><label for="scf-email">${t('Email')}</label><input id="scf-email" value="${this._esc(c.email||'')}" /></div>
+          <div class="ret-field"><label for="scf-phone">${t('Phone')}</label><input id="scf-phone" value="${this._esc(c.phone||'')}" /></div>
         </div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>${t('WhatsApp')}</label><input id="scf-whatsapp" value="${this._esc(c.whatsapp||'')}" placeholder="+962791234567" /></div>
-          <div class="ret-field"><label>${t('Preferred Channel')}</label>
+          <div class="ret-field"><label for="scf-whatsapp">${t('WhatsApp')}</label><input id="scf-whatsapp" value="${this._esc(c.whatsapp||'')}" placeholder="+962791234567" /></div>
+          <div class="ret-field"><label for="scf-channel">${t('Preferred Channel')}</label>
             <select id="scf-channel">
               <option value="whatsapp" ${(!c.channel_preference||c.channel_preference==='whatsapp')?'selected':''}>${t('WhatsApp')}</option>
               <option value="email" ${c.channel_preference==='email'?'selected':''}>${t('Email')}</option>
@@ -7005,11 +7030,11 @@ const RetailSystem = {
           <div id="po-items"></div>
           <div style="margin:12px 0">
             <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
-              <div class="ret-field" style="margin:0"><label>Product</label>
+              <div class="ret-field" style="margin:0"><label for="po-item-prod">Product</label>
                 <select id="po-item-prod"><option value="">${t('Select product…')}</option>${prodOpts}</select></div>
-              <div class="ret-field" style="margin:0"><label>Qty</label>
+              <div class="ret-field" style="margin:0"><label for="po-item-qty">Qty</label>
                 <input type="number" id="po-item-qty" value="1" min="1" /></div>
-              <div class="ret-field" style="margin:0"><label>Unit Cost</label>
+              <div class="ret-field" style="margin:0"><label for="po-item-cost">Unit Cost</label>
                 <input type="number" id="po-item-cost" step="0.01" min="0" /></div>
               <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addPOItem()">+ Add</button>
             </div>
@@ -7413,18 +7438,18 @@ const RetailSystem = {
       <div class="ret-modal ret-modal-wide">
         <h3>${this._icon('repeat', 18, '🔁')} ${t('New Transfer')}</h3>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
-          <div class="ret-field" style="margin:0"><label>${t('From')} *</label>
+          <div class="ret-field" style="margin:0"><label for="tr-source">${t('From')} *</label>
             <select id="tr-source"><option value="">${t('Select branch…')}</option>${branchOpts}</select></div>
-          <div class="ret-field" style="margin:0"><label>${t('To')} *</label>
+          <div class="ret-field" style="margin:0"><label for="tr-dest">${t('To')} *</label>
             <select id="tr-dest"><option value="">${t('Select branch…')}</option>${branchOpts}</select></div>
         </div>
         <div style="margin:16px 0 8px;color:var(--text-primary);font-weight:600">${t('Items')}</div>
         <div id="tr-items"></div>
         <div style="margin:12px 0">
           <div class="ret-field-row" style="grid-template-columns:3fr 1fr auto;gap:8px;align-items:end">
-            <div class="ret-field" style="margin:0"><label>${t('Product')}</label>
+            <div class="ret-field" style="margin:0"><label for="tr-item-prod">${t('Product')}</label>
               <select id="tr-item-prod"><option value="">${t('Select product…')}</option>${prodOpts}</select></div>
-            <div class="ret-field" style="margin:0"><label>${t('Qty')}</label>
+            <div class="ret-field" style="margin:0"><label for="tr-item-qty">${t('Qty')}</label>
               <input type="number" id="tr-item-qty" value="1" min="1" /></div>
             <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addTransferItem()">+ ${t('Add')}</button>
           </div>
@@ -7919,27 +7944,27 @@ const RetailSystem = {
       <div class="ret-modal ret-modal-wide">
         <h3>${this._icon('file-text', 18, '📄')} ${editingId ? t('Edit Quotation') : t('New Quotation')}</h3>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
-          <div class="ret-field" style="margin:0"><label>${t('Document Type')}</label>
+          <div class="ret-field" style="margin:0"><label for="qt-doc-kind">${t('Document Type')}</label>
             <select id="qt-doc-kind" ${editingId ? 'disabled' : ''}>
               <option value="quotation" ${!existing || existing.doc_kind === 'quotation' ? 'selected' : ''}>${t('Quotation')}</option>
               <option value="order" ${existing && existing.doc_kind === 'order' ? 'selected' : ''}>${t('Sales Order')}</option>
             </select></div>
-          <div class="ret-field" style="margin:0"><label>${t('Customer')}</label>
+          <div class="ret-field" style="margin:0"><label for="qt-customer">${t('Customer')}</label>
             <select id="qt-customer">${custOpts}</select></div>
-          <div class="ret-field" style="margin:0"><label>${t('Valid Until')}</label>
+          <div class="ret-field" style="margin:0"><label for="qt-valid-until">${t('Valid Until')}</label>
             <input type="date" id="qt-valid-until" value="${existing && existing.valid_until ? this._esc(existing.valid_until) : ''}" /></div>
         </div>
-        <div class="ret-field" style="margin:10px 0 0"><label>${t('Notes')}</label>
+        <div class="ret-field" style="margin:10px 0 0"><label for="qt-notes">${t('Notes')}</label>
           <textarea id="qt-notes" rows="2">${existing ? this._esc(existing.notes || '') : ''}</textarea></div>
         <div style="margin:16px 0 8px;color:var(--text-primary);font-weight:600">${t('Items')}</div>
         <div id="qt-items"></div>
         <div style="margin:12px 0">
           <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
-            <div class="ret-field" style="margin:0"><label>${t('Product')}</label>
+            <div class="ret-field" style="margin:0"><label for="qt-item-prod">${t('Product')}</label>
               <select id="qt-item-prod" onchange="RetailSystem._showQuotationCommittedDemand()"><option value="">${t('Select product…')}</option>${prodOpts}</select></div>
-            <div class="ret-field" style="margin:0"><label>${t('Qty')}</label>
+            <div class="ret-field" style="margin:0"><label for="qt-item-qty">${t('Qty')}</label>
               <input type="number" id="qt-item-qty" value="1" min="0.001" step="any" /></div>
-            <div class="ret-field" style="margin:0"><label>${t('Discount %')}</label>
+            <div class="ret-field" style="margin:0"><label for="qt-item-discount">${t('Discount %')}</label>
               <input type="number" id="qt-item-discount" value="0" min="0" max="100" /></div>
             <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addQuotationItem()">+ ${t('Add')}</button>
           </div>
@@ -8412,9 +8437,9 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
         <h3>${this._icon(isEdit ? 'square-pen' : 'landmark', 18, isEdit ? '✏️' : '🏦')} ${isEdit ? t('Edit Branch') : t('Add Branch')}</h3>
-        <div class="ret-field"><label>${t('Branch Name')} *</label><input id="brm-name" value="${isEdit ? this._esc(branch.name) : ''}" /></div>
-        <div class="ret-field"><label>${t('Address')}</label><input id="brm-address" value="${isEdit ? this._esc(branch.address) : ''}" /></div>
-        <div class="ret-field"><label>${t('Phone')}</label><input id="brm-phone" value="${isEdit ? this._esc(branch.phone) : ''}" /></div>
+        <div class="ret-field"><label for="brm-name">${t('Branch Name')} *</label><input id="brm-name" value="${isEdit ? this._esc(branch.name) : ''}" /></div>
+        <div class="ret-field"><label for="brm-address">${t('Address')}</label><input id="brm-address" value="${isEdit ? this._esc(branch.address) : ''}" /></div>
+        <div class="ret-field"><label for="brm-phone">${t('Phone')}</label><input id="brm-phone" value="${isEdit ? this._esc(branch.phone) : ''}" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-branch-modal').remove()">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="brm-btn" onclick="RetailSystem._saveBranch(${isEdit ? `'${this._esc(branch.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Branch')}</button>
@@ -8474,22 +8499,22 @@ const RetailSystem = {
           ${t('Shown on printed receipts and the app sidebar. Configure this once for whatever shop, co-op or foundation is running this install.')}
         </p>
         <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-          <div class="ret-field" style="margin:0"><label>${t('Business Name')}</label>
+          <div class="ret-field" style="margin:0"><label for="brand-name">${t('Business Name')}</label>
             <input type="text" id="brand-name" maxlength="120" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Tax / Registration Number')}</label>
+          <div class="ret-field" style="margin:0"><label for="brand-tax">${t('Tax / Registration Number')}</label>
             <input type="text" id="brand-tax" maxlength="60" /></div>
         </div>
         <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px">
-          <div class="ret-field" style="margin:0"><label>${t('Address')}</label>
+          <div class="ret-field" style="margin:0"><label for="brand-address">${t('Address')}</label>
             <input type="text" id="brand-address" maxlength="200" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Phone')}</label>
+          <div class="ret-field" style="margin:0"><label for="brand-phone">${t('Phone')}</label>
             <input type="text" id="brand-phone" maxlength="40" /></div>
         </div>
-        <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Header')}</label>
+        <div class="ret-field" style="margin-top:12px"><label for="brand-header">${t('Receipt Header')}</label>
           <input type="text" id="brand-header" maxlength="120" /></div>
-        <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Footer')}</label>
+        <div class="ret-field" style="margin-top:12px"><label for="brand-footer">${t('Receipt Footer')}</label>
           <input type="text" id="brand-footer" maxlength="120" /></div>
-        <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Language')}</label>
+        <div class="ret-field" style="margin-top:12px"><label for="brand-receipt-lang">${t('Receipt Language')}</label>
           <select id="brand-receipt-lang">
             <option value="auto">${t('Automatic (follows till language)')}</option>
             <option value="en">${t('English')}</option>
@@ -8506,7 +8531,7 @@ const RetailSystem = {
           <label for="brand-show-customer" style="margin:0;text-transform:none;font-size:14px;color:var(--text)">${t('Show customer name on receipt')}</label>
         </div>
         <div class="ret-field" style="margin-top:12px">
-          <label>${t('Logo')}</label>
+          <label for="brand-logo-file">${t('Logo')}</label>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <img id="brand-logo-preview" alt="" style="display:none;max-height:48px;max-width:160px;border-radius:6px;border:1px solid var(--border-default)" />
             <input type="file" id="brand-logo-file" accept="image/png,image/jpeg,image/gif,image/webp" />
@@ -8531,7 +8556,7 @@ const RetailSystem = {
         <div id="device-branch-unpinned-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
           ${t('No branch is pinned to this device. Fine for a single-branch shop -- but on a chain, every sale here files under the company\'s first branch until you pin one.')}
         </div>
-        <div class="ret-field" style="margin:0"><label>${t('Branch')}</label>
+        <div class="ret-field" style="margin:0"><label for="device-branch-select">${t('Branch')}</label>
           <select id="device-branch-select"><option value="">${t('Unpinned')}</option></select>
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:12px" onclick="RetailSystem._saveDeviceBranch()">${t('Save')}</button>
@@ -8548,7 +8573,7 @@ const RetailSystem = {
           ${t('No timezone is declared. Until you set one, each device files sales on its own clock -- so two tills whose clocks differ can put the same evening on different days.')}
         </div>
         <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-          <div class="ret-field" style="margin:0"><label>${t('Timezone')}</label>
+          <div class="ret-field" style="margin:0"><label for="business-day-tz">${t('Timezone')}</label>
             <input type="text" id="business-day-tz" dir="ltr" list="business-day-tz-list" maxlength="64" placeholder="Asia/Amman" />
             <datalist id="business-day-tz-list">
               <option value="Asia/Amman"></option>
@@ -8565,7 +8590,7 @@ const RetailSystem = {
               <option value="UTC"></option>
             </datalist>
           </div>
-          <div class="ret-field" style="margin:0"><label>${t('Day starts at')}</label>
+          <div class="ret-field" style="margin:0"><label for="business-day-hour">${t('Day starts at')}</label>
             <select id="business-day-hour" dir="ltr"></select></div>
         </div>
         <p style="color:var(--text-muted);font-size:11px;margin:8px 0 0">
@@ -8599,22 +8624,22 @@ const RetailSystem = {
         </p>
         <h4 style="color:var(--text-primary);margin:20px 0 10px;font-size:13px">${t('New Book')}</h4>
         <div class="ret-field-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
-          <div class="ret-field" style="margin:0"><label>${t('Document Type')}</label>
+          <div class="ret-field" style="margin:0"><label for="doc-series-new-type">${t('Document Type')}</label>
             <select id="doc-series-new-type">
               <option value="sale">${t('Sales')}</option>
               <option value="return">${t('Returns')}</option>
               <option value="po">${t('Purchase Orders')}</option>
             </select>
           </div>
-          <div class="ret-field" style="margin:0"><label>${t('Code')}</label>
+          <div class="ret-field" style="margin:0"><label for="doc-series-new-code">${t('Code')}</label>
             <input id="doc-series-new-code" dir="ltr" maxlength="12" placeholder="A" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Label')}</label>
+          <div class="ret-field" style="margin:0"><label for="doc-series-new-label">${t('Label')}</label>
             <input id="doc-series-new-label" maxlength="60" placeholder="${t('Main Book')}" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Branch (optional)')}</label>
+          <div class="ret-field" style="margin:0"><label for="doc-series-new-branch">${t('Branch (optional)')}</label>
             <select id="doc-series-new-branch"><option value="">${t('Any branch')}</option></select></div>
-          <div class="ret-field" style="margin:0"><label>${t('Digits')}</label>
+          <div class="ret-field" style="margin:0"><label for="doc-series-new-pad">${t('Digits')}</label>
             <input id="doc-series-new-pad" type="number" dir="ltr" min="3" max="10" value="6" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Starts at (the number the FIRST document will carry)')}</label>
+          <div class="ret-field" style="margin:0"><label for="doc-series-new-start">${t('Starts at (the number the FIRST document will carry)')}</label>
             <input id="doc-series-new-start" type="number" dir="ltr" min="1" value="1" /></div>
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:14px" onclick="RetailSystem._createDocSeries()">${t('Create Book')}</button>
@@ -9086,7 +9111,7 @@ const RetailSystem = {
         <td style="font-weight:600">${this._esc(r.product_name)}<div style="font-size:11px;color:var(--text-muted)">${this._esc(r.sku||'')}</div></td>
         <td>${r.branch_name ? this._esc(r.branch_name) : '—'}</td>
         <td style="color:var(--text-muted);max-width:320px">${this._esc(r.draft_message||'')}</td>
-        <td style="color:var(--text-muted)">${r.created_at ? this._bdi(new Date(r.created_at).toLocaleString()) : '—'}</td>
+        <td style="color:var(--text-muted)">${r.created_at ? this._bdi(this._fixedDateTime(new Date(r.created_at))) : '—'}</td>
         <td>
           <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._acceptReorderRequest('${this._esc(r.id)}')">${t('Accept')}</button>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._declineReorderRequest('${this._esc(r.id)}')">${t('Decline')}</button>
@@ -9187,9 +9212,9 @@ const RetailSystem = {
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Recipients')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('Where automatic emails go. Leave blank to skip that kind of email entirely.')}</p>
         <div class="ret-field-row">
-          <div class="ret-field" style="margin:0"><label>${t('Low-Stock Alert Recipient')}</label>
+          <div class="ret-field" style="margin:0"><label for="email-low-stock">${t('Low-Stock Alert Recipient')}</label>
             <input type="email" id="email-low-stock" placeholder="owner@example.com" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Reports Recipient')}</label>
+          <div class="ret-field" style="margin:0"><label for="email-reports">${t('Reports Recipient')}</label>
             <input type="email" id="email-reports" placeholder="owner@example.com" /></div>
         </div>
       </div>
@@ -9199,14 +9224,14 @@ const RetailSystem = {
           ${t('Queues a sales summary email now. It leaves with the next outbox run -- or press Send Now below to push it straight away. It goes to the Reports Recipient above unless you enter a different address here.')}
         </p>
         <div class="ret-field-row">
-          <div class="ret-field" style="margin:0"><label>${t('Period')}</label>
+          <div class="ret-field" style="margin:0"><label for="email-report-days">${t('Period')}</label>
             <select id="email-report-days">
               <option value="1">${t('Last 24 hours')}</option>
               <option value="7">${t('Last 7 days')}</option>
               <option value="30" selected>${t('Last 30 days')}</option>
               <option value="90">${t('Last 90 days')}</option>
             </select></div>
-          <div class="ret-field" style="margin:0"><label>${t('Send To (optional)')}</label>
+          <div class="ret-field" style="margin:0"><label for="email-report-recipient">${t('Send To (optional)')}</label>
             <input type="email" id="email-report-recipient" dir="ltr" placeholder="owner@example.com" /></div>
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:12px" id="email-send-report-btn" onclick="RetailSystem._sendReportEmail()">${t('Queue Report Email')}</button>
@@ -9215,9 +9240,9 @@ const RetailSystem = {
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Advanced (Retry Settings)')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('For whoever installed this system. A shopkeeper does not need to change these.')}</p>
         <div class="ret-field-row">
-          <div class="ret-field" style="margin:0"><label>${t('Max Attempts')}</label>
+          <div class="ret-field" style="margin:0"><label for="email-max-attempts">${t('Max Attempts')}</label>
             <input type="number" min="1" id="email-max-attempts" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Retry Interval (Seconds)')}</label>
+          <div class="ret-field" style="margin:0"><label for="email-submit-interval">${t('Retry Interval (Seconds)')}</label>
             <input type="number" min="1" id="email-submit-interval" /></div>
         </div>
       </div>
@@ -9451,13 +9476,13 @@ const RetailSystem = {
     c.innerHTML = `
       <div class="sub-chart-card">
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr 1.3fr 1.3fr auto;gap:10px;align-items:end;margin-bottom:18px">
-          <div class="ret-field" style="margin:0"><label>${t('From')}</label>
+          <div class="ret-field" style="margin:0"><label for="aud-from">${t('From')}</label>
             <input type="date" id="aud-from" onchange="RetailSystem._applyAuditFilters()" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('To')}</label>
+          <div class="ret-field" style="margin:0"><label for="aud-to">${t('To')}</label>
             <input type="date" id="aud-to" onchange="RetailSystem._applyAuditFilters()" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Action')}</label>
+          <div class="ret-field" style="margin:0"><label for="aud-action">${t('Action')}</label>
             <select id="aud-action" onchange="RetailSystem._applyAuditFilters()"><option value="">${t('All actions')}</option></select></div>
-          <div class="ret-field" style="margin:0"><label>${t('Entity')}</label>
+          <div class="ret-field" style="margin:0"><label for="aud-entity">${t('Entity')}</label>
             <select id="aud-entity" onchange="RetailSystem._applyAuditFilters()"><option value="">${t('All entities')}</option></select></div>
           <button class="ret-btn ret-btn-ghost" style="height:38px" onclick="RetailSystem._clearAuditFilters()">${t('Clear')}</button>
         </div>
@@ -9663,6 +9688,31 @@ const RetailSystem = {
     if (!ts) return '—';
     const d = new Date(String(ts).replace(' ', 'T') + 'Z');
     if (isNaN(d.getTime())) return this._esc(ts);
+    return this._fixedDateTime(d);
+  },
+
+  // The formatting half of _auditTimestamp, extracted 2026-09-19 so the OTHER
+  // date columns can share the reasoning above instead of each re-deriving it
+  // -- and getting it wrong, which is what had happened. Four more sites were
+  // still calling a bare `toLocaleString()`: the returns list, the backup
+  // list, the printed-receipt date fallback and the test print. Measured for
+  // one instant, 15:45 UTC on 2026-09-19:
+  //
+  //     bare     -> "9/19/2026, 3:45:00 PM"   (this machine's Windows locale)
+  //     'ar'     -> Eastern Arabic-Indic digits, "م" for PM
+  //
+  // The receipt one matters most: it is the timestamp a customer keeps, and
+  // an Arabic-locale till would have printed it in digits the shop's own
+  // price labels never use -- the exact thing axisMoney()'s comment at the top
+  // of this file rules out for money. Every one of them now renders the same
+  // fixed, sortable, catalogue-free `YYYY-MM-DD HH:MM:SS` in local time.
+  //
+  // Takes a Date, not a string, because two of those callers hold an epoch in
+  // SECONDS (the backup list) or a live `new Date()` (the receipt fallback)
+  // and neither can go through _auditTimestamp's parse, which appends a 'Z'
+  // to a stored UTC string.
+  _fixedDateTime(d) {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '—';
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
            `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
@@ -9737,19 +9787,19 @@ const RetailSystem = {
       <div class="ret-modal ret-modal-wide">
         <h3>${this._icon('undo-2', 18, '↩️')} Process Return</h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label>Sale / Receipt Number *</label>
+          <div class="ret-field"><label for="ret-sale-search">Sale / Receipt Number *</label>
             <div style="display:flex;gap:8px">
               <input id="ret-sale-search" placeholder="${t('e.g.')} S-1234567890" style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none" />
               <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._findSaleForReturn()">Lookup</button>
             </div>
           </div>
-          <div class="ret-field"><label>Refund Method</label>
+          <div class="ret-field"><label for="ret-refund-method">Refund Method</label>
             <select id="ret-refund-method">
               <option value="cash">${t('Cash')}</option><option value="card">${t('Card')}</option>
             </select>
           </div>
         </div>
-        <div class="ret-field"><label>Return Reason</label>
+        <div class="ret-field"><label for="ret-reason">Return Reason</label>
           <select id="ret-reason">
             <option value="Customer return">${t('Customer return')}</option><option value="Defective / damaged">${t('Defective / damaged')}</option>
             <option value="Wrong item">${t('Wrong item')}</option><option value="Not as described">${t('Not as described')}</option><option value="Changed mind">${t('Changed mind')}</option>
@@ -10908,9 +10958,9 @@ const RetailSystem = {
           ${t('The recorded balance is')} <strong style="color:var(--text-primary)">${this._esc(this._signedQty(row.observed_quantity_on_hand))}</strong>.
           ${t('Count the shelf if you can, or leave the count blank for a backorder that stays negative until the delivery lands.')}
         </p>
-        <div class="ret-field"><label>${t('Counted Quantity (optional)')}</label>
+        <div class="ret-field"><label for="exq-resolve-qty">${t('Counted Quantity (optional)')}</label>
           <input type="number" id="exq-resolve-qty" step="any" placeholder="${t('Leave blank if not counted')}" /></div>
-        <div class="ret-field"><label>${t('Note')} *</label>
+        <div class="ret-field"><label for="exq-resolve-note">${t('Note')} *</label>
           <textarea id="exq-resolve-note" rows="3" placeholder="${t('Required -- explain the decision')}"></textarea>
           <p style="color:var(--text-faint);font-size:11.5px;margin:4px 0 0">${t('A note is required. The server refuses to resolve without one.')}</p>
         </div>
@@ -12238,9 +12288,9 @@ const RetailSystem = {
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Export Data (CSV)')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('Download a spreadsheet of this shop\'s records for the date range below, for accounting or an outside system.')}</p>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-bottom:16px;max-width:420px">
-          <div class="ret-field" style="margin:0"><label>${t('From')}</label>
+          <div class="ret-field" style="margin:0"><label for="bex-date-from">${t('From')}</label>
             <input type="date" id="bex-date-from" value="${toISO(monthAgo)}" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('To')}</label>
+          <div class="ret-field" style="margin:0"><label for="bex-date-to">${t('To')}</label>
             <input type="date" id="bex-date-to" value="${toISO(today)}" /></div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -12288,7 +12338,7 @@ const RetailSystem = {
       tbody.innerHTML = list.map(b => `<tr>
         <td style="font-weight:600;word-break:break-all">${this._esc(b.filename)}</td>
         <td style="color:var(--text-muted)">${this._fmtBytes(b.size)}</td>
-        <td style="color:var(--text-muted)">${b.modified_at ? this._bdi(new Date(b.modified_at * 1000).toLocaleString()) : '—'}</td>
+        <td style="color:var(--text-muted)">${b.modified_at ? this._bdi(this._fixedDateTime(new Date(b.modified_at * 1000))) : '—'}</td>
         <td style="white-space:nowrap">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._downloadUrl('/api/backup/download/${encodeURIComponent(b.filename)}')">${t('Download')}</button>
           <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openRestoreConfirm('${this._esc(b.filename).replace(/'/g,"\\'")}')">${t('Restore')}</button>
@@ -12491,7 +12541,7 @@ const RetailSystem = {
           <div class="sub-chart-title" style="margin-bottom:14px">Configuration</div>
 
           <div class="ret-field">
-            <label>Scanner Enabled</label>
+            <label for="sc-enabled">Scanner Enabled</label>
             <select id="sc-enabled">
               <option value="true"  ${cfg.enabled ? 'selected' : ''}>${t('On — listen for scans')}</option>
               <option value="false" ${!cfg.enabled ? 'selected' : ''}>${t('Off — manual entry only')}</option>
@@ -12499,7 +12549,7 @@ const RetailSystem = {
           </div>
 
           <div class="ret-field">
-            <label>Input Mode</label>
+            <label for="sc-mode">Input Mode</label>
             <select id="sc-mode">
               <option value="auto"     ${cfg.inputMode === 'auto' ? 'selected' : ''}>${t('Auto Detect (recommended)')}</option>
               <option value="keyboard" ${cfg.inputMode === 'keyboard' ? 'selected' : ''}>${t('Keyboard HID')}</option>
@@ -12509,22 +12559,22 @@ const RetailSystem = {
 
           <div class="ret-field-row">
             <div class="ret-field">
-              <label>Barcode Timeout (ms)</label>
+              <label for="sc-timeout">Barcode Timeout (ms)</label>
               <input type="number" id="sc-timeout" value="${cfg.timeoutMs}" min="10" max="500" step="5" />
             </div>
             <div class="ret-field">
-              <label>Min Length</label>
+              <label for="sc-minlen">Min Length</label>
               <input type="number" id="sc-minlen" value="${cfg.minLength}" min="1" max="64" />
             </div>
           </div>
 
           <div class="ret-field-row">
-            <div class="ret-field"><label>Prefix (stripped)</label><input id="sc-prefix" value="${cfg.prefix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
-            <div class="ret-field"><label>Suffix (stripped)</label><input id="sc-suffix" value="${cfg.suffix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
+            <div class="ret-field"><label for="sc-prefix">Prefix (stripped)</label><input id="sc-prefix" value="${cfg.prefix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
+            <div class="ret-field"><label for="sc-suffix">Suffix (stripped)</label><input id="sc-suffix" value="${cfg.suffix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
           </div>
 
           <div class="ret-field">
-            <label>Success Sound</label>
+            <label for="sc-sound">Success Sound</label>
             <select id="sc-sound">
               <option value="true"  ${cfg.sound ? 'selected' : ''}>${t('On — beep on each scan')}</option>
               <option value="false" ${!cfg.sound ? 'selected' : ''}>${t('Off')}</option>
@@ -12541,7 +12591,7 @@ const RetailSystem = {
             printer. There is no separate USB/Bluetooth thermal protocol implemented.
           </p>
           <div class="ret-field">
-            <label>Paper Width</label>
+            <label for="pr-width">Paper Width</label>
             <select id="pr-width">
               <option value="80mm" ${(this._printerCfg().paperWidth !== '58mm') ? 'selected' : ''}>${t('80mm (standard)')}</option>
               <option value="58mm" ${(this._printerCfg().paperWidth === '58mm') ? 'selected' : ''}>${t('58mm (compact)')}</option>
@@ -12568,7 +12618,7 @@ const RetailSystem = {
                remain administrator-only Settings actions. -->
           <div style="border-top:1px solid var(--border-default);margin-top:16px;padding-top:14px">
             <div class="ret-field">
-              <label>${this._esc(t('Printer Device'))}</label>
+              <label for="pr-device">${this._esc(t('Printer Device'))}</label>
               <select id="pr-device">
                 <option value="">${this._esc(t('Not set (test to a file)'))}</option>
               </select>
@@ -12586,11 +12636,11 @@ const RetailSystem = {
                  any platform. -->
             <div class="ret-field-row" style="margin-top:10px">
               <div class="ret-field">
-                <label>${this._esc(t('Network Printer Host'))}</label>
+                <label for="pr-host">${this._esc(t('Network Printer Host'))}</label>
                 <input type="text" id="pr-host" placeholder="192.168.1.50" value="${this._esc(this._printerCfg().host || '')}" />
               </div>
               <div class="ret-field">
-                <label>${this._esc(t('Network Printer Port'))}</label>
+                <label for="pr-port">${this._esc(t('Network Printer Port'))}</label>
                 <input type="number" id="pr-port" min="1" max="65535" value="${this._esc(String(this._printerCfg().port || 9100))}" />
               </div>
             </div>
@@ -12728,7 +12778,7 @@ const RetailSystem = {
   _testPrint() {
     this._printReceipt({
       sale_number: 'TEST-0000',
-      created_at: new Date().toLocaleString(),
+      created_at: this._fixedDateTime(new Date()),
       lines: [{ name: 'Test Product (sample)', quantity: 1, line_total: 10 }],
       subtotal: 10, discount_amount: 0, tax_amount: 0, total: 10, amount_paid: 10, change: 0,
     });
@@ -13052,10 +13102,10 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal">
         <h3>${t('Bounce')}</h3>
-        <div class="ret-field"><label>${t('Reason')} *</label>
+        <div class="ret-field"><label for="bounce-reason">${t('Reason')} *</label>
           <input type="text" id="bounce-reason" placeholder="${this._esc(t('Reason for the bounce, e.g. insufficient funds'))}" /></div>
-        <div class="ret-field"><label>${t('Bank Reference')}</label><input type="text" id="bounce-ref" /></div>
-        <div class="ret-field"><label>${t('Occurred On')}</label><input type="date" id="bounce-date" /></div>
+        <div class="ret-field"><label for="bounce-ref">${t('Bank Reference')}</label><input type="text" id="bounce-ref" /></div>
+        <div class="ret-field"><label for="bounce-date">${t('Occurred On')}</label><input type="date" id="bounce-date" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-danger" onclick="RetailSystem._submitBounceCheque('${this._esc(id)}')">${t('Bounce')}</button>
@@ -13095,12 +13145,12 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal">
         <h3>${t('Endorse')}</h3>
-        <div class="ret-field"><label>${t('Endorse To')} *</label>
+        <div class="ret-field"><label for="endorse-target">${t('Endorse To')} *</label>
           <select id="endorse-target"><option value="">${t('Select party…')}</option>
             <optgroup label="${this._esc(t('Supplier'))}">${supOpts}</optgroup>
             <optgroup label="${this._esc(t('Customer'))}">${custOpts}</optgroup>
           </select></div>
-        <div class="ret-field"><label>${t('Occurred On')}</label><input type="date" id="endorse-date" /></div>
+        <div class="ret-field"><label for="endorse-date">${t('Occurred On')}</label><input type="date" id="endorse-date" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitEndorseCheque('${this._esc(id)}')">${t('Endorse')}</button>
@@ -13133,25 +13183,25 @@ const RetailSystem = {
       <div class="ret-modal ret-modal-wide">
         <h3>${this._icon('receipt', 18, '🧾')} ${t('Record a Cheque')}</h3>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
-          <div class="ret-field" style="margin:0"><label>${t(direction === 'in' ? 'Customer' : 'Supplier')} *</label>
+          <div class="ret-field" style="margin:0"><label for="chq-party">${t(direction === 'in' ? 'Customer' : 'Supplier')} *</label>
             <select id="chq-party"><option value="">${t('Select party…')}</option>${partyOpts}</select></div>
-          <div class="ret-field" style="margin:0"><label>${t('Amount')} *</label>
+          <div class="ret-field" style="margin:0"><label for="chq-amount">${t('Amount')} *</label>
             <input type="number" id="chq-amount" min="0.001" step="0.001" /></div>
         </div>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
-          <div class="ret-field" style="margin:0"><label>${t('Cheque Number')} *</label><input type="text" id="chq-number" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Due Date')} *</label><input type="date" id="chq-due" /></div>
+          <div class="ret-field" style="margin:0"><label for="chq-number">${t('Cheque Number')} *</label><input type="text" id="chq-number" /></div>
+          <div class="ret-field" style="margin:0"><label for="chq-due">${t('Due Date')} *</label><input type="date" id="chq-due" /></div>
         </div>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
-          <div class="ret-field" style="margin:0"><label>${t('Issue Date')}</label><input type="date" id="chq-issue" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Bank Name')}</label><input type="text" id="chq-bank" /></div>
+          <div class="ret-field" style="margin:0"><label for="chq-issue">${t('Issue Date')}</label><input type="date" id="chq-issue" /></div>
+          <div class="ret-field" style="margin:0"><label for="chq-bank">${t('Bank Name')}</label><input type="text" id="chq-bank" /></div>
         </div>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
-          <div class="ret-field" style="margin:0"><label>${t('Bank Branch')}</label><input type="text" id="chq-bank-branch" /></div>
-          <div class="ret-field" style="margin:0"><label>${t('Drawer Name')}</label><input type="text" id="chq-drawer" /></div>
+          <div class="ret-field" style="margin:0"><label for="chq-bank-branch">${t('Bank Branch')}</label><input type="text" id="chq-bank-branch" /></div>
+          <div class="ret-field" style="margin:0"><label for="chq-drawer">${t('Drawer Name')}</label><input type="text" id="chq-drawer" /></div>
         </div>
-        <div class="ret-field"><label>${t('Account Number')}</label><input type="text" id="chq-account" /></div>
-        <div class="ret-field"><label>${t('Notes')}</label><input type="text" id="chq-notes" /></div>
+        <div class="ret-field"><label for="chq-account">${t('Account Number')}</label><input type="text" id="chq-account" /></div>
+        <div class="ret-field"><label for="chq-notes">${t('Notes')}</label><input type="text" id="chq-notes" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitRecordCheque('${direction}')">${t('Record Cheque')}</button>
@@ -13504,9 +13554,9 @@ const RetailSystem = {
         <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-default)">
           <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">${t('Record Payment')}</div>
           <div class="ret-field-row" style="grid-template-columns:1fr 1fr 2fr auto;gap:8px;align-items:end">
-            <div class="ret-field" style="margin:0"><label>${t('Amount')}</label>
+            <div class="ret-field" style="margin:0"><label for="stmt-pay-amount">${t('Amount')}</label>
               <input type="number" id="stmt-pay-amount" min="0" step="0.001" /></div>
-            <div class="ret-field" style="margin:0"><label>${t('Method')}</label>
+            <div class="ret-field" style="margin:0"><label for="stmt-pay-method">${t('Method')}</label>
               <select id="stmt-pay-method">
                 <option value="cash">${t('Cash')}</option>
                 <option value="card">${t('Card')}</option>
@@ -13514,7 +13564,7 @@ const RetailSystem = {
                 <option value="cheque">${t('Cheque')}</option>
                 <option value="other">${t('Other')}</option>
               </select></div>
-            <div class="ret-field" style="margin:0"><label>${t('Notes')}</label>
+            <div class="ret-field" style="margin:0"><label for="stmt-pay-notes">${t('Notes')}</label>
               <input type="text" id="stmt-pay-notes" /></div>
             <button class="ret-btn ret-btn-primary" id="stmt-pay-btn" onclick="RetailSystem._submitPartyPayment('${kind}','${this._esc(id)}')">${t('Record Payment')}</button>
           </div>

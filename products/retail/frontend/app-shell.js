@@ -2287,8 +2287,14 @@ const SubsystemApp = {
 
     if (data.result === 'PENDING') {
       if (statusEl) {
+        // 'en-GB', not a bare call. A bare toLocaleTimeString() formats
+        // against the OPERATING SYSTEM's locale, not the language chosen in
+        // this app -- so this Arabic sentence ended with an English "3:45:00
+        // PM" on an English Windows, and with Eastern Arabic-Indic digits on
+        // an Arabic one. Neither matches the rest of the line. Same rule and
+        // same fix as subsystem-retail.js's _formatClockTime.
         statusEl.textContent = t('Still waiting for approval. Last checked at ')
-          + new Date().toLocaleTimeString() + '.';
+          + new Date().toLocaleTimeString('en-GB') + '.';
       }
       return;
     }
@@ -2755,7 +2761,7 @@ const SubsystemApp = {
             </a>
           `;
     const tabBarHTML = `
-      <nav class="sub-tabbar" id="sub-tabbar">
+      <nav class="sub-tabbar" id="sub-tabbar" aria-label="${t('Quick navigation')}">
         ${tabHTML('dashboard', '🏠', 'Home')}
         ${tabHTML('products', '📦', 'Stock')}
         ${tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
@@ -2799,6 +2805,26 @@ const SubsystemApp = {
     }).join('');
 
     shell.innerHTML = `
+      <!-- FIRST in the DOM on purpose: a skip link is only useful if it is the
+           very first thing Tab reaches. The shell already had real landmarks
+           (aside / nav / header / main) but no way past them -- a keyboard or
+           switch user tabbed the entire sidebar, EVERY nav group, the AI
+           button and the header controls before reaching the content, on
+           every single screen change. The count is not small: _renderShell
+           emits one focusable per visible nav destination plus the tab bar's
+           five, so the nav is the majority of the page's tab order.
+
+           href AND an explicit focus call: the href is what makes it a real
+           link (announced as one, works if the handler ever throws), the
+           handler is what stops "#sub-content" being left in the address bar
+           -- init() reads location.hash at boot for the #verify-email/
+           #reset-password/#setup one-time links, and while "#sub-content"
+           matches none of those prefixes, leaving unrelated fragments in a
+           URL the user may reload is how a prefix match accidentally becomes
+           load-bearing later. -->
+      <a class="sub-skip-link" href="#sub-content"
+         onclick="return SubsystemApp._skipToContent(event)">${t('Skip to main content')}</a>
+
       <!-- Subsystem Sidebar -->
       <aside class="sub-sidebar" id="sub-sidebar">
         <div class="sub-sidebar-brand aura-logo" title="${t('Return to Home')}">
@@ -2824,7 +2850,7 @@ const SubsystemApp = {
           </div>
         </div>
 
-        <nav class="sub-nav" id="sub-nav">
+        <nav class="sub-nav" id="sub-nav" aria-label="${t('Main navigation')}">
           ${dashboardHTML}${groupsHTML}
         </nav>
 
@@ -2875,12 +2901,35 @@ const SubsystemApp = {
           </div>
         </header>
 
-        <main class="sub-content" id="sub-content">
+        <!-- tabindex="-1" is what makes the skip link above actually move
+             focus. <main> is not focusable by default, so without it the
+             browser scrolls to the element and leaves focus back on the link
+             -- the next Tab returns to the nav and the skip link has done
+             nothing. -1 keeps it out of the tab order itself. -->
+        <main class="sub-content" id="sub-content" tabindex="-1">
           <div style="text-align:center;padding:80px;color:var(--text-muted)">Loading...</div>
         </main>
       </div>
       ${tabBarHTML}
     `;
+  },
+
+  // Target of the skip link rendered first in _renderShell. Kept as a named
+  // method rather than inlined in the onclick because the markup above is
+  // inside a template literal, where a quoted multi-statement handler is one
+  // stray backtick away from silently truncating the whole file.
+  _skipToContent(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const main = document.getElementById('sub-content');
+    if (!main) return false;
+    main.focus();
+    // focus() alone does not scroll a container that is already scrolled --
+    // _navigate() leaves #sub-content mid-list when you come back to a
+    // section, and landing focus on an element the user cannot see is worse
+    // than not moving it. Guarded because jsdom-less test sandboxes in
+    // products/retail/tests stub elements without it.
+    if (main.scrollIntoView) main.scrollIntoView({ block: 'start' });
+    return false;
   },
 
   _navigate(sectionId) {

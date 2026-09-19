@@ -1490,5 +1490,8 @@
   "Your data is stored locally on this device. No cloud required.": "Your data is stored locally on this device. No cloud required.",
   "Database wiped successfully!": "Database wiped successfully!",
   "Error wiping database": "Error wiping database",
-  "required": "required"
+  "required": "required",
+  "Skip to main content": "Skip to main content",
+  "Main navigation": "Main navigation",
+  "Quick navigation": "Quick navigation"
 }

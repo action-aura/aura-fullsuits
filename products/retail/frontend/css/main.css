@@ -2157,6 +2157,59 @@ html[data-theme="light"] {
   background: var(--app-bg);
 }
 
+/* ── SKIP LINK ───────────────────────────────────────────────────────────────
+   Rendered first in the shell (app-shell.js `_renderShell`) and off-screen
+   until it takes focus, which is the whole pattern: invisible to everyone who
+   does not need it, the first stop for everyone who does.
+
+   OFF-SCREEN, NOT `display:none` and NOT `visibility:hidden` -- both of those
+   remove an element from the tab order entirely, so the link could never be
+   reached to be revealed. Translating it out of view is the one technique
+   that keeps it focusable. The sidebar's own ≤640px group-label rule (search
+   "clip-path: inset(50%)") is the other half of this idiom already in the
+   file; that one is hidden permanently and so can use clip, this one has to
+   come back.
+
+   Logical properties only -- retail_design_rtl_test.js scans this file for
+   physical left/right, and a skip link pinned to the physical left would sit
+   in the wrong corner on the Arabic side, which is the corner an RTL reader
+   is not looking at.
+
+   No :hover rule on purpose. The control is invisible until focused, so a
+   hover state could only ever fire after focus had already revealed it --
+   and retail_design_focus_test.js derives its requirement from the hover
+   rules present, so adding a meaningless one would demand a matching
+   :focus-visible for a state that cannot occur. The focus styling below is
+   the real affordance. */
+.sub-skip-link {
+  position: absolute;
+  z-index: 100;
+  inset-block-start: var(--space-snug);
+  inset-inline-start: var(--space-snug);
+  /* Off-screen along the block axis rather than the inline one: an inline
+     translate has to know which way "away" is, and that flips under RTL. */
+  transform: translateY(-200%);
+  display: inline-flex;
+  align-items: center;
+  /* Declared, not inferred from padding -- same reasoning as .auth-submit's
+     own note. A shorter Arabic label must not take the target under 44px. */
+  min-block-size: var(--touch-target-min);
+  padding-block: 10px;
+  padding-inline: 18px;
+  border-radius: 8px;
+  background: var(--sub-accent);
+  color: var(--text-on-accent);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.sub-skip-link:focus,
+.sub-skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--sub-accent);
+  outline-offset: 2px;
+}
+
 /* Subsystem Sidebar */
 .sub-sidebar {
   width: 240px; flex-shrink: 0;
