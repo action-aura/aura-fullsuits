@@ -1493,9 +1493,30 @@ const RetailSystem = {
       const overlay = document.createElement('div');
       overlay.className = 'ret-modal-overlay';
       overlay.innerHTML = `
-        <div class="ret-modal" style="width:420px" role="alertdialog" aria-modal="true">
-          <h3>${this._esc(title)}</h3>
-          <p style="color:var(--text-muted);margin:0 0 22px;font-size:13px;line-height:1.5">${this._esc(message)}</p>
+        <!-- NAMED, which it was not until 2026-09-19. This dialog had
+             role="alertdialog" and aria-modal="true" but nothing pointing at
+             its own title, so a screen reader announced the most consequential
+             dialog in the product -- the one behind every delete, every void,
+             every licence deactivation -- as bare "alert dialog", and the
+             operator had to go looking for the question. It was also the
+             modal held up as the reference implementation while the other 27
+             were wired, which is how the gap survived: everyone copied its
+             keyboard handling and nobody read its markup.
+
+             Found by retail_modal_a11y_coverage_test.js on the first run,
+             before it had ever been green.
+
+             aria-describedby as well as -labelledby: on an alertdialog the
+             MESSAGE is the content that matters ("Delete Widget?" is the
+             title; "This cannot be undone" is the part the operator needs
+             read to them), and describedby is what makes it announced with
+             the name rather than only on demand. -->
+        <div class="ret-modal" style="width:420px" role="alertdialog" aria-modal="true"
+             id="ret-confirm-dialog"
+             aria-labelledby="ret-confirm-dialog-title"
+             aria-describedby="ret-confirm-dialog-msg">
+          <h3 id="ret-confirm-dialog-title">${this._esc(title)}</h3>
+          <p id="ret-confirm-dialog-msg" style="color:var(--text-muted);margin:0 0 22px;font-size:13px;line-height:1.5">${this._esc(message)}</p>
           <div class="ret-modal-footer">
             <button class="ret-btn ret-btn-ghost" id="ret-confirm-cancel">${this._esc(cancelLabel)}</button>
             <button class="ret-btn ${danger ? 'ret-btn-danger' : 'ret-btn-primary'}" id="ret-confirm-ok">${this._esc(confirmLabel)}</button>
@@ -1504,10 +1525,16 @@ const RetailSystem = {
       document.body.appendChild(overlay);
 
       let settled = false;
+      // This dialog's place in the modal key queue (see _modalKeyStack). A
+      // _confirm is almost always the one on TOP -- it is raised BY another
+      // dialog -- so it is the layer that must win the Escape it would
+      // otherwise share with the form underneath it.
+      const layer = { overlay };
       const finish = (result) => {
         if (settled) return;      // Enter/click/overlay-click can race; resolve once only
         settled = true;
         document.removeEventListener('keydown', onKeydown, true);
+        this._dropModalKeyLayer(layer);
         overlay.remove();
         if (trigger && typeof trigger.focus === 'function') {
           // The trigger can legitimately be gone by now (e.g. its row was
@@ -1520,6 +1547,10 @@ const RetailSystem = {
       };
 
       const onKeydown = (e) => {
+        // Only the dialog at the front of the queue answers a key. Without
+        // this, a _confirm raised from an already-wired modal and that modal
+        // would both act on one Escape -- see _modalKeyStack.
+        if (this._topModalKeyLayer() !== layer) return;
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
         // `&& !danger` -- Enter must NOT confirm a destructive dialog. Enter
         // is the key that submits every other form in this product, so a
@@ -1537,6 +1568,7 @@ const RetailSystem = {
         // copy, branch retirement among them.
         if (e.key === 'Enter' && !danger) { e.preventDefault(); e.stopPropagation(); finish(true); }
       };
+      this._modalKeyStack.push(layer);
       document.addEventListener('keydown', onKeydown, true);
 
       overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
@@ -1569,20 +1601,73 @@ const RetailSystem = {
   // tear it down the same way the mouse ✕ and Escape do, instead of a bare
   // `.remove()` that would leak this function's own document-level keydown
   // listener.
+  // ── THE MODAL KEY STACK ─────────────────────────────────────────────────
+  //
+  // Every dialog's Escape handler is registered on `document`, because the
+  // focused element at the time is unknowable. That is fine while exactly one
+  // dialog is open and WRONG the moment two are, which this file does in at
+  // least three places on purpose:
+  //
+  //   _showSupplierModal  -> delete a contact   -> _confirm(danger)
+  //   _openHeldSalesModal -> resume/discard     -> _confirm
+  //   _openCreateReturn   -> change refund method -> _confirm
+  //
+  // Both listeners sit on the SAME document node, so `stopPropagation` on one
+  // does not stop the other -- they are siblings in one dispatch, not a
+  // bubble chain. One Escape press would fire both: the confirmation AND the
+  // form that raised it would vanish together, and the shopkeeper's answer to
+  // "are you sure?" would be silently discarded along with the work behind it.
+  //
+  // So dialogs take a numbered place in line, and only the one at the front
+  // answers Escape. This is what makes wiring the remaining hand-rolled
+  // modals safe; without it, wiring them is what INTRODUCES the bug.
+  _modalKeyStack: [],
+
+  // Reads the front of the queue, discarding any dialog that has since left
+  // the document by a path that bypassed its own close() -- an auto-dismiss
+  // timeout (`_showScanNotFound` gives itself 12s, `_showReceipt` 8s) or a
+  // caller's bare `.remove()`. A leaked layer would otherwise sit at the
+  // front forever and swallow every later Escape: the dialog you CAN see
+  // stops responding because of one you cannot.
+  //
+  // Only an EXPLICIT `false` prunes. `isConnected` is undefined on the
+  // hand-built element stubs in products/retail/tests, and treating undefined
+  // as "detached" would empty the stack on every keypress under test -- the
+  // guard would then be measuring nothing, which is worse than not having it.
+  _topModalKeyLayer() {
+    const stack = this._modalKeyStack;
+    while (stack.length && stack[stack.length - 1].overlay
+           && stack[stack.length - 1].overlay.isConnected === false) stack.pop();
+    return stack.length ? stack[stack.length - 1] : null;
+  },
+
+  _dropModalKeyLayer(layer) {
+    const i = this._modalKeyStack.indexOf(layer);
+    if (i !== -1) this._modalKeyStack.splice(i, 1);
+  },
+
   _wireModalA11y(overlay, dialogId) {
     const dialogEl = (typeof document !== 'undefined' && document.getElementById(dialogId)) || null;
     const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
     let closed = false;
+    const layer = { overlay };
     const close = () => {
       if (closed) return;          // backdrop click, ✕, Escape and a caller's
       closed = true;                // own success path can all race here
       document.removeEventListener('keydown', onKeydown, true);
+      this._dropModalKeyLayer(layer);
       overlay.remove();
       if (trigger && typeof trigger.focus === 'function') trigger.focus();
     };
     const onKeydown = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      if (e.key !== 'Escape') return;
+      // Not the front of the queue: a _confirm() opened on top of this modal
+      // owns this keypress, and closing underneath it would take away the
+      // question and the form in one stroke.
+      if (this._topModalKeyLayer() !== layer) return;
+      e.preventDefault(); e.stopPropagation(); close();
     };
+    this._modalKeyStack.push(layer);
     document.addEventListener('keydown', onKeydown, true);
     // Reachable from the inline `onclick="RetailSystem._closeModalOverlay(this)"`
     // on the markup's own ✕ button, which has no closure over `close` above.
@@ -3804,24 +3889,25 @@ const RetailSystem = {
   // narrow search hid them from THIS batch even though the parent matched),
   // so the picker never opens empty just because of pagination.
   async _openVariantPicker(parentId) {
-    document.getElementById('ret-variant-picker')?.remove();
+    this._closeModalOverlay(document.getElementById('ret-variant-picker'));
     const parent = (this._products || []).find(x => x.id === parentId) ||
                    (this._productsById && this._productsById[parentId]);
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-variant-picker';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:420px">
-        <h3>${this._esc(t('Choose a variant'))}${parent ? ` — ${this._esc(parent.name)}` : ''}</h3>
+      <div class="ret-modal" style="width:420px" id="ret-variant-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-variant-dialog-title">
+        <h3 id="ret-variant-dialog-title">${this._esc(t('Choose a variant'))}${parent ? ` — ${this._esc(parent.name)}` : ''}</h3>
         <div id="ret-variant-picker-list" style="display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow-y:auto">
           <div style="text-align:center;color:var(--text-muted);padding:20px">${this._esc(t('Loading…'))}</div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-variant-picker').remove()">${this._esc(t('Cancel'))}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${this._esc(t('Cancel'))}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeVariant = this._wireModalA11y(overlay, 'ret-variant-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeVariant(); });
 
     let variants = (this._products || []).filter(x => x.parent_product_id === parentId);
     if (!variants.length) {
@@ -3846,7 +3932,7 @@ const RetailSystem = {
           ${outOfStock ? 'aria-disabled="true"' : ''}
           onclick="${outOfStock
             ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')`
-            : `RetailSystem._addToCart('${this._esc(v.id)}');document.getElementById('ret-variant-picker')?.remove()`}">
+            : `RetailSystem._addToCart('${this._esc(v.id)}');RetailSystem._closeModalOverlay(this)`}">
         <span>${this._esc(v.variant_label || v.name)}</span>
         <span>${this._money(v.sell_price)} · ${outOfStock ? this._esc(t('Out of stock')) : `${v.total_stock} ${this._esc(v.unit||'')}`}</span>
       </button>`;
@@ -3979,8 +4065,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-hold-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:420px">
-        <h3>${this._icon('pause', 18, '⏸')} Hold This Sale</h3>
+      <div class="ret-modal" style="width:420px" id="ret-hold-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-hold-dialog-title">
+        <h3 id="ret-hold-dialog-title">${this._icon('pause', 18, '⏸')} Hold This Sale</h3>
         <p style="color:var(--text-muted);margin:0 0 18px;font-size:13px;line-height:1.5">
           The cart is parked and cleared here so you can start a new sale. Resume it later from "Held Sales".
         </p>
@@ -3989,12 +4075,13 @@ const RetailSystem = {
           <input id="hold-label" data-i18n-ph="Helps you find it later" placeholder="${t('Helps you find it later')}" maxlength="200" />
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-hold-modal').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="hold-save-btn" onclick="RetailSystem._saveHold()">Hold Sale</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeHold = this._wireModalA11y(overlay, 'ret-hold-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeHold(); });
     document.getElementById('hold-label')?.focus();
   },
 
@@ -4027,7 +4114,7 @@ const RetailSystem = {
     try {
       const data = await this._post('/api/sub/retail/held-sales', payload);
       if (data.status === 'success') {
-        document.getElementById('ret-hold-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-hold-modal'));
         this._clearCart();
         const discInput = document.getElementById('pos-disc');
         if (discInput) discInput.value = 0;
@@ -4057,17 +4144,18 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-held-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
-        <h3>${this._icon('clipboard-list', 18, '📋')} ${t('Held Sales')}</h3>
+      <div class="ret-modal ret-modal-wide" id="ret-held-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-held-dialog-title">
+        <h3 id="ret-held-dialog-title">${this._icon('clipboard-list', 18, '📋')} ${t('Held Sales')}</h3>
         <div id="held-list" style="max-height:50vh;overflow-y:auto">
           <div style="text-align:center;color:var(--text-muted);padding:30px">Loading…</div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-held-modal').remove()">Close</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Close</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeHeld = this._wireModalA11y(overlay, 'ret-held-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeHeld(); });
     this._loadHeldList();
   },
 
@@ -4134,7 +4222,7 @@ const RetailSystem = {
       const snap = data.data;
       this._cart = snap.items || [];
       this._paymentMethod = snap.payment_method || 'cash';
-      document.getElementById('ret-held-modal')?.remove();
+      this._closeModalOverlay(document.getElementById('ret-held-modal'));
       this._renderCart();
       const discInput = document.getElementById('pos-disc');
       if (discInput) discInput.value = snap.discount_pct || 0;
@@ -4823,30 +4911,31 @@ const RetailSystem = {
 
   // "Product not found" prompt — Add New Product / Scan Again / Cancel.
   _showScanNotFound(code) {
-    document.getElementById('ret-scan-nf')?.remove();
+    this._closeModalOverlay(document.getElementById('ret-scan-nf'));
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-scan-nf';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:380px;text-align:center">
+      <div class="ret-modal" style="width:380px;text-align:center" id="ret-scan-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-scan-dialog-title">
         <div style="font-size:46px;margin-bottom:10px">${this._icon('search', 40, '🔍')}</div>
-        <h3 style="margin:0 0 6px">Product not found</h3>
+        <h3 id="ret-scan-dialog-title" style="margin:0 0 6px">Product not found</h3>
         <p style="color:var(--text-muted);margin:0 0 22px">No item matches barcode
           <span style="font-family:monospace;color:var(--text-primary)">${code}</span></p>
         <div style="display:flex;flex-direction:column;gap:10px">
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._addProductFromScan('${String(code).replace(/'/g,"\\'")}')">${this._icon('plus', 16, '➕')} Add New Product</button>
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">${this._icon('repeat', 16, '🔁')} Scan Again</button>
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${this._icon('repeat', 16, '🔁')} Scan Again</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeScan = this._wireModalA11y(overlay, 'ret-scan-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeScan(); });
     // Auto-dismiss so the till is ready for the next scan if the cashier ignores it.
-    setTimeout(() => overlay.remove(), 12000);
+    setTimeout(() => _closeScan(), 12000);
   },
 
   _addProductFromScan(code) {
-    document.getElementById('ret-scan-nf')?.remove();
+    this._closeModalOverlay(document.getElementById('ret-scan-nf'));
     const catOpts = (this._categories || []).map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
     this._showProductModal({ barcode: code }, catOpts, '', this._eligibleParentOpts(null, null));
   },
@@ -5322,9 +5411,9 @@ const RetailSystem = {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:380px;text-align:center">
+      <div class="ret-modal" style="width:380px;text-align:center" id="ret-receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-receipt-dialog-title">
         <div style="font-size:52px;margin-bottom:12px">${this._icon('circle-check-big', 52, '✅', { animate: 'pop' })}</div>
-        <h3 style="margin:0 0 6px">${t('Sale Complete!')}</h3>
+        <h3 id="ret-receipt-dialog-title" style="margin:0 0 6px">${t('Sale Complete!')}</h3>
         <!-- The receipt number is DATA and stays OUT of the translated
              sentence. "Receipt #S-1001" as one text node is the exact
              "312 active products" shape retail_surface_i18n_test.js's header
@@ -5362,11 +5451,15 @@ const RetailSystem = {
         </div>
         <div style="display:flex;gap:10px">
           <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)"><span aria-hidden="true">${this._icon('printer', 16, '🖨️')}</span> ${t('Print')}</button>
-          <button class="ret-btn ret-btn-primary" style="flex:1" onclick="this.closest('.ret-modal-overlay').remove()">${t('New Sale')}</button>
+          <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._closeModalOverlay(this)">${t('New Sale')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    setTimeout(() => overlay.remove(), 8000);
+    // No backdrop-click listener here -- deliberately: this is the only
+    // hand-rolled modal without one, and adding one would change behaviour
+    // on the post-sale receipt, which is out of scope for this pass.
+    const _closeReceipt = this._wireModalA11y(overlay, 'ret-receipt-dialog');
+    setTimeout(() => _closeReceipt(), 8000);
   },
 
   // ══ RECEIPT PRINTING (Wave 1B, Part O/P) ═════════════════════════════════
@@ -5810,8 +5903,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-prod-modal';
     overlay.innerHTML = `
-      <div class="ret-modal">
-        <h3>${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} ${isEdit ? 'Edit Product' : 'Add Product'}</h3>
+      <div class="ret-modal" id="ret-product-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-product-dialog-title">
+        <h3 id="ret-product-dialog-title">${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} ${isEdit ? 'Edit Product' : 'Add Product'}</h3>
         <div class="ret-field-row">
           <div class="ret-field"><label for="pm-name">Product Name *</label><input id="pm-name" value="${p.name||''}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
           <div class="ret-field"><label for="pm-sku">SKU *</label><input id="pm-sku" value="${p.sku||''}" placeholder="SKU-001" /></div>
@@ -5855,12 +5948,13 @@ const RetailSystem = {
           </div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-prod-modal').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${isEdit?'Save Changes':'Add Product'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeProduct = this._wireModalA11y(overlay, 'ret-product-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeProduct(); });
     document.getElementById('pm-name')?.focus();
   },
 
@@ -5914,7 +6008,7 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/products', payload);
       if (d.status === 'success') {
         SubsystemApp.showToast(pid ? 'Product updated' : 'Product added', 'success');
-        document.getElementById('ret-prod-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-prod-modal'));
         this._renderProducts(document.getElementById('sub-content'));
       } else {
         SubsystemApp.showToast(d.message||'Error','error');
@@ -5928,8 +6022,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-stock-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:380px">
-        <h3>${this._icon('package', 18, '📦')} Adjust Stock — ${this._esc(name)}</h3>
+      <div class="ret-modal" style="width:380px" id="ret-stockadjust-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-stockadjust-dialog-title">
+        <h3 id="ret-stockadjust-dialog-title">${this._icon('package', 18, '📦')} Adjust Stock — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:var(--text-primary)">${currentStock}</strong></p>
         <div class="ret-field"><label for="sa-qty">Adjustment Quantity (+ to add, − to deduct)</label>
           <input type="number" id="sa-qty" placeholder="${t('+10 or -5')}" step="1" /></div>
@@ -5943,12 +6037,13 @@ const RetailSystem = {
           </select>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-stock-modal').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="sa-btn" onclick="RetailSystem._saveStockAdjust('${this._esc(pid)}')">Apply</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeStockAdjust = this._wireModalA11y(overlay, 'ret-stockadjust-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeStockAdjust(); });
     document.getElementById('sa-qty')?.focus();
   },
 
@@ -5962,7 +6057,7 @@ const RetailSystem = {
       const d = await this._post(`/api/sub/retail/products/${pid}/stock-adjust`, { quantity: qty, reason });
       if (d.status === 'success') {
         SubsystemApp.showToast(`${t('Stock updated. New balance:')} ${d.new_stock}`, 'success');
-        document.getElementById('ret-stock-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-stock-modal'));
         this._loadProducts();
       } else {
         SubsystemApp.showToast(d.message||'Error','error');
@@ -6058,17 +6153,18 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-cat-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:440px">
-        <h3>${this._icon(isEdit ? 'square-pen' : 'tag', 18, isEdit ? '✏️' : '🏷️')} ${isEdit ? t('Edit Category') : t('Add Category')}</h3>
+      <div class="ret-modal" style="width:440px" id="ret-category-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-category-dialog-title">
+        <h3 id="ret-category-dialog-title">${this._icon(isEdit ? 'square-pen' : 'tag', 18, isEdit ? '✏️' : '🏷️')} ${isEdit ? t('Edit Category') : t('Add Category')}</h3>
         <div class="ret-field"><label for="catm-name">${t('Category Name')} *</label><input id="catm-name" value="${this._esc(cat.name)}" /></div>
         <div class="ret-field"><label for="catm-desc">${t('Description')}</label><textarea id="catm-desc" rows="3">${this._esc(cat.description)}</textarea></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cat-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="catm-btn" onclick="RetailSystem._saveCategory(${isEdit ? `'${this._esc(cat.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Category')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeCategory = this._wireModalA11y(overlay, 'ret-category-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeCategory(); });
     document.getElementById('catm-name')?.focus();
   },
 
@@ -6084,7 +6180,7 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/categories', payload);
       if (d.status==='success') {
         SubsystemApp.showToast(catId ? t('Category updated') : t('Category added'), 'success');
-        document.getElementById('ret-cat-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-cat-modal'));
         this._loadCategories();
       } else { SubsystemApp.showToast(d.message||'Error','error'); this._restoreSaveButton(btn, catId ? t('Save') : t('Add Category')); }
     } catch(e) { this._restoreSaveButton(btn, catId ? t('Save') : t('Add Category')); }
@@ -6226,8 +6322,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-cust-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:440px">
-        <h3>${this._icon(isEdit ? 'square-pen' : 'user', 18, isEdit ? '✏️' : '👤')} ${isEdit ? 'Edit Customer' : 'Add Customer'}</h3>
+      <div class="ret-modal" style="width:440px" id="ret-customeredit-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-customeredit-dialog-title">
+        <h3 id="ret-customeredit-dialog-title">${this._icon(isEdit ? 'square-pen' : 'user', 18, isEdit ? '✏️' : '👤')} ${isEdit ? 'Edit Customer' : 'Add Customer'}</h3>
         <div class="ret-field"><label for="cm-name">Full Name *</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
         <div class="ret-field-row">
           <div class="ret-field"><label for="cm-phone">Phone</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
@@ -6235,12 +6331,13 @@ const RetailSystem = {
         </div>
         <div class="ret-field"><label for="cm-addr">Address</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cust-modal').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${isEdit?'Save':'Add Customer'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeCustomerEdit = this._wireModalA11y(overlay, 'ret-customeredit-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeCustomerEdit(); });
     document.getElementById('cm-name')?.focus();
   },
 
@@ -6258,7 +6355,7 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/customers', payload);
       if (d.status==='success') {
         SubsystemApp.showToast(cid?'Customer updated':'Customer added','success');
-        document.getElementById('ret-cust-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-cust-modal'));
         this._loadCustomers();
       } else { SubsystemApp.showToast(d.message||'Error','error'); this._restoreSaveButton(btn, cid ? 'Save' : 'Add Customer'); }
     } catch(e) { this._restoreSaveButton(btn, cid ? 'Save' : 'Add Customer'); }
@@ -6511,8 +6608,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-prm-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:480px">
-        <h3>${this._icon(isEdit ? 'square-pen' : 'gift', 18, isEdit ? '✏️' : '🎁')} ${isEdit ? t('Edit Promotion') : t('Add Promotion')}</h3>
+      <div class="ret-modal" style="width:480px" id="ret-promotion-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-promotion-dialog-title">
+        <h3 id="ret-promotion-dialog-title">${this._icon(isEdit ? 'square-pen' : 'gift', 18, isEdit ? '✏️' : '🎁')} ${isEdit ? t('Edit Promotion') : t('Add Promotion')}</h3>
         <div class="ret-field-row">
           <div class="ret-field"><label for="prm-name">${t('Promotion Name')} *</label><input id="prm-name" value="${this._esc(promo.name||'')}" /></div>
           <div class="ret-field"><label for="prm-disc">${t('Discount %')} *</label><input type="number" id="prm-disc" value="${promo.discount_pct||0}" min="0" max="100" step="0.1" /></div>
@@ -6540,12 +6637,13 @@ const RetailSystem = {
           <div class="ret-field"><label for="prm-end">${t('End Date')}</label><input type="date" id="prm-end" value="${promo.ends_at ? this._esc(String(promo.ends_at).slice(0,10)) : ''}" /></div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-prm-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="prm-save-btn" onclick="RetailSystem._savePromotion(${isEdit ? `'${this._esc(promo.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Promotion')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closePromotion = this._wireModalA11y(overlay, 'ret-promotion-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closePromotion(); });
     document.getElementById('prm-name')?.focus();
   },
 
@@ -6580,7 +6678,7 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/promotions', payload);
       if (d.status === 'success') {
         SubsystemApp.showToast(pid ? t('Promotion updated') : t('Promotion added'), 'success');
-        document.getElementById('ret-prm-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-prm-modal'));
         this._loadPromotions();
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
@@ -6696,8 +6794,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-sup-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ${isEdit ? 'ret-modal-wide' : ''}" ${isEdit ? '' : 'style="width:440px"'}>
-        <h3>${this._icon(isEdit ? 'square-pen' : 'factory', 18, isEdit ? '✏️' : '🏭')} ${isEdit ? 'Edit Supplier' : 'Add Supplier'}</h3>
+      <div class="ret-modal ${isEdit ? 'ret-modal-wide' : ''}" ${isEdit ? '' : 'style="width:440px"'} id="ret-supplier-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-supplier-dialog-title">
+        <h3 id="ret-supplier-dialog-title">${this._icon(isEdit ? 'square-pen' : 'factory', 18, isEdit ? '✏️' : '🏭')} ${isEdit ? 'Edit Supplier' : 'Add Supplier'}</h3>
         ${isEdit ? `
         <div class="ret-tabs">
           <button type="button" class="ret-tab active" id="sm-tab-details" onclick="RetailSystem._switchSupplierTab('details')">${t('Details')}</button>
@@ -6711,7 +6809,7 @@ const RetailSystem = {
           </div>
           <div class="ret-field"><label for="sm-addr">Address</label><input id="sm-addr" value="${this._esc(s.address||'')}" /></div>
           <div class="ret-modal-footer">
-            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">Cancel</button>
+            <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
             <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id ? `'${this._esc(s.id)}'` : 'null'})">${isEdit?'Save':'Add Supplier'}</button>
           </div>
         </div>
@@ -6720,13 +6818,14 @@ const RetailSystem = {
           <div id="sup-contacts-list"><p style="color:var(--text-muted)">${t('Loading…')}</p></div>
           <div id="sup-contact-form" style="display:none"></div>
           <div class="ret-modal-footer">
-            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">${t('Cancel')}</button>
+            <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
             <button class="ret-btn ret-btn-primary" onclick="RetailSystem._openAddSupplierContact('${this._esc(s.id)}')">+ ${t('Add Contact')}</button>
           </div>
         </div>` : ''}
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeSupplier = this._wireModalA11y(overlay, 'ret-supplier-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeSupplier(); });
     document.getElementById('sm-name')?.focus();
     if (isEdit) this._loadSupplierContacts(s.id);
   },
@@ -6909,7 +7008,7 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/suppliers', payload);
       if (d.status==='success') {
         SubsystemApp.showToast(sid?'Updated':'Added','success');
-        document.getElementById('ret-sup-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-sup-modal'));
         this._loadSuppliers();
       } else { SubsystemApp.showToast(d.message||'Error','error'); this._restoreSaveButton(btn, sid ? 'Save' : 'Add Supplier'); }
     } catch(e) { this._restoreSaveButton(btn, sid ? 'Save' : 'Add Supplier'); }
@@ -7022,8 +7121,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-po-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
-        <h3>${this._icon('clipboard-list', 18, '📋')} New Purchase Order${supplierName?' — '+supplierName:''}</h3>
+      <div class="ret-modal ret-modal-wide" id="ret-po-create-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-po-create-dialog-title">
+        <h3 id="ret-po-create-dialog-title">${this._icon('clipboard-list', 18, '📋')} New Purchase Order${supplierName?' — '+supplierName:''}</h3>
 
         <div id="po-step-basket">
           <div style="margin:0 0 8px;color:var(--text-primary);font-weight:600">Order Items</div>
@@ -7043,7 +7142,7 @@ const RetailSystem = {
             Total: <span id="po-total-display">$0.00</span>
           </div>
           <div class="ret-modal-footer">
-            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-po-modal').remove()">Cancel</button>
+            <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
             <button class="ret-btn ret-btn-primary" id="po-preview-btn" onclick="RetailSystem._previewPOSplit()">${t('Preview split')}</button>
           </div>
         </div>
@@ -7051,7 +7150,8 @@ const RetailSystem = {
         <div id="po-step-preview" style="display:none"></div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closePO = this._wireModalA11y(overlay, 'ret-po-create-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closePO(); });
     document.getElementById('po-item-prod')?.addEventListener('change', function() {
       const opt = this.options[this.selectedIndex];
       const cost = opt?.dataset?.cost || 0;
@@ -7282,10 +7382,10 @@ const RetailSystem = {
       const overlay = document.createElement('div');
       overlay.className = 'ret-modal-overlay';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide">
+        <div class="ret-modal ret-modal-wide" id="ret-po-view-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-po-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 style="margin:0">PO: ${po.po_number}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
+            <h3 id="ret-po-view-dialog-title" style="margin:0">PO: ${po.po_number}</h3>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Supplier</div><div style="color:var(--text-primary);font-weight:600">${po.supplier_name||'—'}</div></div>
@@ -7306,7 +7406,8 @@ const RetailSystem = {
           ${po.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${po.notes}</p>`:''}
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+      const _closePOView = this._wireModalA11y(overlay, 'ret-po-view-dialog');
+      overlay.addEventListener('click', e => { if(e.target===overlay) _closePOView(); });
     } catch(e) {}
   },
 
@@ -7435,8 +7536,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-transfer-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
-        <h3>${this._icon('repeat', 18, '🔁')} ${t('New Transfer')}</h3>
+      <div class="ret-modal ret-modal-wide" id="ret-transfer-create-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-transfer-create-dialog-title">
+        <h3 id="ret-transfer-create-dialog-title">${this._icon('repeat', 18, '🔁')} ${t('New Transfer')}</h3>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
           <div class="ret-field" style="margin:0"><label for="tr-source">${t('From')} *</label>
             <select id="tr-source"><option value="">${t('Select branch…')}</option>${branchOpts}</select></div>
@@ -7455,12 +7556,13 @@ const RetailSystem = {
           </div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-transfer-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._createTransfer()">${t('Create Transfer')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeTransferCreate = this._wireModalA11y(overlay, 'ret-transfer-create-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeTransferCreate(); });
   },
 
   _addTransferItem() {
@@ -7538,7 +7640,7 @@ const RetailSystem = {
         items: this._transferItems.map(i => ({ product_id: i.product_id, quantity: i.quantity })),
       });
       if (d.status === 'success') {
-        document.getElementById('ret-transfer-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-transfer-modal'));
         SubsystemApp.showToast(t('Transfer created'), 'success');
         this._loadTransfers();
       } else {
@@ -7590,8 +7692,8 @@ const RetailSystem = {
       overlay.className = 'ret-modal-overlay';
       overlay.id = 'ret-receive-modal';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide">
-          <h3>${this._icon('inbox', 18, '📭')} ${t('Receive Transfer')}</h3>
+        <div class="ret-modal ret-modal-wide" id="ret-transfer-receive-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-transfer-receive-dialog-title">
+          <h3 id="ret-transfer-receive-dialog-title">${this._icon('inbox', 18, '📭')} ${t('Receive Transfer')}</h3>
           <table class="ret-table">
             <thead><tr><th>${t('Product')}</th><th>${t('SKU')}</th><th>${t('Sent')}</th><th>${t('Received')}</th></tr></thead>
             <tbody>${items.map(i => `<tr>
@@ -7618,12 +7720,13 @@ const RetailSystem = {
           </table>
           <p id="tr-receive-summary" style="margin:14px 0 0;color:var(--text-muted);font-size:13px"></p>
           <div class="ret-modal-footer">
-            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-receive-modal').remove()">${t('Cancel')}</button>
+            <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
             <button class="ret-btn ret-btn-primary" onclick="RetailSystem._confirmReceiveTransfer('${this._esc(id)}')">${t('Confirm')}</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+      const _closeTransferReceive = this._wireModalA11y(overlay, 'ret-transfer-receive-dialog');
+      overlay.addEventListener('click', e => { if(e.target===overlay) _closeTransferReceive(); });
       this._recalcReceive();
     } catch (e) {
       console.error(e);
@@ -7679,7 +7782,7 @@ const RetailSystem = {
     try {
       const d = await this._post(`/api/sub/retail/stock-transfers/${id}/receive`, { items });
       if (d.status === 'success') {
-        document.getElementById('ret-receive-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-receive-modal'));
         this._loadTransfers();
         const shortages = (d.data && d.data.shortages) || [];
         // A shortage is NOT an error -- see receive_stock_transfer's own
@@ -7732,10 +7835,10 @@ const RetailSystem = {
       const overlay = document.createElement('div');
       overlay.className = 'ret-modal-overlay';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide">
+        <div class="ret-modal ret-modal-wide" id="ret-transfer-view-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-transfer-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 style="margin:0">${t('Transfer')}: ${this._bdi((xfer.id||'').slice(0,8), xfer.id)}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
+            <h3 id="ret-transfer-view-dialog-title" style="margin:0">${t('Transfer')}: ${this._bdi((xfer.id||'').slice(0,8), xfer.id)}</h3>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('From')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(xfer.source_branch_name||'—')}</div></div>
@@ -7776,7 +7879,8 @@ const RetailSystem = {
           </table>
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+      const _closeTransferView = this._wireModalA11y(overlay, 'ret-transfer-view-dialog');
+      overlay.addEventListener('click', e => { if(e.target===overlay) _closeTransferView(); });
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
@@ -7941,8 +8045,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-quotation-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
-        <h3>${this._icon('file-text', 18, '📄')} ${editingId ? t('Edit Quotation') : t('New Quotation')}</h3>
+      <div class="ret-modal ret-modal-wide" id="ret-quotation-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-quotation-edit-dialog-title">
+        <h3 id="ret-quotation-edit-dialog-title">${this._icon('file-text', 18, '📄')} ${editingId ? t('Edit Quotation') : t('New Quotation')}</h3>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
           <div class="ret-field" style="margin:0"><label for="qt-doc-kind">${t('Document Type')}</label>
             <select id="qt-doc-kind" ${editingId ? 'disabled' : ''}>
@@ -7971,12 +8075,13 @@ const RetailSystem = {
           <div id="qt-item-committed" style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-quotation-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._saveQuotation(${editingId ? `'${this._esc(editingId)}'` : 'null'})">${editingId ? t('Save Changes') : t('Create Quotation')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const _closeQuotationEdit = this._wireModalA11y(overlay, 'ret-quotation-edit-dialog');
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeQuotationEdit(); });
     this._renderQuotationItems();
   },
 
@@ -8056,7 +8161,7 @@ const RetailSystem = {
         ? await this._put(`/api/sub/retail/quotations/${editingId}`, body)
         : await this._post('/api/sub/retail/quotations', body);
       if (d.status === 'success') {
-        document.getElementById('ret-quotation-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-quotation-modal'));
         SubsystemApp.showToast(editingId ? t('Quotation updated') : t('Quotation created'), 'success');
         this._loadQuotations();
       } else {
@@ -8160,12 +8265,12 @@ const RetailSystem = {
       overlay.className = 'ret-modal-overlay';
       overlay.id = 'ret-quotation-view-modal';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide" id="qt-print-area">
+        <div class="ret-modal ret-modal-wide" id="qt-print-area" role="dialog" aria-modal="true" aria-labelledby="ret-quotation-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 style="margin:0">${this._esc(q.doc_kind === 'order' ? t('Sales Order') : t('Quotation'))}: ${this._esc(q.doc_number)}</h3>
+            <h3 id="ret-quotation-view-dialog-title" style="margin:0">${this._esc(q.doc_kind === 'order' ? t('Sales Order') : t('Quotation'))}: ${this._esc(q.doc_number)}</h3>
             <div class="qt-no-print">
               <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="window.print()">${t('Print')}</button>
-              <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
+              <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
             </div>
           </div>
           ${q.is_expired ? `<div style="background:var(--state-warning-surface);color:var(--state-warning-text);border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:14px">${t('This quotation has expired.')}</div>` : ''}
@@ -8197,7 +8302,8 @@ const RetailSystem = {
           ${q.notes ? `<p style="color:var(--text-muted);margin-top:14px;font-size:13px">${t('Notes')}: ${this._esc(q.notes)}</p>` : ''}
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      const _closeQuotationView = this._wireModalA11y(overlay, 'qt-print-area');
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeQuotationView(); });
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
@@ -8217,8 +8323,8 @@ const RetailSystem = {
       overlay.className = 'ret-modal-overlay';
       overlay.id = 'ret-quotation-convert-modal';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide">
-          <h3>${this._icon('exchange', 18, '🔄')} ${t('Convert Quotation')}</h3>
+        <div class="ret-modal ret-modal-wide" id="ret-quotation-convert-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-quotation-convert-dialog-title">
+          <h3 id="ret-quotation-convert-dialog-title">${this._icon('exchange', 18, '🔄')} ${t('Convert Quotation')}</h3>
           ${resp.is_expired ? `
             <div style="background:var(--state-warning-surface);color:var(--state-warning-text);border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:10px">${t('This quotation has expired.')}</div>
             <label style="display:flex;gap:8px;align-items:center;margin-bottom:14px;color:var(--text-primary)">
@@ -8241,13 +8347,14 @@ const RetailSystem = {
             <div style="font-weight:700">${t('If honoured')}: ${this._fmt(resp.totals.honour_total)}</div>
           </div>
           <div class="ret-modal-footer">
-            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-quotation-convert-modal').remove()">${t('Cancel')}</button>
+            <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
             <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._convertQuotation('${this._esc(id)}', false)">${t("Use Today's Prices")}</button>
             <button class="ret-btn ret-btn-primary" onclick="RetailSystem._convertQuotation('${this._esc(id)}', true)">${t('Honour Quoted Prices')}</button>
           </div>
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      const _closeQuotationConvert = this._wireModalA11y(overlay, 'ret-quotation-convert-dialog');
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeQuotationConvert(); });
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
@@ -8264,7 +8371,7 @@ const RetailSystem = {
     try {
       const d = await this._post('/api/sub/retail/sales', body);
       if (d.status === 'success') {
-        document.getElementById('ret-quotation-convert-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-quotation-convert-modal'));
         const saleNumber = (d.data && d.data.sale_number) || '';
         SubsystemApp.showToast(`${t('Quotation converted to sale')} ${saleNumber}`, 'success');
         this._loadQuotations();
@@ -8435,18 +8542,19 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-branch-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:440px">
-        <h3>${this._icon(isEdit ? 'square-pen' : 'landmark', 18, isEdit ? '✏️' : '🏦')} ${isEdit ? t('Edit Branch') : t('Add Branch')}</h3>
+      <div class="ret-modal" style="width:440px" id="ret-branch-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-branch-dialog-title">
+        <h3 id="ret-branch-dialog-title">${this._icon(isEdit ? 'square-pen' : 'landmark', 18, isEdit ? '✏️' : '🏦')} ${isEdit ? t('Edit Branch') : t('Add Branch')}</h3>
         <div class="ret-field"><label for="brm-name">${t('Branch Name')} *</label><input id="brm-name" value="${isEdit ? this._esc(branch.name) : ''}" /></div>
         <div class="ret-field"><label for="brm-address">${t('Address')}</label><input id="brm-address" value="${isEdit ? this._esc(branch.address) : ''}" /></div>
         <div class="ret-field"><label for="brm-phone">${t('Phone')}</label><input id="brm-phone" value="${isEdit ? this._esc(branch.phone) : ''}" /></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-branch-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="brm-btn" onclick="RetailSystem._saveBranch(${isEdit ? `'${this._esc(branch.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Branch')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeBranch = this._wireModalA11y(overlay, 'ret-branch-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeBranch(); });
     document.getElementById('brm-name')?.focus();
   },
 
@@ -8471,7 +8579,7 @@ const RetailSystem = {
         : await this._post('/api/sub/retail/branches', payload);
       if (d.status === 'success') {
         SubsystemApp.showToast(branchId ? t('Branch updated') : t('Branch added'), 'success');
-        document.getElementById('ret-branch-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-branch-modal'));
         this._loadBranches();
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
@@ -9784,8 +9892,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-return-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
-        <h3>${this._icon('undo-2', 18, '↩️')} Process Return</h3>
+      <div class="ret-modal ret-modal-wide" id="ret-return-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-return-dialog-title">
+        <h3 id="ret-return-dialog-title">${this._icon('undo-2', 18, '↩️')} Process Return</h3>
         <div class="ret-field-row">
           <div class="ret-field"><label for="ret-sale-search">Sale / Receipt Number *</label>
             <div style="display:flex;gap:8px">
@@ -9807,12 +9915,13 @@ const RetailSystem = {
         </div>
         <div id="ret-sale-items" style="margin-top:16px"></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-return-modal').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
           <button class="ret-btn ret-btn-danger" id="ret-save-btn" onclick="RetailSystem._saveReturn()">Process Refund</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    const _closeReturn = this._wireModalA11y(overlay, 'ret-return-dialog');
+    overlay.addEventListener('click', e => { if(e.target===overlay) _closeReturn(); });
     this._returnItems = [];
     this._returnSaleId = null;
     this._returnSaleOriginalMethod = null;
@@ -10002,7 +10111,7 @@ const RetailSystem = {
           msg += ` (+${this._fmt(d.data.store_credit_amount)} ${t('store credit issued')})`;
         }
         SubsystemApp.showToast(msg,'success');
-        document.getElementById('ret-return-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('ret-return-modal'));
         this._loadReturns();
       } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent=t('Process Refund');} }
     } catch(e) { if(btn){btn.disabled=false;btn.textContent=t('Process Refund');} }
@@ -10952,8 +11061,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'exq-resolve-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:420px">
-        <h3>${t('Resolve Exception')} — ${this._esc(name)}</h3>
+      <div class="ret-modal" style="width:420px" id="ret-exception-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-exception-dialog-title">
+        <h3 id="ret-exception-dialog-title">${t('Resolve Exception')} — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7">
           ${t('The recorded balance is')} <strong style="color:var(--text-primary)">${this._esc(this._signedQty(row.observed_quantity_on_hand))}</strong>.
           ${t('Count the shelf if you can, or leave the count blank for a backorder that stays negative until the delivery lands.')}
@@ -10965,12 +11074,13 @@ const RetailSystem = {
           <p style="color:var(--text-faint);font-size:11.5px;margin:4px 0 0">${t('A note is required. The server refuses to resolve without one.')}</p>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('exq-resolve-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="exq-resolve-btn" onclick="RetailSystem._saveResolveException('${this._esc(id)}')">${t('Resolve')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeException = this._wireModalA11y(overlay, 'ret-exception-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeException(); });
     document.getElementById('exq-resolve-note')?.focus();
   },
 
@@ -10995,7 +11105,7 @@ const RetailSystem = {
       const res = await this._post(`/api/sub/retail/inventory/stock-exceptions/${encodeURIComponent(id)}/resolve`, body);
       if (res && res.status === 'success') {
         SubsystemApp.showToast(t('Exception resolved.'), 'success');
-        document.getElementById('exq-resolve-modal')?.remove();
+        this._closeModalOverlay(document.getElementById('exq-resolve-modal'));
         await this._loadExceptionStock();
       } else {
         SubsystemApp.showToast((res && res.message) || t('Could not resolve this exception.'), 'error');
@@ -12440,8 +12550,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-restore-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:460px">
-        <h3>${this._icon('triangle-alert', 18, '⚠️')} ${t('Restore This Backup?')}</h3>
+      <div class="ret-modal" style="width:460px" id="ret-restore-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-restore-dialog-title">
+        <h3 id="ret-restore-dialog-title">${this._icon('triangle-alert', 18, '⚠️')} ${t('Restore This Backup?')}</h3>
         <p style="color:var(--text);font-size:14px;line-height:1.7;margin:0 0 14px">
           ${t('This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.')}
         </p>
@@ -12459,12 +12569,13 @@ const RetailSystem = {
         </p>
         <p style="color:var(--text-muted);font-size:12px;margin:0 0 22px;word-break:break-all">${this._esc(filename)}</p>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-restore-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-danger" id="bex-restore-confirm-btn" onclick="RetailSystem._confirmRestore('${this._esc(filename).replace(/'/g,"\\'")}')">${t('Yes, Restore & Overwrite')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeRestore = this._wireModalA11y(overlay, 'ret-restore-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeRestore(); });
   },
 
   async _confirmRestore(filename) {
@@ -12484,8 +12595,7 @@ const RetailSystem = {
     } catch (e) {
       SubsystemApp.showToast(t('Error'), 'error');
     }
-    const modal = document.getElementById('ret-restore-modal');
-    if (modal) modal.remove();
+    this._closeModalOverlay(document.getElementById('ret-restore-modal'));
   },
 
   // ── SCANNER SETTINGS ──────────────────────────────────────────────────────
@@ -13100,19 +13210,20 @@ const RetailSystem = {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
-      <div class="ret-modal">
-        <h3>${t('Bounce')}</h3>
+      <div class="ret-modal" id="ret-cheque-bounce-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-cheque-bounce-dialog-title">
+        <h3 id="ret-cheque-bounce-dialog-title">${t('Bounce')}</h3>
         <div class="ret-field"><label for="bounce-reason">${t('Reason')} *</label>
           <input type="text" id="bounce-reason" placeholder="${this._esc(t('Reason for the bounce, e.g. insufficient funds'))}" /></div>
         <div class="ret-field"><label for="bounce-ref">${t('Bank Reference')}</label><input type="text" id="bounce-ref" /></div>
         <div class="ret-field"><label for="bounce-date">${t('Occurred On')}</label><input type="date" id="bounce-date" /></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-danger" onclick="RetailSystem._submitBounceCheque('${this._esc(id)}')">${t('Bounce')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeBounce = this._wireModalA11y(overlay, 'ret-cheque-bounce-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeBounce(); });
     const input = document.getElementById('bounce-reason');
     if (input) input.focus();
   },
@@ -13126,8 +13237,11 @@ const RetailSystem = {
     }
     const bank_reference = (document.getElementById('bounce-ref') || {}).value || undefined;
     const occurred_on = (document.getElementById('bounce-date') || {}).value || undefined;
-    const overlay = reasonEl && reasonEl.closest('.ret-modal-overlay');
-    if (overlay) overlay.remove();
+    // Unified onto the wired close (see _wireModalA11y/_closeModalOverlay) --
+    // this used to be its own `reasonEl.closest('.ret-modal-overlay').remove()`,
+    // a THIRD distinct DOM lookup among the cheque modals that bypassed the
+    // Escape listener/queue entry the other two close paths already tear down.
+    this._closeModalOverlay(reasonEl);
     await this._postChequeTransition(id, 'bounce', { reason, bank_reference, occurred_on });
   },
 
@@ -13143,8 +13257,8 @@ const RetailSystem = {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
-      <div class="ret-modal">
-        <h3>${t('Endorse')}</h3>
+      <div class="ret-modal" id="ret-cheque-endorse-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-cheque-endorse-dialog-title">
+        <h3 id="ret-cheque-endorse-dialog-title">${t('Endorse')}</h3>
         <div class="ret-field"><label for="endorse-target">${t('Endorse To')} *</label>
           <select id="endorse-target"><option value="">${t('Select party…')}</option>
             <optgroup label="${this._esc(t('Supplier'))}">${supOpts}</optgroup>
@@ -13152,12 +13266,13 @@ const RetailSystem = {
           </select></div>
         <div class="ret-field"><label for="endorse-date">${t('Occurred On')}</label><input type="date" id="endorse-date" /></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitEndorseCheque('${this._esc(id)}')">${t('Endorse')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeEndorse = this._wireModalA11y(overlay, 'ret-cheque-endorse-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeEndorse(); });
   },
 
   async _submitEndorseCheque(id) {
@@ -13166,8 +13281,10 @@ const RetailSystem = {
     if (!val) { SubsystemApp.showToast(t('Select party…'), 'error'); return; }
     const [to_party_type, to_party_id] = val.split(':');
     const occurred_on = (document.getElementById('endorse-date') || {}).value || undefined;
-    const overlay = sel && sel.closest('.ret-modal-overlay');
-    if (overlay) overlay.remove();
+    // Unified onto the wired close, same reasoning as _submitBounceCheque's
+    // own comment: this used to be its own `sel.closest('.ret-modal-overlay')
+    // .remove()`, a SECOND distinct DOM lookup among the cheque modals.
+    this._closeModalOverlay(sel);
     await this._postChequeTransition(id, 'endorse', { to_party_type, to_party_id, occurred_on });
   },
 
@@ -13180,8 +13297,8 @@ const RetailSystem = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-cheque-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide">
-        <h3>${this._icon('receipt', 18, '🧾')} ${t('Record a Cheque')}</h3>
+      <div class="ret-modal ret-modal-wide" id="ret-cheque-record-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-cheque-record-dialog-title">
+        <h3 id="ret-cheque-record-dialog-title">${this._icon('receipt', 18, '🧾')} ${t('Record a Cheque')}</h3>
         <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:12px">
           <div class="ret-field" style="margin:0"><label for="chq-party">${t(direction === 'in' ? 'Customer' : 'Supplier')} *</label>
             <select id="chq-party"><option value="">${t('Select party…')}</option>${partyOpts}</select></div>
@@ -13203,12 +13320,13 @@ const RetailSystem = {
         <div class="ret-field"><label for="chq-account">${t('Account Number')}</label><input type="text" id="chq-account" /></div>
         <div class="ret-field"><label for="chq-notes">${t('Notes')}</label><input type="text" id="chq-notes" /></div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="this.closest('.ret-modal-overlay').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitRecordCheque('${direction}')">${t('Record Cheque')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const _closeRecordCheque = this._wireModalA11y(overlay, 'ret-cheque-record-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeRecordCheque(); });
   },
 
   async _submitRecordCheque(direction) {
@@ -13233,8 +13351,11 @@ const RetailSystem = {
       });
       if (d.status === 'success') {
         SubsystemApp.showToast(t('Cheque recorded'), 'success');
-        const overlay = document.getElementById('ret-cheque-modal');
-        if (overlay) overlay.remove();
+        // Unified onto the wired close, same reasoning as the bounce/endorse
+        // submits above: this used to be its own
+        // `document.getElementById('ret-cheque-modal').remove()`, the THIRD
+        // distinct DOM lookup among the cheque modals' close paths.
+        this._closeModalOverlay(document.getElementById('ret-cheque-modal'));
         this._loadCheques();
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
@@ -13262,10 +13383,10 @@ const RetailSystem = {
       const overlay = document.createElement('div');
       overlay.className = 'ret-modal-overlay';
       overlay.innerHTML = `
-        <div class="ret-modal ret-modal-wide">
+        <div class="ret-modal ret-modal-wide" id="ret-cheque-view-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-cheque-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 style="margin:0">${t('Cheque')} ${this._esc(cheque.cheque_number || '')}</h3>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
+            <h3 id="ret-cheque-view-dialog-title" style="margin:0">${t('Cheque')} ${this._esc(cheque.cheque_number || '')}</h3>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Amount')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(cheque.amount)} ${this._esc(cheque.currency || '')}</div></div>
@@ -13293,7 +13414,8 @@ const RetailSystem = {
           </table>
         </div>`;
       document.body.appendChild(overlay);
-      overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+      const _closeChequeView = this._wireModalA11y(overlay, 'ret-cheque-view-dialog');
+      overlay.addEventListener('click', e => { if (e.target === overlay) _closeChequeView(); });
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');

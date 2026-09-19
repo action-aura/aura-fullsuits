@@ -4862,8 +4862,43 @@ the reason to write a gap down is so nobody has to rediscover it by hand:
    correctly in Arabic, and a catalogue parity test structurally cannot see
    this class of bug** — it compares key sets, never how a caller concatenates
    them. `7e79cb8d` closed one instance (the setup screen's "runs only once"
-   emphasis); the audit did not enumerate the rest, so others are believed to
-   remain, unfound rather than fixed.
+   emphasis).
+
+   **MEASURED 2026-09-19, and the item is much smaller than it looked — most
+   of what matches the search is correct and deliberate.** Every `t('…') + …`
+   site in the frontend and every `tr("…") + …` site on Android was read:
+
+   - The dominant shape is a NUMERAL followed by a counted noun
+     (`diffSeconds + t('s ago')`, `"${count} " + tr("items")`), and that is
+     how Arabic actually counts — a bare singular after the numeral. The
+     Arabic catalogue values even carry their own leading space for it
+     (`'s ago'` → `" ثانية مضت"`, rendering `"5 ثانية مضت"`), and
+     `Strings.kt` has a comment explaining the choice for `"items"`. **A
+     mechanical sweep here would have broken working Arabic**, which is the
+     main reason this is written down rather than actioned.
+   - The next shape is label-then-value (`tr("Balance") + " " + money(…)`),
+     which has no ordering problem either.
+   - `_confirmSignOutWhileUnsynced` genuinely splits a sentence around a
+     number, but Arabic puts the count in the same position English does
+     ("يحتوي هذا الجهاز على 5 …"), so it reads correctly as built.
+
+   **What IS left is narrower and is a BIDI-ISOLATION bug, not a word-order
+   one.** `app-shell.js`'s offline sync banners build
+   `t('Offline since') + ' ' + when + ' — ' + pending + ' ' + t('unsynced')`
+   into `innerHTML`, putting a Latin clock time and a Latin numeral inside an
+   Arabic sentence, separated by an em-dash, with nothing isolating them.
+   Under `dir="rtl"` the neutral characters between two LTR runs are resolved
+   by the bidi algorithm and can visibly swap sides. `subsystem-retail.js`
+   solved exactly this with `_bdi()` — and `retail_surface_i18n_test.js`
+   guards it hard, including the subtlety that `<bdi>`'s own `dir="auto"` is
+   NOT enough because it infers direction from the first strong character, so
+   the direction must be stated. **But that suite only scans
+   `subsystem-retail.js`; `app-shell.js` has no `_bdi` helper at all (zero
+   occurrences) and is not covered.** Three call sites: the two offline
+   headlines and the `head + ' · ' + pending` pill.
+   Note `_confirmSignOutWhileUnsynced`'s message is NOT one of them — it goes
+   to `_confirm`, which escapes it as text, so a `<bdi>` tag there would ship
+   as literal angle brackets to the shopkeeper.
 4. ~~**`_formatClockTime` has a locale bug.**~~ **CLOSED 2026-09-19, and it
    was not one site but six.** The diagnosis was exactly right —
    `d.toLocaleTimeString([], …)` asks `Intl` for the RUNTIME's default, i.e.
