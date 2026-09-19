@@ -5173,3 +5173,41 @@ Mutation-proved on the real product, both directions:
 
 That second mutant is the one that matters: it shows the guard has real
 granularity rather than only noticing when everything breaks.
+
+### 2026-09-19 (later still) - the Owner suite was run, and it was not blocked after all
+
+Two entries above recorded Owner's pytest suite as unrunnable, on the grounds
+that it "needs the repo-root venv, which the worktree isolation guard will not
+reach". **That was wrong, and it was my own claim repeated from an agent's
+report without checking it.** The same venv had been in use all session for
+the retail suite. The guard had refused a *subagent's* shell, not the work.
+
+Run: **1,265 passed, 1 failed, in 1h40m.**
+
+The single failure is
+`test_phase9_5e_dev_server_port_isolation.py::test_real_server_start_health_check_and_stop_cycle`,
+and it is an artefact of running inside a git worktree rather than a product
+defect. `owner/tools/dev_server/port_isolation.py:104` resolves the
+interpreter as:
+
+    python_exe = owner_dir.parent / ".venv" / "Scripts" / "python.exe"
+
+i.e. `<repo-root>/.venv`. A git worktree has no `.venv` of its own — the
+environment lives in the main checkout — so the path does not exist and the
+test raises `ServerStartError: venv python not found`. Every other test in the
+file and the suite passes.
+
+**Not fixed, deliberately.** Making it resolve robustly (falling back to
+`sys.executable`, which by definition already has the dependencies, since it
+is running the test) is a two-line change and would make the suite pass in a
+worktree. But `owner/` is another collaborator's area — CLAUDE.md is explicit
+about that and about `master` lagging their branches badly — and this is their
+dev-server tooling, not test scaffolding that happens to live near it.
+Reported rather than quietly changed.
+
+The useful correction for anyone reading the earlier entries: **Owner's suite
+runs fine from a worktree.** Use
+`C:\Users\MSI\Desktop\aura-fullsuits\.venv\Scripts\python.exe -m pytest owner/tests -q`,
+allow about 1h40m, and expect exactly that one environment failure until
+someone with ownership decides whether to make the path resolution
+worktree-aware.
