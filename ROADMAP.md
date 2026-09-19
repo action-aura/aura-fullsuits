@@ -4827,13 +4827,62 @@ decision.
 Each commit above already named its own leftovers; consolidated here because
 the reason to write a gap down is so nobody has to rediscover it by hand:
 
-1. **~32 desktop modals still have no dialog semantics** — no `role="dialog"`,
-   no `aria-modal`, no focus management, no Escape, mouse-only. Only
-   `_confirm()` (the original reference implementation) plus the 3 wired in
-   `eb6a308c` (customer, sale/invoice, AR/AP party statement) are correct.
-   The shared `_wireModalA11y`/`_closeModalOverlay` pair in
-   `products/retail/frontend/subsystem-retail.js` already does the work the
-   remaining ~32 need — closing this is calling it, not designing it again.
+1. ~~**~32 desktop modals still have no dialog semantics.**~~ **CLOSED
+   2026-09-19 — and it was 27, not ~32.** An inventory was taken before any
+   code was written, and it corrected three things at once: there are **31**
+   modal-building sites (this file's own comment claimed "~35"), 4 were
+   already correct, and the four correct ones were the **view** modals
+   (`_viewCustomer`, `_viewSale`), not the add/edit forms — so
+   `_showCustomerModal`, the form a shopkeeper actually types into, was still
+   unwired while a note recorded "the customer modal" as done.
+
+   The inventory also caught two traps a mechanical pass would have sprung:
+   `_viewQuotation`'s dialog div carries `id="qt-print-area"` and print CSS
+   selects on it, so a tidy rename would have silently broken printing a
+   quotation; and `_showScanNotFound` (12s) / `_showReceipt` (8s) auto-dismiss
+   on timeouts that removed the overlay directly, so every missed barcode scan
+   would have leaked a listener.
+
+   **The part that had to be fixed FIRST, because wiring the modals is what
+   would have introduced it:** every dialog registers its Escape handler on
+   `document`. With two dialogs open — and this file opens two on purpose in
+   three places, each raising `_confirm` from an already-open form — both
+   handlers are siblings in one dispatch, not a bubble chain, so
+   `stopPropagation` on one does not reach the other. **One Escape would have
+   fired both**, discarding the shopkeeper's answer and the half-filled form
+   behind it together. Dialogs now take a numbered place in a queue
+   (`_modalKeyStack`); only the front one answers a key, and a layer whose
+   overlay left by a path bypassing `close()` is pruned so it cannot sit in
+   front swallowing later Escapes.
+
+   **And the reference implementation itself had no accessible name.**
+   `_confirm` — the dialog behind every delete, void and licence deactivation
+   — had `role="alertdialog"` and `aria-modal` and nothing pointing at its own
+   title, so it announced as bare "alert dialog". It survived precisely
+   because it was the reference: 27 modals were wired by copying its keyboard
+   handling and nobody read its markup. Caught by the new coverage suite on
+   its first run, before that suite had ever been green.
+
+   **Why two new suites.** The agent that wired the 27 mutation-proved its own
+   work and reported honestly that **nothing went red** — it removed a
+   `_wireModalA11y` call and reverted a close path to a bare `.remove()`,
+   re-ran all fourteen suites, and got byte-identical green output. Fourteen
+   passing suites were not evidence about the change at all. So:
+   `retail_modal_stack_test.js` drives the real helpers through a stubbed DOM
+   (one Escape closes one dialog, the next closes the one beneath, a lone
+   modal still closes, a leaked layer does not wedge the queue, a `_confirm`
+   underneath ignores a key aimed above it); and
+   `retail_modal_a11y_coverage_test.js` is a derived structural rule, not a
+   list — every overlay built must be accounted for by a `_wireModalA11y` call
+   plus exactly one named exemption, every dialog must carry `aria-modal` and
+   a name whose target id exists, and no close path may remove an overlay
+   behind the helpers' back. Modal #32 is under test the day it is written.
+
+   Seven of eight mutants across the two suites go red. The survivor is
+   recorded in the test file with its reason: `close()` removes the overlay,
+   which makes the layer detached, which the prune then collects — the
+   explicit drop and the prune genuinely overlap, so no behavioural test can
+   separate them.
 2. ~~**~120 desktop form fields have a visible `<label>` not programmatically
    associated with its input.**~~ **CLOSED later the same day, 2026-09-19.**
    The estimate was close: measured, `subsystem-retail.js` held 128 `<label>`
@@ -4899,6 +4948,24 @@ the reason to write a gap down is so nobody has to rediscover it by hand:
    Note `_confirmSignOutWhileUnsynced`'s message is NOT one of them — it goes
    to `_confirm`, which escapes it as text, so a `<bdi>` tag there would ship
    as literal angle brackets to the shopkeeper.
+
+   **CLOSED 2026-09-19** for the two offline banners, which were the real
+   defect. `app-shell.js` gained its own `_bdi` (duplicated rather than
+   shared, matching `_esc` directly above it — no module system), and the
+   isolation happens at the SOURCE, per branch, because the two branches need
+   opposite directions: `clock` is "14:20" with no strong character, so `ltr`
+   must be stated; the `_formatRelativeTime` fallback returns Arabic, and
+   forcing `ltr` on that would flip it. A single wrap at the join would have
+   had to guess, and the first version of the fix did exactly that before it
+   was caught. `_syncIndicatorText`'s pill was deliberately left alone: its
+   numbers sit between Arabic on both sides, so they resolve to the
+   surrounding direction and stay put — wrapping them would be cargo cult.
+   Pinned by a second check in `retail_locale_formatting_test.js`,
+   mutation-proved three ways. That check needed fixing twice itself: it used
+   `.test()` ("at least one match") against two banners, so half the fix could
+   be deleted with the suite green, and an earlier version matched three
+   headlines where there are two because the new helper's docstring quotes the
+   expression while explaining it.
 4. ~~**`_formatClockTime` has a locale bug.**~~ **CLOSED 2026-09-19, and it
    was not one site but six.** The diagnosis was exactly right —
    `d.toLocaleTimeString([], …)` asks `Intl` for the RUNTIME's default, i.e.
