@@ -19,6 +19,40 @@ independent products:
   actively developed product.
 - **Aura Clinic** (`products/clinic/`) — clinic management, structurally
   mirrors Retail (`backend/desktop/frontend/packaging/tests`).
+  **BUT IT HAS NO APPLICATION UI, AND LAUNCHING IT OPENS A 404.** Measured
+  2026-09-19 by importing the real app object and asking it, not by reading:
+
+      clinic routes registered        90
+      GET /                          404
+      GET /index.html                404
+      GET /static/index.html         404
+      GET /static/licensing.html     200
+      GET /static/einvoicing.html    200
+      GET /static/subsystem-clinic.js 200
+
+  `app.py` serves `/static` from `frontend/` but registers no `/` route, and
+  there is no `index.html` and no `app-shell.js` anywhere in the product.
+  `desktop/launcher_clinic.py:238` opens `http://127.0.0.1:{port}` — the bare
+  root — so the desktop app boots a window onto a 404.
+
+  The backend is real and substantial (90 routes, 19 test files all passing),
+  and `frontend/subsystem-clinic.js` contains the actual screens — patients,
+  bookings, doctors, invoices, payments, lab expenses, prescriptions — but
+  NOTHING CAN LOAD THEM. They are a subsystem written for a shell that exists
+  only in `products/retail/`. The two pages that do serve (`licensing.html`,
+  `einvoicing.html`) are standalone and reachable only by typing their path.
+
+  The product's own source says so in three places, which is how this was
+  found: `subsystem-clinic.js:167` ("no index.html and no app-shell.js, so
+  neither table can be reached today"), `licensing.js:4` ("no such shell
+  currently exists anywhere in this repo"), and `launcher_clinic.py:10` (the
+  readiness check "used to poll `/` (never served by any route)"). Nobody had
+  collected them into a statement about the product.
+
+  So treat "Clinic mirrors Retail" as true of the FOLDER LAYOUT and false of
+  the running software. Anything that assumes a Clinic user interface — a
+  demo, a screenshot, a release note, an estimate — is assuming something
+  that does not exist yet.
 - **Aura Owner Control Center** (`owner/`) — internal admin platform for
   Action Aura itself (customers, subscriptions, licensing, payments,
   employee management, CRM, i18n/RTL, audit). Not customer-facing.
