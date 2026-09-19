@@ -97,19 +97,26 @@ object AuraPalette {
     val CALM = AuraColors(
         name = "dark",
         isDark = true,
-        surfaceApp = Color(0xFF0F1319),
-        surfaceSunken = Color(0xFF0B0F15),
-        surfacePanel = Color(0xFF151A23),
-        surfaceRaised = Color(0xFF171D27),
-        surfaceTill = Color(0xFF1A212C),
-        surfaceHover = Color(0xFF212936),
-        surfaceActive = Color(0xFF273140),
+        // 2026-09-19: Action-Aura-Brand-Guide.md re-grounding -- surfaces
+        // deepened toward the guide's Dark-surface #101A30 (all six below),
+        // and the accent moved off periwinkle blue onto Retail's own light
+        // accent stop (#F0B87A). See
+        // DesktopTokenParityContractTest.surface_tokens_match_the_desktop_dark_palette
+        // / accent_tokens_match_the_desktop_dark_palette and main.css's
+        // `html[data-theme="dark"]` block for the same diff.
+        surfaceApp = Color(0xFF0A111E),
+        surfaceSunken = Color(0xFF080D18),
+        surfacePanel = Color(0xFF0F1829),
+        surfaceRaised = Color(0xFF101A2E),
+        surfaceTill = Color(0xFF121D34),
+        surfaceHover = Color(0xFF172540),
+        surfaceActive = Color(0xFF1B2B4C),
         textPrimary = Color(0xFFEDF2F8),
         textSecondary = Color(0xFFC3CDDB),
         textTertiary = Color(0xFF9FADC0),
-        accentAction = Color(0xFF98ADF4),
+        accentAction = Color(0xFFF0B87A),
         onAccent = Color(0xFF0F1834),
-        accentSoft = Color(0xFF202947),
+        accentSoft = Color(0xFF24293A),
         accentHighlight = Color(0xFFF0BF4C),
         borderDefault = Color(0xFF2E3947),
         borderHairline = Color(0xFF232B37),
@@ -126,13 +133,20 @@ object AuraPalette {
     val DAY = AuraColors(
         name = "light",
         isDark = false,
-        surfaceApp = Color(0xFFEAEEF3),
-        surfaceSunken = Color(0xFFF2F5F8),
-        surfacePanel = Color(0xFFFFFFFF),
-        surfaceRaised = Color(0xFFF8FAFC),
-        surfaceTill = Color(0xFFFFFFFF),
-        surfaceHover = Color(0xFFEEF2F7),
-        surfaceActive = Color(0xFFE6EAF0),
+        // 2026-09-19: Action-Aura-Brand-Guide.md re-grounding -- Ivory-leaning
+        // warm neutrals replacing the previous cool-grey surfaces (all six
+        // below), and the accent moved off blue entirely onto Retail's own
+        // warm trio (see [AuraBrand]'s RetailAccentDark/Mid/Light). See
+        // DesktopTokenParityContractTest.day_palette_matches_the_desktop_root_light_block
+        // and main.css's `:root` block for the exact same six-surface,
+        // one-accent diff this mirrors.
+        surfaceApp = Color(0xFFEFEDE9),
+        surfaceSunken = Color(0xFFF6F5F2),
+        surfacePanel = Color(0xFFFCFBFA),
+        surfaceRaised = Color(0xFFF9F8F7),
+        surfaceTill = Color(0xFFFCFBFA),
+        surfaceHover = Color(0xFFF3F1EE),
+        surfaceActive = Color(0xFFECEAE3),
         textPrimary = Color(0xFF141A24),
         textSecondary = Color(0xFF3D4859),
         textTertiary = Color(0xFF566071),
@@ -141,9 +155,13 @@ object AuraPalette {
         // exact register the owner's brief was leaving. Corrected into the
         // owner's named band (#1E3A8A-#24409B); a darker ink clears every
         // guard with MORE margin than the original #1745A9 ever had.
-        accentAction = Color(0xFF213C90),
+        // 2026-09-19: superseded again -- the brand guide replaced the blue
+        // family outright with Retail's own accent trio. #792E15 is that
+        // trio's dark stop, deepened further for AA text-on-fill contrast
+        // (main.css's --accent-action, `:root` block).
+        accentAction = Color(0xFF792E15),
         onAccent = Color(0xFFFFFFFF),
-        accentSoft = Color(0xFFEAEDF9),
+        accentSoft = Color(0xFFF2EBE8),
         accentHighlight = Color(0xFFC69010),
         borderDefault = Color(0xFFD3DAE3),
         borderHairline = Color(0xFFE3E8EF),
@@ -180,9 +198,14 @@ object AuraPalette {
         textPrimary = Color(0xFFE9F1FB),
         textSecondary = Color(0xFFBFCBDB),
         textTertiary = Color(0xFF9AAABD),
-        accentAction = Color(0xFF59AEF8),
+        // 2026-09-19: Action-Aura-Brand-Guide.md re-grounding -- the indigo
+        // accent moved onto Retail's warm trio (#E9CDAA, a lightened cousin
+        // of the brand's own light accent stop so Night keeps reading as the
+        // coldest-ground member of the dark family). Surfaces unchanged --
+        // only accents moved, per main.css's `html[data-theme="night"]` diff.
+        accentAction = Color(0xFFE9CDAA),
         onAccent = Color(0xFF0C1B28),
-        accentSoft = Color(0xFF13283A),
+        accentSoft = Color(0xFF222831),
         accentHighlight = Color(0xFFF1C255),
         borderDefault = Color(0xFF26344A),
         borderHairline = Color(0xFF1A2432),
@@ -209,9 +232,14 @@ object AuraPalette {
         textPrimary = Color(0xFFF0EDF9),
         textSecondary = Color(0xFFC9C3DC),
         textTertiary = Color(0xFFA49DBD),
-        accentAction = Color(0xFFB9A6FF),
+        // 2026-09-19: Action-Aura-Brand-Guide.md re-grounding -- the lavender
+        // accent moved onto a warm coral drawn from Retail's trio, keeping
+        // Dusk the warmest-hued member of the dark family. Surfaces
+        // unchanged -- only accents moved, per main.css's
+        // `html[data-theme="dusk"]` diff.
+        accentAction = Color(0xFFF69279),
         onAccent = Color(0xFF150F2E),
-        accentSoft = Color(0xFF2A2350),
+        accentSoft = Color(0xFF322637),
         accentHighlight = Color(0xFFF1C150),
         borderDefault = Color(0xFF34304C),
         borderHairline = Color(0xFF26223A),
@@ -235,7 +263,17 @@ object AuraPalette {
     val SAND = AuraColors(
         name = "sand",
         isDark = false,
-        surfaceApp = Color(0xFFEFE8DC),
+        // Deepened from #EFE8DC on 2026-09-19 to match the desktop block. Day's
+        // ground moved to the brand's warm Ivory in the same wave and landed on
+        // top of Sand: their separation halved, deltaE76 9.72 -> 4.78, and the
+        // two themes stopped being distinguishable at a glance. Sand is the
+        // PAPER to Day's ivory, so Sand deepens rather than Day retreating off
+        // the brand colour it was just given.
+        //
+        // Only the page ground. Taking the whole ground family down in step
+        // drags accent-as-text on surfaceActive to 4.25:1, under AA -- measured,
+        // and the reason the desktop pass left Sand alone in the first place.
+        surfaceApp = Color(0xFFEAE0CD),
         surfaceSunken = Color(0xFFF4EEE4),
         surfacePanel = Color(0xFFFBF7F0),
         surfaceRaised = Color(0xFFFAF6EE),
@@ -368,6 +406,30 @@ object AuraBrand {
     val RingStart: Color = Color(0xFF1745A9)
     val RingMid: Color = Color(0xFF3F7BE6)
     val RingEnd: Color = Color(0xFF5FE3D0)
+
+    // ── THE 2026-09-19 PIERCED-A MARK'S OWN COLOURS ──────────────────────────
+    // Action-Aura-Brand-Guide.md replaced the mark itself (see AuraMark.kt's
+    // header comment and MarkGeometryParityContractTest for the full story):
+    // a faceted letter A read through the Greek delta, pierced by a tilted
+    // orbit ring, retinted to RETAIL'S OWN accent trio -- NOT the master
+    // brand's teal (#2F7B7B), and NOT [RingStart]/[RingMid]/[RingEnd] above,
+    // which remain exactly as they were for their own still-live consumers
+    // (AuraAurora's ambient wash and LoginScreen's sign-in button gradient --
+    // see BrandMarkWiringContractTest, unrelated to this redesign). Values
+    // copied verbatim from products/retail/frontend/brand/aura-mark.svg's
+    // four gradient stops (fl/fr/rb/rf) and two solid fills; AuraMark.kt is
+    // their only consumer.
+    val RetailAccentDark: Color = Color(0xFFA06030)
+    val RetailAccentMid: Color = Color(0xFFC97B3D)
+    val RetailAccentLight: Color = Color(0xFFF0B87A)
+
+    /** The shared brand family's Navy (Action-Aura-Brand-Guide.md) -- the
+     *  pierced-A's right-facet shadow stop and the back-arc's starting stop. */
+    val Navy: Color = Color(0xFF16233D)
+
+    /** The mark's bright ink: the ridge highlight down the A's spine and the
+     *  ring's energy-node core (aura-mark.svg's `#FBE3C4`). */
+    val MarkHighlight: Color = Color(0xFFFBE3C4)
 
     /**
      * Second pass on the sign-in redesign (2026-09-08): the button's fill

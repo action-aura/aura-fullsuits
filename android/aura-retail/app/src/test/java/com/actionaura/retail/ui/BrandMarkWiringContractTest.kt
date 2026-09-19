@@ -131,54 +131,78 @@ class BrandMarkWiringContractTest {
         assertThat(auraMark).contains("ink: Color = TextPrimary")
     }
 
-    // ── (3b) 2026-09-08: the beacon (formerly a soft radial-gradient spark)
-    // is a flat diamond in the SAME ink as the A -- not a second fixed
-    // AuraBrand colour, not a gradient brush ───────────────────────────────
+    // ── (3b) 2026-09-19: the energy node (formerly a flat diamond, and
+    // before that a soft radial-gradient spark) is two flat circles in
+    // FIXED brand colour -- not the theme-following `ink`, not a gradient
+    // brush ─────────────────────────────────────────────────────────────
 
     @Test
-    fun aura_mark_beacon_is_a_flat_diamond_following_ink_not_a_gradient_spark() {
-        // The old spark drew two circles through a radial-gradient Brush
-        // (a blurred glow plus a solid white core) -- the owner read that
-        // softness as a generic tech/crypto glow. Neither may come back.
+    fun aura_mark_energy_node_is_two_flat_circles_in_fixed_brand_colour_not_a_gradient_spark() {
+        // WHAT THIS TEST USED TO PIN, and why it no longer can: the diamond
+        // shape this test pinned before 2026-09-19 was itself already a
+        // replacement for something older still -- a radial-gradient
+        // "spark" (a blurred glow plus a solid white core) the owner read as
+        // generic tech/crypto glow. That invariant -- no radial-gradient
+        // glow on the mark's own energy point -- is the one property that
+        // survives every redesign so far, so it is kept below unchanged.
+        // The DIAMOND shape and the `inkDuringDraw`/theme-following colour
+        // do NOT survive: Action-Aura-Brand-Guide.md's pierced-A ends its
+        // front arc at a bright NODE drawn as two circles in fixed brand
+        // colour (the whole pierced-A is fixed identity colour now, not a
+        // theme-following glyph -- see this file's own header comment), so
+        // this test can no longer catch a regression to the OLD diamond's
+        // exact four points, nor prove the node "follows ink" -- it no
+        // longer does, by design. Exact centre/radius parity against the
+        // SVG is MarkGeometryParityContractTest's job now.
+        //
         // Scoped to AuraMark()'s own body: AuraAurora (below, in the same
         // file) legitimately uses Brush.radialGradient for its unrelated
         // ambient wash, so an unscoped check here would false-positive.
         assertThat(auraMarkFunctionBody).doesNotContain("Brush.radialGradient")
-        // AuraBrand.SparkHalo/SparkFade -- asserted absent from AuraMark.kt
-        // here until 2026-09-08 -- no longer exist anywhere in Color.kt
-        // (removed as dead constants once this test proved they had no
-        // consumer left), so asserting AuraMark.kt doesn't reference them
-        // would be asserting silence about a name nothing can any longer
-        // reference. The geometry checks below are what actually pins the
-        // beacon is a flat diamond, not a gradient.
-        // The beacon's own geometry: a closed diamond at the ring's
-        // opening, filled (no Stroke style) with the same `inkDuringDraw`
-        // the A strokes use -- proving it follows the theme, not a fixed
-        // hex or a second AuraBrand colour.
-        assertThat(auraMark).contains("moveTo(196 * u, 45 * u)")
-        assertThat(auraMark).contains("lineTo(211 * u, 60 * u)")
-        assertThat(auraMark).contains("lineTo(196 * u, 75 * u)")
-        assertThat(auraMark).contains("lineTo(181 * u, 60 * u)")
-        assertThat(auraMark).contains("drawPath(path = beacon, color = inkDuringDraw)")
+        // Exactly two filled circles at the node -- not a diamond's four
+        // points, not a Stroke (Stroke is reserved for the ring arcs, per
+        // MarkGeometryParityContractTest).
+        assertThat(auraMarkFunctionBody.split("drawCircle(")).hasSize(3) // 2 occurrences -> 3 pieces
+        assertThat(auraMark).contains("center = Offset(95.2f * u, 61.5f * u)")
+        // Fixed brand colour, not the theme-following `ink` the old diamond
+        // read via `inkDuringDraw` -- MarkHighlight is the specific fixed
+        // constant the bright core reads.
+        assertThat(auraMarkFunctionBody).contains("AuraBrand.MarkHighlight")
+        assertThat(auraMarkFunctionBody).doesNotContain("inkDuringDraw")
     }
 
-    // ── (3c) 2026-09-08: the A's raised stroke weights and tightened apex ──
+    // ── (3c) 2026-09-19: the A is two filled facets sharing one apex and
+    // shoulder, not a stroked stem+bar ──────────────────────────────────
 
     @Test
-    fun aura_mark_a_uses_the_2026_09_08_raised_weights_and_tightened_apex() {
-        // Same silhouette, same 256-unit box -- only the stroke widths and
-        // the apex/base coordinates moved (peak 19->26, bar 15->20; base
-        // 80/176->84/172, apex y 76->70). Pinned so a future edit can't
-        // quietly drift back to the old, thinner A -- see aura-mark.svg and
-        // icons.js's MARK EVOLUTION comment for the full reasoning and the
-        // 1-bit-render measurement behind it.
-        assertThat(auraMark).contains("moveTo(84 * u, 178 * u)")
-        assertThat(auraMark).contains("lineTo(128 * u, 70 * u)")
-        assertThat(auraMark).contains("lineTo(172 * u, 178 * u)")
-        assertThat(auraMark).contains("width = 26 * u")
-        assertThat(auraMark).contains("moveTo(108 * u, 142 * u)")
-        assertThat(auraMark).contains("lineTo(148 * u, 142 * u)")
-        assertThat(auraMark).contains("width = 20 * u")
+    fun aura_mark_a_is_drawn_as_two_filled_facets_sharing_one_apex_and_shoulder_not_a_stroked_stem_and_bar() {
+        // WHAT THIS TEST USED TO PIN, and why it no longer can: the
+        // stroke-WEIGHT invariant this test pinned before 2026-09-19 (peak
+        // 19->26, bar 15->20) protected the RETIRED construction, where the
+        // A was two stroked lines (a stem + a crossbar) and "thinner" meant
+        // a smaller stroke-width number. Action-Aura-Brand-Guide.md's
+        // pierced-A is not stroked at all -- it is two FILLED facet
+        // polygons meeting at a shared apex/shoulder seam -- so there is no
+        // stroke-width left to regress to a thinner number, and this test
+        // can no longer catch that specific regression (nor pin the exact
+        // apex/shoulder/foot coordinates -- that precision now lives in
+        // MarkGeometryParityContractTest, derived from the SVG).
+        //
+        // What still matters, restated for this construction: the letter
+        // must read as two solid, FILLED planes -- not a flat single-tone
+        // wedge, and not a reversion to the old stroked stem+bar.
+        assertThat(auraMarkFunctionBody).contains("val leftFacet = Path()")
+        assertThat(auraMarkFunctionBody).contains("val rightFacet = Path()")
+        // Both facets share the SAME apex point -- one letter, two planes,
+        // not two independent shapes that merely happen to look similar.
+        assertThat(Regex("""moveTo\(60f \* u, 12\.6f \* u\)""").findAll(auraMarkFunctionBody).count())
+            .isEqualTo(2)
+        val afterLeftFacetDecl = auraMarkFunctionBody.substringAfter("val leftFacet = Path()")
+        val leftFacetDraw = afterLeftFacetDecl.substringBefore("val rightFacet = Path()")
+        assertThat(leftFacetDraw).doesNotContain("Stroke") // filled, not a stroked stem
+        val afterRightFacetDecl = afterLeftFacetDecl.substringAfter("val rightFacet = Path()")
+        val rightFacetDraw = afterRightFacetDecl.substringBefore("drawLine(")
+        assertThat(rightFacetDraw).doesNotContain("Stroke") // filled, not a stroked bar
     }
 
     // ── (4) Adaptive launcher icon points at vector layers, not the PNG ────
@@ -208,24 +232,46 @@ class BrandMarkWiringContractTest {
     }
 
     @Test
-    fun the_vector_foreground_draws_the_rings_arc() {
+    fun the_vector_foreground_draws_the_pierced_a_s_ring_as_two_arcs_behind_and_in_front_of_the_letter() {
+        // WHAT THIS TEST USED TO PIN, and why it no longer can: the old
+        // single "A 94 94 0 1 1" ring (one continuous 300-degree sweep,
+        // drawn in ONE stroke) is retired -- this test can no longer prove
+        // that specific single-arc construction is absent by its own
+        // assertion alone (a `doesNotContain` was added below for that).
+        // The pierced-A's ring is TWO half-ellipse arcs sharing the same
+        // geometry (ellipse rx=36 ry=8, centre 60,69, rotated -12deg): one
+        // dimmed BEHIND the letter's shoulders, one full-strength across
+        // the FRONT of the legs. Ported verbatim from aura-mark-on-dark.svg
+        // (this launcher's dark-ground twin of aura-mark.svg).
         val fg = source("src/main/res/drawable/ic_launcher_foreground.xml")
-        assertThat(fg).contains("A 94 94 0 1 1")
+        assertThat(fg).doesNotContain("A 94 94 0 1 1") // the old single-arc ring must not come back
+        assertThat(fg).contains("M 24 69 A 36 8 0 0 1 96 69") // back arc
+        assertThat(fg).contains("M 24 69 A 36 8 0 0 0 96 69") // front arc
     }
 
     @Test
-    fun the_vector_foreground_draws_the_2026_09_08_a_and_flat_beacon() {
-        // Same pass as AuraMark.kt's -- re-anchored here to the SAME
-        // strictness, not deleted: raised A stroke weights/tightened apex,
-        // and the old radial-gradient spark replaced by a flat diamond
-        // fillColor (the launcher's fixed ink, not a Composable `ink`,
-        // since adaptive icons cannot host one).
+    fun the_vector_foreground_draws_the_pierced_a_s_filled_facets_and_circular_energy_node() {
+        // WHAT THIS TEST USED TO PIN, and why it no longer can: the
+        // 2026-09-08 pass this test name referenced (raised A stroke
+        // weights, tightened apex, flat diamond beacon) protected the
+        // RETIRED stroked-stem-and-bar A and its diamond beacon -- neither
+        // exists in this construction, so this test can no longer catch a
+        // regression to THOSE specific numbers (that precision, for the
+        // SOURCE (Compose) side, now lives in
+        // BrandMarkWiringContractTest's own facet/energy-node tests above
+        // and in MarkGeometryParityContractTest; this test's remaining job
+        // is narrower -- prove the LAUNCHER XML actually carries the new
+        // shapes, not just that AuraMark.kt does).
+        // Re-anchored to the SAME strictness for the NEW construction: two
+        // FILLED facet polygons (not a stroked stem+bar) sharing the apex
+        // (60,12.6) and shoulder (60,56), and a circular energy node (not a
+        // diamond, and not a radial-gradient glow).
         val fg = source("src/main/res/drawable/ic_launcher_foreground.xml")
-        assertThat(fg).contains("M 84 178 L 128 70 L 172 178")
-        assertThat(fg).contains("android:strokeWidth=\"26\"")
-        assertThat(fg).contains("M 108 142 L 148 142")
-        assertThat(fg).contains("android:strokeWidth=\"20\"")
-        assertThat(fg).contains("M 196 45 L 211 60 L 196 75 L 181 60 Z")
+        assertThat(fg).contains("M60 12.6 L60 56 L40 104 L22 104 Z") // left facet
+        assertThat(fg).contains("M60 12.6 L98 104 L80 104 L60 56 Z") // right facet
+        assertThat(fg).doesNotContain("M 196 45 L 211 60 L 196 75 L 181 60 Z") // the old beacon diamond must not come back
+        assertThat(fg).contains("95.2") // the energy node's shared centre x
+        assertThat(fg).contains("61.5") // the energy node's shared centre y
         assertThat(fg).doesNotContain("android:type=\"radial\"")
     }
 
