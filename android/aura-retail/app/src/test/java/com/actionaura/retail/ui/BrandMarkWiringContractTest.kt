@@ -340,12 +340,21 @@ class BrandMarkWiringContractTest {
     fun sign_in_button_is_filled_with_the_brand_gradient_not_a_flat_accent_slab() {
         // The literal call this implementation uses for the button's fill --
         // see SignInButton's doc comment in LoginScreen.kt. Asserted as this
-        // exact string (not just "AuraBrand.RingMid" alone) so a future
-        // rewrite that keeps the ring colours but drops back to a solid fill
-        // still fails this test.
-        assertThat(loginScreen).contains("Brush.linearGradient(listOf(AuraBrand.RingMid, AuraBrand.RingEnd))")
+        // exact string (not just one stop alone) so a future rewrite that
+        // keeps the brand colours but drops back to a solid fill still fails.
+        //
+        // STOPS UPDATED 2026-09-19 with the brand. This pinned
+        // RingMid -> RingEnd, the retired blue-into-teal, whose whole
+        // justification was that it matched the mark's arc -- and the arc now
+        // draws Retail's amber, while teal belongs to the master brand rather
+        // than to this product. Pinning the old pair would have held the first
+        // screen of the app on the identity the owner replaced.
+        assertThat(loginScreen)
+            .contains("Brush.linearGradient(listOf(AuraBrand.RetailAccentMid, AuraBrand.RetailAccentLight))")
         // The retired flat fill this replaces -- must not come back.
         assertThat(loginScreen).doesNotContain("containerColor = AccentAction")
+        // Nor the retired ring pair, which is what this test used to require.
+        assertThat(loginScreen).doesNotContain("AuraBrand.RingEnd")
     }
 
     @Test

@@ -378,15 +378,29 @@ private fun ErrorBanner(message: String) {
  * Second pass (2026-09-08): the SHAPE fixed the pill complaint, but the FILL
  * -- a flat `AccentAction` slab -- was still "Material's default primary
  * container, whatever its corner radius" per the follow-up critique. Fill
- * replaced with the ring's own RingMid -> RingEnd gradient (the same
- * blue-into-teal pairing AuraMark.kt's arc draws), which is why this is a
- * plain [Box] with [Modifier.clickable] rather than a Material [Button]:
+ * replaced with the ring's own gradient, which is why this is a plain [Box]
+ * with [Modifier.clickable] rather than a Material [Button]:
  * `ButtonDefaults.buttonColors` has no gradient `containerColor` to give it.
  * `Role.Button` on the clickable modifier keeps the accessibility semantics
  * a real `Button` would have provided for free. Label ink is
  * [AuraBrand.OnBrand], not [OnAccent] or white -- the gradient is light at
- * BOTH ends, so it needs one fixed dark ink verified against both stops; see
- * `OnBrand`'s doc comment in Color.kt for the measured contrast ratios.
+ * BOTH ends, so it needs one fixed dark ink verified against both stops.
+ *
+ * Third pass (2026-09-19): the stops moved with the brand. This button read
+ * "the ring's own RingMid -> RingEnd gradient, the same blue-into-teal
+ * pairing AuraMark.kt's arc draws" -- and once the new identity landed, the
+ * arc draws Retail's amber while teal belongs to the master brand, not to
+ * this product. The rationale was still true and the colours were no longer
+ * the ring's, so the sign-in button -- the first thing anyone sees -- was the
+ * last piece of the retired identity left on screen. Caught by installing the
+ * build on a real phone and looking at it, not by any test.
+ *
+ * Now RetailAccentMid -> RetailAccentLight. `OnBrand` still clears AA at both
+ * ends, measured: 5.99:1 against the mid stop and 11.11:1 against the light
+ * one. Mid -> light rather than dark -> mid deliberately: `OnBrand` against
+ * the DARK accent is 3.95:1, under the 4.5:1 floor, so that pairing would
+ * have been illegible at one end of its own gradient -- the same trap the
+ * 2026-09-08 pass hit with RingStart and recorded in `OnBrand`'s doc comment.
  */
 @Composable
 private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
@@ -414,7 +428,7 @@ private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
                 // same corner-to-corner span AuraMark's own ring gradient
                 // uses, without threading the measured size through
                 // drawWithCache by hand.
-                brush = Brush.linearGradient(listOf(AuraBrand.RingMid, AuraBrand.RingEnd)),
+                brush = Brush.linearGradient(listOf(AuraBrand.RetailAccentMid, AuraBrand.RetailAccentLight)),
                 shape = shape,
             )
             .clickable(
