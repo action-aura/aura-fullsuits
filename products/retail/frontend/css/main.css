@@ -874,7 +874,7 @@ html[data-theme="dusk"] {
    ivory retint is reaching toward, so there is nothing to move it closer to.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="sand"] {
-  --surface-app: #efe8dc;
+  --surface-app: #eae0cd;
   --surface-till: #fffdf8;
   --surface-panel: #fbf7f0;
   --surface-sunken: #f4eee4;

@@ -753,6 +753,94 @@ function testThemeAccentsAreDistinguishable(lightTokens, themeMerged) {
   console.log(`PASS: all ${report.length} theme-pair --accent-action separations clear ΔE76 >= ${DELTA_E_FLOOR} (${report.join(', ')})`);
 }
 
+/**
+ * THE GROUND, not just the accent.
+ *
+ * WHY THIS EXISTS. On 2026-09-19 the brand re-theme moved Day's ground from a
+ * cool #eaeef3 to a warm off-white, which is right for the brand's Ivory — and
+ * walked it straight into Sand's territory. Day/Sand ground separation HALVED,
+ * from ΔE76 9.72 to 4.78 (their panels to 3.49). Every suite stayed green,
+ * including the accent check above, because Day and Sand still had accents
+ * 19.5 apart. Opening the two screenshots side by side is what caught it: two
+ * of the five themes had become the same theme.
+ *
+ * An accent is a few hundred pixels of button. The ground is the whole screen,
+ * and for a LIGHT theme the paper IS most of the identity. So the accent check
+ * alone was never sufficient, and this is its missing half.
+ *
+ * WHY THE RULE IS NOT ONE FLOOR FOR EVERYONE, which is the interesting part.
+ * Measured across the five grounds, the three DARK ones sit at:
+ *
+ *     dark/dusk 3.48    night/dusk 5.38    dark/night 6.20
+ *
+ * That is not sloppiness, it is arithmetic: near-black grounds have almost no
+ * room left on the lightness axis, so ΔE between them is structurally small no
+ * matter how deliberately they are chosen. Demanding 8 there would be a floor
+ * no correct design could meet, and the only way to pass it would be to stop
+ * being dark themes. The dark trio is told apart by its ACCENTS — which the
+ * check above already holds to ΔE >= 12 — and by hue.
+ *
+ * The light grounds have the whole upper range to work in and no such excuse,
+ * which is precisely where the collapse happened. So the floor applies to
+ * light-ground pairs only, and the dark pairs' exemption is stated here with
+ * its measurements rather than left as an unexplained carve-out.
+ */
+function testLightThemeGroundsAreDistinguishable(lightTokens, themeMerged) {
+  const GROUND_FLOOR = 8;
+  const grounds = { light: lightTokens.get('--surface-app') };
+  for (const [name, merged] of Object.entries(themeMerged)) {
+    grounds[name] = merged.get('--surface-app');
+  }
+  for (const [name, value] of Object.entries(grounds)) {
+    assert.ok(value && parseHex(value), `${name}'s --surface-app is missing or not hex ("${value}")`);
+  }
+
+  // "Light" by measured luminance, not by theme name -- a theme renamed or
+  // re-grounded tomorrow lands in the right bucket automatically.
+  const isLight = (hex) => relativeLuminance(parseHex(hex)) > 0.5;
+  const names = Object.keys(grounds);
+  assert.ok(names.length >= 5, `Expected 5 themes' worth of --surface-app, got ${names.length}.`);
+
+  const lightNames = names.filter((n) => isLight(grounds[n]));
+  // ANTI-VACUITY. If the luminance split ever classified everything as dark,
+  // every pair would be exempt and this check would pass while measuring
+  // nothing at all -- the exact shape this file's own header warns about.
+  assert.ok(
+    lightNames.length >= 2,
+    `Only ${lightNames.length} theme(s) classified as light-ground, so there are no pairs ` +
+    'left to compare and this check would pass without measuring anything. The ' +
+    'luminance split has broken, not the palette.'
+  );
+
+  const report = [];
+  const failures = [];
+  for (let i = 0; i < lightNames.length; i++) {
+    for (let j = i + 1; j < lightNames.length; j++) {
+      const a = lightNames[i], b = lightNames[j];
+      const de = deltaE76(grounds[a], grounds[b]);
+      report.push(`${a}/${b}=${de.toFixed(1)}`);
+      if (de < GROUND_FLOOR) {
+        failures.push(
+          `${a} (${grounds[a]}) vs ${b} (${grounds[b]}): ΔE76 ${de.toFixed(2)} — below the ${GROUND_FLOOR} floor`
+        );
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} light-theme pair(s) have grounds too close to tell apart:\n  ` +
+    failures.join('\n  ') +
+    `\n\nLight-ground separations (ΔE76): ${report.join(', ')}\n\n` +
+    'For a light theme the paper is most of the identity, so two light themes with ' +
+    'the same ground are the same theme wearing different buttons. Move one ground ' +
+    '-- never lower this floor to let a converged pair pass.'
+  );
+  console.log(
+    `PASS: all ${report.length} light-ground theme-pair separations clear ΔE76 >= ${GROUND_FLOOR} ` +
+    `(${report.join(', ')}); ${names.length - lightNames.length} dark-ground themes exempt by construction`
+  );
+}
+
 /* ── TIER 2 — the pairings the app actually renders ────────────────────────── */
 
 /**
@@ -1425,7 +1513,7 @@ const BLOCK_THEMES = ['dark', 'night', 'dusk', 'sand'];
    5 (light TIER 1) + 4 themes x 5 (per-theme TIER 1) + 1 (TIER 8 cross-theme
    distinguishability) + 6 (light TIER 2-5 rendered) + 4 themes x 3
    (per-theme TIER 2 rendered) = 44. */
-const EXPECTED_CHECKS = 44;
+const EXPECTED_CHECKS = 45;
 
 async function main() {
   const checks = [];
@@ -1506,9 +1594,11 @@ async function main() {
     checks.push(
       ['theme --accent-action values are pairwise distinguishable (ΔE76)',
         () => testThemeAccentsAreDistinguishable(tokens, themeMerged)],
+      ['light themes\' --surface-app grounds are pairwise distinguishable (ΔE76)',
+        () => testLightThemeGroundsAreDistinguishable(tokens, themeMerged)],
     );
   } else {
-    setupFailed('theme accent distinguishability (1 check could not run)',
+    setupFailed('theme accent + light-ground distinguishability (2 checks could not run)',
       new Error('the light token map or one of the four theme overlays failed to parse'));
   }
 
