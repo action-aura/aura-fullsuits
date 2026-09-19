@@ -484,6 +484,55 @@ The pattern worth carrying forward, since it found all three: **take a figure
 that is both STORED and DERIVED, and enumerate every writer of the stored
 one.** Do not reason from the screen's own list of events.
 
+### Corrections (round 5, 2026-09-19) — THREE MORE, and all three were shipped by the wave that wrote round 4
+
+This is the fifth round, and the pattern is now the point. Round 4 was written
+on 2026-09-18 by the same push that closed these three items, and it did not
+update them. **A correction round does not make the rest of the document
+current; it only fixes what that round looked at.**
+
+Struck through rather than deleted, per this section's standing convention:
+
+- ~~**A branch cannot be retired.**~~ **SHIPPED 2026-09-18.**
+  `POST /branches/<id>/retire` (CAP_EMPLOYEES) with four separate 409
+  refusals, because retiring a branch is a money-and-stock operation and not a
+  flag: it refuses the LAST active branch, refuses stock on hand (checked on
+  QUANTITY, not on the existence of a stock row — a zero-quantity row is not
+  stock), refuses an open cash session, and refuses an in-flight transfer at
+  EITHER end. `_resolve_working_branch` and `_default_branch` now filter
+  `COALESCE(status,'active')='active'`, so a retired branch stops being
+  selectable rather than merely being labelled. The old bullet's reasoning was
+  right about *why* it was hard — stock balances, the per-device branch pin,
+  open drawers — and those are exactly the four refusals.
+- ~~**AR/AP IS ANDROID-ONLY, inverting the usual pattern.**~~ **CLOSED
+  2026-09-18**, and it was closed in the direction this document predicted was
+  unusual: receivables, payables, party ledger, statements and party payments
+  now exist on the DESKTOP client too. The inversion is over; the note is kept
+  because "which client leads" is not a safe assumption in this repo either
+  way.
+- ~~**Loyalty redemption is desktop only — Android has no redemption UI at
+  all.**~~ **SHIPPED 2026-09-18.** The phone can now spend points at the till,
+  and the Charge button quotes the redemption-adjusted figure rather than the
+  raw cart total — it was showing the unadjusted total one line below the
+  discount it was ignoring.
+
+**Also closed the same week, and never in this document at all:** a tax-collected
+report figure net of returns; `create_product` could write an opening stock
+balance the ledger could not explain; a return did not net `total_spent`, so a
+refunded customer kept counting as a big spender.
+
+**And an accessibility state this document has never mentioned, which matters
+because the product ships Arabic-first to shops where the till operator may be
+using assistive tech.** As of 2026-09-19: the desktop shell has a skip link and
+named landmarks; `showToast` — the product's ONLY feedback surface — carries
+`role`/`aria-live` (assertive for errors, polite otherwise); four modals have
+full dialog semantics and **roughly 32 still do not**; and 124 of 128 form
+labels are now programmatically associated with their inputs, up from 5. Two
+ratchet suites pin the last two (`retail_form_label_association_test.js`,
+`retail_locale_formatting_test.js`). The remaining modals are the known gap —
+the shared `_wireModalA11y`/`_closeModalOverlay` helpers they need already
+exist, so closing it is calling them, not designing anything.
+
 ## How to give a good suggestion here
 
 1. Check whether it's already built before proposing it — this codebase has
