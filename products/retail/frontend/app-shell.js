@@ -549,6 +549,33 @@ const SubsystemApp = {
       .replace(/'/g, '&#39;');
   },
 
+  // Bidi isolation for a Latin/numeric value dropped into a translated
+  // sentence. The same helper subsystem-retail.js has carried for a while,
+  // duplicated here rather than shared because this frontend has no module
+  // system -- the same reason _esc directly above is a second copy.
+  //
+  // THE BUG IT PREVENTS, which the sync banners below had. The offline
+  // headline builds
+  //     t('Offline since') + ' ' + when + ' — ' + pending + ' ' + t('unsynced')
+  // into innerHTML. Under dir="rtl" that is an Arabic sentence containing TWO
+  // separate left-to-right runs (a clock time and a count) with neutral
+  // characters between them -- a space, an em-dash, another space. The
+  // Unicode bidi algorithm resolves those neutrals from their surroundings,
+  // and the two runs can swap sides: "15:45 — 3" renders as "3 — 15:45", so
+  // the shopkeeper reads the wrong number of unsynced sales and the wrong
+  // time, with nothing on screen looking broken.
+  //
+  // dir="ltr" is STATED, not left to <bdi>'s own dir="auto" default. auto
+  // picks direction from the first STRONG character, and "15:45" has none at
+  // all, so auto falls back to the paragraph direction -- which in Arabic is
+  // exactly the RTL that caused the problem. Isolation alone does not fix it.
+  // That reasoning is subsystem-retail.js's, arrived at the hard way and
+  // pinned by retail_surface_i18n_test.js; this copy keeps the same default
+  // so the two files cannot drift apart on it.
+  _bdi(text, dir) {
+    return `<bdi dir="${dir || 'ltr'}">${this._esc(text)}</bdi>`;
+  },
+
   // ── Device-activation predicate (single source of truth) ──────────────────
   // /api/licensing/status's NOT_CONFIGURED shape is ambiguous on its own: the
   // backend returns it both when licensing is genuinely unconfigured for this
@@ -3686,9 +3713,25 @@ const SubsystemApp = {
     // lastSuccess is guaranteed non-null here (_renderSyncBanner only routes
     // here when !data.never_synced), but fall back rather than ever render a
     // blank "Offline since" if the clock formatter can't be reached.
-    const when = clock || this._formatRelativeTime(lastSuccess) || '';
-    const headline = t('Offline since') + ' ' + this._esc(when) + ' — ' +
-      this._esc(String(pending)) + ' ' + t('unsynced');
+    // ISOLATED AT THE SOURCE, not at the join, because the two branches need
+    // OPPOSITE directions and a single wrap would have to guess. `clock` is
+    // "14:20" -- Latin digits, no strong character at all -- and needs dir
+    // stated as ltr, because <bdi>'s own dir="auto" would infer from the
+    // first strong character, find none, and fall back to the paragraph's
+    // RTL. The fallback branch is _formatRelativeTime, which in Arabic
+    // returns Arabic ("منذ ٥ ..."), and forcing ltr on THAT would flip it --
+    // the mirror image of the bug being fixed, and exactly the trap
+    // subsystem-retail.js's own _bdi comment warns about for _attribution().
+    const when = clock
+      ? this._bdi(clock)
+      : this._bdi(this._formatRelativeTime(lastSuccess) || '', 'auto');
+    // `when` and `pending` are now two separate left-to-right islands with
+    // only neutrals (space, em-dash, space) between them. Unisolated, the
+    // bidi algorithm resolves those neutrals from the surrounding Arabic and
+    // the two runs swap: "14:20 — 3" reads as "3 — 14:20", so the shopkeeper
+    // gets the wrong count and the wrong time with nothing looking broken.
+    const headline = t('Offline since') + ' ' + when + ' — ' +
+      this._bdi(String(pending)) + ' ' + t('unsynced');
 
     el.title = '';
     // State tokens, not the old HUD literals (#1e1e2e ground, #60a5fa accent,
@@ -3731,9 +3774,15 @@ const SubsystemApp = {
     // lastSuccess is guaranteed non-null here (_renderSyncBanner only routes
     // here when !data.never_synced), same fallback discipline as the plain
     // "behind" tier just above.
-    const when = clock || this._formatRelativeTime(lastSuccess) || '';
-    const headline = t('Still offline since') + ' ' + this._esc(when) + ' — ' +
-      this._esc(String(pending)) + ' ' + t('unsynced');
+    // Same two-branch isolation as the plain "behind" tier above, and for the
+    // same reason: ltr must be STATED for the clock (no strong character to
+    // infer from) and must NOT be forced on the Arabic relative-time
+    // fallback.
+    const when = clock
+      ? this._bdi(clock)
+      : this._bdi(this._formatRelativeTime(lastSuccess) || '', 'auto');
+    const headline = t('Still offline since') + ' ' + when + ' — ' +
+      this._bdi(String(pending)) + ' ' + t('unsynced');
     const detail = t("This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.");
 
     el.title = '';

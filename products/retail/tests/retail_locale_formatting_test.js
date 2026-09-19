@@ -66,6 +66,10 @@ const BARE_LOCALE = /\.toLocale(?:Date|Time)?String\(\s*(?:\)|\[\s*\])/g;
    were renamed or the read failed, an empty sweep would report clean. */
 const MIN_BYTES_SCANNED = 500000;
 
+function read(file) {
+  return fs.readFileSync(path.join(FRONTEND, file), 'utf8');
+}
+
 function jsFiles() {
   return fs.readdirSync(FRONTEND)
     .filter((f) => f.endsWith('.js'))
@@ -126,16 +130,111 @@ function testNoBareLocaleFormattingInTheRetailFrontend() {
   );
 }
 
+/**
+ * The other half of "rendered wrongly for the reader": not the FORMAT of a
+ * date but its DIRECTION.
+ *
+ * app-shell.js's offline sync banners interpolate a clock time and a count
+ * into a translated sentence, separated by an em-dash, straight into
+ * innerHTML. Under dir="rtl" that is an Arabic sentence containing two
+ * separate left-to-right runs with only neutral characters between them, and
+ * the bidi algorithm resolves those neutrals from their surroundings — so the
+ * two runs can swap sides and "14:20 — 3" reads as "3 — 14:20". The
+ * shopkeeper gets the wrong count and the wrong time, and nothing on screen
+ * looks broken.
+ *
+ * subsystem-retail.js has carried a `_bdi()` helper for this for a while, and
+ * retail_surface_i18n_test.js guards it hard — including the subtlety that
+ * <bdi>'s own dir="auto" is NOT enough, because it infers direction from the
+ * first strong character and a value like "14:20" has none, so auto falls
+ * back to the paragraph's RTL. But that suite scans subsystem-retail.js only.
+ * app-shell.js had no `_bdi` at all (zero occurrences) and no coverage, which
+ * is how two banners shipped without it.
+ *
+ * Pinned structurally rather than by rendering, because there is no bidi
+ * engine available here to render against — same reason the sibling suite
+ * asserts on the presence of a stated `dir` rather than on pixels.
+ */
+function testTheSyncBannersIsolateTheirInterpolations() {
+  const raw = read('app-shell.js');
+  // Comments only, stripped — the _bdi helper's own docstring quotes the
+  // headline expression verbatim while explaining it, so scanning raw text
+  // finds three "headlines" where there are two. (It did, first run.)
+  const src = stripped(raw)
+    .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+  assert.ok(
+    /_bdi\(text, dir\)/.test(src),
+    'app-shell.js no longer defines its own _bdi helper. It has no module system ' +
+    '(see _esc directly above it, a second copy for the same reason), so the helper ' +
+    'has to live in this file.'
+  );
+
+  // The clock branch must STATE ltr (the default), and the relative-time
+  // branch must pass 'auto' — forcing ltr on Arabic text would flip it.
+  //
+  // COUNTED, not merely present. There are two banners, and a `.test()` here
+  // was satisfied by either one of them: mutating the 'auto' out of the first
+  // banner left the second still matching, and the check stayed green while
+  // half the fix was gone. Found by mutation, fixed by counting.
+  const perBranch = (src.match(
+    /\?\s*this\._bdi\(clock\)\s*:\s*this\._bdi\(this\._formatRelativeTime\(lastSuccess\) \|\| '', 'auto'\)/g
+  ) || []).length;
+  assert.strictEqual(
+    perBranch, 2,
+    `${perBranch} of the 2 offline banners isolate \`when\` per branch. The two branches ` +
+    'need OPPOSITE directions: `clock` is "14:20" with no strong character, so ltr must ' +
+    'be stated; the _formatRelativeTime fallback is Arabic in Arabic, so forcing ltr on ' +
+    'it would be the mirror image of the bug this exists to prevent.'
+  );
+
+  // Anchored on `const headline =`, which only the real statements have. The
+  // looser pattern also matched the _bdi docstring, which quotes the
+  // expression to explain it — three headlines where there are two.
+  const headlines = src.match(/const headline = t\('(?:Still offline since|Offline since)'\)[^;]*;/g) || [];
+  assert.strictEqual(
+    headlines.length, 2,
+    `Expected the two offline sync-banner headlines, found ${headlines.length}.`
+  );
+  headlines.forEach((h) => {
+    assert.ok(
+      /_bdi\(String\(pending\)\)/.test(h),
+      'An offline banner headline interpolates `pending` without isolating it:\n  ' +
+      h.replace(/\s+/g, ' ').slice(0, 160) +
+      '\n\nIt sits between an em-dash and Arabic text; unisolated it can swap places ' +
+      'with the timestamp.'
+    );
+    assert.ok(
+      !/_esc\(when\)/.test(h),
+      'An offline banner headline is back to _esc(when). Escaping is not isolation — ' +
+      'it makes the value safe, not correctly ordered.'
+    );
+  });
+
+  console.log('PASS: both offline sync banners isolate their clock and count (ltr stated, Arabic fallback left auto)');
+}
+
 function main() {
-  try {
-    testNoBareLocaleFormattingInTheRetailFrontend();
-  } catch (err) {
-    console.error('FAIL: retail_locale_formatting_test.js');
-    console.error(String((err && err.message) || err));
+  const checks = [
+    ['no bare locale formatting', testNoBareLocaleFormattingInTheRetailFrontend],
+    ['the sync banners isolate their interpolations', testTheSyncBannersIsolateTheirInterpolations],
+  ];
+  const failures = [];
+  for (const [name, fn] of checks) {
+    try {
+      fn();
+    } catch (err) {
+      failures.push(name);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_locale_formatting_test.js — ${failures.length} of ${checks.length} checks failed`);
     process.exitCode = 1;
     return;
   }
-  console.log('PASS: retail_locale_formatting_test.js — 1 check');
+  console.log(`PASS: retail_locale_formatting_test.js — ${checks.length} checks`);
 }
 
 main();
