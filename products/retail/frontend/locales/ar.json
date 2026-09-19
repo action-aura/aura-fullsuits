@@ -1479,5 +1479,7 @@
   "Retire This Branch?": "تعطيل هذا الفرع؟",
   "It stops appearing when ringing sales or moving stock. Its past sales, drawers and reports stay exactly as they are, and it can be reopened by support.": "سيتوقف ظهوره عند تسجيل المبيعات أو نقل المخزون. تبقى مبيعاته ودُرجه وتقاريره السابقة كما هي تمامًا، ويمكن إعادة تفعيله عبر الدعم.",
   "Branch retired.": "تم تعطيل الفرع.",
-  "Could not retire this branch.": "تعذّر تعطيل هذا الفرع."
+  "Could not retire this branch.": "تعذّر تعطيل هذا الفرع.",
+  "Recording…": "جارٍ التسجيل…",
+  "Could not load this list. Check the connection and try again.": "تعذّر تحميل هذه القائمة. تحقّق من الاتصال ثم أعد المحاولة."
 }

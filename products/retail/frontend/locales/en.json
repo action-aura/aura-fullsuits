@@ -1479,5 +1479,7 @@
   "Retire This Branch?": "Retire This Branch?",
   "It stops appearing when ringing sales or moving stock. Its past sales, drawers and reports stay exactly as they are, and it can be reopened by support.": "It stops appearing when ringing sales or moving stock. Its past sales, drawers and reports stay exactly as they are, and it can be reopened by support.",
   "Branch retired.": "Branch retired.",
-  "Could not retire this branch.": "Could not retire this branch."
+  "Could not retire this branch.": "Could not retire this branch.",
+  "Recording…": "Recording…",
+  "Could not load this list. Check the connection and try again.": "Could not load this list. Check the connection and try again."
 }

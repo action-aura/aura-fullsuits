@@ -653,7 +653,26 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 ) {
                     if (charging) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.onPrimary)
-                    else Text(tr("Charge") + "  " + money(total), style = MaterialTheme.typography.labelLarge)
+                    // NET OF REDEEMED POINTS. This is the figure a cashier
+                    // reads aloud as "that'll be ...", so it has to be what
+                    // the customer actually hands over. It used to render the
+                    // raw `total`, which ignored `loyaltyValue` entirely --
+                    // so on every redemption the button contradicted the
+                    // "Redeemed value: X off this sale" line sitting directly
+                    // above it, and quoted the customer too much.
+                    //
+                    // The Subtotal row above deliberately keeps showing the
+                    // PRE-points `total`: it is captioned "Tax and discounts
+                    // are applied at checkout" and is the basket's own value.
+                    // Only this button claims to be what is owed now.
+                    //
+                    // Still a local preview -- the server remains the only
+                    // pricing authority (docs/architecture/financial-authority-
+                    // contracts.md), which is exactly why this stays labelled
+                    // "Charge" and never "Total". CartTotalHonestyContractTest
+                    // pins that distinction.
+                    else Text(tr("Charge") + "  " + money((total - loyaltyValue).coerceAtLeast(0.0)),
+                        style = MaterialTheme.typography.labelLarge)
                 }
             }
         }

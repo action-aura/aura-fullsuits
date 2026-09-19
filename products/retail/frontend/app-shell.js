@@ -4099,6 +4099,25 @@ const SubsystemApp = {
     // colours were being moved onto tokens -- so the toast test below now
     // watches this line instead.
     toast.style.cssText = `position:fixed;bottom:calc(var(--overlay-inset-block-end,24px) + var(--toast-stack-offset,0px));inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4);transition:bottom .18s ease`;
+    // ANNOUNCED, not merely shown. This toast is the product's ONLY feedback
+    // surface -- every validation failure, save confirmation, network error
+    // and stock warning in the whole app arrives here (this function's own
+    // header calls it "shown over EVERY screen"). Without a live region all
+    // of that was silent to a screen-reader user: they would submit a sale,
+    // hear nothing, and have no way to tell success from failure.
+    //
+    // `alert` for errors and `status` for the rest, which is the real
+    // distinction rather than decoration: `alert` is assertive and interrupts
+    // whatever is being read, which is correct for "that did not work" and
+    // wrong for "saved" -- an assertive success toast would talk over the
+    // cashier mid-task on every single write.
+    //
+    // aria-atomic so the whole sentence is re-read rather than just the words
+    // that changed, since these nodes are created complete and appended once.
+    const _isError = type === 'error';
+    toast.setAttribute('role', _isError ? 'alert' : 'status');
+    toast.setAttribute('aria-live', _isError ? 'assertive' : 'polite');
+    toast.setAttribute('aria-atomic', 'true');
     toast.textContent = msg;
     document.body.appendChild(toast);
 

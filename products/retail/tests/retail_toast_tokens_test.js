@@ -82,8 +82,18 @@ function makeElementStub() {
     removeProperty(name) { delete style[name]; },
     getPropertyValue(name) { return style[name] || ''; },
   };
+  // Attributes recorded so an assertion can read them back. Added when the
+  // toast gained its live region (role / aria-live / aria-atomic): a real DOM
+  // element has always had setAttribute, this fake did not, and showToast
+  // died with "toast.setAttribute is not a function" -- an incomplete fake
+  // reporting a failure the product does not have, exactly as this file's own
+  // header warns about getBoundingClientRect.
+  const attrs = {};
   return {
     style,
+    attrs,
+    setAttribute(name, value) { attrs[name] = String(value); },
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
     // Zero-sized: these checks are about COLOUR and DIRECTION, never geometry.
     // _restackToasts only needs the call not to throw; a real layout is the
     // browser suite's job, not this stub's.
@@ -230,6 +240,43 @@ function testUnknownOrOmittedTypeFallsBackToInfo() {
     assert.ok(!HEX_LITERAL.test(css), `fallback toast for type ${JSON.stringify(type)} contains a hex literal: ${css}`);
   }
   console.log('PASS: an omitted or unrecognised type falls back to the info tokens, never to undefined styling');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 3b — the toast is ANNOUNCED, not merely shown
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// This toast is the product's ONLY feedback surface -- every validation
+// failure, save confirmation, network error and stock warning arrives here
+// (showToast's own header calls it "shown over EVERY screen"). Before the live
+// region it carried no role and no aria-live at all, so all of that was silent
+// to a screen-reader user: they would ring a sale, hear nothing, and have no
+// way to tell success from failure.
+//
+// The error/non-error split is the part worth pinning rather than the mere
+// presence of an attribute. `alert`/`assertive` interrupts whatever is being
+// read, which is right for "that did not work" and WRONG for "saved" -- an
+// assertive success toast talks over the cashier on every single write.
+function testToastCarriesTheRightLiveRegionPerType() {
+  const { App, appended } = loadShellForToast(SHELL_SRC);
+
+  const err = fireToast(App, appended, 'it failed', 'error');
+  assert.strictEqual(err.getAttribute('role'), 'alert',
+    `an error toast must be role=alert so it interrupts. Got: ${err.getAttribute('role')}`);
+  assert.strictEqual(err.getAttribute('aria-live'), 'assertive',
+    `an error toast must be aria-live=assertive. Got: ${err.getAttribute('aria-live')}`);
+
+  for (const type of ['success', 'info', undefined]) {
+    const ok = fireToast(App, appended, 'saved', type);
+    assert.strictEqual(ok.getAttribute('role'), 'status',
+      `a ${JSON.stringify(type)} toast must be role=status, never alert -- assertive success ` +
+      `announcements talk over the cashier on every write. Got: ${ok.getAttribute('role')}`);
+    assert.strictEqual(ok.getAttribute('aria-live'), 'polite',
+      `a ${JSON.stringify(type)} toast must be aria-live=polite. Got: ${ok.getAttribute('aria-live')}`);
+    assert.strictEqual(ok.getAttribute('aria-atomic'), 'true',
+      'the whole sentence must be re-read, not just the changed words');
+  }
+  console.log('PASS: every toast carries a live region, assertive only for errors');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -568,6 +615,7 @@ const RUN = [
   testToastIsPositionedLogically,
   testEveryTypeUsesItsOwnStateTokens,
   testUnknownOrOmittedTypeFallsBackToInfo,
+  testToastCarriesTheRightLiveRegionPerType,
   testHexLiteralCheckIsMutationProved,
   testSyncBannerTiersCarryNoColourLiteral,
   testEverySyncTierUsesItsOwnStateTokens,

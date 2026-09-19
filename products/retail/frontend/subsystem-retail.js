@@ -1514,7 +1514,21 @@ const RetailSystem = {
 
       const onKeydown = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
-        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+        // `&& !danger` -- Enter must NOT confirm a destructive dialog. Enter
+        // is the key that submits every other form in this product, so a
+        // shopkeeper who hits it out of habit the instant a dialog appears
+        // would retire a branch, deactivate a promotion, wipe the shop's
+        // JoFotara credentials or deactivate this device's licence, with no
+        // further prompt. On a danger dialog focus starts on Cancel (below),
+        // so Enter activates THAT natively and resolves false.
+        //
+        // This is not a new idea: app-shell.js's own SubsystemApp.confirm
+        // already does exactly this and spells out the reasoning in its own
+        // comment. This function is a copy of it that lost both halves of
+        // the guard -- the Enter check here and the focus target below.
+        // Thirteen danger call sites in this file were riding on the broken
+        // copy, branch retirement among them.
+        if (e.key === 'Enter' && !danger) { e.preventDefault(); e.stopPropagation(); finish(true); }
       };
       document.addEventListener('keydown', onKeydown, true);
 
@@ -1523,9 +1537,14 @@ const RetailSystem = {
       const okBtn = document.getElementById('ret-confirm-ok');
       if (cancelBtn) cancelBtn.addEventListener('click', () => finish(false));
       if (okBtn) okBtn.addEventListener('click', () => finish(true));
-      // Focus moves INTO the dialog on open, onto the confirm action --
-      // matching where a keyboard user's very next Enter should land.
-      if (okBtn) okBtn.focus();
+      // Focus moves INTO the dialog on open. On an ordinary confirm that is
+      // the confirm action, where a keyboard user's next Enter should land.
+      // On a DESTRUCTIVE one it is Cancel, so the safe answer is the default
+      // and destroying something always takes a deliberate second action.
+      // The `danger ? cancel : ok` half is the other piece this copy lost --
+      // see the Enter guard above.
+      const _focusTarget = danger ? (cancelBtn || okBtn) : (okBtn || cancelBtn);
+      if (_focusTarget) _focusTarget.focus();
     });
   },
 
@@ -13251,7 +13270,13 @@ const RetailSystem = {
         <div id="pl-aging-${kind}" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">${t('Loading…')}</div>
         <div style="margin-top:14px;display:flex;align-items:baseline;gap:8px">
           <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${totalLabel}</span>
-          <span id="pl-total-${kind}" style="font-size:22px;font-weight:700;color:var(--text-money)">${this._fmt(0)}</span>
+          <!-- Seeded with an em dash, never a formatted zero. A zero amount
+               during a slow fetch reads as "nobody owes me anything" and is
+               indistinguishable from the real empty state -- on the one
+               figure a shopkeeper opens this screen to see. Same convention
+               as the Reports KPI tiles (rep-rev / rep-txn / rep-profit /
+               rep-avg / rep-tax), which all seed to a dash for this reason. -->
+          <span id="pl-total-${kind}" style="font-size:22px;font-weight:700;color:var(--text-money)">—</span>
         </div>
       </div>
       <div class="sub-chart-card">
@@ -13314,7 +13339,29 @@ const RetailSystem = {
         <td style="font-weight:600;color:var(--text-money)">${this._fmt(row.credit_balance)}</td>
       </tr>`).join('');
     } catch (e) {
+      // VISIBLE failure, not a console one. This catch used to be
+      // `console.error(e)` alone, which left the table and the aging strip
+      // sitting on "Loading…" forever with the only trace in a console the
+      // shopkeeper does not have open -- they cannot tell "still loading"
+      // from "the server is down" from "nobody owes me anything".
+      //
+      // That is the exact bug this file already found and fixed once, for
+      // sales history (see _loadSalesHistory's own comment, which describes
+      // this failure in the same words). The fix was never carried over to
+      // this screen, which shipped hours later.
+      //
+      // The total goes back to the dash rather than staying on a stale or
+      // zero figure: an unknown balance must not read as a known one.
       console.error(e);
+      const tb = document.querySelector(`#pl-table-${kind} tbody`);
+      if (tb) {
+        tb.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
+          ${t('Could not load this list. Check the connection and try again.')}</td></tr>`;
+      }
+      const ag = document.getElementById(`pl-aging-${kind}`);
+      if (ag) ag.textContent = t('Could not load this list. Check the connection and try again.');
+      const tot = document.getElementById(`pl-total-${kind}`);
+      if (tot) tot.textContent = '—';
     }
   },
 
@@ -13400,7 +13447,7 @@ const RetailSystem = {
               </select></div>
             <div class="ret-field" style="margin:0"><label>${t('Notes')}</label>
               <input type="text" id="stmt-pay-notes" /></div>
-            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._submitPartyPayment('${kind}','${this._esc(id)}')">${t('Record Payment')}</button>
+            <button class="ret-btn ret-btn-primary" id="stmt-pay-btn" onclick="RetailSystem._submitPartyPayment('${kind}','${this._esc(id)}')">${t('Record Payment')}</button>
           </div>
         </div>` : '';
 
@@ -13429,6 +13476,30 @@ const RetailSystem = {
     }
     const method = document.getElementById('stmt-pay-method')?.value || 'cash';
     const notes = document.getElementById('stmt-pay-notes')?.value || '';
+    // DOUBLE-SUBMIT GUARD. Without it a double-click -- or one slow-LAN
+    // click on the site-relay hub this product now ships -- records the
+    // payment TWICE and silently wrongs the party's balance. There is no
+    // backstop on the other side: customer_payment/supplier_payment both
+    // call _record_payment + _adjust_credit unconditionally on every POST,
+    // with no idempotency key (unlike create_sale/create_return, which take
+    // one). So this button is the only thing standing between a fat finger
+    // and a duplicated receipt.
+    //
+    // Every other money-mutating submit in this file already does this --
+    // roughly nineteen of them. This screen shipped without it; that was an
+    // omission, not a decision.
+    const btn = document.getElementById('stmt-pay-btn');
+    if (btn) {
+      if (btn.disabled) return;   // the click that lands while the first is in flight
+      btn.disabled = true;
+      btn.textContent = t('Recording…');
+    }
+    const _release = () => {
+      // Re-enabled on EVERY failure path, so a refused payment can be
+      // corrected and retried without reopening the statement. The success
+      // path deliberately does not re-enable: it closes the modal.
+      if (btn) { btn.disabled = false; btn.textContent = t('Record Payment'); }
+    };
     try {
       const d = await this._post(`${this._partyApiBase(kind)}/${id}/payments`, { amount, method, notes });
       if (d.status === 'success') {
@@ -13443,10 +13514,12 @@ const RetailSystem = {
         this._openPartyStatement(kind, id);
         this._loadPartyLedger(kind);
       } else {
+        _release();
         SubsystemApp.showToast(d.message || t('Error'), 'error');
       }
     } catch (e) {
       console.error(e);
+      _release();
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
     }
   },
