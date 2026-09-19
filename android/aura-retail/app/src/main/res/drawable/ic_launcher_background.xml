@@ -2,7 +2,9 @@
 <!--
     Launcher adaptive-icon background: Night ground (DESIGN.md §3, "Night
     ground #070B12, the intro's and app icon's ground"), lit toward a warm
-    navy near the mark's own Navy stop (`AuraBrand.Navy`, #16233D) so the
+    navy near the mark's own shadow-facet stop (`AuraBrand.ShadowFacetOnDark`,
+    #22304A since brand kit v2; this comment said `AuraBrand.Navy`, #16233D,
+    which was the pre-v2 constant and no longer exists) so the
     mark reads as switched-on rather than pasted onto a flat disc. Replaces
     the flat #1A1A1A disc (values/colors.xml's ic_launcher_background) with
     the same two-stop diagonal the desktop's aura-app-icon.svg uses.
