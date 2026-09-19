@@ -2782,6 +2782,7 @@ const SubsystemApp = {
     const tabHTML = (id, emoji, label, extraClass) => `
             <a class="sub-tab${extraClass ? ' ' + extraClass : ''}${id === activeSection ? ' active' : ''}"
                data-tab="${id}"
+               tabindex="0" role="button"
                onclick="SubsystemApp._navigate('${id}')">
               <span class="sub-tab-icon">${tabIcon(emoji)}</span>
               <span class="sub-tab-label">${t(label)}</span>
@@ -2795,6 +2796,7 @@ const SubsystemApp = {
         ${tabHTML('customers', '👥', 'Customers')}
         <a class="sub-tab${!this._TAB_BAR_SECTIONS.includes(activeSection) ? ' active' : ''}"
            id="sub-tab-more"
+           tabindex="0" role="button"
            onclick="SubsystemApp._openMoreSheet()">
           <span class="sub-tab-icon">${tabIcon('☰')}</span>
           <span class="sub-tab-label">${t('More')}</span>
@@ -2806,9 +2808,26 @@ const SubsystemApp = {
     // See the long comment on systems.retail.navGroups for why this stays a
     // separate render-time arrangement over the untouched flat `nav` array
     // rather than a nested nav structure.
+    // tabindex + role, because THIS NAV WAS NOT REACHABLE BY KEYBOARD AT ALL.
+    // An <a> with an onclick and no href is not a link and is not focusable --
+    // it has no implicit role and never enters the tab order. Measured in a
+    // real browser: from <body>, the first Tab stop on the dashboard was the
+    // "AI Assistant" button in the sidebar FOOTER; every navigation
+    // destination above it was simply absent from the tab order. A keyboard
+    // or switch user could not change screens.
+    //
+    // Nothing that reads source could see it: the markup looks like a link,
+    // the CSS styles it like one, the a11y suites check names and contrast
+    // rather than reachability. It took pressing Tab on the running app.
+    //
+    // role="button", not "link": these do not navigate to a URL, they swap a
+    // section in place, and a screen-reader user told "link" reasonably
+    // expects a page load. Enter AND Space are both bound below, which is the
+    // button contract -- a real link would take Enter only.
     const navItemHTML = (item) => `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
+               tabindex="0" role="button"
                onclick="SubsystemApp._navigate('${item.id}')">
               <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
               <span class="sub-nav-label">${t(item.label)}</span>
@@ -2939,6 +2958,33 @@ const SubsystemApp = {
       </div>
       ${tabBarHTML}
     `;
+
+    // Focusable is only half of it. `onclick` does not fire on Enter or Space
+    // for anything that is not a real button or a real link, so tabindex alone
+    // would hand a keyboard user a focus ring on a control they still cannot
+    // operate -- which is arguably worse than being skipped, because it looks
+    // like it should work.
+    this._wireNavKeyboardActivation(shell);
+  },
+
+  // Delegated, and attached to the shell rather than to each item, because
+  // _renderShell replaces this subtree wholesale on every navigation: a
+  // per-item listener would be re-bound dozens of times per session and a
+  // document-level one would outlive the elements it serves. The listener
+  // dies with the subtree it was attached to.
+  _wireNavKeyboardActivation(shell) {
+    if (!shell || typeof shell.addEventListener !== 'function') return;
+    shell.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      const el = e.target && typeof e.target.closest === 'function'
+        ? e.target.closest('.sub-nav-item, .sub-tab')
+        : null;
+      if (!el) return;
+      // Space scrolls the page by default; Enter on a focused element does
+      // nothing here but is prevented for symmetry so neither key leaks.
+      e.preventDefault();
+      if (typeof el.click === 'function') el.click();
+    });
   },
 
   // Target of the skip link rendered first in _renderShell. Kept as a named

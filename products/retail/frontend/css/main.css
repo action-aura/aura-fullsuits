@@ -2310,11 +2310,30 @@ html[data-theme="light"] {
 .sub-skip-link {
   position: absolute;
   z-index: 100;
+  /* HIDDEN IN PLACE, NOT MOVED AWAY, and this took three attempts and a real
+     browser to get right.
+       1. transform: translateY(-200%)  -> Tab skipped it
+       2. inset-block-start: -100px     -> Tab skipped it
+     In both cases the element was display:flex, visibility:visible,
+     opacity:1, FIRST in the DOM (index 0 of 18 focusables, nothing before
+     it), and an explicit .focus() worked -- yet pressing Tab from <body>
+     landed on the AI Assistant button. The whole feature was inert while
+     every source-reading test reported it present and correct.
+     The cause is one line elsewhere in this file: `body { overflow: hidden }`.
+     An element parked outside that box is permanently clipped and can never
+     be scrolled into view, and Chromium refuses to give sequential focus to
+     something it cannot reveal. Moving the box away is therefore the one
+     technique that cannot work here.
+     So it stays exactly where it will be shown and is hidden by CLIPPING
+     instead, which the spec does not tie to focusability. pointer-events
+     keeps the invisible 44px box from swallowing clicks in the corner, and
+     both are undone on :focus. Keeping full size also keeps it honest for
+     retail_design_focus_test.js's 44px floor -- a 1px visually-hidden box
+     would have passed that check by disappearing from it. */
   inset-block-start: var(--space-snug);
   inset-inline-start: var(--space-snug);
-  /* Off-screen along the block axis rather than the inline one: an inline
-     translate has to know which way "away" is, and that flips under RTL. */
-  transform: translateY(-200%);
+  clip-path: inset(50%);
+  pointer-events: none;
   display: inline-flex;
   align-items: center;
   /* Declared, not inferred from padding -- same reasoning as .auth-submit's
@@ -2331,7 +2350,8 @@ html[data-theme="light"] {
 }
 .sub-skip-link:focus,
 .sub-skip-link:focus-visible {
-  transform: translateY(0);
+  clip-path: none;
+  pointer-events: auto;
   outline: 2px solid var(--sub-accent);
   outline-offset: 2px;
 }
