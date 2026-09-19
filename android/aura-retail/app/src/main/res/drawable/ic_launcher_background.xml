@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Launcher adaptive-icon background: Night ground (DESIGN.md §3, "Night
-    ground #070B12, the intro's and app icon's ground"), lit toward the
-    ring's own blue so the mark reads as switched-on rather than pasted onto
-    a flat disc. Replaces the flat #1A1A1A disc (values/colors.xml's
-    ic_launcher_background) with the same two-stop diagonal the desktop's
-    aura-app-icon.svg uses.
+    ground #070B12, the intro's and app icon's ground"), lit toward a warm
+    navy near the mark's own Navy stop (`AuraBrand.Navy`, #16233D) so the
+    mark reads as switched-on rather than pasted onto a flat disc. Replaces
+    the flat #1A1A1A disc (values/colors.xml's ic_launcher_background) with
+    the same two-stop diagonal the desktop's aura-app-icon.svg uses.
+    (Comment corrected 2026-09-19: this used to say "lit toward the ring's
+    own blue", left over from the retired ring+A construction. The actual
+    #0E1A33/#070B12 stops were never that ring's blue and did not change;
+    only the stale reasoning did, caught by the same retired-brand-colour
+    sweep that moved AuraAurora and the sign-in button off the ring.)
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"

@@ -72,15 +72,29 @@ import com.actionaura.retail.ui.theme.TextPrimary
 // signature, but the pierced-A no longer reads it: there is nothing left in
 // this geometry that takes the theme's text colour the way the old A did.
 //
-// KNOWN, NOT SILENT, GAP: MarkGeometryParityContractTest.kt and
-// BrandMarkWiringContractTest.kt still pin the RETIRED ring+A+beacon-diamond
-// construction (exact old coordinates, `AuraBrand.RingStart`/`RingEnd` as
-// the mark's own colours, `ink`-driven fill) by design of this redraw task
-// (android/aura-retail/**'s owner was asked to redraw this file to the new
-// geometry, not to rewrite those tests) -- both will now fail until someone
-// deliberately rewrites them for this construction, the same way the
-// desktop's icons.js already flagged MarkGeometryParityContractTest as
-// stale in its own MARK REDESIGN comment.
+// THAT GAP IS CLOSED, and this note is kept only because the gap was real
+// for part of a day and the fix is worth knowing about.
+// MarkGeometryParityContractTest.kt did pin the RETIRED ring+A+beacon-diamond
+// construction's exact old coordinates, and failed on this redraw. It has
+// since been rewritten to PARSE aura-mark.svg as a real XML DOM and derive
+// every expectation from it, so no coordinate is typed into the test at all.
+// That is why it stopped rotting: the old version read the SVG *and* also
+// hardcoded what it expected to find there, which made it two copies of the
+// same digits -- a brand revision broke it while a genuine desktop/Android
+// divergence, the thing it exists to catch, would not have. It is green (8
+// checks, up from 6) and a coordinate change here now fails it for the right
+// reason.
+//
+// BrandMarkWiringContractTest.kt's colour assertion is NO LONGER part of
+// this gap. It used to pin `AuraBrand.RingStart`/`RingEnd` as "the mark's
+// own colours" and kept passing after this redraw -- but only by accident:
+// the pierced-A never read either constant, and the assertion's `RingEnd`
+// half was actually satisfied by `AuraAurora` (below, in this same file)
+// still painting with it. A later retired-brand-colour sweep (2026-09-19)
+// moved AuraAurora onto Retail's own accent trio too (see its own doc
+// comment), which turned that accidental pass into a real failure and
+// forced the rewrite -- the assertion now checks the pierced-A's ACTUAL
+// colours (RetailAccentDark/Mid/Light, Navy).
 // ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -286,10 +300,8 @@ fun AuraWordmark(product: String = "Retail") {
 
 /**
  * The brand's atmosphere behind a screen's content: two soft radial washes
- * echoing `products/retail/frontend/brand/intro.html`'s `.aurora` layer --
- * teal near the top-right, blue near the bottom-left (DESIGN.md §3's ring
- * gradient stops, reused here as an ambient wash rather than a stroke).
- * Named in PascalCase like [AuraMark]/[AuraWordmark] rather than the usual
+ * giving the ground gentle warmth and depth rather than a flat fill. Named
+ * in PascalCase like [AuraMark]/[AuraWordmark] rather than the usual
  * lowerCamelCase modifier-factory convention, on purpose: it is one of this
  * file's three brand-drawing exports, not a generic layout modifier.
  *
@@ -303,15 +315,36 @@ fun AuraWordmark(product: String = "Retail") {
  * for an effect this subtle on a phone's sign-in screen -- not worth it here,
  * so this stays two flat gradients.
  *
- * Second pass (2026-09-08): the first pass's teal wash sat at
+ * Second pass (2026-09-08): the first pass's top-right wash sat at
  * `(0.75w, 0.20h)` -- close enough inside the frame that its centre, not
  * just its falloff, was visible, which read as a swampy green cast at the
- * top of the screen once layered over the blue wash below it. Two fixes:
- * the dark-theme strength dropped 0.22 -> 0.14 (light kept proportionally
- * lower, 0.10 -> 0.07, same ~2x ratio as before), and the teal wash's centre
+ * top of the screen once layered over the wash below it. Two fixes: the
+ * dark-theme strength dropped 0.22 -> 0.14 (light kept proportionally lower,
+ * 0.10 -> 0.07, same ~2x ratio as before), and the top-right wash's centre
  * moved off-canvas to the top-right corner (`1.05w, -0.05h`) so only its
- * outer falloff -- a hint of teal in the corner, never the full hue --
- * enters the frame. The blue wash (bottom-left) is unchanged.
+ * outer falloff enters the frame. Alpha and position are unchanged by the
+ * third pass below -- only the hue moved.
+ *
+ * Third pass (2026-09-19, retired-brand colour sweep): this wash used to
+ * echo `products/retail/frontend/brand/intro.html`'s `.aurora` layer --
+ * teal near the top-right, blue near the bottom-left, DESIGN.md §3's OLD
+ * ring gradient stops (`AuraBrand.RingEnd`/`RingMid`). That ring is retired
+ * (see this file's header comment), and its blue/teal was never Retail's to
+ * begin with -- teal (#2F7B7B) is the MASTER brand's own accent per
+ * Action-Aura-Brand-Guide.md. A grep for those two constants alone could not
+ * have caught this: they were still a legitimate-looking call site right up
+ * until the question became "does teal belong on THIS product's screen",
+ * which is exactly how the sign-in button's identical fill survived the
+ * mark redesign too (see LoginScreen.kt's `SignInButton` doc comment).
+ * Now `AuraBrand.RetailAccentLight` (top-right) fading toward
+ * `AuraBrand.RetailAccentDark` (bottom-left) -- the same light-to-dark
+ * direction the pierced-A's own facets shade in, so the atmosphere and the
+ * mark read as one identity. Contrast re-measured, not assumed: alpha is
+ * untouched, and against the worst case actually painted directly on this
+ * wash (CALM dark theme, `strength = 0.14f`, LoginScreen's tagline in
+ * `TextTertiary` at 0.75 alpha, sitting directly on this wash before the
+ * sign-in card) the composited background still clears 6.4:1 -- down from
+ * the plain background's 8.3:1, but well clear of the 4.5:1 AA floor.
  */
 fun Modifier.AuraAurora(
     strength: Float = if (AuraPalette.current.isDark) 0.14f else 0.07f,
@@ -319,14 +352,14 @@ fun Modifier.AuraAurora(
     val radius = minOf(size.width, size.height) * 0.9f
     drawRect(
         brush = Brush.radialGradient(
-            colors = listOf(AuraBrand.RingEnd.copy(alpha = strength), Color.Transparent),
+            colors = listOf(AuraBrand.RetailAccentLight.copy(alpha = strength), Color.Transparent),
             center = Offset(size.width * 1.05f, size.height * -0.05f),
             radius = radius,
         ),
     )
     drawRect(
         brush = Brush.radialGradient(
-            colors = listOf(AuraBrand.RingMid.copy(alpha = strength), Color.Transparent),
+            colors = listOf(AuraBrand.RetailAccentDark.copy(alpha = strength), Color.Transparent),
             center = Offset(size.width * 0.15f, size.height * 0.85f),
             radius = radius,
         ),

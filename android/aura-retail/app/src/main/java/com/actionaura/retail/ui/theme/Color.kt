@@ -403,6 +403,17 @@ val CategoryPalette: List<Color> = listOf(
 // deletion). See BrandMarkWiringContractTest's
 // aura_mark_beacon_is_a_flat_diamond_following_ink_not_a_gradient_spark.
 object AuraBrand {
+    // RETIRED 2026-09-19, both by the same retired-brand-colour sweep. Kept
+    // (not deleted) rather than removed outright: ColorTokenContractTest's
+    // "no literal outside this file" rule means anything ever painted has to
+    // be named here, and deleting a named constant loses the record of what
+    // used to paint with it. Their last two consumers were LoginScreen's
+    // sign-in button gradient (found first, by installing the build on a
+    // real phone and looking at it -- see LoginScreen.kt's `SignInButton`
+    // doc comment) and this file's own `AuraAurora` ambient wash (found on
+    // the same sweep, once the question became "does teal belong on this
+    // product" rather than "is this constant still referenced somewhere" --
+    // see `AuraAurora`'s doc comment). Neither has a reader left.
     val RingStart: Color = Color(0xFF1745A9)
     val RingMid: Color = Color(0xFF3F7BE6)
     val RingEnd: Color = Color(0xFF5FE3D0)
@@ -413,9 +424,7 @@ object AuraBrand {
     // a faceted letter A read through the Greek delta, pierced by a tilted
     // orbit ring, retinted to RETAIL'S OWN accent trio -- NOT the master
     // brand's teal (#2F7B7B), and NOT [RingStart]/[RingMid]/[RingEnd] above,
-    // which remain exactly as they were for their own still-live consumers
-    // (AuraAurora's ambient wash and LoginScreen's sign-in button gradient --
-    // see BrandMarkWiringContractTest, unrelated to this redesign). Values
+    // which are now fully retired (see the comment on those three). Values
     // copied verbatim from products/retail/frontend/brand/aura-mark.svg's
     // four gradient stops (fl/fr/rb/rf) and two solid fills; AuraMark.kt is
     // their only consumer.

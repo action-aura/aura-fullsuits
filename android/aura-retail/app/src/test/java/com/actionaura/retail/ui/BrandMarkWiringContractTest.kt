@@ -112,19 +112,36 @@ class BrandMarkWiringContractTest {
 
     @Test
     fun aura_mark_takes_its_brand_colours_from_color_kt_and_a_theme_following_ink() {
-        // DESIGN.md §3, "Brand colours" -- the ring's three stops. They are
-        // FIXED identity colours, so they live as named constants
-        // (AuraBrand) in ui/theme/Color.kt -- the one file
-        // ColorTokenContractTest lets a colour literal live in -- and the
-        // mark reads them by name. A hex typed back into AuraMark.kt would
-        // trip that guard AND this one.
+        // Action-Aura-Brand-Guide.md's pierced-A reads its fixed colours --
+        // Retail's own accent trio plus the shared brand Navy -- as named
+        // constants (AuraBrand) in ui/theme/Color.kt -- the one file
+        // ColorTokenContractTest lets a colour literal live in -- rather
+        // than a hex typed back into AuraMark.kt, which would trip that
+        // guard AND this one.
+        //
+        // REWRITTEN 2026-09-19 (retired-brand colour sweep): this used to
+        // assert `auraMark.contains("AuraBrand.RingStart")` and
+        // `.contains("AuraBrand.RingEnd")` -- the OLD ring+A construction's
+        // colours. The pierced-A never read either constant (confirmed by
+        // search before this rewrite); the assertion kept passing anyway,
+        // by accident -- `RingStart` matched a comment mentioning the old
+        // construction, and `RingEnd` matched this file's OTHER composable,
+        // `AuraAurora`, which was still painting its ambient wash with it.
+        // Moving AuraAurora off RingMid/RingEnd too (same sweep) turned that
+        // accident into a real failure, so this now checks what the mark
+        // ACTUALLY reads. GIVEN UP: nothing new -- the old form could never
+        // actually prove the mark used RingStart/RingEnd; it is a truer
+        // check, not a weaker one.
         assertThat(colorKt).contains("object AuraBrand")
-        assertThat(colorKt).contains("1745A9")
-        assertThat(colorKt).contains("3F7BE6")
-        assertThat(colorKt).contains("5FE3D0")
+        assertThat(colorKt).contains("A06030")
+        assertThat(colorKt).contains("C97B3D")
+        assertThat(colorKt).contains("F0B87A")
+        assertThat(colorKt).contains("16233D")
         assertThat(auraMark).doesNotContain("Color(0x")
-        assertThat(auraMark).contains("AuraBrand.RingStart")
-        assertThat(auraMark).contains("AuraBrand.RingEnd")
+        assertThat(auraMarkFunctionBody).contains("AuraBrand.RetailAccentDark")
+        assertThat(auraMarkFunctionBody).contains("AuraBrand.RetailAccentMid")
+        assertThat(auraMarkFunctionBody).contains("AuraBrand.RetailAccentLight")
+        assertThat(auraMarkFunctionBody).contains("AuraBrand.Navy")
         // The A itself is not a fixed colour -- it follows the active
         // theme's text colour, exactly like the desktop's inline mark
         // follows currentColor.
@@ -337,35 +354,48 @@ class BrandMarkWiringContractTest {
     // invisible card edge, placeholders that repeat their labels) ──────────
 
     @Test
-    fun sign_in_button_is_filled_with_the_brand_gradient_not_a_flat_accent_slab() {
-        // The literal call this implementation uses for the button's fill --
-        // see SignInButton's doc comment in LoginScreen.kt. Asserted as this
-        // exact string (not just one stop alone) so a future rewrite that
-        // keeps the brand colours but drops back to a solid fill still fails.
-        //
-        // STOPS UPDATED 2026-09-19 with the brand. This pinned
-        // RingMid -> RingEnd, the retired blue-into-teal, whose whole
-        // justification was that it matched the mark's arc -- and the arc now
-        // draws Retail's amber, while teal belongs to the master brand rather
-        // than to this product. Pinning the old pair would have held the first
-        // screen of the app on the identity the owner replaced.
-        assertThat(loginScreen)
-            .contains("Brush.linearGradient(listOf(AuraBrand.RetailAccentMid, AuraBrand.RetailAccentLight))")
+    fun sign_in_button_is_filled_with_a_theme_following_gradient_not_a_flat_accent_slab() {
+        // RENAMED AND REWRITTEN 2026-09-19 (second time that day). This used
+        // to pin the exact call `Brush.linearGradient(listOf(AuraBrand.
+        // RetailAccentMid, AuraBrand.RetailAccentLight))` -- a FIXED Retail
+        // amber, itself already a rewrite of an earlier pin on the FIXED
+        // retired blue-into-teal (`RingMid -> RingEnd`). Both were fixed
+        // brand literals; the owner then asked this button to change with
+        // the active theme like every other control, so there is no longer
+        // one literal pair to pin -- the fill is built from
+        // [com.actionaura.retail.ui.theme.AccentAction] plus a derived
+        // second stop. GIVEN UP: this can no longer prove the exact stop
+        // values (they now vary per theme, which is the point); what it
+        // still proves is the important part -- a two-stop gradient built
+        // from the theme, not a flat single-colour fill, and neither of the
+        // two retired fixed pairs.
+        assertThat(loginScreen).contains("val accent = AccentAction")
+        assertThat(loginScreen).contains("Brush.linearGradient(listOf(accent, secondStop))")
         // The retired flat fill this replaces -- must not come back.
         assertThat(loginScreen).doesNotContain("containerColor = AccentAction")
-        // Nor the retired ring pair, which is what this test used to require.
+        // Nor either retired FIXED pair, which is what this test used to
+        // require in turn.
         assertThat(loginScreen).doesNotContain("AuraBrand.RingEnd")
+        assertThat(loginScreen).doesNotContain("AuraBrand.RetailAccentMid")
     }
 
     @Test
-    fun sign_in_button_label_uses_the_verified_dark_ink_on_the_gradient() {
-        // OnBrand is the fixed dark ink measured (see Color.kt's doc
-        // comment) at >=4.5:1 against both RingMid and RingEnd -- OnAccent
-        // and a bare white label are both wrong here (OnAccent assumes a
-        // single flat accent fill; white is too close to both gradient
-        // stops to read).
-        assertThat(loginScreen).contains("AuraBrand.OnBrand")
-        assertThat(colorKt).contains("val OnBrand: Color = Color(0xFF070B12)")
+    fun sign_in_button_label_follows_the_active_palette_ink_not_a_fixed_one() {
+        // RENAMED AND REWRITTEN 2026-09-19 (second time that day): the old
+        // name and assertion ("...uses_the_verified_dark_ink...",
+        // `contains("AuraBrand.OnBrand")`) are both now wrong, not just
+        // stale -- the label ink is [com.actionaura.retail.ui.theme.
+        // OnAccent], which is WHITE on Day and Sand, not dark. "Dark ink" was
+        // never guaranteed again once the fill stopped being fixed; what IS
+        // guaranteed is that the label reads the active palette's own
+        // on-accent ink (contrast-verified per theme in SignInButton's doc
+        // comment: worst case 6.00:1 on Sand), not a brand constant fixed
+        // across every theme. GIVEN UP: this can no longer prove the ink is
+        // dark or prove one exact hex value -- it proves the ink TRACKS the
+        // theme, which the old assertion could not tell apart from a
+        // coincidentally-dark fixed constant in the first place.
+        assertThat(loginScreen).contains("val ink = OnAccent")
+        assertThat(loginScreen).doesNotContain("AuraBrand.OnBrand")
     }
 
     @Test

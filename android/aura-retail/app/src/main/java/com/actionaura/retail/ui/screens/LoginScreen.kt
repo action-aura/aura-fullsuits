@@ -30,6 +30,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -49,12 +51,12 @@ import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.theme.AccentAction
-import com.actionaura.retail.ui.theme.AuraBrand
 import com.actionaura.retail.ui.theme.AuraPalette
 import com.actionaura.retail.ui.theme.BorderDefault
 import com.actionaura.retail.ui.theme.BorderHairline
 import com.actionaura.retail.ui.theme.Danger
 import com.actionaura.retail.ui.theme.DangerContainer
+import com.actionaura.retail.ui.theme.OnAccent
 import com.actionaura.retail.ui.theme.SurfaceApp
 import com.actionaura.retail.ui.theme.SurfaceSunken
 import com.actionaura.retail.ui.theme.SurfaceTill
@@ -378,29 +380,43 @@ private fun ErrorBanner(message: String) {
  * Second pass (2026-09-08): the SHAPE fixed the pill complaint, but the FILL
  * -- a flat `AccentAction` slab -- was still "Material's default primary
  * container, whatever its corner radius" per the follow-up critique. Fill
- * replaced with the ring's own gradient, which is why this is a plain [Box]
+ * replaced with a two-stop gradient, which is why this is a plain [Box]
  * with [Modifier.clickable] rather than a Material [Button]:
  * `ButtonDefaults.buttonColors` has no gradient `containerColor` to give it.
  * `Role.Button` on the clickable modifier keeps the accessibility semantics
- * a real `Button` would have provided for free. Label ink is
- * [AuraBrand.OnBrand], not [OnAccent] or white -- the gradient is light at
- * BOTH ends, so it needs one fixed dark ink verified against both stops.
+ * a real `Button` would have provided for free.
  *
- * Third pass (2026-09-19): the stops moved with the brand. This button read
- * "the ring's own RingMid -> RingEnd gradient, the same blue-into-teal
- * pairing AuraMark.kt's arc draws" -- and once the new identity landed, the
- * arc draws Retail's amber while teal belongs to the master brand, not to
- * this product. The rationale was still true and the colours were no longer
- * the ring's, so the sign-in button -- the first thing anyone sees -- was the
- * last piece of the retired identity left on screen. Caught by installing the
- * build on a real phone and looking at it, not by any test.
+ * Third pass (2026-09-19): the fill was retinted from a fixed blue-into-teal
+ * gradient (the retired ring's own colours, which had quietly outlived the
+ * brand they belonged to) to a fixed Retail amber, with a fixed dark label
+ * ink verified against both new stops. See this file's git history for that
+ * pass's own measurements -- superseded below the same day.
  *
- * Now RetailAccentMid -> RetailAccentLight. `OnBrand` still clears AA at both
- * ends, measured: 5.99:1 against the mid stop and 11.11:1 against the light
- * one. Mid -> light rather than dark -> mid deliberately: `OnBrand` against
- * the DARK accent is 3.95:1, under the 4.5:1 floor, so that pairing would
- * have been illegible at one end of its own gradient -- the same trap the
- * 2026-09-08 pass hit with RingStart and recorded in `OnBrand`'s doc comment.
+ * Fourth pass (2026-09-19, later the same day): the owner asked this button
+ * to change with the active theme like every other control, not stay a
+ * fixed brand slab regardless of which palette is selected. Fill and label
+ * now both come from the ACTIVE palette -- [AccentAction] and [OnAccent] --
+ * with the gradient's second stop derived from the accent rather than a
+ * second fixed literal.
+ *
+ * THE RULE: the second stop moves AWAY from the label ink -- lightened when
+ * the ink is dark (Calm/Night/Dusk), darkened when the ink is light (Day and
+ * Sand, both white). Not arbitrary: the first version always lightened the
+ * second stop regardless of ink, and Sand's white label fell to 4.12:1
+ * against it, under the 4.5:1 AA floor. Moving away from the ink means the
+ * gradient can only ever ADD contrast across its length, never subtract it
+ * -- one rule that is safe for all five palettes, instead of one rule per
+ * palette.
+ *
+ * MEASURED, label ink against both stops, all five themes (accent -> second
+ * stop, moved 0.16 toward black or white):
+ *   Day    #792E15 -> #662712, white ink    9.48:1 / 11.27:1
+ *   Calm   #F0B87A -> #F2C38F, #0F1834      9.86:1 / 10.81:1
+ *   Night  #E9CDAA -> #EDD5B8, #0C1B28     11.45:1 / 12.31:1
+ *   Dusk   #F69279 -> #F7A38E, #150F2E      8.17:1 /  9.29:1
+ *   Sand   #9A4F12 -> #81420F, white ink    6.00:1 /  7.72:1
+ * Worst case 6.00:1, comfortably over the 4.5:1 floor. 0.16 reads as a
+ * visible sheen without becoming a hard two-tone edge.
  */
 @Composable
 private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
@@ -414,6 +430,11 @@ private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
         label = "signInButtonPressScale",
     )
     val shape = RoundedCornerShape(14.dp)
+    val accent = AccentAction
+    val ink = OnAccent
+    // Away from the ink, never toward it -- see this composable's own doc
+    // comment for why that direction is the one that cannot fail AA.
+    val secondStop = lerp(accent, if (ink.luminance() > 0.5f) Color.Black else Color.White, 0.16f)
 
     Box(
         contentAlignment = Alignment.Center,
@@ -428,7 +449,7 @@ private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
                 // same corner-to-corner span AuraMark's own ring gradient
                 // uses, without threading the measured size through
                 // drawWithCache by hand.
-                brush = Brush.linearGradient(listOf(AuraBrand.RetailAccentMid, AuraBrand.RetailAccentLight)),
+                brush = Brush.linearGradient(listOf(accent, secondStop)),
                 shape = shape,
             )
             .clickable(
@@ -440,7 +461,7 @@ private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
             ),
     ) {
         if (loading) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = AuraBrand.OnBrand)
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = ink)
         } else {
             Text(
                 tr("Sign In"),
@@ -448,7 +469,7 @@ private fun SignInButton(loading: Boolean, onClick: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
                 // Same Arabic cursive-join fix as the tagline and FieldLabel above.
                 letterSpacing = if (AppLocale.isRtl) 0.sp else 0.02.em,
-                color = AuraBrand.OnBrand,
+                color = ink,
             )
         }
     }
