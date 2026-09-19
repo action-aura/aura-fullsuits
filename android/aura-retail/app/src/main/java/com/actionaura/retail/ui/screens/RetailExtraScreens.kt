@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -45,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1659,8 +1662,11 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SectionHeader(tr("Language"))
         TillCard(Modifier.fillMaxWidth()) {
+            // role = Role.Button -- a bare Modifier.clickable Row with no role
+            // announces as an unlabelled plain view to TalkBack; see the
+            // Licensing row's identical fix above for the same shape.
             Row(
-                Modifier.fillMaxWidth().clickable { showLanguage = true }.padding(16.dp),
+                Modifier.fillMaxWidth().clickable(role = Role.Button) { showLanguage = true }.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(tr("Language"), Modifier.weight(1f))
@@ -1676,8 +1682,9 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         // desktop's own switcher offers them.
         SectionHeader(tr("Theme"))
         TillCard(Modifier.fillMaxWidth()) {
+            // role = Role.Button -- see the Language row's identical comment above.
             Row(
-                Modifier.fillMaxWidth().clickable { showTheme = true }.padding(16.dp),
+                Modifier.fillMaxWidth().clickable(role = Role.Button) { showTheme = true }.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(tr("Theme"), Modifier.weight(1f))
@@ -1722,7 +1729,10 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                     Column {
                         Row(
                             Modifier.fillMaxWidth()
-                                .let { if (canManageBranch) it.clickable { showBranchPicker = true } else it }
+                                // role = Role.Button -- see the Language row's
+                                // identical comment above; only applies when
+                                // the row is actually clickable (canManageBranch).
+                                .let { if (canManageBranch) it.clickable(role = Role.Button) { showBranchPicker = true } else it }
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1861,7 +1871,21 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 onClick = { printerWidth = PrinterPrefs.NARROW_CHARS },
                 label = { Text(tr("58mm (32 chars)")) })
         }
-        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        // The Row itself carries the toggleable + Role.Switch semantics, and
+        // Switch gets onCheckedChange = null -- the standard Compose
+        // accessibility recipe for a labelled switch row. Without this, the
+        // Switch is its own separate semantics node with no name of its own
+        // (the label Text is a SIBLING, not merged into it): TalkBack would
+        // announce "Switch, off" with no indication of what it toggles.
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                .toggleable(
+                    value = printerAutoPrint,
+                    role = Role.Switch,
+                    onValueChange = { printerAutoPrint = it },
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(Modifier.weight(1f)) {
                 Text(tr("Auto-print after each sale"), fontWeight = FontWeight.Medium)
                 Text(
@@ -1870,7 +1894,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(checked = printerAutoPrint, onCheckedChange = { printerAutoPrint = it })
+            Switch(checked = printerAutoPrint, onCheckedChange = null)
         }
         // A real limitation of the byte path itself (core/retail/
         // escpos_receipt.py's ASCII-only text encoding, not an Android
@@ -1983,8 +2007,13 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
 
         SectionHeader(tr("Licensing"))
         TillCard(Modifier.fillMaxWidth()) {
+            // Role.Button: a bare Modifier.clickable Row with no role announces
+            // as an unlabelled plain view to TalkBack -- same gap as TillCard's
+            // own onClick path (see that composable's comment). The outer
+            // TillCard has no onClick of its own here, so this Row is the only
+            // clickable surface and needs the role directly.
             Row(
-                Modifier.fillMaxWidth().clickable(onClick = onOpenLicensing).padding(16.dp),
+                Modifier.fillMaxWidth().clickable(onClick = onOpenLicensing, role = Role.Button).padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(tr("Licensing"), Modifier.weight(1f))
@@ -2012,11 +2041,18 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             onDismissRequest = { showLanguage = false },
             title = { Text(tr("Choose language")) },
             text = {
-                Column {
+                // selectableGroup(): so TalkBack announces this as a radio
+                // group ("2 of 4") instead of four unrelated rows that each
+                // happen to carry a selected/unselected state.
+                Column(Modifier.selectableGroup()) {
                     AppLang.entries.forEach { lang ->
                         Row(
                             Modifier.fillMaxWidth()
-                                .selectable(selected = AppLocale.lang == lang, onClick = {
+                                // role = Role.RadioButton: selectable()'s role
+                                // defaults to null, so without this TalkBack
+                                // never announces these rows as the radio
+                                // options the nested RadioButton visually is.
+                                .selectable(selected = AppLocale.lang == lang, role = Role.RadioButton, onClick = {
                                     AppLocale.set(ctx, lang)
                                     showLanguage = false
                                 })
@@ -2043,11 +2079,14 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             onDismissRequest = { showTheme = false },
             title = { Text(tr("Choose theme")) },
             text = {
-                Column {
+                // selectableGroup(): see the language dialog's identical comment above.
+                Column(Modifier.selectableGroup()) {
                     AuraPalette.ALL.forEach { palette ->
                         Row(
                             Modifier.fillMaxWidth()
-                                .selectable(selected = AuraPalette.current === palette, onClick = {
+                                // role = Role.RadioButton -- see the language
+                                // dialog's identical comment above.
+                                .selectable(selected = AuraPalette.current === palette, role = Role.RadioButton, onClick = {
                                     AppTheme.set(ctx, palette)
                                     showTheme = false
                                 })
@@ -2151,14 +2190,17 @@ private fun BranchPickerDialog(
                     }
                     loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
-                    else -> Column {
+                    // selectableGroup(): see the language/theme dialogs' identical comment above.
+                    else -> Column(Modifier.selectableGroup()) {
                         // The explicit "clear the pin" option -- always first,
                         // and never omitted just because the company happens
                         // to have branches: unpinning is a real, reachable
                         // choice, not only an initial default.
                         Row(
                             Modifier.fillMaxWidth()
-                                .selectable(selected = selected == null, onClick = { selected = null })
+                                // role = Role.RadioButton -- see the language
+                                // dialog's identical comment above.
+                                .selectable(selected = selected == null, role = Role.RadioButton, onClick = { selected = null })
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -2177,7 +2219,7 @@ private fun BranchPickerDialog(
                         branches.forEach { b ->
                             Row(
                                 Modifier.fillMaxWidth()
-                                    .selectable(selected = selected == b.uid, onClick = { selected = b.uid })
+                                    .selectable(selected = selected == b.uid, role = Role.RadioButton, onClick = { selected = b.uid })
                                     .padding(vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {

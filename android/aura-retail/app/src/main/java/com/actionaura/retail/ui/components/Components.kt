@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.actionaura.retail.ui.theme.AvatarPalette
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -205,6 +206,12 @@ fun TillCard(
         .clip(shape)
         .background(MaterialTheme.colorScheme.surfaceContainerLow)
         .border(width = 1.dp, color = border, shape = shape)
-    val click = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    // Role.Button: this is a hand-built card (a gradient fill Button can't
+    // give it -- see the shadow/border/background stack above), not a
+    // Material Card/Button, so nothing supplies that semantics role for
+    // free. Without it TalkBack announces a clickable TillCard as a plain,
+    // unlabelled view instead of a button -- same gap Role.Button closes on
+    // LoginScreen's SignInButton (see that composable's doc comment).
+    val click = if (onClick != null) Modifier.clickable(onClick = onClick, role = Role.Button) else Modifier
     Column(modifier.then(base).then(click), content = content)
 }

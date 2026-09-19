@@ -64,7 +64,10 @@ fun BackupRestoreScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
         topBar = {
             TopAppBar(
                 title = { Text(tr("Backup & restore")) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                // tr("Back"), not null: an icon-only nav button with no
+                // description announces as nothing to TalkBack. Same string
+                // AppRoot's shell back button already uses.
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, tr("Back")) } },
             )
         },
     ) { padding ->

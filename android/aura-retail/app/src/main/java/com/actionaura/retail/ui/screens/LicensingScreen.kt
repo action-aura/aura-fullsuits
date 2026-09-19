@@ -264,7 +264,10 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
         topBar = {
             TopAppBar(
                 title = { Text(tr("Licensing")) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                // tr("Back"), not null: an icon-only nav button with no
+                // description announces as nothing to TalkBack. Same string
+                // AppRoot's shell back button already uses.
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, tr("Back")) } },
             )
         },
     ) { padding ->
