@@ -1,23 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t d">
-  <title id="t">Aura mark, dark ground</title>
-  <desc id="d">The Aura ring and beacon around a light, bold A, for dark surfaces and the app icon.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
+  <title id="t">Aura Retail mark, dark ground</title>
+  <!-- 2026-09-19: REDESIGNED, paired with aura-mark.svg -- see that file's
+       header comment for the full context. This is the Retail 3D mark
+       brightened for DARK grounds: the source files delivered with the
+       brand guide (aura-mark-light.svg / aura-mark-dark.svg / aura-retail.svg)
+       did not include a dedicated dark-ground Retail variant, only a
+       dark-ground brightening of the MASTER teal mark. This file applies
+       that same brightening ratio (each stop lightened the way
+       aura-mark-dark.svg lightens aura-mark-light.svg) to Retail's own
+       accent trio instead of the master teal -- a derived, not delivered,
+       set of hex values. Flag for design review if the owner wants an
+       exact dark-ground trio specified instead. -->
   <defs>
-    <linearGradient id="aura-ring-d" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
-      <stop offset="0" stop-color="#3f7be6"/>
-      <stop offset="0.55" stop-color="#6ea8ff"/>
-      <stop offset="1" stop-color="#5fe3d0"/>
-    </linearGradient>
-    <radialGradient id="aura-glow-d" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#5fe3d0" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#5fe3d0" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#F6CFA0"/><stop offset="100%" stop-color="#DB9A57"/></linearGradient>
+    <linearGradient id="fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#B87A45"/><stop offset="100%" stop-color="#1E3A5A"/></linearGradient>
+    <linearGradient id="rb" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#223B5E"/><stop offset="100%" stop-color="#DB9A57"/></linearGradient>
+    <linearGradient id="rf" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#DB9A57"/><stop offset="100%" stop-color="#F6CFA0"/></linearGradient>
   </defs>
-  <circle cx="128" cy="128" r="124" fill="url(#aura-glow-d)"/>
-  <circle cx="128" cy="128" r="94" fill="none" stroke="url(#aura-ring-d)" stroke-width="15"
-          stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32"
-          transform="rotate(-90 128 128)"/>
-  <path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="#edf2f8"/>
-  <path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="#edf2f8" stroke-width="26"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 108 142 L 148 142" fill="none" stroke="#edf2f8" stroke-width="20" stroke-linecap="round"/>
+  <path d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#rb)" stroke-width="5" opacity="0.6"/>
+  <path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#fl)"/>
+  <path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#fr)"/>
+  <line x1="60" y1="12.6" x2="60" y2="56" stroke="#FDF0E0" stroke-width="1.3" opacity="0.95"/>
+  <rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#DB9A57"/>
+  <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#rf)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="95.2" cy="61.5" r="7.5" fill="#F6CFA0" opacity="0.3"/>
+  <circle cx="95.2" cy="61.5" r="4" fill="#FDF6EC"/>
 </svg>

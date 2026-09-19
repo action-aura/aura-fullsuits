@@ -117,7 +117,7 @@ test('the ring end clears 3:1 on its own theme app and panel surfaces', () => {
     `(a graphical object needs ${MIN_RATIO}:1):\n  ` + failures.join('\n  '));
 });
 
-test('the dark themes keep the bright brand teal, not a darkened one', () => {
+test('the dark themes keep the bright retail accent, not a darkened one', () => {
   // THE ALLOW HALF, and it exists because mutation-proving this file found the
   // hole: darkening all five CSS tokens satisfied the contrast check above
   // (a darker teal still clears 3:1 on a dark ground) while dimming the mark's
@@ -127,51 +127,102 @@ test('the dark themes keep the bright brand teal, not a darkened one', () => {
   //
   // The identity colour is fixed by definition -- retail_design_tokens_test.js
   // says so -- so pinning the literal here is the correct assertion, not a
-  // magic number: these three must be the brand teal itself.
-  const BRAND_TEAL = '#5fe3d0';
+  // magic number: these three must be the brand's own value.
+  //
+  // THE VALUE CHANGED ON 2026-09-19, by owner instruction. Action Aura shipped
+  // a finished brand identity (Action-Aura-Brand-Guide.md) in which TEAL
+  // #2F7B7B is the MASTER brand accent and belongs to the family, not to any
+  // one product; Aura Retail owns exactly two things, its accent trio
+  // (#A06030 dark / #C97B3D mid / #F0B87A light) and its counter glyph. So the
+  // ring on the Retail mark is amber now, and the old #5fe3d0 was not merely
+  // recoloured -- it was never Retail's to begin with.
+  //
+  // The dark grounds take the LIGHT accent and the light grounds the DARK one,
+  // which is the same light/dark split the guide ships as aura-mark-light.svg
+  // and aura-mark-dark.svg. Measured on each theme's own app/panel:
+  //     light 4.27 / 4.83   sand 4.10 / 4.67
+  //     dark 10.65 / 10.01  night 11.11 / 10.67  dusk 10.53 / 10.00
+  const RETAIL_ACCENT_LIGHT = '#F0B87A';
   const wrong = [];
   for (const name of ['Calm', 'Night', 'Dusk']) {
     const marker = THEMES.find(([n]) => n === name)[1];
     const end = tokensOf(marker)['brand-ring-end'];
-    if (end && end !== BRAND_TEAL) wrong.push(`${name}=${end}`);
+    if (end && end.toLowerCase() !== RETAIL_ACCENT_LIGHT.toLowerCase()) wrong.push(`${name}=${end}`);
   }
   assert.deepStrictEqual(wrong, [],
-    `these dark themes no longer use the brand teal ${BRAND_TEAL} for the ring end: ` +
-    `${wrong.join(', ')}. Only the LIGHT grounds may darken it; darkening the dark ` +
-    'themes dims the mark where it was already at about 12:1.');
+    `these dark themes no longer use the bright retail accent ${RETAIL_ACCENT_LIGHT} for ` +
+    `the ring end: ${wrong.join(', ')}. Only the LIGHT grounds take the darker #A06030; ` +
+    'darkening the dark themes dims the mark where it already scores about 10:1.');
 });
 
 test('the in-app mark actually reads the token, so it is not dead config', () => {
-  assert.ok(/stop-color="var\(--brand-ring-end/.test(ICONS),
-    "icons.js mark() does not read var(--brand-ring-end) for the ring's end stop, so " +
-    'the per-ground token above is decorative and the mark still paints one fixed teal.');
-  assert.ok(/var\(--brand-ring-end,\s*#5fe3d0\)/.test(ICONS),
-    'the var() has no dark-ground literal fallback — the mark must still render ' +
-    'correctly anywhere the stylesheet has not applied.');
+  // EITHER a gradient stop OR a stroke. The 2026-09-08 mark drew its ring as a
+  // gradient and ended it on this token; the 2026-09-19 brand mark draws the
+  // flat/mono variant's ring as a single stroke. What must hold is that the
+  // mark READS the per-theme token at all -- pinning `stop-color=` specifically
+  // was pinning the old drawing technique, and it went red on a revision that
+  // kept the property perfectly.
+  assert.ok(/(stop-color|stroke)="var\(--brand-ring-end/.test(ICONS),
+    "icons.js mark() does not read var(--brand-ring-end) for the ring, so the " +
+    'per-ground token above is decorative and the mark paints one fixed colour ' +
+    'on every theme.');
+  // The fallback must be a REAL colour from Retail's trio, so the mark still
+  // renders correctly anywhere the stylesheet has not applied. It is the
+  // light-ground value, because that is the safer default: an un-themed page
+  // is a white page.
+  assert.ok(/var\(--brand-ring-end,\s*#A06030\)/i.test(ICONS),
+    'the var() has no light-ground literal fallback (#A06030 from the brand guide) — ' +
+    'the mark must still render correctly before or without the stylesheet.');
 });
 
-test('the light-ground static exports do not carry the dark-ground teal', () => {
+/* The two static-export checks below are PROPERTY-based, not literal-based.
+   They used to name #5fe3d0 on both sides, which made them a second copy of
+   the palette: when the owner replaced the identity on 2026-09-19 they failed
+   for describing the old brand rather than for anything being wrong. Asking
+   "is this export legible on the ground it is FOR" survives a revision; asking
+   "does it contain this exact hex" does not. */
+
+const LIGHT_GROUND = '#fcfbfa';   // Day --surface-panel
+const DARK_GROUND = '#0f1829';    // Calm --surface-panel
+
+function hexesIn(file) {
+  const p = path.join(BRAND, file);
+  if (!fs.existsSync(p)) return null;
+  const found = fs.readFileSync(p, 'utf8').match(/#[0-9a-fA-F]{6}/g) || [];
+  return [...new Set(found.map((h) => h.toLowerCase()))];
+}
+
+test('the light-ground exports are legible on a light ground', () => {
   const offenders = [];
   for (const f of ['aura-mark.svg', 'aura-lockup.svg']) {
-    const p = path.join(BRAND, f);
-    if (!fs.existsSync(p)) continue;
-    if (fs.readFileSync(p, 'utf8').toLowerCase().includes('#5fe3d0')) offenders.push(f);
+    const hexes = hexesIn(f);
+    if (!hexes) continue;
+    // At least one ink in the file must actually read against a light panel.
+    // A mark drawn entirely in dark-ground colours scores ~1.3:1 and is simply
+    // absent, which is the defect this file was created for.
+    const best = Math.max(...hexes.map((h) => contrast(h, LIGHT_GROUND)));
+    if (best < MIN_RATIO) offenders.push(`${f} best=${best.toFixed(2)}:1`);
   }
   assert.deepStrictEqual(offenders, [],
-    'these are the LIGHT-ground exports and they still use the dark-ground teal, ' +
-    `which measures 1.29-1.35:1 on the light themes: ${offenders.join(', ')}`);
+    'these are the LIGHT-ground exports and nothing in them reaches ' +
+    `${MIN_RATIO}:1 against a light panel, so the mark is effectively absent ` +
+    `there: ${offenders.join(', ')}`);
 });
 
-test('the dark-ground exports DO keep the bright brand teal', () => {
-  // The allow-half. Darkening every file would "fix" the contrast failure by
-  // dimming the mark everywhere, including the three themes where the bright
-  // teal already scores ~12:1 and is the point of the mark.
-  const p = path.join(BRAND, 'aura-mark-on-dark.svg');
-  if (!fs.existsSync(p)) return;
-  assert.ok(fs.readFileSync(p, 'utf8').toLowerCase().includes('#5fe3d0'),
-    'aura-mark-on-dark.svg lost the bright brand teal. On dark grounds it scores ' +
-    'about 12:1 and is the most recognisable part of the mark; the light-ground ' +
-    'fix must not have been applied to it.');
+test('the dark-ground export keeps a genuinely bright ink', () => {
+  // The ALLOW HALF, and it is the reason this file was mutation-proved in the
+  // first place: darkening every export would satisfy the light-ground check
+  // above while dimming the mark on the three dark themes, where its brightest
+  // ink is the most recognisable thing about it. A contrast floor alone cannot
+  // object to that, because it only ever asks for MORE contrast on ONE ground.
+  const hexes = hexesIn('aura-mark-on-dark.svg');
+  if (!hexes) return;
+  const best = Math.max(...hexes.map((h) => contrast(h, DARK_GROUND)));
+  assert.ok(best >= 7,
+    `aura-mark-on-dark.svg's brightest ink reaches only ${best.toFixed(2)}:1 on a dark ` +
+    'panel. This is the DARK-ground master; the guide describes it as having ' +
+    '"brightened facets and ring", and a light-ground fix must not have been ' +
+    'applied to it wholesale.');
 });
 
 let failed = 0;

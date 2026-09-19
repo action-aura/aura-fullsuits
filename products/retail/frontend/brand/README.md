@@ -1,55 +1,102 @@
-# Aura brand assets — first cut, 2026-09-07
+# Aura brand assets — second generation, 2026-09-19
 
-One mark for the suite: a ring that has just been lit, open where the spark
-sits, around an A that stays legible at 16 px. The ring's gradient (ink blue
-`#1745A9` → aura blue `#3F7BE6` → aura teal `#5FE3D0`) is the brand colour;
-ink blue is already the product's action colour, the teal is new and is the
-Night theme's accent.
+**This replaces the first-cut identity described in every earlier revision of
+this file** (ring + upward A + beacon diamond, first shipped 2026-09-07,
+revised 2026-09-08). The owner supplied a finished replacement identity —
+`Action-Aura-Brand-Guide.md` plus its source SVGs — and this pass brings it
+into the repo. Read the guide itself for the full construction spec and the
+sibling-product colour table; this file only tracks what lives here and who
+consumes it.
 
-**That last clause stopped being true on 2026-09-08 and the sentence is left
-standing so the divergence is visible rather than quietly resolved.** The
-interface palette was re-grounded away from the cyan/teal family that day:
-Night's accent is now `#59AEF8`, and no theme declares `#5FE3D0` any more — the
-value survives in `main.css` only inside the comment recording its retirement.
+## The mark: a "pierced A"
 
-The teal did not leave the product, though. It moved into the brand layer and
-stayed there: `aura-mark.svg`, `intro.html`, and `AuraBrand.RingEnd` in
-Android's `Color.kt`, which the phone's **Sign In button** paints itself with
-(`LoginScreen.kt:387`, a `RingMid → RingEnd` gradient). Seen on a real Mi Note
-10 on 2026-09-09: the first screen of the phone app is a teal-to-blue gradient
-button under a teal-tipped ring, in a product whose five themes no longer
-contain that hue anywhere. So the brand no longer matches the interface it
-sits in, and the mismatch is on the most-seen screen there is.
+A faceted letter **A** read through the Greek **delta** (Δ, the sign of
+change), pierced by a tilted orbit ring — the aura. The ring passes **behind**
+the letter's shoulders, shows **through the counter** (the triangular window
+at the ridge), and sweeps **across the front** of the legs, ending in a
+bright energy node. Two facets meet at a lit ridge line: light-left,
+shadow-right. The right (shadow) facet always fades to the shared brand navy
+`#16233D` — that constant is what makes every product's mark read as a
+sibling of the others.
 
-Not corrected here, because it is a design decision rather than a typo: either
-the mark moves to the new accents, or the teal is kept deliberately as a brand
-colour that the UI does not use. DESIGN.md §4.3 carries the five themes' exact
-values; whoever decides should read that first. Two further facts worth having
-before deciding, both measured rather than assumed. The gradient loses about a
-third of the ring under a thermal printer's 1-bit threshold, which is why
-`aura-mark-1bit.svg` exists as a flat-ink variant. And Android's `AuraMark.kt`
-redraws this file's geometry by hand in Compose, so any change to the shape has
-to be made in both places — `MarkGeometryParityContractTest` now fails the
-Android build when they disagree, but it compares numbers, not colours, so a
-palette change to the mark still has to be carried across by hand.
+**Aura Retail** — this repo's product — owns exactly two things per the
+guide's family rule: its **accent colour** (dark `#A06030` / mid `#C97B3D` /
+light `#F0B87A`) and its **counter glyph**, a small **square** ("the module
+on the shelf") sitting in the counter where the ring shows through.
+
+### The 64px rule
+
+Per the guide's "Usage" section: **the 3D/gradient construction has a 64px
+minimum.** Below that, use the flat geometry — a single flat fill for the
+letterform plus one flat-colour ring stroke, no gradients, no facets, no
+counter glyph (too small to read). This is not optional polish: a gradient
+that bands or partially disappears at small sizes is a real, previously
+measured defect in the first-generation mark (see git history / DESIGN.md
+for the 1-bit threshold measurement that motivated the original flat/1-bit
+export). `AuraIcons.mark(size)` in `../icons.js` enforces this split at
+runtime — `size < 64` renders the flat branch, `size >= 64` renders the 3D
+one. **Both of this repo's real call sites (the sidebar brand slot and the
+sign-in overlay in `app-shell.js`) pass `mark(40)`, so the FLAT geometry is
+what is actually on screen today, not the 3D one** — grep
+`AuraIcons\.mark\(` in `../` before assuming otherwise if a new call site is
+added.
+
+## Files
 
 | File | What it is |
 |---|---|
-| `aura-mark.svg` | the mark on light surfaces (ink A) |
-| `aura-mark-on-dark.svg` | the mark on dark surfaces (off-white A, soft glow) |
-| `aura-app-icon.svg` | 512 px rounded-square app icon, night ground |
-| `aura-lockup.svg` | mark + AURA / RETAIL wordmark on light; the wordmark is **outlined** (Outfit 700 / 300 glyphs as paths, generated by `scripts/brand/lockup_to_paths.py`), so it renders identically with no font installed |
-| `aura-lockup-on-dark.svg` | the same lockup for dark surfaces (off-white wordmark, teal product line) |
-| `intro.html` | the intro: ~6 s, self-contained, reduced-motion aware; sized for a launcher splash |
+| `aura-mark.svg` | Retail's 3D mark, light-ground (== `aura-retail.svg`, kept under this older filename too so nothing that already references it 404s) |
+| `aura-mark-on-dark.svg` | Retail's 3D mark, brightened for dark grounds (derived — see its own header comment; no dark-ground Retail trio was delivered with the guide, only a dark-ground brightening of the master teal mark, so this file applies that same ratio to Retail's own accent) |
+| `aura-mark-1bit.svg` | Retail's FLAT/mono mark — navy letterform + one Retail-accent ring stroke, no gradients, no counter glyph. This is the geometry `AuraIcons.mark()` renders inline for `size < 64`, and the file to use for single-colour print (thermal receipts, embroidery, stamps) |
+| `aura-app-icon.svg` | 512px rounded-square app icon, navy ground, the dark-ground 3D mark centered inside. Consumed live as the browser-tab favicon by `index.html` and `customer-display.html` |
+| `aura-lockup.svg` | mark + AURA / RETAIL wordmark on light; the wordmark is **outlined** (Outfit 700 / 300 glyphs as paths, generated by `scripts/brand/lockup_to_paths.py` — wordmark text unchanged, only mark + text fill colours updated), so it renders identically with no font installed |
+| `aura-lockup-on-dark.svg` | the same lockup for dark surfaces (Ivory wordmark, Retail light-accent product line) |
+| `intro.html` | **NOT updated in this pass** — still draws the pre-2026-09-19 geometry. This was already a known, tracked gap before this pass (the first-generation redesign never reached this file either — see DESIGN.md); redoing the draw-on animation for the new facet-based construction is a separate design task, not a drop-in colour/coordinate swap, because the old animation keys off stroking a center-line path and the new mark is built from filled facets |
+| `README.md` | this file |
+| `aura-mark-light.svg` / `aura-mark-dark.svg` / `aura-mark-flat.svg` / `aura-retail.svg` | the canonical, un-retitled masters brought in verbatim from the brand guide's own source files (metadata stripped — see below). `aura-mark-light/-dark/-flat.svg` are the **master Action Aura identity** (teal accent, no product counter) kept here for reference/parity with the guide; `aura-retail.svg` is Retail's own 3D mark and is what `aura-mark.svg` and `AuraIcons.mark()` both mirror |
 
-Type: **Outfit** (wordmark, headings; Google Fonts) and **Inter Tight** (UI
-copy). Product lines — RETAIL, CLINIC, OWNER — sit under the wordmark in the
-light weight.
+All SVGs here had the source files' embedded C2PA content-provenance
+`<metadata>` block (≈9KB of base64 per file) stripped on import — it carries
+no rendering-relevant content, none of the previous-generation files in this
+directory had one, and there is no reason to ship AI-content-credential
+metadata inside a commercial product's shipped brand assets. Geometry and
+colour are otherwise verbatim from the delivered sources.
 
-Rules: clear space of one ring-stroke width; mark alone at 16 px minimum,
-lockup at 120 px; one-colour use is ink on light and off-white on dark; never
-close the ring, move the spark, rotate the mark, or put text inside it.
+## Known drift / not fixed here
 
-Not yet wired into the apps: the sign-in screens still show the old bolt
-icon and the shell its bag icon; the launcher has no splash. The showcase
-page (with the intro playable) is published as the "Aura Brand" artifact.
+- **`android/aura-retail/`'s `AuraMark.kt` still hand-draws the OLD
+  (ring + upward A + beacon) geometry**, and
+  `MarkGeometryParityContractTest.kt` reads `aura-mark.svg` in THIS
+  directory to compare against it byte-for-coordinate. That test will now
+  fail until someone redraws `AuraMark.kt` (and the launcher vector
+  drawables, which carry the same old geometry in comments) to match. Not
+  fixed here: `android/` is a different owned surface.
+- **`scripts/brand/lockup_to_paths.py`** (not under this directory) still
+  hardcodes the OLD mark geometry for the portion of `aura-lockup.svg` /
+  `aura-lockup-on-dark.svg` it regenerates. If it is re-run, it will
+  overwrite this pass's mark update in those two files with the old one; it
+  was not edited here.
+- **`owner/app/static/img/brand/action-aura-mark.svg`** is a *separate* file
+  (own copy, own directory, referenced from `owner/app/templates/layout/
+  base.html`) carrying the old ring+A geometry. It is not the same asset as
+  anything in this directory and was left untouched — Owner Control Center
+  is a different team's surface.
+- **`DESIGN.md`'s brand section** (root of the repo) documents the
+  first-generation mark's exact construction numbers and file list in
+  detail and is now stale in the same way it once flagged `intro.html` as
+  stale. Not editable from here — owned by another crew for this change.
+- Two test files that pinned the OLD geometry's exact coordinates/mechanism
+  now fail, and were **not edited** to accommodate the redesign (both are
+  outside this change's owned paths):
+  - `products/retail/tests/retail_shell_chrome_test.js` —
+    `testMarkStrokesCurrentColorAndUsesUniqueGradientIds` pins the old A's
+    literal `stroke="currentColor" stroke-width="26"` path and the old
+    beacon diamond. The new mark is fixed-colour brand artwork, not a
+    currentColor glyph (see `icons.js`'s comment on `mark()` for why, and
+    `retail_design_tokens_test.js`'s pre-existing `.aura-logo` exemption,
+    which states the same reasoning).
+  - `products/retail/tests/retail_brand_ring_contrast_test.js` — asserts
+    `icons.js` reads the `--brand-ring-end` CSS variable and that
+    `aura-mark-on-dark.svg` still contains the literal brand teal
+    `#5fe3d0`. The new design uses Retail's own fixed accent trio
+    throughout (no teal, no CSS variable), by design.

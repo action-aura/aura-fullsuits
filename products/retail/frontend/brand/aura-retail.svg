@@ -1,21 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
   <title id="t">Aura Retail mark</title>
-  <!-- 2026-09-19: REDESIGNED. This file used to hold the first-generation
-       "ring + upward A + beacon diamond" mark (256 viewBox). The owner
-       supplied a finished replacement identity, Action-Aura-Brand-Guide.md:
-       a faceted letter A read through the Greek delta ("pierced A"),
-       pierced by a tilted orbit ring that passes BEHIND the letter's
-       shoulders, shows THROUGH the counter, and sweeps ACROSS THE FRONT of
-       the legs to a bright energy node. Content here is identical to
-       aura-retail.svg (the canonical Retail 3D mark, light-ground) --
-       kept under this OLD filename too so nothing that already references
-       "aura-mark.svg" 404s. See brand/README.md for the full file map and
-       KNOWN DRIFT: Android's AuraMark.kt (android/aura-retail/.../ui/brand/
-       AuraMark.kt) still hand-draws the OLD geometry from this file's
-       previous revision, and MarkGeometryParityContractTest.kt reads THIS
-       file path to compare against it -- that test will now fail until the
-       Android side is redrawn to match (out of scope here: android/ is not
-       an owned path for this change). -->
+  <!-- The Retail product's own 3D mark: same pierced-A construction as
+       aura-mark-light.svg, wearing Retail's accent trio (dark #A06030 / mid
+       #C97B3D / light #F0B87A) instead of the master teal, plus Retail's
+       counter glyph -- the small SQUARE ("the module on the shelf") sitting
+       in the counter where the ring shows through. The right (shadow) facet
+       still fades to the shared brand navy #16233D -- that constant is what
+       makes every product's mark read as a sibling of the others (see
+       Action-Aura-Brand-Guide.md, "Family rule"). This is the canonical
+       source this repo's icons.js AuraIcons.mark() reproduces inline for
+       sizes >= 64px; aura-mark.svg mirrors this file for older consumers
+       that still reference that name. -->
   <defs>
     <linearGradient id="fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#F0B87A"/><stop offset="100%" stop-color="#C97B3D"/></linearGradient>
     <linearGradient id="fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#A06030"/><stop offset="100%" stop-color="#16233D"/></linearGradient>

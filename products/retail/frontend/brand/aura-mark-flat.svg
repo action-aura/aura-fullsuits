@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
+  <title id="t">Aura mark, flat</title>
+  <!-- Flat, mono-style master mark for <=64px use (favicons, stamps,
+       embroidery, single-colour print) -- per Action-Aura-Brand-Guide.md,
+       the 3D facet/gradient versions must NOT be used below 64px. No
+       gradients, no 3D shading: the letterform is one flat fill and the
+       ring is one flat stroke, so nothing bands or vanishes under a
+       single-colour print threshold the way a gradient can. This is the
+       master/generic flat (teal accent); the Retail product's own flat
+       export (navy + retail accent, no teal) is aura-mark-1bit.svg. -->
+  <path d="M60 12.6 L98 104 L80 104 L60 56 L40 104 L22 104 Z" fill="#16233D"/>
+  <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="#2F7B7B" stroke-width="9" stroke-linecap="round"/>
+</svg>

@@ -70,17 +70,28 @@
      Ordered by elevation, named by the job they do in the shop. The working
      surface (--surface-till) is the BRIGHTEST: the cart is where the cashier
      looks, so it gets the light, and the chrome around it recedes. */
-  --surface-app:        #eaeef3;  /* outermost shell, deliberately recessed  */
-  --surface-till:       #ffffff;  /* THE working surface: cart, active table */
-  --surface-panel:      #ffffff;  /* sidebar + header chrome                 */
-  --surface-sunken:     #f2f5f8;  /* wells, inputs, anything you type into   */
-  --surface-raised:     #f8fafc;  /* cards lifted off the shell              */
-  --surface-hover:      #eef2f7;  /* pointer/finger is over it               */
-  --surface-active:     #e6eaf0;  /* pressed, or the row under the cursor.
+  /* RE-GROUNDED 2026-09-19 (brand identity, DESIGN.md / Action-Aura-Brand-
+     Guide.md): the owner supplied a finished brand palette whose light
+     neutral is Ivory #F6F4EF, not a cool blue-grey. Every value below is
+     re-hued from the SAME hue/saturation register as Ivory (h~43, s~18-25 --
+     deliberately gentler than Ivory's own 28% so Day stays airier than
+     Sand's deeper warm paper) while its WCAG relative luminance is held
+     within ~0.003 of the value it replaces, so every AA/AAA margin already
+     solved against this family (see the header comment above) carries over
+     unchanged -- confirmed by re-running retail_design_contrast_test.js
+     after this edit, not assumed. Elevation ORDER is unchanged (till/panel
+     brightest, then raised, sunken, hover, app, active darkest). */
+  --surface-app:        #efede9;  /* outermost shell, deliberately recessed  */
+  --surface-till:       #fcfbfa;  /* THE working surface: cart, active table */
+  --surface-panel:      #fcfbfa;  /* sidebar + header chrome                 */
+  --surface-sunken:     #f6f5f2;  /* wells, inputs, anything you type into   */
+  --surface-raised:     #f9f8f7;  /* cards lifted off the shell              */
+  --surface-hover:      #f3f1ee;  /* pointer/finger is over it               */
+  --surface-active:     #eceae3;  /* pressed, or the row under the cursor.
                                      DARKEST text-bearing surface -- every
                                      money token is solved against THIS one. */
   --surface-scrim:      rgba(16, 22, 33, 0.55); /* modal backdrop            */
-  --brand-ring-end: #3d9185; /* brand ring gradient end -- Day -- light ground; NOT a theme accent, see icons.js mark() */
+  --brand-ring-end: #A06030; /* brand ring gradient end -- Day -- light ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(238, 241, 246, 0.94); /* full-bleed ground behind the pre-login auth card */
 
   /* ── TEXT ─────────────────────────────────────────────────────────────────
@@ -158,9 +169,29 @@
      independently clears AA against every solid surface in this palette,
      worst case (--surface-active) 8.23:1 -- not merely against white, and
      comfortably above the original's 7.07:1 on the same surface. */
-  --accent-action:        #213c90;
-  --accent-action-hover:  #1a3073;
-  --accent-action-active: #142559;
+  /* RE-GROUNDED AGAIN 2026-09-19 (brand identity): the 2026-09-08 lapis/
+     indigo family above is now superseded, not merely retouched. The owner
+     supplied a finished brand guide (Action-Aura-Brand-Guide.md) whose
+     Retail product accent is a burnt-amber trio -- dark #A06030, mid
+     #C97B3D, light #F0B87A -- distinct from the shared brand Navy/Teal and
+     from the other two products' own accent trios (Clinic blue, Owner
+     gold). Day is a LIGHT ground, so it takes the flip-strategy's INK end,
+     same as before: a dark, saturated value that reads as text and takes a
+     white label.
+
+     NOT the literal --A06030--: that hex is hue 25.7 deg, and Day needed a
+     value pairwise distinguishable (CIE76 ΔE >= 12, retail_design_
+     contrast_test.js's testThemeAccentsAreDistinguishable) from Sand, which
+     already sits at hue 26.9 deg (#9a4f12, kept -- see Sand's block). Day
+     is therefore pushed to hue 15 deg, a deeper rust/burnt-umber still
+     inside the same amber family the brand guide specifies, not a
+     different hue borrowed from elsewhere. Measured: ΔE76(day, sand) =
+     19.45 (floor 12); accent-action clears AA as plain text against every
+     Day surface above (worst 7.88:1); --text-on-accent (#ffffff, unchanged)
+     clears AA on all three fills (9.48 - 15.34:1). */
+  --accent-action:        #792e15;
+  --accent-action-hover:  #5b2210;
+  --accent-action-active: #41190b;
   /* NOTE: named --surface-*, not --accent-*, and that distinction is load
      bearing. This is a 8%-ish wash of the accent used as a BACKDROP behind
      dark text (selected nav row, active tab) -- it is a surface that happens
@@ -182,7 +213,10 @@
      typo, plus its twin in the legacy-alias block near line 300, left 22 of
      this file's 126 tokens undefined while every text-scanning guard in the
      suite stayed green. See retail_design_css_parse_test.js. */
-  --surface-accent-soft:  #eaedf9;
+  --surface-accent-soft:  #f2ebe8;  /* 8% wash of the new amber accent-action
+                                        over --surface-till, recomputed
+                                        2026-09-19; text-primary on it is
+                                        14.82:1, nowhere near the AA floor. */
   /* Secondary warm accent (owner brief, 2026-09-08): the amber half of
      "lapis/indigo paired with a warm amber". Named for its job -- emphasis/
      highlight -- not its hue, per the naming rule above. Nothing consumes it
@@ -207,7 +241,7 @@
      operators, so the ring is high-contrast and, crucially, has an outer
      halo so it stays visible against BOTH the light chrome and the accent
      button it may be sitting on. */
-  --focus-ring-color:   #213c90;
+  --focus-ring-color:   #792e15;
   --focus-ring-width:   3px;
   --focus-ring-offset:  2px;
 
@@ -470,17 +504,31 @@ html[data-theme="dark"] {
   /* Native widgets (scrollbars, date pickers, <select> popups) follow. */
   color-scheme: dark;
 
-  /* ── SURFACES — elevation lightens; the working surface gets the light ── */
-  --surface-app:        #0f1319;
-  --surface-till:       #1a212c;  /* THE working surface: lightest ground   */
-  --surface-panel:      #151a23;  /* sidebar + header chrome                */
-  --surface-sunken:     #0b0f15;  /* wells, inputs -- sink below the panel  */
-  --surface-raised:     #171d27;
-  --surface-hover:      #212936;
-  --surface-active:     #273140;  /* LIGHTEST text-bearing surface -- every
+  /* ── SURFACES — elevation lightens; the working surface gets the light ──
+     RE-GROUNDED 2026-09-19 (brand identity): these surfaces already sat at
+     hue ~216-219 deg, s~24-31% -- i.e. already in the brand Navy #16233D's
+     own hue family (h220, s47), just under-saturated. "Move toward Navy" is
+     therefore a saturation lift to Navy's ~48%, hue AND lightness held
+     fixed per elevation step -- not a re-hue, which is why the numbers move
+     so little. Confirmed by re-running the contrast suite, not assumed:
+     every text/money token here is unchanged and its worst-case margin
+     against the new surfaces IMPROVED (--text-tertiary on --surface-active
+     was 5.76:1, is now 6.16:1). Night sits even closer to the brand's Dark
+     surface #101A30 already (h~216, s~37-50) and is left untouched below --
+     retinting it too would pull it toward THIS block and collapse two of
+     the five themes into each other, the exact regression
+     testThemeAccentsAreDistinguishable and a side-by-side look both guard
+     against. */
+  --surface-app:        #0a111e;
+  --surface-till:       #121d34;  /* THE working surface: lightest ground   */
+  --surface-panel:      #0f1829;  /* sidebar + header chrome                */
+  --surface-sunken:     #080d18;  /* wells, inputs -- sink below the panel  */
+  --surface-raised:     #101a2e;
+  --surface-hover:      #172540;
+  --surface-active:     #1b2b4c;  /* LIGHTEST text-bearing surface -- every
                                      text and money token is solved on THIS */
   --surface-scrim:      rgba(2, 6, 12, 0.72);
-  --brand-ring-end: #5fe3d0; /* brand ring gradient end -- Calm -- dark ground; NOT a theme accent, see icons.js mark() */
+  --brand-ring-end: #F0B87A; /* brand ring gradient end -- Calm -- dark ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(4, 6, 16, 0.93);
 
   /* ── TEXT — off-white, three steps, AA-or-better on every surface ─────── */
@@ -516,16 +564,26 @@ html[data-theme="dark"] {
   --state-info-border:     #24406b;
 
   /* ── ACCENT — light fill, dark label (strategy flip documented above) ───
-     RE-GROUNDED 2026-09-08 alongside the light palette: same lapis/indigo
-     family (hue 226, vs the light theme's 232), lightened for a dark
-     ground. Each fill independently clears AA against --text-on-accent
-     (6.95 - 8.89:1) AND against every solid surface here, worst case
-     --surface-active at 5.21:1 -- the accent is also used as plain text/
-     icon colour in the shell, not only as a button fill. */
-  --accent-action:        #98adf4;
-  --accent-action-hover:  #a4b7f5;
-  --accent-action-active: #87a0f2;
-  --surface-accent-soft:  #202947;
+     RE-GROUNDED AGAIN 2026-09-19 (brand identity): the 2026-09-08 lapis/
+     indigo above is superseded by the Retail product accent from the
+     brand guide -- dark #A06030 / mid #C97B3D / light #F0B87A. Calm is a
+     DARK ground, so it takes the flip-strategy's LIGHT end, and gets the
+     trio's LIGHT value literally: #F0B87A is Calm's canonical "default
+     amber" (Night and Dusk are pushed off it below, both to stay
+     pairwise-distinguishable and because each has its own register --
+     colder for Night, warmer/coral for Dusk). --text-on-accent is
+     UNCHANGED (#0f1834): it still clears AA on all three new fills
+     (8.53 - 9.86:1), so re-solving it bought nothing. Accent-action clears
+     AA as plain text/icon colour against every surface above, worst case
+     7.91:1 (was 5.21:1 -- the family's higher luminance here helps this
+     margin, not just the money one). Measured: ΔE76(calm, night) = 20.65,
+     ΔE76(calm, dusk) = 25.58 (floor 12 both). */
+  --accent-action:        #f0b87a;
+  --accent-action-hover:  #f3c491;
+  --accent-action-active: #eca75a;
+  --surface-accent-soft:  #24293a;  /* 8% wash of the new accent over
+                                        --surface-till; text-primary on it
+                                        is 12.84:1. */
   /* Secondary warm accent -- see the light palette's note. Same amber hue
      (42) as every other theme, lightened to pop on this dark ground. */
   --accent-highlight:     #f0bf4c;
@@ -537,10 +595,10 @@ html[data-theme="dark"] {
   --border-default:     #2e3947;
   --border-strong:      #47566a;
 
-  /* ── FOCUS — ring rides the accent (>=5.21:1 on the darkest chrome it sits
+  /* ── FOCUS — ring rides the accent (>=7.91:1 on the darkest chrome it sits
      over); the white halo is unchanged because its one job is the pre-login
      canvas, which stays dark in both themes. ── */
-  --focus-ring-color:   #98adf4;
+  --focus-ring-color:   #f0b87a;
 
   /* ── ELEVATION — deeper, wider shadows: on dark ground a 6% black shadow
      is invisible, so depth has to be stated louder to exist at all. ── */
@@ -553,8 +611,9 @@ html[data-theme="dark"] {
   --sheet-scrim: rgba(0, 0, 0, 0.60);
 
   /* The rgb triplet several rules build rgba(var(--sub-accent-rgb), a) tints
-     from; must track the accent flip or every tint stays ink-blue. */
-  --sub-accent-rgb: 152, 173, 244;
+     from; must track the accent flip or every tint stays ink-blue. Re-grounded
+     2026-09-19 alongside --accent-action above. */
+  --sub-accent-rgb: 240, 184, 122;
 }
 /*                                                     [design-tokens-dark:end] */
 
@@ -591,6 +650,27 @@ html[data-theme="dark"] {
    fills each independently clear AA against --text-on-accent (6.36 - 8.13:1)
    and against every solid surface here, worst case --surface-active at
    5.21:1 -- the accent is also used as plain text/icon colour in the shell.
+
+   SURFACES LEFT UNTOUCHED 2026-09-19 (brand identity pass, DESIGN.md /
+   Action-Aura-Brand-Guide.md): the brief that moved Day and Calm's grounds
+   toward the brand's Navy #16233D / Dark surface #101A30 does not touch
+   Night. Measured (not assumed): Night's surfaces already sit at hue
+   ~215-218 deg, s~37-50% -- closer to Dark surface's own hue/saturation
+   (h221, s50) than Calm's grounds were BEFORE their own retint. Moving
+   Night any further would pull it toward Calm's now-retinted family and
+   collapse two of the five themes, exactly the failure this file's own
+   ΔE76 guard and "look at both themes side by side" method exist to catch.
+
+   ACCENT RE-GROUNDED AGAIN 2026-09-19 (brand identity): hue 208 lapis/indigo
+   above is superseded by the Retail brand's amber trio (dark #A06030 / mid
+   #C97B3D / light #F0B87A, Action-Aura-Brand-Guide.md). Night keeps the
+   dark-ground flip-strategy (light fill, dark label) but is pushed OFF the
+   trio's literal light value #F0B87A -- which Calm now owns -- to a paler,
+   cooler-leaning amber (hue 33 vs Calm's 31.5, but +8 lightness / -22
+   saturation) so the two remain pairwise distinguishable: ΔE76(night,
+   calm) = 20.65 (floor 12). --text-on-accent is UNCHANGED (#0c1b28) and
+   still clears AA against all three new fills, worst 9.82:1. Accent-action
+   clears AA as plain text against every surface above, worst case 9.38:1.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="night"] {
   color-scheme: dark;
@@ -623,26 +703,28 @@ html[data-theme="night"] {
   --state-warning-border: #544119;
   --state-danger-border: #63241e;
   --state-info-border: #233f6a;
-  --accent-action: #59aef8;
-  --accent-action-hover: #6cb7f9;
-  --accent-action-active: #3fa1f7;
-  --surface-accent-soft: #13283a;
+  --accent-action: #e9cdaa;
+  --accent-action-hover: #eed9be;
+  --accent-action-active: #e2bc8e;
+  --surface-accent-soft: #222831;  /* 8% wash of the new accent over
+                                        --surface-till; text-primary on it
+                                        is 13.02:1. */
   /* Secondary warm accent -- see the light palette's note. Same amber hue
      (42) as every other theme, lightened to pop on this darkest ground. */
   --accent-highlight: #f1c255;
   --border-hairline: #1a2432;
   --border-default: #26344a;
   --border-strong: #3f5271;
-  --focus-ring-color: #59aef8;
+  --focus-ring-color: #e9cdaa;
   --surface-scrim: rgba(1, 4, 9, 0.74);
-  --brand-ring-end: #5fe3d0; /* brand ring gradient end -- Night -- dark ground; NOT a theme accent, see icons.js mark() */
+  --brand-ring-end: #F0B87A; /* brand ring gradient end -- Night -- dark ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(3, 6, 12, 0.94);
   --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
   --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
   --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
   --elevation-auth-card: 0 40px 90px rgba(0, 0, 0, 0.55);
   --sheet-scrim: rgba(0, 0, 0, 0.62);
-  --sub-accent-rgb: 89, 174, 248;
+  --sub-accent-rgb: 233, 205, 170;
 }
 /*                                                    [design-tokens-night:end] */
 
@@ -665,6 +747,27 @@ html[data-theme="night"] {
    toward, so --accent-action and friends are left exactly as they were.
    Only --accent-highlight (the new secondary warm token, see the light
    palette's note) is added here.
+
+   ACCENT RE-GROUNDED 2026-09-19 (brand identity, DESIGN.md /
+   Action-Aura-Brand-Guide.md): the lavender above IS now retired, by the
+   same brief that spared it in 2026-09-08 -- the owner's finished guide
+   gives Retail one accent family (amber, dark #A06030 / mid #C97B3D /
+   light #F0B87A), not a per-theme free choice, and lavender falls outside
+   it. SURFACES ARE LEFT VIOLET ON PURPOSE: this is the one deliberate
+   design call in this pass rather than a computed one. Retinting Dusk's
+   ground toward the brand Navy (as Calm's was) would collapse three of the
+   five dark themes into one hue family; keeping the violet ground and
+   swapping only the accent to warm amber reads as amber light against a
+   violet sky -- literally dusk -- and keeps Dusk's identity as "the warm
+   counterpart to Night" (DESIGN.md §4.3) intact. The new accent is pushed
+   OFF the trio's literal values (both already spoken for by Calm/Night) to
+   a warmer, more saturated coral-amber -- hue 12 vs Calm's 31.5 and
+   Night's 33 -- both for distinguishability (ΔE76(dusk, calm) = 25.58,
+   ΔE76(dusk, night) = 34.43, floor 12) and because a coral lands better
+   against violet than a colder amber would. --text-on-accent is UNCHANGED
+   (#150f2e) and still clears AA against all three new fills, worst
+   6.69:1. Accent-action clears AA as plain text against every (unchanged)
+   surface above, worst case 5.86:1.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="dusk"] {
   color-scheme: dark;
@@ -694,19 +797,21 @@ html[data-theme="dusk"] {
   --state-warning-border: #57431c;
   --state-danger-border: #672622;
   --state-info-border: #27406d;
-  --accent-action: #b9a6ff;
-  --accent-action-hover: #c9baff;
-  --accent-action-active: #a793f6;
-  --surface-accent-soft: #2a2350;
+  --accent-action: #f69279;
+  --accent-action-hover: #f8a591;
+  --accent-action-active: #f47758;
+  --surface-accent-soft: #322637;  /* 8% wash of the new accent over
+                                        --surface-till; text-primary on it
+                                        is 12.39:1. */
   /* Secondary warm accent -- see the light palette's note. Same amber hue
      (42) as every other theme, lightened to pop on this dark ground. */
   --accent-highlight: #f1c150;
   --border-hairline: #26223a;
   --border-default: #34304c;
   --border-strong: #4d4870;
-  --focus-ring-color: #b9a6ff;
+  --focus-ring-color: #f69279;
   --surface-scrim: rgba(6, 4, 14, 0.74);
-  --brand-ring-end: #5fe3d0; /* brand ring gradient end -- Dusk -- dark ground; NOT a theme accent, see icons.js mark() */
+  --brand-ring-end: #F0B87A; /* brand ring gradient end -- Dusk -- dark ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(11, 9, 20, 0.94);
   /* White, not black -- see the note in the Night block above. The halo's only
      job is the #080808 pre-login canvas, which does not change with the theme. */
@@ -715,7 +820,7 @@ html[data-theme="dusk"] {
   --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
   --elevation-auth-card: 0 40px 90px rgba(0, 0, 0, 0.55);
   --sheet-scrim: rgba(0, 0, 0, 0.62);
-  --sub-accent-rgb: 185, 166, 255;
+  --sub-accent-rgb: 246, 146, 121;
 }
 /*                                                     [design-tokens-dusk:end] */
 
@@ -750,6 +855,23 @@ html[data-theme="dusk"] {
    --text-on-accent (6.00 - 9.62:1) and against every solid surface here,
    worst case --surface-active at 4.58:1 (accent), 5.79:1 (hover), 7.34:1
    (active) -- unchanged from what shipped before this file's first pass.
+
+   LEFT ENTIRELY UNCHANGED 2026-09-19 (brand identity pass,
+   Action-Aura-Brand-Guide.md): this theme's whole block -- surfaces AND
+   accent -- carries zero edits in this pass, and that is a measured
+   decision, not an oversight. #9a4f12 sits at hue 26.9 deg; the brand
+   guide's Retail-dark trio value is #A06030 at hue 25.7 deg -- effectively
+   the SAME hue family already. Swapping in the literal trio hex was tried
+   and MEASURED WORSE: #A06030 is lighter (WCAG relative luminance 0.1605
+   vs #9a4f12's 0.1251), which drops accent-action's worst-case contrast as
+   plain text against this theme's own --surface-active from 4.58:1 to
+   3.81:1 -- below the 4.5:1 AA floor this exact pairing has cleared,
+   razor-thin, since the 2026-09-08 pass above. "The product accent is the
+   amber trio" is satisfied in substance (same hue family, same identity)
+   without re-introducing a defect this file's own history already paid to
+   fix once (the muddy-olive episode two paragraphs up). Grounds are
+   likewise untouched: Sand is already the warm-paper theme the Day block's
+   ivory retint is reaching toward, so there is nothing to move it closer to.
    ═══════════════════════════════════════════════════════════════════════════ */
 html[data-theme="sand"] {
   --surface-app: #efe8dc;
@@ -799,7 +921,7 @@ html[data-theme="sand"] {
   --border-strong: #b7ab99;
   --focus-ring-color: #9a4f12;
   --surface-scrim: rgba(40, 30, 18, 0.45);
-  --brand-ring-end: #3d9185; /* brand ring gradient end -- Sand -- light ground; NOT a theme accent, see icons.js mark() */
+  --brand-ring-end: #A06030; /* brand ring gradient end -- Sand -- light ground; NOT a theme accent, see icons.js mark() */
   --surface-auth-ground: rgba(243, 237, 227, 0.94);
   --elevation-card:  0 1px 2px rgba(60, 45, 25, 0.10), 0 4px 12px rgba(60, 45, 25, 0.08);
   --elevation-panel: 0 8px 28px rgba(60, 45, 25, 0.14);
@@ -2123,7 +2245,11 @@ html[data-theme="light"] {
      rides the one semantic accent. -rgb is kept because several rules build
      rgba(var(--sub-accent-rgb), α) tints from it. */
   --sub-accent: var(--accent-action);
-  --sub-accent-rgb: 23, 69, 169;
+  /* Raw decimal triplet -- must track --accent-action's hex by hand (CSS
+     cannot derive one custom property's channels from another). Re-grounded
+     2026-09-19 to the new Day accent-action #792e15; the four themed blocks
+     below (dark/night/dusk/sand) each carry their own override already. */
+  --sub-accent-rgb: 121, 46, 21;
 
   --app-bg:        var(--surface-app);
   --content-bg:    var(--surface-app);

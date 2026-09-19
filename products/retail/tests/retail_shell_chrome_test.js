@@ -462,34 +462,88 @@ function testFaviconPointsAtBrandIcon() {
 function testMarkStrokesCurrentColorAndUsesUniqueGradientIds() {
   const sandbox = loadShell();
   const A = sandbox.AuraIcons;
-  const m1 = A.mark(40);
-  const m2 = A.mark(40);
+
+  // 40 is what the app ACTUALLY calls -- both real call sites (the sign-in
+  // overlay and the sidebar brand slot) pass it, and 40 < 64, so this is the
+  // flat/mono branch and the entire on-screen presence of the brand.
+  const flat = A.mark(40);
+
+  // THE PROPERTY, not the path data. The 2026-09-19 brand revision replaced
+  // the stroked A with the guide's filled "pierced A", so the old
+  // `stroke="currentColor" stroke-width="26"` geometry this used to pin no
+  // longer exists. What must NOT change is that the mono mark takes the
+  // surrounding ink, because that is the only reason it stays legible when
+  // the shopkeeper switches theme.
+  //
+  // This is not hypothetical. The first cut of the revision shipped a fixed
+  // fill="#16233D", and brand navy measured against the dark theme grounds is
+  // 1.13:1 (dark), 1.21:1 (night), 1.13:1 (dusk) -- a navy mark on a navy
+  // ground, invisible on three of the five sanctioned themes.
   assert.ok(
-    /<path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="currentColor" stroke-width="26"/.test(m1),
-    'AuraIcons.mark()\'s A path does not stroke currentColor at the 2026-09-08 weight/geometry -- ' +
-    'it would not survive a theme change, or it has drifted from the redesigned A.'
-  );
-  const ring1 = m1.match(/aura-ring-(\d+)/);
-  const ring2 = m2.match(/aura-ring-(\d+)/);
-  assert.ok(ring1 && ring2, 'AuraIcons.mark() output is missing an aura-ring-N gradient id.');
-  assert.notStrictEqual(
-    ring1[1], ring2[1],
-    'Two AuraIcons.mark() calls produced the SAME gradient id -- a second <svg> on the same page would silently ' +
-    'reuse the first fragment\'s gradient (duplicate ids resolve to the first match), not fail loudly.'
-  );
-  // The beacon (formerly a soft radial-gradient spark) is now a flat
-  // currentColor diamond -- no gradient, so no id to collide on. Pin BOTH
-  // that the diamond is there and that no radialGradient survives, so a
-  // regression back to the soft blur fails loudly here.
-  assert.ok(
-    /<path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="currentColor" \/>/.test(m1),
-    'AuraIcons.mark() does not render the flat currentColor beacon diamond at the ring\'s opening.'
+    /<path d="[^"]*" fill="currentColor"/.test(flat),
+    'AuraIcons.mark(40) does not fill its letterform with currentColor. The flat/mono ' +
+    'variant is the one the shell actually renders, and a fixed colour there is ' +
+    'invisible on any theme whose ground is near it -- measured at 1.13:1 on the dark ' +
+    'theme when this was last got wrong.'
   );
   assert.ok(
-    !/radialGradient/.test(m1),
-    'AuraIcons.mark() still defines a radialGradient -- the beacon must be a flat, hard-edged shape, not a soft glow.'
+    /stroke="var\(--brand-ring-end/.test(flat),
+    'AuraIcons.mark(40) no longer reads --brand-ring-end for the orbit ring, so the ' +
+    'per-theme token is dead config and the ring paints one fixed colour on every ground.'
   );
-  console.log('PASS: AuraIcons.mark() strokes currentColor on the A/beacon and never reuses a gradient id across calls');
+  assert.ok(
+    !/<linearGradient|<radialGradient/.test(flat),
+    'AuraIcons.mark(40) defines a gradient. Below 64px the brand guide requires the FLAT ' +
+    'master ("gradients and glows do not survive single-colour printing"), and a flat ' +
+    'mark has nothing to collide on.'
+  );
+
+  // THE 64px RULE, from the guide's Usage section: "Minimum size for the 3D
+  // versions: 64 px; below that, use aura-mark-flat.svg". Pinned at the
+  // boundary in BOTH directions so an off-by-one cannot slip through.
+  assert.ok(
+    !/<linearGradient/.test(A.mark(63)),
+    'mark(63) rendered the 3D geometry. The guide sets 64px as the hard floor for it.'
+  );
+  const solid1 = A.mark(64);
+  const solid2 = A.mark(64);
+  assert.ok(
+    /<linearGradient/.test(solid1),
+    'mark(64) did not render the 3D geometry, so the flat fallback is being used above its ceiling.'
+  );
+
+  // Unique gradient ids per call. SVG ids are ONE flat namespace across the
+  // whole document, not scoped per <svg>: this shell renders the mark more
+  // than once per page, and a duplicate id resolves to the FIRST match, so a
+  // collision repaints the second mark with the first's facets and reports
+  // nothing.
+  const idsOf = (svg) => (svg.match(/id="(aura-[a-z]+-\d+)"/g) || []).sort();
+  const a = idsOf(solid1);
+  const b = idsOf(solid2);
+  assert.ok(a.length >= 2, `mark(64) defined ${a.length} gradient id(s); expected the facet/ring set.`);
+  assert.deepStrictEqual(
+    a.filter((id) => b.includes(id)), [],
+    'Two AuraIcons.mark(64) calls produced OVERLAPPING gradient ids -- a second <svg> on ' +
+    'the same page silently reuses the first fragment\'s gradients (duplicate ids resolve ' +
+    'to the first match), so the mark renders with the wrong facet colours and no error.'
+  );
+
+  assert.ok(
+    !/radialGradient/.test(solid1),
+    'AuraIcons.mark() defines a radialGradient -- the energy node must be a hard-edged ' +
+    'shape. The guide is explicit that the staging glow is presentation-context only and ' +
+    'not part of the deliverable mark.'
+  );
+
+  // WHAT THIS NO LONGER CATCHES, stated rather than left to be discovered:
+  // the exact path data. It used to pin the old A's three coordinates and the
+  // beacon diamond's four, so a silent geometry drift failed here. The
+  // revision made that impossible to keep -- the geometry is now the brand
+  // guide's, and duplicating its coordinates in a test would be a second
+  // source of truth that drifts from brand/*.svg rather than guarding it.
+  // Geometry parity against the SVG masters is Android's
+  // MarkGeometryParityContractTest, and brand/README.md documents the files.
+  console.log('PASS: AuraIcons.mark() takes the theme\'s ink below 64px, honours the 64px 3D floor, and never reuses a gradient id');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

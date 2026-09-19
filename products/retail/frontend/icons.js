@@ -58,24 +58,42 @@
 // alongside render()/svg() below, is a different thing from an icon: it is
 // the Aura BRAND MARK (products/retail/frontend/brand/aura-mark.svg)
 // reproduced inline so the shell's brand slot and sign-in screen can render
-// it at any size and have its "A" inherit the surrounding text colour --
-// see the comment on mark() itself for why and for the gradient-id caveat.
+// it at any size without an <img> request -- see the comment on mark()
+// itself for the current construction and the gradient-id caveat.
 //
-// MARK EVOLUTION (2026-09-08 -- the owner read the mark as a generic tech/
-// crypto token, not a retail tool): two changes to mark(), applied
-// identically everywhere this geometry is duplicated (the five brand SVGs,
-// this function, AuraMark.kt, and the launcher vector) -- (1) the A's
-// stroke weights raised (peak 19->26, bar 15->20) and its apex narrowed and
-// raised (base 80/176->84/172, apex y 76->70) so the A, not the ring, is
-// the thing you see first; (2) the soft radial-gradient spark (a blurred
-// glow plus a white dot) replaced by a flat, hard-edged diamond in the same
-// ink as the A -- no blur, no gradient. Proven, not asserted: rendering the
-// OLD aura-mark.svg to a canvas and thresholding it to pure black/white at
-// 50% vanished roughly a third of the ring's own sweep (the gradient's teal
-// end crosses the threshold), which is why a dedicated
-// products/retail/frontend/brand/aura-mark-1bit.svg (one flat ink, no
-// gradients) now exists for that print path; the RING here is unchanged --
-// this pass touches only the A and the spark.
+// MARK REDESIGN (2026-09-19 -- the owner supplied a finished replacement
+// identity, Action-Aura-Brand-Guide.md, superseding the 2026-09-07/08
+// "ring + upward A + beacon diamond" mark described below and in the
+// now-historical MARK EVOLUTION paragraph two below this one). The new
+// mark is a faceted letter A read through the Greek delta ("pierced A"),
+// pierced by a tilted orbit ring: the ring passes BEHIND the letter's
+// shoulders (the back-arc), shows THROUGH the counter -- the triangular
+// window at the ridge, where Retail's counter glyph (a small SQUARE, "the
+// module on the shelf") also sits -- and sweeps ACROSS THE FRONT of the
+// legs to a bright energy node. Geometry and colour are copied verbatim
+// from products/retail/frontend/brand/aura-retail.svg (>=64px) and
+// aura-mark-flat.svg's construction, retinted to Retail's accent, for
+// <64px (see mark()'s own comment for the size split and why the colours
+// are now FIXED literals rather than currentColor). KNOWN, NOT SILENT,
+// DRIFT: Android's AuraMark.kt and MarkGeometryParityContractTest.kt (both
+// under android/aura-retail/, not an owned path for this change) still
+// implement/pin the OLD geometry below -- that Kotlin test will now fail
+// until someone redraws AuraMark.kt to match. products/retail/frontend/
+// brand/intro.html also still draws the OLD geometry (a pre-existing,
+// already-tracked gap per DESIGN.md -- not reworked here either).
+//
+// MARK EVOLUTION (2026-09-08, HISTORICAL -- superseded by the 2026-09-19
+// redesign above; kept for the record, since it explains dimensions still
+// visible in android/'s un-migrated copies). The owner read the ORIGINAL
+// mark as a generic tech/crypto token, not a retail tool: two changes were
+// made to it then -- (1) the A's stroke weights raised (peak 19->26, bar
+// 15->20) and its apex narrowed and raised (base 80/176->84/172, apex y
+// 76->70); (2) the soft radial-gradient spark replaced by a flat, hard-
+// edged diamond. Proven, not asserted, at the time: rendering that mark to
+// a canvas and thresholding it to pure black/white at 50% vanished roughly
+// a third of the ring's own sweep (the gradient's teal end crossed the
+// threshold) -- the reason a dedicated flat/one-ink export existed even
+// before this redesign, and still does (aura-mark-1bit.svg).
 //
 // LOUD FALLBACK (2026-09-08 -- measured on the running till: all eleven
 // sections showed emoji on screen, and U+1F4BE/U+1F4E7 rendered as raw
@@ -995,79 +1013,119 @@ window.AuraIcons = (function () {
   var PATHS = {};
   Object.keys(ICONS).forEach(function (name) { PATHS[name] = ICONS[name].el.join('\n  '); });
 
-  // mark(size, opts) -- the Aura BRAND MARK, not an icon from ICONS above.
-  // Geometry copied verbatim from products/retail/frontend/brand/aura-mark.svg
-  // (viewBox, ring, spark, A, bar -- every coordinate the same file the brand
-  // asset itself defines); this is not a second source of truth for that
-  // geometry, it is the same numbers inlined so the shell can render the
-  // mark at an arbitrary size without an <img> request. Two deliberate
-  // departures from the static file:
+  // mark(size, opts) -- the Aura Retail BRAND MARK, not an icon from ICONS
+  // above. Geometry and colour copied verbatim from
+  // products/retail/frontend/brand/aura-retail.svg for size >= 64, and from
+  // that same directory's flat/mono construction (aura-mark-1bit.svg) for
+  // size < 64 -- this is not a second source of truth for either, it is the
+  // same numbers inlined so the shell can render the mark at an arbitrary
+  // size without an <img> request. See Action-Aura-Brand-Guide.md's
+  // "Usage" section for the 64px rule this enforces: "Minimum size for the
+  // 3D versions: 64 px; below that, use aura-mark-flat.svg" -- both of this
+  // shell's real call sites (app-shell.js's sign-in overlay and sidebar
+  // brand slot) pass 40, so the FLAT branch below is what is actually on
+  // screen today, not the 3D one.
   //
-  //   1. The A and its bar stroke `currentColor` instead of the asset's
-  //      fixed #0f1319 ink. The static brand/ directory ships a SECOND file
-  //      (aura-mark-on-dark.svg) purely to swap that one colour for dark
-  //      surfaces; a mark that inherits the surrounding text colour makes
-  //      that second file unnecessary here, and it can never go stale
-  //      against whichever of the five sanctioned themes (THEME_NAMES in
-  //      app-shell.js) is active -- there were only ever two files for what
-  //      is now five palettes.
-  //   2. The ring's gradient id carries a per-call counter (aura-ring-N),
-  //      never the static file's bare "aura-ring". SVG gradient ids are ONE
-  //      flat namespace across the whole document, not scoped to their own
-  //      <svg>; this shell renders the mark more than once per page
-  //      (sidebar brand slot + sign-in overlay, at minimum), and two
-  //      fragments both defining #aura-ring would collide -- the SECOND
-  //      one's stroke="url(#aura-ring)" would silently resolve to the
-  //      FIRST fragment's gradient (duplicate ids resolve to the first
-  //      match), so the mark would render with the wrong ring and no error
-  //      at all. The beacon (below) needs no such id: it is a flat
-  //      `currentColor` fill, not a gradient, so it cannot collide.
+  // FIXED colour, not currentColor. The pierced-A mark is full-colour brand
+  // artwork (Retail's own accent trio plus the shared brand navy shadow
+  // facet) -- unlike the old ring+A design, it was never a single-ink glyph
+  // that could inherit the surrounding text colour, and per
+  // Action-Aura-Brand-Guide.md the family's colours ARE the identity and
+  // must not shift with the product theme. This is exactly the situation
+  // retail_design_tokens_test.js's `.aura-logo` exemption already exists
+  // for ("Fixed brand mark; its colours are the company identity and must
+  // not shift with the product theme") -- see that file's EXEMPTIONS list.
+  // One consequence: this function no longer reads the CSS custom property
+  // --brand-ring-end the previous design depended on for light/dark-theme
+  // contrast, so retail_brand_ring_contrast_test.js's assertions that were
+  // written against that mechanism (the var() read, the literal fallback,
+  // the light-vs-dark-ground teal split) no longer apply to this geometry;
+  // that test file is not an owned path for this change and was not edited.
   //
-  // 2026-09-08: the A's stroke weights and apex were raised/tightened, and
-  // the old radial-gradient spark (a blurred glow plus a white dot) was
-  // replaced by a flat `currentColor` diamond at the same point -- see the
-  // MARK EVOLUTION comment above this IIFE for the full reasoning and the
-  // measurement that proves the old gradient spark's softness had nothing
-  // to do with print safety (a `currentColor` fill has none of the
-  // gradient ring's banding problem; only the ring itself needs the
-  // dedicated aura-mark-1bit.svg for that path).
-  //
-  // The ring gradient colour literals below are allowed by
-  // retail_design_tokens_test.js's `.aura-logo` exemption -- fixed brand
-  // colour, not a themed surface (see that file's EXEMPTIONS list).
+  // Gradient ids. The 3D branch defines FOUR gradients per call (the two
+  // letterform facets, the ring's back-arc, the ring's front-arc) --
+  // 'aura-fl-N' / 'aura-fr-N' / 'aura-rb-N' / 'aura-rf-N', each carrying the
+  // SAME per-call counter N used by the old design's single 'aura-ring-N'.
+  // SVG gradient ids are one flat namespace across the whole document, not
+  // scoped to their own <svg>; this shell renders the mark more than once
+  // per page (sidebar brand slot + sign-in overlay, at minimum), and two
+  // fragments defining the same id would collide -- the SECOND one's
+  // url(#id) would silently resolve to the FIRST fragment's gradient
+  // (duplicate ids resolve to the first match), so the mark would render
+  // with the wrong facet/ring colours and no error at all. The flat branch
+  // defines no gradients, so it has no id to collide on.
   var markCounter = 0;
   function mark(size, opts) {
     opts = opts || {};
     size = size || 40;
     var n = ++markCounter;
-    var ringId = 'aura-ring-' + n;
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="' + size + '" height="' + size +
+    if (size < 64) {
+      // FLAT geometry: navy letterform + one accent-colour ring stroke, no
+      // gradients, no counter glyph (the source flat master carries
+      // neither, and a 9-unit square would not read at these sizes) --
+      // see products/retail/frontend/brand/aura-mark-1bit.svg.
+      // currentColor FOR THE LETTERFORM, and it is not a compromise -- it is
+      // what "flat mono" MEANS. The brand guide calls this variant the
+      // "flat mono-style version for <=64px (favicons, stamps, embroidery,
+      // single-color print)"; a mono mark takes one ink by definition, and
+      // the ink it takes here is the surrounding text colour, which every
+      // theme already defines correctly against its own ground.
+      //
+      // MEASURED, because the first version of this shipped a fixed
+      // fill="#16233D" and the brand navy against the dark theme grounds is:
+      //
+      //     dark  #0f1829   1.13:1
+      //     night #0b111b   1.21:1
+      //     dusk  #191626   1.13:1
+      //
+      // 1:1 is "identical". The mark -- the first thing in the sidebar and
+      // the only thing on the sign-in overlay -- was a navy shape on a navy
+      // ground in three of the five sanctioned themes, invisible. The two
+      // real call sites both pass 40, so this branch is the entire on-screen
+      // presence of the brand today; nothing else would have caught it.
+      //
+      // That is also exactly why retail_brand_ring_contrast_test.js exists
+      // and why the previous design read a token here. Its failure was the
+      // guard working, not an assertion that had gone stale.
+      //
+      // The RING keeps brand colour, through --brand-ring-end so each theme
+      // can carry the accent from Retail's trio that clears contrast on its
+      // own ground. The literal fallback is the guide's DARK accent, not the
+      // mid one: measured on light grounds the mid #C97B3D reaches only
+      // 2.99:1 on ivory -- under the 3:1 floor WCAG 1.4.11 sets for a
+      // graphical object -- while #A06030 reaches 4.54:1. The dark themes
+      // override the token upward to the light accent #F0B87A (10:1).
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="' + size + '" height="' + size +
+        '" class="aura-ic aura-mark aura-mark-flat" data-aura-mark="1" data-aura-mark-flat="1" aria-hidden="true" focusable="false">' +
+          '<path d="M60 12.6 L98 104 L80 104 L60 56 L40 104 L22 104 Z" fill="currentColor" />' +
+          '<path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="var(--brand-ring-end, #A06030)" stroke-width="9" stroke-linecap="round" />' +
+        '</svg>';
+    }
+    var fl = 'aura-fl-' + n, fr = 'aura-fr-' + n, rb = 'aura-rb-' + n, rf = 'aura-rf-' + n;
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="' + size + '" height="' + size +
       '" class="aura-ic aura-mark" data-aura-mark="1" aria-hidden="true" focusable="false">' +
         '<defs>' +
-          '<linearGradient id="' + ringId + '" x1="0.15" y1="0.9" x2="0.85" y2="0.1">' +
-            '<stop offset="0" stop-color="#1745a9" />' +
-            '<stop offset="0.55" stop-color="#3f7be6" />' +
-            // The ring's END STOP, and the only part of the mark that is not a
-            // fixed literal. #5fe3d0 scores 1.35:1 on Day's ground and 1.29:1
-            // on Sand's -- a graphical object needs 3:1, so the brightest third
-            // of the ring was simply absent on both light themes while scoring
-            // 11.9:1 on the dark ones it was designed against. --brand-ring-end
-            // carries the SAME teal darkened for light grounds (#3d9185, 0.3
-            // degrees away in Lab, 3.09:1 and 3.23:1) and the original on dark
-            // grounds. This is the light-ground/dark-ground pair brand/ already
-            // ships as two files for the ink -- NOT the mark following the
-            // theme accent, which retail_design_tokens_test.js's .aura-logo
-            // exemption rightly forbids. The literal fallback keeps the mark
-            // correct anywhere the stylesheet has not loaded.
-            '<stop offset="1" stop-color="var(--brand-ring-end, #5fe3d0)" />' +
+          '<linearGradient id="' + fl + '" x1="0%" y1="0%" x2="0%" y2="100%">' +
+            '<stop offset="0%" stop-color="#F0B87A" /><stop offset="100%" stop-color="#C97B3D" />' +
+          '</linearGradient>' +
+          '<linearGradient id="' + fr + '" x1="0%" y1="0%" x2="0%" y2="100%">' +
+            '<stop offset="0%" stop-color="#A06030" /><stop offset="100%" stop-color="#16233D" />' +
+          '</linearGradient>' +
+          '<linearGradient id="' + rb + '" x1="0%" y1="0%" x2="100%" y2="0%">' +
+            '<stop offset="0%" stop-color="#16233D" /><stop offset="100%" stop-color="#C97B3D" />' +
+          '</linearGradient>' +
+          '<linearGradient id="' + rf + '" x1="0%" y1="0%" x2="100%" y2="0%">' +
+            '<stop offset="0%" stop-color="#C97B3D" /><stop offset="100%" stop-color="#F0B87A" />' +
           '</linearGradient>' +
         '</defs>' +
-        '<circle cx="128" cy="128" r="94" fill="none" stroke="url(#' + ringId + ')" stroke-width="15" ' +
-          'stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32" transform="rotate(-90 128 128)" />' +
-        '<path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="currentColor" />' +
-        '<path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="currentColor" stroke-width="26" ' +
-          'stroke-linecap="round" stroke-linejoin="round" />' +
-        '<path d="M 108 142 L 148 142" fill="none" stroke="currentColor" stroke-width="20" stroke-linecap="round" />' +
+        '<path d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#' + rb + ')" stroke-width="5" opacity="0.55" />' +
+        '<path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#' + fl + ')" />' +
+        '<path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#' + fr + ')" />' +
+        '<line x1="60" y1="12.6" x2="60" y2="56" stroke="#FBE3C4" stroke-width="1.3" opacity="0.9" />' +
+        '<rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#C97B3D" />' +
+        '<path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#' + rf + ')" stroke-width="6" stroke-linecap="round" />' +
+        '<circle cx="95.2" cy="61.5" r="7.5" fill="#F0B87A" opacity="0.3" />' +
+        '<circle cx="95.2" cy="61.5" r="4" fill="#FBE3C4" />' +
       '</svg>';
   }
 

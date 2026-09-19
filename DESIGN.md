@@ -206,14 +206,14 @@ Dusk were added that day. "Calm" is the phone's original and default look.
 
 | token | Day `light` | Sand `sand` | Calm `dark` | Night `night` | Dusk `dusk` |
 |---|---|---|---|---|---|
-| `--surface-app` | `#EAEEF3` | `#EFE8DC` | `#0F1319` | `#070B12` | `#13111C` |
-| `--surface-panel` | `#FFFFFF` | `#FBF7F0` | `#151A23` | `#0B111B` | `#191626` |
-| `--surface-till` | `#FFFFFF` | `#FFFDF8` | `#1A212C` | `#111A27` | `#211D31` |
-| `--surface-raised` | `#F8FAFC` | `#FAF6EE` | `#171D27` | `#0E1520` | `#1C192A` |
-| `--surface-sunken` | `#F2F5F8` | `#F4EEE4` | `#0B0F15` | `#04070C` | `#0E0C16` |
-| `--surface-hover` | `#EEF2F7` | `#F1EADF` | `#212936` | `#172233` | `#29253D` |
-| `--surface-active` | `#E6EAF0` | `#E8E0D2` | `#273140` | `#1D2B3F` | `#312C49` |
-| `--surface-accent-soft` | `#EAEDF9` | `#F6E7D3` | `#202947` | `#13283A` | `#2A2350` |
+| `--surface-app` | `#EFEDE9` | `#EFE8DC` | `#0A111E` | `#070B12` | `#13111C` |
+| `--surface-panel` | `#FCFBFA` | `#FBF7F0` | `#0F1829` | `#0B111B` | `#191626` |
+| `--surface-till` | `#FCFBFA` | `#FFFDF8` | `#121D34` | `#111A27` | `#211D31` |
+| `--surface-raised` | `#F9F8F7` | `#FAF6EE` | `#101A2E` | `#0E1520` | `#1C192A` |
+| `--surface-sunken` | `#F6F5F2` | `#F4EEE4` | `#080D18` | `#04070C` | `#0E0C16` |
+| `--surface-hover` | `#F3F1EE` | `#F1EADF` | `#172540` | `#172233` | `#29253D` |
+| `--surface-active` | `#ECEAE3` | `#E8E0D2` | `#1B2B4C` | `#1D2B3F` | `#312C49` |
+| `--surface-accent-soft` | `#F2EBE8` | `#F6E7D3` | `#24293A` | `#222831` | `#322637` |
 | `--text-primary` | `#141A24` | `#2A2119` | `#EDF2F8` | `#E9F1FB` | `#F0EDF9` |
 | `--text-secondary` | `#3D4859` | `#4D4034` | `#C3CDDB` | `#BFCBDB` | `#C9C3DC` |
 | `--text-tertiary` | `#566071` | `#63564A` | `#9FADC0` | `#9AAABD` | `#A49DBD` |
@@ -221,9 +221,9 @@ Dusk were added that day. "Calm" is the phone's original and default look.
 | `--text-money` | `#141A24` | `#2A2119` | `#EDF2F8` | `#E9F1FB` | `#F0EDF9` |
 | `--text-money-positive` | `#0A5832` | `#1A502E` | `#8FE6B3` | `#8FE8BD` | `#95E6B6` |
 | `--text-money-negative` | `#98170F` | `#891B12` | `#FFB3A8` | `#FFB0A6` | `#FFB0A6` |
-| `--accent-action` | `#213C90` | `#9A4F12` | `#98ADF4` | `#59AEF8` | `#B9A6FF` |
-| `--accent-action-hover` | `#1A3073` | `#84420D` | `#A4B7F5` | `#6CB7F9` | `#C9BAFF` |
-| `--accent-action-active` | `#142559` | `#6D3609` | `#87A0F2` | `#3FA1F7` | `#A793F6` |
+| `--accent-action` | `#792E15` | `#9A4F12` | `#F0B87A` | `#E9CDAA` | `#F69279` |
+| `--accent-action-hover` | `#5B2210` | `#84420D` | `#F3C491` | `#EED9BE` | `#F8A591` |
+| `--accent-action-active` | `#41190B` | `#6D3609` | `#ECA75A` | `#E2BC8E` | `#F47758` |
 | `--accent-highlight` | `#C69010` | `#E6A819` | `#F0BF4C` | `#F1C255` | `#F1C150` |
 | `--state-success-text` | `#0A5832` | `#1D5A34` | `#7BD9A2` | `#7FDFA9` | `#86DFA8` |
 | `--state-success-surface` | `#E7F4ED` | `#E5F1E6` | `#12301F` | `#0F2D1F` | `#132D22` |
@@ -240,24 +240,27 @@ Dusk were added that day. "Calm" is the phone's original and default look.
 | `--border-hairline` | `#E3E8EF` | `#E4DCCF` | `#232B37` | `#1A2432` | `#26223A` |
 | `--border-default` | `#D3DAE3` | `#D4CABB` | `#2E3947` | `#26344A` | `#34304C` |
 | `--border-strong` | `#B3BFCD` | `#B7AB99` | `#47566A` | `#3F5271` | `#4D4870` |
-| `--focus-ring-color` | `#213C90` | `#9A4F12` | `#98ADF4` | `#59AEF8` | `#B9A6FF` |
+| `--focus-ring-color` | `#792E15` | `#9A4F12` | `#F0B87A` | `#E9CDAA` | `#F69279` |
 
-Character of each theme, for choosing and for extending:
+Character of each theme, for choosing and for extending. Re-accented
+2026-09-19 to the Retail brand trio (see below) — the hue descriptions below
+are current; the pre-2026-09-19 lapis/indigo/lavender history is kept as a
+dated note rather than deleted:
 
-- **Day** — the default. Cool grey shell, white till, deep lapis/indigo
-  action.
+- **Day** — the default. Warm ivory-tinted shell (was cool grey), warm
+  near-white till, a deep rust/burnt-umber amber ink action colour.
 - **Sand** — warm paper for shops that find cool grey clinical; the ORIGINAL
-  terracotta/sienna ink as the action colour, kept rather than re-hued (see
-  below); the same structure as Day.
-- **Calm** — the phone's original dark and the desktop's dark: blue-grey
-  ground, light lapis/indigo action, off-white text. "Same product, lights
-  off."
-- **Night** — deep ink with a light, genuinely BLUE indigo action colour
-  (aurora teal until 2026-09-08, retired for cause — see below); the
+  terracotta/sienna ink as the action colour, kept unchanged through BOTH
+  re-accenting passes (see below); the same structure as Day.
+- **Calm** — the phone's original dark and the desktop's dark: ground
+  re-saturated toward the brand's Navy, light warm-amber action, off-white
+  text. "Same product, lights off."
+- **Night** — deep ink (already the brand's Navy/Dark-surface hue family,
+  left untouched) with a pale, cool-leaning amber action colour; the
   elevation lightens more steeply so cards read on a very dark ground.
-- **Dusk** — violet charcoal with a lavender action colour, already in the
-  blue-violet register the 2026-09-08 pass asked for, so it was not
-  re-accented; the warm counterpart to Night.
+- **Dusk** — violet charcoal (kept violet on purpose, not pulled toward
+  Navy) with a warm coral-amber action colour — amber light against a
+  violet sky, and still the warm counterpart to Night.
 
 **Why the accent moved (2026-09-08).** The owner's judgement, verbatim: the
 blue-into-teal spread across Day, Calm and Night — plain corporate blue
@@ -314,6 +317,40 @@ different theme" or "does this look inviting rather than disabled" — both
 defects above passed every number in this file and were found only by
 rendering the till and looking.
 
+**Why the accent moved AGAIN (2026-09-19, brand identity).** Everything in
+§4.3's "why the accent moved" and "two rounds" notes above describes real
+history and is kept rather than rewritten, but it is no longer the current
+palette: the owner supplied a finished brand identity
+(`Action-Aura-Brand-Guide.md`) with a shared Navy/Teal/Aqua/Ivory spine and a
+per-product accent trio. Retail's is burnt amber — dark `#A06030`, mid
+`#C97B3D`, light `#F0B87A` — deliberately distinct from Clinic's blue and
+Owner's gold trios and from the shared brand Teal, which the guide reserves
+as the master-brand accent, not a product one. The lapis/indigo family above
+is retired product-wide; Sand's terracotta/sienna is kept UNCHANGED through
+this pass too (see its per-theme note in main.css) because it already sits
+in the trio's own hue family and a literal swap measurably regresses its
+tightest contrast margin (4.58:1 -> 3.81:1 against AA's 4.5:1 floor) for no
+gain. Day and Calm's GROUNDS also moved this pass — toward Ivory `#F6F4EF`
+and Navy `#16233D`/Dark surface `#101A30` respectively — while Night and
+Dusk's grounds were deliberately left alone: Night already sat in the brand's
+navy hue family, and Dusk's violet is the intentional warm counterpart to
+Night, so retinting either toward Navy would have collapsed distinct themes
+into each other. Exact before/after values for every changed token, per
+theme, are in the PR/commit that made this edit; §4.3's table above and
+main.css's own per-theme comments are the source of truth going forward.
+Re-verified against `retail_design_contrast_test.js`'s full 44-check suite
+(palette cross-products, the whole rendered corpus per theme, and the ΔE76
+distinguishability guard) after every theme, not assumed.
+
+**Android parity is NOT YET updated as of this note.** `Color.kt`'s
+`AuraColors` palettes and `DesktopTokenParityContractTest` still reflect the
+PRE-2026-09-19 values above; updating them is tracked as a follow-up in the
+same change that authored this note, owned separately from the desktop
+tokens (see CLAUDE.md's file-ownership guidance for parallel work). Until
+that lands, the phone and the desktop are intentionally, temporarily
+out of parity — do not "fix" `DesktopTokenParityContractTest` by reverting
+either side; update `Color.kt` to match the table above instead.
+
 The phone holds the same five as `AuraColors` palettes and its parity test
 compares every value to the desktop block of the same name; a one-digit
 drift on either side fails the build.
@@ -359,6 +396,33 @@ literal outside the token block or `Color.kt`, a second allowlist, a
 - **Arabic:** currently the system Arabic fallback on both clients. Choosing
   and bundling an Arabic face that pairs with Plus Jakarta Sans is open
   design work (see §9).
+
+**Investigated 2026-09-19, NOT changed: the brand guide's typeface ask vs
+what this repo can actually bundle.** `Action-Aura-Brand-Guide.md` specifies
+Space Grotesk 700 for the wordmark/display and Work Sans for supporting
+text. Neither exists anywhere in this repository -- not in
+`products/retail/frontend/fonts/`, not under `android/`, not as a licence
+file, nothing -- and the two faces the desktop actually bundles and
+self-hosts are Plus Jakarta Sans and IBM Plex Sans Arabic (both woff2,
+both with an OFL licence file alongside, both asserted as the CLOSED
+sanctioned set by `retail_design_tokens_test.js`'s
+`testBundledTypefacesAreSanctionedAndDoNotShareFiles`). A live smoke run of
+the app shows a `fonts.googleapis.com` request get ABORTED, so this product
+is built to run with zero runtime dependency on a font CDN -- every
+character it can render has to ship inside the install. Swapping in Space
+Grotesk / Work Sans via a Google Fonts `<link>` or CDN `@font-face` would
+therefore silently fall back to the system sans on every offline till,
+which is a worse regression than not changing the type at all. NOTHING WAS
+CHANGED: Plus Jakarta Sans and IBM Plex Sans Arabic remain the sanctioned
+set. Closing this gap for real needs: downloading Space Grotesk's and Work
+Sans's actual woff2 files plus their OFL licence text, adding them under
+`products/retail/frontend/fonts/`, adding `@font-face` rules for them in
+`css/main.css`'s bundled-webfont block, widening
+`SANCTIONED_FAMILIES`/`SANCTIONED_FAMILY_NAMES` in
+`retail_design_tokens_test.js` to include them (a deliberate, reviewable
+edit, per that file's own "closed list" design), and only then repointing
+`--font-base`/a new display-font token at them. None of that was attempted
+here -- it is sized like its own task, not a one-line font-family swap.
 
 ## 6. Shape, space, motion, sound
 
