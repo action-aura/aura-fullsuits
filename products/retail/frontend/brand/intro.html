@@ -7,18 +7,68 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;700&display=swap">
 <style>
-  /* Aura intro -- one scene, about six seconds, self-contained.
-     A luminous ring is drawn around an A, a beacon lights at the ring's
-     opening, the wordmark settles from wide tracking, one line of copy.
-     Reduced motion: the final frame, no drawing. */
+  /* Aura intro -- one scene, about 4.3s of motion inside app-shell.js's
+     ~6.5s overlay window (~1.2s under reduced motion), self-contained.
+     REDESIGNED 2026-09-19 for the "pierced A" mark (Action-Aura-Brand-
+     Guide.md): a faceted letter A read through the Greek delta, pierced by
+     a tilted orbit ring. Geometry (viewBox 0 0 120 120) is copied verbatim
+     from ../aura-retail.svg -- the canonical Retail 3D mark -- so this is a
+     genuine reproduction of the master construction, not an approximation.
+
+     WHY A REVEAL, NOT A COLOUR SWAP: the retired mark was a single stroked
+     centre-line path, so stroke-dasharray/dashoffset could "draw" it. The
+     new mark is built from two FILLED facet triangles plus a tilted
+     elliptical ring stroke -- a fill has no dasharray to animate, so the
+     letterform is revealed with an SVG clip-path wipe (a <rect> inside a
+     userSpaceOnUse <clipPath>, scaled via CSS transform/fill-box) instead.
+     The two ring arcs (back-arc and front-arc) ARE genuine stroked paths,
+     so THOSE still draw on with stroke-dashoffset (pathLength="1" is used
+     so the dash math is 0..1 regardless of the arc's real length).
+
+     REVEAL ORDER intentionally follows the brand guide's own construction
+     narrative, in the SAME z-order the master SVG already draws in:
+       1. ring BACK-arc draws first, fully visible (nothing occludes it yet)
+       2. the letterform wipes in top-down (apex first, per the guide's
+          "apex overshoots the cap line" framing) and, as it grows over the
+          back-arc, progressively swallows it -- except through the open
+          triangular COUNTER, which is simply the unfilled gap between the
+          two facets. The arc being "visible through the counter" is not a
+          separate animation step; it is what z-order + the counter's shape
+          produce automatically once the facets are in front of it. That is
+          the same trick the master SVG's own layer order performs; this
+          reveal just plays it out over time instead of rendering it static.
+       3. the ring FRONT-arc draws last, on top of the finished letterform --
+          the "sweeps across the front of the legs" line, literally.
+       4. the energy node lights up right where the front-arc's sweep ends,
+          because that end point IS the node's position (95.2, 61.5) --
+          "ending in a bright energy node."
+     This traces the mark's own construction story rather than a generic
+     fade-in, which is the brief's ask; a plain crossfade would not show WHY
+     the ring reads as "behind the shoulders" versus "across the front".
+
+     COLOUR: every literal below is one of the five sanctioned tokens --
+     navy #16233D, Retail's accent trio #A06030/#C97B3D/#F0B87A, ivory
+     #F6F4EF. No teal/blue/aqua survives from the retired palette. Two
+     substitutions from the master SVG's own literals, both staying inside
+     that same five-colour set: the ridge highlight and node core use ivory
+     #F6F4EF in place of the master's off-palette tint #FBE3C4, and the
+     aurora glow uses the accent trio at low alpha instead of teal/blue.
+
+     Reduced motion: every animation is suppressed and every element is set
+     to its finished state directly (ring arcs fully drawn, facets fully
+     wiped in and opaque, node lit, wordmark settled) -- see the
+     `prefers-reduced-motion` block, which is the same contract the retired
+     version used, just re-targeted at the new element classes. */
   :root {
-    --ground: #070b12;
-    --ink: #edf2f8;
-    --teal: #5fe3d0;
-    --blue: #3f7be6;
-    --deep: #1745a9;
-    --t-ring: 1400ms;
-    --t-a: 700ms;
+    --ground: #16233D;
+    --ink: #F6F4EF;
+    --accent-dark: #A06030;
+    --accent-mid: #C97B3D;
+    --accent-light: #F0B87A;
+    --t-ring-back: 700ms;
+    --t-facets: 650ms;
+    --t-ring-front: 550ms;
+    --t-node: 400ms;
   }
   html, body { height: 100%; margin: 0; background: var(--ground); color: var(--ink);
     font-family: Outfit, "Segoe UI", system-ui, sans-serif; overflow: hidden; }
@@ -26,8 +76,8 @@
   .aurora {
     position: absolute; inset: -20%; pointer-events: none;
     background:
-      radial-gradient(60% 45% at 68% 30%, rgba(95, 227, 208, 0.20), transparent 70%),
-      radial-gradient(55% 50% at 30% 72%, rgba(63, 123, 230, 0.22), transparent 70%);
+      radial-gradient(60% 45% at 68% 30%, rgba(201, 123, 61, 0.20), transparent 70%),
+      radial-gradient(55% 50% at 30% 72%, rgba(160, 96, 48, 0.22), transparent 70%);
     filter: blur(40px);
     opacity: 0;
     animation: aurora-in 2400ms 200ms cubic-bezier(.2,.7,.2,1) forwards, aurora-drift 14s 2600ms ease-in-out infinite alternate;
@@ -38,36 +88,76 @@
   }
   .lockup { position: relative; display: grid; grid-template-columns: auto auto; align-items: center; gap: 44px; }
   .mark { width: clamp(140px, 24vw, 220px); height: auto; }
-  .ring { stroke-dasharray: 492 99; stroke-dashoffset: 460; animation: ring-draw var(--t-ring) 500ms cubic-bezier(.65,0,.2,1) forwards; }
-  .spark { opacity: 0; transform-origin: 196px 60px; animation: spark-in 700ms 1750ms cubic-bezier(.2,.9,.3,1.4) forwards; }
-  .a-peak { stroke-dasharray: 230; stroke-dashoffset: 230; animation: a-draw var(--t-a) 1150ms cubic-bezier(.4,0,.2,1) forwards; }
-  .a-bar { stroke-dasharray: 46; stroke-dashoffset: 46; animation: a-draw 300ms 1800ms ease-out forwards; }
+
+  /* Ring arcs: genuine stroked paths -- pathLength="1" normalises the dash
+     math to 0..1 regardless of the arc's real geometric length. */
+  .ring-back, .ring-front { stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .ring-back { animation: ring-draw var(--t-ring-back) 300ms cubic-bezier(.4,0,.2,1) forwards; }
+  .ring-front { animation: ring-draw var(--t-ring-front) 1450ms cubic-bezier(.4,0,.2,1) forwards; }
+
+  /* Letterform: filled facets cannot be stroke-drawn, so a clip-path wipe
+     (the .wipe rect, scaled from its own top edge) stands in for the
+     "draw-on" the old stroked A used. .facets carries a matching opacity
+     fade so the wipe edge reads as a soft materialise rather than a hard
+     mechanical mask line. transform-origin is given as an explicit
+     coordinate in the mark's own 0..120 user space (the rect's own top-
+     centre, x=60 y=0) rather than `transform-box: fill-box` -- measured
+     via getComputedStyle + a pixel scan, `fill-box` combined with an
+     `opacity`/`transform` CSS animation on an SVG shape painted a stray,
+     fully-opaque ghost of the (still delay-phase, computed-opacity-0)
+     energy node for a few frames after load in this app's Chromium target,
+     even though computed style already reported opacity 0 -- a paint/
+     style desync, not anything-CSS-visible-wrong. Explicit user-space
+     coordinates need no bounding-box computation at all and the ghost
+     paint did not reproduce once every fill-box use below was replaced
+     with one. */
+  .wipe { transform: scaleY(0); transform-origin: 60px 0px;
+    animation: facet-wipe var(--t-facets) 850ms cubic-bezier(.4,0,.2,1) forwards; }
+  .facets { opacity: 0; animation: facets-fade var(--t-facets) 850ms ease-out forwards; }
+
+  /* Energy node: halo rests at 30% opacity (matching the master SVG's own
+     halo alpha, not full-strength), core rests fully opaque. transform-
+     origin is the node's own (cx, cy) -- see the .wipe comment above for
+     why this is a coordinate, not `fill-box`. */
+  .node-halo { opacity: 0; transform: scale(.3); transform-origin: 95.2px 61.5px;
+    animation: halo-in var(--t-node) 1900ms cubic-bezier(.2,.9,.3,1.4) forwards; }
+  .node-core { opacity: 0; transform: scale(.3); transform-origin: 95.2px 61.5px;
+    animation: core-in var(--t-node) 1900ms cubic-bezier(.2,.9,.3,1.4) forwards; }
+
   .words { display: grid; gap: 6px; }
   .word {
     font-weight: 700; font-size: clamp(56px, 9vw, 96px); line-height: 1; letter-spacing: .55em;
     opacity: 0; transform: translateY(10px);
-    animation: word-in 1100ms 1900ms cubic-bezier(.2,.8,.2,1) forwards;
+    animation: word-in 900ms 2150ms cubic-bezier(.2,.8,.2,1) forwards;
   }
   .product {
-    font-weight: 300; font-size: clamp(16px, 2.4vw, 26px); letter-spacing: .5em; color: var(--teal);
-    opacity: 0; animation: fade-in 800ms 2700ms ease-out forwards;
+    font-weight: 300; font-size: clamp(16px, 2.4vw, 26px); letter-spacing: .5em; color: var(--accent-mid);
+    opacity: 0; animation: fade-in 700ms 2850ms ease-out forwards;
   }
   .line {
     position: absolute; bottom: 12%; left: 0; right: 0; text-align: center;
-    font-weight: 300; font-size: clamp(14px, 1.8vw, 20px); letter-spacing: .12em; color: rgba(237, 242, 248, 0.72);
-    opacity: 0; animation: fade-in 1000ms 3400ms ease-out forwards;
+    font-weight: 300; font-size: clamp(14px, 1.8vw, 20px); letter-spacing: .12em; color: rgba(246, 244, 239, 0.72);
+    opacity: 0; animation: fade-in 900ms 3400ms ease-out forwards;
   }
-  @keyframes ring-draw { to { stroke-dashoffset: -32; } }
-  @keyframes spark-in { from { opacity: 0; transform: scale(.2); } to { opacity: 1; transform: scale(1); } }
-  @keyframes a-draw { to { stroke-dashoffset: 0; } }
+  @keyframes ring-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes facet-wipe { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+  @keyframes facets-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes halo-in { from { opacity: 0; transform: scale(.3); } to { opacity: .3; transform: scale(1); } }
+  @keyframes core-in { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: scale(1); } }
   @keyframes word-in { to { opacity: 1; transform: translateY(0); letter-spacing: .16em; } }
   @keyframes fade-in { to { opacity: 1; } }
   @keyframes aurora-in { to { opacity: 1; } }
   @keyframes aurora-drift { from { transform: translate3d(0,0,0) rotate(0deg); } to { transform: translate3d(2%, -3%, 0) rotate(3deg); } }
   @media (prefers-reduced-motion: reduce) {
-    .aurora, .ring, .spark, .a-peak, .a-bar, .word, .product, .line { animation: none !important; }
-    .aurora { opacity: 1; } .ring { stroke-dashoffset: -32; } .spark, .product, .line { opacity: 1; }
-    .a-peak, .a-bar { stroke-dashoffset: 0; } .word { opacity: 1; transform: none; letter-spacing: .16em; }
+    .aurora, .ring-back, .ring-front, .wipe, .facets, .node-halo, .node-core, .word, .product, .line { animation: none !important; }
+    .aurora { opacity: 1; }
+    .ring-back, .ring-front { stroke-dashoffset: 0; }
+    .wipe { transform: scaleY(1); }
+    .facets { opacity: 1; }
+    .node-halo { opacity: .3; transform: scale(1); }
+    .node-core { opacity: 1; transform: scale(1); }
+    .word { opacity: 1; transform: none; letter-spacing: .16em; }
+    .product, .line { opacity: 1; }
   }
 </style>
 </head>
@@ -76,16 +166,61 @@
   <div class="aurora"></div>
   <div class="grain"></div>
   <div class="lockup">
-    <svg class="mark" viewBox="0 0 256 256" aria-hidden="true">
+    <svg class="mark" viewBox="0 0 120 120" aria-hidden="true">
       <defs>
-        <linearGradient id="ring-g" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
-          <stop offset="0" stop-color="#3f7be6"/><stop offset="0.55" stop-color="#6ea8ff"/><stop offset="1" stop-color="#5fe3d0"/>
+        <linearGradient id="i-fl" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#F0B87A"/><stop offset="100%" stop-color="#C97B3D"/>
         </linearGradient>
+        <!-- #223B5E, NOT the brand navy #16233D, and this is the whole reason
+             the guide ships a separate dark master.
+             The shadow facet fades to navy on the LIGHT master, where navy
+             reads against a pale page. This intro's ground IS navy #16233D,
+             so a facet ending at #16233D measures 1.00:1 against it -- the
+             same colour, exactly. Rendered and looked at: the A's entire
+             right leg dissolved into the background and the mark read as
+             lopsided and broken.
+             aura-mark-on-dark.svg exists precisely for this ("brightened
+             facets and ring", per the guide) and #223B5E is its own shadow
+             value -- so this is the brand's answer to a dark ground, not an
+             invented colour. It is only 1.38:1 against the ground, which is
+             fine and deliberate: a faceted solid reads by its INTERNAL
+             contrast against the lit facet beside it, not by its silhouette
+             against the page. What it must not be is IDENTICAL to the page. -->
+        <linearGradient id="i-fr" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#A06030"/><stop offset="100%" stop-color="#223B5E"/>
+        </linearGradient>
+        <linearGradient id="i-rb" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#223B5E"/><stop offset="100%" stop-color="#C97B3D"/>
+        </linearGradient>
+        <linearGradient id="i-rf" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#C97B3D"/><stop offset="100%" stop-color="#F0B87A"/>
+        </linearGradient>
+        <clipPath id="i-reveal" clipPathUnits="userSpaceOnUse">
+          <rect class="wipe" x="0" y="0" width="120" height="120"/>
+        </clipPath>
       </defs>
-      <circle class="ring" cx="128" cy="128" r="94" fill="none" stroke="url(#ring-g)" stroke-width="15" stroke-linecap="round" transform="rotate(-90 128 128)"/>
-      <path class="spark" d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="#edf2f8"/>
-      <path class="a-peak" d="M 84 178 L 128 70 L 172 178" fill="none" stroke="#edf2f8" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
-      <path class="a-bar" d="M 108 142 L 148 142" fill="none" stroke="#edf2f8" stroke-width="20" stroke-linecap="round"/>
+      <!-- 1. ring back-arc: passes BEHIND the letter's shoulders -->
+      <path class="ring-back" pathLength="1" d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)"
+        fill="none" stroke="url(#i-rb)" stroke-width="5" opacity="0.55"/>
+      <!-- 2. letterform: two filled facets + lit ridge + Retail's square
+           counter glyph, wiped in top-down (apex first). The back-arc
+           above becomes visible only through the open triangular counter
+           once this group is drawn over it; "shows through the counter"
+           falls out of z-order, not a separate animation step. -->
+      <g clip-path="url(#i-reveal)">
+        <g class="facets">
+          <path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#i-fl)"/>
+          <path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#i-fr)"/>
+          <line x1="60" y1="12.6" x2="60" y2="56" stroke="#F6F4EF" stroke-width="1.3" opacity="0.9"/>
+          <rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#C97B3D"/>
+        </g>
+      </g>
+      <!-- 3. ring front-arc: sweeps ACROSS THE FRONT of the legs -->
+      <path class="ring-front" pathLength="1" d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)"
+        fill="none" stroke="url(#i-rf)" stroke-width="6" stroke-linecap="round"/>
+      <!-- 4. energy node: sits where the front-arc's sweep ends -->
+      <circle class="node-halo" cx="95.2" cy="61.5" r="7.5" fill="#F0B87A"/>
+      <circle class="node-core" cx="95.2" cy="61.5" r="4" fill="#F6F4EF"/>
     </svg>
     <div class="words">
       <div class="word">AURA</div>
