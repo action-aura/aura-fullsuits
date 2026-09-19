@@ -257,10 +257,49 @@ behind the unchanged token names (getters over `AuraPalette.current`),
 `DesktopTokenParityContractTest` comparing each palette to its desktop
 block. Never add a theme-scoped paint rule, never a colour literal outside
 `Color.kt`, never a second allowlist. Brand assets (mark, app icon, lockup,
-intro) live under `products/retail/frontend/brand/` and are not yet wired
-into any screen. The full design brief — philosophy, brand geometry, every
-theme's token values, the recipe for adding a theme, and the open design
-work — is `DESIGN.md` at the repo root; read it before any visual change.
+intro) live under `products/retail/frontend/brand/`. The full design brief —
+philosophy, brand geometry, every theme's token values, the recipe for adding
+a theme, and the open design work — is `DESIGN.md` at the repo root; read it
+before any visual change.
+
+**UPDATE 2026-09-19 — the identity changed, and the numbers above are now the
+OLD ones.** The owner supplied a finished brand
+(`Action-Aura-Brand-Guide.md`): master Navy `#16233D`, Teal `#2F7B7B`, Aqua
+`#8FD0D0` (highlights only), Ivory `#F6F4EF`. **Teal belongs to the MASTER
+brand, not to a product** — it has left the Retail client entirely. Aura
+Retail owns exactly two things, its accent trio (`#A06030` / `#C97B3D` /
+`#F0B87A`) and a SQUARE counter glyph; Clinic owns blue + a plus, Owner gold +
+a diamond. The shared navy shadow facet is what makes them read as siblings,
+so adding a future product is an accent trio plus a glyph and nothing else.
+
+Four things a session needs to know before touching any of it:
+
+- **The mark is wired now** (`AuraIcons.mark()` in `icons.js`, inlined, not an
+  `<img>`), and it SPLITS AT 64px per the guide: 3D above, flat mono below.
+  Both real call sites pass 40, so **the flat variant is the entire on-screen
+  presence of the brand**; the 3D artwork currently renders nowhere. Wiring it
+  into the splash is open work, not an oversight.
+- **The flat mark takes `currentColor`, deliberately.** A fixed brand navy was
+  tried and measures 1.13:1 against the dark theme ground — an invisible mark
+  on three of five themes. Flat = mono = one ink, and the ink is the theme's.
+- **`--brand-ring-end` is split by GROUND, not by theme name**: the guide's
+  dark accent on light grounds, its light accent on dark ones, mirroring the
+  two SVG masters.
+- **Sand is intentionally not on the literal trio.** The literal `#A06030`
+  regresses Sand's worst case to 3.81:1, under AA. Its existing `#9A4F12` is
+  the same hue family. Do not "finish the job" there.
+
+`retail_design_contrast_test.js` now also pins that LIGHT themes' grounds stay
+pairwise distinguishable (ΔE76 ≥ 8) — the dark three are exempt because
+near-black grounds sit 3.5–6.2 apart by arithmetic, and are separated by their
+accents instead. That check exists because Day's ground moved onto Sand's and
+every suite stayed green; it took opening both screenshots to see it.
+
+`MarkGeometryParityContractTest` on Android now DERIVES its expectations by
+parsing `aura-mark.svg` as XML rather than hardcoding coordinates — the old
+version compared two copies of the same typed digits, so a brand revision
+broke it while a real desktop/Android divergence was what it was meant to
+catch.
 
 ## What's real and solid right now
 
