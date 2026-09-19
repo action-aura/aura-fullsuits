@@ -5122,3 +5122,54 @@ Every item here passed every source-reading test, before and after.
    fixed; nothing has yet pressed Tab through a POS sale, a return, or the
    cash-drawer flow. Given what a single Tab press found in the shell, that is
    the highest-value next pass in this area.
+
+### 2026-09-19 (later still) - the keyboard audit reached the till, and the till was clean
+
+The previous entry listed "the keyboard audit stopped at the shell" as the
+highest-value next pass, on the reasoning that a single Tab press had already
+found two severe defects there. It has now been done, and the result is the
+opposite of what that reasoning predicted — which is worth recording precisely
+so nobody re-runs it on a hunch.
+
+**Measured in a real browser across six screens — POS, Returns, Customers,
+Products, cash drawer, Receivables — every clickable control is reachable.
+Zero defects.** Roughly 190 clickable controls; every one is either focusable
+itself or contains something focusable.
+
+The POS tab order is complete and in a sensible order: Open Shift, category
+filter, Held, Customer Display, customer select, Hold, cart, Void Sale, the two
+discount/tender fields, all six payment methods, Charge, then wrapping to the
+skip link and the nav.
+
+**The barcode field is focused on arrival**, which is the right behaviour and
+was confirmed behaviourally rather than assumed: typing `5901234123457` blind —
+no click, no Tab — put it straight into `#pos-search`. A scanner IS a keyboard,
+so a cashier can scan the instant the screen opens. It is absent from the tab
+order because it is where the tab order STARTS.
+
+So the shell defects were the exception, not the pattern. The money path was
+built correctly; it was the chrome around it that was not.
+
+**A source scan cannot do this job, and that is the reusable lesson.** A regex
+over the frontend for "onclick on something not focusable" produced 13 hits, of
+which 12 were false: every clickable `<tr>` already contains a real opener
+button (`_saleOpenerButton` / `_partyOpenerButton`), and a regex cannot see
+through a helper call; two more were the scanner reading prose that QUOTES the
+retired defect while explaining it. Asking the rendered DOM "is anything
+focusable inside this element" gets all of that right for free.
+
+**Now a permanent guard**, in `retail_modal_e2e.py`: it walks the six screens
+in a live browser and fails on any clickable element that is neither focusable
+nor contains something focusable, plus an anti-vacuity floor (it asserts it saw
+at least 60 clickable controls, so a silent navigation failure cannot pass by
+measuring nothing), plus the scan-field-takes-focus contract.
+
+Mutation-proved on the real product, both directions:
+
+  * strip `tabindex`/`role` from the sidebar nav items — the exact original
+    defect — and it reports **126** unreachable controls
+  * turn ONE POS payment button into a bare clickable `div` and it reports
+    exactly **1**
+
+That second mutant is the one that matters: it shows the guard has real
+granularity rather than only noticing when everything breaks.

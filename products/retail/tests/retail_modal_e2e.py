@@ -337,6 +337,92 @@ def _run(page, backend: Backend, report: Report, shots: Path) -> None:
 
     report.run("skip link is the first Tab stop and moves focus to main", scenario_skip_link)
 
+    # ------------------------------------------------------------------
+    # THE WHOLE-SURFACE GUARD. Two severe defects were found by pressing Tab
+    # -- the sidebar was not keyboard-reachable at all, and the phone's More
+    # sheet had the same shape -- and BOTH passed every source-reading suite,
+    # because those check accessible NAMES, dialog semantics, contrast and
+    # touch targets. A control you cannot reach still has a perfectly good
+    # name. This asks the question none of them ask.
+    #
+    # LIVE DOM, not a source scan, and that distinction is the whole reason
+    # this works. A regex over the source cannot see through a helper call,
+    # and this codebase deliberately puts a real <button> INSIDE clickable
+    # rows (_saleOpenerButton / _partyOpenerButton) -- a source scan reports
+    # those rows as defects and buries the real ones. Asking the rendered DOM
+    # "does anything focusable exist inside this element" gets it right for
+    # free.
+    # ------------------------------------------------------------------
+    MONEY_SCREENS = ["pos", "returns", "customers", "products", "cash-drawer", "receivables"]
+
+    AUDIT_JS = """
+    () => {
+      const F = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),'
+              + 'textarea:not([disabled]),[tabindex]:not([tabindex="-1"]),summary';
+      const visible = (el) => {
+        const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+      };
+      const bad = [];
+      let clickable = 0;
+      document.querySelectorAll('[onclick]').forEach((el) => {
+        if (!visible(el)) return;
+        clickable++;
+        if (el.matches(F)) return;
+        if (el.querySelector(F)) return;
+        bad.push(el.tagName.toLowerCase() + '.' + (el.className || '').toString().split(' ')[0]
+                 + ' "' + (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 40) + '"');
+      });
+      return { bad, clickable };
+    }
+    """
+
+    def scenario_money_screens_are_keyboard_reachable():
+        offenders = []
+        checked = 0
+        for screen in MONEY_SCREENS:
+            page.evaluate("(s) => SubsystemApp._navigate(s)", screen)
+            page.wait_for_timeout(900)
+            res = page.evaluate(AUDIT_JS)
+            checked += res["clickable"]
+            for b in res["bad"]:
+                offenders.append(f"{screen}: {b}")
+
+        # ANTI-VACUITY. If navigation silently failed, or the selector stopped
+        # matching, every screen would report zero clickable elements and this
+        # would pass having measured nothing at all.
+        assert checked >= 60, (
+            f"only {checked} clickable controls seen across {len(MONEY_SCREENS)} screens "
+            "(there were ~190 when this was written). Navigation or the selector has "
+            "broken, so a green result here would mean nothing."
+        )
+        assert offenders == [], (
+            f"{len(offenders)} interactive control(s) on the money screens cannot be reached "
+            "by keyboard -- they have an onclick, are not focusable themselves, and contain "
+            "nothing focusable:\n  " + "\n  ".join(offenders) +
+            "\n\nA till is driven by keyboard and barcode scanner more than by mouse, and a "
+            "scanner IS a keyboard. Give the control tabindex + a role AND an Enter/Space "
+            "handler (onclick does not fire on those keys for a non-button), or put a real "
+            "<button> inside it the way the clickable sales rows already do."
+        )
+
+        # The till's own contract: a scanner must be able to fire the instant
+        # the screen opens, with no click and no Tab first.
+        page.evaluate("() => SubsystemApp._navigate('pos')")
+        page.wait_for_timeout(1200)
+        focused_scan = page.evaluate(
+            "() => { const a = document.activeElement; return !!a && a.id === 'pos-search'; }"
+        )
+        assert focused_scan, (
+            "the POS barcode field is not focused when the screen opens. A cashier with a "
+            "scanner would have to click or Tab into it before the first scan of every sale."
+        )
+
+    report.run(
+        f"no unreachable controls on {len(MONEY_SCREENS)} money screens; POS scan field takes focus",
+        scenario_money_screens_are_keyboard_reachable,
+    )
+
 
 def main() -> int:
     # Same reason retail_smoke_e2e.py does this: the page carries non-ASCII
