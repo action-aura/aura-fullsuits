@@ -81,7 +81,30 @@ def test_v4_to_v5_upgrade_adds_sync_outbox_and_cursor(v4_registry_db, monkeypatc
         assert outbox_cols == {"id", "entity_type", "entity_id", "event_type", "payload", "created_at"}
 
         cursor_cols = {row[1] for row in conn.execute("PRAGMA table_info(sync_cursor)").fetchall()}
-        assert cursor_cols == {"id", "last_seq"}
+        # RELAXED FROM `== {"id", "last_seq"}` ON 2026-09-20, and the reason
+        # is a property of this migration chain rather than a concession.
+        #
+        # `_migrate_registry_schema` is documented as "run every step, each
+        # independently idempotent" -- the STEPS are not individually
+        # version-gated. The version integer decides only WHETHER the chain
+        # runs, never which parts of it do. So a database built "at v5" by
+        # the fixture above is built by TODAY's chain, and registry v8's
+        # `ALTER TABLE sync_cursor ADD COLUMN relay_url TEXT` runs on it too.
+        # Exact equality here was a correct assertion only while v5 was the
+        # head of the chain, and it silently became a statement about the
+        # chain's length rather than about v5.
+        #
+        # WHAT THIS CAN NO LONGER CATCH, stated rather than left implicit:
+        # v5 itself creating an unexpected EXTRA column. That risk is now
+        # covered from the other side by
+        # products/retail/tests/retail_sync_cursor_schema_parity_test.py,
+        # which pins registry's column set against retail's -- the invariant
+        # that actually matters, since one route implementation
+        # (make_sync_internal_blueprint) runs against both schemas, and whose
+        # absence is what let `relay_url` diverge for long enough to return
+        # HTTP 500 on every install.
+        assert {"id", "last_seq"} <= cursor_cols, (
+            f"v5's sync_cursor is missing a base column; got {sorted(cursor_cols)}")
 
         cursor_row = conn.execute("SELECT id, last_seq FROM sync_cursor WHERE id=1").fetchone()
         assert cursor_row == (1, 0), (

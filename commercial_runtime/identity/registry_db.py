@@ -85,7 +85,24 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # a `branches.uid` a Retail account is scoped to. See
 # branch_scope_schema.py's own module docstring for the full "why nullable
 # with no default is what keeps Clinic byte-identical" reasoning.
-REGISTRY_SCHEMA_VERSION = 7
+# v8: registry.db's `sync_cursor` gains ONE nullable column, `relay_url`
+# -- ROADMAP.md's 2026-09-20 "registry schema v8 CLAIMED" entry. Retail
+# schema v31 added this column to retail.db's own `sync_cursor`; the
+# registry copy, which registry_sync_schema.py's docstring says mirrors
+# retail's "verbatim", did not follow. app.py registers the sync internal
+# blueprint twice -- `/api/sync` on the retail connection and
+# `/api/registry-sync` on this one -- and the shared `_internal/cursor`
+# route calls `ensure_cursor_matches_relay()` whenever the client sends a
+# `relay_url` parameter, which Android's SyncCoordinator does. The registry
+# stream therefore queried a column in the other database and returned
+# HTTP 500 ("no such column: relay_url") on EVERY install; found in logcat
+# on real hardware and reproduced against a fresh database. The bump is what
+# makes existing installs pick it up: `_migrate_registry_schema` runs its
+# steps only on a database BEHIND this number, so a v7 database would never
+# re-run the chain and would keep failing. NULL means "not bound to a known
+# relay", costing one harmless full re-pull per device, exactly as retail
+# v31 specifies. See registry_sync_schema.py's own docstring.
+REGISTRY_SCHEMA_VERSION = 8
 
 
 def _migrate_registry_schema(conn):

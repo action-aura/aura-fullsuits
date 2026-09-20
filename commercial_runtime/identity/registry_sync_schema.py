@@ -32,13 +32,40 @@ design; it is the existing outbox pattern, given its own file because
 `users` lives in a different database than the row it will eventually
 belong to.
 
-Additive only: two `CREATE TABLE IF NOT EXISTS` statements and one
-`INSERT OR IGNORE` seed row -- no `ALTER TABLE`, no rebuild, no `DROP`, no
-`RENAME`. Unlike account_schema.py's `ALTER TABLE ... ADD COLUMN` steps,
-this needs no `PRAGMA table_info` guard at all: `CREATE TABLE IF NOT EXISTS`
-and `INSERT OR IGNORE` are both naturally idempotent, so this is safe to run
-twice and safe on a database that already has these tables (a re-run after
-a partial failure, or one that started life at v5 or later).
+Additive only: two `CREATE TABLE IF NOT EXISTS` statements, one
+`INSERT OR IGNORE` seed row, and -- since v8 -- one guarded
+`ALTER TABLE ... ADD COLUMN`. No rebuild, no `DROP`, no `RENAME`.
+
+v8 (2026-09-20) IS WHY THIS PARAGRAPH CHANGED, and the change matters more
+than the column. It used to say "no `ALTER TABLE` ... this needs no
+`PRAGMA table_info` guard at all", which stopped being true the moment a
+column had to be added to a table that already exists in the field. It now
+carries one, in exactly account_schema.py's shape.
+
+THE DRIFT THIS FIXES. The paragraph above still says these tables mirror
+retail's "verbatim -- same columns, same defaults". That was true when
+written. Retail schema **v31** then added `sync_cursor.relay_url` to
+retail.db and this copy did not follow, with nothing asserting the mirror
+still held. products/retail/backend/app.py registers
+`make_sync_internal_blueprint` TWICE -- once at `/api/sync` on the retail
+connection, once at `/api/registry-sync` on this database's -- and the
+shared `_internal/cursor` route calls
+`SyncService.ensure_cursor_matches_relay()` whenever the client passes a
+`relay_url` parameter. Android's `SyncCoordinator` passes it. So the
+registry stream queried a column living in the other database and returned
+HTTP 500, on every install, not merely on a stale one:
+
+    sqlite3.OperationalError: no such column: relay_url
+
+Found in logcat on a real phone, then reproduced against a fresh database
+built by this function alone (columns were exactly ['id', 'last_seq']).
+
+SEMANTICS ARE RETAIL v31'S, UNCHANGED ON PURPOSE. A stored NULL means
+"different from any real relay", so the first pull after upgrading resets
+`last_seq` to 0 exactly once -- a harmless one-time catch-up pull, which is
+the cost retail's own v31 comment already argues for. Copying that rule
+rather than inventing a kinder one keeps the two streams explainable by a
+single sentence.
 
 Wired into registry_db.py's `_migrate_registry_schema` at
 REGISTRY_SCHEMA_VERSION=5 and applied through
@@ -56,6 +83,13 @@ even name `sync_outbox`/`sync_cursor`.
 from __future__ import annotations
 
 import sqlite3
+
+
+def _sync_cursor_columns(conn: sqlite3.Connection) -> set:
+    """Live column names on `sync_cursor`. Mirrors account_schema.py's
+    `_user_columns` rather than inventing a second way to ask the same
+    question."""
+    return {row[1] for row in conn.execute("PRAGMA table_info(sync_cursor)").fetchall()}
 
 
 def apply_registry_sync_schema(conn: sqlite3.Connection) -> None:
@@ -79,4 +113,23 @@ def apply_registry_sync_schema(conn: sqlite3.Connection) -> None:
         )
     ''')
     conn.execute("INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0)")
+
+    # v8: the column retail.db's own `sync_cursor` gained at retail v31.
+    # Guarded, because unlike the two statements above this one is NOT
+    # naturally idempotent -- `ALTER TABLE ... ADD COLUMN` raises
+    # "duplicate column name" on a second run, and every step wired into
+    # `ensure_schema_version` has to be safe to run twice (a database
+    # upgrading from v4 runs the whole chain; one already at v7 runs it
+    # again when the version bumps to 8).
+    #
+    # NO DEFAULT, deliberately. NULL is the signal
+    # `SyncService.ensure_cursor_matches_relay` reads as "this cursor is not
+    # bound to any known relay yet", which makes the first pull after the
+    # upgrade reset `last_seq` to 0 once. A default of '' or of the current
+    # relay would suppress that reset and leave a high-water mark pointing
+    # into a relay it was never measured against -- the exact confusion
+    # retail v31 exists to prevent.
+    if "relay_url" not in _sync_cursor_columns(conn):
+        conn.execute("ALTER TABLE sync_cursor ADD COLUMN relay_url TEXT")
+
     conn.commit()
