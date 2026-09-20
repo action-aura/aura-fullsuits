@@ -1,0 +1,109 @@
+# Aura Owner Control Center — Fly.io deployment
+#
+# Deploy from the REPOSITORY ROOT (the Dockerfile copies requirements/ from
+# there, so the build context must be the repo root, not owner/):
+#
+#   fly deploy --config owner/deploy/fly/fly.toml --dockerfile owner/Dockerfile
+#
+# See DEPLOY.md next to this file for the full first-run sequence, including
+# the two configuration landmines that produce a *silently* broken system.
+
+app = "aura-owner"
+primary_region = "fra"          # Frankfurt — closest low-latency region to Jordan
+
+[build]
+
+[env]
+  OWNER_ENV = "production"
+
+  # ── LANDMINE 1 ────────────────────────────────────────────────────────
+  # This defaults to FALSE. With it unset the app boots perfectly, /healthz
+  # returns 200, the whole admin UI works -- and the licensing, external-API
+  # and sync blueprints are never registered. No till can activate, check in
+  # or sync, and NOTHING logs an error. It must be explicit.
+  OWNER_EXTERNAL_API_ENABLED = "true"
+
+  # Fly terminates TLS at its proxy and forwards to the app over the private
+  # network, so the app itself binds every interface. The external API is a
+  # blueprint on the same Flask app, not a second listener.
+  OWNER_EXTERNAL_API_BIND_HOST = "0.0.0.0"
+
+  # ── LANDMINE 2 ────────────────────────────────────────────────────────
+  # config.py::validate_external_api_production() REFUSES TO START unless
+  # this directory already exists. That is deliberate and good -- it stops a
+  # licensing authority coming up with nowhere to put its signing key. The
+  # volume below mounts /app/var, and the process command creates the
+  # subdirectories before gunicorn starts, because a freshly created volume
+  # is empty.
+  OWNER_SIGNING_KEY_DIRECTORY = "/app/var/signing-keys"
+  OWNER_BACKUP_DIR = "/app/var/backups"
+
+  # Also enforced by that same validator when the external API is on. Listed
+  # explicitly rather than relied upon as defaults, so a future default
+  # change cannot silently weaken a production deploy.
+  OWNER_REPLAY_PROTECTION_REQUIRED = "true"
+  OWNER_DISTRIBUTED_RATE_LIMIT_REQUIRED = "true"
+
+  # Fly's proxy is exactly one hop in front of the app. Getting this wrong
+  # makes every client appear to share one IP, which would collapse the
+  # per-IP rate limiting into a single global bucket.
+  OWNER_TRUSTED_PROXY_COUNT = "1"
+
+  # Rejects typo'd OWNER_* variables at boot instead of ignoring them. A
+  # misspelled security flag that is silently ignored is the failure mode
+  # this exists to prevent.
+  OWNER_STRICT_CONFIG = "true"
+
+  OWNER_SCHEDULER_ROLE = "worker"
+
+# Secrets are NEVER in this file. Set them with `fly secrets set`:
+#   OWNER_SECRET_KEY, OWNER_LICENSE_PEPPER, OWNER_DATABASE_URL,
+#   OWNER_ALLOWED_HOSTS, OWNER_BOOTSTRAP_PASSWORD
+# See DEPLOY.md.
+
+# Migrations and seeding run before the new release takes traffic. The bare
+# Dockerfile CMD is just gunicorn with NO seeding -- only the dev
+# docker-compose wrapper seeded RBAC/catalog/offline-policy, so a plain
+# container deploy would come up with no roles and no catalog. All three
+# seed commands are idempotent.
+[deploy]
+  release_command = "sh -c 'python -m alembic upgrade head && flask --app app:create_app seed-rbac && flask --app app:create_app seed-catalog && flask --app app:create_app seed-offline-policy'"
+
+# Overrides the image CMD so the volume's subdirectories exist before the
+# config validator checks for them. Done here rather than by editing
+# owner/Dockerfile, which is another collaborator's file.
+[processes]
+  app = "sh -c 'mkdir -p /app/var/signing-keys /app/var/backups && exec gunicorn --bind 0.0.0.0:5000 --workers 2 \"app:create_app()\"'"
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = false      # a licensing authority must not sleep:
+  auto_start_machines = true      # a till that cannot reach it cannot activate
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[http_service.checks]]
+  grace_period = "20s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/healthz"
+
+# The signing key lives here. It is the private half of the Ed25519 pair that
+# signs EVERY licence assertion the suite ever issues, and losing it cannot
+# be fixed by re-signing -- a device only extends trust to a new key when an
+# already-trusted key cross-signs it. Back this volume up off-host before the
+# first real customer. See DEPLOY.md.
+[[mounts]]
+  source = "aura_owner_var"
+  destination = "/app/var"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
