@@ -39,8 +39,37 @@ just unlikely:
 from __future__ import annotations
 
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from typing import Optional
+
+
+def _row_class_for(conn):
+    """The Row class belonging to the driver that opened `conn`.
+
+    `sqlite3.Row` only accepts a `sqlite3.Cursor`. Assigning it to a
+    connection opened by a DIFFERENT DBAPI driver raises, at FETCH time
+    rather than at assignment:
+
+        TypeError: Row() argument 1 must be sqlite3.Cursor,
+                   not sqlcipher3.dbapi2.Cursor
+
+    which reads like a query bug and is a driver mismatch. This is not
+    hypothetical: a product in this suite encrypts its database at rest
+    and therefore opens it with sqlcipher3 on every real desktop
+    install. Reproduced against sqlcipher3 3.51.1 on 2026-09-21.
+
+    It stayed hidden because the two methods a caller reaches for first,
+    `enqueue()` and `counts_by_state()`, never set row_factory at all --
+    so queueing and status reporting work fine, and only a submission
+    worker (which calls `claim_due()` / `reclaim_expired_leases()`)
+    would hit it, on its first run.
+
+    Falls back to `sqlite3.Row` for any driver that exposes no Row of
+    its own, which preserves the previous behaviour exactly.
+    """
+    module = sys.modules.get(type(conn).__module__)
+    return getattr(module, "Row", sqlite3.Row)
 
 STATES = frozenset({
     'QUEUED', 'SUBMITTING', 'CLEARED', 'FAILED_PERMANENT',
@@ -108,7 +137,7 @@ class OutboxRepository:
         return cur.lastrowid
 
     def get_by_ref(self, invoice_ref: str) -> Optional[sqlite3.Row]:
-        self._conn.row_factory = sqlite3.Row
+        self._conn.row_factory = _row_class_for(self._conn)
         return self._conn.execute(
             "SELECT * FROM einvoice_outbox WHERE invoice_ref=?", (invoice_ref,)
         ).fetchone()
@@ -124,7 +153,7 @@ class OutboxRepository:
         company_id filter at all, so any company's worker could claim (and
         submit to the tax authority under that company's own provider
         credentials/sequence) another company's queued invoices."""
-        self._conn.row_factory = sqlite3.Row
+        self._conn.row_factory = _row_class_for(self._conn)
         now = _now()
         candidates = self._conn.execute(
             "SELECT id FROM einvoice_outbox WHERE company_id=? AND status='QUEUED' "
@@ -245,7 +274,7 @@ class OutboxRepository:
         SUBMITTING_UNKNOWN -- NEVER straight back to QUEUED. The caller
         (worker.py) must call provider.check_status() on each returned row
         and only then decide CLEARED vs QUEUED. Returns the reclaimed rows."""
-        self._conn.row_factory = sqlite3.Row
+        self._conn.row_factory = _row_class_for(self._conn)
         now = _now()
         candidates = self._conn.execute(
             "SELECT id FROM einvoice_outbox WHERE status='SUBMITTING' AND lease_expires_at IS NOT NULL "
