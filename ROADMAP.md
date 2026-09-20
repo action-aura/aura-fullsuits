@@ -5294,3 +5294,66 @@ time) while the painted letterform and ring colours changed on every switch,
 because the flat branch paints with `currentColor` and `var(--brand-ring-end)`.
 No repaint hook was added, deliberately; adding one would have been code for a
 path that cannot be reached.
+
+## 2026-09-20 — registry schema v8 CLAIMED: the registry sync cursor has no `relay_url`
+
+**Reserving the version integer before writing the migration**, per this
+ledger's own convention and because `REGISTRY_SCHEMA_VERSION` is a
+single-writer resource shared with branches that are not on master.
+`registry.db` is also SHARED WITH CLINIC, so anyone else holding v8 on another
+branch must reconcile with this entry rather than both landing.
+
+### The defect, found on real hardware and then reproduced locally
+
+An on-device run surfaced this in logcat:
+
+    GET /api/registry-sync/_internal/cursor
+    sqlite3.OperationalError: no such column: relay_url   -> HTTP 500
+
+It is not device drift. Reproduced against a FRESH registry database built by
+`apply_registry_sync_schema` alone:
+
+    registry sync_cursor columns: ['id', 'last_seq']
+    has relay_url: False
+    SELECT relay_url FROM sync_cursor
+      -> sqlite3.OperationalError: no such column: relay_url
+
+**Cause.** `products/retail/backend/app.py` registers
+`make_sync_internal_blueprint` TWICE — once at `/api/sync` backed by the
+retail connection, and once at `/api/registry-sync` backed by
+`commercial_runtime.identity.registry_db.get_conn()`. Retail schema **v31**
+added `sync_cursor.relay_url` to `retail.db` only. The shared
+`_internal/cursor` route calls `SyncService.ensure_cursor_matches_relay()`
+whenever the client sends a `relay_url` query parameter, and Android's
+`SyncCoordinator` sends it — so the registry stream hits a column that exists
+in the other database.
+
+`registry_sync_schema.py`'s own docstring says its tables mirror retail's
+"verbatim — same columns, same defaults". That was true when written; retail's
+v31 moved and the registry copy did not. This is the same drift shape as the
+launcher icon and the brand masters earlier the same day: a file that says it
+mirrors another, and no test asserting it still does.
+
+**Why it matters beyond a 500.** `/api/registry-sync` is the stream that
+carries `users`/`user_permissions` between devices — the "a cashier created on
+the desktop can sign in on the phone" capability proven on hardware
+2026-09-05. Relay binding is the guard that stops a cursor being read as a
+high-water mark into a relay it does not belong to.
+
+### v8 — one nullable column, mirroring retail v31 exactly
+
+`sync_cursor.relay_url TEXT`, added by an idempotent `PRAGMA table_info`
+guarded `ALTER TABLE` inside `apply_registry_sync_schema`. The version bump is
+what makes existing installs re-run the chain: `_migrate_registry_schema` runs
+every step on any database BEHIND the version, so a database already at v7
+would never pick the column up and would keep 500-ing.
+
+Semantics are retail v31's, deliberately unchanged: a stored NULL reads as
+"different from any real relay", so the first pull after upgrading resets
+`last_seq` to 0 exactly once — a harmless one-time catch-up pull, which is the
+cost retail's own v31 comment already argues is acceptable.
+
+Clinic is unaffected: it does not sync, its backend never imports
+`commercial_runtime.sync`, and no query in `products/clinic` can name
+`sync_cursor`. One nullable column on an empty-until-used table costs it
+nothing.
