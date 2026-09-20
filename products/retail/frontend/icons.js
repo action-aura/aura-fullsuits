@@ -82,6 +82,27 @@
 // brand/intro.html also still draws the OLD geometry (a pre-existing,
 // already-tracked gap per DESIGN.md -- not reworked here either).
 //
+// BRAND KIT v2 (2026-09-20 -- the owner supplied a second, more complete
+// brand kit; Action-Aura-Brand-Guide.md was replaced in place with its v2
+// edition). The decisive change: v2 is dark-first and ships a MATCHED PAIR
+// of primary marks for every surface (brand/aura-retail-dark.svg /
+// aura-retail-light.svg, real delivered artwork, replacing the single
+// aura-retail.svg plus a derived aura-mark-on-dark.svg "brightening" that
+// v1 shipped because no dark-ground Retail trio existed yet). It also adds
+// a colour v1 lacked: "Lifted navy" #22304A, the shadow facet's value on
+// DARK surfaces so the letter doesn't sink the way it does fading to the
+// LIGHT-surface navy #16233D on a dark ground -- exactly the defect this
+// repo already hit and patched independently in intro.html (see that
+// file's own comment: its ground IS #16233D, so a facet ending at #16233D
+// measured 1.00:1 against it and the A's right leg disappeared; it was
+// patched with #223B5E, pulled from the v1 kit's OWN dark master, because
+// #22304A did not exist yet). The 3D branch below now picks the shadow
+// facet by SURFACE, not by product accent -- light/sand read #16233D,
+// dark/night/dusk read #22304A -- via _surfaceShadowFacet(), read at
+// RENDER TIME from html[data-theme]. See that function's own comment for
+// why a fixed/uncached read is correct here, and a caveat this pass found
+// but could not fix (app-shell.js is not an owned path for this change).
+//
 // MARK EVOLUTION (2026-09-08, HISTORICAL -- superseded by the 2026-09-19
 // redesign above; kept for the record, since it explains dimensions still
 // visible in android/'s un-migrated copies). The owner read the ORIGINAL
@@ -1035,6 +1056,18 @@ window.AuraIcons = (function () {
   // retail_design_tokens_test.js's `.aura-logo` exemption already exists
   // for ("Fixed brand mark; its colours are the company identity and must
   // not shift with the product theme") -- see that file's EXEMPTIONS list.
+  // ONE EXCEPTION, added in BRAND KIT v2 (2026-09-20): the shadow facet
+  // (the fr letterform gradient's end stop and the rb ring-back gradient's
+  // start stop) now picks between the guide's two navies by SURFACE --
+  // #16233D on light/sand, #22304A on dark/night/dusk, via
+  // _surfaceShadowFacet() below. That is not the product theme shifting the
+  // brand's identity colour the exemption above is about -- Retail's own
+  // accent trio (#A06030/#C97B3D/#F0B87A) is still fixed regardless of
+  // theme, and every OTHER product would make the exact same light/dark
+  // choice for this one shared constant. It is a legibility rule (the guide:
+  // "so the letter doesn't sink"), the same class of fix
+  // retail_brand_ring_contrast_test.js's whole existence argues for on the
+  // ring, just applied to the facet instead.
   // One consequence: this function no longer reads the CSS custom property
   // --brand-ring-end the previous design depended on for light/dark-theme
   // contrast, so retail_brand_ring_contrast_test.js's assertions that were
@@ -1054,6 +1087,43 @@ window.AuraIcons = (function () {
   // (duplicate ids resolve to the first match), so the mark would render
   // with the wrong facet/ring colours and no error at all. The flat branch
   // defines no gradients, so it has no id to collide on.
+  //
+  // Surface classification for the shadow facet -- see this file's BRAND KIT
+  // v2 (2026-09-20) comment above for the colour reasoning. Read at RENDER
+  // TIME from html[data-theme], never cached on the module, because a
+  // cached value taken once at load time would freeze the mark to whatever
+  // theme was active on first paint. THEME_NAMES/PRIMARY vs DARK surface
+  // grouping is a deliberate INDEPENDENT copy of app-shell.js's own
+  // THEME_NAMES list (light/sand/dark/night/dusk), not a read of that
+  // constant -- icons.js has no import mechanism and must not assume load
+  // order against app-shell.js. An unset or unrecognised data-theme (no
+  // boot script having run yet, a bare test harness, or a value outside the
+  // five sanctioned names) resolves to the LIGHT set, matching
+  // ThemeEngine._sanitize()'s own "anything outside the allowlist is light"
+  // rule in app-shell.js.
+  //
+  // CHECKED, NOT ASSUMED: rendering at call time is correct for BOTH of this
+  // shell's real call sites the moment they render -- app-shell.js's
+  // _renderShell() (sidebar brand slot) runs once per subsystem entry and
+  // its auth overlay (.auth-icon) runs once per sign-up screen, and both
+  // read whatever html[data-theme] is current at that instant. What this
+  // does NOT cover: ThemeEngine.apply()'s own theme-switch re-render path
+  // (app-shell.js) calls SubsystemApp._navigate() only, which rebuilds
+  // #sub-content -- it does not call _renderShell() again. Toggling the
+  // theme picker while already inside a subsystem therefore leaves the
+  // SIDEBAR mark's already-rendered markup exactly as it was drawn at the
+  // last subsystem entry (stale shadow facet) until the user leaves and
+  // re-enters, or reloads. Render-time reading is necessary but not, on its
+  // own, sufficient for a live in-place repaint on that one call site --
+  // noted here rather than left silent, since app-shell.js is not an owned
+  // path for this change.
+  var DARK_SURFACE_THEMES = { dark: true, night: true, dusk: true };
+  function _surfaceShadowFacet() {
+    var theme = (typeof document !== 'undefined' && document.documentElement &&
+      document.documentElement.getAttribute('data-theme')) || 'light';
+    return DARK_SURFACE_THEMES[theme] ? '#22304A' : '#16233D';
+  }
+
   var markCounter = 0;
   function mark(size, opts) {
     opts = opts || {};
@@ -1102,6 +1172,7 @@ window.AuraIcons = (function () {
         '</svg>';
     }
     var fl = 'aura-fl-' + n, fr = 'aura-fr-' + n, rb = 'aura-rb-' + n, rf = 'aura-rf-' + n;
+    var shadowFacet = _surfaceShadowFacet();
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="' + size + '" height="' + size +
       '" class="aura-ic aura-mark" data-aura-mark="1" aria-hidden="true" focusable="false">' +
         '<defs>' +
@@ -1109,10 +1180,10 @@ window.AuraIcons = (function () {
             '<stop offset="0%" stop-color="#F0B87A" /><stop offset="100%" stop-color="#C97B3D" />' +
           '</linearGradient>' +
           '<linearGradient id="' + fr + '" x1="0%" y1="0%" x2="0%" y2="100%">' +
-            '<stop offset="0%" stop-color="#A06030" /><stop offset="100%" stop-color="#16233D" />' +
+            '<stop offset="0%" stop-color="#A06030" /><stop offset="100%" stop-color="' + shadowFacet + '" />' +
           '</linearGradient>' +
           '<linearGradient id="' + rb + '" x1="0%" y1="0%" x2="100%" y2="0%">' +
-            '<stop offset="0%" stop-color="#16233D" /><stop offset="100%" stop-color="#C97B3D" />' +
+            '<stop offset="0%" stop-color="' + shadowFacet + '" /><stop offset="100%" stop-color="#C97B3D" />' +
           '</linearGradient>' +
           '<linearGradient id="' + rf + '" x1="0%" y1="0%" x2="100%" y2="0%">' +
             '<stop offset="0%" stop-color="#C97B3D" /><stop offset="100%" stop-color="#F0B87A" />' +

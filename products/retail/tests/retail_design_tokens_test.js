@@ -275,6 +275,10 @@ const SANCTIONED_FAMILIES = [
   { name: 'IBM Plex Sans Arabic', licence: 'IBMPlexSansArabic-OFL.txt' },
   // latin subset; the product's Latin face.
   { name: 'Plus Jakarta Sans', licence: 'PlusJakartaSans-OFL.txt' },
+  // Latin subset, VARIABLE 300..700 in one file; the BRAND face, used for
+  // the "Aura <Product>" lockup and the intro wordmark, never for body
+  // text (Action-Aura-Brand-Guide.md names it for wordmarks only).
+  { name: 'Space Grotesk', licence: 'SpaceGrotesk-OFL.txt' },
 ];
 const SANCTIONED_FAMILY_NAMES = SANCTIONED_FAMILIES.map((f) => f.name);
 

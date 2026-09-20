@@ -1,21 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
   <title id="t">Aura Retail mark</title>
-  <!-- 2026-09-19: REDESIGNED. This file used to hold the first-generation
-       "ring + upward A + beacon diamond" mark (256 viewBox). The owner
-       supplied a finished replacement identity, Action-Aura-Brand-Guide.md:
-       a faceted letter A read through the Greek delta ("pierced A"),
-       pierced by a tilted orbit ring that passes BEHIND the letter's
-       shoulders, shows THROUGH the counter, and sweeps ACROSS THE FRONT of
-       the legs to a bright energy node. Content here is identical to
-       aura-retail.svg (the canonical Retail 3D mark, light-ground) --
-       kept under this OLD filename too so nothing that already references
-       "aura-mark.svg" 404s. See brand/README.md for the full file map and
-       KNOWN DRIFT: Android's AuraMark.kt (android/aura-retail/.../ui/brand/
-       AuraMark.kt) still hand-draws the OLD geometry from this file's
-       previous revision, and MarkGeometryParityContractTest.kt reads THIS
-       file path to compare against it -- that test will now fail until the
-       Android side is redrawn to match (out of scope here: android/ is not
-       an owned path for this change). -->
+  <!-- BRAND KIT v2 (2026-09-20). Content here is identical to
+       aura-retail-light.svg (the canonical Retail 3D mark, light-ground)
+       -- kept under this OLD filename too so nothing that already
+       references "aura-mark.svg" 404s (Android's
+       MarkGeometryParityContractTest.kt reads this exact path). For the
+       matching dark-ground artwork, new in this kit, see
+       aura-retail-dark.svg / aura-mark-on-dark.svg. See brand/README.md
+       for the full file map and KNOWN DRIFT: Android's AuraMark.kt
+       (android/aura-retail/.../ui/brand/AuraMark.kt) still hand-draws the
+       OLD first-generation geometry, and the contract test above already
+       fails comparing it to this file -- out of scope here, android/ is
+       not an owned path for this change. -->
   <defs>
     <linearGradient id="fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#F0B87A"/><stop offset="100%" stop-color="#C97B3D"/></linearGradient>
     <linearGradient id="fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#A06030"/><stop offset="100%" stop-color="#16233D"/></linearGradient>
@@ -25,7 +21,7 @@
   <path d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#rb)" stroke-width="5" opacity="0.55"/>
   <path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#fl)"/>
   <path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#fr)"/>
-  <line x1="60" y1="12.6" x2="60" y2="56" stroke="#FBE3C4" stroke-width="1.3" opacity="0.9"/>
+  <line x1="60" y1="12.6" x2="60" y2="56" stroke="#FBE3C4" stroke-width="1.3" opacity="0.95"/>
   <rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#C97B3D"/>
   <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#rf)" stroke-width="6" stroke-linecap="round"/>
   <circle cx="95.2" cy="61.5" r="7.5" fill="#F0B87A" opacity="0.3"/>

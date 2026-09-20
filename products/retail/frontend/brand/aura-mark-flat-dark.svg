@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
+  <title id="t">Aura mark, flat, dark ground</title>
+  <!-- BRAND KIT v2 (2026-09-20), NEW in this kit -- v1 shipped one flat
+       master (aura-mark-flat.svg, == aura-mark-flat-light.svg below) with
+       no dark-ground counterpart. Master/generic flat mark (teal ring) for
+       <=64px use (favicons, stamps, embroidery, single-colour print) on a
+       DARK ground: ivory letterform + one teal ring stroke, no gradients,
+       no 3D shading -- per Action-Aura-Brand-Guide.md, "below ~32px the
+       glyph cannot survive; products differentiate by ring colour only".
+       The Retail product's own flat export (navy/ivory letterform + Retail
+       accent ring, no teal) is aura-mark-1bit.svg / AuraIcons.mark()'s
+       flat branch in ../icons.js -- see that function's own comment for why
+       Retail's flat mark stays on currentColor + --brand-ring-end rather
+       than mirroring this file's fixed teal ring. -->
+  <path d="M60 12.6 L98 104 L80 104 L60 56 L40 104 L22 104 Z" fill="#F6F4EF"/>
+  <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="#7FCAC5" stroke-width="9" stroke-linecap="round"/>
+</svg>

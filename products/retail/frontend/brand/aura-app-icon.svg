@@ -1,17 +1,41 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="t">
   <title id="t">Aura Retail app icon</title>
-  <!-- 2026-09-19: REDESIGNED to the new pierced-A Retail mark -- see
-       aura-mark.svg's header comment for the full context. Same
-       512x512/rx=112 rounded-square navy ground as before; the mark inside
-       is the dark-ground Retail 3D mark (aura-mark-on-dark.svg's palette,
-       inlined here rather than referenced, same as the previous generation
-       did) scaled from its native 0-120 viewBox to fill most of the icon.
-       Consumed live by the browser tab favicon (index.html, customer-
-       display.html both link this file directly) as well as any future
-       OS/launcher icon use -- unlike AuraIcons.mark(), this file is not
-       split into a separate <64px flat variant, since an app/launcher icon
-       is drawn at many sizes by the OS and a favicon crop of the 3D
-       version already matches what this file looked like before. -->
+  <!-- BRAND KIT v2 (2026-09-20). Same 512x512/rx=112 rounded-square navy
+       ground as before; the mark inside is the dark-ground Retail 3D mark,
+       now synced to aura-retail-dark.svg's real v2 colours (was: the old
+       derived-brightening set aura-mark-on-dark.svg carried before this
+       pass -- see that file's own comment) -- inlined here rather than
+       referenced, same as the previous generation did. Consumed live by the
+       browser tab favicon (index.html, customer-display.html both link this
+       file directly) as well as any future OS/launcher icon use -- unlike
+       AuraIcons.mark(), this file is not split into a separate <64px flat
+       variant, since an app/launcher icon is drawn at many sizes by the OS
+       and a favicon crop of the 3D version already matches what this file
+       looked like before.
+
+       APP ICON RECIPE, CHECKED AGAINST WHAT WAS ACTUALLY DELIVERED:
+       Action-Aura-Brand-Guide.md's "App icons" note says to take "the
+       primary SVG" and delete "the two glow <circle> elements and the
+       shadow <ellipse> (first three elements)". Neither
+       aura-retail-dark.svg nor aura-retail-light.svg (verified against
+       both the ZIP-extracted kit copies and the loose, C2PA-tagged
+       Downloads copies, which are geometrically identical) actually
+       contains a shadow <ellipse> anywhere, or leads with two glow
+       <circle>s -- their first three elements are <path>(ring-back),
+       <path>(left facet), <path>(right facet). So that literal recipe does
+       not apply to this kit drop; there is nothing matching the guide's
+       description to strip. What this file already had before this pass --
+       a separate <rect fill="url(#icon-ground)"/> + soft
+       <rect fill="url(#icon-glow)"/> staging pair behind the mark, not
+       glow circles/an ellipse INSIDE the mark itself -- is a different,
+       icon-specific background technique that predates this recipe and
+       still serves the same "rounded-square app-icon ground" requirement,
+       so it is left in place rather than guessed away. If the owner's
+       fuller hero-canvas source (the Claude artifact link at the top of
+       Action-Aura-Brand-Guide.md, not included in this file kit) does carry
+       literal glow-circle/shadow-ellipse elements, this icon should be
+       regenerated from that source instead -- flagged as a gap, not
+       silently guessed at. -->
   <defs>
     <linearGradient id="icon-ground" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0e1a33"/>
@@ -21,10 +45,10 @@
       <stop offset="0" stop-color="#F0B87A" stop-opacity="0.24"/>
       <stop offset="1" stop-color="#F0B87A" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="ic-fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#F6CFA0"/><stop offset="100%" stop-color="#DB9A57"/></linearGradient>
-    <linearGradient id="ic-fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#B87A45"/><stop offset="100%" stop-color="#1E3A5A"/></linearGradient>
-    <linearGradient id="ic-rb" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#223B5E"/><stop offset="100%" stop-color="#DB9A57"/></linearGradient>
-    <linearGradient id="ic-rf" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#DB9A57"/><stop offset="100%" stop-color="#F6CFA0"/></linearGradient>
+    <linearGradient id="ic-fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#F0B87A"/><stop offset="100%" stop-color="#C97B3D"/></linearGradient>
+    <linearGradient id="ic-fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#A06030"/><stop offset="100%" stop-color="#22304A"/></linearGradient>
+    <linearGradient id="ic-rb" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#22304A"/><stop offset="100%" stop-color="#C97B3D"/></linearGradient>
+    <linearGradient id="ic-rf" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#C97B3D"/><stop offset="100%" stop-color="#F0B87A"/></linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#icon-ground)"/>
   <rect width="512" height="512" rx="112" fill="url(#icon-glow)"/>
@@ -32,10 +56,10 @@
     <path d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#ic-rb)" stroke-width="5" opacity="0.6"/>
     <path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#ic-fl)"/>
     <path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#ic-fr)"/>
-    <line x1="60" y1="12.6" x2="60" y2="56" stroke="#FDF0E0" stroke-width="1.3" opacity="0.95"/>
-    <rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#DB9A57"/>
+    <line x1="60" y1="12.6" x2="60" y2="56" stroke="#FBE3C4" stroke-width="1.3" opacity="0.95"/>
+    <rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#F0B87A"/>
     <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#ic-rf)" stroke-width="6" stroke-linecap="round"/>
-    <circle cx="95.2" cy="61.5" r="7.5" fill="#F6CFA0" opacity="0.3"/>
-    <circle cx="95.2" cy="61.5" r="4" fill="#FDF6EC"/>
+    <circle cx="95.2" cy="61.5" r="7.5" fill="#F0B87A" opacity="0.3"/>
+    <circle cx="95.2" cy="61.5" r="4" fill="#FBE3C4"/>
   </g>
 </svg>

@@ -1,11 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
   <title id="t">Aura mark, dark ground</title>
-  <!-- Master Action Aura mark ("pierced A") for DARK backgrounds -- same
-       construction as aura-mark-light.svg, facets and ring brightened for
-       legibility on a dark ground. See that file's comment for the
-       construction notes; this is the master/generic identity (teal
-       accent), not the Retail product variant (aura-mark-on-dark.svg /
-       aura-retail.svg carry the retail accent + square counter). -->
+  <!-- BRAND KIT v2 (2026-09-20). Master Action Aura mark ("pierced A") for
+       DARK backgrounds -- same construction as aura-mark-light.svg, facets
+       and ring brightened for legibility on a dark ground. See that file's
+       comment for the construction notes; this is the master/generic
+       identity (teal accent), not the Retail product variant
+       (aura-retail-dark.svg / aura-mark-on-dark.svg carry the retail accent
+       + square counter). Brought in verbatim from Action-Aura-Brand-Guide.md
+       v2's own source files (metadata stripped -- see README.md), replacing
+       the v1-kit copy that lived under this same filename. -->
   <defs>
     <linearGradient id="fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#9FDCD8"/><stop offset="100%" stop-color="#4FA09B"/></linearGradient>
     <linearGradient id="fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#3E7E88"/><stop offset="100%" stop-color="#1E3A5A"/></linearGradient>
