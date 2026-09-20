@@ -5357,3 +5357,70 @@ Clinic is unaffected: it does not sync, its backend never imports
 `commercial_runtime.sync`, and no query in `products/clinic` can name
 `sync_cursor`. One nullable column on an empty-until-used table costs it
 nothing.
+
+## 2026-09-20 — retail schema v38 CLAIMED: a real general ledger
+
+**Reserving the version integer before the migration exists**, per this
+ledger's convention and because `RETAIL_SCHEMA_VERSION` is a single-writer
+resource shared with branches that are not on master.
+
+### Why
+
+CLAUDE.md has said for some time that **there is no accounting at all**: no
+chart of accounts, no general ledger, no trial balance, no P&L, no period
+close. The one artefact that exists is a fossil from the monolith extraction:
+
+    CREATE TABLE journal_entries (
+        id, company_id, reference, description,
+        debit_account TEXT,      -- free text, no FK
+        credit_account TEXT,     -- free text, no FK
+        amount REAL,             -- a FLOAT, for money
+        entry_type, created_at
+    )
+
+It has never had a single INSERT or SELECT in the codebase's history. Three
+things are wrong with it beyond being unused: accounts are free-text strings
+rather than rows, an entry is a single debit/credit pair rather than a
+balanced set of lines (so it cannot express a sale that splits across tax,
+discount and multiple revenue accounts), and `amount REAL` is binary floating
+point — which this codebase has already been burned by, having spent a whole
+correction round replacing money comparisons that assumed 2 decimals in a
+currency whose minor unit is the fil.
+
+`retail_api.py`'s own comments say "a future double-entry GL CONSUMES these
+records" about the AR/AP subledger. That future is this.
+
+### What v38 is, and is not
+
+**Is:** the double-entry core.
+
+* `gl_accounts` — chart of accounts: code, name, type
+  (asset/liability/equity/revenue/expense), normal balance, optional parent,
+  company-scoped, seeded with a small default chart.
+* `gl_journals` — the header: business date, reference, memo, source document
+  type and id, posted-at, company and branch scoped.
+* `gl_journal_lines` — the lines: journal, account, debit, credit, memo.
+* The balance invariant enforced at write time: a journal's debits must equal
+  its credits, to the currency's own minor unit — never to a hardcoded 0.005.
+* Posting from the documents that already exist (sales, returns, payments,
+  purchases), and a trial balance that ties back to the AR/AP subledger.
+
+**Is NOT, deliberately:** period close, fiscal-year rollover, retained-earnings
+posting, multi-currency, or a balance sheet / P&L presentation layer. Those
+need the core to exist first and each deserves its own version.
+
+### Constraints this must respect
+
+* **Money is never REAL.** Match whatever representation `payments` and
+  `sales` already use after v37's requantization, and route every comparison
+  through `_money_epsilon(currency)`. Never introduce a second money
+  convention.
+* **Every table is `company_id`-scoped**, and journals are additionally
+  `branch_id`-scoped, like every other business table in this product.
+* **Posting is append-only.** A mistake is corrected by a reversing journal,
+  never by editing or deleting a posted one — that is what makes a ledger
+  auditable and it is far cheaper to enforce from the first commit than to
+  retrofit.
+* The existing `journal_entries` fossil is left in place and untouched. It has
+  no readers or writers, so dropping it buys nothing and risks a migration on
+  live shop data for no gain. It should be marked as superseded in a comment.
