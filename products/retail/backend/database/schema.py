@@ -1017,7 +1017,22 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # _migrate_requantize_sale_tender_payments's own docstring says why: only one
 # caller was ever affected, and its formula reads only sale columns that are
 # still at full precision.
-RETAIL_SCHEMA_VERSION = 37
+#
+# v38 (2026-09-20/21): the double-entry general ledger core. Claimed in
+# writing in ROADMAP.md's 2026-09-20 "retail schema v38 CLAIMED: a real
+# general ledger" entry before this constant was touched -- v35 is STILL the
+# open Aseel-parity reservation, untouched by this. Three new tables
+# (`gl_accounts`, `gl_journals`, `gl_journal_lines`), four append-only
+# triggers, and a best-effort opening-balance backfill for any company whose
+# `customers`/`suppliers.credit_balance` was already nonzero before this
+# migration ran. See _migrate_add_general_ledger's own docstring for the
+# full column-by-column reasoning and core/retail/general_ledger.py's module
+# docstring for the posting/balance-invariant design this table shape
+# supports. The pre-existing `journal_entries` fossil (below, in the base
+# executescript) is left untouched and marked superseded -- it has no
+# readers or writers, so dropping it would risk a migration on live shop
+# data for zero gain.
+RETAIL_SCHEMA_VERSION = 38
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2094,6 +2109,15 @@ def _migrate_retail_schema(conn):
     # v34 -> v36 -- see the block immediately above for why this now runs
     # AFTER v37 rather than last.
     _migrate_add_return_settlement_split(conn)
+    # v37 -> v38 (the double-entry general ledger core): appended LAST, same
+    # convention as every step above except v37 itself (which has its own,
+    # data-dependent reason to run early -- see that block's comment). v38
+    # has no such constraint: it only CREATEs three new, self-contained
+    # tables and reads `customers`/`suppliers.credit_balance` for its
+    # opening-balance backfill, neither of which any step above this line
+    # writes. See the RETAIL_SCHEMA_VERSION v38 comment above and
+    # _migrate_add_general_ledger's own docstring for the full reasoning.
+    _migrate_add_general_ledger(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -7393,6 +7417,16 @@ def _init_retail(conn):
         is_default INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    -- SUPERSEDED by the real double-entry ledger (schema v38: gl_accounts /
+    -- gl_journals / gl_journal_lines, see _migrate_add_general_ledger below
+    -- and core/retail/general_ledger.py). A fossil from the monolith
+    -- extraction: free-text account names instead of rows, one debit/credit
+    -- PAIR instead of a balanced SET of lines, and `amount REAL` quantized
+    -- nowhere -- exactly the three defects v38 exists to fix. Has never had
+    -- a single INSERT or SELECT anywhere in this codebase's history. Left
+    -- in place, untouched, on purpose: it has no readers or writers, so
+    -- dropping it would risk a migration on live shop data for zero gain.
+    -- Do not add a new writer here -- use core/retail/general_ledger.py.
     CREATE TABLE IF NOT EXISTS journal_entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER DEFAULT 1,
@@ -9314,4 +9348,474 @@ def _migrate_requantize_sale_tender_payments(conn):
             conn.execute(
                 "UPDATE payments SET amount=? WHERE id=?",
                 (float(net_received), row['pid'])
+            )
+
+
+def _migrate_add_general_ledger(conn):
+    """One-time migration (schema v37 -> v38): the double-entry general
+    ledger core (ROADMAP.md's 2026-09-20 "retail schema v38 CLAIMED: a real
+    general ledger" entry). See core/retail/general_ledger.py's own module
+    docstring for the posting/balance-invariant design these tables exist
+    to support -- this docstring covers only the SHAPE.
+
+        gl_accounts       -- chart of accounts, company_id-scoped
+        gl_journals       -- one posted event's header
+        gl_journal_lines  -- that event's balanced set of debit/credit legs
+
+    `gl_accounts` COLUMN BY COLUMN:
+      * `id INTEGER PRIMARY KEY AUTOINCREMENT` -- local, device-scoped. GL
+        posting is NOT wired into sync_outbox in v38 (deliberately -- see
+        "NOT BUILT" below), so there is no cross-device identity to carry
+        and no reason to pay the UUID-primary-key cost `cheques`/
+        `stock_transfers` pay for exactly that reason.
+      * `company_id INTEGER NOT NULL` -- MANDATORY tenant scope, the
+        `stock_transfers`/`cheques`/`loyalty_ledger` convention (NOT NULL,
+        not the legacy `DEFAULT 1` older tables carry) for a table nothing
+        should ever be allowed to insert without a tenant. Discovered
+        automatically by `company_scoped_tables(conn)` from the live
+        schema (that function's own docstring), so no maintenance list
+        needs a new entry for it.
+      * `code TEXT NOT NULL` -- e.g. '1000'. Display/lookup key, resolved
+        by `core/retail/general_ledger.py::_account_id`; see
+        `idx_gl_accounts_company_code` below for why this is unique per
+        company rather than globally.
+      * `name TEXT NOT NULL` / `account_type TEXT NOT NULL` (asset |
+        liability | equity | revenue | expense) / `normal_balance TEXT
+        NOT NULL` (debit | credit) -- no CHECK constraint on either enum
+        column, matching this file's own established precedent for enum-
+        shaped text columns (`entry_type`/`movement_type`/`stock_
+        transfers.status`) -- validated by `DEFAULT_CHART` being the only
+        writer in v38 (there is no create-account ROUTE yet; see "NOT
+        BUILT" below).
+      * `parent_id INTEGER REFERENCES gl_accounts(id)` -- a declared FK IS
+        safe here (unlike `branch_id` elsewhere in this file): both sides
+        are this table's own local autoincrement id, so there is no cross-
+        device remapping risk. Nullable; only '4900' (Sales Returns and
+        Allowances) has a parent in `DEFAULT_CHART` today.
+      * `is_active INTEGER NOT NULL DEFAULT 1` -- reserved for a future
+        deactivate-an-account route; nothing in v38 reads or writes it
+        besides the default.
+      * `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- display only,
+        the `stock_transfers.created_at` posture, never compared across
+        devices (there ARE no other devices for this table in v38).
+
+    `gl_journals` COLUMN BY COLUMN:
+      * `id INTEGER PRIMARY KEY AUTOINCREMENT` -- local, same reasoning as
+        `gl_accounts.id` above.
+      * `company_id INTEGER NOT NULL` / `branch_id INTEGER` -- company
+        MANDATORY, branch OPTIONAL (an opening-balance or a direct
+        customer/supplier account payment has no single branch to charge
+        -- see `post_customer_payment`/`post_supplier_payment`, which pass
+        the branch the ROUTE resolved, itself already nullable for those
+        two routes). NO declared FOREIGN KEY on `branch_id`, matching
+        `sales.branch_id`/`cheques.branch_id`/`stock_transfers.source_
+        branch_id` -- `branches.id` is a local, per-device autoincrement
+        never part of the UUID migration (see the v11 `held_sales`
+        comment above), so a declared FK would be a landmine the moment
+        this table is ever relayed cross-device.
+      * `business_date TEXT NOT NULL` -- the ACCOUNTING date ('YYYY-MM-DD'),
+        which `post_journal`'s callers default to "today" but may override
+        -- kept distinct from `posted_at` below (the instant this row was
+        actually written) for the same reason `stock_transfers` keeps
+        `created_at`/`sent_at`/`received_at` distinct: a real-world event
+        and the moment a device happened to record it are different facts.
+      * `reference TEXT` -- the human document reference (a sale_number /
+        return_number / payment reference like "REC-000123"), display
+        only, matching every other `reference`-shaped column in this file.
+      * `memo TEXT` -- free text, nullable.
+      * `source_type TEXT NOT NULL` / `source_id INTEGER` -- 'sale' |
+        'return' | 'customer_payment' | 'supplier_payment' | 'po_payment' |
+        'purchase_order' | 'reversal'. `source_id` is a LOCAL row id
+        (`sales.id`/`returns.id`/`purchase_orders.id`), device-local
+        reference only, matching `payments.sale_id`'s own posture -- NULL
+        for a direct customer/supplier account payment, which has no
+        single source row to point at, and for a reversal (which points
+        at the reversed JOURNAL id instead, via `reversed_journal_id`
+        below, not `source_id`).
+      * `currency TEXT NOT NULL` -- stamped once at posting, never re-
+        derived later, matching `payments.currency`'s own "labelled once"
+        contract. Every line on this journal was quantized to THIS
+        currency by `post_journal`.
+      * `reversed_journal_id INTEGER REFERENCES gl_journals(id)` -- set
+        ONLY on a reversing journal, at INSERT time, pointing at the
+        journal it reverses. Never set by an UPDATE -- see APPEND-ONLY
+        below; `reverse_journal` passes it straight into the INSERT.
+      * `posted_by TEXT DEFAULT 'System'` -- matches `stock_transfers`/
+        `inventory_movements`'s own who-column, not the later `actor_user_
+        uid`/`terminal_id`/`created_at_utc` triple v13 retrofitted onto
+        RETAIL_ACTOR_TABLES (adding this new table to that tuple now would
+        fire for no database that has ever run it -- the identical
+        reasoning `_migrate_add_stock_transfers`'s own docstring already
+        gives for the identical choice).
+      * `posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` -- local wall-clock
+        stamp, display only.
+
+    `gl_journal_lines` COLUMN BY COLUMN:
+      * `id INTEGER PRIMARY KEY AUTOINCREMENT` -- local.
+      * `journal_id INTEGER NOT NULL REFERENCES gl_journals(id)` -- a
+        declared FK IS safe (both sides local autoincrement, same
+        reasoning as `gl_accounts.parent_id` above). Deliberately carries
+        NO `company_id` of its own -- scoped entirely through `journal_id`
+        (and transitively through `account_id`, see `trial_balance`'s own
+        comment on why that is sufficient) -- the `cheque_events`/`stock_
+        transfer_items` shape ("a line has no meaning outside the journal
+        it belongs to"), correctly EXCLUDED from `company_scoped_tables`'s
+        automatic discovery for the identical reason those two are.
+      * `account_id INTEGER NOT NULL REFERENCES gl_accounts(id)`.
+      * `debit REAL NOT NULL DEFAULT 0` / `credit REAL NOT NULL DEFAULT 0`
+        -- MONEY, stored the identical way `payments.amount` is stored
+        after v37's requantization: `REAL` is the SQLite column affinity
+        (this codebase has no fixed-point type available -- raw sqlite3,
+        no ORM), but every value written here already passed through
+        `commercial_runtime.currency.quantize_money` before it ever
+        reaches this INSERT -- see core/retail/general_ledger.py's module
+        docstring, MONEY section, for the full reasoning and why that is
+        NOT the same mistake `journal_entries.amount REAL` made (that
+        fossil never quantized anything; this table's every writer does).
+        Exactly one of the two is nonzero per line -- enforced in Python
+        by `post_journal`, not by a CHECK constraint, matching this file's
+        `entry_type`/`movement_type` precedent for business-rule
+        validation living in the API layer rather than SQL.
+      * `memo TEXT` -- free text, nullable, per-line detail
+        ("Credit extended to customer", "Sales tax collected", ...).
+
+    APPEND-ONLY, ENFORCED BY TRIGGER, NOT MERELY BY CONVENTION. Both
+    `gl_journals` and `gl_journal_lines` get a BEFORE UPDATE and a BEFORE
+    DELETE trigger. Three of the four are an unconditional `RAISE(ABORT,
+    ...)`; `trg_gl_journals_no_update` is the one exception, and
+    deliberately so: `gl_journals` carries `company_id`, which makes it a
+    member of `company_scoped_tables(conn)`, and `rebind_company_id()`
+    legitimately issues `UPDATE gl_journals SET company_id=?` for an
+    install that accumulated GL history (a return, a customer payment --
+    both post journals and are on the pre-activation restricted allowlist)
+    before a licence was ever activated. An unconditional trigger would
+    refuse that real, already-shipped path. So this one trigger's `WHEN`
+    clause names every content column and fires only if one of THOSE
+    changed, letting a `company_id`-only UPDATE (the rebind, including a
+    no-op rebind that writes back the value it already has) through while
+    still refusing any change to accounting content -- see the trigger's
+    own inline comment in the `executescript` block above for the full
+    reasoning, the residual gap this leaves, and why that gap is accepted.
+    Correcting a posted journal still means posting a REVERSING journal
+    (core/retail/general_ledger.py::reverse_journal), never rewriting or
+    removing one -- CLAUDE.md's engineering standard is explicit that this
+    kind of guarantee is far cheaper to ship from the first commit than to
+    retrofit once a shop has live data, so it is enforced at the database
+    level (a future bug in application code cannot silently violate it)
+    rather than left as "nothing in general_ledger.py happens to issue an
+    UPDATE". `gl_accounts` carries NO such trigger -- a chart of accounts
+    is legitimately editable (rename, deactivate) even though the
+    transactions posted against it are not; v38 ships no accounts-editing
+    route, so this is future-proofing rather than something exercised
+    today.
+
+    OPENING-BALANCE BACKFILL, best-effort, matching the disclosure
+    convention `_migrate_add_return_settlement_split` established for a
+    backfill that cannot be exact: any company whose `customers`/
+    `suppliers.credit_balance` was already nonzero when this migration
+    runs (i.e. real AR/AP history that accrued before the GL existed) gets
+    ONE opening-balance journal, dated the day this migration ran, that
+    books that net balance against `3000` (Owner's Equity) as a plug --
+    Dr `1100` for a positive net customer balance (or Cr, negative net --
+    a shop that owes its customers more store credit than it is owed),
+    Cr `2000` for a positive net supplier balance (or Dr, negative --
+    an overpaid supplier), and the OPPOSITE side on `3000` to balance.
+    Without this, `trial_balance`'s AR/AP accounts would read zero on
+    every UPGRADED install (as opposed to a brand-new one) while
+    `customers`/`suppliers.credit_balance` read real numbers -- exactly
+    the "ties back to the AR/AP subledger" property the ROADMAP.md v38
+    entry asks for, failing silently for every shop that was not new the
+    day this shipped.
+
+    GUARDED ON `customers`/`suppliers.credit_balance` EXISTING, the same
+    shape `_migrate_requantize_sale_tender_payments` immediately above
+    uses for `payments.related_type`. `credit_balance` is NOT created by
+    any migration in this file -- it is one of the columns api/
+    retail_api.py's `_ensure_credit_schema` adds LAZILY at runtime,
+    exactly like `retail_settings` itself (see that function's own
+    comment). A brand-new install, or any install whose runtime has never
+    opened the credit schema (never rung a credit sale, never taken a
+    customer/supplier payment), does not have the column at all -- and
+    correctly so: no column means `_ensure_credit_schema` never ran, which
+    means no credit-affecting route has ever executed, which means there
+    is definitionally nothing to backfill. Querying an absent column would
+    turn a true "nothing to do" into a failed migration; this guard makes
+    it the harmless no-op it actually is. Found the same way v37's own
+    identical guard was found -- running this against a real
+    `init_retail()` database, which is exactly the schema-only fixture
+    every migration test in this file's test suite boots.
+
+    NOT SCHEMA, same commit: nothing else changes. Every route this ships
+    beside (api/retail_api.py's create_sale/create_return/customer_
+    payment/supplier_payment/pay_purchase_order/create_purchase_order) now
+    also calls `core/retail/general_ledger.py`'s posting helpers -- wiring
+    documented there, not here.
+
+    WHAT v38 DELIBERATELY DOES NOT BUILD, so silence is not mistaken for
+    oversight (mirrors the ROADMAP.md entry's own "Is NOT" list):
+      * No sync wiring. `gl_accounts`/`gl_journals`/`gl_journal_lines`
+        are NOT in RETAIL_UID_TABLES, carry no `uid`, and nothing queues a
+        `_queue_sync_event` for them -- a multi-device shop's ledger is
+        single-device-local in v38. Extending it needs its own design (a
+        UUID primary key on `gl_journals` at minimum, matching the `stock_
+        transfers`/`cheques` id-choice reasoning above) and its own
+        version.
+      * No accounts-editing route (rename/deactivate/create a custom
+        account) -- `DEFAULT_CHART` is the only writer of `gl_accounts` in
+        v38.
+      * No COGS/inventory-valuation posting -- see `ACCOUNT_INVENTORY`'s
+        own comment in general_ledger.py for why (this product has no
+        per-unit inventory valuation to post from yet).
+      * No period close, fiscal-year rollover, retained-earnings posting,
+        multi-currency, or balance-sheet/P&L presentation layer -- the
+        ROADMAP.md entry's own words; each needs this core to exist first.
+
+    Idempotent: every CREATE TABLE / CREATE INDEX / CREATE TRIGGER above is
+    IF NOT EXISTS, so a second call -- including replaying this whole
+    chain against a database restored from a mid-upgrade backup -- is a
+    clean no-op for the schema half. The opening-balance backfill is
+    idempotent for a different, structural reason: it is guarded by
+    `RETAIL_SCHEMA_VERSION`/`ensure_schema_version` like every other step
+    in this chain, so it runs at most once per database, ever -- unlike
+    `_migrate_requantize_sale_tender_payments` above (which recomputes and
+    compares a VALUE so it is safe to re-run), a second run of THIS
+    backfill would double-book the opening balance, so it deliberately
+    does NOT try to be re-run-safe the way that migration is. If this ever
+    needs to run twice against the same data (a restored mid-upgrade
+    backup, matching every other migration's stated concern), the correct
+    fix is a reversing journal via `reverse_journal`, not a re-run.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS gl_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            account_type TEXT NOT NULL,        -- asset|liability|equity|revenue|expense
+            normal_balance TEXT NOT NULL,      -- debit|credit
+            parent_id INTEGER REFERENCES gl_accounts(id),
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_gl_accounts_company_code
+            ON gl_accounts(company_id, code);
+
+        CREATE TABLE IF NOT EXISTS gl_journals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            branch_id INTEGER,                 -- branches.id; NO declared FK (see docstring)
+            business_date TEXT NOT NULL,       -- 'YYYY-MM-DD', the accounting date
+            reference TEXT,
+            memo TEXT,
+            source_type TEXT NOT NULL,
+            source_id INTEGER,
+            currency TEXT NOT NULL,
+            reversed_journal_id INTEGER REFERENCES gl_journals(id),
+            posted_by TEXT DEFAULT 'System',
+            posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_gl_journals_company_date
+            ON gl_journals(company_id, business_date);
+        CREATE INDEX IF NOT EXISTS idx_gl_journals_source
+            ON gl_journals(company_id, source_type, source_id);
+
+        CREATE TABLE IF NOT EXISTS gl_journal_lines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            journal_id INTEGER NOT NULL REFERENCES gl_journals(id),
+            account_id INTEGER NOT NULL REFERENCES gl_accounts(id),
+            debit REAL NOT NULL DEFAULT 0,
+            credit REAL NOT NULL DEFAULT 0,
+            memo TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_gl_journal_lines_journal
+            ON gl_journal_lines(journal_id);
+        CREATE INDEX IF NOT EXISTS idx_gl_journal_lines_account
+            ON gl_journal_lines(account_id);
+
+        -- APPEND-ONLY, enforced here rather than left to application
+        -- discipline -- see this migration's own docstring, "APPEND-ONLY,
+        -- ENFORCED BY TRIGGER". A reversing journal is the only correction
+        -- path; these four triggers make an UPDATE or DELETE against
+        -- either table fail loudly instead of succeeding silently.
+        --
+        -- trg_gl_journals_no_update is VALUE-CONDITIONAL on every column
+        -- except company_id -- everywhere else in this file "append-only"
+        -- means unconditional, but this table is also a member of
+        -- company_scoped_tables(conn) (it carries company_id), so
+        -- rebind_company_id() -- which runs, sometimes, on an install that
+        -- already has GL history: the pre-activation restricted allowlist
+        -- permits returns and customer payments, and both post journals --
+        -- issues `UPDATE "gl_journals" SET company_id=?` over every row.
+        -- An unconditional BEFORE UPDATE trigger would refuse that
+        -- legitimate, already-shipped rebind alongside any real tampering.
+        -- The WHEN clause names every content column so a statement that
+        -- changes ONLY company_id (including a no-op rebind that writes
+        -- back the value it already has) is allowed through, while any
+        -- change to accounting content is still refused. `IS NOT` rather
+        -- than `!=` so a NULL column (branch_id, reference, memo,
+        -- source_id, reversed_journal_id) compares correctly -- `!=`
+        -- against NULL is never true in SQL, which would have silently
+        -- exempted those columns from the guard.
+        --
+        -- RESIDUAL GAP, left in on purpose rather than left unwritten: a
+        -- single UPDATE statement that changes company_id AND content
+        -- together is not caught by this trigger (some clause would compare
+        -- unchanged and the WHEN could evaluate false while another clause
+        -- is true, but only if that clause also changed -- the point is
+        -- narrower: this trigger cannot distinguish "rebind + tamper in one
+        -- statement" from "rebind alone" if every changed column is
+        -- inspected value-by-value and ALL of them, content included,
+        -- differ). Nothing in this codebase issues such a statement --
+        -- rebind_company_id() (schema.py, company_scoped_tables docstring)
+        -- names only `company_id` in its UPDATE and verifies row counts on
+        -- both sides before committing -- and ratchet test
+        -- retail_gl_append_only_test.py pins the WHEN clause to the live
+        -- table shape so a future column addition cannot widen this gap
+        -- silently. Accepted because closing it would require either a
+        -- per-column OLD/NEW audit trigger (a real design, not a one-line
+        -- fix) or moving the rebind off raw UPDATE entirely, and neither is
+        -- justified by a caller that does not exist.
+        --
+        -- DROP before CREATE: v38 is uncommitted and has never shipped, so
+        -- every database that already ran the old unconditional trigger is
+        -- a dev/test database, not a customer's. This makes them converge
+        -- on the relaxed trigger too, without a new schema version -- see
+        -- this migration's own docstring for why bumping RETAIL_SCHEMA_
+        -- VERSION for an in-place edit to an unshipped version would be
+        -- wrong.
+        DROP TRIGGER IF EXISTS trg_gl_journals_no_update;
+        CREATE TRIGGER IF NOT EXISTS trg_gl_journals_no_update
+        BEFORE UPDATE ON gl_journals
+        WHEN OLD.id                  IS NOT NEW.id
+          OR OLD.branch_id           IS NOT NEW.branch_id
+          OR OLD.business_date       IS NOT NEW.business_date
+          OR OLD.reference           IS NOT NEW.reference
+          OR OLD.memo                IS NOT NEW.memo
+          OR OLD.source_type         IS NOT NEW.source_type
+          OR OLD.source_id           IS NOT NEW.source_id
+          OR OLD.currency            IS NOT NEW.currency
+          OR OLD.reversed_journal_id IS NOT NEW.reversed_journal_id
+          OR OLD.posted_by           IS NOT NEW.posted_by
+          OR OLD.posted_at           IS NOT NEW.posted_at
+        BEGIN
+            SELECT RAISE(ABORT, 'gl_journals is append-only: post a reversing journal, never UPDATE one');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_gl_journals_no_delete
+        BEFORE DELETE ON gl_journals
+        BEGIN
+            SELECT RAISE(ABORT, 'gl_journals is append-only: post a reversing journal, never DELETE one');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_gl_journal_lines_no_update
+        BEFORE UPDATE ON gl_journal_lines
+        BEGIN
+            SELECT RAISE(ABORT, 'gl_journal_lines is append-only: post a reversing journal, never UPDATE one');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_gl_journal_lines_no_delete
+        BEFORE DELETE ON gl_journal_lines
+        BEGIN
+            SELECT RAISE(ABORT, 'gl_journal_lines is append-only: post a reversing journal, never DELETE one');
+        END;
+    """)
+
+    # ── Opening-balance backfill -- see docstring for the full reasoning ──
+    existing = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if not {'customers', 'suppliers'} <= existing:
+        return
+    cust_cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
+    sup_cols = {r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
+    if 'credit_balance' not in cust_cols or 'credit_balance' not in sup_cols:
+        # _ensure_credit_schema has never run on this install -- see
+        # docstring's "GUARDED ON credit_balance EXISTING". Nothing to
+        # backfill.
+        return
+
+    from core.retail import general_ledger as _gl
+    from core.retail import pricing as _tax_engine
+
+    companies = set()
+    for row in conn.execute(
+        "SELECT company_id FROM customers WHERE COALESCE(credit_balance,0) != 0 "
+        "GROUP BY company_id"
+    ).fetchall():
+        companies.add(row[0])
+    for row in conn.execute(
+        "SELECT company_id FROM suppliers WHERE COALESCE(credit_balance,0) != 0 "
+        "GROUP BY company_id"
+    ).fetchall():
+        companies.add(row[0])
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    for cid in companies:
+        cust_total = conn.execute(
+            "SELECT COALESCE(SUM(credit_balance),0) FROM customers WHERE company_id=?",
+            (cid,)
+        ).fetchone()[0]
+        sup_total = conn.execute(
+            "SELECT COALESCE(SUM(credit_balance),0) FROM suppliers WHERE company_id=?",
+            (cid,)
+        ).fetchone()[0]
+        cust_total = Decimal(str(cust_total or 0))
+        sup_total = Decimal(str(sup_total or 0))
+        if cust_total == 0 and sup_total == 0:
+            continue
+
+        # try/except, not just the table-existence guard above -- mirrors
+        # `_quantum_for` in _migrate_requantize_sale_tender_payments
+        # immediately above verbatim. `retail_settings` is created lazily
+        # by _ensure_credit_schema, the SAME function that adds
+        # `credit_balance` in the first place, so in real usage the two
+        # always arrive together -- but this migration reads
+        # `credit_balance` directly off `customers`/`suppliers`, not
+        # through that function, so a database that somehow has the
+        # column populated without `retail_settings` existing (a hand-
+        # built test fixture; found running this against exactly such a
+        # fixture rather than by reading the code) must still degrade to
+        # the default currency instead of raising "no such table" and
+        # failing the whole migration.
+        currency = _tax_engine.DEFAULT_BASE_CURRENCY
+        try:
+            code = conn.execute(
+                "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+                (cid,)
+            ).fetchone()
+            if code and code[0]:
+                currency = code[0]
+        except Exception:
+            pass
+
+        lines = []
+        if cust_total > 0:
+            lines.append({'account_code': _gl.ACCOUNT_AR, 'debit': cust_total,
+                          'memo': 'Opening balance: pre-v38 customer AR history'})
+        elif cust_total < 0:
+            lines.append({'account_code': _gl.ACCOUNT_AR, 'credit': -cust_total,
+                          'memo': 'Opening balance: pre-v38 net customer store credit'})
+        if sup_total > 0:
+            lines.append({'account_code': _gl.ACCOUNT_AP, 'credit': sup_total,
+                          'memo': 'Opening balance: pre-v38 supplier AP history'})
+        elif sup_total < 0:
+            lines.append({'account_code': _gl.ACCOUNT_AP, 'debit': -sup_total,
+                          'memo': 'Opening balance: pre-v38 overpaid supplier balance'})
+
+        # Plug the difference to Owner's Equity so the journal balances
+        # exactly regardless of the sign combination above -- see
+        # docstring's "OPENING-BALANCE BACKFILL" for why this account.
+        net = cust_total - sup_total
+        if net > 0:
+            lines.append({'account_code': _gl.ACCOUNT_EQUITY, 'credit': net,
+                          'memo': 'Opening balance plug'})
+        elif net < 0:
+            lines.append({'account_code': _gl.ACCOUNT_EQUITY, 'debit': -net,
+                          'memo': 'Opening balance plug'})
+
+        if lines:
+            _gl.post_journal(
+                conn, cid, None, today, 'opening_balance', None, currency, lines,
+                reference='OPENING-BALANCE',
+                memo='Seeded from pre-v38 AR/AP subledger at migration time',
+                posted_by='migration',
             )

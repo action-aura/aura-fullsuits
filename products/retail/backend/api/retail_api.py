@@ -137,6 +137,14 @@ from core.retail import doc_series
 # full reasoning. Pure module, no database access, same contract as every
 # other core.retail import on this list.
 from core.retail import returns_settlement
+# Schema v38, ROADMAP.md's "retail schema v38 CLAIMED: a real general
+# ledger" entry -- the double-entry posting core. UNLIKE returns_settlement
+# above, this one DOES take a connection and write (the reorder_hook.py /
+# whatsapp_hook.py shape, not the pricing.py/cheques.py pure-function
+# shape) -- see that module's own docstring, "WHAT THIS MODULE IS,
+# STRUCTURALLY", for why it is called inside each route's own transaction
+# rather than isolated the way those two hooks deliberately are.
+from core.retail import general_ledger as gl
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -3267,7 +3275,33 @@ def create_purchase_order():
     # both still run strictly after it, unchanged.
     conn = get_retail_conn()
     currency = _company_currency(conn, cid)
-    amount_paid = _money(data.get('amount_paid', 0), currency)
+    # CLAMPED AT ZERO, and the clamp belongs HERE rather than at any of the
+    # four places that read this local. The comment block above is right that
+    # a negative amount_paid never reached _record_payment -- the `> _eps`
+    # gate already excluded it -- but it stops one line short: the same
+    # negative then flows into `balance = _money(total - amount_paid)` further
+    # down, and `15 - (-50)` is `65`. A PO for 15 with `amount_paid: -50`
+    # therefore pushed SIXTY-FIVE onto the supplier's AP through
+    # _adjust_credit, silently, while paying nothing out. The shop's books
+    # said it owed 50 more than it did, on a document the route returns 200
+    # for and a test deliberately allows (retail_route_capability_matrix_
+    # test.py's `negative -> allowed` case, which is correct about the
+    # PAYMENT half and was never asserting anything about the AP half).
+    #
+    # Found by schema v38's general ledger, not by reading: posting this
+    # same PO raised GeneralLedgerImbalanceError "debits=15.000
+    # credits=65.000 diff=-50.000", because double-entry cannot express
+    # "inventory worth 15 was financed by 65 of supplier credit" and the
+    # single-sided subledger could. That is the whole argument for the GL
+    # sitting inside the document's own transaction.
+    #
+    # Clamping the ONE local the route computes once fixes every consumer
+    # together -- the capability gate (unchanged: a negative never passed
+    # `> _eps` and 0.0 still does not), the stored `purchase_orders.
+    # amount_paid` column, `payment_status` (still 'unpaid' either way),
+    # the AP `_adjust_credit`, and the GL posting -- so they cannot drift
+    # apart again the way they just did.
+    amount_paid = max(0.0, _money(data.get('amount_paid', 0), currency))
     _eps = _money_epsilon(currency)
     if amount_paid > _eps and not session_has_capability(CAP_EMPLOYEES):
         conn.close()
@@ -3443,6 +3477,14 @@ def create_purchase_order():
         balance = _money(total - amount_paid, currency)
         if balance > _eps and supplier_id:
             _adjust_credit(conn, 'suppliers', supplier_id, cid, balance, currency)
+        # Schema v38 (general ledger core): Dr Inventory / Cr Cash + Cr AP.
+        # `ap_balance_for_gl` mirrors the EXACT `_adjust_credit` gate just
+        # above rather than the raw `balance` -- see post_purchase_order's
+        # own docstring for why (supplier_id is optional here, and a
+        # supplier-less unpaid balance is untracked by the subledger too).
+        ap_balance_for_gl = balance if (balance > _eps and supplier_id) else 0.0
+        gl.post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
+                                amount_paid, ap_balance_for_gl)
         _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -6803,6 +6845,21 @@ def create_sale():
             # read. See _adjust_credit's own docstring for the full history.
             _adjust_credit(conn, 'customers', customer_id, cid, balance_due, currency)
 
+        # Schema v38 (general ledger core): Dr Cash (net_received) + Dr AR
+        # (mirrors the `_adjust_credit` gate immediately above -- NOT
+        # independently re-derived, so the GL and the subledger can never
+        # disagree about whether this sale became a debt) + Dr Loyalty
+        # Program Expense (points redeemed) against Cr Tax Payable + Cr
+        # Sales Revenue (subtotal net of discount). See post_sale's own
+        # docstring (core/retail/general_ledger.py) for why this balances
+        # and the one documented sub-epsilon edge case it tolerates.
+        ar_amount_for_gl = balance_due if (is_credit and balance_due > _eps and customer_id) else 0.0
+        revenue_amount = float(
+            (Decimal(str(subtotal)) - Decimal(str(discount))).quantize(_quant, rounding=ROUND_HALF_UP))
+        gl.post_sale(conn, cid, bid, sale_id, sale_number, currency,
+                     net_received, ar_amount_for_gl, points_redeemed_amount,
+                     tax, revenue_amount)
+
         if quotation_id:
             # (f) Aseel-parity wave A-PAR (schema v33): after the sale row
             # is written, in the SAME transaction. `converted_sale_uid` is
@@ -8475,6 +8532,16 @@ def create_return():
                             (redeem_giveback, earn_clawback, sale['customer_id'], cid))
                         loyalty_audit_note = (
                             f' loyalty_redeem_giveback={redeem_giveback} loyalty_earn_clawback={earn_clawback}')
+
+        # Schema v38 (general ledger core): Cr Cash (tender_refund) + Cr AR
+        # (ar_forgiven + store_credit combined -- both are the SAME `-amount`
+        # adjustment to customers.credit_balance, see the two _adjust_credit
+        # calls above) against Dr Sales Returns and Allowances for exactly
+        # what was settled. See post_return's own docstring
+        # (core/retail/general_ledger.py) for why the debit is derived from
+        # the credits rather than from `refund` itself.
+        gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
+                        tender_refund, ar_forgiven + store_credit)
 
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}{loyalty_audit_note}')
         conn.commit()
@@ -10456,6 +10523,44 @@ def report_summary():
         return _scope_err
     data = _compute_report_summary(conn, cid, days, branch_id)
     conn.close()
+    return jsonify({'success': True, 'data': data})
+
+# retail-hardware-viewports: schema v38's general ledger
+# (core/retail/general_ledger.py) exposed read-only. `gl.trial_balance` has
+# been correct since v38 shipped but was reachable only from Python -- no
+# route ever called it, so the ledger was invisible to any user despite
+# being posted to on every sale/return/payment/purchase order since. This
+# is deliberately the ONLY route this wave adds: no journal-browse/
+# drill-through here -- ROADMAP.md records v35 as an unclaimed version
+# reserved for source-document drill-through, so that is a different
+# version's work and belongs in a route of its own.
+@retail_bp.route('/reports/trial-balance', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def report_trial_balance():
+    """THE POINT OF THIS ROUTE is the `subledger` key, not the bare account
+    balances -- ROADMAP.md's v38 entry asks for "a trial balance that ties
+    back to the AR/AP subledger", and a reader has to be able to SEE
+    whether it does, not merely receive the raw figures and reconcile them
+    by hand. `gl.subledger_tie` is handed the SAME `tb` this route already
+    computed (never a second `trial_balance` call, and never a second SUM
+    over `gl_journal_lines`) -- see that function's own docstring for why a
+    duplicate query here could disagree with the first. `dict(tb,
+    subledger=...)` builds a NEW response dict rather than mutating `tb` in
+    place, matching this codebase's immutability convention.
+
+    Company-wide, all branches, all time, exactly like `trial_balance()`
+    itself -- no `?branch_id=`/date filtering in v38 (see that function's
+    own docstring for why: a presentation/reporting layer over the ledger
+    is a later, unclaimed wave, not this one).
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    tb = gl.trial_balance(conn, cid)
+    subledger = gl.subledger_tie(conn, cid, tb)
+    conn.close()
+    data = dict(tb, subledger=subledger)
     return jsonify({'success': True, 'data': data})
 
 def _render_report_email_body(data, currency):
@@ -13395,6 +13500,11 @@ def customer_payment(cust_id):
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='receipt',
                               currency=currency)
         newbal = _adjust_credit(conn, 'customers', cust_id, cid, -amt, currency)
+        # Schema v38 (general ledger core): Dr Cash / Cr AR. No branch
+        # context on this route (an account payment is not tied to a
+        # terminal or a branch), so branch_id is None -- matches
+        # gl_journals.branch_id's own nullable design.
+        gl.post_customer_payment(conn, cid, None, ref, currency, amt)
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -13538,6 +13648,10 @@ def supplier_payment(sid):
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='supplier_payment',
                               currency=currency)
         newbal = _adjust_credit(conn, 'suppliers', sid, cid, -amt, currency)
+        # Schema v38 (general ledger core): Dr AP / Cr Cash. See
+        # customer_payment's identical comment just above -- same
+        # reasoning, no branch context on this route.
+        gl.post_supplier_payment(conn, cid, None, ref, currency, amt)
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -13582,6 +13696,16 @@ def pay_purchase_order(po_id):
                               device=data.get('device'), doc_type='supplier_payment', currency=currency)
         if po['supplier_id']:
             _adjust_credit(conn, 'suppliers', po['supplier_id'], cid, -amt, currency)
+            # Schema v38 (general ledger core): Dr AP / Cr Cash. Gated on
+            # the IDENTICAL `if po['supplier_id']:` the _adjust_credit call
+            # just above is, for the identical reason create_purchase_
+            # order's own GL wiring documents: a supplier-less PO's
+            # payment is untracked by the subledger too (no _adjust_credit
+            # call happens), so this must stay silent along with it rather
+            # than credit a GL Accounts Payable balance nothing in
+            # `suppliers.credit_balance` will ever match.
+            gl.post_supplier_payment(conn, cid, None, ref, currency, amt,
+                                      source_type='po_payment', source_id=po_id)
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py

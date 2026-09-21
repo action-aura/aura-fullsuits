@@ -432,6 +432,12 @@ const RetailSystem = {
       // than two near-identical copies.
       case 'receivables': return this._renderReceivables(c);
       case 'payables':    return this._renderPayables(c);
+      // Schema v38 general ledger (retail_api.py's report_trial_balance,
+      // core/retail/general_ledger.py). See app-shell.js's nav entry and
+      // _renderTrialBalance below for the capability gate and for why the
+      // subledger tie-back, not the bare balances, is the point of the
+      // screen.
+      case 'trial-balance': return this._renderTrialBalance(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -13770,6 +13776,234 @@ const RetailSystem = {
       _release();
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
     }
+  },
+
+  // ── GENERAL LEDGER: TRIAL BALANCE (schema v38, 2026-09-21) ──────────────────
+  //
+  // core/retail/general_ledger.py has posted every sale/return/payment/
+  // purchase order to gl_journal_lines since v38 shipped, with no route ever
+  // calling gl.trial_balance -- the ledger existed and was correct but was
+  // reachable only from Python. GET /api/sub/retail/reports/trial-balance
+  // (retail_api.py's report_trial_balance) is the desktop half of making it
+  // visible; no backend route is added, changed or renamed here.
+  //
+  // THE POINT OF THIS SCREEN is not the bare account balances -- it is
+  // proving the GL agrees with itself (total debits == total credits) AND
+  // with the two subledgers that predate it and are what the till actually
+  // collects/pays against: customers.credit_balance and
+  // suppliers.credit_balance (see _renderPartyLedger above). A GL that
+  // balances against its own arithmetic but has drifted from the subledger
+  // it is supposed to summarize is exactly as broken as one that does not
+  // balance at all -- just quieter, because nothing about the GL's own
+  // debit/credit arithmetic would ever show it. report_trial_balance's own
+  // docstring makes the same point: `subledger` is the reason the route
+  // exists, not a bonus field alongside it. That is why the tie-back block
+  // below is its own visible section, not a footnote under the table.
+  //
+  // Same structural precedent as _renderPartyLedger immediately above: one
+  // route, one table, a `_render...` that draws the skeleton and a
+  // `_load...` that repaints it in place -- 'Loading…' from the very first
+  // paint, never an empty table a shopkeeper could misread as "no accounts
+  // posted" while the real response is still in flight.
+  async _renderTrialBalance(c) {
+    this._injectStyles();
+    // Same defence-in-depth every other retail.reports screen in this file
+    // carries (see _renderPartyLedger's identical guard immediately above)
+    // -- hiding the nav entry (app-shell.js) is not the enforcement, and
+    // this section is reachable with no nav click in between (_navigate()
+    // is called directly by the phone tab bar / More sheet and by the
+    // shell's own re-render after a theme or language switch).
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: 'scale',
+        title: t('Trial Balance'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title"><span aria-hidden="true">${this._icon('scale', 18, '💼')}</span> <span>${t('Trial Balance')}</span></h2>
+      </div>
+      <div class="sub-chart-card" style="margin-bottom:16px">
+        <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
+          <div>
+            <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Debit Amount')}</span><br/>
+            <span id="tb-total-debit" style="font-size:20px;font-weight:700;color:var(--text-money)">—</span>
+          </div>
+          <div>
+            <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Credit Amount')}</span><br/>
+            <span id="tb-total-credit" style="font-size:20px;font-weight:700;color:var(--text-money)">—</span>
+          </div>
+          <!-- Seeded empty, never a green/red guess before the real figure
+               is in -- same "no placeholder value that could be misread as
+               the real answer" reasoning _renderPartyLedger's total span
+               comment gives, applied to a status badge instead of a money
+               figure. -->
+          <div id="tb-status"></div>
+        </div>
+      </div>
+      <div class="sub-chart-card" style="margin-bottom:16px">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="tb-table">
+            <thead><tr>
+              <th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Type')}</th>
+              <th>${t('Debit Amount')}</th><th>${t('Credit Amount')}</th><th>${t('Balance')}</th>
+            </tr></thead>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">${t('Subledger Reconciliation')}</div>
+        <div id="tb-subledger" style="color:var(--text-muted)">${t('Loading…')}</div>
+      </div>`;
+    await this._loadTrialBalance();
+  },
+
+  async _loadTrialBalance() {
+    try {
+      // report_trial_balance returns the standard {success, data} envelope
+      // every other route in this file does (see _loadPartyLedger's
+      // `listResp.data` immediately above) -- NOT the bare {currency,
+      // accounts, ...} object on its own. Reading `resp.accounts` directly
+      // here would silently resolve to undefined -> [] and paint "no
+      // accounts posted yet" forever on a company with a fully-posted
+      // ledger, exactly the "stuck on the empty state, not the loading
+      // one" failure this screen exists to avoid -- confirmed against the
+      // real route in retail_api.py rather than assumed.
+      const resp = await this._get('/api/sub/retail/reports/trial-balance');
+      const data = resp.data || {};
+      const accounts = data.accounts || [];
+
+      // Looked up AFTER the await, not before -- same reason
+      // _loadPartyLedger's identical lookups are also post-await: a slower
+      // fetch that resolves after the operator has already navigated to a
+      // different section finds nothing here (the container's innerHTML has
+      // since been replaced) and the `if (!tbody) return` guard below stops
+      // it from doing anything with a screen that is no longer on screen.
+      const statusEl = document.getElementById('tb-status');
+      const debitEl = document.getElementById('tb-total-debit');
+      const creditEl = document.getElementById('tb-total-credit');
+      const tbody = document.querySelector('#tb-table tbody');
+      const subEl = document.getElementById('tb-subledger');
+
+      if (debitEl) debitEl.textContent = this._fmt(data.total_debit || 0);
+      if (creditEl) creditEl.textContent = this._fmt(data.total_credit || 0);
+
+      // The one figure this whole screen exists to surface: an unbalanced
+      // trial balance means the double-entry posting itself is broken, not
+      // just a display glitch. Green/red so it reads at a glance from
+      // across a counter, matching every other pass/fail badge in this file
+      // (see _loadStockAccuracy's identical convention).
+      if (statusEl) {
+        statusEl.innerHTML = data.is_balanced
+          ? this._badge(t('Balanced'), 'green')
+          : this._badge(t('Out of Balance'), 'red');
+      }
+
+      if (!tbody) return;
+      if (!accounts.length) {
+        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+          icon: 'scale',
+          title: t('No accounts posted yet'),
+          hint: t('Transactions will appear here once the general ledger starts recording them.'),
+        })}</td></tr>`;
+      } else {
+        // Every interpolated value is escaped or bdi'd (see this._esc/
+        // _bdi): an account name is shop-editable data like a customer/
+        // supplier name (_loadPartyLedger's identical note above) and could
+        // arrive from another device over the sync relay; the code is
+        // treated like the Reference column on the party statement -- LTR-
+        // isolated, monospace, never re-flowed by the surrounding Arabic
+        // paragraph direction.
+        const rows = accounts.map(a => `<tr>
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>
+          <td style="font-weight:600">${this._esc(a.name)}</td>
+          <td>${this._glAccountTypeLabel(a.account_type)}</td>
+          <td>${this._fmt(a.debit)}</td>
+          <td>${this._fmt(a.credit)}</td>
+          <td style="font-weight:600;color:var(--text-money)">${this._fmt(a.balance)}</td>
+        </tr>`).join('');
+        // Totals footer -- the same two figures as the KPI strip above,
+        // restated at the foot of the table itself (the conventional place
+        // a trial balance's own total line lives) so the per-account rows
+        // and the total never have to be cross-checked by eye against two
+        // separate parts of the screen. Balance column left blank: the
+        // is_balanced badge above already answers the one question a
+        // debit-minus-credit figure here would be trying to restate.
+        const totalsRow = `<tr style="font-weight:700;background:var(--surface-active)">
+          <td colspan="3">${t('Total')}</td>
+          <td>${this._fmt(data.total_debit)}</td>
+          <td>${this._fmt(data.total_credit)}</td>
+          <td>—</td>
+        </tr>`;
+        tbody.innerHTML = rows + totalsRow;
+      }
+
+      // ── Subledger tie-back -- the point of this screen (see the section
+      // comment above _renderTrialBalance) -- rendered as its own visible
+      // block, not folded into the table, so it cannot be scrolled past
+      // unread the way a footnote under a long account list could be.
+      const sl = data.subledger || {};
+      if (subEl) {
+        subEl.innerHTML = `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Accounts Receivable')}</div>
+              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ar_gl)}</div>
+              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Customer Balances (Subledger)')}</div>
+              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ar_subledger)}</div>
+              <div style="margin-top:8px">${sl.ar_ties ? this._badge(t('Ties'), 'green') : this._badge(t('Does Not Tie'), 'red')}</div>
+            </div>
+            <div>
+              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Accounts Payable')}</div>
+              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ap_gl)}</div>
+              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Supplier Balances (Subledger)')}</div>
+              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ap_subledger)}</div>
+              <div style="margin-top:8px">${sl.ap_ties ? this._badge(t('Ties'), 'green') : this._badge(t('Does Not Tie'), 'red')}</div>
+            </div>
+          </div>`;
+      }
+    } catch (e) {
+      // VISIBLE failure, matching _loadPartyLedger's identical fix above --
+      // this file already found and fixed the "silently stuck on Loading…
+      // forever with only a console trace the shopkeeper never opens" bug
+      // class once (see that catch block's own long comment); a new screen
+      // must not reintroduce it.
+      console.error(e);
+      // Re-queried fresh here rather than reusing the try block's consts --
+      // those are out of scope in catch, and matching _loadPartyLedger's
+      // identical catch means a screen the operator has since navigated
+      // away from (see the comment on the try-block lookups above) finds
+      // nothing here either, and quietly does nothing instead of writing
+      // into a detached node.
+      const tbody = document.querySelector('#tb-table tbody');
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
+          ${t('Could not load this list. Check the connection and try again.')}</td></tr>`;
+      }
+      const subEl = document.getElementById('tb-subledger');
+      if (subEl) subEl.textContent = t('Could not load this list. Check the connection and try again.');
+      const statusEl = document.getElementById('tb-status');
+      if (statusEl) statusEl.innerHTML = '';
+      const debitEl = document.getElementById('tb-total-debit');
+      if (debitEl) debitEl.textContent = '—';
+      const creditEl = document.getElementById('tb-total-credit');
+      if (creditEl) creditEl.textContent = '—';
+    }
+  },
+
+  // account_type -> translated label. Falls back to a FIXED safe label
+  // ('Other') rather than ever echoing the raw server value -- same
+  // defensive shape _partyStatementKind takes above for an unrecognized
+  // statement-event kind: an unrecognized type is display noise, not a
+  // reason to trust an arbitrary string into t()/the DOM.
+  _TRIAL_BALANCE_TYPE_LABEL: {
+    asset: 'Asset', liability: 'Liability', equity: 'Equity',
+    income: 'Income', expense: 'Expense',
+  },
+  _glAccountTypeLabel(type) {
+    return t(this._TRIAL_BALANCE_TYPE_LABEL[type] || 'Other');
   },
 };
 

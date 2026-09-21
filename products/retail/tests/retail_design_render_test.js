@@ -986,6 +986,74 @@ const STOCK_DRIFT = {
   ],
 };
 
+/* GET /api/sub/retail/reports/trial-balance, schema v38's general ledger
+ * screen (report_trial_balance in retail_api.py; the underlying postings come
+ * from core/retail/general_ledger.py). The point of that screen is not the
+ * account list -- it is proving the GL agrees with itself (is_balanced) AND
+ * with the two subledgers that predate it (ar_ties/ap_ties against
+ * customers.credit_balance / suppliers.credit_balance -- see
+ * _renderPartyLedger above). So the figures below are not arbitrary: they are
+ * nine real double-entry postings (owner capital, a taxed cash sale, a taxed
+ * credit sale, two matching COGS entries, a credit purchase, a supplier
+ * payment, a customer receipt, and a cash return with a partial restock),
+ * chosen so every posting's own debit equals its own credit AND the whole
+ * ledger nets to total_debit === total_credit -- see the comment on
+ * total_debit below for the arithmetic.
+ *
+ * This is deliberately the BALANCED, TYING state -- the "healthy till" a
+ * shopkeeper sees on a normal day. The unbalanced / "Does Not Tie" states are
+ * functionally proven, both directions, by retail_gl_trial_balance_ui_test.js
+ * (a structural test, not a contrast one), and picking the healthy state here
+ * does not leave `.ret-badge-red` unmeasured in this corpus: it is already
+ * exercised by half the other screens in it (quotations' declined/cancelled,
+ * cheques' bounced/cancelled, branches' Retired, transfers' cancelled,
+ * sales-history's voided, and the receivables/payables aging chip's 90+ Days).
+ *
+ * Five account types on purpose -- asset, liability, equity, income and
+ * expense are the whole of `_TRIAL_BALANCE_TYPE_LABEL`, and a fixture with
+ * fewer would leave one of `_glAccountTypeLabel`'s labels silently
+ * unexercised. And the debit/credit COLUMNS themselves carry real, different
+ * nonzero values across the account list -- some rows nonzero in debit,
+ * others nonzero in credit -- because a fixture where one column was all
+ * zero would never render that column's own cell as anything but an
+ * unstyled "0.000", the same class of miss the header comment on this file
+ * exists to name.
+ */
+const TRIAL_BALANCE = {
+  currency: 'JOD',
+  accounts: [
+    { code: '1000', name: 'Cash', account_type: 'asset', normal_balance: 'debit',
+      debit: 4760.000, credit: 0, balance: 4760.000 },
+    { code: '1100', name: 'Accounts Receivable', account_type: 'asset', normal_balance: 'debit',
+      debit: 512.000, credit: 0, balance: 512.000 },
+    { code: '1200', name: 'Inventory', account_type: 'asset', normal_balance: 'debit',
+      debit: 2060.000, credit: 0, balance: 2060.000 },
+    { code: '2000', name: 'Accounts Payable', account_type: 'liability', normal_balance: 'credit',
+      debit: 0, credit: 2000.000, balance: 2000.000 },
+    { code: '2100', name: 'Sales Tax Payable', account_type: 'liability', normal_balance: 'credit',
+      debit: 0, credit: 272.000, balance: 272.000 },
+    { code: '3000', name: 'Owner\'s Equity', account_type: 'equity', normal_balance: 'credit',
+      debit: 0, credit: 5000.000, balance: 5000.000 },
+    { code: '4000', name: 'Sales Revenue', account_type: 'income', normal_balance: 'credit',
+      debit: 0, credit: 1600.000, balance: 1600.000 },
+    { code: '5000', name: 'Cost of Goods Sold', account_type: 'expense', normal_balance: 'debit',
+      debit: 940.000, credit: 0, balance: 940.000 },
+    { code: '5100', name: 'Rent Expense', account_type: 'expense', normal_balance: 'debit',
+      debit: 600.000, credit: 0, balance: 600.000 },
+  ],
+  // Every debit-normal balance above (asset + expense: 4760+512+2060+940+600)
+  // equals every credit-normal balance above (liability + equity + income:
+  // 2000+272+5000+1600) -- both sides are 8872.000, which is what makes this
+  // ledger balanced rather than merely plausible-looking.
+  total_debit: 8872.000,
+  total_credit: 8872.000,
+  is_balanced: true,
+  subledger: {
+    ar_gl: 512.000, ar_subledger: 512.000, ar_ties: true,
+    ap_gl: 2000.000, ap_subledger: 2000.000, ap_ties: true,
+  },
+};
+
 /**
  * The response for a URL. Routed, because the screens below fan out across nine
  * endpoints and a single blanket payload would render every table as its EMPTY
@@ -1004,6 +1072,10 @@ function apiResponseFor(url) {
   // testCorpusRendersRealScreens exists to refuse.
   if (/\/reports\/by-employee/.test(u)) return ok(TABLE_DATA.employeeSales);
   if (/\/reports\/summary/.test(u)) return ok(REPORT_SUMMARY);
+  // Schema v38's general ledger trial balance. See the TRIAL_BALANCE fixture's
+  // own comment above for why these particular numbers were chosen -- a real,
+  // balanced, nine-posting ledger rather than arbitrary figures.
+  if (/\/reports\/trial-balance/.test(u)) return ok(TRIAL_BALANCE);
   // Before the /products rule below for the same reason `top-products` is:
   // this URL contains no "products", but it WOULD fall through to the
   // catch-all, and STATS carries no `rows`/`pairs_examined` — which the Stock
@@ -1431,6 +1503,17 @@ async function buildCorpus() {
     // shipped unlooked-at when the cheques register skipped this step.
     ['receivables', (rs, c) => rs._renderReceivables(c)],
     ['payables', (rs, c) => rs._renderPayables(c)],
+    // Schema v38's general ledger trial balance (app-shell.js nav entry under
+    // Insight, gated 'retail.reports' -- the identical gate receivables/
+    // payables immediately above already carry). Enters the corpus in the
+    // same breath its doorway was built, matching every other "doorway"
+    // precedent above (transfers, quotations, cheques, receivables/payables
+    // themselves): a route this corpus does not build is a whole screen
+    // every downstream contrast/opacity/touch-target loop goes green without
+    // looking at -- which is the exact failure this file's header describes
+    // for the Reports page. See the TRIAL_BALANCE fixture for why its
+    // numbers are a real, balanced, tying ledger rather than placeholders.
+    ['trial-balance', (rs, c) => rs._renderTrialBalance(c)],
   ];
   // 'retail.employees' added alongside 'retail.reports' for the `branches`
   // entry above (create_branch's own @mt_require_capability(CAP_EMPLOYEES)
@@ -1681,6 +1764,10 @@ const DECLARED_SCREENS = [
   // because this assertion compares declared against rendered EXACTLY and in
   // sequence, so position is part of the claim.
   'receivables', 'payables',
+  // Schema v38 general ledger trial balance -- same BUILD-order reasoning,
+  // immediately after 'payables' because that is where buildCorpus() renders
+  // it.
+  'trial-balance',
   'customer-modal', 'sale-modal', 'held-sales-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
@@ -1738,6 +1825,7 @@ const SCREEN_ROUTES = {
   cheques: 'cheques',
   receivables: 'receivables',
   payables: 'payables',
+  'trial-balance': 'trial-balance',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.

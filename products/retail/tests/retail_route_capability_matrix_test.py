@@ -542,6 +542,14 @@ EXPECTED_READ_CAPABILITIES = {
     # list_stock_transfers (both above, this file).
     'list_quotations': CAP_SELL,
     'get_quotation': CAP_SELL,
+
+    # ── General ledger, schema v38 (retail-hardware-viewports) ──────────────
+    # `report_trial_balance` (GET /reports/trial-balance) discloses the
+    # WHOLE chart of accounts' lifetime debit/credit totals plus the AR/AP
+    # subledger tie-back -- the same disclosure tier as every other report
+    # route in this table (report_summary, daily_cash, aging_report), not a
+    # till operation.
+    'report_trial_balance': CAP_REPORTS,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

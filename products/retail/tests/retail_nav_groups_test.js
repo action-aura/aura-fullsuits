@@ -110,7 +110,11 @@ const GROUPS = [
   // (it had existed only on Android). Both live in Insight for the same
   // reason 'reports' and 'cheques' do: they disclose the shop's financial
   // position and are gated on retail.reports.
-  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables'] },
+  // 'trial-balance' appended when schema v38's general ledger got a desktop
+  // surface. Insight for the same reason, and the same retail.reports gate,
+  // as 'receivables'/'payables' directly above -- it is the one screen that
+  // shows whether the GL agrees with the AR/AP subledger those two render.
+  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance'] },
   { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
@@ -301,12 +305,13 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  // 24 = dashboard + 23 grouped entries. Was 22 before AR/AP (receivables,
-  // payables) reached the desktop client. The message and the number are
+  // 25 = dashboard + 24 grouped entries. Was 22 before AR/AP (receivables,
+  // payables) reached the desktop client, and 24 before schema v38's general
+  // ledger got its 'trial-balance' screen. The message and the number are
   // bumped TOGETHER on purpose: this assertion exists to catch GROUPS drifting
   // from the product, so a count that disagrees with its own prose is the
   // exact failure it is supposed to make loud.
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 24, 'sanity: this file\'s own expectation list drifted from 24 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 25, 'sanity: this file\'s own expectation list drifted from 25 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

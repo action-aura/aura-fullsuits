@@ -494,17 +494,54 @@ makes a session rebuild something that already works.**
 **Two things this document has never said, both of which change what you would
 build next:**
 
-- **THERE IS NO ACCOUNTING, AT ALL.** No chart of accounts, no general ledger,
-  no trial balance, no balance sheet, no P&L, no period close — zero
-  occurrences of any of those terms in the retail backend. `journal_entries`
-  exists in `schema.py` with free-text `debit_account`/`credit_account`
-  columns, no FK, no line model, and **has never had one INSERT or SELECT in
-  the codebase's history** — a fossil from the monolith extraction. The AR/AP
-  subledger is real and good, and `retail_api.py` says in its own comments that
-  "a future double-entry GL CONSUMES these records", which has never been
-  started. The "what's real and solid" list above praises AR/AP depth without
-  mentioning that nothing sits above it; against an accounting-first competitor
-  that omission matters more than any single wrong bullet.
+- ~~**THERE IS NO ACCOUNTING, AT ALL.**~~ **FALSE IN ITS FIRST HALF as of
+  2026-09-21 — retail schema v38 shipped a real double-entry general
+  ledger.** This bullet used to say "no chart of accounts, no general
+  ledger, no trial balance ... zero occurrences of any of those terms in the
+  retail backend", and that was true when written. It no longer is:
+  `core/retail/general_ledger.py` (689 lines) is the double-entry core —
+  `gl_accounts` (chart of accounts, company-scoped, seeded with a small
+  default chart), `gl_journals`/`gl_journal_lines` (the balanced
+  header/lines pair, APPEND-ONLY — BEFORE UPDATE and BEFORE DELETE triggers
+  RAISE(ABORT) on both tables at the database level, so a mistake is
+  corrected only by a reversing journal, never an edit), `post_journal`'s
+  balance invariant enforced AT WRITE TIME (debits must equal credits to
+  within half the currency's own minor unit, via `_money_epsilon` — never a
+  hardcoded 0.005), and `trial_balance(conn, cid)` reading it back with an
+  AR/AP tie-back. Six routes post to it now — `create_sale`, `create_
+  return`, `create_purchase_order`, `customer_payment`, `supplier_payment`,
+  `pay_purchase_order` — each handed the SAME figures its neighbouring
+  `_adjust_credit` call already uses, never re-derived, so the GL and the
+  AR/AP subledger cannot disagree about whether a sale became a debt.
+  Measured 2026-09-21 with the repo venv: 49 tests, 49 passed, 0 failed
+  (`retail_gl_schema_test.py`, `retail_gl_posting_test.py`, `retail_gl_
+  integration_test.py`). Full detail in ROADMAP.md's 2026-09-20 "v38
+  CLAIMED" and 2026-09-21 "v38 CASHED IN" entries.
+
+  WHAT REMAINS TRUE from the old claim: no balance sheet, no P&L, no period
+  close, no fiscal-year rollover, no retained-earnings posting, no
+  multi-currency — v38 is deliberately just the core, and each of those
+  needs it to exist first. And, not previously said anywhere in this
+  document: **there is still no COGS and no gross profit.** `Inventory`
+  (account `1200`) is debited when stock is purchased and is NEVER credited
+  when it is sold — `sale_items` carries no cost column, and the sale's own
+  stock movement (`retail_api.py`, the `'sale_out'` insert into `inventory_
+  movements`) never writes `unit_cost`, unlike the `'purchase_in'` movement,
+  which does. `products.cost_price` is a CURRENT cost, not evidence of what
+  a unit actually cost when it was sold — schema.py says so in its own
+  words near its general-ledger migration. That gap is named and claimed as
+  the next schema version (retail v39, ROADMAP.md, 2026-09-21) rather than
+  left silent. `journal_entries`, the fossil this claim was originally
+  about, is UNCHANGED — still zero INSERTs, zero SELECTs in this codebase's
+  history, left in place and marked superseded in schema.py rather than
+  dropped, because dropping it buys nothing and risks a migration on live
+  shop data for no gain. The AR/AP subledger comment this bullet used to
+  quote — "a future double-entry GL CONSUMES these records" — is no longer
+  aspirational; v38 is that future, though it does not yet feed a
+  presentation layer (no balance-sheet/P&L reads it yet). The "what's real
+  and solid" list above still does not mention any of this — that list is
+  itself untouched by this correction, per this document's own rule not to
+  restructure sections outside the one being corrected.
 - **AR/AP IS ANDROID-ONLY, inverting the usual pattern.** Receivables,
   payables, aging, statements and daily cash exist in full on Android and are
   **absent from the desktop client** this document calls the most actively
@@ -524,6 +561,15 @@ Read `RETAIL_SCHEMA_VERSION` in `products/retail/backend/database/schema.py`
 rather than any number written here. v35 is still an unclaimed hole (reserved
 for source-document drill-through, never cashed in), v36 is the return
 settlement split, v37 requantizes the `payments` rows create_sale wrote at 2dp.
+
+**AND THAT LINE IS STALE TOO, PREDICTABLY — retail schema is v38 as of
+2026-09-20/21.** v38 is the general ledger described in the correction just
+above; ROADMAP.md carries the "v38 CLAIMED" (2026-09-20) and "v38 CASHED IN"
+(2026-09-21) entries. v35 remains the only unclaimed hole. v39 is now
+claimed too — not cashed in, no schema change exists for it yet — for COGS
+and inventory valuation, the gap the correction above names explicitly.
+Read `RETAIL_SCHEMA_VERSION` itself rather than trusting this paragraph to
+still be current by the time it is read; it has now been wrong twice.
 
 ### Corrections (round 4, 2026-09-18) — the money path, measured
 

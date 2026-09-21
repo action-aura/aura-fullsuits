@@ -5424,3 +5424,177 @@ need the core to exist first and each deserves its own version.
 * The existing `journal_entries` fossil is left in place and untouched. It has
   no readers or writers, so dropping it buys nothing and risks a migration on
   live shop data for no gain. It should be marked as superseded in a comment.
+
+
+## 2026-09-21 — retail schema v38 CASHED IN: the general ledger core, delivered
+
+Claimed the day before ("2026-09-20 — retail schema v38 CLAIMED: a real
+general ledger", immediately above). `RETAIL_SCHEMA_VERSION` is now **38**;
+v35 is still the untouched Aseel-parity hole.
+
+WHAT SHIPPED.
+
+`products/retail/backend/core/retail/general_ledger.py` — NEW, 689 lines, the
+double-entry core. `post_journal` is THE balance invariant: it inserts a
+`gl_journals` header plus its `gl_journal_lines` in the caller's own
+transaction, IF AND ONLY IF the lines balance to within half the currency's
+own minor unit (`_gl_epsilon`, computed from the SAME `currency_quantum`
+table `_money_epsilon` in `api/retail_api.py` reads — duplicated rather than
+imported because `core/` must not import `api/`, never a hardcoded `0.005`);
+on violation it raises `GeneralLedgerImbalanceError` and writes NOTHING, so
+the caller's own `except Exception: conn.rollback()` — every wired-in route
+already has one — aborts the WHOLE document rather than commit a sale beside
+a broken ledger. `reverse_journal` posts a new journal with debit and credit
+swapped — the only sanctioned correction, because both `gl_journals` and
+`gl_journal_lines` carry BEFORE UPDATE / BEFORE DELETE triggers that
+RAISE(ABORT) unconditionally, enforced at the database level rather than by
+"nothing in this file issues an UPDATE" discipline. `ensure_default_chart`
+lazily seeds a small ten-account `DEFAULT_CHART` (Cash, Accounts Receivable,
+Inventory, Accounts Payable, Tax Payable, Owner's Equity, Sales Revenue,
+Sales Returns and Allowances, Loyalty Program Expense, Cost of Goods Sold)
+per company the first time anything posts for it, not at migration time — a
+company is not a row this codebase creates explicitly, it simply appears the
+first time something writes with that `company_id`, so a migration-time
+sweep could never reach one that does not exist yet. `trial_balance(conn,
+cid)` and `account_balance` read the chart back; five posting helpers —
+`post_sale`, `post_return`, `post_customer_payment`, `post_supplier_payment`,
+`post_purchase_order` — turn the documents that already exist into balanced
+journals without re-deriving any business logic: each takes figures the
+calling route already computed and already used to write the document
+itself.
+
+`products/retail/backend/database/schema.py` — `RETAIL_SCHEMA_VERSION` is 38;
+`_migrate_add_general_ledger` adds `gl_accounts`, `gl_journals`,
+`gl_journal_lines`, each `company_id`-scoped (`gl_journal_lines` scoped only
+transitively, through `journal_id`/`account_id` — the `cheque_events`/`stock_
+transfer_items` shape, correctly excluded from `company_scoped_tables`'s
+automatic discovery for the identical reason those two are). Append-only is
+the BEFORE UPDATE/BEFORE DELETE trigger pair named above, on both journal
+tables. The migration also runs a best-effort OPENING-BALANCE BACKFILL: any
+company whose `customers`/`suppliers.credit_balance` was already nonzero when
+the migration ran gets ONE opening journal, dated the day the migration ran,
+booking that net balance against `3000` (Owner's Equity) as a plug — without
+it, `trial_balance`'s AR/AP accounts would read zero on every UPGRADED
+install while the subledger read real numbers, which is exactly the "ties
+back to the AR/AP subledger" property the CLAIMED entry asked for, failing
+silently for every shop that was not new the day this shipped. Guarded on
+`credit_balance` existing at all — the same shape
+`_migrate_requantize_sale_tender_payments` (v37) uses for `payments.related_
+type` — because that column is added LAZILY at runtime by `retail_api.py`'s
+`_ensure_credit_schema`, not by any migration in this file; a brand-new
+install, or one whose runtime has never opened the credit schema, has nothing
+to backfill, and querying an absent column would turn a true "nothing to do"
+into a failed migration. The `journal_entries` fossil is left in place,
+untouched, and marked superseded in a comment, exactly as the CLAIMED entry
+specified.
+
+`products/retail/backend/api/retail_api.py` — six posting call sites:
+`create_sale`, `create_return`, `create_purchase_order`, `customer_payment`,
+`supplier_payment`, `pay_purchase_order`. Each is gated on the IDENTICAL
+condition as its neighbouring `_adjust_credit` call and handed the SAME
+figures the document itself was written with — `create_sale`'s own call, for
+instance, passes `ar_amount_for_gl = balance_due if (is_credit and
+balance_due > _eps and customer_id) else 0.0`, the literal gate
+`_adjust_credit` already fired on two lines above, never independently
+re-derived, so the GL and the AR/AP subledger cannot disagree about whether a
+sale became a debt. Posting happens BEFORE the document's own
+`conn.commit()`, on the SAME connection and transaction — deliberately
+UNLIKE `reorder_hook.py`/`einvoice_adapter.py`, which run AFTER commit on
+their own connection specifically so a hook failure can never roll back or
+block a sale — because an unbalanced journal is exactly the kind of defect
+that must abort the whole document rather than let it commit silently wrong.
+
+TESTS. `retail_gl_schema_test.py` (15), `retail_gl_posting_test.py` (20),
+`retail_gl_integration_test.py` (14). MEASURED 2026-09-21 with the repo
+venv: **49 passed, 0 failed** (15 in 10.12s, 20 in 15.31s, 14 in 52.16s).
+
+REPORTING, landing alongside this in parallel (other agents; not detailed
+here since this entry does not own that code): a read-only `GET
+/api/sub/retail/reports/trial-balance` route and a desktop Trial Balance
+screen, returning the trial balance plus an AR/AP subledger tie-back.
+
+WHAT v38 IS STILL NOT, exactly as the CLAIMED entry said it would not be:
+period close, fiscal-year rollover, retained-earnings posting,
+multi-currency, or a balance sheet / P&L presentation layer. Each needs this
+core to exist first and gets its own version.
+
+THE GAP THAT MATTERS MOST, stated here rather than left to be found — the
+CLAUDE.md correction this ships beside states it too. **There is no Cost of
+Goods Sold posting.** `Inventory` (`1200`) is debited when stock is purchased
+(`post_purchase_order`) and is NEVER credited when it is sold — nothing in
+`post_sale` touches it, and `DEFAULT_CHART`'s own comment in general_
+ledger.py says why: this product has no per-unit inventory valuation to post
+from. `sale_items` has no cost column, and the sale's own stock movement
+(`retail_api.py`, the `'sale_out'` INSERT into `inventory_movements` around
+line 6630) does not write `unit_cost` at all — the column is simply absent
+from that INSERT's column list — unlike the `'purchase_in'` movement around
+line 3709, which writes `item['unit_cost']` explicitly.
+`products.cost_price` is the shop's CURRENT cost, not evidence of what a
+given unit actually cost when it was sold; schema.py already states that
+principle in its own words, in `_v15_seed_opening_counts`'s docstring
+(schema.py:3743-3745): "the shop's cost_price today is not evidence of what
+this stock cost when it arrived, and valuation reading a made-up figure is
+worse than valuation reading a zero it can see." Posting COGS from
+`products.cost_price` at the moment of sale would be exactly that made-up
+figure this codebase has already argued against, for a different table. So
+no gross profit is derivable from this ledger, and none will be until a cost
+snapshot is captured at the moment of sale — which is a schema change, not
+something this module could have absorbed. Claimed as v39, immediately
+below, rather than left silent.
+
+
+## 2026-09-21 — retail schema v39 CLAIMED: COGS and inventory valuation
+
+**Reserving the version integer before writing the migration**, per this
+ledger's own convention and because `RETAIL_SCHEMA_VERSION` is a
+single-writer resource shared with branches that are not on master.
+`RETAIL_SCHEMA_VERSION` is **38** at the moment this is written. v35 remains
+the ROADMAP's own "schema versions v32-v35 RESERVED for the Aseel-parity
+wave" hole — source-document back-references for drill-through, still NOT
+cashed in. This claim is unrelated to that reservation and does not need it,
+so per the rule the v36/v37 entries already applied in exactly this
+situation it takes **v39**, the next number above the live head, and leaves
+v35 open.
+
+### Why
+
+The general ledger delivered as v38 (the entry immediately above) cannot
+post Cost of Goods Sold: `Inventory` is debited when stock is purchased and
+is never credited when it is sold, so no gross profit is derivable from the
+ledger. That is not an oversight left in v38 — `general_ledger.py`'s own
+`DEFAULT_CHART` comment names it explicitly at the time of writing — it is a
+missing COST BASIS one layer down: `sale_items` has no cost column, and the
+sale's own stock movement never writes `unit_cost`, unlike the purchase
+movement, which does. `products.cost_price` is the shop's CURRENT cost, not
+evidence of what a specific unit cost when it was actually sold — schema.py
+already states that principle in its own words (`_v15_seed_opening_
+counts`'s docstring, schema.py:3743-3745): "the shop's cost_price today is
+not evidence of what this stock cost when it arrived, and valuation reading
+a made-up figure is worse than valuation reading a zero it can see." Posting
+COGS from `products.cost_price` at the moment of sale would be exactly that
+made-up figure this codebase has already argued against, for a different
+table.
+
+### What v39 needs to be, deliberately not designed here
+
+A cost snapshot captured AT THE MOMENT OF SALE, not read back later from a
+mutable field — the same reasoning that gives `payments.currency` and
+`sales.total` their "labelled once, never re-derived" contract elsewhere in
+this codebase. At minimum: a cost column on `sale_items` (or an equivalent),
+populated from something closer to an actual unit cost than today's single
+current-cost field — which raises the real design question this claim
+deliberately leaves open: FIFO, weighted-average, or last-cost, against a
+product model that has never tracked per-unit cost history before. That
+choice is the actual work of v39 and does not belong in a version-claim
+paragraph; it needs its own design pass before schema.py is touched, the
+same way the A-PAR wave (v32-v35) got a design document before any of its
+migrations landed.
+
+### What this claim is not
+
+Not an implementation, not a schema, not a decision on FIFO vs.
+weighted-average vs. last-cost. No `_migrate_add_*` function exists for v39
+anywhere in schema.py as of this entry. Whoever designs and lands it should
+update this entry — or add a "v39 CASHED IN" entry below it, matching this
+ledger's v37/v38 convention — rather than silently changing what v39 turned
+out to mean.

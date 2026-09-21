@@ -992,6 +992,20 @@ const SubsystemApp = {
         // write authorities instead of one.
         { id: 'receivables', label: 'Receivables', icon: '💰', capability: 'retail.reports' },
         { id: 'payables',    label: 'Payables',    icon: '📤', capability: 'retail.reports' },
+        // Schema v38 general ledger (products/retail/backend/core/retail/
+        // general_ledger.py): the one screen whose entire job is proving the
+        // GL agrees with itself (total debits == total credits) and with the
+        // AR/AP subledgers Receivables/Payables above already expose --
+        // GET /api/sub/retail/reports/trial-balance (retail_api.py,
+        // report_trial_balance) carries @mt_require_capability(CAP_REPORTS),
+        // matching `capability: 'retail.reports'` here the same reasoning
+        // every other Insight entry above already states: a user is not
+        // invited into a screen whose first read would 403. Read-only report
+        // with no row-level write action of its own, so unlike Cheques/
+        // Exceptions above there is no second, stricter capability hiding
+        // inside the screen -- see _renderTrialBalance's identical single
+        // capability check.
+        { id: 'trial-balance', label: 'Trial Balance', icon: '💼', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -1029,7 +1043,7 @@ const SubsystemApp = {
       navGroups: [
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },
