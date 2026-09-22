@@ -160,6 +160,27 @@
   // gets asked for the same key forever again.
   const PENDING_ACTIVATION_KEY = 'aura.licensing.pendingActivation';
 
+  // Must match SubsystemApp.ACTIVATION_HANDOFF_KEY in app-shell.js EXACTLY --
+  // same reasoning as PENDING_ACTIVATION_KEY just above (separate document,
+  // separate script scope, nothing to import). POST /api/licensing/activate
+  // rebinds this install's company_id on SUCCESS, and that rebind invalidates
+  // the very session that just submitted the key -- so the admin's next
+  // request anywhere in the app gets a genuine, correctly-worded 401
+  // ("Session expired or revoked") for a session THIS PAGE deliberately
+  // ended. This document only ever WRITES the marker, at the moment
+  // activation actually succeeds; app-shell.js is what reads/consumes it, on
+  // whichever page the user lands on next (the ?gate=1 auto-redirect back to
+  // '/', or a manual click on the "Back to Aura Retail" link below) and turns
+  // it into a hand-off message instead of a raw session-expired one. See
+  // ACTIVATION_HANDOFF_KEY's comment in app-shell.js for the full reasoning,
+  // including why the marker is single-use and short-lived.
+  const ACTIVATION_HANDOFF_KEY = 'aura.licensing.activationHandoff';
+
+  function markActivationHandoff(email) {
+    const rec = { v: 1, at: Date.now(), email: email || '' };
+    try { sessionStorage.setItem(ACTIVATION_HANDOFF_KEY, JSON.stringify(rec)); } catch (e) {}
+  }
+
   // The submitted license key, held in a module-scoped variable and NOWHERE
   // else -- not localStorage, not sessionStorage, not the URL. It is
   // credential material: it is the thing that proves entitlement to this
@@ -177,6 +198,17 @@
   // promises automatic progress without one is a lie; render() picks the
   // honest screen instead. See renderActivationForm's `pendingWithoutKey`.
   let pendingKey = '';
+
+  // The signed-in user's email at the moment THIS submission was made --
+  // captured (best-effort, see onActivateClicked) so markActivationHandoff()
+  // still has something to offer app-shell.js's relogin form once a held
+  // activation is finally approved and pollActivationApproval() resolves it,
+  // possibly long after this page first rendered. Not credential material
+  // like pendingKey above -- an email is not a secret -- so it carries no
+  // equivalent restriction, but it is reset alongside pendingKey by
+  // clearActivationPending() for the same reason: a stale value here must
+  // never outlive the submission it belongs to.
+  let pendingEmail = '';
 
   // A pending approval nobody ever ruled on is not evidence forever. Without
   // an expiry, a marker left behind by an install whose licensing.db was later
@@ -279,6 +311,7 @@
   function clearActivationPending() {
     memoryPending = null;
     pendingKey = '';
+    pendingEmail = '';
     try { localStorage.removeItem(PENDING_ACTIVATION_KEY); } catch (e) {}
   }
 
@@ -634,6 +667,11 @@
       // leaving them set would show this screen again the next time the device
       // legitimately needs a key.
       stopAwaitingPoll();
+      // Marked BEFORE clearActivationPending() below, which resets
+      // pendingEmail to '' -- this is the same rebind/invalidated-session
+      // reasoning as onActivateClicked()'s own SUCCESS branch, just resolved
+      // later, on Owner's own schedule, instead of immediately.
+      markActivationHandoff(pendingEmail);
       clearActivationPending();
       showMessage(t('This installation has been approved and activated.'), 'info');
       if (new URLSearchParams(location.search).get('gate') === '1') {
@@ -749,6 +787,20 @@
       return;
     }
 
+    // Captured BEFORE the activation POST below: this page's activation form
+    // is only ever reached with an already-authenticated session (see
+    // ACTIVATION_HANDOFF_KEY's comment), but success invalidates that very
+    // session, so this is the last moment it is safe to ask who it belongs
+    // to. Best-effort only -- a failure here must never block activation
+    // itself, it just means markActivationHandoff() below has no email to
+    // offer and app-shell.js's relogin form renders with a blank field, same
+    // as it always has.
+    let currentEmail = '';
+    try {
+      const sess = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' }).then(r => r.json());
+      currentEmail = (sess && sess.user && sess.user.email) || '';
+    } catch (e) { /* best effort, see comment above */ }
+
     clearMessage();
     btn.disabled = true;
     clearChildren(btn);
@@ -766,6 +818,14 @@
         // Fully activated -- retire any marker left behind by an earlier
         // PENDING submission on this device.
         clearActivationPending();
+        // The activation that just succeeded rebound this install's identity
+        // and, with it, invalidated the session that submitted it -- see
+        // ACTIVATION_HANDOFF_KEY's comment. Whatever this page does next
+        // (the ?gate=1 bounce below, or the settings-accessed page staying
+        // put), app-shell.js is what eventually discovers the dead session,
+        // and this is what lets it explain why instead of it reading as an
+        // error.
+        markActivationHandoff(currentEmail);
         showMessage(t('Activation successful.'), 'info');
         // Reached via app-shell.js's pre-login activation gate (?gate=1) --
         // bounce back to '/' so init() re-runs and, now that this device is
@@ -797,6 +857,10 @@
         // it is never written anywhere that outlives this document; the marker
         // beside it deliberately carries no key material at all.
         pendingKey = key;
+        // Carried forward so a LATER approval (see pollActivationApproval's
+        // own SUCCESS branch) can still mark the hand-off -- this is the only
+        // point at which the still-live session can be asked for its email.
+        pendingEmail = currentEmail;
         markActivationPending(body.installation_id);
         clearMessage();
         renderAwaitingApproval(body, readPendingRecord());

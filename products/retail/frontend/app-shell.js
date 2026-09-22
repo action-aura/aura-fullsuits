@@ -721,6 +721,75 @@ const SubsystemApp = {
     return (Date.now() - at) <= this.PENDING_ACTIVATION_MAX_AGE_MS;
   },
 
+  // ── Post-activation session hand-off marker ────────────────────────────────
+  // POST /api/licensing/activate REBINDS this install's company_id to the
+  // licence's identity (commercial_runtime/identity/company_rebind.py), and
+  // that rebind deliberately invalidates every session issued before it --
+  // the same session_version mechanism mt_auth.py uses for a password reset
+  // or a role change (see mt_auth.py's _revoked_response()). So the admin's
+  // own request that JUST activated this device is followed by a 401 on the
+  // very next one, carrying the backend's real, correct "Session expired or
+  // revoked" message -- true, and exactly the wrong thing to show, because
+  // nothing is wrong: the till did this to itself, on purpose, to adopt the
+  // licence's identity.
+  //
+  // This marker is how the two 401-arrival points below (checkAuthAndSetup()
+  // and init()'s own auth gate) tell "a session failure WE caused a moment
+  // ago by activating" apart from "an unrelated, genuine session failure" --
+  // the one distinction that matters, per CLAUDE.md's instruction not to
+  // paper over a real one. It is:
+  //   - written ONLY when POST /api/licensing/activate answers 200 SUCCESS
+  //     (this file's own _setupSubmit(), and licensing.js's onActivateClicked
+  //     / pollActivationApproval) -- never on PENDING, never on a failure;
+  //   - consumed (read AND deleted) by the very first 401/unauthenticated
+  //     this document sees afterward, so a SECOND, later session failure in
+  //     the same tab never inherits the excuse;
+  //   - bounded by a short TTL regardless of consumption, so a marker that is
+  //     somehow never read (a crashed tab, a request that never comes) cannot
+  //     sit around and paper over some unrelated failure minutes later.
+  //
+  // sessionStorage, not localStorage: the marker must survive the ONE full
+  // navigation the ?gate=1 flow (and the standalone page's own "Back to Aura
+  // Retail" link) makes -- licensing.html -> '/' -- which rules out an
+  // in-memory field, but must NOT survive past this browser tab the way the
+  // multi-day PENDING_ACTIVATION_KEY above deliberately does. This is a
+  // one-shot courtesy, not a durable record.
+  //
+  // licensing.js is a separate script scope on a separate page and cannot
+  // import this -- it mirrors the same key name and record shape to WRITE the
+  // marker; only this file ever reads/consumes it. Keep the two in step, the
+  // same warning _needsActivation() above already carries for exactly this
+  // reason.
+  ACTIVATION_HANDOFF_KEY: 'aura.licensing.activationHandoff',
+
+  // 2 minutes: comfortably covers the slowest real redirect/init() round
+  // trip (the ?gate=1 bounce, or the "Account Created!" overlay's own
+  // setTimeout in _setupSubmit()), short enough that it can never reach
+  // into an unrelated LATER failure in the same tab.
+  ACTIVATION_HANDOFF_MAX_AGE_MS: 2 * 60 * 1000,
+
+  _markActivationHandoff(email) {
+    const rec = { v: 1, at: Date.now(), email: email || '' };
+    try { sessionStorage.setItem(this.ACTIVATION_HANDOFF_KEY, JSON.stringify(rec)); } catch (e) {}
+  },
+
+  // Read AND delete in the same call -- single-use by construction, so no
+  // caller can ever consume it twice or leave it behind for a later,
+  // unrelated 401 to find.
+  _consumeActivationHandoff() {
+    let raw = null;
+    try {
+      raw = sessionStorage.getItem(this.ACTIVATION_HANDOFF_KEY);
+      sessionStorage.removeItem(this.ACTIVATION_HANDOFF_KEY);
+    } catch (e) { return null; }
+    if (!raw) return null;
+    let rec;
+    try { rec = JSON.parse(raw); } catch (e) { return null; }
+    if (!rec || typeof rec !== 'object') return null;
+    if (typeof rec.at !== 'number' || (Date.now() - rec.at) > this.ACTIVATION_HANDOFF_MAX_AGE_MS) return null;
+    return rec;
+  },
+
   // A real toggle again -- but only because the work its previous comment
   // demanded actually happened. For one era this was deliberately a no-op that
   // forced light: the first dark theme rendered white-on-white at 1.00:1
@@ -1174,7 +1243,21 @@ const SubsystemApp = {
           // this init() call early) -- an admin account is guaranteed to
           // exist by this point, so this is always a returning-user login,
           // never account creation.
-          this.showReloginModal('Sign in to your store');
+          //
+          // EXCEPT for the one case _consumeActivationHandoff() exists for:
+          // this same document just completed a successful activation (the
+          // ?gate=1 redirect back to '/', or _setupSubmit()'s own re-init()),
+          // and the session it did that with is the one the rebind just
+          // invalidated. That is not a returning-user login gone wrong -- see
+          // ACTIVATION_HANDOFF_KEY's comment for the full reasoning and why
+          // this check cannot swallow a real, unrelated session failure.
+          const handoff = this._consumeActivationHandoff();
+          if (handoff) {
+            this._reloginPrefillEmail = handoff.email || '';
+            this.showReloginModal(t('Your license is now active. Please sign in again to continue.'));
+          } else {
+            this.showReloginModal('Sign in to your store');
+          }
           return; // Modal's success handler will call SubsystemApp.init() again
         }
         // Authenticated: apply the account's saved UI language before rendering,
@@ -1579,6 +1662,13 @@ const SubsystemApp = {
     if (window.isDemoMode || sessionStorage.getItem('demo_mode') === 'true') return;
     if (this._authModalOpen) return;
     this._authModalOpen = true;
+    // Consumed ONCE, up front, regardless of which branch below actually
+    // uses it -- a needs_setup device can never be the one that just
+    // activated (activation always happens with an admin account already in
+    // place, see ACTIVATION_HANDOFF_KEY's comment), so a marker that somehow
+    // reached here anyway must not survive to color some later, unrelated
+    // call to this function.
+    const handoff = this._consumeActivationHandoff();
     try {
       const status = await fetch('/api/onboarding/status', { cache: 'no-store' })
         .then(r => r.json()).catch(() => ({ needs_setup: false }));
@@ -1587,6 +1677,14 @@ const SubsystemApp = {
         // "Connecting to your shop…" wait for a device that has already
         // joined -- made in ONE place so the two callers cannot disagree.
         await this._openFirstRun();
+      } else if (handoff) {
+        // The one narrow case this errorMsg (the backend's real, correct
+        // "Session expired or revoked. Please log in again.") must NOT be
+        // shown verbatim -- see ACTIVATION_HANDOFF_KEY's comment. Any 401
+        // that arrives without a live handoff marker still falls through to
+        // the branch below unchanged, raw backend message and all.
+        this._reloginPrefillEmail = handoff.email || '';
+        this.showReloginModal(t('Your license is now active. Please sign in again to continue.'));
       } else {
         this.showReloginModal(errorMsg || 'Your session has expired. Please log in again.');
       }
@@ -1780,6 +1878,14 @@ const SubsystemApp = {
           // Fully activated -- retire any marker left over from an earlier
           // PENDING submission on this device.
           this._clearActivationPending();
+          // The rebind /api/licensing/activate just triggered invalidates
+          // THIS session -- the one create-admin issued a moment ago in this
+          // very function. The re-init() a few lines below (via the
+          // "Account Created!" overlay's setTimeout) is what discovers that,
+          // and this marker is what lets it explain why instead of just
+          // bouncing the user to a bare sign-in form. See
+          // ACTIVATION_HANDOFF_KEY's comment for the full reasoning.
+          this._markActivationHandoff(email);
         } else if (activation.result === 'PENDING') {
           // 202: Owner is holding this key for manual approval and persists
           // NO local state record, so /api/licensing/status will keep
@@ -1790,6 +1896,11 @@ const SubsystemApp = {
           // scope that still holds the key needed to resolve it.
           this._markActivationPending(activation.installation_id);
           this._pendingActivationKey = key;
+          // Carried across every downstream screen this held activation can
+          // still resolve through (_pollSetupApproval's own SUCCESS, and the
+          // key-retry screen's) -- none of them collect an email of their
+          // own, and it is still the same just-created account's email.
+          this._setupApprovalEmail = email;
           await fetch('/api/onboarding/complete', { method: 'POST', credentials: 'include' }).catch(() => {});
           return this._setupAwaitingApproval(name, activation.installation_id);
         } else {
@@ -1797,6 +1908,13 @@ const SubsystemApp = {
           // place, never re-show the registration form (the account already
           // exists). _activationFailureMessage() is what keeps this honest:
           // a thrown fetch or a 503 is NOT a verdict on the key.
+          //
+          // Set here too (not just in the PENDING branch above): a retry
+          // that succeeds from THIS screen also ends in the same rebind and
+          // invalidated session (_setupKeyRetrySubmit's own SUCCESS branch),
+          // and without this it would mark the hand-off with no email at
+          // all -- correct, just needlessly worse than it has to be.
+          this._setupApprovalEmail = email;
           return this._setupKeyRetry(name, this._activationFailureMessage(activation));
         }
       }
@@ -2367,6 +2485,12 @@ const SubsystemApp = {
     if (data.result === 'SUCCESS') {
       this._stopSetupApprovalPoll();
       this._clearActivationPending();
+      // Same rebind, same invalidated session, same reasoning as
+      // _setupSubmit()'s own SUCCESS branch -- Owner approved this activation
+      // just now, and the init() call three lines down is what discovers the
+      // session is gone. _setupApprovalEmail is the email _setupSubmit()
+      // captured when this held activation was first submitted.
+      this._markActivationHandoff(this._setupApprovalEmail || '');
       document.getElementById('aura-relogin-modal')?.remove();
       this._authModalOpen = false;
       await SubsystemApp.init();
@@ -2449,6 +2573,10 @@ const SubsystemApp = {
       // exact key a second time. SUCCESS retires it.
       if (data.result === 'SUCCESS') {
         this._clearActivationPending();
+        // Same reasoning as _setupSubmit()'s own SUCCESS branch -- this key
+        // retry still ends in the same rebind and the same invalidated
+        // session, discovered by the init() call a few lines below.
+        this._markActivationHandoff(this._setupApprovalEmail || '');
       } else if (data.result === 'PENDING') {
         this._markActivationPending(data.installation_id);
         this._pendingActivationKey = key;
@@ -2500,7 +2628,24 @@ const SubsystemApp = {
         <p class="auth-foot"><a href="#" onclick="SubsystemApp._showForgotPasswordScreen();return false;">${t('Forgot password?')}</a></p>
       </div>`;
     document.body.appendChild(overlay);
-    setTimeout(() => document.getElementById('rl-email')?.focus(), 100);
+    // Post-activation hand-off: carried on `this` rather than as a second
+    // parameter here (see ACTIVATION_HANDOFF_KEY's comment for why, and
+    // retail_shell_chrome_test.js's mutation proof on this exact method's
+    // opening lines for the practical reason a new parameter is off the
+    // table). Read-and-clear: a value left behind would leak into the very
+    // next UNRELATED call to this function -- a real logout, a real session
+    // expiry -- and pre-fill an email nobody just typed.
+    const prefillEmail = this._reloginPrefillEmail || '';
+    this._reloginPrefillEmail = '';
+    const emailInput = document.getElementById('rl-email');
+    if (prefillEmail && emailInput) {
+      emailInput.value = prefillEmail;
+      // Already filled in -- send focus straight to the field the user still
+      // has to type into, instead of a box that already has their answer.
+      setTimeout(() => document.getElementById('rl-pass')?.focus(), 100);
+    } else {
+      setTimeout(() => document.getElementById('rl-email')?.focus(), 100);
+    }
   },
 
   async _reloginSubmit() {

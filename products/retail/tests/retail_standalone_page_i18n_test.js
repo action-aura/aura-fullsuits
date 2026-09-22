@@ -398,6 +398,7 @@ const EXCLUDED_CONSTS = {
     PENDING_ACTIVATION_KEY: 'an internal localStorage key, never rendered to a user.',
     PENDING_MAX_AGE_MS: 'a numeric constant.',
     AWAITING_POLL_MS: 'a numeric constant.',
+    ACTIVATION_HANDOFF_KEY: 'an internal sessionStorage key, never rendered to a user.',
   },
   'whatsapp.js': {},
 };
