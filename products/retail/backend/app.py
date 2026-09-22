@@ -156,6 +156,7 @@ from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import (
+    RETAIL_SCHEMA_VERSION,
     get_retail_conn,
     init_retail,
     load_sync_freshness,
@@ -662,9 +663,28 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # `REGISTRY_SYNC_ENTITY_TYPES`.
     _retail_sync_freshness_store = SyncFreshnessStore(
         load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
+    # `local_schema_version_provider` ARMS THE SCHEMA-SKEW GUARD, which is
+    # inert without it. Until 2026-09-22 nothing anywhere checked a schema
+    # version before applying a pulled row, so a v38 till and a v39 till
+    # synced happily and the OLDER one silently dropped every column it had
+    # never migrated -- no error, no warning, permanent disagreement. That
+    # was found the hard way when three v39 columns travelled correctly and
+    # still failed to converge.
+    #
+    # A callable, not the bare integer: it is read at APPLY time, so a
+    # process that migrates mid-run reports the version it actually has
+    # rather than the one it booted with.
+    #
+    # Retail's number belongs on the two services that read and write
+    # retail.db. It is deliberately NOT passed to `_registry_sync_service`
+    # below -- that one syncs `users` into registry.db, which carries its
+    # OWN schema version on its own release cadence, and stamping retail's
+    # integer onto it would quarantine perfectly good user rows every time
+    # retail alone bumped.
     _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
                                 local_ensure_schema=_ensure_credit_schema,
                                 local_freshness_store=_retail_sync_freshness_store,
+                                local_schema_version_provider=lambda: RETAIL_SCHEMA_VERSION,
                                 stock_exception_recorder=record_or_refresh_stock_exception)
     register_active_service(_sync_service)
 
@@ -764,9 +784,16 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # does, and gets the same collaborator.
     _android_sync_freshness_store = SyncFreshnessStore(
         load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
+    # Same schema-skew arming as the Windows branch above, and it matters
+    # MORE here: a handset is the device most likely to be running a build
+    # older than the till's, because a phone updates on its owner's whim
+    # while a Windows till is updated deliberately. An un-armed handset is
+    # exactly the "older peer silently drops columns it never migrated"
+    # case the guard exists for.
     _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry,
                                         local_ensure_schema=_ensure_credit_schema,
                                         local_freshness_store=_android_sync_freshness_store,
+                                        local_schema_version_provider=lambda: RETAIL_SCHEMA_VERSION,
                                         stock_exception_recorder=record_or_refresh_stock_exception)  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
