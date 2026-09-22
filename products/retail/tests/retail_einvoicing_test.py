@@ -350,6 +350,79 @@ def test_build_document_respects_configured_tax_calculation_mode():
     assert line.discount_amount == 10.00
 
 
+def test_reorder_hook_exception_does_not_consume_the_einvoice_enqueue(monkeypatch):
+    """Adjacency regression (restored 2026-09-22 -- see GAP 2 in today's task
+    report). create_sale's e-invoicing enqueue and reorder-hook trigger sit
+    in two BACK-TO-BACK try/except blocks (retail_api.py, roughly lines
+    7260-7297), both AFTER the sale's own commit -- einvoicing runs FIRST,
+    the reorder hook SECOND. This property used to be proven incidentally by
+    retail_reorder_hook_regression_test.py's own
+    test_hook_exception_produces_the_identical_response_a_successful_hook_
+    would_have, which compared the sale response's 'einvoice' key across the
+    hook-fires and hook-raises cases. E-invoicing then went opt-in by
+    default (tax_regime defaults to 'none'), that file's companies stopped
+    opting in, and the property became unobservable there -- honestly
+    removed rather than faked (see that file's own AUDIT 2026-09-22
+    comment). Restored HERE, where a company can legitimately opt into
+    tax_regime='jordan'.
+
+    Opts in by writing the setting DIRECTLY via
+    commercial_runtime.einvoicing.settings.set_setting() rather than POSTing
+    /api/einvoicing/settings -- that route starts a real background
+    OutboxWorker thread (app.py's einvoicing blueprint) that this file's
+    teardown_module does stop (see teardown_module above), but every OTHER
+    write-setting-directly test in this file already avoids the live POST
+    for the same reason other tests in this suite hit twice: an extra
+    worker thread outliving its own test is a real leak, not a hypothetical
+    one.
+
+    Forces the REORDER hook to raise (identical monkeypatch technique to
+    retail_reorder_hook_regression_test.py's test_hook_exception_does_not_
+    fail_the_sale) and proves the einvoice enqueue -- its neighbour, which
+    already ran and independently committed on its OWN connection
+    (einvoice_adapter.enqueue_sale's own docstring) before the reorder hook
+    block even starts -- still lands: the sale response still carries
+    'einvoice', and the outbox row genuinely exists with a real allocated
+    number.
+    """
+    client, cid, pid, bid = _make_admin_and_product()
+
+    from commercial_runtime.einvoicing import settings as einv_settings
+    sconn = get_retail_conn()
+    einv_settings.set_setting(sconn, cid, 'tax_regime', 'jordan')
+    einv_settings.set_setting(sconn, cid, 'enabled', '1')
+    sconn.commit()
+    sconn.close()
+
+    import core.retail.reorder_hook as reorder_hook
+
+    def _boom(conn_factory, **kwargs):
+        raise RuntimeError("simulated reorder hook failure")
+
+    monkeypatch.setattr(reorder_hook, 'maybe_trigger_reorder', _boom)
+    # retail_api.py imports maybe_trigger_reorder by name at call time
+    # (inside its own try block), so patching the module attribute is
+    # sufficient -- no need to touch retail_api.py, matching
+    # retail_reorder_hook_regression_test.py's own comment on this same
+    # technique.
+
+    data = _sell(client, pid)
+    assert 'einvoice' in data, (
+        "the reorder hook raising must not consume the neighbouring "
+        "e-invoicing enqueue's response key -- the two try/except blocks in "
+        "create_sale are supposed to be fully independent"
+    )
+    assert data['einvoice']['status'] == 'queued'
+
+    conn = get_retail_conn()
+    row = conn.execute(
+        "SELECT einvoice_no FROM einvoice_outbox WHERE source_id=?", (data['id'],)
+    ).fetchone()
+    conn.close()
+    assert row is not None, "e-invoice outbox row must exist despite the reorder hook raising"
+    assert row['einvoice_no'], "outbox row must carry a real allocated number, not a blank/None one"
+
+
 def test_enabled_at_prevents_backfilling_pre_enablement_sales():
     client, cid, pid, bid = _make_admin_and_product()
     # AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']=

@@ -142,22 +142,29 @@ file explicitly excludes below, in the same "don't chase every shape, chase
 the ones actually used and say so" spirit retail_capability_ratchet_ast.py's
 own honest-limits section models.
 
-── TABLES COVERED (11) ───────────────────────────────────────────────────────
+── TABLES COVERED (12) ───────────────────────────────────────────────────────
 sales, sale_items, products, categories, customers, suppliers, branches,
-inventory_movements, returns, return_items, payments -- every synced entity
-type, across every module `_discover_sync_modules()` finds, whose `create`
-event queues a literal dict at the call site. `sale_items`/`sales`/
-`products` are the three the task that produced the ORIGINAL version of this
-file named explicitly; the other six (everything except `payments`) were
-found by grepping every `_queue_sync_event(` call site in retail_api.py and
-share the identical literal-dict-at-`create` shape. `payments` joined this
-list 2026-09-22 -- see "PAYMENTS: THE FOLLOW-UP RESOLVED" below for why it
-was originally left out and what changed. Of these 11, `products` is also
-written by `import_api.py` (see "CROSS-MODULE WIDENING" above) and
+inventory_movements, returns, return_items, payments, reorder_requests --
+every synced entity type, across every module `_discover_sync_modules()`
+finds, whose `create` event queues a literal dict at the call site.
+`sale_items`/`sales`/`products` are the three the task that produced the
+ORIGINAL version of this file named explicitly; the other six covered by the
+first 2026-09-21/22 passes (everything except `payments`) were found by
+grepping every `_queue_sync_event(` call site in retail_api.py and share the
+identical literal-dict-at-`create` shape. `payments` joined this list
+2026-09-22 -- see "PAYMENTS: THE FOLLOW-UP RESOLVED" below for why it was
+originally left out and what changed. `reorder_requests` joined it the same
+day, in a SEPARATE pass -- see "SECOND-SHAPE WIDENING" below: its `create`
+event is queued by `core/retail/reorder_hook.py`'s `_queue_reorder_sync_event`,
+a differently-named, differently-shaped duplicate of `_queue_sync_event`'s own
+INSERT, which needed its own extractor rather than the `_is_queue_call`
+machinery every other table in this list uses. Of these 12, `products` is
+also written by `import_api.py` (see "CROSS-MODULE WIDENING" above) and
 `inventory_movements` is ALSO written by `import_api.py`'s own stock-
 declaration block, verified by hand to carry the identical 13-key shape as
-retail_api.py's six call sites; every other table in this list is written
-by retail_api.py alone.
+retail_api.py's six call sites; `reorder_requests` is written by
+`core/retail/reorder_hook.py` alone; every other table in this list is
+written by retail_api.py alone.
 
 ── PAYMENTS: THE FOLLOW-UP RESOLVED (2026-09-22) ─────────────────────────────
 The original version of this file left `payments` out entirely: its `create`
@@ -249,6 +256,19 @@ columns -- see EXCLUSIONS['payments'] below for each, in full.
   to keep this file's per-table comparison anchored to shapes it can
   actually verify rather than a judgment call about a helper it cannot
   parse.
+
+  SECOND CORRECTION (2026-09-22, second-shape widening pass): `reorder_
+  request` is NO LONGER left out. This pass owns BOTH `core/retail/
+  reorder_hook.py` and this test file, so the two design questions the
+  paragraph above left open were answered directly rather than deferred
+  again: hand-parsing `_queue_reorder_sync_event`'s own INSERT was chosen
+  over widening `_is_queue_call`, because widening it would not actually
+  have removed the "which helper means what" judgment call, only hidden it
+  inside a fatter matcher -- see `reorder_payload_keys_for`'s own docstring,
+  "SECOND-SHAPE WIDENING", for the full reasoning, including why a purely
+  INSERT-keyed matcher (ignoring function names entirely) was considered and
+  rejected too. `reorder_requests` is now in TRACKED_TABLES with its own
+  `EXCLUSIONS` entry; see "TABLES COVERED" above.
 * `quotation`, `doc_series` -- payload assembled by a dedicated helper
   function (`_quotation_sync_header_payload`, `_doc_series_sync_payload`)
   and passed in as a bound name, not a literal dict at the `_queue_sync_
@@ -568,6 +588,191 @@ def union_payload_keys(tree, sources):
     return keys, literal_total, nonliteral_total
 
 
+# ── SECOND-SHAPE WIDENING (2026-09-22, reorder_request) ─────────────────────
+# `core/retail/reorder_hook.py` queues its own 'reorder_request'/'create'
+# sync_outbox row through `_queue_reorder_sync_event`, a DELIBERATE duplicate
+# of `_queue_sync_event`'s own INSERT statement under a DIFFERENT name (that
+# module's own docstring: avoiding a core/retail -> api import -- every other
+# dependency in this codebase runs the other way). Because the name differs,
+# `payload_keys_for`'s `_is_queue_call` -- which only ever looked for literal
+# `QUEUE_EVENT_FN` calls -- could not see it, and `reorder_requests` sat out
+# of TRACKED_TABLES entirely with a written "TABLES DELIBERATELY LEFT OUT"
+# reason (see this module's docstring). This section closes that gap.
+#
+# CHOICE MADE, AND WHY: teach the ratchet the second call-site name, rather
+# than keying purely on the raw `INSERT INTO sync_outbox` statement with no
+# function name involved at all (the more general-SOUNDING option). That
+# INSERT-keyed approach was worked through on paper first and rejected: it
+# does not actually remove the function-name dependency, it only relocates
+# it. Look at where each shape keeps its LITERAL values:
+#   * `_queue_sync_event`'s own two real definitions (retail_api.py /
+#     import_api.py) do their raw INSERT with `entity_type` / `event_type` /
+#     `payload` as bound PARAMETER NAMES, not literals -- the literal values
+#     only exist one frame up, at every ROUTE HANDLER that calls
+#     `_queue_sync_event(cur, 'sale', ..., 'create', {...})`. A matcher keyed
+#     on the INSERT statement alone would see three bound names there, not
+#     three literals, and would still have to walk back up to the CALLER to
+#     recover them -- which is exactly the call-site matching this file
+#     already does for that shape.
+#   * `_queue_reorder_sync_event` inverts which half is literal where:
+#     `entity_type` ('reorder_request') is hardcoded literal INSIDE its own
+#     INSERT, and the payload dict is only literal INSIDE that same function
+#     body (wrapped in `json.dumps(...)`) -- but `event_type` is a bound
+#     parameter there too, only literal at ITS OWN caller
+#     (reorder_hook.py's `_maybe_create_request_for_product`).
+# A single matcher spanning both shapes would still have to know, per shape,
+# which frame to read which fact from -- i.e. it would still be keyed on
+# which helper is in play, just with the branching hidden inside one fatter
+# function instead of two smaller, named ones. So this file keeps the two
+# shapes as two explicit, documented extractors: `payload_keys_for`
+# (unchanged, above) for `_queue_sync_event`'s shape, and
+# `reorder_payload_keys_for` (below) for `_queue_reorder_sync_event`'s. A
+# future THIRD helper with a THIRD shape still needs its own extractor --
+# an accepted, stated limit, not an oversight, matching this module's own
+# docstring ("APPROACH": "chase the shapes actually used and say so") rather
+# than preemptively generalising for a shape nothing uses yet.
+#
+# `payload_keys_for`/`union_payload_keys` above remain BYTE-FOR-BYTE
+# unchanged by this pass -- the merge happens one layer up, in
+# `per_module_payload_keys` below, so the single-module machinery's own
+# NOT-VACUOUS proofs (and their exact literal/nonliteral-count assertions)
+# stay valid with no risk of this widening silently changing their answers.
+REORDER_QUEUE_FN = '_queue_reorder_sync_event'
+REORDER_ENTITY_TYPE = 'reorder_request'
+
+
+def _is_reorder_queue_call(node):
+    """`_queue_reorder_sync_event(...)` in either spelling -- same
+    dual-spelling posture as `_is_queue_call` above, for the same reason:
+    accepting a spelling nobody uses yet costs nothing, missing one is how a
+    real call site goes unexamined."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == REORDER_QUEUE_FN
+    if isinstance(func, ast.Attribute):
+        return func.attr == REORDER_QUEUE_FN
+    return False
+
+
+def _find_function_def(tree, name):
+    """The first `def name(...)` found anywhere in `tree` (module-level or
+    nested), or `None`. `core/retail/reorder_hook.py` defines
+    `_queue_reorder_sync_event` exactly once, so "first" is unambiguous for
+    the one real module this is ever run against."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    return None
+
+
+def _sync_outbox_insert_dict_keys(func_node, entity_type):
+    """Walks `func_node`'s OWN body for a `<obj>.execute("... INSERT INTO
+    sync_outbox ...", (...))` call -- the shape `_queue_reorder_sync_event`
+    uses to build its INSERT directly, rather than delegating to
+    `_queue_sync_event`. Column order matches database/schema.py's
+    `CREATE TABLE sync_outbox` / every real INSERT against it: `(id,
+    entity_type, entity_id, event_type, payload, created_at)` -- so
+    `entity_type` is `params[1]` and `payload` is `params[4]`.
+
+    Returns the payload dict's literal string keys when this function's own
+    INSERT genuinely targets `entity_type` AND the payload argument is
+    exactly `json.dumps({...})` wrapping a literal dict (the one shape
+    `_queue_reorder_sync_event` actually uses today). Returns `None` when no
+    matching INSERT is found, or the payload isn't that exact shape --
+    `None` is distinct from "found, zero keys" so the caller can tell "not
+    recognised" apart from "recognised, empty payload" and count the former
+    as a nonliteral site instead of silently reporting zero keys.
+    """
+    for node in ast.walk(func_node):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == 'execute'):
+            continue
+        if not node.args:
+            continue
+        sql_node = node.args[0]
+        if not (isinstance(sql_node, ast.Constant) and isinstance(sql_node.value, str)):
+            continue
+        if 'INSERT INTO sync_outbox' not in sql_node.value:
+            continue
+        if len(node.args) < 2 or not isinstance(node.args[1], ast.Tuple):
+            continue
+        params = node.args[1].elts
+        if len(params) < 5:
+            continue
+        et_node, payload_node = params[1], params[4]
+        if not (isinstance(et_node, ast.Constant) and et_node.value == entity_type):
+            continue
+        if (isinstance(payload_node, ast.Call)
+                and isinstance(payload_node.func, ast.Attribute)
+                and payload_node.func.attr == 'dumps'
+                and payload_node.args
+                and isinstance(payload_node.args[0], ast.Dict)):
+            dict_node = payload_node.args[0]
+            return {k.value for k in dict_node.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return None
+
+
+def reorder_payload_keys_for(tree, entity_type, event_type):
+    """`payload_keys_for`'s counterpart for `_queue_reorder_sync_event` call
+    sites -- see "SECOND-SHAPE WIDENING" above for the full shape and why
+    this needed its own extractor. Returns `(keys, literal_sites,
+    nonliteral_sites)`, the same shape `payload_keys_for` returns, so
+    `per_module_payload_keys` below can fold both together symmetrically.
+
+    Scoped to `REORDER_ENTITY_TYPE` immediately, before touching the tree at
+    all: the call-site match below (`event_type` literal at the CALL) and
+    the definition-site match inside `_sync_outbox_insert_dict_keys`
+    (`entity_type` literal INSIDE the function) are two independent checks
+    against two different nodes. Without this early return, a module
+    carrying `_queue_reorder_sync_event`'s one real call -- whose literal
+    `event_type` is 'create', the SAME literal nearly every OTHER tracked
+    table's `create` event also uses -- would spuriously report a
+    nonliteral site for every one of those unrelated tables purely because
+    their `entity_type` never matched 'reorder_request'.
+    `test_reorder_payload_keys_for_ignores_unrelated_entity_types` below
+    mutation-proves this guard actually matters, not merely reads as a
+    plausible-sounding optimisation.
+    """
+    if entity_type != REORDER_ENTITY_TYPE:
+        return set(), 0, 0
+    keys = set()
+    literal_sites = 0
+    nonliteral_sites = 0
+    for node in ast.walk(tree):
+        if not _is_reorder_queue_call(node):
+            continue
+        evt_value = None
+        # Positional signature (core/retail/reorder_hook.py):
+        # (conn, request_id, company_id, branch_id, product_id, status,
+        # draft_message, timestamp, event_type, *, row_version=None,
+        # updated_at_utc=None) -- event_type is the 9th positional
+        # parameter, index 8.
+        if len(node.args) > 8 and isinstance(node.args[8], ast.Constant):
+            evt_value = node.args[8].value
+        else:
+            for kw in node.keywords:
+                if kw.arg == 'event_type' and isinstance(kw.value, ast.Constant):
+                    evt_value = kw.value.value
+        if evt_value != event_type:
+            continue
+        func_def = _find_function_def(tree, REORDER_QUEUE_FN)
+        if func_def is None:
+            nonliteral_sites += 1
+            continue
+        found_keys = _sync_outbox_insert_dict_keys(func_def, entity_type)
+        if found_keys is None:
+            nonliteral_sites += 1
+        else:
+            literal_sites += 1
+            keys |= found_keys
+    return keys, literal_sites, nonliteral_sites
+
+
 def missing_coverage(schema_columns, payload_keys, exclusions):
     """The ratchet's actual question, as a pure function: which schema
     columns are covered by NEITHER the payload key set NOR a reasoned
@@ -598,6 +803,18 @@ def per_module_payload_keys(trees_by_path, sources):
     result = {}
     for path, tree in trees_by_path.items():
         keys, lit, nonlit = union_payload_keys(tree, sources)
+        # SECOND-SHAPE WIDENING (2026-09-22): also fold in any
+        # `_queue_reorder_sync_event`-shaped sites this module carries --
+        # see `reorder_payload_keys_for`'s own docstring above for the full
+        # "why". `reorder_payload_keys_for` early-returns (set(), 0, 0) for
+        # every entity_type except 'reorder_request', so this is a no-op for
+        # every module/table pair except core/retail/reorder_hook.py's own
+        # ('reorder_request', 'create').
+        for entity_type, event_type in sources:
+            rkeys, rlit, rnonlit = reorder_payload_keys_for(tree, entity_type, event_type)
+            keys |= rkeys
+            lit += rlit
+            nonlit += rnonlit
         if lit or nonlit:
             result[path] = (keys, lit, nonlit)
     return result
@@ -642,6 +859,12 @@ TRACKED_TABLES = {
     'returns': [('return', 'create')],
     'return_items': [('return_item', 'create')],
     'payments': [('payment', 'create')],
+    # reorder_requests joined 2026-09-22 -- see this module's docstring,
+    # "SECOND-SHAPE WIDENING", for why its ('reorder_request', 'create')
+    # event needed its own extractor (`reorder_payload_keys_for`) rather
+    # than the `_is_queue_call` machinery every table above this comment
+    # uses.
+    'reorder_requests': [('reorder_request', 'create')],
 }
 
 MIN_REASON_LEN = 40
@@ -912,6 +1135,31 @@ EXCLUSIONS = {
                      "side while sync_service.py is owned and actively edited "
                      "elsewhere.",
     },
+    # reorder_requests joined this ratchet 2026-09-22 (SECOND-SHAPE WIDENING
+    # -- see this module's docstring). All three exclusions below were
+    # verified against sync_service.py's real reorder_request apply branch
+    # (`elif entity_type == "reorder_request":`), not guessed at: none of
+    # the three appears in that branch's own INSERT column list `(id,
+    # company_id, branch_id, product_id, status, draft_message,
+    # resolved_at, row_version, updated_at_utc)`.
+    'reorder_requests': {
+        'company_id': "Tenant-isolation key; sync_service.py's reorder_request "
+                      "apply branch INSERTs `local_company_id`, never a value "
+                      "read off the incoming payload, identical to every other "
+                      "synced entity in this file.",
+        'created_at': "Row-insertion bookkeeping timestamp; sync_service.py's "
+                      "reorder_request apply-branch INSERT column list never "
+                      "references it either, matching every other master-data "
+                      "entity in this file (products/categories/customers/"
+                      "suppliers/branches all share the identical omission).",
+        'deleted_at_utc': "A row emitted by a `create` event has, by "
+                          "definition, never been deleted; sync_service.py's "
+                          "reorder_request INSERT column list never "
+                          "references it either, so the apply-side row is "
+                          "left at its implicit NULL exactly like the local "
+                          "INSERT (core/retail/reorder_hook.py) that produced "
+                          "the row in the first place.",
+    },
 }
 
 
@@ -1049,6 +1297,10 @@ def test_return_items_outbox_payload_covers_every_column():
 
 def test_payments_outbox_payload_covers_every_column():
     _assert_full_coverage('payments')
+
+
+def test_reorder_requests_outbox_payload_covers_every_column():
+    _assert_full_coverage('reorder_requests')
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────
@@ -1210,6 +1462,14 @@ def test_discovery_finds_every_known_sync_queuing_module():
     names = {p.name for p in _SYNC_MODULE_TREES}
     assert 'retail_api.py' in names
     assert 'import_api.py' in names
+    # reorder_hook.py mentions `_queue_sync_event` in its own docstring
+    # (comparing itself to it) -- this substring-discovery test predates the
+    # SECOND-SHAPE WIDENING pass that taught this file to actually parse its
+    # differently-named call site, but the discovery step itself already
+    # found the file before that pass; pinned here too so a regression in
+    # `_discover_sync_modules` breaks this assertion, not just a silently
+    # weaker reorder_requests coverage test.
+    assert 'reorder_hook.py' in names
 
 
 def test_per_module_payload_keys_keeps_each_modules_keys_separate_not_unioned():
@@ -1330,6 +1590,125 @@ def test_full_cross_module_pipeline_catches_a_column_present_in_one_writer_only(
     missing_after = missing_coverage(
         schema_cols, intersection_of_module_keys(per_module_after), exclusions={})
     assert missing_after == set()
+
+
+# ── SECOND-SHAPE NOT-VACUOUS PROOF (2026-09-22) ──────────────────────────────
+# `reorder_payload_keys_for`/`_sync_outbox_insert_dict_keys` are new code
+# this same pass added -- proven here entirely through synthetic sources,
+# exactly like every other not-vacuous proof in this file. The entity_type
+# string used below is the real 'reorder_request' literal (not a fictional
+# 'widget'-style name) because `reorder_payload_keys_for` is deliberately
+# SCOPED to that one entity type (see its own docstring) rather than generic
+# like `payload_keys_for` -- everything else about these sources (variable
+# names, helper body order, the payload's own key set) is synthetic, never
+# copied from core/retail/reorder_hook.py.
+
+def test_reorder_payload_keys_for_reads_a_synthetic_second_shape_source():
+    """Proves `reorder_payload_keys_for` genuinely parses the AST for the
+    `_queue_reorder_sync_event` shape rather than returning a canned answer:
+    different variable names, a different key set, and a made-up
+    `custom_test_only_field` key that only appears in THIS synthetic source
+    -- if this function were hardcoded to the real file's own key set, this
+    key would never show up in the result."""
+    source = (
+        "def _queue_reorder_sync_event(conn, rid, cid, bid, pid, st, msg, ts, evt, "
+        "*, row_version=None, updated_at_utc=None):\n"
+        "    conn.execute(\n"
+        "        'INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, "
+        "payload, created_at) VALUES (?,?,?,?,?,?)',\n"
+        "        (str(uuid4()), 'reorder_request', rid, evt, json.dumps({\n"
+        "            'id': rid, 'status': st, 'custom_test_only_field': 1,\n"
+        "        }), ts),\n"
+        "    )\n"
+        "\n"
+        "def _caller():\n"
+        "    _queue_reorder_sync_event(conn, rid, cid, bid, pid, 'pending', msg, now, "
+        "'create', row_version=1, updated_at_utc=now)\n"
+    )
+    tree = ast.parse(source)
+    keys, literal_sites, nonliteral_sites = reorder_payload_keys_for(tree, 'reorder_request', 'create')
+    assert keys == {'id', 'status', 'custom_test_only_field'}
+    assert literal_sites == 1
+    assert nonliteral_sites == 0
+
+
+def test_reorder_payload_keys_for_ignores_unrelated_entity_types():
+    """RED-direction mutation target for the early-return guard in
+    `reorder_payload_keys_for`: a call site whose literal `event_type` is
+    'create' -- the SAME literal nearly every OTHER tracked table's `create`
+    event also uses -- must NOT contribute a phantom nonliteral site to an
+    unrelated table's coverage just because this module also happens to
+    define `_queue_reorder_sync_event`. Deleting the `if entity_type !=
+    REORDER_ENTITY_TYPE: return set(), 0, 0` guard turns this test red
+    (nonliteral_sites becomes 1 instead of 0) -- verified by hand while
+    writing this test, not merely asserted to be true."""
+    source = (
+        "def _queue_reorder_sync_event(conn, rid, cid, bid, pid, st, msg, ts, evt):\n"
+        "    conn.execute(\n"
+        "        'INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, "
+        "payload, created_at) VALUES (?,?,?,?,?,?)',\n"
+        "        (str(uuid4()), 'reorder_request', rid, evt, json.dumps({'id': rid}), ts),\n"
+        "    )\n"
+        "\n"
+        "def _caller():\n"
+        "    _queue_reorder_sync_event(conn, rid, cid, bid, pid, 'pending', msg, now, 'create')\n"
+    )
+    tree = ast.parse(source)
+    keys, literal_sites, nonliteral_sites = reorder_payload_keys_for(tree, 'sale', 'create')
+    assert keys == set()
+    assert literal_sites == 0
+    assert nonliteral_sites == 0
+
+
+def test_reorder_payload_keys_for_flags_missing_function_def_as_nonliteral():
+    """A call site with a literal, matching event_type but NO local
+    `_queue_reorder_sync_event` definition in the same tree (e.g. imported
+    from elsewhere) must be counted as a nonliteral site, not silently
+    zero -- the same 'fail loudly rather than under-report' posture
+    `payload_keys_for` already takes for its own shape (see
+    test_payload_keys_for_flags_a_nonliteral_payload_instead_of_silently_
+    missing_it above)."""
+    source = (
+        "def _caller():\n"
+        "    _queue_reorder_sync_event(conn, rid, cid, bid, pid, 'pending', msg, now, 'create')\n"
+    )
+    tree = ast.parse(source)
+    keys, literal_sites, nonliteral_sites = reorder_payload_keys_for(tree, 'reorder_request', 'create')
+    assert keys == set()
+    assert literal_sites == 0
+    assert nonliteral_sites == 1
+
+
+def test_per_module_payload_keys_folds_in_the_reorder_shaped_site():
+    """Integration proof for the one-line addition inside
+    `per_module_payload_keys` itself: a synthetic module carrying BOTH an
+    ordinary `_queue_sync_event` site for an unrelated table AND a
+    `_queue_reorder_sync_event` site for 'reorder_request' must report
+    keys/literal_sites that include the second shape's contribution, not
+    just the first."""
+    source = (
+        "def create_widget():\n"
+        "    _queue_sync_event(cur, 'widget', wid, 'create', {'id': wid, 'name': n})\n"
+        "\n"
+        "def _queue_reorder_sync_event(conn, rid, cid, bid, pid, st, msg, ts, evt, "
+        "*, row_version=None, updated_at_utc=None):\n"
+        "    conn.execute(\n"
+        "        'INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, "
+        "payload, created_at) VALUES (?,?,?,?,?,?)',\n"
+        "        (str(uuid4()), 'reorder_request', rid, evt, "
+        "json.dumps({'id': rid, 'status': st}), ts),\n"
+        "    )\n"
+        "\n"
+        "def _caller():\n"
+        "    _queue_reorder_sync_event(conn, rid, cid, bid, pid, 'pending', msg, now, "
+        "'create', row_version=1, updated_at_utc=now)\n"
+    )
+    tree = ast.parse(source)
+    per_module = per_module_payload_keys({Path('mixed.py'): tree}, [('reorder_request', 'create')])
+    keys, lit, nonlit = per_module[Path('mixed.py')]
+    assert keys == {'id', 'status'}
+    assert lit == 1
+    assert nonlit == 0
 
 
 # ── FUNCTIONAL PROOF: a real route, a real payload, REAL VALUES ──────────────
