@@ -521,27 +521,81 @@ build next:**
   WHAT REMAINS TRUE from the old claim: no balance sheet, no P&L, no period
   close, no fiscal-year rollover, no retained-earnings posting, no
   multi-currency — v38 is deliberately just the core, and each of those
-  needs it to exist first. And, not previously said anywhere in this
-  document: **there is still no COGS and no gross profit.** `Inventory`
-  (account `1200`) is debited when stock is purchased and is NEVER credited
-  when it is sold — `sale_items` carries no cost column, and the sale's own
-  stock movement (`retail_api.py`, the `'sale_out'` insert into `inventory_
-  movements`) never writes `unit_cost`, unlike the `'purchase_in'` movement,
-  which does. `products.cost_price` is a CURRENT cost, not evidence of what
-  a unit actually cost when it was sold — schema.py says so in its own
-  words near its general-ledger migration. That gap is named and claimed as
-  the next schema version (retail v39, ROADMAP.md, 2026-09-21) rather than
-  left silent. `journal_entries`, the fossil this claim was originally
-  about, is UNCHANGED — still zero INSERTs, zero SELECTs in this codebase's
-  history, left in place and marked superseded in schema.py rather than
-  dropped, because dropping it buys nothing and risks a migration on live
-  shop data for no gain. The AR/AP subledger comment this bullet used to
-  quote — "a future double-entry GL CONSUMES these records" — is no longer
-  aspirational; v38 is that future, though it does not yet feed a
-  presentation layer (no balance-sheet/P&L reads it yet). The "what's real
-  and solid" list above still does not mention any of this — that list is
-  itself untouched by this correction, per this document's own rule not to
-  restructure sections outside the one being corrected.
+  needs it to exist first. ~~And, not previously said anywhere in this
+  document: **there is still no COGS and no gross profit.**~~ **FALSE AS OF
+  2026-09-21 — retail schema v39 shipped it, the same day it was claimed.**
+  This was true when written, earlier the same day: `Inventory` was debited
+  when stock was purchased and never credited when it was sold, because
+  `sale_items` had no cost column and the sale's own stock movement never
+  wrote `unit_cost`, unlike the purchase movement. It no longer is.
+  `_migrate_add_cost_basis` (`RETAIL_SCHEMA_VERSION` now **39**) added
+  `products.avg_cost` — a MOVING WEIGHTED AVERAGE maintained at
+  purchase-order receipt (`new_avg = (qty_on_hand*old_avg +
+  received_qty*received_unit_cost) / (qty_on_hand+received_qty)`), a
+  deliberate choice over FIFO and last-cost: FIFO needs cost layers this
+  product has never tracked, and would be wrong from day one anyway, because
+  inter-branch `transfer_out`/`transfer_in` movements carry no `unit_cost`
+  at all. `sale_items.unit_cost`, a per-line cost SNAPSHOT `create_sale` now
+  writes, is DELIBERATELY NOT BACKFILLED for rows written before v39 — 0
+  there means "no snapshot taken", UNKNOWN, never "free goods"; writing
+  today's cost into a months-old sale would manufacture exactly the false
+  precision schema.py already refuses in its own words, near
+  `_v15_seed_opening_counts`'s docstring. `general_ledger.py::post_cogs` now
+  debits `5900 Cost of Goods Sold` / credits `1200 Inventory` on a sale and
+  mirrors it on a return, using that snapshot (falling back to `cost_price`
+  when none exists); a document with no known cost basis posts nothing
+  rather than fabricate a journal, and is never blocked by it.
+  `metrics.py::cogs()` and `inventory_value()` prefer the same
+  snapshot/`avg_cost` the same way, which is the actual fix for this file's
+  own `KNOWN GAP -- COST AT TIME OF SALE` section (`metrics.py:308`): gross
+  profit no longer moves when a shopkeeper edits today's cost price, because
+  it now reads what a unit cost AT THE MOMENT IT SOLD, not what it costs
+  right now. Measured 2026-09-21, repo venv, one file per process:
+  `retail_v39_cost_basis_test.py` 13 passed, `retail_cogs_history_test.py` 7
+  passed, `retail_gl_posting_test.py` 20 passed, `retail_gl_
+  integration_test.py` 15 passed, `retail_gl_route_test.py` 6 passed; a
+  dedicated `retail_gl_cogs_test.py` also exists, written by a separate
+  concurrent pass, so its count is not quoted here. Full detail in
+  ROADMAP.md's 2026-09-21 "v39 CLAIMED" and "v39 CASHED IN" entries.
+
+  WHAT STILL REMAINS TRUE, even after v39: no balance sheet, no P&L, no
+  period close, no fiscal-year rollover, no retained-earnings posting, no
+  multi-currency, and — new to this correction — no PER-BRANCH cost basis:
+  `avg_cost` lives on `products`, which is company-scoped, and inter-branch
+  transfers still carry no cost, so branch-level inventory valuation stays
+  unavailable. `journal_entries`, the fossil this claim was originally
+  about, is STILL UNCHANGED — still zero INSERTs, zero SELECTs in this
+  codebase's history, left in place and marked superseded in schema.py
+  rather than dropped, because dropping it buys nothing and risks a
+  migration on live shop data for no gain.
+
+  A SEPARATE BUG the v39 pass found and fixed, unrelated to COGS:
+  `sales.points_redeemed_amount` had NEVER synced between devices — shipped
+  in loyalty redemption (schema v27), but `create_sale`'s outbox payload
+  never carried the column and `sale` has no `update` sync event to carry it
+  later, so two tills could disagree about how much of the same sale was
+  paid in points. Now on the wire, caught by a NEW ratchet,
+  `retail_sync_payload_coverage_test.py` (18 passed), which derives the
+  column side of "does every column reach the sync payload" from a real
+  migrated database and the payload side by AST-parsing the sync-queueing
+  calls in `retail_api.py` — never two hand-typed lists compared to each
+  other, the same mistake `MarkGeometryParityContractTest` already taught
+  this repo once.
+
+  A GAP RECORDED, NOT FIXED, by the same pass: there is still no
+  schema-version skew guard anywhere in the sync paths — no route checks
+  `RETAIL_SCHEMA_VERSION` before push, pull or apply, so a v38 device and a
+  v39 device sync silently and an older peer simply drops a column it never
+  migrated onto.
+
+  The AR/AP subledger comment this bullet used to quote — "a future
+  double-entry GL CONSUMES these records" — is no longer aspirational; v38
+  was that future for the ledger core, and v39 is the cost basis it needed
+  to post COGS from. Neither yet feeds a presentation layer (no
+  balance-sheet/P&L reads either). The "what's real and solid" list above
+  still does not mention any of this — that list is itself untouched by
+  this correction, per this document's own rule not to restructure sections
+  outside the one being corrected.
 - **AR/AP IS ANDROID-ONLY, inverting the usual pattern.** Receivables,
   payables, aging, statements and daily cash exist in full on Android and are
   **absent from the desktop client** this document calls the most actively
@@ -565,11 +619,21 @@ settlement split, v37 requantizes the `payments` rows create_sale wrote at 2dp.
 **AND THAT LINE IS STALE TOO, PREDICTABLY — retail schema is v38 as of
 2026-09-20/21.** v38 is the general ledger described in the correction just
 above; ROADMAP.md carries the "v38 CLAIMED" (2026-09-20) and "v38 CASHED IN"
-(2026-09-21) entries. v35 remains the only unclaimed hole. v39 is now
+(2026-09-21) entries. v35 remains the only unclaimed hole. ~~v39 is now
 claimed too — not cashed in, no schema change exists for it yet — for COGS
-and inventory valuation, the gap the correction above names explicitly.
-Read `RETAIL_SCHEMA_VERSION` itself rather than trusting this paragraph to
-still be current by the time it is read; it has now been wrong twice.
+and inventory valuation, the gap the correction above names explicitly.~~
+**v39 IS CASHED IN TOO, the same day it was claimed — see below.** Read
+`RETAIL_SCHEMA_VERSION` itself rather than trusting this paragraph to still
+be current by the time it is read; it has now been wrong twice.
+
+**AND THAT LINE IS STALE ONCE MORE — retail schema is v39 as of 2026-09-21.**
+v39 is the moving weighted-average cost basis and COGS/Inventory posting
+described in the correction above; ROADMAP.md carries the "v39 CLAIMED" and
+"v39 CASHED IN" entries, both dated 2026-09-21 — claimed and delivered the
+same day, unlike v38, which was claimed one day and cashed in the next. v35
+remains the only unclaimed hole. Read `RETAIL_SCHEMA_VERSION` itself rather
+than trusting this paragraph to still be current by the time it is read; it
+has now been wrong three times running.
 
 ### Corrections (round 4, 2026-09-18) — the money path, measured
 

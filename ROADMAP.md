@@ -5598,3 +5598,212 @@ anywhere in schema.py as of this entry. Whoever designs and lands it should
 update this entry — or add a "v39 CASHED IN" entry below it, matching this
 ledger's v37/v38 convention — rather than silently changing what v39 turned
 out to mean.
+
+
+## 2026-09-21 — retail schema v39 CASHED IN: moving weighted-average cost, delivered
+
+Claimed above, the same day ("2026-09-21 — retail schema v39 CLAIMED: COGS
+and inventory valuation", immediately above). `RETAIL_SCHEMA_VERSION` is now
+**39**; v35 is still the untouched Aseel-parity hole.
+
+THE DECISION the CLAIMED entry deliberately left open. Moving weighted
+average, not FIFO, not last-cost:
+
+    new_avg = (qty_on_hand * old_avg + received_qty * received_unit_cost)
+              / (qty_on_hand + received_qty)
+
+WHY NOT FIFO: it needs cost layers — a new table, consumption logic on every
+sale, reversal logic on every return, and a per-branch story — and it would
+be wrong from day one here regardless, because inter-branch `transfer_out`/
+`transfer_in` movements carry NO `unit_cost` at all today; stock moves
+between branches at zero cost. Weighted average degrades gracefully: with a
+single purchase in a product's history it equals last cost. FIFO remains
+buildable later on top of `inventory_movements.unit_cost`, which this
+migration does not touch. Recorded as a DECISION, not a default, because the
+CLAIMED entry explicitly left this open and the next reader needs to know it
+was chosen rather than fallen into.
+
+WHAT SHIPPED.
+
+`products/retail/backend/database/schema.py` — `RETAIL_SCHEMA_VERSION` is
+39; `_migrate_add_cost_basis` adds two columns and nothing else:
+
+    products.avg_cost    REAL DEFAULT 0
+    sale_items.unit_cost REAL DEFAULT 0
+
+`products.avg_cost` IS backfilled, once, from `products.cost_price` — the
+same best-effort plug `_migrate_add_return_settlement_split` (v36) and
+`_migrate_add_general_ledger` (v38) already use for a column that has to
+start somewhere, disclosed rather than left to be discovered.
+
+`sale_items.unit_cost` is DELIBERATELY NOT BACKFILLED. Every pre-v39 row
+stays 0, and 0 means "no snapshot was taken" — UNKNOWN, never "free goods".
+Writing today's `cost_price` into a months-old sale would manufacture the
+exact false precision schema.py already refuses in its own words, in
+`_v15_seed_opening_counts`'s docstring: "the shop's cost_price today is not
+evidence of what this stock cost when it arrived, and valuation reading a
+made-up figure is worse than valuation reading a zero it can see." A reader
+who does not know this is deliberate will mistake it for an omission, so it
+is said plainly here.
+
+`products/retail/backend/api/retail_api.py` — purchase-order receipt
+(~line 3777) maintains `avg_cost` as the moving average above, and
+deliberately does NOT overwrite `products.cost_price`, which stays the
+shopkeeper's own typed field. `create_sale` (~line 6250) resolves a per-line
+cost basis — `avg_cost` when it is nonzero, else `cost_price` — and stores
+it on the `sale_items` row it writes (~line 6363).
+
+`products/retail/backend/core/retail/general_ledger.py` — `post_cogs`
+(~line 803), one function for both directions, the same shape
+`post_supplier_payment` already uses for its own two callers: Dr `5900 Cost
+of Goods Sold` / Cr `1200 Inventory` on a sale, Cr COGS / Dr Inventory on a
+return of the same lines. Called from `create_sale` (~line 7020) and
+`create_return` (~line 8748). Account `5900` was seeded by v38's default
+chart and had never been posted to — v38's own write-up named that as its
+headline remaining gap, and this is what closes it. A sale or return with no
+known cost basis on any of its lines posts NOTHING rather than fabricate a
+journal, and never blocks the document — the same "unknown must mean
+unknown, not zero" contract `sale_items.unit_cost` itself carries.
+
+THE DEFECT THIS CLOSES, already disclosed and deferred by the codebase
+itself: `metrics.py:308-323` has carried a section headed "KNOWN GAP --
+COST AT TIME OF SALE (follow-up, NOT fixed here)" saying COGS and gross
+profit had to join `products.cost_price` — the cost the product has RIGHT
+NOW, not what it cost when it sold — so raising a cost price today
+retroactively shrank last month's gross profit, and prescribing the exact
+fix: "a `unit_cost` column on sale_items plus a PRAGMA user_version
+migration and a write-side change in create_sale()". That is precisely v39,
+so this is a debt the codebase booked against itself and has now paid, not a
+newly discovered bug. `metrics.py::cogs()` now prefers the snapshot and
+falls back to `cost_price` when there is none, on both the sold leg and the
+returned leg (the returned leg reaching the ORIGINAL sale line's snapshot
+through a correlated subquery, deliberately `LIMIT 1` rather than a JOIN, so
+a modifier variant's sibling lines cannot multiply the returned quantity).
+The fallback is the point: reading the snapshot blindly and defaulting a
+missing one to zero would price all of history at zero and report 100%
+margins on every past month — strictly worse than the gap being closed.
+`inventory_value()` likewise prefers `avg_cost` over `cost_price`. Both feed
+the desktop Reports "Gross Profit" tile and Android's `StatCard("Gross
+Profit", ...)`, so this was visible to shopkeepers on both clients.
+
+A SEPARATE, PRE-EXISTING BUG FOUND AND FIXED IN THE SAME PASS, unrelated to
+COGS — given its own heading so a reader scanning for loyalty issues can
+find it: `sales.points_redeemed_amount` had NEVER synced between devices.
+Loyalty redemption shipped it in schema v27, but `create_sale`'s outbox
+payload never carried the column and `sale` has no `update` sync event that
+would carry it later, so on every peer device a sale that redeemed points
+read 0 redeemed — two tills disagreeing about how the same sale was paid.
+Now on the wire.
+
+NEW RATCHET: `products/retail/tests/retail_sync_payload_coverage_test.py`.
+Multi-device sync serialises rows using hardcoded, explicit column lists,
+and the receiving side reads each column with `p.get(...)` and silently
+ignores keys it does not recognise — so a synced table that gains a column
+nobody adds to its payload list never converges between devices, with no
+error and no failing test. The ratchet derives the column side from a real
+migrated database (`PRAGMA table_info`) and the payload side by AST-parsing
+the `_queue_sync_event(...)` calls in `retail_api.py` — never two hand-typed
+lists, which compare equal to each other while both drift from the product,
+the same lesson `MarkGeometryParityContractTest` already taught this repo
+about hardcoded coordinates. Exclusions require a written reason of at least
+40 characters or the test fails. It covers 10 tables. It was RED on exactly
+three findings when first written — `sale_items.unit_cost`,
+`products.avg_cost`, `sales.points_redeemed_amount` — and is now 18 passed;
+it caught all three, including the loyalty one nobody was looking for.
+
+KNOWN GAP, RECORDED NOT FIXED: there is no schema-version skew guard
+anywhere in the sync paths. No route checks `RETAIL_SCHEMA_VERSION` before
+push, pull or apply, so a v38 device and a v39 device sync silently, and an
+older peer simply drops a column it never migrated onto. Written down here
+with its consequence rather than left to be found. A known gap written down
+is a decision; an unwritten one is a trap.
+
+ALSO STILL OUT OF SCOPE, unchanged from v38: period close, fiscal-year
+rollover, retained-earnings posting, multi-currency, balance sheet / P&L
+presentation. And, new to v39: a per-BRANCH cost basis. `avg_cost` lives on
+`products`, which is company-scoped, and inter-branch transfers still carry
+no cost, so branch-level inventory valuation remains unavailable.
+
+MEASURED 2026-09-21, repo venv, one file per process:
+
+    retail_v39_cost_basis_test.py           13 passed
+    retail_cogs_history_test.py              7 passed
+    retail_sync_payload_coverage_test.py    18 passed
+    retail_gl_integration_test.py           15 passed
+    retail_gl_posting_test.py               20 passed
+    retail_gl_route_test.py                  6 passed
+
+A dedicated `retail_gl_cogs_test.py` was written in the same pass by a
+separate, concurrent agent — COGS has dedicated coverage beyond the counts
+above, but its count is not quoted here since this entry cannot verify it
+independently.
+
+## 2026-09-22 — retail schema v40 CLAIMED: a per-branch cost basis
+
+**Reserving the version integer before the migration exists**, per this
+ledger's convention and because `RETAIL_SCHEMA_VERSION` is a single-writer
+resource shared with branches that are not on master. Claimed BEFORE any
+parallel work is dispatched against it — two agents discovering they both
+wanted the next integer is a collision that does not fail loudly, because the
+migration chain gates on live shape rather than on the number.
+
+### Why
+
+v39 shipped a moving weighted-average cost on `products.avg_cost`, and said
+in its own entry that a per-BRANCH basis was out of scope. That gap is the
+one that bites a multi-branch shop: `products` is company-scoped, so every
+branch shares one average. A shop that buys the same SKU cheaply for one
+branch and dearly for another sees a single blended figure, and neither
+branch's cost of goods sold is right.
+
+Worse, and the part that makes this a schema problem rather than a query
+problem: **inter-branch transfers carry no cost at all.** `transfer_out` and
+`transfer_in` both write `unit_cost` 0 into `inventory_movements`
+(api/retail_api.py). Today that is harmless — a company-wide average does not
+change when stock moves inside the company, which is arithmetically correct
+and is why v39 deliberately left transfers alone. The moment cost is tracked
+per branch it stops being harmless: stock moving from a branch that paid 4.00
+to one that paid 10.00 must carry its cost with it, or the receiving branch
+values it at nothing and the sending branch keeps value it no longer holds.
+
+### What v40 is expected to be, and what is still undecided
+
+**Is:** a per-branch cost basis, and a transfer that carries cost.
+
+**Undecided, and deliberately not decided here** — the shape of the storage
+(a column on an existing per-branch stock table versus a new one), and
+whether a transfer moves cost at the sending branch's average or at a
+transfer-time snapshot. Both need the code read first. What IS settled is the
+valuation METHOD: moving weighted average, unchanged from v39, because two
+valuation conventions in one product is exactly the drift this ledger keeps
+having to correct.
+
+**Is NOT:** FIFO. v39 recorded why (cost layers, consumption on every sale,
+reversal on every return, and a per-branch story), and a per-branch basis
+makes that strictly harder, not easier.
+
+### Constraints this must respect
+
+* **Do not introduce a second money convention.** Quantize through the same
+  helpers and compare through `_money_epsilon(currency)`, never a hardcoded
+  threshold — CLAUDE.md's round-4 corrections exist because ~25 gates drifted
+  apart exactly that way, and doing one in isolation already caused a real
+  defect once.
+* **`sale_items.unit_cost` stays the snapshot of record.** Whatever v40 does
+  to the basis, a sale that has already happened must keep reporting the cost
+  it was rung at; that immutability is the whole point of v39 and must not be
+  re-derived from a new per-branch figure.
+* **Every new column must reach the wire AND the apply path.** v39 shipped
+  three columns that travelled correctly and were silently dropped on
+  arrival, because the receiving side in `commercial_runtime/sync/
+  sync_service.py` did not know them. `retail_sync_payload_coverage_test.py`
+  now catches the send half; it structurally cannot catch the receive half,
+  nor a write path that emits no event at all (a purchase-order receipt was
+  exactly that). Check both by hand.
+* **Backfill honestly or not at all.** v39 backfilled `avg_cost` from
+  `cost_price` as a disclosed plug and deliberately left `sale_items.
+  unit_cost` at 0 for history, because "the shop's cost_price today is not
+  evidence of what this stock cost when it arrived, and valuation reading a
+  made-up figure is worse than valuation reading a zero it can see". A
+  per-branch backfill has no better evidence available and should not pretend
+  otherwise.
