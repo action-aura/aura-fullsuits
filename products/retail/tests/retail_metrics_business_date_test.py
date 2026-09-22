@@ -285,6 +285,18 @@ def teardown_module(module):
 
 
 # ── fixture ───────────────────────────────────────────────────────────────────
+#
+# `sale_items.unit_cost` (schema v39, database/schema.py::_migrate_add_cost_
+# basis) is declared below with its real DEFAULT 0 and is never written by
+# `_sale()` -- every row this file creates is therefore a "no snapshot taken"
+# row, exactly like a pre-v39 sale, and `metrics.cogs()`/`top_products()`
+# resolve their cost through the COALESCE fallback to `products.cost_price`
+# (== COST == 10.0 everywhere here), not through the snapshot leg. That is
+# deliberate, not an oversight: this file's tests are about WHICH BUSINESS-
+# DATE BUCKET a cost figure lands in, not about which of the two v39 cost
+# bases it is computed from -- the snapshot-vs-fallback question belongs to,
+# and is covered by, retail_v39_cost_basis_test.py / retail_cogs_history_
+# test.py / retail_gl_cogs_test.py, none of which this file duplicates.
 
 _BASE_DDL = """
 CREATE TABLE branches (
@@ -295,7 +307,8 @@ CREATE TABLE products (
     id TEXT PRIMARY KEY, company_id INTEGER DEFAULT 1, sku TEXT NOT NULL, barcode TEXT,
     name TEXT NOT NULL, category_id TEXT, cost_price REAL DEFAULT 0, sell_price REAL DEFAULT 0,
     tax_rate REAL DEFAULT 0, unit TEXT DEFAULT 'pcs', reorder_level INTEGER DEFAULT 5,
-    status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+    status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at_utc TEXT, avg_cost REAL DEFAULT 0);
 CREATE TABLE inventory_balances (
     id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1,
     product_id TEXT NOT NULL, branch_id INTEGER NOT NULL,
@@ -311,7 +324,7 @@ CREATE TABLE sales (
 CREATE TABLE sale_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, sale_id INTEGER NOT NULL, product_id TEXT NOT NULL,
     quantity REAL NOT NULL, unit_price REAL NOT NULL, discount_pct REAL DEFAULT 0,
-    tax_rate REAL DEFAULT 0, line_total REAL NOT NULL);
+    tax_rate REAL DEFAULT 0, line_total REAL NOT NULL, unit_cost REAL DEFAULT 0);
 CREATE TABLE returns (
     id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1, return_number TEXT UNIQUE,
     sale_id INTEGER, branch_id INTEGER, cashier TEXT DEFAULT 'POS', reason TEXT,

@@ -305,22 +305,51 @@ there is exactly one place to argue with them.
    `users` table -- a DIFFERENT DATABASE, on a connection this module does
    not hold and must not open. The uid is returned raw; the route joins it.
 
-KNOWN GAP -- COST AT TIME OF SALE (follow-up, NOT fixed here)
-=============================================================
-`sale_items` captures quantity/unit_price/discount_pct/tax_rate/line_total
-but NO cost snapshot (see database/schema.py's sale_items CREATE TABLE and
-the v12 rebuild of it -- there is no cost column in either). So COGS and
-gross profit below must join products.cost_price, i.e. the cost the product
-has RIGHT NOW, not what it cost when it sold. Raising a cost price today
-therefore retroactively shrinks last month's gross profit.
+KNOWN GAP -- COST AT TIME OF SALE -- CLOSED 2026-09-21 (schema v39)
+====================================================================
+THE ORIGINAL GAP, for context (everything below this paragraph until
+"CLOSED" was true and is kept rather than deleted, per this file's own
+history of correcting itself in place instead of quietly editing the
+record): `sale_items` captured quantity/unit_price/discount_pct/tax_rate/
+line_total but NO cost snapshot (see database/schema.py's sale_items CREATE
+TABLE and the v12 rebuild of it -- there was no cost column in either). So
+COGS and gross profit below had to join products.cost_price, i.e. the cost
+the product has RIGHT NOW, not what it cost when it sold. Raising a cost
+price today therefore retroactively shrank last month's gross profit. That
+was a real defect and it was flagged, not silently papered over -- and
+fixing it needed a `unit_cost` column on sale_items plus a PRAGMA
+user_version migration and a write-side change in create_sale(),
+deliberately out of scope for the pass that first wrote this section.
 
-That is a real defect and it is flagged, not silently papered over. Fixing
-it needs a `unit_cost` column on sale_items plus a PRAGMA user_version
-migration and a write-side change in create_sale() -- deliberately out of
-scope for this pass, which is about making the figures AGREE with each
-other. Every cost/profit figure produced here is consistently wrong in the
-same direction until that migration lands, which is strictly better than
-today's mix of consistent-with-nothing.
+CLOSED. Schema v39 (database/schema.py::_migrate_add_cost_basis) added the
+two columns that section said were missing:
+
+    sale_items.unit_cost REAL DEFAULT 0  -- per-line cost SNAPSHOT, written
+                                             by create_sale() going forward
+    products.avg_cost    REAL DEFAULT 0  -- moving weighted-average cost,
+                                             backfilled once from cost_price,
+                                             maintained at PO receipt
+
+`cogs()` and `top_products()` below now PREFER the snapshot and fall back to
+`cost_price` only when there is none (a pre-v39 row, or one where no
+snapshot was ever taken) -- see `cogs()`'s own docstring for the full
+reasoning, including why its two legs can safely resolve cost from
+different places and still net correctly. `inventory_value()` similarly
+prefers `avg_cost` over `cost_price` for the same "maintained beats
+manually-typed" reason, argued in its own docstring.
+
+LEFT DELIBERATELY IMPERFECT, stated rather than hidden: `cost_price` is
+still the LAST-RESORT fallback everywhere above, which means every row that
+predates v39 -- and any row where a snapshot was skipped for some other
+reason -- is STILL priced at whatever `cost_price` reads RIGHT NOW, exactly
+as this whole section originally described. That is not a residue of this
+fix; it is what "no snapshot was taken" has to mean when there is truly no
+historical figure to fall back on (`cogs()`'s docstring argues why reading
+the snapshot blindly, defaulting a missing one to zero, would be strictly
+worse than this). The boundary is permanent, the same way `KNOWN GAP --
+HISTORY IS UNSTAMPED` below is one: a real install's pre-v39 trading history
+will always report cost the old way, and that is the honest answer, not
+merely a tolerated one.
 
 KNOWN GAP -- HISTORY IS UNSTAMPED, AND ALWAYS WILL BE
 =====================================================
@@ -1147,18 +1176,77 @@ def cogs(conn, cid, period, branch_id=None, currency=None):
     their cost genuinely was not consumed. Subtracting them is the accurate
     answer, not merely the self-consistent one.
 
-    Both legs are `quantity * products.cost_price`, i.e. the same expression
-    over the same column, so the #7 basis question does not arise here at all
-    -- a purchase cost carries no sales tax and neither leg has one. (Stated
-    because "check both sides of every subtraction" is the rule that
-    top_products failed; this is what checking it looks like when it passes.)
+    COST BASIS, schema v39 onward (database/schema.py::_migrate_add_cost_
+    basis): each leg PREFERS the per-line cost SNAPSHOT and FALLS BACK to
+    today's `products.cost_price` when there is none -- this is the fix for
+    the KNOWN GAP section in this module's own docstring.
 
-    Uses products.cost_price as it stands RIGHT NOW on both sides -- see the
-    KNOWN GAP section in this module's docstring."""
+      * SOLD leg: `si.unit_cost`, the snapshot create_sale() writes going
+        forward, when it is nonzero; else `p.cost_price`.
+      * RETURNED leg: `return_items` carries no cost column of its own and
+        never will (it is a refund record, not a second sale). So this leg
+        looks up the ORIGINAL SALE LINE the return reverses -- from
+        `return_items` through the return's `sale_id` to the matching
+        `sale_items` row on `product_id` -- and uses THAT row's `unit_cost`,
+        nonzero, else `p.cost_price`. A correlated subquery (`LIMIT 1`, not a
+        JOIN) does the lookup on purpose: a JOIN that happened to match more
+        than one sale_items row for the same (sale, product) -- two sibling
+        lines from a modifier variant, schema v26 -- would multiply the
+        returned quantity by each match and overstate the cost. `LIMIT 1` is
+        safe here specifically because every sibling line of one product
+        within one sale reads the SAME `unit_cost` (it is a snapshot of
+        `avg_cost` taken once, at that sale's moment, not a per-line figure),
+        so which sibling the subquery happens to pick can never change the
+        answer.
+
+    WHY THE FALLBACK, stated because it is the entire reason this is not a
+    regression: a pre-v39 row has `unit_cost = 0`, which means "no snapshot
+    was taken", NOT "these goods were free". Reading the snapshot blindly
+    would price every pre-v39 sale at zero cost and report ~100% margins on
+    the shop's entire history up to the day this migration ran -- strictly
+    WORSE than the defect being fixed, which only ever mispriced history by
+    however much `cost_price` had moved since. With the fallback, a sale rung
+    before v39 behaves EXACTLY as it always has, and a sale rung from v39
+    onward is permanently correct regardless of what `cost_price` does later.
+    That is a strict improvement with no regression.
+
+    RE-ARGUING "CHECK BOTH SIDES OF EVERY SUBTRACTION" -- the rule
+    top_products() failed (#7), which this function's docstring used to cite
+    as the reason its own two legs were safe. Before this change that
+    argument was "both legs are `quantity * products.cost_price`, the SAME
+    expression over the SAME column, so the question does not arise." That
+    sentence is no longer true: the two legs can now resolve cost from
+    DIFFERENT places. Netting is still correct, for a sharper reason -- for
+    any ONE unit of stock, whichever basis SOLD it is the basis its RETURN
+    resolves to, by construction:
+
+      * A v39 SALE, later returned: the sold leg priced that unit at the
+        sale's own `unit_cost` snapshot; the returned leg's subquery finds
+        that EXACT `sale_items` row and reads the SAME snapshot back, never
+        today's `cost_price`. The two legs cancel to exactly zero net cost
+        for that unit, in whichever periods the sale and the return each
+        fall into, however far apart and however much `cost_price` has moved
+        between them. THAT is the point of the migration: the old
+        cost_price-at-read-time version netted a sale (priced under one
+        `cost_price` reading) against its return (priced under a possibly
+        later, different reading) and left a residue that was pure noise
+        from a price edit, not a real cost.
+      * A pre-v39 SALE, later returned (`unit_cost=0` on the original line,
+        so the subquery's lookup resolves to 0 too): both legs fall back to
+        `p.cost_price`, read at the SAME instant this one `cogs()` call
+        executes, so they are once again the same expression over the same
+        column FOR THAT CALL -- the exact guarantee the pre-fix docstring
+        described, preserved unchanged for every row this migration does not
+        touch.
+
+    Uses `products.cost_price` as the LAST-RESORT fallback on both legs --
+    see the KNOWN GAP section in this module's docstring for what is still
+    imperfect about that fallback itself (unchanged by this pass)."""
     boundary = business_day(conn, cid)
     sale_where, sale_params = _scope(cid, period, boundary, branch_id, alias='s')
     sold = conn.execute(f"""
-        SELECT COALESCE(SUM(si.quantity * p.cost_price),0)
+        SELECT COALESCE(SUM(si.quantity *
+                             COALESCE(NULLIF(si.unit_cost, 0), p.cost_price)), 0)
         FROM sale_items si
         JOIN products p ON si.product_id=p.id
         JOIN sales s ON si.sale_id=s.id
@@ -1167,7 +1255,11 @@ def cogs(conn, cid, period, branch_id=None, currency=None):
 
     ret_where, ret_params = _scope(cid, period, boundary, branch_id, alias='r')
     rows = _returns_query(conn, f"""
-        SELECT COALESCE(SUM(ri.quantity * p.cost_price),0)
+        SELECT COALESCE(SUM(ri.quantity * COALESCE(NULLIF((
+            SELECT si.unit_cost FROM sale_items si
+            WHERE si.sale_id = r.sale_id AND si.product_id = ri.product_id
+            ORDER BY si.id LIMIT 1
+        ), 0), p.cost_price)), 0)
         FROM return_items ri
         JOIN products p ON ri.product_id=p.id
         JOIN returns r ON ri.return_id=r.id
@@ -1181,13 +1273,36 @@ def inventory_value(conn, cid, currency=None):
     """Stock on hand at current cost. Not period- or branch-scoped: it is a
     snapshot of right now, which is why it takes no Period.
 
+    COST BASIS, schema v39 onward (database/schema.py::_migrate_add_cost_
+    basis): prefers `p.avg_cost`, the moving weighted-average cost maintained
+    at purchase-order receipt (see this module's KNOWN GAP section), and
+    falls back to `p.cost_price`, the manually-typed figure, when avg_cost is
+    zero -- the identical `COALESCE(NULLIF(x,0), fallback)` shape `cogs()`
+    now uses for the same reason. `avg_cost` IS backfilled from `cost_price`
+    at migration time, so on a freshly-migrated install the two columns are
+    identical and this changes nothing on day one; the fallback exists for a
+    hand-built fixture (or a database rebuilt outside the normal migration
+    chain) that carries `avg_cost=0` beside a real `cost_price`, the same
+    defensive posture every other v39-basis read in this module takes.
+
+    WHY avg_cost IS THE BETTER BASIS FOR A "RIGHT NOW" FIGURE. `cost_price`
+    is a manual, point-in-time entry nobody is obliged to revisit; `avg_cost`
+    is a running figure MAINTAINED by every purchase-order receipt (a moving
+    weighted average over what stock actually cost to bring in -- see the
+    KNOWN GAP section for why weighted-average rather than FIFO). A snapshot
+    of "what is my stock worth right now" should read the figure the system
+    keeps current, not the one a shopkeeper may have typed once and never
+    looked at again.
+
     launch-readiness Phase 6 stage 6b-iii-a: `AND p.deleted_at_utc IS NULL`
     added alongside the existing `p.status='active'` -- this is a "right now"
     snapshot, so a tombstoned product's leftover balance would otherwise
     inflate it forever, exactly the failure mode `docs/launch-readiness/
-    phase6b-deltas-and-tombstones.md` names this function for."""
+    phase6b-deltas-and-tombstones.md` names this function for. Both filters
+    are unchanged by this pass."""
     row = conn.execute("""
-        SELECT COALESCE(SUM(b.quantity_on_hand * p.cost_price),0)
+        SELECT COALESCE(SUM(b.quantity_on_hand *
+                             COALESCE(NULLIF(p.avg_cost, 0), p.cost_price)), 0)
         FROM inventory_balances b JOIN products p ON b.product_id=p.id
         WHERE b.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
     """, (cid,)).fetchone()
@@ -1381,7 +1496,23 @@ def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
 
     Units and revenue are both net: a returned unit is subtracted from the
     product's units_sold and its refund from the product's revenue, via
-    return_items. Cost/profit carry the current-cost caveat (KNOWN GAP).
+    return_items.
+
+    COST/PROFIT, schema v39 onward: computed on EXACTLY the same basis
+    `cogs()` uses -- per-line `sale_items.unit_cost` snapshot on the sold
+    side, the ORIGINAL sale line's snapshot (looked up the identical way
+    `cogs()`'s returned leg does, via a `LIMIT 1` correlated subquery, for
+    the identical reason -- see that function's docstring) on the returned
+    side, both falling back to `p.cost_price` when there is no snapshot.
+    This is NOT optional polish: `summary()`'s `gross_profit` card is
+    `revenue() - cogs()`, and this function's `profit` column is the
+    PER-PRODUCT breakdown of that same card (#4's own text: "the Reports
+    summary card would report a different profit from the per-product
+    profit column beside it"). Computing this column on `cost_price` alone
+    while `cogs()` moved to the snapshot basis would silently reopen that
+    exact disagreement -- untruncated, this function's costs must sum back
+    to `cogs()` for the same period/branch, the same way its revenues sum
+    back to `revenue()` (see the module-level note above this section).
 
     THE SALES LEG DOES NOT READ sale_items.line_total. It cannot: that
     column holds the TAXABLE amount (tax excluded) while return_items
@@ -1426,6 +1557,47 @@ def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
         GROUP BY ri.product_id
     """, ret_params)
 
+    # COST, per product -- see this function's docstring's "COST/PROFIT,
+    # schema v39 onward" paragraph. Grouped by product_id (unlike the
+    # revenue query above, which groups by the full line shape to keep its
+    # per-line tax re-pricing exact); cost has no such requirement since it
+    # is a plain SUM either way. Same `sale_where`/`sale_params` as the
+    # revenue query above -- one `_scope()` call, reused, so these two
+    # queries are structurally incapable of scoping to different rows.
+    sold_cost_rows = conn.execute(f"""
+        SELECT si.product_id AS pid,
+               COALESCE(SUM(si.quantity *
+                            COALESCE(NULLIF(si.unit_cost, 0), p.cost_price)), 0) AS cost
+        FROM sale_items si
+        JOIN sales s ON si.sale_id=s.id
+        JOIN products p ON si.product_id=p.id
+        WHERE {sale_where}
+        GROUP BY si.product_id
+    """, sale_params).fetchall()
+    sold_cost = {row['pid']: float(row['cost'] or 0) for row in sold_cost_rows}
+
+    # RETURNED cost, at the ORIGINAL sale line's snapshot -- identical
+    # lookup to cogs()'s returned leg (correlated subquery, LIMIT 1, and the
+    # identical reason: a JOIN risks multiplying by more than one sibling
+    # sale_items row for the same (sale, product), which LIMIT 1 cannot do
+    # because every sibling shares one unit_cost snapshot anyway -- see
+    # cogs()'s docstring). Wrapped in `_returns_query` for the same missing-
+    # table tolerance the revenue-side `rets` query above already has.
+    ret_cost_rows = _returns_query(conn, f"""
+        SELECT ri.product_id AS pid,
+               COALESCE(SUM(ri.quantity * COALESCE(NULLIF((
+                   SELECT si.unit_cost FROM sale_items si
+                   WHERE si.sale_id = r.sale_id AND si.product_id = ri.product_id
+                   ORDER BY si.id LIMIT 1
+               ), 0), p.cost_price)), 0) AS cost
+        FROM return_items ri
+        JOIN returns r ON ri.return_id=r.id
+        JOIN products p ON ri.product_id=p.id
+        WHERE {ret_where}
+        GROUP BY ri.product_id
+    """, ret_params)
+    ret_cost = {row['pid']: float(row['cost'] or 0) for row in ret_cost_rows}
+
     totals = {}
     for row in sales:
         count = int(row['line_count'] or 0)
@@ -1458,12 +1630,15 @@ def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
     limit = max(1, min(int(limit), 500))
     ranked = sorted(totals.items(), key=lambda kv: kv[1]['units'], reverse=True)[:limit]
 
-    # Names/SKUs/costs by id rather than by JOIN, because a product that
-    # appears ONLY in return_items for this window still has to be nameable.
+    # Names/SKUs by id rather than by JOIN, because a product that appears
+    # ONLY in return_items for this window still has to be nameable. No
+    # cost_price here any more -- the sold_cost/ret_cost dicts above already
+    # resolved the correct basis (snapshot-or-cost_price) per product, in
+    # SQL, so re-reading cost_price a second time here would just be a stale
+    # second copy of a decision already made.
     placeholders = ','.join('?' * len(ranked))
     meta = {r['id']: r for r in conn.execute(
-        f'SELECT id, name, sku, COALESCE(cost_price,0) AS cost_price '
-        f'FROM products WHERE company_id=? AND id IN ({placeholders})',
+        f'SELECT id, name, sku FROM products WHERE company_id=? AND id IN ({placeholders})',
         [cid] + [pid for pid, _ in ranked]).fetchall()}
 
     rows = []
@@ -1471,7 +1646,13 @@ def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
         info = meta.get(pid)
         if info is None:
             continue  # product hard-deleted out from under its sale lines
-        cost = _money(entry['units'] * float(info['cost_price'] or 0), currency)
+        # NET cost -- sold minus returned, each leg on its own basis (see
+        # this function's docstring). `.get(pid, 0.0)` covers a product that
+        # is only a bucket key because of the OTHER leg (e.g. a return-only
+        # bucket, no sale in this window): that leg's dict simply has no
+        # entry for it, same shape as `entry['units']`/`entry['revenue']`
+        # above, which is negative in exactly that case.
+        cost = _money(sold_cost.get(pid, 0.0) - ret_cost.get(pid, 0.0), currency)
         rows.append({'product_id': pid, 'name': info['name'], 'sku': info['sku'],
                      # NOT money -- a unit count, currency-precision does not
                      # apply, kept at the module's existing 2dp rounding.

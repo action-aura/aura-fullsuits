@@ -155,7 +155,7 @@ def _make_device_b():
             category_id TEXT, supplier_id TEXT, cost_price REAL DEFAULT 0, sell_price REAL DEFAULT 0,
             tax_rate REAL DEFAULT 0, unit TEXT DEFAULT 'pcs', reorder_level INTEGER DEFAULT 5,
             reorder_method TEXT DEFAULT 'none', status TEXT DEFAULT 'active', deleted_at_utc TEXT,
-            parent_product_id TEXT, variant_label TEXT,
+            parent_product_id TEXT, variant_label TEXT, avg_cost REAL DEFAULT 0,
             row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT
         );
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id = 1), last_seq INTEGER NOT NULL DEFAULT 0);

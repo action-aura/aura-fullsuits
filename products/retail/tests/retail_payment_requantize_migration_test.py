@@ -397,8 +397,8 @@ def test_the_real_chain_advances_the_version_and_keeps_integrity():
     try:
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert conn.execute('PRAGMA user_version').fetchone()[0] == sch.RETAIL_SCHEMA_VERSION
-        assert sch.RETAIL_SCHEMA_VERSION == 38, (
-            f"this suite is written against v38; constant is {sch.RETAIL_SCHEMA_VERSION}")
+        assert sch.RETAIL_SCHEMA_VERSION == 39, (
+            f"this suite is written against v39; constant is {sch.RETAIL_SCHEMA_VERSION}")
         assert _amount(conn, pay_id) == 4.007, (
             f"the chain must have applied the correction, got {_amount(conn, pay_id)!r}")
     finally:

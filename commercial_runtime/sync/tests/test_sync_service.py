@@ -99,6 +99,12 @@ CREATE TABLE products (
     category_id TEXT,
     supplier_id TEXT,
     cost_price REAL DEFAULT 0,
+    -- retail schema v39. `_apply_event`'s product branch now writes this, so
+    -- the fixture has to carry it -- see this module's own docstring on the
+    -- two earlier rounds of exactly this (row_version/updated_at_utc, then
+    -- parent_product_id/variant_label), each of which hid real test failures
+    -- behind "table products has no column named ...".
+    avg_cost REAL DEFAULT 0,
     sell_price REAL DEFAULT 0,
     tax_rate REAL DEFAULT 0,
     unit TEXT DEFAULT 'pcs',
@@ -199,6 +205,11 @@ CREATE TABLE sales (
     amount_paid REAL DEFAULT 0,
     change_amount REAL DEFAULT 0,
     payment_method TEXT DEFAULT 'cash',
+    -- Loyalty redemption (retail schema v27) wrote this column from the very
+    -- beginning, but it never reached the wire until 2026-09-21, so a peer
+    -- device always read 0 redeemed points on a sale that had spent some.
+    -- Now that `_apply_event` binds it, this fixture must declare it.
+    points_redeemed_amount REAL DEFAULT 0,
     status TEXT DEFAULT 'completed',
     idempotency_key TEXT UNIQUE,
     notes TEXT,
@@ -220,6 +231,13 @@ CREATE TABLE sale_items (
     discount_pct REAL DEFAULT 0,
     tax_rate REAL DEFAULT 0,
     line_total REAL NOT NULL,
+    -- retail schema v39's per-line cost SNAPSHOT. Added in the SAME pass as
+    -- `products.avg_cost` and `sales.points_redeemed_amount` above, on
+    -- purpose: this one was latent rather than failing, because every
+    -- sale-creating test here died earlier on the `sales` INSERT and never
+    -- reached the `sale_item` one. Fixing only the two that were visibly red
+    -- would have left it to resurface later as a fresh, confusing failure.
+    unit_cost REAL DEFAULT 0,
     uid TEXT,
     FOREIGN KEY (sale_id) REFERENCES sales(id),
     -- The real schema (products/retail/backend/database/schema.py) declares

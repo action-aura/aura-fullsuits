@@ -218,6 +218,115 @@ locally-authoritative `company_id` (read fresh from the registry DB's
 every pulled row instead. `_apply_event` runs on a background thread with no
 Flask request/session context, so it cannot call `_cid()`/read
 `session.get('company_id')` -- it must read the value directly from disk.
+
+Schema-version skew guard (2026-09-22, retail-hardware-viewports): the hole
+this closes was found the hard way at retail schema v39 -- three columns
+(`products.avg_cost`, `sale_items.unit_cost`, `sales.points_redeemed_amount`)
+were put on the wire before every apply branch below knew their names, and a
+device still running the pre-v39 apply code applied those events anyway,
+silently dropping the unknown columns (`p.get(...)` simply never asked for
+them). That specific gap is now closed (see each branch's own v39 comment),
+but the STRUCTURAL hole is not: nothing anywhere in this file, before this
+paragraph, ever compared versions at all. A device on schema v38 and a device
+on v39 would sync "happily" forever, each apply silently losing whatever
+columns the receiving build's code had never heard of, with no error, no log
+line, and no failing test -- exactly the "two replicas quietly disagree
+forever" shape this file otherwise goes to great lengths to avoid (see
+`_record_sync_conflict`, `_quarantine_apply_event`: this codebase has never
+tolerated a SILENT discard anywhere else in this apply path).
+
+WHAT IS COMPARED, and why not a hardcoded retail constant: this module is
+shared with Clinic (`RETAIL_SYNC_ENTITY_TYPES` above is retail's OWN entity
+set; a Clinic-configured `SyncService` would carry a different one), so
+`RETAIL_SCHEMA_VERSION` (products/retail/backend/database/schema.py) can
+never be imported here directly -- doing so would be the identical layering
+violation `local_ensure_schema`/`stock_exception_recorder`'s own docstrings
+already refuse for exactly this reason. The version compared is therefore
+whatever `local_schema_version_provider` (new constructor parameter, __init__
+docstring below) returns -- a single opaque, product-supplied integer
+representing "the version of THIS device's own apply logic for the entity
+types it handles". No SEPARATE sync-protocol version was added alongside it:
+the wire ENVELOPE itself (id/entity_type/event_type/payload/created_at,
+`_changed_fields`) has always evolved compatibly -- an unrecognised
+`entity_type` is skipped (see the "Two-stream design" section above), a
+missing `_changed_fields` key means "legacy, full snapshot" (see
+`_delta_set_clause`) -- so there is nothing today a second version axis would
+protect that a single one does not already cover. A product that ever needs a
+compound version is free to have its provider return a tuple (Python compares
+tuples lexicographically, and the parser below only ever needs `>`/`<=`); YAGNI
+argues against inventing that shape before a real second axis exists.
+
+WHICH DIRECTION IS REFUSED: only the LOSSY one. An event whose sender's
+version is STRICTLY GREATER than this device's own is refused -- that is
+exactly the v39 incident above, an older build applying a newer build's row
+and silently dropping columns it was never taught to write. An event whose
+sender's version is LESS THAN OR EQUAL is applied normally, unchanged from
+today: a newer device pulling an older device's row cannot lose data it never
+had a column for (`p.get(col, default)` already handles a payload's genuine
+absence of a column this build knows about -- see each branch's own comment),
+so gating that direction too would only turn "usually fine" into "never
+syncs", which is a worse outcome than the bug this guard exists to close.
+
+HOW A REFUSAL SURFACES: the SAME visible, replayable queue this file already
+uses for "cannot apply yet" (`sync_apply_quarantine`, see
+`_quarantine_apply_event`) -- never a silent drop, and never `sync_conflicts`
+(that table means "a write LOST to a newer one on the SAME schema"; this is
+"cannot safely evaluate this write at all on the CURRENT schema", a different
+claim). Reason codes `schema_version_too_new` (a real, resolved skew) and
+`schema_version_unverifiable` (either side's version could not be trusted --
+see the fail-closed paragraph below) are distinct so an operator reading
+`sync_apply_quarantine.reason` can tell "my build is behind" from "something
+is sending garbage" at a glance. `apply_pull_result` also logs one
+consolidated WARNING per batch (`_log_schema_version_skew_summary`, mirroring
+`_log_sync_conflict_summary`/`_log_branch_fallback_summary` immediately above
+it) rather than one line per row, and `get_health()` surfaces a live count
+(`schema_version_quarantine_count`) through the SAME dict the frontend's calm
+sync-state indicator already reads -- so a shop stuck mid-rollout has a
+number to look at, not just a log file.
+
+UPGRADE ORDERING / NOT BRICKING A SHOP MID-ROLLOUT: the whole guard is
+OFF -- not merely permissive, entirely inert, byte-for-byte today's behavior
+-- for a `SyncService` built with no `local_schema_version_provider` at all,
+which is every existing call site (products/retail/backend/app.py wires
+neither Windows nor Android instance with one yet; that wiring, and the
+Clinic-side equivalent, is deliberately left to whoever owns those files
+next, not this change) and every test in this suite that predates this
+guard. Once a product DOES wire the provider in, a till running the new
+build will refuse (loudly, retryably -- see `_retry_quarantined_events`,
+which re-attempts every parked row, including these, on every later pull) to
+apply anything from a sibling till it cannot positively verify is not ahead
+of it -- INCLUDING a sibling that has not yet been upgraded to a build that
+stamps its own version at all, per the fail-closed rule immediately below.
+That is a deliberate, accepted cost: the two degrade to "these two don't
+sync with each other until both are updated", loudly and specifically, which
+is the point -- not a fleet-wide outage, not silent data loss, and it heals
+itself the moment the older till is upgraded too (no operator action beyond
+that upgrade is needed; the next pull tick on the newer till re-attempts the
+parked rows and they apply cleanly once versions line up).
+
+FAIL-CLOSED ON UNPARSEABLE/ABSENT/GARBAGE, matching
+`commercial_runtime/einvoicing/settings.py::is_enabled()`'s own documented
+discipline (only an exact, trusted literal is ever accepted as an opt-in;
+everything else -- absent, unrecognised, corrupt -- resolves to the SAME
+"not proven safe" outcome, never a guess): `_parse_schema_version` trusts
+ONLY a genuine non-negative `int` (explicitly not `bool`, which is an `int`
+subclass in Python and must never silently compare as 0/1; not a numeric
+string, no `int(...)` coercion, no leniency) from EITHER side of the
+comparison. A payload with no `_sender_schema_version` key at all -- an event
+already sitting in an outbox/relay when a device upgrades to carry this
+guard, or one from a sibling that has not been upgraded to stamp it yet -- is
+therefore indistinguishable, on purpose, from a payload carrying a corrupted
+or hostile value: both parse to `None`, and `None` on either side refuses
+the event (`schema_version_unverifiable`) rather than assuming "no stamp
+must mean old, therefore safe". Deliberately the OPPOSITE of this same
+file's OWN row_version convention for a legacy catalogue write (`_delta_set_
+clause`'s "changed is None -> full snapshot", the category branch's "missing
+row_version -> treat as legacy, still applies") -- those precedents exist for
+a DIFFERENT question ("has this exact row been fully described"), answerable
+safely by assuming "everything changed". "Is this row safe for MY code to
+apply at all" is not answerable that way: guessing wrong in that direction is
+exactly how the v39 incident happened, so this guard does not extend the
+lenient convention to itself.
 """
 from __future__ import annotations
 
@@ -478,6 +587,7 @@ class SyncService:
         handled_entity_types: Optional[Iterable[str]] = None,
         local_freshness_store: Optional[SyncFreshnessStore] = None,
         stock_exception_recorder: Optional[Callable[..., None]] = None,
+        local_schema_version_provider: Optional[Callable[[], Optional[int]]] = None,
     ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
@@ -604,11 +714,38 @@ class SyncService:
         without resorting to a try/except around the missing table -- which
         would be indistinguishable from swallowing a real migration
         failure, the exact error-sentinel shape ENGINEERING.md warns
-        against."""
+        against.
+
+        `local_schema_version_provider`, when supplied, is THIS device's own
+        opt-in to the schema-version skew guard (module docstring's
+        "Schema-version skew guard" section has the full design and the
+        fail-closed reasoning -- read that first, this is the constructor-
+        level summary only). Called fresh wherever it is needed, never
+        cached -- same freshness discipline as `client_factory` above, and
+        unlike `local_company_id_provider` there is no I/O-avoidance reason
+        to fetch it only once per batch (a product's provider is expected to
+        be `lambda: SOME_MODULE_LEVEL_INT_CONSTANT`, not a query), so
+        `read_outbox()`/`_apply_event` each call it directly rather than
+        threading a pre-fetched value through every signature the way
+        `local_company_id` is threaded.
+
+        `None` (the default) makes the ENTIRE guard inert -- not lenient,
+        inert: `read_outbox()` stamps nothing onto pushed events and
+        `_apply_event` never even evaluates the gate, so a `SyncService`
+        built this way is byte-for-byte today's pre-guard behavior. This is
+        every existing call site as of this parameter's introduction
+        (products/retail/backend/app.py wires neither its Windows nor its
+        Android instance with one yet -- that wiring belongs to whoever owns
+        app.py next) and every pre-existing test in this suite. A product
+        opts in by passing e.g. `lambda: RETAIL_SCHEMA_VERSION` (that
+        constant lives in products/retail/backend/database/schema.py, which
+        this shared module must never import directly -- see the module
+        docstring's "WHAT IS COMPARED" paragraph)."""
         self._client_factory = client_factory
         self._get_conn = get_conn
         self._local_company_id_provider = local_company_id_provider
         self._local_ensure_schema = local_ensure_schema
+        self._local_schema_version_provider = local_schema_version_provider
         self._local_freshness_store = local_freshness_store
         self._stock_exception_recorder = stock_exception_recorder
         # See _ensure_freshness_loaded's own docstring for why this is a
@@ -761,19 +898,50 @@ class SyncService:
         batch forever. rowid is assigned monotonically at INSERT and, in
         this table, is never disturbed afterwards: ack_outbox only ever
         deletes already-pushed (oldest) rows, so a surviving row can never
-        be out-ranked by a later insert reusing a freed higher rowid."""
+        be out-ranked by a later insert reusing a freed higher rowid.
+
+        Schema-version skew guard (module docstring's dedicated section):
+        when `local_schema_version_provider` is configured and returns a
+        value `_parse_schema_version` trusts, every event's PAYLOAD (not a
+        new top-level key on the event dict itself) gains a
+        `_sender_schema_version` entry stamped with it here, at read time --
+        never at write time in `sync_outbox` itself, so a row already
+        sitting in the outbox before this device was upgraded to carry a
+        provider is stamped with the CURRENT version at the moment it is
+        actually sent, which is correct: the code doing the sending, not the
+        code that originally queued the row, is what a receiver needs to
+        reason about. Inside `payload`, not a sibling key on `ev`, for the
+        same reason `_changed_fields` already lives there and not on `ev`:
+        `_retry_quarantined_events` reconstructs a quarantined event from
+        ONLY `entity_id`/`entity_type`/`event_type`/`payload` (the columns
+        `sync_apply_quarantine` actually has) -- any metadata `_apply_event`
+        needs to survive a quarantine-and-retry round trip has to live
+        inside `payload`, or it is silently lost the first time this exact
+        event gets parked. No provider configured, or the provider's return
+        value does not parse, means nothing is stamped at all (not a
+        fabricated 0) -- an unstamped payload reads on the receiving end
+        exactly like one from a sender that never had this guard, which is
+        the correct, honest signal: a device that cannot state its own
+        version has no business asserting one."""
+        sender_version = (
+            self._parse_schema_version(self._local_schema_version_provider())
+            if self._local_schema_version_provider is not None else None
+        )
         rows = conn.execute("SELECT * FROM sync_outbox ORDER BY rowid").fetchall()
-        return [
-            {
+        events = []
+        for r in rows:
+            payload = json.loads(r["payload"])
+            if sender_version is not None:
+                payload = dict(payload, _sender_schema_version=sender_version)
+            events.append({
                 "id": r["id"],
                 "entity_type": r["entity_type"],
                 "entity_id": r["entity_id"],
                 "event_type": r["event_type"],
-                "payload": json.loads(r["payload"]),
+                "payload": payload,
                 "created_at": r["created_at"],
-            }
-            for r in rows
-        ]
+            })
+        return events
 
     def ack_outbox(self, conn, ids: list) -> None:
         """Deletes exactly the given outbox row ids -- the second half of
@@ -959,19 +1127,34 @@ class SyncService:
         # so a busy multi-device install discarding many stale rows in one
         # pull tick logs once, not once per row.
         conflicts: list = []
+        # Schema-version skew guard (module docstring's dedicated section):
+        # identical one-sink-per-batch shape to `branch_fallbacks`/
+        # `conflicts` just above, collected by `_apply_event`'s version gate
+        # and consumed by `_log_schema_version_skew_summary` below. Empty
+        # and never appended to for every call site that has not opted into
+        # `local_schema_version_provider` -- the gate itself never runs.
+        schema_skew: list = []
         for ev in events:
             self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallbacks,
-                               conflict_sink=conflicts)
+                               conflict_sink=conflicts, schema_skew_sink=schema_skew)
         # Retried AFTER this batch's own events, not before: the whole point
         # of a batch containing the once-missing parent (e.g. an operator
         # replayed a quarantined sale from Owner's console) is that its
         # previously-parked children can resolve in the SAME tick they
-        # arrive in, rather than waiting one more pull cycle.
-        self._retry_quarantined_events(conn, local_company_id, branch_fallback_sink=branch_fallbacks)
+        # arrive in, rather than waiting one more pull cycle. The same
+        # reasoning now also covers a row parked purely for schema-version
+        # skew: retrying it here means the very next pull tick after this
+        # device is upgraded (no restart, no operator action) re-evaluates
+        # it against the NEW local_schema_version_provider() value and
+        # applies cleanly the moment versions line up.
+        self._retry_quarantined_events(conn, local_company_id, branch_fallback_sink=branch_fallbacks,
+                                        schema_skew_sink=schema_skew)
         if branch_fallbacks:
             self._log_branch_fallback_summary(branch_fallbacks)
         if conflicts:
             self._log_sync_conflict_summary(conflicts)
+        if schema_skew:
+            self._log_schema_version_skew_summary(schema_skew)
         conn.execute("UPDATE sync_cursor SET last_seq=? WHERE id=1", (result["cursor"],))
 
     @staticmethod
@@ -1058,6 +1241,30 @@ class SyncService:
         frag = ", ".join(f"{c}=CASE WHEN ? THEN excluded.{c} ELSE {table}.{c} END" for c in columns)
         binds = [1 if (changed is None or c in changed) else 0 for c in columns]
         return frag, binds
+
+    @staticmethod
+    def _parse_schema_version(value) -> Optional[int]:
+        """The schema-version skew guard's one trust boundary (module
+        docstring's "FAIL-CLOSED ON UNPARSEABLE/ABSENT/GARBAGE" section) --
+        every comparison in `_apply_event`/`read_outbox` runs its raw value
+        through this first, on BOTH sides of the comparison, and never
+        compares a raw value directly.
+
+        Trusts ONLY a genuine non-negative `int`. `isinstance(value, bool)`
+        is checked and rejected explicitly and FIRST -- `bool` is a subclass
+        of `int` in Python (`isinstance(True, int)` is `True`), so without
+        this a stray `True`/`False` (a provider returning the wrong thing by
+        mistake, or a hand-built test payload) would silently compare as
+        1/0 instead of being refused as unparseable. No `int("39")`
+        coercion of a numeric string, no truncation of a float that happens
+        to be integral: matching `commercial_runtime/einvoicing/settings.
+        py::is_enabled()`'s own documented discipline of trusting only an
+        exact literal and treating every other shape -- absent, wrong type,
+        out of range -- identically, as "not proven", never as "probably
+        fine"."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value if value >= 0 else None
 
     @staticmethod
     def _record_sync_conflict(conn, conflict_sink: Optional[list], *, local_company_id,
@@ -1188,6 +1395,32 @@ class SyncService:
             len(conflicts), ", ".join(parts),
         )
 
+    @staticmethod
+    def _log_schema_version_skew_summary(schema_skew: list) -> None:
+        """One WARNING for the whole batch, not one per refused row --
+        identical reasoning to `_log_branch_fallback_summary`/`_log_sync_
+        conflict_summary` above. Grouped by `(entity_type, reason)` so "9
+        product events too new, 2 sale events unverifiable" reads at a
+        glance; the exact local/incoming schema_version and entity_id for
+        each live in `sync_apply_quarantine` (see `_quarantine_apply_event`'s
+        `detail` string), not repeated here. Unlike those two siblings, an
+        empty batch here is not merely common -- it is the ENTIRE fleet's
+        state until a product opts into `local_schema_version_provider` (see
+        `__init__`'s docstring), so this line should be rare in practice
+        and, when it does appear, names something an operator can act on:
+        upgrade the behind device."""
+        counts: dict = {}
+        for entity_type, reason in schema_skew:
+            key = (entity_type, reason)
+            counts[key] = counts.get(key, 0) + 1
+        parts = [f"{entity_type}/{reason}={count}" for (entity_type, reason), count in counts.items()]
+        logger.warning(
+            "sync: %d row(s) this batch were refused by the schema-version skew guard -- "
+            "this device could not verify it is safe to apply them; see sync_apply_quarantine "
+            "for detail. %s",
+            len(schema_skew), ", ".join(parts),
+        )
+
     def _get_local_company_id(self) -> str:
         """Returns THIS device's own locally-authoritative company_id --
         never the pulled payload's. Raises rather than silently applying a
@@ -1213,21 +1446,25 @@ class SyncService:
 
     def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None,
                       branch_fallback_sink: Optional[list] = None,
-                      conflict_sink: Optional[list] = None) -> bool:
+                      conflict_sink: Optional[list] = None,
+                      schema_skew_sink: Optional[list] = None) -> bool:
         """Applies one pulled event to a local table. Returns True when the
         event is FULLY handled -- inserted, upserted, a legitimate no-op
         (unknown entity_type, a non-`create` event on one of the five
         money-moving types, other than `payment`'s one narrow `update` void
         transition -- AUDIT-032A, see that branch's own comment) -- and
-        False only when a Phase 5 money-moving event was PARKED in
+        False when a Phase 5 money-moving event was PARKED in
         `sync_apply_quarantine` because a row it depends on could not be
         resolved locally (see `_quarantine_apply_event`): a sale_item/
-        return/return_item/payment(sale) whose PARENT hasn't arrived yet, or
-        a payment `update` (void) whose OWN `create` hasn't arrived yet. The
-        pre-Phase-5 five entity types never return False; every one of their
-        branches falls through to the unconditional `return True` at the
-        bottom, unchanged from before this return value existed. Callers
-        that only care about "did this raise" (the main loop in
+        return/return_item/payment(sale) whose PARENT hasn't arrived yet, a
+        payment `update` (void) whose OWN `create` hasn't arrived yet, OR
+        (schema-version skew guard, module docstring's dedicated section)
+        this device could not positively verify it is safe to apply this
+        event's schema version at all. The pre-Phase-5 five entity types
+        never return False for the missing-parent reasons above, but CAN
+        now return False via the version gate -- it runs before any
+        entity-specific branch, uniformly, for every handled entity type.
+        Callers that only care about "did this raise" (the main loop in
         apply_pull_result) can ignore the return value entirely; only
         `_retry_quarantined_events` uses it, to decide whether a previously
         parked row may now be deleted.
@@ -1240,7 +1477,14 @@ class SyncService:
         for why storing the payload is safe) and, when a sink is given,
         appends to it for `apply_pull_result`'s own one-per-batch WARNING.
         None is the correct default for a test or caller that only wants the
-        `sync_conflicts` row and does not care about the batch summary."""
+        `sync_conflicts` row and does not care about the batch summary.
+
+        `schema_skew_sink`, when given, collects `(entity_type, reason)` for
+        every event THIS call refused via the version gate -- the identical
+        one-sink-per-batch shape `conflict_sink`/`branch_fallback_sink`
+        already use, consumed by `apply_pull_result`'s own
+        `_log_schema_version_skew_summary` call. None is correct for a test
+        that only cares about the `sync_apply_quarantine` row."""
         entity_type = ev.get("entity_type")
         # `self._handled_entity_types`, not a hardcoded tuple -- see the
         # module docstring's "Two-stream design" paragraph and `__init__`'s
@@ -1255,6 +1499,43 @@ class SyncService:
             return True
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
+        # Schema-version skew guard (module docstring's dedicated section) --
+        # runs BEFORE any entity-specific branch, uniformly, for every
+        # handled entity type: a structural compatibility precondition, not
+        # a per-entity business rule, so it belongs above the dispatch, not
+        # duplicated into each branch below. Entirely inert (`self._local_
+        # schema_version_provider is None`) for every call site that has not
+        # opted in -- see `__init__`'s own docstring for why this is safe by
+        # construction rather than by luck.
+        if self._local_schema_version_provider is not None:
+            receiver_version = self._parse_schema_version(self._local_schema_version_provider())
+            raw_sender_version = p.get("_sender_schema_version")
+            sender_version = self._parse_schema_version(raw_sender_version)
+            if receiver_version is None or sender_version is None:
+                if schema_skew_sink is not None:
+                    schema_skew_sink.append((entity_type, "schema_version_unverifiable"))
+                return self._quarantine_apply_event(
+                    conn, ev, reason="schema_version_unverifiable",
+                    detail=(
+                        f"local schema_version={receiver_version!r}, incoming "
+                        f"schema_version={raw_sender_version!r} (entity_type={entity_type!r}, "
+                        f"event_type={event_type!r}); cannot prove this event is safe to apply "
+                        "on this device's current schema -- refusing rather than assuming it is."
+                    ),
+                )
+            if sender_version > receiver_version:
+                if schema_skew_sink is not None:
+                    schema_skew_sink.append((entity_type, "schema_version_too_new"))
+                return self._quarantine_apply_event(
+                    conn, ev, reason="schema_version_too_new",
+                    detail=(
+                        f"incoming schema_version={sender_version} is ahead of this device's "
+                        f"local schema_version={receiver_version} (entity_type={entity_type!r}, "
+                        f"event_type={event_type!r}); applying it here could silently drop "
+                        "columns this build has never migrated -- refusing until this device "
+                        f"is upgraded to schema_version>={sender_version}."
+                    ),
+                )
         if entity_type == "category":
             if event_type in ("create", "update"):
                 # `local_company_id` -- THIS device's own company_id -- not
@@ -1620,20 +1901,32 @@ class SyncService:
                 # which is exactly what NULL already means for every existing
                 # product, so an old payload changes nothing about how it
                 # applies.
+                # Schema v39 (cost basis): `avg_cost` was omitted from BOTH the
+                # delta-gated column list below AND the INSERT column list/
+                # VALUES a few lines down -- retail_api.py puts it on the wire
+                # (create's payload carries a literal 0; receive_purchase_
+                # order's own update event carries the real moving average,
+                # `_changed_fields: ['avg_cost']`) but this apply branch had
+                # no column named `avg_cost` anywhere, so `_delta_set_clause`
+                # could never gate it (its own docstring: a column absent from
+                # `columns` is code-invisible, not merely unchanged) and the
+                # plain INSERT half left it at the schema DEFAULT 0 regardless
+                # of what the payload carried. A peer device therefore never
+                # converged on the real cost basis at all.
                 changed_fields = p.get("_changed_fields")
                 delta_frag, delta_binds = self._delta_set_clause(
                     "products",
                     ["sku", "barcode", "name", "category_id", "supplier_id", "cost_price",
                      "sell_price", "tax_rate", "unit", "reorder_level", "reorder_method", "status",
-                     "deleted_at_utc", "parent_product_id", "variant_label"],
+                     "deleted_at_utc", "parent_product_id", "variant_label", "avg_cost"],
                     changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
                     "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status, "
-                    "deleted_at_utc, parent_product_id, variant_label, row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "deleted_at_utc, parent_product_id, variant_label, avg_cost, row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(products.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
@@ -1642,7 +1935,7 @@ class SyncService:
                      p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
                      p.get("reorder_method", "none"), p.get("status", "active"), p.get("deleted_at_utc"),
-                     p.get("parent_product_id"), p.get("variant_label"),
+                     p.get("parent_product_id"), p.get("variant_label"), p.get("avg_cost", 0),
                      insert_row_version, p.get("updated_at_utc"),
                      *delta_binds,
                      raw_row_version, raw_row_version),
@@ -2005,17 +2298,28 @@ class SyncService:
             resolved_branch_id = self._resolve_branch_id(
                 conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
             try:
+                # Schema v27/sync-payload-coverage follow-up: `points_redeemed_
+                # amount` was missing from this INSERT entirely -- create_sale
+                # puts it on the wire (see that route's own comment, right
+                # beside amount_paid/change_amount in the same settled-tender
+                # breakdown), but this apply branch never named the column, so
+                # a redeemed sale arrived on every OTHER device reading 0
+                # redeemed forever. `sale` has no update event (see this
+                # branch's own comment above), so there is no delta-gate half
+                # to fix -- this INSERT is the only write path.
                 conn.execute(
                     "INSERT INTO sales (company_id, sale_number, branch_id, customer_id, cashier, "
                     "subtotal, discount_amount, tax_amount, total, amount_paid, change_amount, "
+                    "points_redeemed_amount, "
                     "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
                     "uid, actor_user_uid, terminal_id, created_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
                      p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
                      p.get("tax_amount", 0), p.get("total", 0), p.get("amount_paid", 0),
-                     p.get("change_amount", 0), p.get("payment_method", "cash"), p.get("status", "completed"),
+                     p.get("change_amount", 0), p.get("points_redeemed_amount", 0),
+                     p.get("payment_method", "cash"), p.get("status", "completed"),
                      p.get("notes", ""), p.get("created_at"), p.get("due_date"),
                      p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
                 )
@@ -2084,12 +2388,20 @@ class SyncService:
                 return self._quarantine_apply_event(
                     conn, ev, reason="missing_parent:product",
                     detail=f"product_id={p.get('product_id')!r} not found locally")
+            # Schema v39 (cost basis): `unit_cost` -- the per-line cost
+            # SNAPSHOT create_sale takes at sale time (see that route's own
+            # comment) -- was missing from this INSERT entirely, same
+            # omission as the product branch's `avg_cost` above. `sale_item`
+            # has no update event either, so this INSERT is the only write
+            # path; without this a device applying a pulled sale showed a
+            # cost of 0 for every line it did not ring itself.
             conn.execute(
                 "INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, discount_pct, "
-                "tax_rate, line_total, uid) VALUES (?,?,?,?,?,?,?,?) "
+                "tax_rate, line_total, unit_cost, uid) VALUES (?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                 (sale_local_id, p.get("product_id"), p.get("quantity"), p.get("unit_price"),
-                 p.get("discount_pct", 0), p.get("tax_rate", 0), p.get("line_total"), p.get("uid")),
+                 p.get("discount_pct", 0), p.get("tax_rate", 0), p.get("line_total"),
+                 p.get("unit_cost", 0), p.get("uid")),
             )
         elif entity_type == "return":
             if event_type != "create":
@@ -3333,7 +3645,8 @@ class SyncService:
         return row is not None
 
     def _retry_quarantined_events(self, conn, local_company_id: Optional[str] = None,
-                                   branch_fallback_sink: Optional[list] = None) -> None:
+                                   branch_fallback_sink: Optional[list] = None,
+                                   schema_skew_sink: Optional[list] = None) -> None:
         """Re-attempts every row currently parked in `sync_apply_quarantine`,
         oldest first, and deletes exactly the ones that resolve this pass.
         Safe to call every `apply_pull_result()` -- an empty quarantine table
@@ -3353,7 +3666,16 @@ class SyncService:
         unchanged -- a retried quarantined sale/return can ALSO fall back to
         this device's default branch, and that fallback belongs in the same
         one-per-batch summary `apply_pull_result` logs for its own loop, not
-        a second, separate WARNING."""
+        a second, separate WARNING.
+
+        `schema_skew_sink`, when given, is forwarded to `_apply_event`
+        unchanged, same reasoning as `branch_fallback_sink` above -- a row
+        parked purely for schema-version skew is re-evaluated here against
+        the CURRENT `local_schema_version_provider()` value on every retry,
+        so it stops appearing in this summary (and its own `sync_apply_
+        quarantine` row is deleted below) the very first pull tick after
+        this device is upgraded past the version that originally refused
+        it."""
         try:
             rows = conn.execute(
                 "SELECT entity_id, entity_type, event_type, payload FROM sync_apply_quarantine "
@@ -3370,7 +3692,8 @@ class SyncService:
                 "event_type": row["event_type"],
                 "payload": json.loads(row["payload"]),
             }
-            if self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallback_sink):
+            if self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallback_sink,
+                                  schema_skew_sink=schema_skew_sink):
                 # Keyed on BOTH columns -- entity_id alone would risk
                 # deleting a DIFFERENT still-blocked event_type that happens
                 # to share this entity_id (see the table's own CREATE
@@ -3569,6 +3892,40 @@ class SyncService:
         finally:
             conn.close()
 
+    def _schema_version_quarantine_count(self) -> int:
+        """Rows currently parked in `sync_apply_quarantine` by the
+        schema-version skew guard specifically (module docstring's dedicated
+        section) -- the number `get_health()` surfaces below through the
+        SAME dict the frontend's calm sync-state indicator already reads
+        (`_pending_outbox_count`'s own docstring, just above), so a shop
+        stuck mid-rollout (module docstring's "UPGRADE ORDERING" paragraph)
+        has a number to look at, not just a log file. Filtered to this
+        guard's own two reason codes -- `schema_version_too_new` /
+        `schema_version_unverifiable` -- not a bare COUNT(*), because that
+        table also holds unrelated missing-parent quarantine rows (a
+        sale_item whose parent sale has not arrived yet) that this specific
+        indicator has no business reporting on.
+
+        Missing-table tolerant for the identical reason `_has_quarantined_
+        events` is -- see that method's docstring; a `SyncService` with no
+        `local_schema_version_provider` configured never writes either
+        reason code, so this returning 0 for such an install is the correct
+        steady state, not merely the tolerant fallback."""
+        conn = self._get_conn()
+        try:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM sync_apply_quarantine "
+                    "WHERE reason IN ('schema_version_too_new', 'schema_version_unverifiable')"
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if self._is_missing_table_error(exc):
+                    return 0
+                raise
+            return row["n"] if row else 0
+        finally:
+            conn.close()
+
     def get_health(self) -> dict:
         self._ensure_freshness_loaded()
         with self._health_lock:
@@ -3589,6 +3946,11 @@ class SyncService:
             # is the other half of the calm-state label; read fresh on every
             # call (not cached) so it's always current as of this request.
             "pending_count": self._pending_outbox_count(),
+            # Schema-version skew guard (module docstring's dedicated
+            # section): 0 for every install that has not opted into
+            # `local_schema_version_provider` -- see
+            # `_schema_version_quarantine_count`'s own docstring.
+            "schema_version_quarantine_count": self._schema_version_quarantine_count(),
             # Launch-readiness Phase 7 stage 7a (docs/launch-readiness/
             # phase7-offline-ux.md "FINDING 1"): the elapsed-offline figure
             # 7b (stale-stock hiding) and 7c (24h warning, 72h hard stop)

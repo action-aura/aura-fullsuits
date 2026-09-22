@@ -112,20 +112,36 @@ ACCOUNT_COGS = '5900'
 #: failing loudly.
 #:
 #: DELIBERATELY SMALL: this is the "small sensible default chart" the
-#: ROADMAP.md v38 entry asks for, not a full SME chart of accounts. 1200
-#: (Inventory) and 5900 (Cost of Goods Sold) are seeded but UNPOSTED by
-#: anything in this module -- this product has no per-unit inventory
-#: valuation (products.cost_price is a single "current cost" field, not a
-#: weighted-average/FIFO ledger tied to actual stock movements), so booking
-#: COGS at the moment of sale would be inventing a valuation this codebase
-#: does not actually track. Both accounts exist so a purchase can land
-#: somewhere real (see `post_purchase_order`) and so a later wave that DOES
-#: build inventory valuation has a chart entry waiting rather than another
-#: schema version to claim first. 3000 (Owner's Equity) is seeded for the
-#: identical reason: `_migrate_add_general_ledger`'s own opening-balance
-#: backfill needs a plug account for pre-v38 AR/AP history, and a real
-#: install eventually needs an equity account regardless of whether this
-#: module ever posts to it directly.
+#: ROADMAP.md v38 entry asks for, not a full SME chart of accounts.
+#:
+#: 1200 (Inventory) and 5900 (Cost of Goods Sold) WERE seeded-but-unposted
+#: when v38 shipped this chart -- at the time this product had no per-unit
+#: inventory valuation (`products.cost_price` was a single "current cost"
+#: field, not a weighted-average/FIFO ledger tied to actual stock
+#: movements), so booking COGS at the moment of sale would have been
+#: inventing a valuation this codebase did not actually track. `post_
+#: purchase_order` already posted 1200 even then (a purchase is a real,
+#: already-settled cash/AP event regardless of valuation method); 5900 was
+#: the one account genuinely waiting.
+#:
+#: THAT WAIT IS OVER as of schema v39 (`products.avg_cost`, a moving
+#: weighted average maintained by `receive_purchase_order`, and `sale_
+#: items.unit_cost`, the per-line snapshot taken at the moment of sale --
+#: see database/schema.py's v39 migration docstring for the full design and
+#: WHY a moving average rather than FIFO). `post_cogs` below now posts 5900
+#: on every sale that has a known cost basis (Dr COGS / Cr Inventory) and
+#: reverses it on a return of those same lines (Cr COGS / Dr Inventory) --
+#: see that function's own docstring for the epsilon-gated "no cost basis,
+#: no journal" case, which is deliberately NOT an error: it is what an
+#: unknown cost basis (a pre-v39 sale, or a product that has never been
+#: received against) must mean here, exactly like `sale_items.unit_cost`
+#: itself treats its own zero.
+#:
+#: 3000 (Owner's Equity) is seeded for a different, still-current reason:
+#: `_migrate_add_general_ledger`'s own opening-balance backfill needs a
+#: plug account for pre-v38 AR/AP history, and a real install eventually
+#: needs an equity account regardless of whether this module ever posts to
+#: it directly.
 DEFAULT_CHART = (
     ('1000', 'Cash and Bank', 'asset', 'debit', None),
     ('1100', 'Accounts Receivable', 'asset', 'debit', None),
@@ -782,3 +798,75 @@ def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          'purchase_order', po_id, currency, lines,
                          reference=po_number, posted_by=posted_by)
+
+
+def post_cogs(conn, cid, branch_id, source_type, source_id, reference, currency,
+              cogs_amount, business_date=None, posted_by=None, reverse=False):
+    """Dr Cost of Goods Sold / Cr Inventory for `cogs_amount` -- the cost
+    basis (schema v39: `products.avg_cost` at the moment of sale, snapshotted
+    onto `sale_items.unit_cost`) of goods that left the shelf on a sale --
+    or, when `reverse=True`, the MIRROR (Cr Cost of Goods Sold / Dr
+    Inventory) for goods a return actually put back on the shelf.
+
+    ONE HELPER FOR BOTH DIRECTIONS, same shape `post_supplier_payment` above
+    already uses for `supplier_payment`/`po_payment`: the accounting entry
+    is identical either way (swap which side each account lands on), so
+    this is one function with a `reverse` flag and a doc-metadata
+    `source_type`/`source_id`/`reference` triple, rather than two
+    near-duplicates that could drift on which account gets debited. The
+    caller passes `source_type='sale'`/`source_id=sale_id` (create_sale) or
+    `source_type='return'`/`source_id=return_id` (create_return) -- the
+    SAME pair `post_sale`/`post_return` already stamp on their own sibling
+    journal for the same document, so `gl_journals` ends up with TWO rows
+    per sale (revenue+tender, and cost) sharing one `(source_type,
+    source_id)` -- deliberate: `idx_gl_journals_source` carries no UNIQUE
+    constraint (see database/schema.py), and "every journal this sale ever
+    posted" is exactly what a lookup on that pair should answer.
+
+    `cogs_amount` IS NOT RE-DERIVED HERE. It is `SUM(quantity * unit_cost)`
+    over the document's own lines, computed by the caller from figures that
+    already exist on the row being posted (create_sale: the SAME `sale_
+    items.unit_cost` snapshot the write loop just persisted; create_return:
+    the ORIGINAL sale line's snapshot, joined by `sale_item_id`, never the
+    product's cost today) -- this module's usual contract, restated at the
+    top of the "Document posting helpers" section above: it trusts the sum
+    it is handed, it does not go compute one of its own.
+
+    THE EPSILON-GATED EMPTY CASE, stated because it is the one a caller
+    could get wrong by analogy with `post_sale`'s `if not lines: return
+    None`: this function checks the TOTAL against `_gl_epsilon(currency)`,
+    not against zero, and returns None -- posting nothing -- whenever it is
+    at or below that half-minor-unit floor. That is not merely "no lines to
+    post" (this function only ever has the same two lines, Inventory and
+    COGS); it is "every line in this document had an unknown cost basis"
+    (schema v39's `sale_items.unit_cost = 0` means NO SNAPSHOT WAS TAKEN,
+    never "these goods cost nothing" -- see that migration's own docstring)
+    or "this document's total cost basis rounds to functionally zero" for a
+    tiny sale. Either way, inventing a balanced Dr/Cr pair around a total
+    this module cannot actually vouch for would be the exact manufactured
+    figure the v39 migration refused to backfill onto historical rows, for
+    a live journal instead of a column -- so the correct behaviour is
+    silence, not a zero-value or unbalanced journal, and NOT a blocked
+    sale/return either (the caller never treats this return value as
+    pass/fail -- see create_sale/create_return's own call sites).
+    """
+    amount = Decimal(str(cogs_amount or 0))
+    if amount <= _gl_epsilon(currency):
+        return None
+    if reverse:
+        lines = [
+            {'account_code': ACCOUNT_INVENTORY, 'debit': amount,
+             'memo': f'Cost of goods restocked, {reference}'},
+            {'account_code': ACCOUNT_COGS, 'credit': amount,
+             'memo': f'Return {reference}'},
+        ]
+    else:
+        lines = [
+            {'account_code': ACCOUNT_COGS, 'debit': amount,
+             'memo': f'Cost of goods sold, {reference}'},
+            {'account_code': ACCOUNT_INVENTORY, 'credit': amount,
+             'memo': 'Inventory consumed'},
+        ]
+    return post_journal(conn, cid, branch_id, business_date or _today(),
+                         source_type, source_id, currency, lines,
+                         reference=reference, posted_by=posted_by)

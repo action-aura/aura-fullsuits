@@ -1032,7 +1032,23 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # executescript) is left untouched and marked superseded -- it has no
 # readers or writers, so dropping it would risk a migration on live shop
 # data for zero gain.
-RETAIL_SCHEMA_VERSION = 38
+#
+# v39 (2026-09-21): cost basis for COGS. Claimed in writing in ROADMAP.md's
+# 2026-09-21 "retail schema v39 CLAIMED: COGS and inventory valuation" entry
+# before this constant was touched -- v35 is STILL the open Aseel-parity
+# reservation, untouched by this. Two additive columns, no existing table
+# ALTERed beyond that: `products.avg_cost` (a moving weighted-average cost,
+# backfilled best-effort from `products.cost_price` -- today's manually-typed
+# figure is the only cost basis that exists, so it is strictly better than
+# starting every product at zero) and `sale_items.unit_cost` (a per-line cost
+# SNAPSHOT written at sale time by another agent, deliberately left at 0 for
+# every historical row rather than backfilled from `cost_price` -- see
+# _migrate_add_cost_basis's own docstring for why manufacturing that figure
+# would be exactly the false precision `_v15_seed_opening_counts`'s docstring,
+# schema.py:3743-3745, already refuses in writing). See ROADMAP.md's v39 entry
+# for the full "why weighted-average, not FIFO" reasoning and
+# _migrate_add_cost_basis's own docstring for the column-by-column detail.
+RETAIL_SCHEMA_VERSION = 39
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2118,6 +2134,15 @@ def _migrate_retail_schema(conn):
     # writes. See the RETAIL_SCHEMA_VERSION v38 comment above and
     # _migrate_add_general_ledger's own docstring for the full reasoning.
     _migrate_add_general_ledger(conn)
+    # v38 -> v39 (cost basis for COGS): appended LAST, same convention as
+    # every step above except v37 itself (which has its own, data-dependent
+    # reason to run early -- see that block's comment). v39 has no such
+    # constraint: it only ADD COLUMNs `products.avg_cost` and `sale_items.
+    # unit_cost`, and its backfill reads only `products.cost_price`, which no
+    # step above this line writes. See the RETAIL_SCHEMA_VERSION v39 comment
+    # above and _migrate_add_cost_basis's own docstring for the full
+    # reasoning.
+    _migrate_add_cost_basis(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -9819,3 +9844,132 @@ def _migrate_add_general_ledger(conn):
                 memo='Seeded from pre-v38 AR/AP subledger at migration time',
                 posted_by='migration',
             )
+
+
+def _migrate_add_cost_basis(conn):
+    """One-time migration (schema v38 -> v39): cost basis for Cost of Goods
+    Sold. Claimed in writing in ROADMAP.md's 2026-09-21 "retail schema v39
+    CLAIMED: COGS and inventory valuation" entry -- this migration is
+    CASHING IN that claim, not re-claiming it (v35 is STILL the open
+    Aseel-parity reservation, untouched by this; v39 is the next number
+    above the live head, same rule the v36/v37 entries already applied).
+    Two new, additive-only columns (column-existence-checked ADD COLUMN,
+    same guard shape every other additive step in this chain uses):
+
+        products.avg_cost    REAL DEFAULT 0
+        sale_items.unit_cost REAL DEFAULT 0
+
+    THE PROBLEM THIS EXISTS TO SOLVE: `metrics.py::cogs()` computes cost of
+    goods sold as `SUM(quantity * products.cost_price)` using `cost_price`
+    AS IT STANDS RIGHT NOW -- not as it stood on the day of the sale -- and
+    `gross_profit = revenue - cogs()` feeds a "Gross Profit" KPI tile on
+    BOTH the desktop reports hub and Android. Editing one product's cost
+    price today therefore silently rewrites every historical profit figure
+    the shop has ever looked at; metrics.py's own docstring already admits
+    this as a KNOWN GAP. Separately, nothing MAINTAINS `cost_price` at all:
+    receiving a purchase order writes `unit_cost` into `inventory_movements`
+    (api/retail_api.py's `purchase_in` movement) and deliberately never
+    promotes it to `products.cost_price`, which stays manual-entry-only.
+    `sale_items.unit_cost` is what makes a sale REMEMBER what its goods cost
+    at the moment it happened, so profit stops moving under the shopkeeper's
+    feet after the fact, and `products.avg_cost` is the running figure that
+    `unit_cost` is snapshotted FROM at sale time.
+
+    WHY MOVING WEIGHTED AVERAGE, NOT FIFO -- stated as a DECISION, not a
+    default. FIFO needs cost LAYERS: a new table tracking each purchase's
+    remaining quantity, consumption logic on every sale (walk the layers
+    oldest first), and a reversal story on every return (which layer does a
+    returned unit go back into?) -- none of which exists today, and all of
+    which is a real design, not a column. It would also be WRONG from day
+    one here specifically: inter-branch `transfer_out`/`transfer_in`
+    movements (`_migrate_add_stock_transfers`, schema v28) carry NO
+    `unit_cost` at all -- stock moves between branches at zero cost today --
+    so a FIFO layer consumed by a transfer would either have to invent a
+    cost the movement never recorded or silently break the layer chain.
+    Moving weighted average has neither problem: it degrades gracefully (a
+    single purchase makes it equal last cost, matching what `cost_price`
+    already approximates today) and a branch transfer simply moves stock
+    without needing to say anything about cost layers, because there are
+    none. FIFO REMAINS POSSIBLE LATER, on top of the `inventory_movements.
+    unit_cost` this codebase already writes for purchases -- this migration
+    does not foreclose it, it just does not build it before there is a
+    single caller that needs it.
+
+    `products.avg_cost` IS BACKFILLED, from `products.cost_price` --
+    company-scoped because `products` already is. This is a PLUG, disclosed
+    using the same convention `_migrate_add_return_settlement_split` and
+    `_migrate_add_general_ledger` already established for a backfill that
+    cannot be exact: today's manually-typed `cost_price` is the ONLY cost
+    basis that exists anywhere in this database, so it is the best
+    available starting average, and it is strictly better than starting
+    every product at a false zero (a zero `avg_cost` would make the very
+    first sale after upgrade post a zero-cost COGS line, overstating
+    margin, for a product that plainly has a real cost). Maintained GOING
+    FORWARD at purchase-order receipt by another agent's runtime change --
+    this migration only creates the column and seeds its starting value.
+
+    `sale_items.unit_cost` is DELIBERATELY NOT BACKFILLED. Every historical
+    line is left at its default, 0. Writing today's `cost_price` into a
+    sale that happened months ago would MANUFACTURE exactly the false
+    precision this codebase already refuses in writing, for a different
+    table but the identical reasoning: `_v15_seed_opening_counts`'s own
+    docstring (schema.py:3743-3745) says "the shop's cost_price today is
+    not evidence of what this stock cost when it arrived, and valuation
+    reading a made-up figure is worse than valuation reading a zero it can
+    see." A historical sale's true cost at the moment it happened is
+    UNKNOWABLE from here -- `cost_price` may have changed a dozen times
+    since, and there is no ledger of what it was on that date -- so 0 here
+    is not "this sale cost nothing", it is "no snapshot was taken", and any
+    downstream reader (metrics.py's COGS query, a future margin report)
+    MUST treat it as unknown rather than as free goods. Another agent is
+    making `metrics.py` fall back to the old `cost_price`-at-read-time
+    behaviour for exactly these zero-snapshot rows, so this decision will
+    not collapse historical margins to 100% -- but that fallback is their
+    job, not this migration's; this docstring only makes the contract
+    explicit so a future reader is not tempted to "fix" the omission by
+    backfilling it after all.
+
+    GUARDED ON TABLE EXISTENCE, same reasoning as every other additive step
+    in this chain (search "existing_tables" in this file): a minimal test
+    fixture that hand-builds its own schema and calls `_migrate_retail_
+    schema` directly may not have `products`/`sale_items` at all. `sale_
+    items` IS created by the base `_init_retail` executescript (like
+    `sales`/`products`/`returns`), NOT added lazily at runtime the way
+    several `payments`/`retail_settings` columns are by api/retail_api.py's
+    `_ensure_credit_schema` -- confirmed by reading that function before
+    writing this guard, rather than assumed. Each column is ALSO
+    individually existence-checked via `PRAGMA table_info` before its own
+    `ALTER TABLE`, and the two columns are independently guarded (a fixture
+    might carry `products` but not `sale_items`, or vice versa), each
+    following the `added_any`-per-column idempotency shape v36/v38 already
+    use: if a column already exists, its ALTER (and, for `avg_cost`, its
+    backfill) is skipped entirely -- a second call to this function,
+    including one replayed against a database restored from a mid-upgrade
+    backup, is a clean no-op that neither re-derives `avg_cost` from a
+    `cost_price` the runtime has since moved on, nor touches `unit_cost`
+    a second time.
+    """
+    existing_tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+    if 'products' in existing_tables:
+        products_cols = {row[1] for row in conn.execute('PRAGMA table_info(products)').fetchall()}
+        if 'avg_cost' not in products_cols:
+            conn.execute('ALTER TABLE products ADD COLUMN avg_cost REAL DEFAULT 0')
+            # Best-effort backfill -- see docstring's "products.avg_cost IS
+            # BACKFILLED" section. Runs only the FIRST time the column is
+            # added; a second call sees the column already present (the
+            # guard above) and returns without touching it, exactly like
+            # `_migrate_add_return_settlement_split`'s own `added_any`
+            # guard -- so a replay can never re-derive avg_cost from a
+            # cost_price the runtime has since moved on.
+            conn.execute('UPDATE products SET avg_cost = COALESCE(cost_price, 0)')
+
+    if 'sale_items' in existing_tables:
+        sale_items_cols = {row[1] for row in conn.execute('PRAGMA table_info(sale_items)').fetchall()}
+        if 'unit_cost' not in sale_items_cols:
+            # DEFAULT 0, and -- unlike `avg_cost` immediately above --
+            # deliberately NEVER backfilled. See docstring's "sale_items.
+            # unit_cost is DELIBERATELY NOT BACKFILLED": 0 here means "no
+            # snapshot was taken", not "this sale cost nothing".
+            conn.execute('ALTER TABLE sale_items ADD COLUMN unit_cost REAL DEFAULT 0')

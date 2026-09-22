@@ -1571,10 +1571,22 @@ def _handle_retail_products(records):
             # Whatever this row's current value is rides along unclaimed
             # here, matching update_product's own "full row + explicit
             # changed set" shape.
+            # `avg_cost` added to this SELECT (schema v39, sync-payload
+            # coverage sweep): mirrors update_product's own identical SELECT
+            # (retail_api.py, ~line 2216) and for the SAME reason stated
+            # there -- this UPDATE never SETS avg_cost (not in the SET
+            # clause above, not in `changed` below: receive_purchase_order
+            # is the column's only writer), but this payload is a full-row
+            # upsert for a device seeing this product for the first time, so
+            # omitting it here silently zeroed avg_cost on any device that
+            # learns about a re-imported product only through this event.
+            # Found by retail_sync_payload_coverage_test.py's cross-module
+            # widening: this SELECT was missing the column even after the
+            # importer's own `create` event (below) was fixed to carry it.
             prow = conn.execute(
                 "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
                 "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
-                "row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+                "avg_cost,row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
             _queue_sync_event(cur, 'product', pid, 'update',
                                dict(prow) | {'id': pid, '_changed_fields': sorted(changed)})
             dupes += 1
@@ -1615,6 +1627,22 @@ def _handle_retail_products(records):
                 'id': pid, 'sku': sku, 'barcode': rec.get('barcode', ''), 'name': rec.get('name', ''),
                 'category_id': cat_id, 'supplier_id': None,
                 'cost_price': rec.get('cost_price') or 0,
+                # Schema v39: `avg_cost` mirrors create_product's own payload
+                # (retail_api.py, ~line 2050) key-for-key. NOT client-settable
+                # -- the import sheet has no such column and none is read
+                # here -- seeded at the column's own DEFAULT 0 for the
+                # identical reason create_product states: a product this
+                # import just inserted has never had a PO receipt through
+                # receive_purchase_order (the ONLY writer of this column), so
+                # 0 is the correct value on both the local row and the wire.
+                # Included on the wire explicitly, matching every other
+                # column here, rather than relying on the receiving device's
+                # own local schema default to happen to agree. Found by
+                # retail_sync_payload_coverage_test.py's cross-module
+                # widening: this event had no entry for the column at all,
+                # so a bulk-imported product's cost basis never reached a
+                # second device.
+                'avg_cost': 0,
                 'sell_price': rec.get('sell_price') or 0, 'tax_rate': rec.get('tax_rate') or 0,
                 'unit': rec.get('unit', 'pcs') or 'pcs', 'reorder_level': rec.get('reorder_level') or 5,
                 'reorder_method': 'none',
@@ -1892,10 +1920,16 @@ def _handle_retail_products(records):
             # complete row; `_changed_fields` names only what THIS write
             # touched, matching update_product's own delta-allowlist
             # convention.
+            # `avg_cost` added to this SELECT for the identical reason as
+            # pass 1's own update-branch SELECT above -- this is ALSO a
+            # full-row upsert for a device seeing this product for the first
+            # time, and this second, additive event is queued independently
+            # of whether pass 1 took the create or update branch for this
+            # row.
             prow2 = conn.execute(
                 "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
                 "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
-                "row_version,updated_at_utc FROM products WHERE id=?", (m['pid'],)).fetchone()
+                "avg_cost,row_version,updated_at_utc FROM products WHERE id=?", (m['pid'],)).fetchone()
             _queue_sync_event(cur, 'product', m['pid'], 'update',
                                dict(prow2) | {'id': m['pid'], '_changed_fields': ['parent_product_id']})
             linked += 1

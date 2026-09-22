@@ -2047,6 +2047,14 @@ def create_product():
             'id': pid, 'sku': data['sku'], 'barcode': data.get('barcode', ''), 'name': data['name'],
             'category_id': data.get('category_id'), 'supplier_id': data.get('supplier_id'),
             'cost_price': data.get('cost_price', 0),
+            # Schema v39: `avg_cost` is NOT client-settable -- a brand-new
+            # product has never had a PO receipt through receive_purchase_
+            # order (the ONLY writer of this column), so it starts at the
+            # column's own DEFAULT 0, same as the row itself. Included on
+            # the wire explicitly anyway, matching every other column in
+            # this payload, rather than relying on the receiving device's
+            # own local schema default to happen to agree.
+            'avg_cost': 0,
             'sell_price': data.get('sell_price', 0), 'tax_rate': data.get('tax_rate', 0),
             'unit': data.get('unit', 'pcs'), 'reorder_level': data.get('reorder_level', 5),
             # reorder automation foundation: propagated through the outbox so
@@ -2193,9 +2201,21 @@ def update_product(pid):
     # allowlist). Without these two here, a PATCH that changes a variant's
     # label or re-parents it would upsert a full row on a device seeing this
     # id for the first time with BOTH columns silently NULL.
+    # `avg_cost` added to this SELECT (schema v39, sync-payload coverage
+    # sweep): NOT in `allowed` above -- a PATCH never SETS avg_cost, the
+    # same way it never sets `row_version` -- receive_purchase_order is the
+    # column's only writer (see that route's own moving-average comment).
+    # But this payload is a full-row upsert for a device seeing this
+    # product for the first time (see the comment below on `_changed_
+    # fields`), and omitting avg_cost here left THAT payload silently
+    # zeroing it out on any device that learns about a product only
+    # through an unrelated later PATCH rather than through its own create/
+    # sync of the original row -- the identical "present on one path,
+    # absent on another" shape `parent_product_id`/`variant_label` were
+    # already fixed for, two lines above.
     row = conn.execute(
         "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
-        "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
+        "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,avg_cost,"
         "row_version,updated_at_utc FROM products WHERE id=?", (pid,)
     ).fetchone()
     # launch-readiness Phase 6 stage 6b-i (changed-field deltas): the payload
@@ -3718,8 +3738,160 @@ def receive_purchase_order(po_id):
         # terminal, utc_now` on the line above -- every line of one delivery
         # was received at the SAME branch.
         receipt_branch_uid = _branch_uid(conn, bid)
+        # Schema v39 (cost basis for COGS): drives the quantization of the
+        # moving-average update below, same `currency` every money figure in
+        # this file is quantized at -- see `_money`'s own docstring.
+        currency = _company_currency(conn, cid)
         for item in items:
             qty = item['quantity']
+            # Schema v39: maintain `products.avg_cost` as a MOVING WEIGHTED
+            # AVERAGE at the moment stock actually arrives -- see database/
+            # schema.py's v39 migration docstring for why a weighted average
+            # rather than FIFO, and why `cost_price` itself is NEVER touched
+            # here: it stays the shopkeeper's own manually-typed field, and
+            # `avg_cost` is the only cost figure this route writes.
+            #
+            # `qty_on_hand` is read COMPANY-WIDE (summed across every
+            # branch), never scoped to this receipt's own `bid` -- `products.
+            # avg_cost` is a single company-scoped column (`products` has no
+            # branch_id of its own), so the average must be weighted by the
+            # SAME scope it lives at. This mirrors metrics.py's `inventory_
+            # value`, which sums `inventory_balances` company-wide rather
+            # than per branch for the identical reason.
+            #
+            # Read BEFORE this item's own `inventory_balances` UPDATE two
+            # lines below moves the figure: the formula weights the stock
+            # that was ALREADY on hand against the stock arriving now, so
+            # reading it after would double-count this receipt's own
+            # quantity into both halves of the average.
+            on_hand_row = cur.execute(
+                "SELECT COALESCE(SUM(quantity_on_hand),0) FROM inventory_balances "
+                "WHERE company_id=? AND product_id=?",
+                (cid, item['product_id'])
+            ).fetchone()
+            qty_on_hand = float(on_hand_row[0] or 0)
+            old_avg_row = cur.execute(
+                "SELECT avg_cost FROM products WHERE id=? AND company_id=?",
+                (item['product_id'], cid)
+            ).fetchone()
+            old_avg = float(old_avg_row['avg_cost'] or 0) if old_avg_row else 0.0
+            denom = qty_on_hand + float(qty)
+            # Guard the zero/negative denominator. The common case this
+            # reaches is a product that has never been stocked before AND
+            # carries no `inventory_balances` row yet (`qty_on_hand == 0`),
+            # where the formula below collapses to exactly `unit_cost` --
+            # "the first receipt simply sets the average to the received
+            # cost" the task's own spec calls for, no special-casing needed.
+            # `denom <= 0` is reachable only through a corrupted/negative
+            # on-hand figure this route did not cause; keeping the OLD
+            # average rather than dividing by zero refuses to compound a
+            # pre-existing data problem into the cost ledger too.
+            if denom > 0:
+                new_avg = (
+                    Decimal(str(qty_on_hand)) * Decimal(str(old_avg))
+                    + Decimal(str(qty)) * Decimal(str(item['unit_cost']))
+                ) / Decimal(str(denom))
+                # AUDIT (2026-09-21, adversarial cost-basis pass): the guard
+                # immediately above only catches a zero/negative DENOMINATOR.
+                # A NEGATIVE NUMERATOR reaching a POSITIVE denominator slips
+                # straight through it. `qty_on_hand` is summed COMPANY-WIDE
+                # (see the read above) and can be legitimately negative --
+                # create_sale's `behind_on_sync` oversell path lets a device
+                # sell stock it has not yet learned about from a peer, which
+                # can drive this company's on-hand total below zero without
+                # THIS receipt having done anything wrong. When that happens,
+                # `old_avg` gets weighted by a negative quantity and the
+                # formula can swing past zero even though `item['unit_cost']`
+                # -- the price actually paid on THIS transaction -- is an
+                # ordinary positive number.
+                #
+                # Reproduced live: old_avg=10, qty_on_hand=-5, receive 6 @
+                # 5.00 -> formula gives -20.00. Left uncaught, that negative
+                # figure was PERSISTED straight into products.avg_cost and
+                # then SNAPSHOTTED by the very next sale into sale_items.
+                # unit_cost -- a shopkeeper sees a negative cost on a real
+                # sale and nothing complains, because the negative total
+                # quietly fails post_cogs's own epsilon gate ("is there a
+                # real cost basis here") instead of raising anywhere loud
+                # enough to notice.
+                #
+                # Fall back to `item['unit_cost']` here, NOT 0. This file's
+                # cost model treats 0 as ITS OWN sentinel for "no cost basis
+                # known at all" (metrics.py falls back to cost_price when
+                # avg_cost is 0; post_cogs posts nothing for a 0 total) --
+                # clamping a negative result to 0 would misreport a product
+                # that DOES have a known cost (the price just paid on this
+                # very receipt) as one that has none. `item['unit_cost']` is
+                # the one number in this formula that is an OBSERVED fact of
+                # this transaction rather than a figure dragged along by a
+                # corrupted running total -- the honest answer, not merely a
+                # safe one, the same reasoning the `denom <= 0` branch above
+                # (untouched by this fix) already applies to a different
+                # corruption of this same running total.
+                if new_avg < 0:
+                    new_avg = Decimal(str(item['unit_cost']))
+                new_avg_cost = _money(new_avg, currency)
+                # Sync-payload coverage follow-up (2026-09-21): row_version/
+                # updated_at_utc now bump in the SAME statement as the field
+                # write, matching update_product's own "every successful
+                # write to a synced column bumps row_version" rule (see that
+                # route's own comment). Without this, the `product`/`update`
+                # event queued below would carry the SAME row_version a peer
+                # that already knows this product is very likely already
+                # holding, and sync_service.py's product apply branch gates
+                # its DO UPDATE on `excluded.row_version > products.
+                # row_version` -- an unchanged row_version there is
+                # indistinguishable from a stale replay and gets silently
+                # discarded into sync_conflicts instead of applied,
+                # defeating the point of queuing the event at all.
+                cur.execute(
+                    "UPDATE products SET avg_cost=?, row_version=row_version+1, updated_at_utc=? "
+                    "WHERE id=? AND company_id=?",
+                    (new_avg_cost, utc_now, item['product_id'], cid)
+                )
+                # AUDIT (2026-09-21): this route used to update products.
+                # avg_cost with NO matching sync event at all -- the sync_
+                # outbox row count for entity_type='product' was measured
+                # unchanged before and after a receipt. A peer device
+                # therefore never learned the new average; only a LATER,
+                # unrelated PATCH to this same product (update_product's own
+                # `product`/`update` event, which re-reads the full row)
+                # would ever carry the real figure across the wire. Note for
+                # the next reader: retail_sync_payload_coverage_test.py's
+                # own ratchet did NOT catch this -- it checks that a payload
+                # DICT contains every column, never that an event is ever
+                # EMITTED, and a payload this route never queued has no call
+                # site for that ratchet to inspect in the first place.
+                #
+                # Matches update_product's own emission mechanism exactly: a
+                # full-row re-read (the INSERT half of the receiving
+                # device's upsert needs a complete snapshot for a device
+                # seeing this id for the first time) merged with `_changed_
+                # fields` naming only the column THIS write actually
+                # touched. `avg_cost` is the ONLY thing a receipt ever
+                # changes on `products` -- `cost_price` stays manual-entry-
+                # only, per this loop's own comment above -- so `_changed_
+                # fields` here is always exactly `['avg_cost']`, never
+                # `sorted(fields)` the way update_product computes it: there
+                # is no `fields` dict on this route, this write touches one
+                # column, unconditionally, every time this branch runs.
+                #
+                # Emitted only when the average actually MOVED, compared
+                # against the currency's own epsilon (never a hardcoded
+                # 0.005 -- see `_money_epsilon`'s own docstring): a second
+                # receipt landing at EXACTLY the prior average (most
+                # commonly, a second delivery at an identical price) would
+                # otherwise queue an outbox row that carries no new
+                # information for any peer to apply.
+                if abs(new_avg_cost - old_avg) > _money_epsilon(currency):
+                    product_row = cur.execute(
+                        "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
+                        "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,avg_cost,"
+                        "row_version,updated_at_utc FROM products WHERE id=?", (item['product_id'],)
+                    ).fetchone()
+                    _queue_sync_event(cur, 'product', item['product_id'], 'update',
+                                       dict(product_row) | {'id': item['product_id'],
+                                                             '_changed_fields': ['avg_cost']})
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
@@ -6017,8 +6189,16 @@ def create_sale():
             # unit actually on the shelf is counted under a variant -- so
             # it is refused below rather than allowed to silently misfile a
             # sale onto a product nobody can restock against.
+            # `avg_cost, cost_price` added to this SELECT (schema v39, cost
+            # basis for COGS): the product-fetch loop is the only place this
+            # route reads a product row before pricing/writing its sale_
+            # items line, so it is also the right place to read the cost
+            # basis that line's `unit_cost` snapshot needs -- see the
+            # `cost_basis`/`unit_cost` computation below, right after
+            # `unit_price`/`tax_rate` are resolved from this SAME row.
             product = cur.execute(
                 "SELECT p.id, p.name, p.sell_price, p.tax_rate, p.status, p.category_id, "
+                "p.avg_cost, p.cost_price, "
                 "p.parent_product_id, EXISTS("
                 "  SELECT 1 FROM products c WHERE c.parent_product_id = p.id "
                 "  AND c.company_id = p.company_id AND c.deleted_at_utc IS NULL "
@@ -6139,6 +6319,34 @@ def create_sale():
             unit_price = float(product['sell_price'])
             tax_rate = float(product['tax_rate'])
 
+            # Schema v39 (cost basis for COGS): SNAPSHOT the product's cost
+            # basis AT THIS INSTANT, inside this sale's own BEGIN IMMEDIATE
+            # transaction, so `sale_items.unit_cost` ends up holding the
+            # figure that was true when the sale rang -- never re-derived
+            # later from an `avg_cost` that has since moved. That is the
+            # ENTIRE point of this column: database/schema.py's v39
+            # migration docstring calls the alternative (reading cost_price
+            # at REPORT time) "the retroactive-profit defect" -- editing one
+            # product's cost today would otherwise silently rewrite every
+            # historical profit figure this sale ever contributed to.
+            #
+            # Falls back to `cost_price` ONLY when `avg_cost` is exactly 0 --
+            # a product that predates this company's very first PO receipt
+            # through receive_purchase_order (see that route's own moving-
+            # average comment) and therefore has no weighted-average figure
+            # yet. `cost_price` is the shopkeeper's own manually-typed
+            # "current cost" and is the best available basis for that one
+            # case -- the SAME fallback the v39 migration used to seed
+            # `avg_cost`'s own starting value company-wide.
+            #
+            # Quantized through `_money(..., currency)`, the SAME money
+            # helper every other coerced figure in this route already goes
+            # through -- `avg_cost`/`cost_price` are raw REAL columns that
+            # never passed through `calculate_line`'s own quantization, so
+            # this is the one place that has to happen for them.
+            cost_basis = product['avg_cost'] if product['avg_cost'] else product['cost_price']
+            unit_cost = _money(cost_basis, currency)
+
             # Launch-readiness "restaurant modifiers, wave 1" (schema v26,
             # design doc docs/launch-readiness/variants-and-modifiers-
             # design.md section 4.3). Resolved here, BEFORE calculate_line,
@@ -6245,6 +6453,11 @@ def create_sale():
                 'product_id': pid, 'quantity': qty, 'unit_price': unit_price,
                 'discount_pct': effective_discount_pct, 'tax_rate': tax_rate,
                 'line_total': calc['taxable_amount'], 'branch_id': bid,
+                # Schema v39: the cost-basis snapshot resolved above,
+                # BEFORE any quotation price-winner logic runs -- cost basis
+                # is independent of which side (quoted vs. live) wins this
+                # line's SELLING price.
+                'unit_cost': unit_cost,
                 # Carried through to the sale_items write loop below so a
                 # winning promotion can be snapshotted into
                 # sale_item_promotions -- `discount_amount` is calc's OWN
@@ -6556,7 +6769,18 @@ def create_sale():
             'uid': sale_uid, 'sale_number': sale_number, 'branch_id': bid, 'branch_uid': branch_uid,
             'customer_id': customer_id, 'cashier': data.get('cashier', _uid()),
             'subtotal': subtotal, 'discount_amount': discount, 'tax_amount': tax, 'total': total,
-            'amount_paid': paid, 'change_amount': change, 'payment_method': pm, 'status': 'completed',
+            'amount_paid': paid, 'change_amount': change,
+            # Sync-payload coverage sweep: `points_redeemed_amount` (schema
+            # v27, loyalty redemption) was omitted here since the column was
+            # added, AND `sale` has no `update` event that could ever carry
+            # it later -- a redeemed sale therefore reached every OTHER
+            # device in the shop reading 0 redeemed forever, two tills
+            # silently disagreeing about how the same sale was paid.
+            # Included now for the identical reason `amount_paid`/
+            # `change_amount` beside it already are: it is part of the
+            # sale's own settled tender breakdown, not a local-only figure.
+            'points_redeemed_amount': points_redeemed_amount,
+            'payment_method': pm, 'status': 'completed',
             'notes': data.get('notes', ''), 'created_at': now_local, 'due_date': due_date,
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
         })
@@ -6570,10 +6794,10 @@ def create_sale():
             # given a peer device several rows it could not tell apart.
             item_uid = _new_uid()
             cur.execute("""
-                INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total,uid)
-                VALUES (?,?,?,?,?,?,?,?)
+                INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total,unit_cost,uid)
+                VALUES (?,?,?,?,?,?,?,?,?)
             """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'],
-                  line['line_total'], item_uid))
+                  line['line_total'], line['unit_cost'], item_uid))
             # `cur.lastrowid` captured IMMEDIATELY after the INSERT it
             # describes and before any other `cur.execute()` runs -- same
             # discipline `_default_branch`'s own comment states in full:
@@ -6595,6 +6819,16 @@ def create_sale():
                 'uid': item_uid, 'sale_uid': sale_uid, 'product_id': pid, 'quantity': qty,
                 'unit_price': line['unit_price'], 'discount_pct': line['discount_pct'],
                 'tax_rate': line['tax_rate'], 'line_total': line['line_total'],
+                # Schema v39: the cost-basis SNAPSHOT taken at sale time
+                # (see the product-fetch loop above), on the wire for the
+                # identical reason `unit_price`/`line_total` already are.
+                # Without this a device pulling this row via sync would show
+                # a sale's cost as whatever ITS local `avg_cost` happens to
+                # be right now rather than what the selling device actually
+                # recorded -- the exact retroactive-profit defect this
+                # column exists to kill, reappearing on every OTHER device
+                # in the shop even though the selling device got it right.
+                'unit_cost': line['unit_cost'],
             })
             # Promotions, wave 1 (schema v23): snapshot the WINNING
             # promotion, if any, onto this line. `applied_promotion` is None
@@ -6859,6 +7093,28 @@ def create_sale():
         gl.post_sale(conn, cid, bid, sale_id, sale_number, currency,
                      net_received, ar_amount_for_gl, points_redeemed_amount,
                      tax, revenue_amount)
+
+        # Schema v39 (cost basis for COGS): Dr Cost of Goods Sold / Cr
+        # Inventory for the cost basis of what actually left the shelf on
+        # this sale -- see post_cogs's own docstring (core/retail/general_
+        # ledger.py) for the accounting and the epsilon-gated "no cost
+        # basis, no journal" case this call relies on rather than
+        # special-casing here.
+        #
+        # `cogs_amount` sums `quantity * unit_cost` over `resolved_lines` --
+        # the SAME per-line `unit_cost` the write loop above already
+        # persisted onto each `sale_items` row (never re-derived from
+        # today's `avg_cost`/`cost_price`), so this journal and that column
+        # can never disagree about what a line's cost was. A line whose
+        # cost basis is genuinely unknown contributes exactly 0 to this sum
+        # (its own `unit_cost` is 0), which is what lets a sale mixing
+        # known- and unknown-cost products post a correct PARTIAL COGS
+        # figure rather than an all-or-nothing one.
+        cogs_amount = float(sum(
+            (Decimal(str(line['unit_cost'])) * Decimal(str(line['quantity'])) for line in resolved_lines),
+            Decimal('0')
+        ).quantize(_quant, rounding=ROUND_HALF_UP))
+        gl.post_cogs(conn, cid, bid, 'sale', sale_id, sale_number, currency, cogs_amount)
 
         if quotation_id:
             # (f) Aseel-parity wave A-PAR (schema v33): after the sale row
@@ -7912,8 +8168,12 @@ def create_return():
             # silent wrong-price refund.
             sale_item_id = item.get('sale_item_id')
             if sale_item_id is not None:
+                # `unit_cost` added to this SELECT (schema v39): the return-
+                # side COGS reversal below needs the ORIGINAL LINE'S cost
+                # snapshot, not the product's cost today -- see resolved_
+                # items.append's own comment a few lines down.
                 sold = cur.execute(
-                    "SELECT id, product_id, quantity, unit_price, discount_pct, tax_rate "
+                    "SELECT id, product_id, quantity, unit_price, discount_pct, tax_rate, unit_cost "
                     "FROM sale_items WHERE id=? AND sale_id=?", (sale_item_id, sale_id)
                 ).fetchone()
                 if not sold:
@@ -7938,8 +8198,10 @@ def create_return():
                 ).fetchone()[0]
                 claim_key = ('item', sale_item_id)
             else:
+                # `unit_cost` added, same reason as the sale_item_id branch
+                # immediately above.
                 sale_lines_for_product = cur.execute(
-                    "SELECT id, quantity, unit_price, discount_pct, tax_rate "
+                    "SELECT id, quantity, unit_price, discount_pct, tax_rate, unit_cost "
                     "FROM sale_items WHERE sale_id=? AND product_id=?", (sale_id, pid)
                 ).fetchall()
                 if not sale_lines_for_product:
@@ -7991,6 +8253,19 @@ def create_return():
                 'unit_price': float(sold['unit_price']),
                 'discount_amount': calc['discount_amount'], 'tax_amount': calc['tax'],
                 'line_total': calc['total'],
+                # Schema v39: the ORIGINAL SALE LINE'S cost-basis snapshot
+                # (`sold['unit_cost']`, just added to both SELECTs above),
+                # NEVER the product's `avg_cost`/`cost_price` as they stand
+                # today -- the goods being restocked left the shelf at
+                # whatever they cost back then, and re-reading today's
+                # figure would silently move a return's COGS reversal every
+                # time a later PO receipt shifts the average. `or 0` covers
+                # a pre-v39 sale being returned now: that row's `unit_cost`
+                # is 0, meaning "no snapshot was taken" (see the v39
+                # migration's own docstring), which the COGS-reversal sum
+                # below must treat as no known cost for this line, not as
+                # free goods.
+                'unit_cost_snapshot': float(sold['unit_cost'] or 0),
             })
             refund_total += Decimal(str(calc['total']))
 
@@ -8542,6 +8817,33 @@ def create_return():
         # the credits rather than from `refund` itself.
         gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
                         tender_refund, ar_forgiven + store_credit)
+
+        # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
+        # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost
+        # basis of goods this return actually restocked. `create_return`
+        # restocks returned goods (the `inventory_balances`/`inventory_
+        # movements` writes in the loop above; metrics.py's `cogs()` nets
+        # returns out for exactly this reason), so their cost genuinely was
+        # not consumed and belongs back in Inventory, not left sitting in
+        # COGS from the original sale.
+        #
+        # `cogs_reversal_amount` sums `quantity * unit_cost_snapshot` over
+        # `resolved_items` -- the ORIGINAL SALE LINE's cost, joined via
+        # `sale_item_id` when the validation loop above resolved it (see
+        # `resolved_items.append`'s own comment), never today's `avg_cost`.
+        # A line whose original snapshot is 0 (a pre-v39 sale returned now,
+        # or any other line with no known cost) contributes exactly 0 here
+        # -- `post_cogs`'s own epsilon gate then either posts the correct
+        # partial figure for the lines that DO have a known cost, or posts
+        # nothing at all when none of them do, exactly like create_sale's
+        # own call.
+        cogs_reversal_amount = float(sum(
+            (Decimal(str(item['unit_cost_snapshot'])) * Decimal(str(item['quantity']))
+             for item in resolved_items),
+            Decimal('0')
+        ).quantize(tax_engine.currency_quantum(currency), rounding=ROUND_HALF_UP))
+        gl.post_cogs(conn, cid, bid, 'return', ret_id, ret_num, currency,
+                     cogs_reversal_amount, reverse=True)
 
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}{loyalty_audit_note}')
         conn.commit()
