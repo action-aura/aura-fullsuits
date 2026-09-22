@@ -40,8 +40,15 @@ services:
       sh -c "python -m alembic upgrade head &&
              flask seed-rbac &&
              flask seed-catalog &&
+             flask seed-plans &&
              flask seed-offline-policy &&
              gunicorn --bind 0.0.0.0:5000 --workers 2 'app:create_app()'"
+    # `flask seed-plans` (added 2026-09-22) MUST run after seed-catalog and
+    # before the server starts -- without it owner_plans stays empty and
+    # issue_license_direct has no plan to issue a licence against, even
+    # though every route above answers 200. This is the exact "flask
+    # seed-plans is never run anywhere -- not in the README, not in any
+    # deploy doc, not in docker-compose" gap a real end-to-end run found.
 
 volumes:
   owner_pg_data:

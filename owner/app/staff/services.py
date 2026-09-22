@@ -12,12 +12,49 @@ from app.auth.session import revoke_all_sessions_for_staff
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.employees import EmployeeProfile
-from app.models.staff import Role, StaffInvitation, StaffRoleAssignment, StaffUser
+from app.models.staff import Permission, Role, RolePermission, StaffInvitation, StaffRoleAssignment, StaffUser
 from app.security.passwords import hash_password
 from app.security.super_admin_guard import assert_can_remove_super_admin_status
 from app.security.tokens import generate_token, hash_token
+from app.staff.seed_data import PERMISSIONS, ROLES
 
 INVITATION_TTL_SECONDS = 60 * 60 * 24 * 3  # 3 days
+
+
+def seed_rbac() -> dict:
+    """Seeds the canonical permission and role catalog (idempotent). The
+    same logic `flask seed-rbac` (app/cli.py) has always run, extracted
+    here 2026-09-22 so the new `flask bootstrap-dev` composite command can
+    call it directly instead of a third copy -- app/staff/seed_data.py's
+    own docstring keeps PERMISSIONS/ROLES as pure data with no seeding
+    logic of its own, so this is where that logic belongs."""
+    existing_perms = {p.code: p for p in db_session.execute(select(Permission)).scalars().all()}
+    for code, category, description in PERMISSIONS:
+        if code not in existing_perms:
+            existing_perms[code] = Permission(code=code, category=category, description=description)
+            db_session.add(existing_perms[code])
+    db_session.flush()
+
+    existing_roles = {r.code: r for r in db_session.execute(select(Role)).scalars().all()}
+    for code, definition in ROLES.items():
+        role = existing_roles.get(code)
+        if role is None:
+            role = Role(code=code, name=definition["name"], description=definition["description"], is_system_role=True)
+            db_session.add(role)
+            db_session.flush()
+            existing_roles[code] = role
+
+        wanted_codes = (
+            set(existing_perms.keys()) if definition["permissions"] == "*" else set(definition["permissions"])
+        )
+        have_codes = {
+            rp.permission.code
+            for rp in db_session.execute(select(RolePermission).where(RolePermission.role_id == role.id)).scalars()
+        }
+        for missing_code in wanted_codes - have_codes:
+            db_session.add(RolePermission(role_id=role.id, permission_id=existing_perms[missing_code].id))
+    db_session.commit()
+    return {"permissions": len(existing_perms), "roles": len(existing_roles)}
 
 # Phase 9.5B Milestone 3 -- employee-profile draft fields carried on a
 # StaffInvitation, materialized into a real EmployeeProfile transactionally

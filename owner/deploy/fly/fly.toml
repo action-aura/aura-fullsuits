@@ -64,10 +64,21 @@ primary_region = "fra"          # Frankfurt — closest low-latency region to Jo
 # Migrations and seeding run before the new release takes traffic. The bare
 # Dockerfile CMD is just gunicorn with NO seeding -- only the dev
 # docker-compose wrapper seeded RBAC/catalog/offline-policy, so a plain
-# container deploy would come up with no roles and no catalog. All three
+# container deploy would come up with no roles and no catalog. All four
 # seed commands are idempotent.
+#
+# `seed-plans` (added 2026-09-22, after seed-catalog since it requires
+# products to already exist) closes a real gap: without it owner_plans
+# stays empty forever and issue_license_direct has no plan to issue a
+# licence against, even though this Machine reports healthy and every
+# other route answers normally -- exactly the "flask seed-plans is never
+# run anywhere -- not in the README, not in any deploy doc, not in
+# docker-compose" finding from a real end-to-end run. Deliberately NOT
+# adding signing-key generation/activation here -- that stays the manual,
+# deliberate "Then verify" step in DEPLOY.md below, the same reason it was
+# never folded into this release_command before.
 [deploy]
-  release_command = "sh -c 'python -m alembic upgrade head && flask --app app:create_app seed-rbac && flask --app app:create_app seed-catalog && flask --app app:create_app seed-offline-policy'"
+  release_command = "sh -c 'python -m alembic upgrade head && flask --app app:create_app seed-rbac && flask --app app:create_app seed-catalog && flask --app app:create_app seed-plans && flask --app app:create_app seed-offline-policy'"
 
 # Overrides the image CMD so the volume's subdirectories exist before the
 # config validator checks for them. Done here rather than by editing

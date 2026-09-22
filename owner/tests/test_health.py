@@ -8,6 +8,30 @@ def test_live_is_always_ok(client):
     assert resp.get_json() == {"status": "ok"}
 
 
+def test_healthz_reports_external_api_enabled_without_failing(client, app):
+    # 2026-09-22: bare-liveness /healthz must still surface whether the
+    # licensing/activation/sync API is registered, without turning that
+    # into a failure -- a dashboard-only deployment with it off on purpose
+    # must keep reading "status": "ok" (see app/__init__.py's healthz()).
+    original = app.config["EXTERNAL_API_ENABLED"]
+    app.config["EXTERNAL_API_ENABLED"] = False
+    try:
+        resp = client.get("/healthz")
+    finally:
+        app.config["EXTERNAL_API_ENABLED"] = original
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "ok"
+    assert body["external_api_enabled"] is False
+
+
+def test_healthz_external_api_enabled_true_in_testing(client):
+    # TestingConfig hardcodes EXTERNAL_API_ENABLED=True (app/config.py) --
+    # confirms the field reflects real config, not a hardcoded stub.
+    resp = client.get("/healthz")
+    assert resp.get_json()["external_api_enabled"] is True
+
+
 def test_ready_reports_ok_with_healthy_dependencies(client, seeded, signing_key):
     # trust_anchor.json is a real build-time artifact (gitignored) pinned to
     # a specific key_id -- it will not match this test's ephemeral

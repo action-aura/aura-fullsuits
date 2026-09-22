@@ -109,9 +109,13 @@ fly secrets set --app aura-owner \
 fly ssh console --app aura-owner -C "flask --app app:create_app commercial preflight"
 ```
 
-`preflight` runs twelve checks and exists precisely to catch a bad bring-up
-before anyone trusts it. Run it. It is also what catches a signing key that
-has drifted from `trust_anchor.json`.
+`preflight` runs many checks (see `app/commercial_ops/preflight.py` for the
+current, authoritative list rather than a count here that will drift) and
+exists precisely to catch a bad bring-up before anyone trusts it. Run it. It
+is also what catches a signing key that has drifted from `trust_anchor.json`,
+plans never seeded (`seed-plans`), or the external API left disabled
+(`OWNER_EXTERNAL_API_ENABLED`) -- all three now hard-FAIL it, added
+2026-09-22 after a real end-to-end run found them silent.
 
 Create the first admin:
 

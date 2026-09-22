@@ -165,9 +165,38 @@ def create_app(config_name: str | None = None) -> Flask:
         # signature check is its CSRF-equivalent protection for the same
         # reason licensing_api_bp's is exempted.
         csrf.exempt(sync_api_bp)
-    # else: no external API blueprint is ever registered -- there is no route
-    # for an external activation/check-in/deactivation/sync request to reach
-    # (Part B/R), not merely a disabled check inside one.
+    else:
+        # 2026-09-22: a real fresh-deploy end-to-end run found this exact
+        # state -- OWNER_EXTERNAL_API_ENABLED unset, app boots healthy,
+        # /healthz returns 200, dashboard fully usable -- and NOTHING logged
+        # that no till anywhere can activate, check in, or sync, because no
+        # route for any of that was ever registered (see the block above).
+        # `owner/deploy/fly/DEPLOY.md` already calls this "Landmine 1" from a
+        # real deploy. `flask commercial preflight` and /health/ready both
+        # now hard-FAIL on this too (app/commercial_ops/preflight.py's
+        # external_api_enabled check) -- but neither runs unless an operator
+        # (or a monitor) asks. This log line is the one thing that reaches
+        # an operator who never runs either: it fires unconditionally at
+        # boot, on every process, with no dependency on anyone probing
+        # anything. Deliberately NOT a refusal to boot: a dashboard-only
+        # deployment (no product using this Owner for licensing yet, or a
+        # staff-tools-only instance) is a legitimate, intentional shape, and
+        # refusing to start would turn a real deployment choice into an
+        # outage. A refusal-to-start belongs to config.py's own
+        # validate_external_api_production() gate, which already fails
+        # closed when the external API IS enabled but insecurely so -- that
+        # is a different, narrower question ("is this configuration safe")
+        # from this one ("does this operator know what they turned off").
+        app.logger.warning(
+            "OWNER_EXTERNAL_API_ENABLED is not \"true\" -- the licensing/activation API, the device-facing "
+            "API, and the sync relay were NOT registered. This instance cannot issue, activate, check in, or "
+            "sync a single license; only the staff dashboard is reachable. If this is a deliberate "
+            "dashboard-only deployment, no action is needed. If not, set OWNER_EXTERNAL_API_ENABLED=true and "
+            "restart. Run 'flask commercial preflight' for the full readiness picture."
+        )
+    # No external API blueprint is registered when the flag is off -- there
+    # is no route for an external activation/check-in/deactivation/sync
+    # request to reach (Part B/R), not merely a disabled check inside one.
 
     from app.cli import register_cli
 
@@ -175,6 +204,20 @@ def create_app(config_name: str | None = None) -> Flask:
 
     @app.get("/healthz")
     def healthz():
-        return {"status": "ok", "product_code": "AURA_OWNER"}
+        # `external_api_enabled` is a plain config read (no DB/dependency
+        # call -- keeps this endpoint's bare-liveness-probe contract, see
+        # _HEALTH_CHECK_REASON in test_route_reachability.py), deliberately
+        # never influencing "status": a monitor that already curls this
+        # endpoint (owner/deploy/fly/fly.toml's health check, e.g.) can see
+        # at a glance whether licensing/activation/sync is live without a
+        # second request to /health/ready -- but a dashboard-only deployment
+        # with it off on purpose must still read "status": "ok", not
+        # unhealthy, for the reasoning above the OWNER_EXTERNAL_API_ENABLED
+        # else-branch log line just above.
+        return {
+            "status": "ok",
+            "product_code": "AURA_OWNER",
+            "external_api_enabled": bool(app.config.get("EXTERNAL_API_ENABLED")),
+        }
 
     return app

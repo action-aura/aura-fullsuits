@@ -15,42 +15,17 @@ from app.catalog.services import import_release_manifest, seed_canonical_catalog
 from app.extensions import db_session
 from app.licensing_service import signing as signing_service
 from app.licensing_service.offline_policy import seed_default_offline_policy
-from app.models.staff import Permission, Role, RolePermission, StaffUser
+from app.models.staff import Role, StaffUser
 from app.security.passwords import PasswordPolicyError, hash_password
-from app.staff.seed_data import PERMISSIONS, ROLES
+from app.staff.services import seed_rbac as seed_rbac_service
 
 
 def register_cli(app: Flask) -> None:
     @app.cli.command("seed-rbac")
     def seed_rbac():
         """Seed the canonical permission and role catalog (idempotent)."""
-        existing_perms = {p.code: p for p in db_session.execute(select(Permission)).scalars().all()}
-        for code, category, description in PERMISSIONS:
-            if code not in existing_perms:
-                existing_perms[code] = Permission(code=code, category=category, description=description)
-                db_session.add(existing_perms[code])
-        db_session.flush()
-
-        existing_roles = {r.code: r for r in db_session.execute(select(Role)).scalars().all()}
-        for code, definition in ROLES.items():
-            role = existing_roles.get(code)
-            if role is None:
-                role = Role(code=code, name=definition["name"], description=definition["description"], is_system_role=True)
-                db_session.add(role)
-                db_session.flush()
-                existing_roles[code] = role
-
-            wanted_codes = (
-                set(existing_perms.keys()) if definition["permissions"] == "*" else set(definition["permissions"])
-            )
-            have_codes = {
-                rp.permission.code
-                for rp in db_session.execute(select(RolePermission).where(RolePermission.role_id == role.id)).scalars()
-            }
-            for missing_code in wanted_codes - have_codes:
-                db_session.add(RolePermission(role_id=role.id, permission_id=existing_perms[missing_code].id))
-        db_session.commit()
-        click.echo(f"Seeded {len(existing_perms)} permissions and {len(existing_roles)} roles.")
+        result = seed_rbac_service()
+        click.echo(f"Seeded {result['permissions']} permissions and {result['roles']} roles.")
 
     @app.cli.command("seed-catalog")
     def seed_catalog():
@@ -145,6 +120,73 @@ def register_cli(app: Flask) -> None:
         """Seed the default offline-grace policy (idempotent, safe non-unlimited defaults)."""
         policy = seed_default_offline_policy()
         click.echo(f"Default offline policy ready: {policy.policy_code} (v{policy.policy_version})")
+
+    @app.cli.command("bootstrap-dev")
+    def bootstrap_dev_cmd():
+        """Runs every idempotent seed step a fresh Owner deployment needs
+        (RBAC, catalog, plans, offline policy), generates + activates a
+        signing key if none is active yet, then runs 'commercial preflight'
+        and reports the result. The one command owner/README.md's no-Docker
+        quick start now points to, instead of five separate steps an
+        operator can forget one of.
+
+        2026-09-22: a real Owner -> licence -> till -> sale end-to-end run
+        found 'flask seed-plans' had never been run anywhere in this repo --
+        not in the README, not in docker-compose.yml, not in any deploy doc
+        -- so a fresh Owner could not issue a single licence, with no error
+        until someone actually tried to issue one. This command exists so
+        that gap (and its siblings this same run found: no active signing
+        key, an unseeded RBAC table) is caught and closed in one run rather
+        than rediscovered by hand again. It cannot set OWNER_EXTERNAL_API_
+        ENABLED or OWNER_LICENSE_PEPPER for you -- both are read once at
+        process boot (app/config.py), so a value fixed after this command
+        starts requires a restart, not a rerun; the preflight report at the
+        end names exactly which of those, if any, still need it.
+
+        Deliberately does NOT create a Super Admin -- 'create-superadmin'
+        stays its own explicit, audited, password-bearing step, the same
+        reason 'seed-plans' was kept a separate command from 'seed-catalog'
+        (see seed_canonical_plans()'s own docstring)."""
+        from app.commercial_ops.preflight import run_preflight
+
+        rbac_result = seed_rbac_service()
+        click.echo(f"[1/5] RBAC: {rbac_result['permissions']} permissions, {rbac_result['roles']} roles.")
+
+        catalog_result = seed_canonical_catalog()
+        click.echo(f"[2/5] Catalog: {json.dumps(catalog_result)}")
+
+        try:
+            plans_result = seed_canonical_plans()
+        except ValueError as exc:
+            # Should be unreachable -- seed_canonical_catalog() just ran
+            # above -- but never silently swallow a real failure here.
+            raise click.ClickException(f"seed-plans failed immediately after seed-catalog ran: {exc}")
+        click.echo(f"[3/5] Plans: {json.dumps(plans_result)}")
+
+        policy = seed_default_offline_policy()
+        click.echo(f"[4/5] Offline policy: {policy.policy_code} (v{policy.policy_version})")
+
+        existing_key = signing_service.get_active_signing_key()
+        if existing_key is not None:
+            click.echo(f"[5/5] Signing key: already active ({existing_key.key_id}) -- left untouched.")
+        else:
+            row = signing_service.generate_signing_key(app.config["SIGNING_KEY_DIRECTORY"])
+            signing_service.activate_signing_key(app.config["SIGNING_KEY_DIRECTORY"], row.key_id)
+            click.echo(f"[5/5] Signing key: generated and activated {row.key_id}.")
+
+        click.echo("")
+        click.echo("Running 'flask commercial preflight' for the full readiness picture...")
+        result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        click.echo(json.dumps(result.as_dict(), indent=2))
+        if not result.ok:
+            raise click.ClickException(
+                "bootstrap-dev finished its seed steps but preflight still FAILS -- see checks above. Two "
+                "common remaining causes this command cannot fix for you: OWNER_EXTERNAL_API_ENABLED is not "
+                "\"true\" (a running process must be restarted after setting it, not just rerun), or "
+                "OWNER_LICENSE_PEPPER is unset."
+            )
+        click.echo("")
+        click.echo("Preflight OK. Next: 'flask create-superadmin --email you@example.com --display-name \"Your Name\"'.")
 
     @app.cli.group("licensing")
     def licensing_group():

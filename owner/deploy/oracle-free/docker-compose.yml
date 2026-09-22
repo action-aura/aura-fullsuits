@@ -71,10 +71,16 @@ services:
       - owner_backups:/app/owner/var/backups
     # No `ports:` mapping to the host -- reachable only via the `proxy`
     # service. Nothing should ever talk to gunicorn directly.
+    # `seed-plans` (added 2026-09-22, after seed-catalog since it requires
+    # products to already exist) closes a real gap: without it owner_plans
+    # stays empty forever and issue_license_direct has no plan to issue a
+    # licence against, even though this container reports healthy and
+    # every other route answers normally.
     command: >
       sh -c "python -m alembic upgrade head &&
              flask --app app:create_app seed-rbac &&
              flask --app app:create_app seed-catalog &&
+             flask --app app:create_app seed-plans &&
              flask --app app:create_app seed-offline-policy &&
              gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30
                       --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200

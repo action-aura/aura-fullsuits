@@ -11,7 +11,7 @@ def test_preflight_fails_with_no_active_signing_key(app, seeded):
         assert names["active_signing_key_exists"] == "FAIL"
 
 
-def test_preflight_permission_seed_ok_by_default(app, seeded, signing_key, tmp_path):
+def test_preflight_permission_seed_ok_by_default(app, seeded, signing_key, plans_seeded, tmp_path):
     # `seeded` runs seed-rbac equivalent setup, so the freshly-migrated test
     # database should already be in sync with app/staff/seed_data.py --
     # this is the regression guard against the exact class of drift the
@@ -19,7 +19,10 @@ def test_preflight_permission_seed_ok_by_default(app, seeded, signing_key, tmp_p
     # Trust anchor pointed at an isolated empty path (this test's freshly
     # generated key was never written to the real, developer-machine
     # trust_anchor.json, so checking against it here would be a false
-    # negative unrelated to what this test verifies).
+    # negative unrelated to what this test verifies). `plans_seeded` added
+    # 2026-09-22 alongside the new at_least_one_sellable_plan check -- this
+    # test asserts result.ok is True, so the "fully healthy environment" it
+    # builds must satisfy every blocking check, including the new one.
     with app.app_context():
         import os
 
@@ -81,7 +84,7 @@ def test_preflight_detects_role_missing_permission_assignment(app, seeded, signi
         assert any(n.startswith("role_permissions_synced:SALES") for n in fail_names)
 
 
-def test_preflight_trust_anchor_missing_is_warning_not_failure(app, seeded, signing_key, tmp_path):
+def test_preflight_trust_anchor_missing_is_warning_not_failure(app, seeded, signing_key, plans_seeded, tmp_path):
     with app.app_context():
         from app.commercial_ops.preflight import run_preflight
 
@@ -117,7 +120,7 @@ def test_preflight_trust_anchor_stale_key_fails(app, seeded, signing_key, tmp_pa
         assert names["trust_anchor_matches_active_key"] == "FAIL"
 
 
-def test_preflight_trust_anchor_matching_key_passes(app, seeded, signing_key, tmp_path):
+def test_preflight_trust_anchor_matching_key_passes(app, seeded, signing_key, plans_seeded, tmp_path):
     with app.app_context():
         import json
         import os
@@ -240,3 +243,106 @@ def test_preflight_super_admin_without_mfa_is_warning_not_failure(app, seeded, s
         assert names["super_admin_mfa_required"] == "WARNING"
         # A missing-MFA super admin alone must not fail preflight -- it's a
         # real environment risk to flag, not a validation-blocking defect.
+
+
+# -- 2026-09-22: fresh-deploy readiness (real end-to-end run findings) ------
+#
+# A local Owner -> real licence -> fresh till -> persisted sale run found
+# `OWNER_EXTERNAL_API_ENABLED` defaulting false and `flask seed-plans` never
+# having been run are BOTH landmines a healthy-looking `flask commercial
+# preflight`/`/health/ready` previously stayed silent about. These checks
+# close that; the tests below prove both directions of each.
+
+def test_preflight_external_api_disabled_fails(app, seeded, signing_key, plans_seeded):
+    with app.app_context():
+        from app.commercial_ops.preflight import run_preflight
+
+        original = app.config["EXTERNAL_API_ENABLED"]
+        app.config["EXTERNAL_API_ENABLED"] = False
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            app.config["EXTERNAL_API_ENABLED"] = original
+        assert result.ok is False
+        names = {c.name: c.status for c in result.checks}
+        assert names["external_api_enabled"] == "FAIL"
+
+
+def test_preflight_external_api_enabled_passes(app, seeded, signing_key, plans_seeded, tmp_path):
+    with app.app_context():
+        import os
+
+        from app.commercial_ops.preflight import run_preflight
+
+        # Same isolation as test_preflight_permission_seed_ok_by_default --
+        # point the trust anchor at a path that does not exist so that
+        # unrelated check stays a non-blocking WARNING, not a FAIL, and this
+        # test proves only what its name says.
+        os.environ["COMMERCIAL_TRUST_ANCHOR_PATH"] = str(tmp_path / "does-not-exist.json")
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            del os.environ["COMMERCIAL_TRUST_ANCHOR_PATH"]
+        names = {c.name: c.status for c in result.checks}
+        assert names["external_api_enabled"] == "OK"
+        assert result.ok is True
+
+
+def test_preflight_fails_when_no_sellable_plan(app, seeded, signing_key, tmp_path):
+    # Deliberately NOT using `plans_seeded` -- `seeded` alone (seed-catalog
+    # equivalent) seeds products/platforms/channels but never a Plan,
+    # matching the exact gap the live 2026-09-22 run found: seed-catalog had
+    # run, seed-plans never had, and owner_plans stayed empty.
+    with app.app_context():
+        import os
+
+        from app.commercial_ops.preflight import run_preflight
+
+        os.environ["COMMERCIAL_TRUST_ANCHOR_PATH"] = str(tmp_path / "does-not-exist.json")
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            del os.environ["COMMERCIAL_TRUST_ANCHOR_PATH"]
+        assert result.ok is False
+        names = {c.name: c.status for c in result.checks}
+        assert names["at_least_one_sellable_plan"] == "FAIL"
+
+
+def test_preflight_passes_when_plan_seeded(app, seeded, signing_key, plans_seeded, tmp_path):
+    with app.app_context():
+        import os
+
+        from app.commercial_ops.preflight import run_preflight
+
+        os.environ["COMMERCIAL_TRUST_ANCHOR_PATH"] = str(tmp_path / "does-not-exist.json")
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            del os.environ["COMMERCIAL_TRUST_ANCHOR_PATH"]
+        names = {c.name: c.status for c in result.checks}
+        assert names["at_least_one_sellable_plan"] == "OK"
+        assert result.ok is True
+
+
+def test_preflight_fails_on_completely_fresh_unseeded_database(app):
+    # No `seeded`, no `signing_key`, no `plans_seeded` -- the literal state
+    # of a brand-new Owner deployment against a freshly migrated database,
+    # before any of the four fixes this task closes has run: no active
+    # signing key, no plans seeded, RBAC unseeded. TestingConfig hardcodes
+    # EXTERNAL_API_ENABLED=True regardless of the env var (app/config.py,
+    # "always on in TESTING... so `pytest` alone is sufficient to prove the
+    # whole surface works"), so that one check is independent of database
+    # state and stays OK here -- this test is about what an empty DATABASE
+    # looks like to preflight, not what a wrong env var looks like (that is
+    # test_preflight_external_api_disabled_fails above).
+    with app.app_context():
+        from app.commercial_ops.preflight import run_preflight
+
+        result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        assert result.ok is False
+        names = {c.name: c.status for c in result.checks}
+        assert names["active_signing_key_exists"] == "FAIL"
+        assert names["all_permissions_seeded"] == "FAIL"
+        assert names["at_least_one_sellable_plan"] == "FAIL"
+        assert any(status == "FAIL" for name, status in names.items() if name.startswith("role_seeded:"))
+        assert names["external_api_enabled"] == "OK"

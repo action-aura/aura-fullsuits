@@ -175,6 +175,25 @@ def login_and_verify_mfa(client, email, password="Sup3r-Str0ng-Pass!"):
     return client.post("/auth/mfa-verify", data={"csrf_token": csrf, "code": totp_code()})
 
 
+@pytest.fixture()
+def plans_seeded(app, seeded):
+    """Seeds one AVAILABLE, priced plan per canonical product (`flask
+    seed-plans` equivalent, app/catalog/services.py::seed_canonical_plans).
+
+    Deliberately a separate, opt-in fixture -- NOT folded into `seeded`
+    above. seed_canonical_plans()'s own docstring warns against exactly
+    that: `seeded` is invoked by ~700 call sites across this suite, and
+    silently injecting a real, immediately-sellable plan into every one of
+    them (catalog/dashboard/plan-listing counts and read-models alike)
+    would have no auditable blast radius from here. Requires `seeded` to
+    have already run -- seed_canonical_plans() raises ValueError otherwise
+    (no canonical products to attach a plan to)."""
+    with app.app_context():
+        from app.catalog.services import seed_canonical_plans
+
+        return seed_canonical_plans()
+
+
 # -- Phase 6 helpers -----------------------------------------------------
 
 @pytest.fixture()

@@ -26,6 +26,16 @@ The app is at `http://localhost:5551`.
 
 Requires a local PostgreSQL 17+ instance and Python 3.11+.
 
+**Followed verbatim, this produces a working licensing authority** -- not
+just a dashboard. Two real gaps found by an actual local end-to-end run
+(fresh Owner -> real licence -> fresh till -> persisted sale, 2026-09-22)
+used to make that untrue even after every step below looked like it
+succeeded: `flask seed-plans` was never called anywhere in this repo (so
+`issue_license_direct` had no plan to issue against), and
+`OWNER_EXTERNAL_API_ENABLED` defaults to `false` (so the app boots healthy,
+`/healthz` returns 200, and the licensing/activation/sync API is silently
+never registered -- nothing logged an error). Both are closed below.
+
 ```
 python -m venv .venv
 .venv/Scripts/activate  # or source .venv/bin/activate on macOS/Linux
@@ -37,28 +47,109 @@ createdb aura_owner_test -O aura_owner
 
 cd owner
 export OWNER_DATABASE_URL=postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_dev
+
+# HMAC pepper for license-key secret hashing (Part O). DevelopmentConfig
+# already falls back to this exact insecure placeholder if unset, so this
+# export is not strictly required to get a working local instance -- it is
+# spelled out here so the value is visible rather than buried in
+# config.py, and so `bootstrap-dev`'s pepper self-test below has a
+# real, non-empty value to round-trip. Replace with a real secret for
+# anything beyond throwaway local dev; config.py rejects this exact
+# placeholder outside development/testing.
+export OWNER_LICENSE_PEPPER=dev-only-insecure-pepper-do-not-use-in-production
+
+# WITHOUT THIS the app still boots, /healthz still returns 200, and the
+# admin dashboard still works completely -- but create_app() never
+# registers the licensing/activation API (app/api_external/routes.py), the
+# device-facing API (app/api/routes.py), or the sync relay (app/sync), so
+# no till anywhere can activate, check in, or sync. This is the single
+# most-missed step in this whole quick start; it has no default that makes
+# it safe to skip.
+export OWNER_EXTERNAL_API_ENABLED=true
+
 python -m alembic upgrade head
+flask --app app:create_app bootstrap-dev
+```
+
+`bootstrap-dev` (added 2026-09-22, `owner/app/cli.py`) is the one command
+this quick start now points to instead of five separate steps an operator
+can forget one of. It idempotently runs all four seed commands --
+`seed-rbac`, `seed-catalog`, `seed-plans`, `seed-offline-policy` -- generates
+and activates a signing key if none is active yet (`licensing
+generate-signing-key` + `licensing activate-signing-key`), then runs `flask
+commercial preflight` itself and prints the result, exiting nonzero if
+preflight still fails. It cannot set `OWNER_EXTERNAL_API_ENABLED` or
+`OWNER_LICENSE_PEPPER` for you -- both are read once at process boot
+(`app/config.py`) -- but its final preflight report names exactly which of
+those, if either, still needs fixing before you restart it. Running the four
+seed commands and the two signing-key commands by hand, in this order,
+does the same thing:
+
+```
 flask --app app:create_app seed-rbac
 flask --app app:create_app seed-catalog
+flask --app app:create_app seed-plans
 flask --app app:create_app seed-offline-policy
+flask --app app:create_app licensing generate-signing-key
+flask --app app:create_app licensing activate-signing-key <key_id-from-above>
+flask --app app:create_app commercial preflight
+```
+
+Create the first Super Admin -- deliberately its own explicit,
+password-bearing step, never folded into `bootstrap-dev` (same reason
+`seed-plans` is its own command rather than folded into `seed-catalog`: see
+that function's own docstring) -- then start the server:
+
+```
 flask --app app:create_app create-superadmin --email you@example.com --display-name "Your Name"
 flask --app app:create_app run --port 5551
 ```
+
+### Verify it actually works -- do not assume
+
+`bootstrap-dev`'s own preflight run already checked signing-key/RBAC/plan/
+external-API readiness against the database. With the server running from
+the step above, check the real HTTP surface it depends on:
+
+```
+curl -s http://127.0.0.1:5551/api/licensing/v1/signing-keys
+```
+
+Expected -- a signed key-set manifest, one entry per key ever activated
+(trimmed; see `app/licensing_service/signing.py::export_signed_keyset_manifest`
+for the full field list):
+
+```json
+{
+  "schema_version": 1,
+  "keys": [
+    {"key_id": "...", "algorithm": "ed25519", "public_key": "...", "use": "assertion-signing", "status": "ACTIVE", "valid_from": "2026-09-22T...", "retired_at": null}
+  ],
+  "manifest_version": 1,
+  "issued_at": "2026-09-22T...",
+  "signed_by_key_id": "...",
+  "signature": "...",
+  "signatures": [{"key_id": "...", "signature": "..."}]
+}
+```
+
+A `404` here (not an error body -- a plain 404, no route) means
+`OWNER_EXTERNAL_API_ENABLED` is not `"true"` for the running process --
+check its startup log for a `WARNING` naming this exact condition
+(`app/__init__.py`), or rerun `flask --app app:create_app commercial
+preflight`, which fails closed on it too.
 
 Full detail (including this session's specific environment notes): `docs/owner/phase5/owner-local-development-guide.md`.
 
 ## Licensing & Activation Service (Phase 6)
 
-Disabled by default. To exercise it locally:
-
-```
-export OWNER_EXTERNAL_API_ENABLED=true
-flask --app app:create_app licensing generate-signing-key
-flask --app app:create_app licensing activate-signing-key <key_id-from-above>
-flask --app app:create_app run --port 5551
-```
-
-Then drive it with the standalone simulator (real Ed25519 crypto, real HTTP, no mocks):
+The Quick start above already enables this (`OWNER_EXTERNAL_API_ENABLED=true`)
+and provisions a signing key via `bootstrap-dev`. Licence issuance is a
+dashboard action, not a CLI command (`issue_license_direct`, wired to the
+staff-facing issuance screen) -- log in as the Super Admin created above and
+issue a real test licence against the plan `bootstrap-dev` seeded. Then
+drive the activation protocol against it with the standalone simulator (real
+Ed25519 crypto, real HTTP, no mocks):
 
 ```
 python -m owner.tools.activation_simulator init-device

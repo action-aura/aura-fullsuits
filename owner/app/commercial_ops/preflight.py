@@ -65,6 +65,69 @@ def _trust_anchor_path() -> Path:
     return Path(override) if override else _DEFAULT_TRUST_ANCHOR_RELATIVE_PATH
 
 
+def _check_external_api_enabled(checks: list[PreflightCheck]) -> bool:
+    """2026-09-22: a real local end-to-end run (fresh Owner -> real licence
+    -> fresh till -> persisted sale) found that `OWNER_EXTERNAL_API_ENABLED`
+    defaults to "false", and with it unset the app boots healthy, serves its
+    dashboard, and `/healthz` returns 200 -- while `create_app()` (app/
+    __init__.py) never even imports app/api_external/routes.py,
+    app/api/routes.py, or app/sync, so there is no licensing/activation/
+    sync ROUTE for a till to reach, not merely one that refuses. Nothing
+    logged an error; a till pointed at a deploy in this state gets a plain
+    404 with no server-side clue why. `owner/deploy/fly/DEPLOY.md` already
+    named this "Landmine 1" from a real deploy, but nothing enforced it.
+    This is the same class of gap `_check_active_signing_key` exists to
+    catch -- a service that reports healthy while structurally unable to do
+    its one job -- so it is a blocking FAIL here, not a warning."""
+    from flask import current_app
+
+    if not current_app.config.get("EXTERNAL_API_ENABLED"):
+        checks.append(PreflightCheck(
+            "external_api_enabled", "FAIL",
+            "OWNER_EXTERNAL_API_ENABLED is not \"true\". create_app() never registers the licensing/"
+            "activation blueprint (app/api_external/routes.py), the device-facing API (app/api/routes.py), "
+            "or the sync relay (app/sync) -- every real activation/check-in/sync request has no route to "
+            "reach at all (404, not 403), and nothing logs an error when it happens. Fix: set "
+            "OWNER_EXTERNAL_API_ENABLED=true in the environment and restart the process (this is read once "
+            "at boot in create_app(), so a running process must be restarted, not reconfigured live).",
+        ))
+        return False
+    checks.append(PreflightCheck(
+        "external_api_enabled", "OK", "OWNER_EXTERNAL_API_ENABLED=true -- external API blueprints are registered.",
+    ))
+    return True
+
+
+def _check_plans_seeded(checks: list[PreflightCheck]) -> bool:
+    """2026-09-22: the same live end-to-end run found `flask seed-plans`
+    (app/cli.py, added to seed exactly this gap) is never invoked anywhere
+    in this repo -- not in owner/README.md, not in docker-compose.yml, not
+    in any Fly/Oracle deploy doc. Without it `owner_plans` stays empty even
+    after `flask seed-catalog`, and `issue_license_direct` (app/licensing/
+    issuance.py) issues against a `plan_id` that resolves through
+    describe_plan_for_sale() -- so a genuinely fresh Owner deployment cannot
+    mint a single licence key, with no error until someone actually tries.
+    Reuses describe_plan_for_sale() itself (not a re-implementation of its
+    eligibility rules) so this check can never drift from the real gate the
+    issuance screen enforces."""
+    from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
+    from app.models.catalog import Plan
+
+    plan_ids = db_session.execute(select(Plan.id)).scalars().all()
+    sellable = [pid for pid in plan_ids if describe_plan_for_sale(pid) is not None]
+    if not sellable:
+        checks.append(PreflightCheck(
+            "at_least_one_sellable_plan", "FAIL",
+            f"No sellable Plan found ({len(plan_ids)} Plan row(s) total, zero pass describe_plan_for_sale's "
+            "effective-date/price/product-active eligibility). issue_license_direct has no plan_id to issue "
+            "a licence against -- this deployment cannot mint a single licence key. Fix: 'flask seed-catalog' "
+            "(if not already run) then 'flask seed-plans'.",
+        ))
+        return False
+    checks.append(PreflightCheck("at_least_one_sellable_plan", "OK", f"{len(sellable)} of {len(plan_ids)} plan(s) currently sellable."))
+    return True
+
+
 def _check_active_signing_key(checks: list[PreflightCheck]) -> bool:
     key = signing_service.get_active_signing_key()
     if key is None:
@@ -826,12 +889,23 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
 
-    blocking_ok &= _check_active_signing_key(checks)
-    if blocking_ok:
+    # Whether the service can do its one job at all -- checked first,
+    # unconditionally. Deliberately kept in its own local rather than folded
+    # into `blocking_ok` before the signing-key checks below: an operator
+    # who only forgot OWNER_EXTERNAL_API_ENABLED=true still deserves to see
+    # whether their signing key/trust anchor are otherwise healthy in the
+    # same run, not have that skipped because an unrelated check failed.
+    external_api_ok = _check_external_api_enabled(checks)
+    blocking_ok &= external_api_ok
+
+    signing_key_ok = _check_active_signing_key(checks)
+    blocking_ok &= signing_key_ok
+    if signing_key_ok:
         blocking_ok &= _check_signing_key_health(checks, key_directory)
         blocking_ok &= _check_trust_anchor(checks)
     blocking_ok &= _check_permission_seed(checks)
     blocking_ok &= _check_role_permission_assignments(checks)
+    blocking_ok &= _check_plans_seeded(checks)
     blocking_ok &= _check_license_pepper(checks)
     blocking_ok &= _check_employee_domain_integrity(checks)
     blocking_ok &= _check_i18n_configuration(checks)
