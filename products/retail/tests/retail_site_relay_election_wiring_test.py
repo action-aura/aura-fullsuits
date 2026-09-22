@@ -331,27 +331,50 @@ def test_the_beacon_observer_seam_really_listens_on_the_lan():
     heard = []
     failure = []
 
+    # OBSERVATION WINDOW widened from 3.0s, and the fixed `time.sleep(0.4)`
+    # that used to stand between starting the listener and sending is gone.
+    # That sleep was a thread handshake by assumption: it assumed the
+    # listener would be scheduled and have its UDP socket BOUND within 400ms.
+    # True on an idle machine, and false the first time this suite ran its
+    # files in parallel -- this test failed with "heard nothing" inside the
+    # full run and then passed 8/8 standalone moments later. The beacon was
+    # being broadcast before anything was listening.
+    #
+    # Polling `heard` instead is not available: `_observe_beacons` only
+    # returns -- and only then extends `heard` -- once its whole window has
+    # elapsed, so `heard` is empty for the entire time the sender is running
+    # and cannot be used as a "you may stop now" signal.
+    #
+    # So the sender simply keeps broadcasting for as long as the observer
+    # could still be listening. Whenever the bind actually lands inside that
+    # window, it hears one. This is deterministic in the sense that matters:
+    # it no longer depends on a thread being scheduled inside a fixed
+    # duration, only on the bind happening at SOME point in a generous one.
+    _OBSERVE_WINDOW_S = 6.0
+    _SEND_FOR_S = 5.0
+
     def _listen():
         try:
-            heard.extend(COORDINATOR._observe_beacons(3.0))
+            heard.extend(COORDINATOR._observe_beacons(_OBSERVE_WINDOW_S))
         except OSError as exc:  # pragma: no cover - environment, not logic
             failure.append(exc)
 
     listener = threading.Thread(target=_listen, name='election-wiring-listener')
     listener.start()
-    time.sleep(0.4)  # let the listener get its socket bound before sending
 
     sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # Sent more than once: UDP is allowed to drop, and one dropped packet
-        # must not be the reason this guard reports the wiring is broken.
-        for _ in range(3):
+        # Sent repeatedly for the same reason it was always sent more than
+        # once: UDP is allowed to drop, and one dropped packet must not be
+        # the reason this guard reports the wiring is broken.
+        _send_until = time.monotonic() + _SEND_FOR_S
+        while time.monotonic() < _send_until:
             sender.sendto(datagram, ('127.0.0.1', _coordinator_module.beacon.BEACON_PORT))
-            time.sleep(0.15)
+            time.sleep(0.1)
     finally:
         sender.close()
 
-    listener.join(timeout=10.0)
+    listener.join(timeout=_OBSERVE_WINDOW_S + 10.0)
 
     assert not failure, (
         f"the production beacon observer could not bind UDP "
