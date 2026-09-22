@@ -9,6 +9,7 @@ healthcare/education/manufacturing industries-demo verticals -- out of scope)
 and `DEFAULT_USERS` (only used by the legacy domain-based demo login, which
 is not ported -- see docs/migration/source-inventory.md #34, risk-register R12).
 """
+import logging
 import os
 import sys
 
@@ -79,7 +80,122 @@ OWNER_LICENSING_TIMEOUT_SECONDS = float(os.environ.get('AURA_OWNER_LICENSING_TIM
 # __file__ is correct in both dev and frozen/PyInstaller builds, matching how
 # commercial_runtime.identity/backup are already imported either way).
 import commercial_runtime.licensing_contracts as _licensing_contracts_pkg
-LICENSING_TRUST_ANCHOR_PATH = os.path.join(os.path.dirname(_licensing_contracts_pkg.__file__), 'trust_anchor.json')
+_DEFAULT_LICENSING_TRUST_ANCHOR_PATH = os.path.join(os.path.dirname(_licensing_contracts_pkg.__file__), 'trust_anchor.json')
+
+# ── Trust-anchor path override (field recovery, 2026-09-22) ────────────────
+# THE TENSION THIS RESOLVES. The trust anchor is the one thing standing
+# between "this till only ever accepts a licence Owner really signed" and
+# "this till accepts a licence from anyone who claims to be Owner" --
+# docs/licensing/phase7v/windows-commercial-build-security-review.md
+# ("Other required controls, checked and confirmed clean") specifically
+# verified this path was NOT environment-derived, the one invariant left
+# once OWNER_LICENSING_BASE_URL and OWNER_LICENSING_CA_BUNDLE_PATH already
+# are. Those two are not the same risk: an attacker who fully controls them
+# still has to get a real assertion admitted by OwnerTrustStore, which only
+# trusts keys already in the bundled anchor (or reached from it by a
+# validly-signed rotation manifest). An attacker who fully controls THIS
+# path does not -- they can run their own fake Owner, mint their own
+# Ed25519 keypair, and hand this till a trust_anchor.json naming their own
+# public key ACTIVE, and every downstream check (bootstrap_from_anchor,
+# admit_bundled_anchor, AssertionVerifier) does exactly its job and admits
+# a free licence. So this is not a connectivity setting like the URL or CA
+# bundle; it is the root of trust itself, and the review's finding was
+# right to flag it as the one thing that must not become "arbitrary... from
+# user-writable configuration".
+#
+# THE OPERATIONAL PROBLEM THAT STILL HAS TO BE SOLVED. OWNER_SIGNING_KEY_
+# DIRECTORY's private PEM has no enforced backup (owner/docker-compose.yml's
+# own comment: "Back this up via a separate, explicitly secured process" --
+# nothing enforces or even checks that anyone ever did), and retired keys
+# must stay on disk indefinitely for cross-signing continuity, so the
+# exposure only grows with age. Lose that PEM, or stand up a fresh Owner
+# with no continuity bridge to the old one, and every activation/check-in
+# fails UNKNOWN_SIGNING_KEY for the rest of this install's life.
+# trust_store.py's admit_bundled_anchor() is the BUILT-IN recovery for
+# exactly that (see its own docstring for the three properties that keep it
+# safe) -- but routes.py wires BOTH call sites (/activate and the
+# background /check-in) to re-read this SAME hardcoded path, so an install
+# stranded on a rotation its own bundled anchor never heard about cannot be
+# repaired without shipping a brand-new installer to every affected till.
+# scripts/backup_signing_keys.py / scripts/restore_signing_keys.py (added
+# alongside this) close the "lose the PEM" half; this override closes the
+# "already lost it, now what" half.
+#
+# THE RESOLUTION. Overridable, but never by a bare env var alone: a second,
+# distinctly-named, EXACT-STRING confirmation
+# (AURA_LICENSING_TRUST_ANCHOR_OVERRIDE_CONFIRM=1) must also be present --
+# same exact-string discipline as AURA_SITE_RELAY_ENABLED below, so a
+# near-miss ('true', 'yes', a stray copy-pasted value) confirms nothing and
+# the override silently stays off rather than silently turning on. This is
+# honored even in a FROZEN build -- deliberately the opposite floor from
+# OWNER_LICENSING_VERIFY_TLS above, because a frozen commercial .exe
+# stranded in the field is exactly who needs this repair; an unfrozen/
+# source run does not (a developer with a checkout can already overwrite
+# the bundled file directly).
+#
+# BE HONEST ABOUT WHAT THIS DOES NOT DEFEND. It is not a defense against an
+# attacker who already has that much control over the till's process
+# environment -- nothing env-var-based can be, and this file's own already-
+# accepted posture puts AURA_OWNER_LICENSING_URL and
+# AURA_OWNER_LICENSING_CA_BUNDLE in that same "trusts the operator's
+# environment" category. What the two-variable gate and the loud log below
+# actually buy: it cannot fire by accident (a single stray env var is not
+# enough), and it can never be silent (anyone auditing this till sees
+# "LICENSING TRUST ANCHOR OVERRIDDEN" in its logs the moment it is active,
+# which a quietly swapped file on disk alone would never give them). What
+# is UNCHANGED and doing the real remaining work: the override only changes
+# WHICH FILE is read, never how its contents are trusted --
+# bootstrap_from_anchor() still refuses to run against an already-
+# initialized trust store (so it cannot reset trust on an activated till),
+# and admit_bundled_anchor() is still add-only / merge-not-replace (so even
+# a malicious override anchor can only ADD a key_id, never overwrite or
+# revoke one this till already trusts). This override rides on top of both
+# guarantees, never around them.
+def resolve_licensing_trust_anchor_path(default_path, env_override_path, env_confirm):
+    """Pure decision (no I/O, no environment reads here -- both env values
+    are passed in by the caller, same discipline as site_relay_should_start
+    below) -- see the module comment above for the full reasoning.
+
+    Returns (path, override_active, refused_reason). `refused_reason` is
+    populated only when a path was offered but not confirmed, so the caller
+    can still surface a loud warning for a half-configured override instead
+    of silently doing nothing and leaving an operator to wonder why their
+    env var had no effect.
+    """
+    if not env_override_path:
+        return default_path, False, None
+    if env_confirm != '1':
+        return default_path, False, (
+            f"AURA_LICENSING_TRUST_ANCHOR_PATH was set to {env_override_path!r} but "
+            "AURA_LICENSING_TRUST_ANCHOR_OVERRIDE_CONFIRM was not exactly '1' -- the "
+            "override was REFUSED and the build's bundled trust anchor is being used "
+            "instead. Set AURA_LICENSING_TRUST_ANCHOR_OVERRIDE_CONFIRM=1 if this "
+            "override was genuinely intended."
+        )
+    return env_override_path, True, None
+
+
+_LICENSING_TRUST_ANCHOR_OVERRIDE_PATH = os.environ.get('AURA_LICENSING_TRUST_ANCHOR_PATH', '')
+_LICENSING_TRUST_ANCHOR_OVERRIDE_CONFIRM = os.environ.get('AURA_LICENSING_TRUST_ANCHOR_OVERRIDE_CONFIRM', '')
+(
+    LICENSING_TRUST_ANCHOR_PATH,
+    LICENSING_TRUST_ANCHOR_OVERRIDE_ACTIVE,
+    _LICENSING_TRUST_ANCHOR_OVERRIDE_REFUSED_REASON,
+) = resolve_licensing_trust_anchor_path(
+    _DEFAULT_LICENSING_TRUST_ANCHOR_PATH,
+    _LICENSING_TRUST_ANCHOR_OVERRIDE_PATH,
+    _LICENSING_TRUST_ANCHOR_OVERRIDE_CONFIRM,
+)
+
+if LICENSING_TRUST_ANCHOR_OVERRIDE_ACTIVE:
+    logging.getLogger(__name__).error(
+        "LICENSING TRUST ANCHOR OVERRIDDEN: reading %s instead of the build's bundled "
+        "trust anchor. This changes which Owner signing keys this install will ever "
+        "accept a licence from -- confirm this was a deliberate field-recovery step.",
+        LICENSING_TRUST_ANCHOR_PATH,
+    )
+elif _LICENSING_TRUST_ANCHOR_OVERRIDE_REFUSED_REASON:
+    logging.getLogger(__name__).warning(_LICENSING_TRUST_ANCHOR_OVERRIDE_REFUSED_REASON)
 
 # Part H: see products/clinic/backend/config.py's identical block for the
 # full rationale. Set by android/aura-retail's main.py (AURA_PLATFORM=
