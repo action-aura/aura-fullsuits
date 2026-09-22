@@ -491,7 +491,7 @@ forces it earlier.
 R1's counter-service value on LAN day one, stated plainly: multi-till cafés
 already converge via the cloud relay when the internet is up; R-LAN's
 incremental gift to R1 is **offline convergence and independence from the
-droplet mid-service** — real, but incremental. R-LAN's gift to R2 is
+central host mid-service** — real, but incremental. R-LAN's gift to R2 is
 **existence** — table service on shop wifi is not shippable without it.
 
 ---

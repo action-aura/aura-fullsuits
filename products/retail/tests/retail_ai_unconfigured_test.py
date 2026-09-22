@@ -1,17 +1,17 @@
 """Aura Retail -- the AI Assistant must refuse FAST when it has no server.
 
-THE BUG THIS PINS. AURA_AI_ENDPOINT_URL used to default to the demo droplet's
-own address, https://104-248-35-215.sslip.io/api/generate. config.py argued for
-that default, and the argument was sound when written:
+THE BUG THIS PINS. AURA_AI_ENDPOINT_URL used to default to a demo host's
+own address. config.py argued for that default, and the argument was sound
+when written:
 
-    "An unset token here means the /ai/chat route's request to the droplet gets
+    "An unset token here means the /ai/chat route's request to the host gets
      a 401, which the route already treats as 'AI assistant is temporarily
      unavailable' -- fails closed and gracefully, never a crash."
 
-That depends on a droplet being there to answer 401. The droplet is gone -- the
-DigitalOcean account was locked and both were destroyed -- and sslip.io still
-resolves the IP straight out of the hostname, so DNS succeeds and the TCP
-connect goes to an unrouted address. No RST, no 401, just silence until
+That depends on a host being there to answer 401. The host is gone -- the
+hosting account was locked and both machines behind it were destroyed -- and
+its DNS name still resolved the dead IP straight out of the hostname, so DNS
+succeeded and the TCP connect goes to an unrouted address. No RST, no 401, just silence until
 AURA_AI_TIMEOUT_SECONDS (45 seconds) expires, because the route only catches
 RequestException AFTER the wait. The documented graceful failure had become a
 45-second hang ending in a message that was wrong twice over: nothing was

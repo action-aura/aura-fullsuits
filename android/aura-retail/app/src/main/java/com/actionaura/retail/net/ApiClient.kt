@@ -94,7 +94,7 @@ object ApiClient {
                 // Flask proxy itself waits up to AURA_AI_TIMEOUT_SECONDS
                 // (45s, see products/retail/backend/config.py) on the hosted
                 // model, and a realistic reply takes ~17-36s of CPU-bound
-                // generation (measured on the real droplet, per retail_api.py's
+                // generation (measured on the real host, per retail_api.py's
                 // comments). With only the global 30s read timeout the app
                 // would hang up FIRST -- and that SocketTimeoutException is an
                 // IOException, so a reply still being generated would be

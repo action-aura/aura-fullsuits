@@ -26,7 +26,7 @@ object LicensingMessages {
      * licensing.js keeps for the same reason, and the reason the Android
      * screen needed one at all: Owner rotates its signing key while this
      * install still ships a stale trust_anchor.json (a condition this
-     * project has actually hit on the live droplet), so Owner APPROVES,
+     * project has actually hit on the live host), so Owner APPROVES,
      * marks the installation ACTIVE, consumes a paid device slot -- and the
      * assertion then fails verify_assertion() here with
      * UNKNOWN_SIGNING_KEY. Before this bucket existed on Android every one

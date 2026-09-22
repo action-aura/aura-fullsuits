@@ -39,7 +39,7 @@ waiter handheld **consumes a device slot** (recommended; see §5). No
 entitlement wiring, no new licensing machinery, no second build.
 
 Sequence position: **after** the still-owed go-live work (clean-machine exe
-test, droplet setup) and the v26 wave now in flight; kitchen tickets
+test, Owner CC bring-up) and the v26 wave now in flight; kitchen tickets
 immediately after v26; split tender/tips in parallel; **before** inter-branch
 transfers (v24) and far before any Clubs work. Argument in §6.
 
@@ -248,7 +248,7 @@ owner/collaborator call and an Owner-side build.
 
 Recommended order, with the reasoning that survives scrutiny:
 
-1. **Go-live work still owed (clean-machine exe test, droplet setup,
+1. **Go-live work still owed (clean-machine exe test, Owner CC bring-up,
    runbook).** Gates *all* revenue, restaurant included. Nothing below makes
    sense while the product cannot be handed to a stranger's Windows machine.
 2. **v26 modifiers (in flight — finish and verify).** Already the plan of

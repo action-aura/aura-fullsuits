@@ -3,7 +3,7 @@
 Covers the Arabic-support half of the AI speed/Arabic work:
 AI_SYSTEM_PREFACE used to be a fixed English string that never told the
 model what language to reply in, so an Arabic-speaking user got whatever
-phi3.5:3.8b happened to default to (verified live against the real droplet
+phi3.5:3.8b happened to default to (verified live against the real host
 before this change -- see this branch's commit message for the actual
 before/after Arabic transcripts; both came back in Arabic-majority text even
 without an instruction, but content quality was rough -- odd word choices,
@@ -62,7 +62,7 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_ai_lang_"))
 # This suite drives /ai/chat with a monkeypatched requests.post, so the
 # upstream is never really contacted -- but the route now refuses BEFORE
 # opening a socket when AURA_AI_ENDPOINT_URL is unset. It used to default to
-# a demo droplet that no longer exists, which turned the documented graceful
+# a demo host that no longer exists, which turned the documented graceful
 # 401 into a 45-second hang. These tests were relying, invisibly, on that
 # default merely being non-empty; declaring a fake endpoint here removes the
 # coupling to production config, exactly as the line below already does for

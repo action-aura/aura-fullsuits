@@ -1925,7 +1925,7 @@ that only lives on one tablet is useless.
 
 ### The sequence, as it now stands
 
-    go-live work still owed  (clean-machine test, droplet setup)   <- gates everything
+    go-live work still owed  (clean-machine test, Owner CC bring-up)   <- gates everything
     R1  counter service      modifiers (v26, in flight) + kitchen tickets
                              + split tender/tips + takeaway tag
     R-LAN                    site relay, roster, pairing, forwarder,
@@ -1972,7 +1972,7 @@ established against the code, not assumed, and the verification is in the
 documents.
 
 **What is NOT deferred**, and remains the actual gate on revenue: the
-clean-machine test and the droplet setup in `docs/release/go-live-runbook.md`.
+clean-machine test and the Owner CC bring-up in `docs/release/go-live-runbook.md`.
 Nothing in the restaurant programme matters until an install can be sold at all.
 
 ## 2026-09-01 — Owner: the customer dropdown silently caps at 200, and one of them takes money

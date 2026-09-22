@@ -27,26 +27,25 @@ is passed at build time, and no build script or doc passes it, so a rebuilt APK
 sends `Bearer ` and gets 401 → 503 even once the UI is wired (**OPEN** — this
 must be wired into the build, or every future APK ships with AI dead).
 
-**The AI infrastructure itself is alive** — verified 2026-08-20, not assumed.
-`POST https://104-248-35-215.sslip.io/api/generate` answers in ~1.5 s with
-**401**, i.e. reachable and demanding auth, not down. That host is the
-DigitalOcean droplet `aura-llm-demo` (8 GB / 4 vCPU, fra1), which runs
-`ollama.service` behind `caddy.service`; the Caddyfile gates the Ollama
-reverse-proxy (`127.0.0.1:11434`) on an `Authorization: Bearer …` match. The
-required token value is recoverable from `/etc/caddy/Caddyfile` on that droplet
-— it is deliberately not reproduced here.
+**The AI infrastructure itself was alive at the time** — verified 2026-08-20,
+not assumed. An unauthenticated probe against the hosted Ollama endpoint
+answered in ~1.5 s with **401**, i.e. reachable and demanding auth, not down:
+`ollama.service` behind `caddy.service`, with the Caddyfile gating the Ollama
+reverse-proxy (`127.0.0.1:11434`) on an `Authorization: Bearer …` match.
 
-So once the Compose sheet is wired and the APK is rebuilt passing
-`-PaiBearerToken=<value from that Caddyfile>`, the assistant should work
-end to end. Nothing needs to be provisioned.
+So once the Compose sheet is wired and the APK is rebuilt passing the matching
+bearer token, the assistant should work end to end. **That host no longer
+exists** — the hosting account behind it was abandoned and both machines
+destroyed — so there is currently nothing to point a rebuilt APK at; see
+`docs/ops/free-hosting-owner.md` for the current hosting plan.
 
-Cost note, correcting an earlier recommendation: `aura-llm-demo` was previously
-flagged as the obvious droplet to downsize for savings. It is not — it is the
-LLM host. `phi3.5:3.8b` needs roughly 4 GB resident, so 8 GB is headroom rather
-than waste; downsizing to 2 GB would kill the assistant outright, and 4 GB would
-leave no margin. That droplet also, unexpectedly, runs a second
-`aura-owner-deptnav.service` instance — worth reconciling, since the review
-instance was believed to live only on the retail droplet.
+Cost note, correcting an earlier recommendation: the AI host was previously
+flagged as the obvious box to downsize for savings. It was not — it was the
+LLM host. `phi3.5:3.8b` needs roughly 4 GB resident, so 8 GB was headroom rather
+than waste; downsizing to 2 GB would have killed the assistant outright, and 4 GB
+would have left no margin. That host also, unexpectedly, ran a second
+`aura-owner-deptnav.service` instance — the review instance was believed to
+live only on the retail host.
 
 ### B. "The phone is not working properly as it should"
 
@@ -168,7 +167,7 @@ session expiry mid-use is clean — a global 401 guard raises a re-login modal.
 
 | Sev | Location | Defect |
 |---|---|---|
-| CRITICAL | `owner/app/licensing_service/signing.py:228-234` + `trust_store.py:82-83` | **Signing-key rotation can never propagate.** The keyset manifest is signed by the *currently active* key, but `admit_manifest()` only accepts manifests signed by an *already-trusted* key. After a rotation no fielded client trusts the new signer, so every activation and check-in fails `UNKNOWN_SIGNING_KEY` permanently — while Owner still marks the install ACTIVE and burns a paid slot. Only a new app build recovers it. A stale bundled `trust_anchor.json` has already been hit on the live droplet |
+| CRITICAL | `owner/app/licensing_service/signing.py:228-234` + `trust_store.py:82-83` | **Signing-key rotation can never propagate.** The keyset manifest is signed by the *currently active* key, but `admit_manifest()` only accepts manifests signed by an *already-trusted* key. After a rotation no fielded client trusts the new signer, so every activation and check-in fails `UNKNOWN_SIGNING_KEY` permanently — while Owner still marks the install ACTIVE and burns a paid slot. Only a new app build recovers it. A stale bundled `trust_anchor.json` has already been hit on the live host |
 | CRITICAL | `android/.../LicensingScreen.kt:158` | PENDING tells the user "We'll keep checking automatically — no action needed", but **nothing on Android polls**. Re-entering the key loops 202 forever |
 | HIGH | `android/.../LicensingScreen.kt:33-47,161` | `REASON_MESSAGES` omits `UNKNOWN_SIGNING_KEY`, `ASSERTION_*`, `INSTALLATION_DEACTIVATED`, `INSTALLATION_REPLACED`; all fall back to "Double-check the key and try again" — the exact wrong advice, and retyping reproduces it forever |
 | HIGH | `activation.py:240-242`, `deactivation.py:65-71`, `licensing_admin/routes.py:101-116` | A wiped or dead device's slot stays consumed, because self-deactivation requires the *old* device's private key. Reinstall-after-wipe hits `DEVICE_LIMIT_REACHED` and recovery **always** needs an admin |

@@ -92,7 +92,7 @@ def make_trust_manifest_refresher(client: LicensingClient, trust_store: OwnerTru
     and gave up -- so a freshly-installed build whose trust_anchor.json was
     cut before a rotation failed activation with UNKNOWN_SIGNING_KEY and had
     no way forward at all. That exact stale-anchor situation has already been
-    hit on the live droplet.
+    hit on the live host.
 
     This grants no new authority: it only fetches the public key-set manifest
     and hands it to admit_manifest(), which still refuses anything not

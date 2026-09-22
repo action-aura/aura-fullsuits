@@ -42,7 +42,7 @@ def _sanitize_display_filename(original_filename: str) -> str:
     non-alphanumeric character (defeats traversal sequences, absolute paths,
     unicode homograph tricks, and null-byte injection in one pass). Splits on
     BOTH separators explicitly rather than os.path.basename: basename only
-    knows the host's separator, so on the Linux droplet "..\\..\\secrets.pdf"
+    knows the host's separator, so on the Linux CI host "..\\..\\secrets.pdf"
     came through whole and reached the header as ".._.._secrets.pdf" (CI,
     2026-09-07) while every local run, on Windows, stripped it. Any run of
     two or more dots is then collapsed to "_": a display name that still

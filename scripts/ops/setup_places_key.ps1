@@ -67,7 +67,7 @@ if (-not $keyName) {
 $keyString = & $gcloud services api-keys get-key-string $keyName --format="value(keyString)"
 
 Write-Host ""
-Write-Host "Put these two lines in Owner's environment (/etc/aura-owner.env on the droplet, or the shell that starts it):" -ForegroundColor Green
+Write-Host "Put these two lines in Owner's environment (/etc/aura-owner.env on the host, or the shell that starts it):" -ForegroundColor Green
 Write-Host "OWNER_LEAD_DISCOVERY_PROVIDER=google_places"
 Write-Host "OWNER_GOOGLE_PLACES_API_KEY=$keyString"
 Write-Host ""

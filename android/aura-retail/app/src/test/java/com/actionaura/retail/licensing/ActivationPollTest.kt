@@ -51,7 +51,7 @@ class ActivationPollTest {
 
     @Test
     fun owner_approved_but_unverifiable_locally_is_not_a_verdict_either() {
-        // The live-droplet failure this whole bucket exists for: Owner rotated
+        // The live-host failure this whole bucket exists for: Owner rotated
         // its signing key, this install still ships a stale trust_anchor.json,
         // so Owner APPROVED, consumed a paid device slot, and the assertion
         // failed verify_assertion() here. Treating that as a rejection

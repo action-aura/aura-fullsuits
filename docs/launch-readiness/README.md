@@ -380,8 +380,8 @@ The two VS Code jedi language servers were deliberately left alone.
 | Thing | Where | Notes |
 |---|---|---|
 | Owner CC (live) | https://owner.actionaura.me | `/opt/aura-owner`, service `aura-owner`, gunicorn on 127.0.0.1:5551 |
-| Owner CC (review) | https://deptnav-161-35-219-243.sslip.io | `/opt/aura-owner-deptnav`, separate DB — still on the OLD UI lineage, and its DB is on a different Alembic graph than production |
-| Rollback of last deploy | `/opt/aura-owner.bak-20260820` on the droplet | |
+| Owner CC (review) | (dept-nav review instance, on the same now-decommissioned host as production) | `/opt/aura-owner-deptnav`, separate DB — still on the OLD UI lineage, and its DB is on a different Alembic graph than production |
+| Rollback of last deploy | `/opt/aura-owner.bak-20260820` on the host | |
 | Android APK | https://owner.actionaura.me/downloads/AuraRetail.apk | |
 | Windows portable | https://owner.actionaura.me/downloads/AuraRetail-Windows-Portable.zip | portable ZIP, not an installer — Inno Setup is not installed on the build machine |
 

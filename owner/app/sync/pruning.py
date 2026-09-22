@@ -9,7 +9,7 @@ see deploy/systemd/).
 WHY THIS EXISTS AT ALL: today owner_sync_events holds tens of rows. Once
 Phase 5 widens the sync allowlist, it holds roughly 5,000 events/device/day
 of full-row JSONB -- a ten-device customer alone generates ~50,000 rows a
-day, on a 2GB droplet that also runs the web app, with zero TTL and zero
+day, on a 2GB host that also runs the web app, with zero TTL and zero
 `DELETE` anywhere in routes.py or models/sync.py before this module. Left
 unaddressed, this is an outage that arrives weeks after launch, when it is
 hardest to fix (the design doc's own framing, preserved here because it is

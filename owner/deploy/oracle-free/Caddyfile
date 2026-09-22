@@ -1,0 +1,48 @@
+# Owner Control Center -- reverse proxy for the Oracle Cloud Always Free
+# deployment. Copied and adapted from <repo-root>/deploy/staging/Caddyfile
+# (same security headers, same health-checked reverse_proxy block) rather
+# than written from scratch, per this repo's own convention of documenting
+# where a pattern came from.
+#
+# TLS: no `tls` directive below, so Caddy does the default thing and
+# obtains a real Let's Encrypt certificate automatically as soon as
+# {$OWNER_DOMAIN} resolves publicly to this VM's IP. Ports 80 and 443 must
+# be open in BOTH the Oracle Cloud security list/NSG AND the VM's own
+# firewall (iptables/firewalld) -- Oracle Always Free VMs block inbound
+# traffic at the cloud level by default even before the OS firewall is
+# considered; see docs/ops/free-hosting-owner.md step on opening ports.
+
+{$OWNER_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
+		-Server
+	}
+
+	encode gzip
+
+	# Edge-level request-body ceiling, matching deploy/staging/Caddyfile's
+	# reasoning: slightly above the app's own MAX_CONTENT_LENGTH so a
+	# legitimate multipart upload's boundary/header overhead doesn't get
+	# rejected at the edge before the app even sees it.
+	request_body {
+		max_size 15MB
+	}
+
+	# No edge-level rate limiting here either, for the same reason as
+	# deploy/staging/Caddyfile: vanilla Caddy has no built-in directive for
+	# it. Owner's own application-level login throttling (OWNER_LOGIN_MAX_
+	# ATTEMPTS / OWNER_LOGIN_LOCKOUT_SECONDS) is the real, tested control.
+	# If you add OS-level rate limiting (fail2ban/ufw), that is independent
+	# of this file.
+
+	reverse_proxy owner:5000 {
+		header_up X-Forwarded-Proto {scheme}
+		health_uri /health/live
+		health_interval 30s
+		health_timeout 5s
+	}
+}

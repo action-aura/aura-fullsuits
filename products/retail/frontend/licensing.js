@@ -90,7 +90,7 @@
   // Treating one of these as a verdict is a real, already-seen failure: Owner
   // rotates its signing key while this install still ships a stale
   // trust_anchor.json (a condition this project has actually hit on the live
-  // droplet), so Owner APPROVES, marks the installation ACTIVE and consumes a
+  // host), so Owner APPROVES, marks the installation ACTIVE and consumes a
   // paid device slot, and the assertion then fails verify_assertion() here
   // with UNKNOWN_SIGNING_KEY. Before this bucket existed that landed in the
   // rejection branch: the poll stopped, the pending marker was destroyed, and

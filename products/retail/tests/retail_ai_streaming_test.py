@@ -14,12 +14,12 @@ run). Test 1 below pins that regression lock explicitly in this file too.
 The upstream fake here (_FakeStreamResponse) simulates Ollama's real
 streaming wire shape: iter_lines() yields raw bytes, one JSON object per
 line, each carrying a `response` fragment until a final line with
-`"done": true`. Real, on-droplet testing (SSH, direct curl with
+`"done": true`. Real, on-host testing (SSH, direct curl with
 `stream:true`) confirmed tokens actually arrive incrementally through the
 Caddy-fronted endpoint (not buffered) before this feature was built on top
 of that assumption -- see this branch's commit message for the timestamped
 proof. This suite tests the PROXY logic (retail_api.py's own generator,
-NDJSON envelope, and failure handling), not the droplet itself.
+NDJSON envelope, and failure handling), not the host itself.
 
 Run:
     pytest products/retail/tests/retail_ai_streaming_test.py -v
@@ -47,7 +47,7 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_ai_stream_"))
 # This suite drives /ai/chat with a monkeypatched requests.post, so the
 # upstream is never really contacted -- but the route now refuses BEFORE
 # opening a socket when AURA_AI_ENDPOINT_URL is unset. It used to default to
-# a demo droplet that no longer exists, which turned the documented graceful
+# a demo host that no longer exists, which turned the documented graceful
 # 401 into a 45-second hang. These tests were relying, invisibly, on that
 # default merely being non-empty; declaring a fake endpoint here removes the
 # coupling to production config, exactly as the line below already does for

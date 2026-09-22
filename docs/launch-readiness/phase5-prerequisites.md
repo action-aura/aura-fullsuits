@@ -106,7 +106,7 @@ TTL, no retention policy, and **no `DELETE` anywhere** in
 `owner/app/sync/routes.py` or `owner/app/models/sync.py`.
 
 A ten-device customer generates ~50,000 rows a day. Within a month that is a
-table nobody planned for, on a 2 GB droplet that also runs the Owner web app.
+table nobody planned for, on a 2 GB host that also runs the Owner web app.
 This is not a tidiness concern; it is the shape of an outage that arrives
 without warning several weeks after launch, when it is hardest to fix.
 

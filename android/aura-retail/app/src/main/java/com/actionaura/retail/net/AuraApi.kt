@@ -290,7 +290,7 @@ interface AuraApi {
     // /api/sub/retail). Non-streaming contract only -- see AiChatRequest's
     // doc comment in Models.kt for why `stream` is never sent. This call
     // legitimately takes ~17-36s (CPU-bound generation on the hosted
-    // droplet), which is why ApiClient raises the read timeout for exactly
+    // server), which is why ApiClient raises the read timeout for exactly
     // this path.
     @POST("api/sub/retail/ai/chat")
     suspend fun aiChat(@Body body: AiChatRequest): AiChatResponse

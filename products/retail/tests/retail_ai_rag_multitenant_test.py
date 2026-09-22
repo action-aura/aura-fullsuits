@@ -26,7 +26,7 @@ prompt this route built back as the "reply" -- real session/login/`_cid()`/
 DB-query/prompt-assembly code all runs for real; only the third-party
 network hop to Ollama is stubbed, the same boundary `retail_einvoicing_test
 .py`'s `test_enqueue_exception_does_not_fail_the_sale` stubs at (a live
-call to a demo droplet has no place in a hermetic, deterministic unit
+call to a demo host has no place in a hermetic, deterministic unit
 suite). Echoing the prompt back as the reply is what lets these tests
 assert on `response.json()['data']['reply']` exactly as a real user would
 read it in the sidebar, while still proving the isolation property against
@@ -65,7 +65,7 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_ai_rag_mt_"))
 # This suite drives /ai/chat with a monkeypatched requests.post, so the
 # upstream is never really contacted -- but the route now refuses BEFORE
 # opening a socket when AURA_AI_ENDPOINT_URL is unset. It used to default to
-# a demo droplet that no longer exists, which turned the documented graceful
+# a demo host that no longer exists, which turned the documented graceful
 # 401 into a 45-second hang. These tests were relying, invisibly, on that
 # default merely being non-empty; declaring a fake endpoint here removes the
 # coupling to production config, exactly as the line below already does for

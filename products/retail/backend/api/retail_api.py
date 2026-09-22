@@ -16654,9 +16654,9 @@ AI_SYSTEM_PREFACE = (
 
 # Small model (phi3.5:3.8b as of 2026-08-13, ~4GB resident; see config.py's
 # AURA_AI_MODEL_NAME comment for the benchmark that picked it over phi3:mini
-# and two larger 7B-class candidates) on a small CPU-only droplet -- keep
+# and two larger 7B-class candidates) on a small CPU-only host -- keep
 # the prompt itself small so latency stays reasonable. Caps mirror
-# _AI_HISTORY_TURNS below. Real measured throughput on this droplet is
+# _AI_HISTORY_TURNS below. Real measured throughput on this host is
 # ~8.5-9.4 tokens/sec (phi3:mini's baseline was ~6.6-7), so
 # _AI_REPLY_MAX_TOKENS bounds worst-case generation time almost as much as
 # prompt size does -- see _AI_REPLY_MAX_TOKENS' own comment for the incident
@@ -16667,7 +16667,7 @@ _AI_HISTORY_TURNS = 10
 
 # 2026-08-12: a real, realistic prompt ("How do I add a new product?")
 # produced a 254-token reply that took 36.5s to generate against the real
-# droplet -- verified by direct timed curl, not assumed -- well past the
+# host -- verified by direct timed curl, not assumed -- well past the
 # then-15s server timeout. The earlier ~7s benchmark this route's comments
 # reference was a 2-token "Say OK" reply, not representative. Capping the
 # model's own output length (via Ollama's num_predict) directly bounds
@@ -16676,7 +16676,7 @@ _AI_HISTORY_TURNS = 10
 # instructions but num_predict is enforced by the server regardless.
 _AI_REPLY_MAX_TOKENS = 150
 
-# 2026-08-13, speed pass: direct on-droplet benchmarking (SSH, `GET
+# 2026-08-13, speed pass: direct on-host benchmarking (SSH, `GET
 # /api/ps`) showed Ollama's default idle-unload cost a real ~4.89s
 # `load_duration` on the first request after idle vs ~0.08s once warm -- a
 # real, measured latency tax on the FIRST message of a session (or any
@@ -16688,8 +16688,8 @@ _AI_REPLY_MAX_TOKENS = 150
 # Ollama ignores unknown fields inside `options`). 30 minutes covers a real
 # chat session's think-time between messages without paying the cold-load
 # penalty on every turn; it does NOT help the very first request after a
-# genuinely idle period. Costs ~4GB of resident RAM on the droplet for up to
-# 30 min after the last request -- accepted, this droplet is dedicated to
+# genuinely idle period. Costs ~4GB of resident RAM on the host for up to
+# 30 min after the last request -- accepted, this host is dedicated to
 # this feature (8GB box, model is the only real resident consumer).
 _AI_KEEP_ALIVE = '30m'
 
@@ -16982,7 +16982,7 @@ def _build_ai_prompt(message, history, context='', lang='en'):
     flattened here. `history` is the optional client-supplied
     [{role, content}] list -- only the most recent turns are kept and each
     turn is truncated, so a long-running chat session can't balloon the
-    prompt sent to a ~4GB model on a small CPU-only droplet. `context`, if
+    prompt sent to a ~4GB model on a small CPU-only host. `context`, if
     non-empty, is the server-fetched, already company-scoped data summary
     from _build_ai_context() -- injected as its own labeled block so the
     model can tell it apart from conversation history, with an explicit
@@ -17078,7 +17078,7 @@ def ai_chat():
     # Without this the route posts to whatever AURA_AI_ENDPOINT_URL holds and
     # waits AURA_AI_TIMEOUT_SECONDS (45s) for an answer. When the configured
     # host is simply gone -- which is exactly what happened to the demo
-    # droplet this default used to point at -- a TCP connect to an unrouted
+    # host this default used to point at -- a TCP connect to an unrouted
     # address never gets refused, it just goes quiet, so the user sat through
     # 45 seconds before being told the assistant was 'temporarily
     # unavailable'. Neither word was true: nothing was temporary and nothing
@@ -17115,7 +17115,7 @@ def ai_chat():
             )
         except requests.exceptions.RequestException as e:
             # 2026-08-12: real observed latency for a REALISTIC prompt on this
-            # model/droplet is ~35s uncapped (see _AI_REPLY_MAX_TOKENS' comment)
+            # model/host is ~35s uncapped (see _AI_REPLY_MAX_TOKENS' comment)
             # -- a timeout here now means the upstream host is genuinely
             # unreachable/overloaded even with the reply-length cap in place,
             # not a bug in this route.
@@ -17147,7 +17147,7 @@ def ai_chat():
 
     # ── Streaming branch (2026-08-13 speed pass) ────────────────────────────
     # Total generation time for a realistic ~150-token reply is CPU-bound at
-    # ~17-27s on this droplet either way (measured 2026-08-13, see this
+    # ~17-27s on this host either way (measured 2026-08-13, see this
     # branch's own commit message for the before/after numbers) -- streaming
     # does NOT change that. What it changes is time-to-first-visible-token:
     # the browser can start rendering the

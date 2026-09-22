@@ -426,33 +426,33 @@ SITE_RELAY_BIND_HOST = os.environ.get('AURA_SITE_RELAY_BIND_HOST', '0.0.0.0')
 # Proxies the sidebar "AI Assistant" button (see app-shell.js's `hasAI` /
 # `sub-ai.js`'s SubAI module) to a small hosted LLM (phi3.5:3.8b as of
 # 2026-08-13, see AURA_AI_MODEL_NAME below, behind an Ollama-compatible
-# /api/generate endpoint). The URL defaults to the
-# demo droplet since it's not secret and the feature is meaningless without
-# it -- defaulting it on is what makes the button work out of the box instead
+# /api/generate endpoint). The URL used to default to a
+# demo host since it wasn't secret and the feature is meaningless without
+# it -- defaulting it on is what made the button work out of the box instead
 # of shipping another "looks wired, does nothing" control. The bearer token
 # is a real credential and must NEVER have a hardcoded default (2026-08-12:
 # an earlier version of this file did exactly that and got a live token
 # committed to git history -- the token was rotated immediately after
 # discovery, but the lesson stands). An unset token here means the /ai/chat
-# route's request to the droplet gets a 401, which the route already treats
+# route's request to the host gets a 401, which the route already treats
 # as "AI assistant is temporarily unavailable" -- fails closed and gracefully,
 # never a crash. Set AURA_AI_BEARER_TOKEN in the environment (see
 # .env.example) to actually enable the feature.
-# 2026-09-13: the default was the demo droplet's own URL
-# ('https://104-248-35-215.sslip.io/api/generate'). That droplet no longer
-# exists -- the account was locked and both droplets destroyed -- and the
-# paragraph above no longer held: sslip.io still resolves the IP out of the
-# hostname, so DNS succeeds and the TCP connect goes to an unrouted address.
-# No RST, no 401, just silence for the full 45s timeout. The documented
-# 'fails closed and gracefully' had quietly become a 45-second hang ending in
-# a generic 'temporarily unavailable'. Defaulting to EMPTY makes an
-# unconfigured install refuse in milliseconds with an honest message (see
-# the guard at the top of the /ai/chat route); setting this variable enables
-# the feature exactly as before.
+# 2026-09-13: the default was a demo host's own URL. That host no longer
+# exists -- the hosting account was locked and both machines behind it were
+# destroyed -- and the paragraph above no longer held: the dead hostname
+# still resolved its old IP, so DNS succeeded and the TCP connect went to an
+# unrouted address. No RST, no 401, just silence for the full 45s timeout.
+# The documented 'fails closed and gracefully' had quietly become a
+# 45-second hang ending in a generic 'temporarily unavailable'. Defaulting to
+# EMPTY makes an unconfigured install refuse in milliseconds with an honest
+# message (see the guard at the top of the /ai/chat route); setting this
+# variable enables the feature exactly as before, pointed at whatever model
+# host is configured.
 AURA_AI_ENDPOINT_URL = os.environ.get('AURA_AI_ENDPOINT_URL', '')
 AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '')
 # 2026-08-12: bumped from 15s after a real, realistic prompt (verified via
-# timed curl against the actual droplet, not assumed) took 36.5s -- the
+# timed curl against the actual host, not assumed) took 36.5s -- the
 # original 15s was benchmarked against a 2-token "Say OK" reply, not
 # representative. retail_api.py's _AI_REPLY_MAX_TOKENS now caps the model's
 # own output length too, so this is a safety margin on top of that cap, not
@@ -460,7 +460,7 @@ AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '')
 AURA_AI_TIMEOUT_SECONDS = float(os.environ.get('AURA_AI_TIMEOUT_SECONDS', '45'))
 
 # 2026-08-13: switched the deployed model from phi3:mini to phi3.5:3.8b after
-# real, on-droplet benchmarking (same CPU-only 4vCPU/8GB droplet, same
+# real, on-host benchmarking (same CPU-only 4vCPU/8GB host, same
 # realistic "How do I add a new product?" prompt, same num_predict=150 cap
 # used in production -- via direct curl against http://localhost:11434,
 # not assumed). Measured generation throughput: phi3:mini ~6.6 tok/s vs phi3.5:3.8b
@@ -468,12 +468,12 @@ AURA_AI_TIMEOUT_SECONDS = float(os.environ.get('AURA_AI_TIMEOUT_SECONDS', '45'))
 # and the same resident-memory class (~3.9GB while loaded) -- a strict
 # improvement, not a resize. Two larger 7B-class candidates (qwen2.5:7b,
 # and qwen2.5:3b as a smaller/faster-hoped-for option) were also pulled and
-# benchmarked on the same droplet; qwen2.5:7b was ~3.4 tok/s with a ~20s
+# benchmarked on the same host; qwen2.5:7b was ~3.4 tok/s with a ~20s
 # cold-load alone (would blow the 45s timeout on a full-length reply) and
 # qwen2.5:3b was slower per-token than phi3.5:3.8b despite being smaller
-# (5.96 tok/s) -- both were deleted from the droplet after benchmarking
+# (5.96 tok/s) -- both were deleted from the host after benchmarking
 # (`ollama rm`), not left installed. phi3:mini itself is deliberately left
 # installed (not deleted) as an instant rollback -- set AURA_AI_MODEL_NAME
-# back to 'phi3:mini' with no droplet changes needed if phi3.5:3.8b ever
+# back to 'phi3:mini' with no host changes needed if phi3.5:3.8b ever
 # regresses in practice.
 AURA_AI_MODEL_NAME = os.environ.get('AURA_AI_MODEL_NAME', 'phi3.5:3.8b')

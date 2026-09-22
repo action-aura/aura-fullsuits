@@ -46,7 +46,7 @@ Legend:
 | Item | State | How |
 |---|---|---|
 | Outbox, cursors, quarantine, pruning | **TESTED** | Owner suite; `owner/app/sync/pruning.py` has its own tests |
-| `flask sync prune-events` scheduled | **BLOCKED** | Code and tests exist. Nothing schedules it. Needs a systemd timer on the droplet |
+| `flask sync prune-events` scheduled | **BLOCKED** | Code and tests exist. Nothing schedules it. Needs a systemd timer on the host |
 | Two real devices converging on one shop | **RUN — WORKS: accounts, customers, catalogue, stock and sales** | 2026-09-05, a real Mi Note 10 and a desktop till on one licence, every step through the real HTTP API of the real artefact: a cashier created on the desktop signed in on the phone; a customer created on each device reached the other; a product created on the desktop with stock 10 appeared on the phone with the **same UUID** and stock 10; that cashier opened a drawer and rang a sale of 2 **on the phone** (`SALE-000004-69e67d3f-570e4413`, 24.69); the phone's stock read 8; the desktop then listed that sale number and read stock **8**. Sale and stock crossed phone → desktop within the 90 s poll |
 | Business day is configurable | **RUN** | Was unreachable — no client could set it, so every install bucketed on each writing device's own clock. Now a card in Admin Center, proved against the real route |
 | A second device can join the shop without inventing an admin | **RUN — WORKS on the desktop, 2026-09-06 (backend + the real screen in Chromium); the Android door is built the same day (303 unit tests, decision mutation-proved) and PROVEN on the wiped Mi Note 10 the same evening — key, "Yes — connect to my shop", "Connecting to your shop…", sign-in, dashboard as `ADMIN-0001`; no admin created (`scripts/ops/phone_join_door.py`)** | The placeholder-admin leftover recorded under blocker 4 was a missing door plus one missing row: a device with no admin has no company id, so the sync parked the owner's account. The identity rebind now seeds `company_settings` with the licence id at activation when no admin exists (`company_rebind.seed_company_settings_for_joining_device`, five tests, mutation-proved). Proven on a fourth, empty till by API (`scripts/ops/join_e2e.py`), then through the REAL first-run screen in a real browser on a fifth and a sixth till (`scripts/ops/join_door_e2e.py`): "Already have a shop? Join it with your licence key" → key → "Connected to your shop" → restart → the desktop's owner signs in there through the ordinary form; the page made zero `create-admin` calls. The browser run caught a defect the unit tests had passed over — the boot path opened the setup modal a second time — fixed and pinned by a test that drives `init()` itself. Design, measurements, and what the Android door still needs: `docs/launch-readiness/join-existing-shop-design.md` |
@@ -141,22 +141,14 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 
 ## Operations — all BLOCKED on the owner
 
-**Found 2026-09-04, and it outranks everything else in this section: the
-DigitalOcean account is LOCKED and both droplets are OFF.** Measured with the
-authenticated `doctl` on this machine, not inferred from a timeout:
-
-- `doctl account get` → status **`locked`**
-- `doctl balance get` → account balance **$46.16** (the August invoice, unpaid); month-to-date $52.59
-- `doctl compute droplet list` → `aura-retail-demo` (Owner production, 161.35.219.243) **off**; `aura-llm-demo` (the Ollama server Retail's AI assistant points at, 104.248.35.215) **off**
-- `doctl compute droplet-action power-on` on both → `403 There is currently a lock on the account, please log in to the control panel and contact support.`
-
-So production Owner and the AI endpoint have been down all day for an unpaid
-$46.16. Nothing on this list below can be done on the droplet until that is
-cleared, and it cannot be cleared from here — it needs the account holder's
-login and card. **The one action:** sign in at cloud.digitalocean.com, pay the
-$46.16, and if the lock does not lift on its own, open the support ticket the
-message asks for. Then `doctl compute droplet-action power-on 591801885` and
-`... 591806146`, or the console's Power button.
+**Found 2026-09-04, and it outranked everything else in this section: the
+hosting account behind production Owner and the AI endpoint was LOCKED and
+both hosts were OFF over an unpaid invoice.** That account has since been
+abandoned entirely — the access token was revoked and both hosts were
+destroyed, so there is no path back through it, and none is wanted. There is
+currently no hosted Owner Control Center and no hosted AI endpoint. See
+`docs/ops/free-hosting-owner.md` for the current hosting plan; nothing on the
+list below can be done until a replacement host exists.
 
 Three scripts were added under `scripts/ops/` so the remaining human steps are
 one action each:
@@ -183,7 +175,7 @@ one action each:
   rehearsal most plausibly used; this proves it against a stored HMAC instead
   of assuming it.
 
-- Droplet bring-up and the clean-machine rehearsal (`go-live-runbook.md` Parts 1–2)
+- Owner CC bring-up and the clean-machine rehearsal (`go-live-runbook.md` Parts 1–2)
 - `EXTRA_DEVICE` priced and set `AVAILABLE`
 - A systemd timer for `flask sync prune-events`
 - A real WhatsApp number — the configured one is Meta **test tier** and can only
@@ -298,14 +290,14 @@ retail runner 170/170, Owner suite 1262 passed with the same three known
 failures as before.
 
 What still stands between this and a paying customer is **outside the
-code**, and each item is one action for the owner: the production Owner
-and AI droplets are off behind an unpaid $46.16; the Google key for lead
-discovery; a real WhatsApp business number (and the choice of onboarding
-path); reactivating the demo shop's subscription; and two one-word
-answers (250 JOD per year or one-time; do sales staff issue keys). After
-those, the clean-machine rehearsal on the real droplet (`go-live-runbook.md`
-Part 2) is the last gate — the same steps have been run on this laptop,
-not yet on the server.
+code**, and each item is one action for the owner: there is currently no
+hosted Owner CC or AI endpoint (see `docs/ops/free-hosting-owner.md`); the
+Google key for lead discovery; a real WhatsApp business number (and the
+choice of onboarding path); reactivating the demo shop's subscription; and
+two one-word answers (250 JOD per year or one-time; do sales staff issue
+keys). After those, the clean-machine rehearsal on the real host
+(`go-live-runbook.md` Part 2) is the last gate — the same steps have been
+run on this laptop, not yet on the server.
 
 The record below is kept as it was written, blocker by blocker, so the
 reasoning can be audited; the numbered items are closed in the order they
@@ -390,8 +382,8 @@ were found.
    and the rehearsal Owner holds *only* `cdcaa65b` — it has no `6567e3c6` with
    which to countersign. A deterministic dead end on every retry.
 
-   Underlying cause: the phone's trust store came from the **droplet** lineage
-   (the 2026-08-15 rotation), while the build pointed it at a **locally
+   Underlying cause: the phone's trust store came from the **previously
+   hosted Owner** lineage (the 2026-08-15 rotation), while the build pointed it at a **locally
    provisioned rehearsal Owner** created 2026-09-03 with a brand-new key and no
    continuity. Two different Owner lineages.
 

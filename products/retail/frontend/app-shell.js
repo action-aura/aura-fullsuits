@@ -2204,7 +2204,7 @@ const SubsystemApp = {
   // verdict: routes.py::activate() flattens every ActivationFailed into the
   // same 400 {reason_code, detail}. Real, already-seen case: Owner rotates
   // its signing key while this install still ships a stale trust_anchor.json
-  // (a condition this project has hit on the live droplet) -> Owner APPROVES,
+  // (a condition this project has hit on the live host) -> Owner APPROVES,
   // the installation goes ACTIVE and burns a paid device slot, and this
   // device answers UNKNOWN_SIGNING_KEY. Without this bucket that reached the
   // `a.detail` fallback below and told the customer their key was rejected,

@@ -1287,7 +1287,7 @@ def test_no_query_buckets_on_a_bare_local_wall_clock(ledger):
 def test_no_query_ever_asks_sqlite_for_the_server_machines_own_zone(ledger):
     """SQLite's only timezone modifiers are 'localtime' and 'utc', and BOTH
     mean the zone of the process running the query -- a shop laptop, a
-    droplet, a phone. Reading the reporting machine's zone is the original
+    hosted server, a phone. Reading the reporting machine's zone is the original
     defect wearing a different hat: it moves every bucket the day the report
     is opened somewhere else.
 

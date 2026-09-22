@@ -52,7 +52,7 @@ Findings that change the shape of the answer:
    Promotions (percentage, best-price-wins) are real as of v23
    (`products/retail/backend/core/retail/promotions.py`). The AI assistant is
    real (`retail_api.py:9573+`, `config.py:177+`): sidebar chat, RAG over a
-   company-scoped local summary, proxied to a hosted phi3.5 on the droplet,
+   company-scoped local summary, proxied to a hosted phi3.5 on the AI host,
    gated on `CAP_REPORTS`, fails closed to "temporarily unavailable".
 
 4. **A live defect in the sales pipeline: the licence key is issued and then
@@ -96,7 +96,7 @@ Findings that change the shape of the answer:
 - **No plan rows ship at all.** `seed_canonical_catalog()` seeds products,
   platforms, channels, entitlement *definitions*, and DRAFT/PLANNED add-on
   rows — deliberately never a plan (`catalog/services.py::seed_canonical_catalog`).
-  Any plan on the droplet was hand-typed.
+  Any plan on the live host was hand-typed.
 - A plan can differ from another plan, via the UI, in exactly: **name, code,
   billing model, currency, price, included device count.** `support_level`
   exists on the model but not in the form; `effective_date` likewise (see §0.5).
@@ -248,11 +248,11 @@ extra cost" and make it the headline of the Shop tier.
 
 **The AI assistant is a paid opt-in add-on, not a tier feature and not in
 the base.** The chat sends a company-scoped business-data summary to a
-vendor-hosted droplet (`retail_api.py::_build_ai_context`) — for some buyers
+vendor-hosted server (`retail_api.py::_build_ai_context`) — for some buyers
 (co-ops, foundations, anyone with a data-locality stance) that is
 disqualifying, so it must never be something a tier forces them to carry.
-It costs real money (~$48/month droplet ≈ 410 JOD/yr): at 60 JOD/yr, seven
-subscribers cover the droplet; capacity of the current 4vCPU box is limited,
+It costs real money (~$48/month host ≈ 410 JOD/yr): at 60 JOD/yr, seven
+subscribers cover the host; capacity of the current 4vCPU box is limited,
 so the price also throttles adoption to what the hardware can serve. It is
 correctly built for the offline doctrine already (fails closed, never on the
 sale path). One decorator argument makes it Owner-governable (§A.2).
@@ -260,7 +260,7 @@ sale path). One decorator argument makes it Owner-governable (§A.2).
 **Annual only at launch; no perpetual SKU.** The runtime is term-shaped
 (check-ins, signed grace ladder, renewal pipeline, Part W term fields); a
 perpetual licence forfeits the recurring revenue that funds the relay, the
-droplet, and JoFotara compliance updates — and note that the current direct
+host, and JoFotara compliance updates — and note that the current direct
 issuance path *accidentally* sells perpetual today because nobody sets term
 dates anywhere (§B.1). The minimal path (§B.4) fixes that by construction.
 The annual price is framed as "licence + updates + support + sync relay +
@@ -300,7 +300,7 @@ them Shop for their retail counter only, in writing.
 ### B.1 The flow as it exists — two paths, both counted honestly
 
 **One-time bootstrap** (not per-licence, but it gates everything and has
-burned this project before — the droplet was found with RBAC never seeded and
+burned this project before — the host was found with RBAC never seeded and
 a stale trust anchor): `create-superadmin` → `seed-rbac` → `seed-catalog` →
 `seed-offline-policy` → `licensing generate-signing-key` + activate →
 `LICENSE_PEPPER` env → hand-create plans (+ SQL for effective dates, §0.5).
@@ -480,7 +480,7 @@ narrower and more specific than the owner's framing suggests:
    the comment in `config.py` records it). Once `ai_assistant_enabled` is an
    entitlement, per-customer token provisioning/rotation should ride the
    same channel (a check-in-delivered credential or per-licence token on
-   the droplet's auth layer). Until then AI enablement is install-time
+   the host's auth layer). Until then AI enablement is install-time
    labour, not Owner control.
 5. **Seeing usage truth.** The assertion/check-in stream is deliberately
    one-way on business data (`FORBIDDEN_ASSERTION_MARKERS`) — right and
@@ -522,7 +522,7 @@ option" is a doctrine, not an accident).
 multi-device shops keep selling but stop converging — stock and the money
 ledger go stale across tills until it returns. That is the accepted design
 (outbox buffers, cursors resume). But the moment devices are the paid meter,
-the relay is the service being paid for: droplet uptime, backups of the
+the relay is the service being paid for: host uptime, backups of the
 Owner Postgres, and the preflight runbook (`seed-rbac`, trust-anchor
 freshness — both already bitten once) stop being dev-ops hygiene and become
 the product's SLO. Budget it like one.
@@ -540,7 +540,7 @@ the product's SLO. Budget it like one.
    time without code; the *structure* (two tiers + device meter + add-ons)
    is the part this document asks him to lock.
 3. **AI as opt-in add-on at 60 JOD/yr** — confirm he accepts it NOT being in
-   any base tier (the data-locality argument in §A.5), and that the droplet
+   any base tier (the data-locality argument in §A.5), and that the host
    gets a capacity ceiling before the tenth subscriber.
 4. **Chain launch posture:** hold Chain until wave C ships, or sell
    early-access now at pilot pricing with the roadmap in writing?

@@ -5,20 +5,49 @@ is down, **no Aura Retail or Aura Dental install can activate, check in, or
 sync.** Treat its availability as a product requirement, not infrastructure
 housekeeping.
 
-## Why Fly and not the other free options
+## CORRECTED 2026-09-22 — Fly is not free. It is the cheap option, not the free one.
+
+This file previously claimed "Fly does not bill it for a machine this size"
+under a free allowance. That was checked again while building
+`docs/ops/free-hosting-owner.md` and is **wrong for any account created
+today**: Fly retired its Hobby/free allowance; a new organization gets only a
+one-time trial (2 VM-hours or 7 days, whichever ends first), and after that
+this deployment bills continuously. For a `shared-cpu-1x` / 256MB machine
+plus a 1GB volume for the signing key, that is **about $2.19/mo (compute) +
+$0.15/mo (volume) ≈ $2.34/mo** at Fly's published rates (unchanged by the
+October 1, 2026 pricing update). It also needs a card on file from account
+creation, not just "for verification."
+
+**The genuinely free, primary recommendation is now Oracle Cloud Always
+Free + Neon — see `docs/ops/free-hosting-owner.md`.** This file (and this
+whole `owner/deploy/fly/` directory) is kept as the documented **cheap,
+low-sysadmin alternative** named in that runbook: about $2.34/mo gets you a
+managed platform (no VM patching, automatic TLS, no Caddy to configure)
+instead of owning a raw VM. Use it if $2-3/month is an acceptable trade for
+less operational work; use the free-hosting runbook if it genuinely must be
+$0.
+
+The **`fly postgres create` step below is also stale** — Fly deprecated that
+command ("Legacy Postgres") in favor of a paid `fly mpg create` product. This
+file now uses free Neon Postgres instead (see the Postgres section below),
+which also keeps this path's real cost at ~$2.34/mo rather than adding a
+second paid Fly product.
+
+## Why Fly over the other paid-tier PaaS options
 
 | | |
 |---|---|
-| **Fly.io** ✅ | Real Postgres, persistent volumes, no forced sleep, Docker-native. The existing `owner/Dockerfile` works essentially as-is. |
-| Render | Free Postgres **expires after 90 days** and free web services sleep. Disqualifying for the service that gates every activation. |
-| Railway | Good DX, but the free allowance is trial-shaped rather than genuinely free. |
-| Oracle Cloud Free Tier | Genuinely free forever and generous, but a raw VM — you own the OS, patching, TLS and backups. Viable fallback if zero cost matters more than zero sysadmin. |
+| **Fly.io** ✅ | Real persistent volumes (the signing key requirement below is non-negotiable — see `docs/ops/free-hosting-owner.md`), no forced sleep, Docker-native. Not free, but cheap and predictable (~$2.34/mo). |
+| Render | Free web services sleep (tolerable) but the **free tier cannot mount a persistent disk at all** — persistent disks require the paid Starter plan ($7/mo+). Disqualifying on the free tier for the service that must never lose its signing key. |
+| Koyeb | Free tier has no persistent volumes either, plus forced scale-to-zero after 1h idle that cannot be disabled on the free instance. Same disqualification as Render. |
+| Railway | Free tier was removed in 2023. Now a one-time $5/30-day trial, then $1/mo minimum plus usage — not meaningfully cheaper than Fly, without Fly's persistent-volume story. |
+| Oracle Cloud Free Tier | Genuinely free forever (not a trial) and generous, but a raw VM — you own the OS, patching, TLS and backups. This is the **primary recommendation** in `docs/ops/free-hosting-owner.md` for exactly the owner who does not want to pay anything. |
 
 ## Before you start
 
-You need: a Fly account, `flyctl` installed, and about ten minutes. Signup
-needs a card for identity verification even on the free allowance — Fly does
-not bill it for a machine this size, but it must be on file.
+You need: a Fly account with a card on file (billing starts immediately —
+there is no ongoing free allowance for a new account), `flyctl` installed,
+and about ten minutes.
 
 ## First run
 
@@ -28,9 +57,15 @@ not bill it for a machine this size, but it must be on file.
 fly auth login
 fly apps create aura-owner
 
-# Postgres. Note the connection string it prints -- you need it below.
-fly postgres create --name aura-owner-db --region fra
-fly postgres attach aura-owner-db --app aura-owner
+# Postgres: use Neon (free, never expires, auto-resumes on the next query
+# after its idle suspend -- see docs/ops/free-hosting-owner.md for why this
+# beats both Fly's own Postgres offerings here). `fly postgres create`
+# (Legacy Postgres) is deprecated, and its replacement `fly mpg create`
+# (Managed Postgres) is a second paid product on top of the compute machine
+# below -- neither is worth it when Neon's free tier already satisfies
+# Owner's config.py validator (postgresql:// / postgresql+psycopg://).
+# Create a Neon project at https://console.neon.tech, copy its connection
+# string, and set it as a Fly secret in the next block.
 
 # The volume that holds the signing key. WITHOUT THIS THE APP REFUSES TO
 # START, by design -- see "Landmine 2" below.
@@ -43,18 +78,29 @@ fly secrets set --app aura-owner \
   OWNER_SECRET_KEY="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
   OWNER_LICENSE_PEPPER="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
   OWNER_ALLOWED_HOSTS="aura-owner.fly.dev" \
-  OWNER_BOOTSTRAP_PASSWORD="$(python -c 'import secrets;print(secrets.token_urlsafe(24))')"
+  OWNER_BOOTSTRAP_PASSWORD="$(python -c 'import secrets;print(secrets.token_urlsafe(24))')" \
+  OWNER_DATABASE_URL="postgresql+psycopg://<user>:<pass>@<neon-host>/<db>?sslmode=require"
 
+# Deliberately still owner/Dockerfile (root user), not Dockerfile.staging,
+# even though Dockerfile.staging is leaner and non-root. Dockerfile.staging's
+# USER aura is set at BUILD time; this fly.toml's [processes] entry runs
+# `mkdir -p /app/var/...` at CONTAINER START time against a volume that is
+# attached fresh at that point, not baked into the image -- a freshly
+# created Fly volume's ownership was not verified against the non-root user
+# in this session (no Docker available to test), so switching images here
+# risks a permission denial on first boot that would only surface on a real
+# deploy. Revisit once that is verified; do not swap this silently.
 fly deploy --config owner/deploy/fly/fly.toml --dockerfile owner/Dockerfile
 ```
 
-`fly postgres attach` sets `DATABASE_URL`. Owner reads **`OWNER_DATABASE_URL`**
-and rejects any URI that is not `postgresql://` or `postgresql+psycopg://`, so
-set it explicitly from what attach printed:
+Owner reads **`OWNER_DATABASE_URL`** and rejects any URI that is not
+`postgresql://` or `postgresql+psycopg://`. Neon connection strings need
+`?sslmode=require` appended (Neon requires TLS; the app itself does not add
+this for you):
 
 ```bash
 fly secrets set --app aura-owner \
-  OWNER_DATABASE_URL="postgresql+psycopg://<user>:<pass>@<host>:5432/<db>"
+  OWNER_DATABASE_URL="postgresql+psycopg://<user>:<pass>@<neon-host>/<db>?sslmode=require"
 ```
 
 ## Then verify — do not assume
@@ -120,9 +166,20 @@ rm owner-signing-keys.tgz
 yet.** With test data only, a lost key costs nothing — generate a fresh one.
 The moment one real customer activates, that stops being true permanently.
 
-## Aura Dental
+## Aura Dental / Aura Retail
 
-Aura Dental already has its own cloud stack (`clinic/cloud/`: Docker Compose +
-Caddy with automatic TLS + a read-only backup sidecar), so it is close to a
-lift-and-shift onto the same platform. Aura Retail is desktop and Android and
-needs no server of its own beyond this one.
+**CORRECTED 2026-09-22:** this section previously claimed Aura Dental has its
+own `clinic/cloud/` Docker Compose + Caddy stack. No such directory exists
+anywhere in this repository -- checked while writing
+`docs/ops/free-hosting-owner.md`. `products/clinic` has no application UI at
+all (see the root `CLAUDE.md`); there is nothing there to lift and shift.
+
+The real Docker Compose + Caddy + automatic-TLS pattern in this repo is
+`docker-compose.staging.yml` (repository root) plus `deploy/staging/` -- built
+for Owner itself, not Clinic. `docs/ops/free-hosting-owner.md`'s Oracle Cloud
+Always Free path (`owner/deploy/oracle-free/`) is modeled directly on that
+proven shape rather than this Fly config -- same non-root hardened image
+(`owner/Dockerfile.staging`), same Caddy security headers -- swapping
+self-hosted Postgres for free Neon and `OWNER_ENV=staging` for `production`.
+Aura Retail is desktop and Android and needs no server of its own beyond
+this one licensing authority.

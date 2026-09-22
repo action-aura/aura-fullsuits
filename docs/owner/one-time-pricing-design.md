@@ -99,7 +99,7 @@ changes the spec, the fix arrives as an update, and updates are a service.
 Every option below words this carefully rather than promising "JoFotara
 forever."
 
-**0.6 The AI assistant is a hard-recurring cost.** The LLM droplet is
+**0.6 The AI assistant is a hard-recurring cost.** The LLM host is
 $48/month = 408 JOD/yr for all customers combined
 (`docs/launch-readiness/infrastructure.md`, measured), before any scaling.
 At the already-decided 60 JOD/yr add-on price, seven subscribers cover the
@@ -124,8 +124,8 @@ stated, all adjustable:**
 
 | Assumption | Value | Basis |
 |---|---|---|
-| Fixed infrastructure, today | 510 JOD/yr ($60/mo) | Measured, infrastructure.md. Of which 408 is the AI droplet — funded separately by the AI add-on (0.6), leaving **~102 JOD/yr** (Owner box) as the base the licence business must carry. |
-| Marginal infra per served customer | 2–4 JOD/yr | Check-ins ≈ nothing; relay = small JSON batches (≤500 rows/call) well inside droplet bandwidth; Postgres growth + a droplet upsize step (~+102 JOD/yr per ~$12 tier) every few hundred customers. |
+| Fixed infrastructure, today | 510 JOD/yr ($60/mo) | Measured, infrastructure.md. Of which 408 is the AI host — funded separately by the AI add-on (0.6), leaving **~102 JOD/yr** (Owner box) as the base the licence business must carry. |
+| Marginal infra per served customer | 2–4 JOD/yr | Check-ins ≈ nothing; relay = small JSON batches (≤500 rows/call) well inside host bandwidth; Postgres growth + a host upsize step (~+102 JOD/yr per ~$12 tier) every few hundred customers. |
 | Support per active customer, steady state | 2–3 h/yr × 5–8 JOD/h loaded | Jordanian support-tech cost ~600–800 JOD/mo fully loaded; WhatsApp-based support. Year 1 is higher (onboarding); steady state after. → **10–24 JOD/yr, call it ~18** |
 | Compliance/updates engineering | amortised, not per-customer | Real but lumpy (a JoFotara spec change is a fixed cost whenever it lands); funded by whatever recurring line exists. |
 | Serving cost per **entitled** customer/yr | **~20–25 JOD** | 18 support + 2–4 infra. |
@@ -158,7 +158,7 @@ Concretely: **a pure perpetual model stops covering its own serving cost at
 roughly 300–450 customers** on the post-wave sales assumption — a base the
 JoFotara wave alone could build in its first two years. And that table
 already *excludes* AI (0.6) and prices the fixed base at today's single small
-droplet. This is not a pricing problem fixable with a bigger P: P = 1,000
+host. This is not a pricing problem fixable with a bigger P: P = 1,000
 moves the crossing to ~45× s, it does not remove the crossing. The only
 structural fix is to put recurring costs behind a recurring line — which is
 Options B and C.
@@ -335,7 +335,7 @@ Read before answering, per the brief (`offline_policy.py`,
   ladder cannot produce RESTRICTED for a licence whose subscription_status
   is ACTIVE — and a perpetual subscription is ACTIVE forever (0.1). This is
   exactly the behaviour a perpetual buyer is owed, including the extreme
-  case: Owner's droplet dies permanently and the shop keeps selling. Put
+  case: Owner's host dies permanently and the shop keeps selling. Put
   that sentence in the sales material — no local competitor can say it.
 - **Unreachable for a long time, subscription (annual):** identical today —
   which is arguably too generous (0.2's corollary: offline-forever evades

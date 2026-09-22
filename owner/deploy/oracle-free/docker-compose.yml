@@ -1,0 +1,99 @@
+# Owner Control Center -- production compose for a genuinely free host
+# (Oracle Cloud Always Free VM). See docs/ops/free-hosting-owner.md for the
+# full numbered runbook this file is one piece of.
+#
+# Modeled directly on the repo's own proven hardened stack at
+# <repo-root>/docker-compose.staging.yml + deploy/staging/Caddyfile (Phase 9)
+# -- same non-root image, same Caddy TLS termination, same security headers.
+# Two deliberate differences from that file:
+#
+#   1. OWNER_ENV=production, not staging. This is meant to be the real
+#      licensing authority serving real customers, and Non-Negotiable
+#      Principle 2 (docs/owner -- "staging must be clearly labeled and
+#      operated as staging") cuts the other way too: don't run production
+#      traffic through something every log/audit record calls "staging".
+#      config.py's validate() enforces an identical hardening checklist for
+#      both ENV values, so this changes labeling only, not what's checked.
+#
+#   2. No `db` service. Postgres is Neon (https://neon.tech), free, managed,
+#      auto-resumes on the next query after its idle suspend -- see the
+#      runbook for why that beats self-hosting Postgres on a free VM you'd
+#      also have to patch and back up yourself. If you would rather
+#      self-host Postgres on this same VM instead of depending on Neon,
+#      copy the `db` service and `internal`/`edge` network split from
+#      docker-compose.staging.yml verbatim; nothing else here needs to
+#      change to support that.
+#
+# Usage:
+#   cp owner/deploy/oracle-free/.env.example .env.oracle   # fill in real values, never commit
+#   docker compose -f owner/deploy/oracle-free/docker-compose.yml --env-file .env.oracle up -d
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file:
+      - .env.oracle
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      owner:
+        condition: service_healthy
+    networks:
+      - edge
+
+  owner:
+    build:
+      # Repo root -- owner/Dockerfile.staging COPYs requirements/ from
+      # there, exactly like the Fly and staging builds. This compose file
+      # lives three directories below the repo root
+      # (owner/deploy/oracle-free/), hence ../../..
+      context: ../../..
+      dockerfile: owner/Dockerfile.staging
+    restart: unless-stopped
+    env_file:
+      - .env.oracle
+    environment:
+      OWNER_ENV: production
+      OWNER_SIGNING_KEY_DIRECTORY: /app/owner/var/signing-keys
+      OWNER_BACKUP_DIR: /app/owner/var/backups
+    volumes:
+      # Named volume backed by the VM's own real disk -- this is the ENTIRE
+      # point of this host choice. It survives container restarts, image
+      # rebuilds, and VM reboots. It does NOT survive the VM being deleted,
+      # which is why the runbook's backup step is not optional.
+      - owner_signing_keys:/app/owner/var/signing-keys
+      - owner_backups:/app/owner/var/backups
+    # No `ports:` mapping to the host -- reachable only via the `proxy`
+    # service. Nothing should ever talk to gunicorn directly.
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             flask --app app:create_app seed-rbac &&
+             flask --app app:create_app seed-catalog &&
+             flask --app app:create_app seed-offline-policy &&
+             gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30
+                      --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200
+                      --access-logfile - --error-logfile - 'app:create_app()'"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - edge
+
+networks:
+  edge:
+    driver: bridge
+
+volumes:
+  owner_signing_keys:
+  owner_backups:
+  caddy_data:
+  caddy_config:

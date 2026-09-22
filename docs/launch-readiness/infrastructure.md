@@ -1,28 +1,25 @@
-# Infrastructure — measured state, 2026-08-20
+# Infrastructure — measured state, 2026-08-20 (the hosts measured here no longer exist)
 
-Everything here was measured on the live hosts, not inferred from config.
+Everything here was measured on the live hosts of the time, not inferred from
+config. **That hosting account has since been abandoned entirely** — access
+was revoked and both hosts were destroyed — so the inventory, IPs and cost
+figures below are historical record only, not a place to go back to. See
+`docs/ops/free-hosting-owner.md` for the current hosting plan.
 
-## Droplets
+## The AI assistant's actual topology (as it was)
 
-| Name | IP | Size | Runs |
-|---|---|---|---|
-| `aura-retail-demo` | 161.35.219.243 | 2 GB / 1 vCPU, fra1 | Owner CC **production** (`aura-owner`, gunicorn on 127.0.0.1:5551), `aura-retail`, `/opt/downloads` (APK + Windows ZIP), and a dept-nav review instance |
-| `aura-llm-demo` | 104.248.35.215 | 8 GB / 4 vCPU, fra1 | `ollama` behind `caddy`, **plus** a second dept-nav Owner instance and its Postgres |
-
-## The AI assistant's actual topology
-
-The desktop and Android assistants both call
-`https://104-248-35-215.sslip.io/api/generate`, which is Caddy on
-`aura-llm-demo` reverse-proxying `127.0.0.1:11434` (Ollama). Caddy gates it on
+At the time, the desktop and Android assistants both called a small hosted
+Ollama instance reverse-proxied through Caddy on port 11434. Caddy gated it on
 an `Authorization: Bearer …` match — which is why an unauthenticated probe
-returns **401, not a connection failure**. The service is healthy.
+returned **401, not a connection failure**; the service was healthy.
 
 Models present: `phi3.5:3.8b` (2.2 GB) and `phi3:mini` (2.2 GB).
 
-The bearer token is in `/etc/caddy/Caddyfile` on that droplet. It must match
-`AURA_AI_BEARER_TOKEN`, which is baked into the APK at build time.
+The bearer token lived on that host and had to match `AURA_AI_BEARER_TOKEN`,
+which is baked into the APK at build time. There is currently no AI endpoint
+for the app to point at.
 
-**Correction, 2026-08-30.** This paragraph used to end: *"Nothing in the build
+**Correction, 2026-08-30 (still true, independent of the host).** This paragraph used to end: *"Nothing in the build
 currently passes it, so a rebuilt APK gets 401 → 503 regardless of the app code
 being correct."* That is no longer true, and it was the most alarming sentence
 in this document, so it should not be left standing. `android/aura-retail/app/
@@ -41,30 +38,19 @@ its own consequence text — the licensing one is worth reading, because a blank
 there does not weaken licensing, it removes it, and the resulting APK is the
 product given away.
 
-## Cost — and a correction
+## Cost — historical
 
-Roughly **$60/month**: ~$12 for the 2 GB box, ~$48 for the 8 GB box.
-
-An earlier recommendation in this project was to downsize `aura-llm-demo` for
-savings. **That advice was wrong** — it is the LLM host, and downsizing to 2 GB
-would kill the AI assistant outright.
-
-Measured headroom on `aura-llm-demo`: 7941 MB total, **710 MB used**, 7230 MB
-available at idle. Ollama sits at ~39 MB RSS when idle and only pulls the model
-into memory to serve a request, so idle usage is misleadingly low — the number
-that matters is the ~2.2 GB model plus working memory during inference.
-
-So a **4 GB droplet (~$24/month, saving ~$24)** is plausible for `phi3.5:3.8b`
-with roughly 1.5 GB left for the OS, Caddy, Postgres and gunicorn. It is not
-generous: concurrent requests, or ever moving to a larger model, would not fit.
-Downsizing also **changes the droplet's IP**, which breaks the `sslip.io`
-hostname baked into `config.py:193` and therefore every already-installed
-client. That makes it a coordinated change, not a slider drag — do it before
-shipping installs, or not at all.
-
-Recommendation: leave it at 8 GB until launch traffic is understood. The saving
-is small relative to the risk of the assistant becoming the thing that is
-"not working" again.
+That host ran roughly $60/month total (~$12 for the 2 GB Owner box, ~$48 for
+the 8 GB AI box), with headroom measured at 7941 MB total / 710 MB used / 7230
+MB available at idle — Ollama sits at ~39 MB RSS when idle and only pulls the
+model into memory to serve a request, so idle usage understated the real
+number, which is the ~2.2 GB model plus working memory during inference. A
+smaller box was considered and rejected: it would have left too little margin
+for concurrent requests or a larger model, and resizing moves the host's IP,
+which breaks any DNS name baked into a shipped client — a coordinated change,
+not a slider drag, whichever host this ends up on. Current cost planning lives
+in `docs/owner/phase9r/production-cost-model.md` and
+`docs/ops/free-hosting-owner.md`.
 
 ## Model choice — the "better LLM, no more resources" question
 
@@ -74,8 +60,8 @@ different answers.
 
 **Stated up front, because this document's own convention is to separate
 measured from believed: none of the model-quality claims below were measured on
-this hardware.** Everything about droplet sizing, memory and cost above WAS
-measured on the live hosts. The comparison below is a recommendation to test,
+this hardware.** Everything about host sizing, memory and cost above WAS
+measured on the live hosts of the time. The comparison below is a recommendation to test,
 not a result. It would be settled by an afternoon: pull the candidate
 alongside the incumbent on the same box, run the same twenty real questions
 through both — including Arabic ones — and compare.
@@ -90,14 +76,14 @@ product ships an Arabic/RTL interface for the Jordanian market. A shopkeeper
 asking the assistant a question in Arabic is not an edge case for this product,
 it is the main case.
 
-This is the answer to the question as asked: same droplet, same memory, same
+This is the answer to the question as asked: same host, same memory, same
 $0 additional cost, `ollama pull` and a config change. **It is also the only
 option on this page that does not require a decision from anyone about data
 leaving the shop.** If only one thing is done, do this one.
 
 ### 2. The latency problem is not a model problem
 
-`aura-llm-demo` has 4 vCPU and no GPU, so every token is generated on CPU.
+The AI host had 4 vCPU and no GPU, so every token was generated on CPU.
 Roughly 30 seconds to a full answer is a property of that, not of which 3B
 model is loaded — a better 3B will answer better in about the same time. Nobody
 waits 30 seconds at a till. Whatever else happens, the assistant should not sit
@@ -106,9 +92,9 @@ in any path a cashier is blocked on.
 ### 3. Hosted, and why it is a decision rather than an optimisation
 
 A small hosted model would answer in one to three seconds instead of thirty,
-cost fractions of a cent per question, and remove the $48/month that the 8 GB
-droplet exists to pay for — cheaper AND faster AND better, on every axis this
-document can measure.
+cost fractions of a cent per question, and remove the recurring cost that a
+small dedicated AI host exists to pay for — cheaper AND faster AND better,
+on every axis this document can measure.
 
 **The axis it cannot measure is the one that decides it.** The assistant is
 retrieval-augmented: answering "how did we do last week" means sending real
@@ -123,41 +109,10 @@ two options above complementary rather than competing — the local model stays
 the floor for shops that will not send data out, and the hosted one is the
 upgrade for shops that will.
 
-**What this does NOT change:** downsizing or replacing the droplet still moves
-its IP, which still breaks the `sslip.io` hostname baked into `config.py` and
-therefore every already-installed client. That is a coordinated change, not a
-slider drag — the same caveat the cost section above records, and it applies
-just as much to switching the assistant off a droplet as to shrinking one.
-
-## Redundant deployments worth reconciling
-
-There are **two** dept-nav review instances:
-
-- `deptnav-161-35-219-243.sslip.io` on the retail droplet
-- `deptnav.104-248-35-215.sslip.io` on the LLM droplet (active since 2026-08-19)
-
-Since the dept-nav UI was merged into the production lineage and deployed to
-`owner.actionaura.me` on 2026-08-20, **both are now redundant**. Neither costs
-extra money — they fit inside droplets already paid for — but each runs a
-Postgres and a gunicorn, and each is another internet-facing login surface for
-a product that has not launched yet.
-
-**Decision, 2026-08-20 — owner's call: KEEP BOTH. Neither is to be retired.**
-
-Retiring the LLM-droplet instance was briefly considered and then explicitly
-reversed by the owner before anything was changed. Nothing was stopped,
-deleted, or reconfigured — the only commands run against it were read-only
-health probes. Recorded here so a later cleanup pass does not "helpfully"
-remove it: **`deptnav.104-248-35-215.sslip.io` stays.**
-
-Both instances cost no extra money — they fit inside droplets already paid
-for. The standing trade-off, for the record, is that each runs its own Postgres
-and gunicorn and is another internet-facing login surface for a product that
-has not launched yet; that is accepted.
-
-Note that the surviving review instance's database is on a **different Alembic
-graph** than production's, so it cannot be used to rehearse a production
-migration without being rebuilt first.
+**What this does NOT change:** any future host swap still moves the AI
+endpoint's address, which breaks whatever hostname is baked into a shipped
+client. That is a coordinated change, not a slider drag, on any host this
+ends up on.
 
 ## Deployments
 
@@ -188,7 +143,7 @@ does nothing.
 
 ## Development machine — leaked processes, measured 2026-08-20
 
-Not a droplet issue, but it belongs with the measured state because it is a
+Not a hosting issue, but it belongs with the measured state because it is a
 standing drag on the machine every build and test run shares.
 
 | PID pair | Started | What | CPU burned |
@@ -212,8 +167,7 @@ this has now accumulated across at least three separate days.
 
 ## Rollback points
 
-| What | Where |
-|---|---|
-| Owner CC production, pre-UI-deploy | `/opt/aura-owner.bak-20260820` on 161.35.219.243 |
-| Owner CC production, pre-Wave-2-deploy | `/opt/aura-owner.bak-20260820b` on 161.35.219.243 |
-| Previous published APK | `/opt/downloads/AuraRetail-2026-08-17.apk` |
+The pre-deploy backup paths recorded here (`/opt/aura-owner.bak-*`) lived on
+the host described at the top of this document, which no longer exists —
+there is nothing to roll back to on it today. Any future host needs its own
+rollback convention; see `docs/ops/free-hosting-owner.md`.

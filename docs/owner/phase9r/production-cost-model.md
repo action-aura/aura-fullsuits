@@ -10,7 +10,6 @@ planning estimate for the owner to decide against, per
 | Item | Option | Est. monthly cost (USD) |
 |---|---|---|
 | App server VPS (2 vCPU / 4 GB) | Hetzner CPX22/CX32-class | ~$8–10 |
-| App server VPS (2 vCPU / 4 GB) | DigitalOcean Basic Droplet, for comparison | ~$24 |
 | PostgreSQL | Self-managed on a second small VPS of similar spec | ~$8–10 |
 | PostgreSQL | Managed Postgres (provider-dependent, typically 2–4x self-managed) | ~$25–50+ |
 | Domain registration | Typical `.com`/`.io`-class TLD | ~$1–3/mo amortized (annual purchase, ~$12–40/yr) |
@@ -63,7 +62,6 @@ shows a concrete reason to.
 
 ## Sources
 
-- [DigitalOcean vs. Hetzner Cloud 2026](https://betterstack.com/community/guides/web-servers/digitalocean-vs-hetzner/)
 - [Hetzner Cloud Review 2026: pricing](https://betterstack.com/community/guides/web-servers/hetzner-cloud-review/)
 - [Backblaze cloud storage pricing](https://www.backblaze.com/cloud-storage/pricing)
 - [Backblaze B2 vs Amazon S3 pricing 2026](https://next3offload.com/blog/backblaze-b2-vs-amazon-s3/)

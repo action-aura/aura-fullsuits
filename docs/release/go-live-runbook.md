@@ -1,4 +1,4 @@
-# Go-live runbook — droplet bring-up and the first real rehearsal
+# Go-live runbook — Owner CC bring-up and the first real rehearsal
 
 Written 2026-08-30. Every command below was verified to EXIST in this repo
 (`owner/app/cli.py`) before being written here. What each does on the live host
@@ -18,24 +18,27 @@ than guessing. **Run it before anything else and after every change below.** It
 is designed to be run repeatedly and it names its own fixes in its output
 (e.g. *"Fix: 'flask seed-rbac'"*).
 
-All `flask` commands run on the droplet, from the Owner app directory, with the
-production environment loaded — the same environment gunicorn uses. Running them
-with the wrong env var set will configure the wrong database, silently.
+All `flask` commands run on whatever host runs Owner, from the Owner app
+directory, with the production environment loaded — the same environment
+gunicorn uses. Running them with the wrong env var set will configure the
+wrong database, silently.
 
 ---
 
-## Part 1 — the droplet
+## Part 1 — the Owner host
 
-Host: `aura-retail-demo`, 161.35.219.243 — Owner CC production (`aura-owner`,
-gunicorn on 127.0.0.1:5551), served at `owner.actionaura.me`.
+There is currently no hosted Owner CC install — the previous host is gone (see
+`docs/ops/free-hosting-owner.md` for the current hosting plan). Wherever Owner
+ends up running: `aura-owner` behind gunicorn on 127.0.0.1:5551, fronted by
+whatever domain is configured for it.
 
 ### 1.1 Diagnose
 
     flask commercial preflight
 
 Read the whole output. It checks RBAC seeding, signing-key health and
-role/permission drift. Two problems were recorded against this droplet
-previously and both are things preflight reports:
+role/permission drift. Two problems were recorded against the previous host
+and both are things preflight reports:
 
 * **RBAC was never seeded** — no genuine `is_super_admin` account.
 * **`trust_anchor.json` was stale** — the products verify licence assertions
@@ -210,8 +213,8 @@ ever consulted, because no account exists yet — so a probe that stops there ha
 measured authentication, not licensing.
 
 Still owed: step 4 (activation) needs a running Owner Control Center, and there
-is none — the DigitalOcean account is locked and `doctl compute droplet list`
-returns nothing. Steps 5 to 10, everything from pinning the branch through a
+is currently none — see `docs/ops/free-hosting-owner.md` for the current
+hosting plan. Steps 5 to 10, everything from pinning the branch through a
 two-device sale, have never been run anywhere.
 
 1. **Install** from the installer. Not from source.
@@ -283,6 +286,6 @@ line from the log is enough.
 * **`POST /api/admin/employees` carries no licence guard**, so staff can be
   created on a restricted licence. Logged as an audit item, not yet fixed.
 * **iOS needs a macOS host** that does not exist in this environment.
-* **The AI assistant** runs on a $48/month droplet at roughly 30 seconds per
+* **The AI assistant** runs on a $48/month host at roughly 30 seconds per
   answer, and is weakest at Arabic — the language that matters most here. See
   `docs/launch-readiness/infrastructure.md`.
