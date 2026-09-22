@@ -550,6 +550,11 @@ EXPECTED_READ_CAPABILITIES = {
     # route in this table (report_summary, daily_cash, aging_report), not a
     # till operation.
     'report_trial_balance': CAP_REPORTS,
+    # `report_profit_and_loss` (GET /reports/profit-and-loss) -- the income
+    # statement derived from the SAME general ledger `report_trial_balance`
+    # exposes just above it in retail_api.py. Identical disclosure tier:
+    # a full period's revenue/COGS/expense figures, not a till operation.
+    'report_profit_and_loss': CAP_REPORTS,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

@@ -1518,5 +1518,19 @@
   "Customer Balances (Subledger)": "Customer Balances (Subledger)",
   "Supplier Balances (Subledger)": "Supplier Balances (Subledger)",
   "Ties": "Ties",
-  "Does Not Tie": "Does Not Tie"
+  "Does Not Tie": "Does Not Tie",
+  "Profit and Loss": "Profit and Loss",
+  "Choose a start and end date.": "Choose a start and end date.",
+  "Gross Revenue": "Gross Revenue",
+  "Sales Returns": "Sales Returns",
+  "Cost of Goods Sold": "Cost of Goods Sold",
+  "Gross Margin": "Gross Margin",
+  "Operating Expenses": "Operating Expenses",
+  "No operating expenses recorded in this period.": "No operating expenses recorded in this period.",
+  "Net Profit": "Net Profit",
+  "Cost basis is incomplete for this period": "Cost basis is incomplete for this period",
+  "sale(s) affected": "sale(s) affected",
+  "These sales have no recorded cost of goods. Cost of goods sold is understated, and the gross profit and net profit shown below are overstated.": "These sales have no recorded cost of goods. Cost of goods sold is understated, and the gross profit and net profit shown below are overstated.",
+  "Nothing was posted in this period": "Nothing was posted in this period",
+  "No sale, return, purchase or expense was recorded in this date range. This is not a zero profit -- there is nothing to measure yet.": "No sale, return, purchase or expense was recorded in this date range. This is not a zero profit -- there is nothing to measure yet."
 }

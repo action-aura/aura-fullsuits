@@ -114,7 +114,12 @@ const GROUPS = [
   // surface. Insight for the same reason, and the same retail.reports gate,
   // as 'receivables'/'payables' directly above -- it is the one screen that
   // shows whether the GL agrees with the AR/AP subledger those two render.
-  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance'] },
+  // 'profit-and-loss' appended when schema v39's income statement got its
+  // own desktop surface -- same group, same retail.reports gate, as
+  // 'trial-balance' immediately before it: both read the identical GL this
+  // group's other members expose, one as a bare ledger and one as a derived
+  // statement.
+  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss'] },
   { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
@@ -305,13 +310,14 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  // 25 = dashboard + 24 grouped entries. Was 22 before AR/AP (receivables,
-  // payables) reached the desktop client, and 24 before schema v38's general
-  // ledger got its 'trial-balance' screen. The message and the number are
-  // bumped TOGETHER on purpose: this assertion exists to catch GROUPS drifting
-  // from the product, so a count that disagrees with its own prose is the
-  // exact failure it is supposed to make loud.
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 25, 'sanity: this file\'s own expectation list drifted from 25 destinations');
+  // 26 = dashboard + 25 grouped entries. Was 22 before AR/AP (receivables,
+  // payables) reached the desktop client, 24 before schema v38's general
+  // ledger got its 'trial-balance' screen, and 25 before schema v39's income
+  // statement got its 'profit-and-loss' screen. The message and the number
+  // are bumped TOGETHER on purpose: this assertion exists to catch GROUPS
+  // drifting from the product, so a count that disagrees with its own prose
+  // is the exact failure it is supposed to make loud.
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 26, 'sanity: this file\'s own expectation list drifted from 26 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

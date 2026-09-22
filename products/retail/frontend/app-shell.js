@@ -1006,6 +1006,18 @@ const SubsystemApp = {
         // inside the screen -- see _renderTrialBalance's identical single
         // capability check.
         { id: 'trial-balance', label: 'Trial Balance', icon: '💼', capability: 'retail.reports' },
+        // Schema v39's income statement (products/retail/backend/core/retail/
+        // financial_statements.py::income_statement), read off the same GL
+        // trial-balance immediately above already surfaces. GET
+        // /api/sub/retail/reports/profit-and-loss (retail_api.py,
+        // report_profit_and_loss) carries @mt_require_capability(CAP_REPORTS),
+        // matching `capability: 'retail.reports'` here for the identical
+        // reason every other Insight entry above already states. Shipped
+        // complete and gated with nothing in the frontend ever calling it --
+        // retail_route_reachability_test.py flagged /reports/profit-and-loss
+        // by name -- until subsystem-retail.js's _renderProfitAndLoss became
+        // its doorway.
+        { id: 'profit-and-loss', label: 'Profit and Loss', icon: '📈', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -1043,7 +1055,7 @@ const SubsystemApp = {
       navGroups: [
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },

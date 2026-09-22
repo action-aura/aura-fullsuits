@@ -1054,6 +1054,77 @@ const TRIAL_BALANCE = {
   },
 };
 
+/* GET /api/sub/retail/reports/profit-and-loss, schema v39's income statement
+ * (report_profit_and_loss in retail_api.py; core/retail/financial_
+ * statements.py::income_statement does the derivation off the same ledger
+ * TRIAL_BALANCE above already exercises).
+ *
+ * TWO fixtures, deliberately, rendered as TWO corpus screens below (the same
+ * "same route, two genuinely different surfaces" precedent 'dashboard'/
+ * 'cashier-landing' already use) -- because `cost_basis_incomplete` is a real
+ * COLOURED element (the honesty banner _renderProfitAndLoss paints in
+ * --state-danger-* tokens) that one fixture can only ever show ON or leave
+ * OFF, never both, and "off" is not a state with nothing to measure: it is
+ * the state every OTHER screen in this corpus already renders, and this one,
+ * uniquely, must not paint the warning colour into. A single fixture would
+ * leave one of those two states an untested rule, which is exactly the class
+ * of miss this whole file exists to refuse.
+ *
+ * PROFIT_AND_LOSS (company-wide, the default render) carries the warning ON:
+ * a mid-size month with returns, COGS, three expense accounts and four
+ * pre-v39 sales with no cost snapshot. PROFIT_AND_LOSS_CLEAN (one branch
+ * selected -- report_profit_and_loss's own `branch_id` scoping) carries it
+ * OFF: a smaller, fully cost-complete period. Both are internally consistent
+ * (revenue = gross_revenue - sales_returns, gross_profit = revenue - cogs,
+ * net_profit = gross_profit - operating_expenses.total), matching this
+ * file's own "real numbers, not arbitrary ones" convention for TRIAL_BALANCE
+ * above.
+ */
+const PROFIT_AND_LOSS = {
+  currency: 'JOD',
+  period: { start_date: '2026-09-01', end_date: '2026-09-22', branch_id: null },
+  gross_revenue: 16100.000,
+  sales_returns: 869.500,
+  revenue: 15230.500,
+  cost_of_goods_sold: 8420.000,
+  gross_profit: 6810.500,
+  gross_margin: 0.4472,
+  operating_expenses: {
+    total: 3120.750,
+    accounts: [
+      { code: '5100', name: 'Rent Expense', amount: 1800.000 },
+      { code: '5200', name: 'Utilities Expense', amount: 420.750 },
+      { code: '5300', name: 'Wages Expense', amount: 900.000 },
+    ],
+  },
+  net_profit: 3689.750,
+  has_activity: true,
+  cost_basis_incomplete: true,
+  cost_basis_incomplete_sale_count: 4,
+};
+
+const PROFIT_AND_LOSS_CLEAN = {
+  currency: 'JOD',
+  period: { start_date: '2026-09-01', end_date: '2026-09-22', branch_id: 1 },
+  gross_revenue: 5100.000,
+  sales_returns: 0,
+  revenue: 5100.000,
+  cost_of_goods_sold: 2800.000,
+  gross_profit: 2300.000,
+  gross_margin: 0.4510,
+  operating_expenses: {
+    total: 950.000,
+    accounts: [
+      { code: '5100', name: 'Rent Expense', amount: 600.000 },
+      { code: '5200', name: 'Utilities Expense', amount: 350.000 },
+    ],
+  },
+  net_profit: 1350.000,
+  has_activity: true,
+  cost_basis_incomplete: false,
+  cost_basis_incomplete_sale_count: 0,
+};
+
 /**
  * The response for a URL. Routed, because the screens below fan out across nine
  * endpoints and a single blanket payload would render every table as its EMPTY
@@ -1076,6 +1147,14 @@ function apiResponseFor(url) {
   // own comment above for why these particular numbers were chosen -- a real,
   // balanced, nine-posting ledger rather than arbitrary figures.
   if (/\/reports\/trial-balance/.test(u)) return ok(TRIAL_BALANCE);
+  // Schema v39's income statement. Branch-scoped (`&branch_id=`) gets the
+  // CLEAN fixture (cost_basis_incomplete: false); every other call -- the
+  // default company-wide render -- gets the one with the honesty banner ON.
+  // See the PROFIT_AND_LOSS/_CLEAN fixtures' own comment for why this is two
+  // fixtures rather than one.
+  if (/\/reports\/profit-and-loss/.test(u)) {
+    return ok(/branch_id=/.test(u) ? PROFIT_AND_LOSS_CLEAN : PROFIT_AND_LOSS);
+  }
   // Before the /products rule below for the same reason `top-products` is:
   // this URL contains no "products", but it WOULD fall through to the
   // catch-all, and STATS carries no `rows`/`pairs_examined` — which the Stock
@@ -1528,6 +1607,36 @@ async function buildCorpus() {
     screens.push(screenFrom(name, ctx, content.innerHTML));
   }
 
+  // Schema v39's income statement (app-shell.js nav entry under Insight,
+  // gated 'retail.reports' -- the identical gate trial-balance immediately
+  // above already carries). TWO renders of the SAME route, not one -- see the
+  // PROFIT_AND_LOSS/_CLEAN fixtures' own comment for why the honesty banner's
+  // ON and OFF states are both real, differently-coloured elements this
+  // corpus has to reach, the same "same route, two genuinely different
+  // surfaces" shape 'dashboard'/'cashier-landing' already use above.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderProfitAndLoss(content);
+    await settle();
+    screens.push(screenFrom('profit-and-loss', ctx, content.innerHTML));
+  }
+  // Same screen, one branch selected (report_profit_and_loss's own
+  // `branch_id` scoping) -- apiResponseFor() routes that to PROFIT_AND_LOSS_
+  // CLEAN, so the warning banner's ABSENCE is a real rendered state here too,
+  // not an inference from "the fixture didn't set the flag".
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderProfitAndLoss(content);
+    await settle();
+    const branchEl = ctx.els['pnl-branch'];
+    if (branchEl) branchEl.value = '1';
+    await ctx.RetailSystem._loadProfitAndLoss();
+    await settle();
+    screens.push(screenFrom('profit-and-loss-clean', ctx, content.innerHTML));
+  }
+
   // ── The three modals. The dark `.ret-modal` island and everything inside it
   //    (its fields, its <option>s, its wide invoice table) is a large family of
   //    colour rules that NO amount of list-screen rendering reaches, and the
@@ -1768,6 +1877,12 @@ const DECLARED_SCREENS = [
   // immediately after 'payables' because that is where buildCorpus() renders
   // it.
   'trial-balance',
+  // Schema v39 income statement -- same route rendered TWICE, like
+  // 'dashboard'/'cashier-landing' at the top of this list, because the
+  // cost_basis_incomplete honesty banner is ON in one render and OFF in the
+  // other (see buildCorpus()'s own comment on these two blocks). Listed in
+  // BUILD order, immediately after 'trial-balance'.
+  'profit-and-loss', 'profit-and-loss-clean',
   'customer-modal', 'sale-modal', 'held-sales-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
@@ -1826,6 +1941,10 @@ const SCREEN_ROUTES = {
   receivables: 'receivables',
   payables: 'payables',
   'trial-balance': 'trial-balance',
+  // Same route rendered twice -- see the 'cashier-landing': 'dashboard'
+  // precedent immediately above SCREEN_ROUTES' first entry.
+  'profit-and-loss': 'profit-and-loss',
+  'profit-and-loss-clean': 'profit-and-loss',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.

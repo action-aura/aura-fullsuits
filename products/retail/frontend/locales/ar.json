@@ -1518,5 +1518,19 @@
   "Customer Balances (Subledger)": "أرصدة العملاء (الدفتر المساعد)",
   "Supplier Balances (Subledger)": "أرصدة الموردين (الدفتر المساعد)",
   "Ties": "متطابق",
-  "Does Not Tie": "غير متطابق"
+  "Does Not Tie": "غير متطابق",
+  "Profit and Loss": "الأرباح والخسائر",
+  "Choose a start and end date.": "اختر تاريخ البدء وتاريخ الانتهاء.",
+  "Gross Revenue": "إجمالي الإيرادات",
+  "Sales Returns": "مرتجعات المبيعات",
+  "Cost of Goods Sold": "تكلفة البضاعة المباعة",
+  "Gross Margin": "هامش الربح الإجمالي",
+  "Operating Expenses": "المصروفات التشغيلية",
+  "No operating expenses recorded in this period.": "لا توجد مصروفات تشغيلية مسجّلة في هذه الفترة.",
+  "Net Profit": "صافي الربح",
+  "Cost basis is incomplete for this period": "أساس التكلفة غير مكتمل لهذه الفترة",
+  "sale(s) affected": "عملية بيع متأثرة",
+  "These sales have no recorded cost of goods. Cost of goods sold is understated, and the gross profit and net profit shown below are overstated.": "لا تحمل عمليات البيع هذه أي تكلفة مسجّلة للبضاعة، لذلك فإن تكلفة البضاعة المباعة أقل من الواقع، وإجمالي الربح وصافي الربح الموضّحان أدناه أعلى من الواقع الفعلي.",
+  "Nothing was posted in this period": "لم يتم ترحيل أي شيء في هذه الفترة",
+  "No sale, return, purchase or expense was recorded in this date range. This is not a zero profit -- there is nothing to measure yet.": "لم يتم تسجيل أي عملية بيع أو إرجاع أو شراء أو مصروف خلال هذا النطاق الزمني. هذا لا يعني ربحًا صفريًا -- فلا يوجد بعد ما يمكن قياسه."
 }

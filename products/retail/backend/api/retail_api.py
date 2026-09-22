@@ -145,6 +145,14 @@ from core.retail import returns_settlement
 # STRUCTURALLY", for why it is called inside each route's own transaction
 # rather than isolated the way those two hooks deliberately are.
 from core.retail import general_ledger as gl
+# The income-statement (profit and loss) presentation layer over the SAME
+# ledger `gl` posts to above -- a separate module (not more functions on
+# `gl`) because general_ledger.py's own docstring scopes itself to posting
+# and a bare trial balance; a P&L is a presentation/derivation layer on top,
+# matching the "NOT BUILT -- a presentation layer over the ledger is a
+# later, unclaimed wave" note on `trial_balance`'s own docstring. See that
+# module's own docstring for the full design.
+from core.retail import financial_statements as fin_statements
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -10863,6 +10871,59 @@ def report_trial_balance():
     subledger = gl.subledger_tie(conn, cid, tb)
     conn.close()
     data = dict(tb, subledger=subledger)
+    return jsonify({'success': True, 'data': data})
+
+# core/retail/financial_statements.py exposed read-only, the same wave and
+# the same reasoning report_trial_balance's own comment gives just above:
+# the ledger is correct and posted-to on every money-path route, but
+# invisible to a user until a route reads it back. `?branch_id=` goes
+# through `_coerce_branch_id_for_scope` -- the SAME multi-branch-scope
+# coercion `report_summary`/`dashboard_stats`/etc. already use -- so a
+# scoped caller cannot probe another branch's numbers by guessing an id.
+@retail_bp.route('/reports/profit-and-loss', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def report_profit_and_loss():
+    """`?start_date=`/`?end_date=` (both required, 'YYYY-MM-DD', BOTH ENDS
+    INCLUSIVE) and an optional `?branch_id=`. Unlike `report_trial_balance`
+    above (company-wide, all time, by design -- v38 shipped no date/branch
+    filtering on the bare ledger), a profit and loss statement is
+    meaningless without a period, so there is no default range here: a
+    missing or malformed date is refused with a 400, never silently
+    defaulted to "today" or "all time" -- see `fin_statements.
+    StatementPeriodError` and this route's own validation below.
+
+    `branch_id`, if given, must parse as an integer -- refused with a 400
+    otherwise, same posture. Passed through `_coerce_branch_id_for_scope`
+    BEFORE being handed to `income_statement`, so a scoped caller always
+    gets their own branch back regardless of what (if anything) they asked
+    for, exactly like every other branch-filterable report route.
+    """
+    cid = _cid()
+    start_date = request.args.get('start_date', '').strip()
+    end_date = request.args.get('end_date', '').strip()
+
+    raw_branch = request.args.get('branch_id', '').strip()
+    branch_id = None
+    if raw_branch:
+        try:
+            branch_id = int(raw_branch)
+        except ValueError:
+            return jsonify({'status': 'error',
+                             'message': f'Invalid branch_id {raw_branch!r} -- must be an integer.'}), 400
+
+    conn = get_retail_conn()
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
+    try:
+        data = fin_statements.income_statement(conn, cid, start_date, end_date, branch_id=branch_id)
+    except fin_statements.StatementPeriodError as exc:
+        conn.close()
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    conn.close()
     return jsonify({'success': True, 'data': data})
 
 def _render_report_email_body(data, currency):

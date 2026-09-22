@@ -438,6 +438,15 @@ const RetailSystem = {
       // subledger tie-back, not the bare balances, is the point of the
       // screen.
       case 'trial-balance': return this._renderTrialBalance(c);
+      // Schema v39's income statement, GL-derived (retail_api.py's
+      // report_profit_and_loss, core/retail/financial_statements.py::
+      // income_statement). retail_route_reachability_test.py flagged
+      // /reports/profit-and-loss as reachable by no shipped client -- this
+      // screen (and app-shell.js's nav entry beside 'trial-balance') is the
+      // doorway. See _renderProfitAndLoss below for the capability gate and
+      // for the two honesty flags (cost_basis_incomplete, has_activity) the
+      // route was built to carry.
+      case 'profit-and-loss': return this._renderProfitAndLoss(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -14160,6 +14169,284 @@ const RetailSystem = {
   },
   _glAccountTypeLabel(type) {
     return t(this._TRIAL_BALANCE_TYPE_LABEL[type] || 'Other');
+  },
+
+  // ── GENERAL LEDGER: PROFIT AND LOSS (schema v39, 2026-09-22) ────────────────
+  //
+  // core/retail/financial_statements.py::income_statement reads the same GL
+  // _renderTrialBalance above already surfaces, and derives a real income
+  // statement from it (retail_api.py's report_profit_and_loss, GET
+  // /api/sub/retail/reports/profit-and-loss) -- shipped complete and gated
+  // with nothing in this file ever calling it, exactly the "doorway" shape
+  // trial-balance/receivables/payables/cheques/transfers were before their
+  // own screens. This is that doorway.
+  //
+  // TWO HONESTY FLAGS ride the response, and they are the reason this screen
+  // exists rather than a bare table:
+  //
+  //   cost_basis_incomplete -- true when any sale in the period has a line
+  //   with NO recorded cost (sale_items.unit_cost = 0 -- pre-v39 history, or
+  //   a product that has never been received against). cost_of_goods_sold is
+  //   then UNDERSTATED and gross_profit/net_profit are OVERSTATED -- see
+  //   financial_statements.py's own module docstring, point 5. A shopkeeper
+  //   reading an inflated profit with no warning is the exact failure that
+  //   flag exists to prevent, so it is disclosed as its own visible banner
+  //   above the statement, never a tooltip or a footnote.
+  //
+  //   has_activity -- false when NOT ONE revenue/expense account moved in the
+  //   period. Rendered as "nothing was posted", never as a row of zeros --
+  //   zero profit and no data are different answers to the question a
+  //   shopkeeper is asking, and a screen that cannot tell them apart is lying
+  //   by omission on a slow day.
+  //
+  // Same structural precedent as _renderTrialBalance immediately above: a
+  // `_render...` that draws the skeleton (plus this screen's own period/
+  // branch controls, which trial-balance has none of -- see report_profit_
+  // and_loss's own docstring: unlike the bare ledger, a P&L is meaningless
+  // without a period) and a `_load...` that repaints it in place.
+  async _renderProfitAndLoss(c) {
+    this._injectStyles();
+    // Same defence-in-depth every other retail.reports screen in this file
+    // carries (see _renderTrialBalance's identical guard immediately above)
+    // -- hiding the nav entry (app-shell.js) is not the enforcement.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: 'trending-up',
+        title: t('Profit and Loss'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+
+    // Default period: MONTH-TO-DATE (the 1st of the current calendar month
+    // through today), not a rolling N-day window like the lightweight Reports
+    // KPI strip (_renderReports' #rep-days). A profit and loss statement is
+    // conventionally read as "this month so far" by the person it is for --
+    // an accountant or a shopkeeper closing their books -- and a calendar
+    // boundary is what makes one P&L comparable to the same shop's own prior
+    // month, which a trailing 30-day window is not (it drifts across month
+    // boundaries and never lines up with anything else the shop files).
+    const today = new Date();
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const toISO = (d) => d.toISOString().slice(0, 10);
+
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title"><span aria-hidden="true">${this._icon('trending-up', 18, '📈')}</span> <span>${t('Profit and Loss')}</span></h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <select id="pnl-branch" class="ret-input" onchange="RetailSystem._loadProfitAndLoss()">
+            <option value="">${this._esc(t('All branches'))}</option>
+          </select>
+          <input type="date" id="pnl-from" class="ret-input" value="${toISO(monthStart)}"
+            title="${this._esc(t('From'))}" onchange="RetailSystem._loadProfitAndLoss()" />
+          <input type="date" id="pnl-to" class="ret-input" value="${toISO(today)}"
+            title="${this._esc(t('To'))}" onchange="RetailSystem._loadProfitAndLoss()" />
+        </div>
+      </div>
+      <!-- Seeded empty, filled by _loadProfitAndLoss() -- the cost-basis
+           banner is its own region so it can be cleared independently of the
+           statement body below it (a re-load with a clean period must not
+           leave a stale warning from the previous one on screen). -->
+      <div id="pnl-warning"></div>
+      <div class="sub-chart-card" id="pnl-body" style="margin-bottom:16px">
+        <div style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</div>
+      </div>`;
+    // Belt-and-suspenders alongside the `value="..."` attributes just
+    // written: _loadProfitAndLoss() below reads these two inputs SYNCHRONOUSLY
+    // on this very first render (unlike _renderReports' #rep-days, which is
+    // only ever read after a later onchange), so the default period has to be
+    // a real, readable `.value` the moment it runs, not merely an attribute a
+    // parser will eventually reflect onto one.
+    const fromEl = document.getElementById('pnl-from');
+    const toEl = document.getElementById('pnl-to');
+    if (fromEl) fromEl.value = toISO(monthStart);
+    if (toEl) toEl.value = toISO(today);
+    await this._loadPnlBranchFilter();
+    await this._loadProfitAndLoss();
+  },
+
+  // GET /api/sub/retail/branches, populating #pnl-branch. Deliberately its
+  // own small function rather than generalizing _renderReports'
+  // _loadBranchFilterOptions (which is hardcoded to #rep-branch) -- the same
+  // "one small query duplicated rather than a cross-screen coupling"
+  // reasoning financial_statements.py's own module docstring gives for
+  // duplicating _resolve_currency/_epsilon from general_ledger.py instead of
+  // importing them.
+  async _loadPnlBranchFilter() {
+    try {
+      const branches = (await this._get('/api/sub/retail/branches')).data || [];
+      const sel = document.getElementById('pnl-branch');
+      if (!sel) return;
+      sel.innerHTML = `<option value="">${this._esc(t('All branches'))}</option>` +
+        branches.map(b => `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
+    } catch (e) { console.error('Failed to load branches for P&L filter', e); }
+  },
+
+  async _loadProfitAndLoss() {
+    // Per-operation reload guard, same mechanism/reasoning _loadReports'
+    // opToken carries: changing the period or branch never navigates away
+    // from this screen, so an older selection's response landing after a
+    // newer one's is a real hazard here too -- these are real revenue
+    // figures, not a chart tick.
+    const opToken = this._beginOp('profit-and-loss');
+    const fromEl = document.getElementById('pnl-from');
+    const toEl = document.getElementById('pnl-to');
+    const branchEl = document.getElementById('pnl-branch');
+    const startDate = fromEl ? fromEl.value : '';
+    const endDate = toEl ? toEl.value : '';
+    const branchId = branchEl ? branchEl.value : '';
+    const body = document.getElementById('pnl-body');
+    const warnEl = document.getElementById('pnl-warning');
+
+    // report_profit_and_loss requires both dates (StatementPeriodError -> a
+    // 400 with no default range -- see that route's own docstring) --
+    // refused client-side for the same reason _loadSalesHistory never sends
+    // a date bound it already knows a cashier will be refused: don't ask the
+    // server for a request whose answer is already known.
+    if (!startDate || !endDate) {
+      if (body) body.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:30px">${t('Choose a start and end date.')}</div>`;
+      if (warnEl) warnEl.innerHTML = '';
+      return;
+    }
+
+    try {
+      const branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
+      const resp = await this._get(
+        `/api/sub/retail/reports/profit-and-loss?start_date=${encodeURIComponent(startDate)}` +
+        `&end_date=${encodeURIComponent(endDate)}${branchQS}`
+      );
+      if (this._isStaleOp('profit-and-loss', opToken)) return;
+
+      // A validation refusal (StatementPeriodError -> 400, e.g. a manually
+      // typed start_date after end_date) resolves normally -- it does NOT
+      // throw -- and carries no `data` key, only {status:'error', message}.
+      // Reading `resp.data || {}` on that envelope would silently resolve to
+      // {}, and `{}.has_activity` is undefined, i.e. falsy -- which this
+      // screen's OWN empty-period branch below would then render as "nothing
+      // was posted in this period". That is a refusal rendered as a true
+      // statement about the shop's books, the exact class of miss
+      // retail_attribution_i18n_test.py's Sales History cases (elsewhere in
+      // this file) were written to catch -- so the refusal is read and shown
+      // BEFORE anything touches data.has_activity.
+      if (resp && resp.status === 'error') {
+        if (body) body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">${this._esc(resp.message) || t('Could not load this list. Check the connection and try again.')}</div>`;
+        if (warnEl) warnEl.innerHTML = '';
+        return;
+      }
+
+      const data = resp.data || {};
+
+      // ── The cost-basis honesty banner -- always re-set, never left stale
+      // from a previous, dirtier period (see the container comment above).
+      if (warnEl) {
+        warnEl.innerHTML = data.cost_basis_incomplete
+          ? `<div style="background:var(--state-danger-surface);color:var(--state-danger-text);` +
+            `border:1px solid var(--state-danger-border);border-radius:10px;padding:14px 16px;margin-bottom:16px" role="alert">
+              <div style="font-weight:700;margin-bottom:6px">${t('Cost basis is incomplete for this period')}</div>
+              <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+                <span style="font-size:20px;font-weight:800">${this._fmtNum(data.cost_basis_incomplete_sale_count)}</span>
+                <span>${t('sale(s) affected')}</span>
+              </div>
+              <div style="font-size:13px;line-height:1.6">${t('These sales have no recorded cost of goods. Cost of goods sold is understated, and the gross profit and net profit shown below are overstated.')}</div>
+            </div>`
+          : '';
+      }
+
+      if (!body) return;
+
+      // has_activity === false: "nothing was posted", never a row of zeros --
+      // see the section comment above _renderProfitAndLoss for why those are
+      // different claims. Rendered as its own state, matching
+      // _renderTrialBalance's "No accounts posted yet" empty state
+      // immediately above in this file, not folded into the statement below
+      // with every figure defaulted to 0.
+      if (!data.has_activity) {
+        body.innerHTML = this._emptyState({
+          icon: 'trending-up',
+          title: t('Nothing was posted in this period'),
+          hint: t('No sale, return, purchase or expense was recorded in this date range. This is not a zero profit -- there is nothing to measure yet.'),
+        });
+        return;
+      }
+
+      // gross_margin is `null`, never 0.0, when revenue is not meaningfully
+      // nonzero (income_statement's own divide-by-zero guard) -- a 0.0
+      // margin would read as "broke even on every unit sold", a different
+      // claim from "no revenue to measure a margin against". Rendered as an
+      // em dash, matching every other "no meaningful figure" placeholder in
+      // this file (_loadTrialBalance's totals before the fetch resolves).
+      const marginText = (data.gross_margin === null || data.gross_margin === undefined)
+        ? '—'
+        : `${(data.gross_margin * 100).toFixed(1)}%`;
+
+      const opexAccounts = (data.operating_expenses && data.operating_expenses.accounts) || [];
+      // Every interpolated account name is escaped and its code bdi'd, same
+      // convention _loadTrialBalance's own account rows use immediately
+      // above in this file -- an expense account is shop-editable data like
+      // a customer/supplier name and could arrive from another device over
+      // the sync relay (see that screen's own comment for the full
+      // reasoning).
+      const opexRows = opexAccounts.map(a => `<tr>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>
+        <td style="font-weight:600">${this._esc(a.name)}</td>
+        <td>${this._fmt(a.amount)}</td>
+      </tr>`).join('');
+      const opexTotal = (data.operating_expenses && data.operating_expenses.total) || 0;
+      const opexBlock = opexRows
+        ? `<table class="ret-table"><thead><tr><th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Amount')}</th></tr></thead>
+            <tbody>${opexRows}
+              <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td>${this._fmt(opexTotal)}</td></tr>
+            </tbody></table>`
+        : `<div style="color:var(--text-muted);padding:8px 0">${t('No operating expenses recorded in this period.')}</div>`;
+
+      // Statement order, top to bottom, the order an accountant reads one:
+      // revenue (its gross/returns components shown, then the net figure a
+      // trial-balance-style dashed rule sets off), cost of goods sold, gross
+      // profit with its margin, operating expenses broken out by account,
+      // and net profit -- visually the loudest figure on the screen, the
+      // literal answer to "did we make money", matching the emphasis
+      // _viewSale's own subtotal/tax/Total column gives its bottom line
+      // (border-top, larger weight) but carried further here because this
+      // number is the entire point of the screen rather than one line in a
+      // receipt.
+      body.innerHTML = `
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px">
+          <span style="color:var(--text-muted)">${t('Gross Revenue')}</span>
+          <span style="color:var(--text-money)">${this._fmt(data.gross_revenue)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px">
+          <span style="color:var(--text-muted)">${t('Sales Returns')}</span>
+          <span style="color:var(--text-money-negative)">-${this._fmt(data.sales_returns)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:15px;font-weight:700;border-top:1px dashed var(--border-default);margin-top:4px">
+          <span style="color:var(--text-primary)">${t('Revenue')}</span>
+          <span>${this._money(data.revenue)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;margin-top:10px">
+          <span style="color:var(--text-muted)">${t('Cost of Goods Sold')}</span>
+          <span style="color:var(--text-money-negative)">-${this._fmt(data.cost_of_goods_sold)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;font-size:16px;font-weight:700;border-top:1px dashed var(--border-default);margin-top:4px">
+          <span style="color:var(--text-primary)">${t('Gross Profit')}</span>
+          <span>${this._money(data.gross_profit, data.gross_profit > 0 ? 'money--positive' : '')}
+            <span style="font-size:12px;font-weight:400;color:var(--text-muted)">${t('Gross Margin')} ${marginText}</span></span>
+        </div>
+        <div style="margin:20px 0 8px;font-weight:600;color:var(--text-primary)">${t('Operating Expenses')}</div>
+        ${opexBlock}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;margin-top:16px;border-top:2px solid var(--border-default);border-radius:8px;background:var(--surface-active);font-size:20px;font-weight:800">
+          <span style="color:var(--text-primary)">${t('Net Profit')}</span>
+          <span>${this._money(data.net_profit, data.net_profit > 0 ? 'money--positive' : '')}</span>
+        </div>`;
+    } catch (e) {
+      // VISIBLE failure, matching _loadTrialBalance's identical fix
+      // immediately above in this file.
+      console.error(e);
+      if (this._isStaleOp('profit-and-loss', opToken)) return;
+      if (body) {
+        body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
+          ${t('Could not load this list. Check the connection and try again.')}</div>`;
+      }
+      if (warnEl) warnEl.innerHTML = '';
+    }
   },
 };
 
