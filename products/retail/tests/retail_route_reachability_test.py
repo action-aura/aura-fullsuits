@@ -59,15 +59,34 @@ ANDROID_NET_GLOB = str(
 #: forced and recorded.
 INTENTIONALLY_UNREACHABLE = {
     # ── Deferred in writing, with the commit that deferred them ──────────────
-    'modifier-groups':
-        'The modifier CONFIG API (schema v26, commit 3596d35). That commit says '
-        'plainly that the POS picker screen and the cart merge-key rework were '
-        'cut to protect the money path, and that the API is complete so a '
-        'screen can consume it whenever it is scheduled. Deferred deliberately '
-        'and in writing, which is the difference between this and the five '
-        'accidents above.',
+    # 'modifier-groups' (schema v26, commit 3596d35 -- the modifier CONFIG
+    # API) is REMOVED from this dict: the till's own picker
+    # (RetailSystem._openModifierPicker, subsystem-retail.js) now calls
+    # `GET /products/<id>/modifier-groups`, and the cart merge-key rework
+    # that commit also deferred landed alongside it (_cartLineKey). Every
+    # OTHER route whose longest literal segment is 'modifier-groups' --
+    # including the admin CRUD routes (create/update/delete a group, attach/
+    # detach a product) -- shares this search key by construction (see
+    # _search_key's own docstring on why the key is the longest literal
+    # segment, not the full path), so this heuristic now reads all of them
+    # as reached even though only the till's GET is actually wired to a
+    # client. That is a known imprecision in the heuristic itself, not a
+    # claim that a modifier-admin Settings screen was built here -- it was
+    # not; see 'modifier-options' below for the entry that still needs one.
     'modifier-options':
-        'Same wave and same deferral as modifier-groups.',
+        'PATCH/DELETE /modifier-options/<id> -- editing or deactivating one '
+        'already-created option. Still genuinely unreachable: this wave '
+        '(the POS picker, subsystem-retail.js) only ever READS options, '
+        'nested inside GET /products/<id>/modifier-groups -- it never '
+        'edits or deletes one, and no Settings screen for authoring '
+        'modifier groups/options exists yet on either client (grep '
+        'confirms zero references to "modifier" in app-shell.js and only '
+        'this wave\'s own POS code in subsystem-retail.js). Building that '
+        'admin screen was out of scope for the till-side wave that closed '
+        '\'modifier-groups\' above; when it lands, POST /modifier-groups/'
+        '<id>/options (create) is covered by the SAME "modifier-groups" '
+        'search key and will need no entry of its own, but these two '
+        'routes will.',
 
     # ── Genuinely reachable only from elsewhere ─────────────────────────────
     'demo-seed':

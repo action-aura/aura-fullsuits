@@ -2935,6 +2935,12 @@ const RetailSystem = {
            saved" figure reads anywhere else money is shown positive. */
         .pos-price-orig { text-decoration:line-through;color:var(--text-tertiary, var(--text-dim));margin-inline-end:4px; }
         .pos-promo-tag { display:flex;align-items:center;gap:4px;color:var(--state-success-text);font-size:11px;font-weight:600;margin-block-start:2px; }
+        /* Restaurant modifiers, wave 2 (the till side -- schema v26's config
+           API shipped without this; see retail_route_reachability_test.py's
+           former 'modifier-groups' INTENTIONALLY_UNREACHABLE entry). Only
+           rendered when a line carries a non-empty modifiers array (see
+           _renderCart) -- an unmodified line's .pos-item-meta is untouched. */
+        .pos-item-modifiers { color:var(--text-dim);font-size:11px;line-height:1.4;margin-block-start:2px; }
         /* High-frequency zone: quantity stepper + the line's money. */
         .pos-line-freq { display:flex;align-items:center;gap:12px;flex-shrink:0; }
         /* PHONE: let the row wrap so the name gets a line of its own.
@@ -3399,6 +3405,14 @@ const RetailSystem = {
       </div>`;
 
     this._cart = [];
+    // Restaurant modifiers, wave 2 (the till side). Per-product cache of
+    // GET /products/<id>/modifier-groups results, keyed by product_id --
+    // reset on every POS (re)mount, same as _cart/_promotions below, so a
+    // group/option edited in Settings mid-session is never served stale
+    // to the next sale. undefined (key absent) means "not yet checked this
+    // session"; an explicit [] means "checked, has none" -- _addToCart
+    // relies on that distinction to only fetch once per product.
+    this._modifierGroupsByProduct = {};
     this._paymentMethod = 'cash';
     this._activeCat = null;
     // Promotions wave 1 (ROADMAP.md "retail schema v23"). Reset synchronously
@@ -3983,6 +3997,55 @@ const RetailSystem = {
     }
   },
 
+  // Restaurant modifiers, wave 2 -- the till side (schema v26 shipped the
+  // config API only; see retail_route_reachability_test.py's former
+  // INTENTIONALLY_UNREACHABLE entries for the two modifier route groups,
+  // which named this exact screen as the deferred work). Deliberately not
+  // spelling either entry's own search key as one hyphenated word in this
+  // comment -- retail_route_reachability_test.py treats that literal as
+  // proof a client calls it, and a code comment is not a caller.
+  //
+  // STAYS FULLY SYNCHRONOUS, deliberately -- unchanged from wave 2's own
+  // constraint. Dozens of existing tests across this suite
+  // (retail_surface_pos_test.js, retail_pos_scale_test.js,
+  // retail_promotions_ui_test.js, ... -- grep `_addToCart(` under
+  // products/retail/tests/) call this directly and assert on `this._cart`
+  // the very next line, with no `await` and often with `fetch` stubbed to
+  // REJECT ("no network in this test"). Making this an `async function`,
+  // even correctly, would have silently broken every one of them --
+  // measured, not assumed: that was the first cut of wave 2, and
+  // retail_surface_pos_test.js went from 12/12 to 10/12 with the two
+  // failures ("scan field regains focus", "destructive controls not
+  // adjacent") both downstream of _addToCart never reaching _renderCart()
+  // because its `fetch` stub rejects by design. Still true today, and still
+  // why the function below is not `async` -- only what happens once a
+  // modifier product is KNOWN to need the picker changed.
+  //
+  // THE COLD-START HOLE THIS CLOSES ("modifier picker cold-start fix"):
+  // wave 2 shipped with no way to know, from list_products'/lookup_product's
+  // response alone, whether a product carries modifier groups -- so a
+  // product's FIRST tap each session committed a bare line, and a
+  // background probe flagged the mismatch AFTER the fact ("Coffee: has
+  // options -- remove this line and tap it again to choose"). On a till
+  // with a queue that is the wrong trade: a cashier should never have to
+  // undo a line because the software had not looked something up yet.
+  // `has_modifiers` (retail_api.py's EXISTS subquery, added to
+  // list_products/lookup_product/list_product_variants) closes it -- the
+  // product object already carries the answer by the time a tile exists to
+  // tap, so this function decides synchronously and the picker opens on the
+  // very first tap of a modifier product, exactly like every later one.
+  // `_addToCart` itself still never returns a Promise and never awaits
+  // anything -- only the picker's OWN population (when this session's first
+  // tap of THIS modifier product has not fetched its actual group/option
+  // data yet) happens after an async gap, the identical shape
+  // `_openVariantPicker` already uses for a picker whose options are not
+  // yet known. Nothing is EVER committed to the cart without going through
+  // a picker a product is known to need, so there is no longer a line to
+  // undo.
+  //
+  // Returns `true` when a line was committed to the cart on THIS call,
+  // `false` when the tap opened (or is opening) the picker instead --
+  // _posScan reads this to decide whether "Added: X" is true yet.
   _addToCart(productId) {
     // this._products is only ever ONE page/search batch (see
     // _renderPOSGrid), so a product reached by SCAN -- or a search result
@@ -3991,15 +4054,103 @@ const RetailSystem = {
     // page loads, search results, and single-product scan lookups alike.
     const p = (this._products || []).find(x => x.id === productId) ||
               (this._productsById && this._productsById[productId]);
-    if (!p) return;
+    if (!p) return false;
     // Consumes and clears the pending keyboard-shortcut quantity multiplier
     // (see _onPOSShortcut / "3*") in the SAME step it is read, so it can
-    // never survive to apply to a later, unrelated add -- e.g. "3*" meant
-    // for one product silently multiplying the next unrelated scan too.
-    // Defaults to 1, so a plain tap/scan with no multiplier armed is
-    // byte-for-byte the old behaviour.
+    // never survive to apply to a later, unrelated add. Defaults to 1, so a
+    // plain tap/scan with no multiplier armed is byte-for-byte the old
+    // behaviour.
     const qty = this._consumePendingQty();
-    const existing = this._cart.find(i => i.product_id === productId);
+    // Several existing test harnesses drive _addToCart directly against a
+    // bare RetailSystem object that never went through _renderPOS's mount
+    // (see that method's own "at mount, same as _cart above" comment) --
+    // defensive init here for the identical reason this._cart/_promotions
+    // are read with `|| []` throughout this file.
+    if (!this._modifierGroupsByProduct) this._modifierGroupsByProduct = {};
+
+    if (!p.has_modifiers) {
+      // The list/lookup/variant route already told us this product carries
+      // no LIVE modifier group -- commit directly, unconditionally, on
+      // every single call. No cache check, no fetch: a plain product's
+      // tap-to-cart is unconditionally one synchronous step, identical to
+      // every tap before wave 2, on every single call, not merely the
+      // common case.
+      this._commitCartLine(p, qty, [], []);
+      return true;
+    }
+
+    const cached = this._modifierGroupsByProduct[productId];
+    if (Array.isArray(cached)) {
+      // Already resolved earlier THIS session (a later tap of the same
+      // product) -- open immediately, no fetch.
+      this._openModifierPicker(p, cached, qty);
+      return false;
+    }
+    // KNOWN to have modifier groups (has_modifiers) but the actual
+    // group/option data has not been fetched yet this session. Open the
+    // picker as soon as it resolves -- never commit a line that might be
+    // missing its modifiers, which is exactly the hole this closes. A
+    // second tap while the SAME fetch is still in flight reuses the one
+    // in-flight promise (see _fetchModifierGroups) rather than firing a
+    // redundant request.
+    const inflight = (cached && typeof cached.then === 'function')
+      ? cached
+      : this._fetchModifierGroups(productId);
+    inflight.then((groups) => this._openModifierPicker(p, groups, qty)).catch(() => {
+      // Best-effort: a failed fetch means the tap silently opened nothing.
+      // Nothing was ever committed, so there is no line to undo -- tapping
+      // again retries (_fetchModifierGroups' own catch clears the cache
+      // back to `undefined` on failure, rather than leaving a rejected
+      // promise permanently cached).
+    });
+    return false;
+  },
+
+  // The actual `GET /products/<id>/modifier-groups` fetch, factored out of
+  // _addToCart so a concurrent second tap of the same product (while the
+  // first fetch is still in flight) can be told apart from a first tap that
+  // needs to start one. Stores the in-flight PROMISE itself in the cache
+  // (not `undefined`), synchronously, before any `await`/microtask
+  // boundary, so a second caller for the SAME product sees a non-`undefined`
+  // entry and reuses this exact promise instead of firing a second request.
+  // On success the cache is replaced with the resolved ARRAY (so the next
+  // tap this session opens the picker with no fetch at all); on failure the
+  // cache is cleared back to `undefined` (not left holding a rejected
+  // promise) so a LATER tap retries rather than being permanently stuck.
+  _fetchModifierGroups(productId) {
+    const promise = this._get(`/api/sub/retail/products/${encodeURIComponent(productId)}/modifier-groups`)
+      .then(res => {
+        const groups = res.data || [];
+        this._modifierGroupsByProduct[productId] = groups;
+        return groups;
+      })
+      .catch((e) => {
+        this._modifierGroupsByProduct[productId] = undefined;
+        throw e;
+      });
+    this._modifierGroupsByProduct[productId] = promise;
+    return promise;
+  },
+
+  // The merge key two cart lines are compared under: same product AND the
+  // same SET of modifier selections (order-independent -- ticking "Extra
+  // cheese" then "No onion" must merge with "No onion" then "Extra cheese").
+  // A plain product with no selections resolves to `${id}::`, identical to
+  // every prior tap of that product -- so the no-modifier merge behaviour
+  // (by product_id alone) is byte-unchanged from before this wave.
+  _cartLineKey(productId, optionIds) {
+    return `${productId}::${(optionIds || []).slice().sort().join(',')}`;
+  },
+
+  // The actual cart write, shared by the direct (no-modifier) path and the
+  // modifier picker's Confirm handler. `optionIds`/`modifierLines` are both
+  // `[]` for a plain add, so this is exactly _addToCart's old push/merge
+  // logic with the key generalised from `i.product_id === productId` to
+  // _cartLineKey (see above) -- an ordinary product's behaviour is
+  // unaffected because its key never changes.
+  _commitCartLine(p, qty, optionIds, modifierLines) {
+    const key = this._cartLineKey(p.id, optionIds);
+    const existing = this._cart.find(i => this._cartLineKey(i.product_id, i.modifier_option_ids) === key);
     const newQty = existing ? existing.quantity + qty : qty;
     if (newQty > p.total_stock) {
       SubsystemApp.showToast(`${t('Only')} ${p.total_stock} ${t('in stock')}`, 'error');
@@ -4009,10 +4160,20 @@ const RetailSystem = {
       existing.quantity = newQty;
       existing.line_total = newQty * existing.unit_price;
     } else {
+      // THE CLAMP, mirrored client-side for the preview only -- identical
+      // formula to core.retail.modifiers.resolve_line_modifiers'
+      // `max(0, base_unit_price + sum(price_delta))`. This is a PREVIEW:
+      // create_sale (retail_api.py) re-fetches `p.sell_price` itself and
+      // re-resolves every delta server-side from `modifier_option_ids`
+      // below, exactly like every other client-side total on this screen
+      // (promotions, loyalty redemption) -- the server is the sole
+      // financial authority, unchanged.
+      const priceDeltaTotal = (modifierLines || []).reduce((sum, m) => sum + (m.price_delta || 0), 0);
+      const unitPrice = Math.max(0, p.sell_price + priceDeltaTotal);
       this._cart.push({
         product_id: p.id, name: p.name, quantity: qty,
-        unit_price: p.sell_price, tax_rate: p.tax_rate || 0,
-        line_total: qty * p.sell_price, max_stock: p.total_stock,
+        unit_price: unitPrice, tax_rate: p.tax_rate || 0,
+        line_total: qty * unitPrice, max_stock: p.total_stock,
         // Promotions wave 1: category_id travels with the line so a
         // category-scoped promotion can resolve against it later (see
         // _bestPromoFor) without re-looking the product up. Not sent to the
@@ -4028,13 +4189,146 @@ const RetailSystem = {
         // this preview mirrors the server's tier order EXACTLY. Same rule:
         // not sent to the server, _checkout's payload untouched.
         parent_product_id: p.parent_product_id != null ? p.parent_product_id : null,
+        // Restaurant modifiers, wave 2: `modifier_option_ids` is read
+        // verbatim by create_sale (retail_api.py) as CLIENT-SUBMITTED INTENT
+        // ONLY -- an id list, never a price. Omitted (not an empty array)
+        // on a plain line so an old fixture/test that built a cart item by
+        // hand and never heard of modifiers stays byte-identical.
+        modifier_option_ids: (optionIds && optionIds.length) ? optionIds.slice() : undefined,
+        // Presentational only -- name/price_delta AS SELECTED, for
+        // _renderCart's sub-line. Never read by _checkout; the server's own
+        // sale_item_modifiers snapshot is the durable record.
+        modifiers: (modifierLines && modifierLines.length) ? modifierLines : undefined,
       });
     }
     // Presentational: mark which row _renderCart should animate in. Only the
     // touched row moves — re-animating the whole list on every add/increment
     // reads as flicker at real cashier speed.
-    this._lastAddedId = productId;
+    this._lastAddedId = p.id;
     this._renderCart();
+  },
+
+  // A stable, collision-free element id for one option's radio/checkbox
+  // input, shared between _openModifierPicker's render and its Confirm
+  // handler's read-back -- both close over the SAME `groups` array, so the
+  // Confirm handler never needs querySelectorAll to discover what exists,
+  // only getElementById to read what each already-known input is set to.
+  _modifierOptionElId(groupId, optionId) {
+    return `ret-modopt-${groupId}-${optionId}`;
+  },
+
+  // The modifier picker. Opens ONLY from _addToCart, and only when `groups`
+  // (already resolved via GET /products/<id>/modifier-groups -- the SAME
+  // route/function create_sale's own resolver runs, per that route's own
+  // docstring: "the picker and the server can never disagree about what is
+  // attached, because they call the same function") is non-empty.
+  //
+  // UI split per group, per the brief: a "choose exactly one" group
+  // (max_select === 1) renders as radio inputs (native mutual exclusion,
+  // plus an explicit "None" choice when the group is OPTIONAL -- a radio
+  // group cannot otherwise be returned to "nothing picked" once one option
+  // is chosen); a "choose any"/"choose up to N" group renders as checkboxes.
+  //
+  // DEFAULTS: is_default only pre-checks an option when its group is
+  // REQUIRED (min_select >= 1) -- resolve_line_modifiers (core/retail/
+  // modifiers.py) only ever substitutes a default for an EMPTY selection on
+  // a required group; an optional group's default is never auto-applied
+  // server-side, so pre-checking one here would preview (and, once
+  // confirmed, charge) a delta the cashier never actually chose.
+  _openModifierPicker(p, groups, qty) {
+    this._closeModalOverlay(document.getElementById('ret-modifier-picker'));
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-modifier-picker';
+
+    const groupsHTML = groups.map(g => {
+      const required = (g.min_select || 0) >= 1;
+      const single = g.max_select === 1;
+      const inputType = single ? 'radio' : 'checkbox';
+      const radioName = single ? `ret-modgroup-${this._esc(g.id)}` : '';
+      const optionsHTML = (g.options || []).map(o => {
+        const id = this._modifierOptionElId(g.id, o.id);
+        const checked = (required && o.is_default) ? 'checked' : '';
+        const delta = o.price_delta || 0;
+        const deltaLabel = delta ? ` (${delta > 0 ? '+' : ''}${this._fmt(delta)})` : '';
+        return `<label class="ret-modifier-option" style="display:flex;align-items:center;gap:8px;padding-block:6px;min-block-size:var(--touch-target-min, 44px)">
+          <input type="${inputType}" id="${id}" ${radioName ? `name="${radioName}"` : ''} ${checked} style="width:auto" />
+          <span>${this._esc(o.name)}${deltaLabel}</span>
+        </label>`;
+      }).join('');
+      // Optional single-select ONLY: an explicit "None" radio, checked by
+      // default (never a real option here -- see the DEFAULTS note above),
+      // so the cashier can leave the group unset and so the group can be
+      // RETURNED to unset after picking an option, which a bare radio group
+      // cannot do on its own.
+      const noneHTML = (single && !required)
+        ? `<label class="ret-modifier-option" style="display:flex;align-items:center;gap:8px;padding-block:6px;min-block-size:var(--touch-target-min, 44px)">
+            <input type="radio" id="${this._modifierOptionElId(g.id, '__none')}" name="${radioName}" checked style="width:auto" />
+            <span>${this._esc(t('None'))}</span>
+          </label>`
+        : '';
+      const hint = required
+        ? (single ? t('Choose one') : `${t('Choose at least')} ${g.min_select}`)
+        : (single ? '' : (g.max_select != null ? `${t('Choose up to')} ${g.max_select}` : t('Choose any')));
+      return `<fieldset style="border:1px solid var(--border-default);border-radius:8px;padding:10px 12px;margin-block-end:10px">
+        <legend style="padding-inline:4px;font-weight:600">${this._esc(g.name)} · ${this._esc(t(required ? 'Required' : 'Optional'))}</legend>
+        ${hint ? `<div style="color:var(--text-muted);font-size:12px;margin-block-end:6px">${this._esc(hint)}</div>` : ''}
+        ${noneHTML}${optionsHTML}
+      </fieldset>`;
+    }).join('');
+
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:440px" id="ret-modifier-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-modifier-dialog-title">
+        <h3 id="ret-modifier-dialog-title">${this._esc(t('Choose options'))} — ${this._esc(p.name)}</h3>
+        <div style="max-block-size:55vh;overflow-y:auto">${groupsHTML}</div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" id="ret-modifier-cancel">${this._esc(t('Cancel'))}</button>
+          <button class="ret-btn ret-btn-primary" id="ret-modifier-confirm">${this._esc(t('Add to cart'))}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = this._wireModalA11y(overlay, 'ret-modifier-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+    const cancelBtn = document.getElementById('ret-modifier-cancel');
+    const confirmBtn = document.getElementById('ret-modifier-confirm');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => close());
+    if (confirmBtn) confirmBtn.addEventListener('click', () => {
+      // Reads each option's checked state by the SAME predictable id the
+      // render above used -- no querySelectorAll needed, because `groups`
+      // (closed over here) already names every id worth reading. Validated
+      // group by group, in the SAME order resolve_line_modifiers itself
+      // walks `groups`, and refused with the group's own name in the
+      // message -- "the till has to tell the cashier what to fix" (core/
+      // retail/modifiers.py's ModifierValidationError docstring), mirrored
+      // here as a client-side pre-check; the server re-validates identically
+      // and is still the last word.
+      const optionIds = [];
+      const modifierLines = [];
+      for (const g of groups) {
+        const minSelect = g.min_select || 0;
+        const maxSelect = g.max_select;
+        const chosen = (g.options || []).filter(o => {
+          const el = document.getElementById(this._modifierOptionElId(g.id, o.id));
+          return !!(el && el.checked);
+        });
+        if (chosen.length < minSelect) {
+          const msg = minSelect === 1 ? t('Choose one') : `${t('Choose at least')} ${minSelect}`;
+          SubsystemApp.showToast(`${this._esc(g.name)}: ${msg}`, 'error');
+          return;
+        }
+        if (maxSelect != null && chosen.length > maxSelect) {
+          SubsystemApp.showToast(`${this._esc(g.name)}: ${t('Choose up to')} ${maxSelect}`, 'error');
+          return;
+        }
+        chosen.forEach(o => {
+          optionIds.push(o.id);
+          modifierLines.push({ group_name: g.name, name: o.name, price_delta: o.price_delta || 0 });
+        });
+      }
+      close();
+      this._commitCartLine(p, qty, optionIds, modifierLines);
+    });
   },
 
   // See _onPOSShortcut for how _pendingQty is armed ("3*"). Reset happens
@@ -4336,11 +4630,25 @@ const RetailSystem = {
       const promoTagHTML = promo
         ? `<div class="pos-promo-tag" title="${this._esc(promo.name)}"><span aria-hidden="true">${this._icon('tag', 14, '🏷️')}</span><span>${this._esc(t('Promo'))}: ${this._esc(promo.name)}</span></div>`
         : '';
+      // Restaurant modifiers, wave 2: only rendered when this line actually
+      // carries a `modifiers` array (see _commitCartLine) -- an unmodified
+      // line's markup is byte-identical to before this wave. Each entry is
+      // the name AS SELECTED plus its price delta, matching how a receipt
+      // shows a modifier sub-line; ", " is punctuation, not a translatable
+      // word, so it is never routed through t().
+      const modifiersHTML = (item.modifiers && item.modifiers.length)
+        ? `<div class="pos-item-modifiers">${item.modifiers.map(m => {
+            const delta = m.price_delta || 0;
+            const deltaLabel = delta ? ` (${delta > 0 ? '+' : ''}${this._fmt(delta)})` : '';
+            return this._esc(m.name) + deltaLabel;
+          }).join(', ')}</div>`
+        : '';
       return `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
         <div class="pos-line-main">
           <div class="pos-item-name" title="${this._esc(item.name)}">${this._esc(item.name)}</div>
           <div class="pos-item-meta">${metaHTML}</div>
+          ${modifiersHTML}
           ${promoTagHTML}
         </div>
         <div class="pos-line-freq">
@@ -4891,8 +5199,14 @@ const RetailSystem = {
       // resolving here avoids a scan that "worked" only to fail later.
       this._openVariantPicker(product.id);
     } else if (product) {
-      this._addToCart(product.id);              // reuses existing stock checks + cart merge
-      SubsystemApp.showToast(`${t('Added')}: ${product.name}`, 'success');
+      // reuses existing stock checks + cart merge. Restaurant modifiers,
+      // wave 2: _addToCart is now async and may open the modifier picker
+      // instead of committing -- awaited here so this toast only fires once
+      // a line has ACTUALLY landed in the cart (the picker's own Confirm
+      // tap is the visible confirmation for a modified line, matching how
+      // _openVariantPicker's own selection never toasts either).
+      const added = await this._addToCart(product.id);
+      if (added) SubsystemApp.showToast(`${t('Added')}: ${product.name}`, 'success');
     } else if (error) {
       // Distinct from "not found": the lookup itself failed, so telling the
       // cashier this product doesn't exist would be a lie about why the
