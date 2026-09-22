@@ -1018,6 +1018,18 @@ const SubsystemApp = {
         // by name -- until subsystem-retail.js's _renderProfitAndLoss became
         // its doorway.
         { id: 'profit-and-loss', label: 'Profit and Loss', icon: '📈', capability: 'retail.reports' },
+        // financial_statements.py's SECOND GL-derived statement
+        // (retail-hardware-viewports), the balance sheet -- same wave as
+        // 'profit-and-loss' immediately above, same reasoning: GET
+        // /api/sub/retail/reports/balance-sheet (retail_api.py,
+        // report_balance_sheet) carries @mt_require_capability(CAP_REPORTS),
+        // matching `capability: 'retail.reports'` here. Unlike
+        // 'profit-and-loss', this is a SNAPSHOT as of one date, not a
+        // period -- see financial_statements.balance_sheet's own docstring
+        // for why, and its "THE NO-PERIOD-CLOSE PROBLEM" section for why
+        // equity on this screen is Owner's Equity plus a derived, never-
+        // closed retained-earnings line rather than one ledger balance.
+        { id: 'balance-sheet', label: 'Balance Sheet', icon: '🏦', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -1055,7 +1067,7 @@ const SubsystemApp = {
       navGroups: [
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss', 'balance-sheet'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },

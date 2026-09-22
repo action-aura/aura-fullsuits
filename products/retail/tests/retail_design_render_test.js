@@ -1125,6 +1125,72 @@ const PROFIT_AND_LOSS_CLEAN = {
   cost_basis_incomplete_sale_count: 0,
 };
 
+/* GET /api/sub/retail/reports/balance-sheet, financial_statements.py's
+ * SECOND GL-derived statement (report_balance_sheet in retail_api.py;
+ * core/retail/financial_statements.py::balance_sheet does the derivation off
+ * the SAME ledger TRIAL_BALANCE/PROFIT_AND_LOSS above already exercise).
+ *
+ * ONE fixture, deliberately, matching TRIAL_BALANCE's own precedent rather
+ * than PROFIT_AND_LOSS's two: the "healthy, agreeing" state (is_balanced:
+ * true, cost_basis_incomplete: false) is what this corpus's contrast/
+ * opacity/touch-target loops need to reach every colour token this screen
+ * uses in its ordinary path -- the LOUD, danger-coloured "Out of Balance"
+ * badge and the cost-basis banner are functionally proven, both directions,
+ * by retail_balance_sheet_ui_test.js's own mutation proofs (a structural
+ * test, not a contrast one), the identical division of labour TRIAL_
+ * BALANCE's own comment states for `.ret-badge-red`. `.ret-badge-red`
+ * itself is not left unmeasured in this corpus either way -- see that
+ * comment for the half-dozen other screens already exercising it.
+ *
+ * Internally consistent with TRIAL_BALANCE above by construction, not by
+ * coincidence: assets_total (Cash 3200 + AR 512 + Inventory 2060 = 5772)
+ * equals liabilities_total (AP 2000 + Tax Payable 272 = 2272) plus
+ * equity_total (owners_equity 3000 + retained_earnings 500 = 3500) --
+ * 2272 + 3500 = 5772. retained_earnings (500) is deliberately NOT
+ * TRIAL_BALANCE's own 3000 Owner's Equity figure (5000) or PROFIT_AND_
+ * LOSS's own net_profit (3689.750) -- this fixture is a different moment in
+ * the same company's life, and the whole point of a snapshot statement is
+ * that it need not match a period statement taken over a different window.
+ */
+const BALANCE_SHEET = {
+  currency: 'JOD',
+  as_of_date: '2026-09-22',
+  branch_id: null,
+  assets: {
+    total: 5772.000,
+    accounts: [
+      { code: '1000', name: 'Cash and Bank', amount: 3200.000 },
+      { code: '1100', name: 'Accounts Receivable', amount: 512.000 },
+      { code: '1200', name: 'Inventory', amount: 2060.000 },
+    ],
+  },
+  liabilities: {
+    total: 2272.000,
+    accounts: [
+      { code: '2000', name: 'Accounts Payable', amount: 2000.000 },
+      { code: '2100', name: 'Tax Payable', amount: 272.000 },
+    ],
+  },
+  equity: {
+    owners_equity: 3000.000,
+    retained_earnings: 500.000,
+    total: 3500.000,
+    accounts: [
+      { code: '3000', name: 'Owner\'s Equity', amount: 3000.000 },
+    ],
+  },
+  total_liabilities_and_equity: 5772.000,
+  balance_check: {
+    assets_total: 5772.000,
+    liabilities_and_equity_total: 5772.000,
+    is_balanced: true,
+    difference: 0,
+  },
+  has_activity: true,
+  cost_basis_incomplete: false,
+  cost_basis_incomplete_sale_count: 0,
+};
+
 /**
  * The response for a URL. Routed, because the screens below fan out across nine
  * endpoints and a single blanket payload would render every table as its EMPTY
@@ -1155,6 +1221,10 @@ function apiResponseFor(url) {
   if (/\/reports\/profit-and-loss/.test(u)) {
     return ok(/branch_id=/.test(u) ? PROFIT_AND_LOSS_CLEAN : PROFIT_AND_LOSS);
   }
+  // financial_statements.py's second GL-derived statement. See the
+  // BALANCE_SHEET fixture's own comment for why one fixture (not two)
+  // matches TRIAL_BALANCE's precedent here.
+  if (/\/reports\/balance-sheet/.test(u)) return ok(BALANCE_SHEET);
   // Before the /products rule below for the same reason `top-products` is:
   // this URL contains no "products", but it WOULD fall through to the
   // catch-all, and STATS carries no `rows`/`pairs_examined` — which the Stock
@@ -1637,6 +1707,19 @@ async function buildCorpus() {
     screens.push(screenFrom('profit-and-loss-clean', ctx, content.innerHTML));
   }
 
+  // financial_statements.py's second GL-derived statement (app-shell.js
+  // nav entry under Insight, gated 'retail.reports' -- the identical gate
+  // profit-and-loss immediately above already carries). ONE render, not
+  // two -- see the BALANCE_SHEET fixture's own comment for why this
+  // follows trial-balance's precedent rather than profit-and-loss's.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderBalanceSheet(content);
+    await settle();
+    screens.push(screenFrom('balance-sheet', ctx, content.innerHTML));
+  }
+
   // ── The three modals. The dark `.ret-modal` island and everything inside it
   //    (its fields, its <option>s, its wide invoice table) is a large family of
   //    colour rules that NO amount of list-screen rendering reaches, and the
@@ -1883,6 +1966,12 @@ const DECLARED_SCREENS = [
   // other (see buildCorpus()'s own comment on these two blocks). Listed in
   // BUILD order, immediately after 'trial-balance'.
   'profit-and-loss', 'profit-and-loss-clean',
+  // financial_statements.py's second GL-derived statement -- same BUILD-
+  // order reasoning, immediately after 'profit-and-loss-clean' because
+  // that is where buildCorpus() renders it. ONE screen, not two, matching
+  // 'trial-balance' immediately above rather than the profit-and-loss
+  // pair -- see the BALANCE_SHEET fixture's own comment.
+  'balance-sheet',
   'customer-modal', 'sale-modal', 'held-sales-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
@@ -1945,6 +2034,7 @@ const SCREEN_ROUTES = {
   // precedent immediately above SCREEN_ROUTES' first entry.
   'profit-and-loss': 'profit-and-loss',
   'profit-and-loss-clean': 'profit-and-loss',
+  'balance-sheet': 'balance-sheet',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.

@@ -447,6 +447,14 @@ const RetailSystem = {
       // for the two honesty flags (cost_basis_incomplete, has_activity) the
       // route was built to carry.
       case 'profit-and-loss': return this._renderProfitAndLoss(c);
+      // financial_statements.py's SECOND GL-derived statement
+      // (retail-hardware-viewports): the balance sheet (retail_api.py's
+      // report_balance_sheet, core/retail/financial_statements.py::
+      // balance_sheet). See app-shell.js's nav entry and
+      // _renderBalanceSheet below for the capability gate and for the
+      // no-period-close/retained-earnings reasoning the route was built to
+      // carry.
+      case 'balance-sheet': return this._renderBalanceSheet(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -14755,6 +14763,307 @@ const RetailSystem = {
       // immediately above in this file.
       console.error(e);
       if (this._isStaleOp('profit-and-loss', opToken)) return;
+      if (body) {
+        body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
+          ${t('Could not load this list. Check the connection and try again.')}</div>`;
+      }
+      if (warnEl) warnEl.innerHTML = '';
+    }
+  },
+
+  // ── GENERAL LEDGER: BALANCE SHEET (financial_statements.py's second
+  // GL-derived statement, retail-hardware-viewports) ──────────────────────
+  //
+  // core/retail/financial_statements.py::balance_sheet reads the same GL
+  // _renderTrialBalance/_renderProfitAndLoss above already surface, and
+  // derives a real balance sheet from it (retail_api.py's
+  // report_balance_sheet, GET /api/sub/retail/reports/balance-sheet) --
+  // shipped complete and gated, with this screen as its doorway, the same
+  // "doorway" shape every GL screen in this file has been.
+  //
+  // THE ONE STRUCTURAL DIFFERENCE FROM _renderProfitAndLoss: this is a
+  // SNAPSHOT as of ONE date, not a period -- one `#bs-as-of` input, no
+  // `#pnl-from`/`#pnl-to` pair. See balance_sheet's own docstring for why.
+  //
+  // THREE HONESTY-ADJACENT THINGS this screen has to get right, none of
+  // which _renderTrialBalance (no period at all) or _renderProfitAndLoss
+  // (no equity split) had to:
+  //
+  //   retained_earnings -- equity is shown as TWO lines, the ledger's own
+  //   Owner's Equity account plus a derived "Retained Earnings" figure,
+  //   never merged into one number. This product has no period-close step
+  //   (nothing ever posts net profit into the ledger's 3000 account), so
+  //   the ledger balance ALONE would not balance the sheet -- see
+  //   balance_sheet's own docstring, "THE NO-PERIOD-CLOSE PROBLEM". The
+  //   explanatory sentence beneath it exists so a shopkeeper reads it as
+  //   "accumulated, always current" rather than a bookkeeping entry
+  //   someone made.
+  //
+  //   balance_check -- shown PLAINLY, not buried: a green "Balanced" badge
+  //   when assets tie to liabilities+equity, a loud red "Out of Balance"
+  //   one (plus the signed difference) when they do not, matching
+  //   _loadTrialBalance's identical is_balanced convention immediately
+  //   above in this file. Suppressed entirely -- not shown as a trivial
+  //   "Balanced at zero" -- when has_activity is false; see the next
+  //   point.
+  //
+  //   has_activity -- false when NOT ONE asset/liability/equity account
+  //   has ever moved as of this date (financial_statements.py's own
+  //   all-time income_statement check rides along too). Rendered as
+  //   "nothing has been posted", never a statement full of zeros with a
+  //   trivially-agreeing balance badge over them -- the same "these are
+  //   two different claims" reasoning _renderProfitAndLoss's own section
+  //   comment gives for its own has_activity flag.
+  //
+  //   cost_basis_incomplete -- carried from the SAME all-time income_
+  //   statement call balance_sheet makes for retained_earnings (see that
+  //   function's own docstring). Unlike _renderProfitAndLoss's banner,
+  //   which names COGS/gross-profit/net-profit, this one names Inventory
+  //   and Retained Earnings -- the two balance-sheet line items the same
+  //   understated-COGS root cause actually distorts (post_cogs's matching
+  //   Cr Inventory leg is skipped for the same zero-cost lines that skip
+  //   Dr COGS, so Inventory is left overstated by the identical unknown
+  //   amount, and retained_earnings inherits the overstated net profit).
+  async _renderBalanceSheet(c) {
+    this._injectStyles();
+    // Same defence-in-depth every other retail.reports screen in this file
+    // carries (see _renderProfitAndLoss's identical guard immediately
+    // above) -- hiding the nav entry (app-shell.js) is not the
+    // enforcement.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: 'landmark',
+        title: t('Balance Sheet'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+
+    // Default as-of date: TODAY -- a balance sheet is conventionally read
+    // "as things stand right now", matching the same "the default matches
+    // how the person reading this statement actually asks the question"
+    // reasoning _renderProfitAndLoss's own comment gives for its own
+    // month-to-date default.
+    const today = new Date();
+    const toISO = (d) => d.toISOString().slice(0, 10);
+
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title"><span aria-hidden="true">${this._icon('landmark', 18, '🏦')}</span> <span>${t('Balance Sheet')}</span></h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <select id="bs-branch" class="ret-input" onchange="RetailSystem._loadBalanceSheet()">
+            <option value="">${this._esc(t('All branches'))}</option>
+          </select>
+          <input type="date" id="bs-as-of" class="ret-input" value="${toISO(today)}"
+            title="${this._esc(t('As of Date'))}" onchange="RetailSystem._loadBalanceSheet()" />
+        </div>
+      </div>
+      <!-- Seeded empty, filled by _loadBalanceSheet() -- its own region so
+           it can be cleared independently of the statement body below it,
+           matching _renderProfitAndLoss's identical #pnl-warning
+           reasoning. -->
+      <div id="bs-warning"></div>
+      <div class="sub-chart-card" id="bs-body" style="margin-bottom:16px">
+        <div style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</div>
+      </div>`;
+    // Belt-and-suspenders alongside the `value="..."` attribute just
+    // written -- see _renderProfitAndLoss's identical comment for why this
+    // matters on the very first synchronous read below.
+    const asOfEl = document.getElementById('bs-as-of');
+    if (asOfEl) asOfEl.value = toISO(today);
+    await this._loadBsBranchFilter();
+    await this._loadBalanceSheet();
+  },
+
+  // GET /api/sub/retail/branches, populating #bs-branch. Its own small
+  // function rather than generalizing _loadPnlBranchFilter (hardcoded to
+  // #pnl-branch) -- the same "one small query duplicated rather than a
+  // cross-screen coupling" reasoning that function's own comment gives.
+  async _loadBsBranchFilter() {
+    try {
+      const branches = (await this._get('/api/sub/retail/branches')).data || [];
+      const sel = document.getElementById('bs-branch');
+      if (!sel) return;
+      sel.innerHTML = `<option value="">${this._esc(t('All branches'))}</option>` +
+        branches.map(b => `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
+    } catch (e) { console.error('Failed to load branches for balance sheet filter', e); }
+  },
+
+  async _loadBalanceSheet() {
+    // Per-operation reload guard, same mechanism/reasoning
+    // _loadProfitAndLoss's opToken carries immediately above in this file.
+    const opToken = this._beginOp('balance-sheet');
+    const asOfEl = document.getElementById('bs-as-of');
+    const branchEl = document.getElementById('bs-branch');
+    const asOfDate = asOfEl ? asOfEl.value : '';
+    const branchId = branchEl ? branchEl.value : '';
+    const body = document.getElementById('bs-body');
+    const warnEl = document.getElementById('bs-warning');
+
+    // report_balance_sheet requires the date (StatementPeriodError -> a 400
+    // with no default -- see that route's own docstring) -- refused
+    // client-side for the same reason _loadProfitAndLoss never sends a
+    // date bound it already knows will be refused.
+    if (!asOfDate) {
+      if (body) body.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:30px">${t('Choose a date.')}</div>`;
+      if (warnEl) warnEl.innerHTML = '';
+      return;
+    }
+
+    try {
+      const branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
+      const resp = await this._get(
+        `/api/sub/retail/reports/balance-sheet?as_of_date=${encodeURIComponent(asOfDate)}${branchQS}`
+      );
+      if (this._isStaleOp('balance-sheet', opToken)) return;
+
+      // A validation refusal (StatementPeriodError -> 400) resolves
+      // normally -- it does NOT throw -- and carries no `data` key, only
+      // {status:'error', message}. Reading `resp.data || {}` on that
+      // envelope would silently resolve to {}, and `{}.has_activity` is
+      // undefined -- falsy -- which this screen's OWN empty-ledger branch
+      // below would then render as "nothing has been posted". Read and
+      // shown BEFORE anything touches data.has_activity, matching
+      // _loadProfitAndLoss's identical fix for the identical bug class.
+      if (resp && resp.status === 'error') {
+        if (body) body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">${this._esc(resp.message) || t('Could not load this list. Check the connection and try again.')}</div>`;
+        if (warnEl) warnEl.innerHTML = '';
+        return;
+      }
+
+      const data = resp.data || {};
+
+      // ── The cost-basis honesty banner -- always re-set, never left stale
+      // from a previous, dirtier date (see the container comment above).
+      // Names Inventory/Retained Earnings, not COGS/profit -- see the
+      // section comment above _renderBalanceSheet for why those are the
+      // two line items THIS statement's own understated-COGS root cause
+      // distorts.
+      if (warnEl) {
+        // (data.cost_basis_incomplete) -- parenthesized so this line's exact
+        // text differs from _loadProfitAndLoss's own identically-shaped
+        // banner assignment above, keeping each screen's own mutation-proof
+        // anchor (this file's and retail_profit_and_loss_ui_test.js's own)
+        // unambiguous: a single-occurrence text search across the whole
+        // file must not match BOTH screens' otherwise-identical lines.
+        warnEl.innerHTML = (data.cost_basis_incomplete)
+          ? `<div style="background:var(--state-danger-surface);color:var(--state-danger-text);` +
+            `border:1px solid var(--state-danger-border);border-radius:10px;padding:14px 16px;margin-bottom:16px" role="alert">
+              <div style="font-weight:700;margin-bottom:6px">${t('Cost basis is incomplete')}</div>
+              <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+                <span style="font-size:20px;font-weight:800">${this._fmtNum(data.cost_basis_incomplete_sale_count)}</span>
+                <span>${t('sale(s) affected')}</span>
+              </div>
+              <div style="font-size:13px;line-height:1.6">${t('These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated.')}</div>
+            </div>`
+          : '';
+      }
+
+      if (!body) return;
+
+      // has_activity === false: "nothing has been posted", never a set of
+      // zeros with a trivially-agreeing balance badge over them -- see the
+      // section comment above _renderBalanceSheet for why those are
+      // different claims. Matches _renderProfitAndLoss's identical empty
+      // state, not folded into the statement below. Parenthesized (like
+      // the cost-basis check above) so this line's exact text differs from
+      // _loadProfitAndLoss's own identically-shaped guard, keeping each
+      // screen's own mutation-proof anchor unambiguous.
+      if (!(data.has_activity)) {
+        body.innerHTML = this._emptyState({
+          icon: 'landmark',
+          title: t('Nothing has been posted as of this date'),
+          hint: t('No sale, return, purchase or expense was recorded on or before this date. This is not a zero balance sheet -- there is nothing to measure yet.'),
+        });
+        return;
+      }
+
+      // ── The balance check -- shown PLAINLY, first thing under the
+      // controls, matching _loadTrialBalance's identical "the one figure
+      // this whole screen exists to surface" reasoning for its own
+      // is_balanced badge.
+      const bc = data.balance_check || {};
+      const balanceBadge = bc.is_balanced
+        ? this._badge(t('Balanced'), 'green')
+        : this._badge(t('Out of Balance'), 'red');
+      const differenceLine = bc.is_balanced ? '' :
+        `<div style="color:var(--state-danger-text);font-weight:700">${t('Difference')}: ${this._fmt(bc.difference)}</div>`;
+      const balanceCheckBlock = `
+        <div class="sub-chart-card" style="margin-bottom:16px">
+          <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
+            <div>
+              <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Total Assets')}</span><br/>
+              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(bc.assets_total)}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Total Liabilities and Equity')}</span><br/>
+              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(bc.liabilities_and_equity_total)}</span>
+            </div>
+            <div>${balanceBadge}</div>
+            ${differenceLine}
+          </div>
+        </div>`;
+
+      // Every interpolated account name is escaped and its code bdi'd, the
+      // same convention _loadTrialBalance/_loadProfitAndLoss's own account
+      // rows use -- an account name is shop-editable data like a
+      // customer/supplier name and could arrive from another device over
+      // the sync relay.
+      // The amount cell carries `white-space:nowrap` (a longer money figure
+      // -- JOD's 3dp minor unit -- must never wrap onto a second line inside
+      // this narrower third column, unlike _loadProfitAndLoss's own single
+      // wide expense table).
+      const accountRows = (accounts) => accounts.map(a => `<tr>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>
+        <td style="font-weight:600">${this._esc(a.name)}</td>
+        <td style="white-space:nowrap">${this._fmt(a.amount)}</td>
+      </tr>`).join('');
+      const accountTable = (accounts, emptyLabel) => {
+        const rows = accountRows(accounts);
+        return rows
+          ? `<table class="ret-table"><thead><tr><th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Amount')}</th></tr></thead>
+              <tbody>${rows}
+                <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td>${this._fmt(accounts.reduce((s, a) => s + (+a.amount || 0), 0))}</td></tr>
+              </tbody></table>`
+          : `<div style="color:var(--text-muted);padding:8px 0">${emptyLabel}</div>`;
+      };
+
+      const assetAccounts = (data.assets && data.assets.accounts) || [];
+      const liabilityAccounts = (data.liabilities && data.liabilities.accounts) || [];
+      const equityAccounts = (data.equity && data.equity.accounts) || [];
+      const retainedEarnings = (data.equity && data.equity.retained_earnings) || 0;
+      const equityTotal = (data.equity && data.equity.total) || 0;
+
+      // Statement order, top to bottom: the balance check first (the one
+      // question this screen exists to answer), then assets, liabilities,
+      // and equity -- the conventional order an accountant reads a balance
+      // sheet in, matching _renderProfitAndLoss's own "top to bottom, the
+      // order an accountant reads one" precedent.
+      body.innerHTML = `
+        ${balanceCheckBlock}
+        <div style="margin:4px 0 8px;font-weight:600;color:var(--text-primary)">${t('Assets')}</div>
+        ${accountTable(assetAccounts, t('No asset accounts recorded as of this date.'))}
+        <div style="margin:20px 0 8px;font-weight:600;color:var(--text-primary)">${t('Liabilities')}</div>
+        ${accountTable(liabilityAccounts, t('No liability accounts recorded as of this date.'))}
+        <div style="margin:20px 0 8px;font-weight:600;color:var(--text-primary)">${t('Equity')}</div>
+        ${accountTable(equityAccounts, t('No equity accounts recorded as of this date.'))}
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;margin-top:10px">
+          <span style="color:var(--text-muted)">${t('Retained Earnings')}</span>
+          <span>${this._fmt(retainedEarnings)}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin:-2px 0 8px;max-width:560px">${t('Accumulated profit since the ledger began. This product has no period-close step, so this figure is always current rather than a posted ledger entry.')}</div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;font-size:16px;font-weight:700;border-top:1px dashed var(--border-default);margin-top:4px">
+          <span style="color:var(--text-primary)">${t('Total Equity')}</span>
+          <span>${this._money(equityTotal)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;margin-top:16px;border-top:2px solid var(--border-default);border-radius:8px;background:var(--surface-active);font-size:18px;font-weight:800">
+          <span style="color:var(--text-primary)">${t('Total Liabilities and Equity')}</span>
+          <span>${this._money(data.total_liabilities_and_equity)}</span>
+        </div>`;
+    } catch (e) {
+      // VISIBLE failure, matching _loadProfitAndLoss's identical fix
+      // immediately above in this file.
+      console.error(e);
+      if (this._isStaleOp('balance-sheet', opToken)) return;
       if (body) {
         body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
           ${t('Could not load this list. Check the connection and try again.')}</div>`;
