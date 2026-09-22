@@ -222,9 +222,25 @@ def test_expire_stale_quotes_only_affects_sent_not_accepted(app, seeded):
     plan_id = _seed_plan(app, plan_code="QK_PLAN")
     with app.app_context():
         from app.commercial_sales.quotes import add_quote_line, create_quote, expire_stale_quotes, record_customer_decision, submit_quote
+        from app.extensions import db_session
+
+        # Was `date.today() - timedelta(days=1)` for valid_until, with no `as_of`
+        # passed to expire_stale_quotes(): that sets valid_until from the LOCAL
+        # calendar date but the production function evaluates staleness against
+        # utcnow().date() (UTC) internally -- so on a host ahead of UTC (this
+        # machine is UTC+3) "local yesterday" can equal "UTC today", and
+        # `valid_until < as_of` is then False: the quote never expires, exactly
+        # the reported `assert 0 == 1` (reproduced live 2026-09-23 02:23 local /
+        # 2026-09-22 UTC: local-yesterday == UTC-today). This isn't a rare
+        # midnight-rollover coincidence, it recurs every day for hours in this
+        # timezone. Fix: drive both the fixture data and the function's `as_of`
+        # from one fixed, hand-chosen reference date -- expire_stale_quotes()
+        # already accepts `as_of` for exactly this kind of determinism, so no new
+        # clock read (local or UTC) is needed anywhere in this test.
+        reference_date = date(2026, 6, 15)
 
         quote_sent = create_quote(
-            {"customer_id": customer_id, "currency": "USD", "valid_until": date.today() - timedelta(days=1)},
+            {"customer_id": customer_id, "currency": "USD", "valid_until": reference_date - timedelta(days=1)},
             actor_employee_profile_id=profile_id, actor_staff_user_id=staff_id,
         )
         add_quote_line(quote_sent, plan_id=plan_id, addon_id=None, quantity=1, actor_staff_user_id=staff_id)
@@ -241,9 +257,19 @@ def test_expire_stale_quotes_only_affects_sent_not_accepted(app, seeded):
         add_quote_line(quote_accepted, plan_id=plan_id, addon_id=None, quantity=1, actor_staff_user_id=staff_id)
         submit_quote(quote_accepted, actor_staff_user_id=staff_id)
         record_customer_decision(quote_accepted, accepted=True, actor_staff_user_id=staff_id)
-        quote_accepted.valid_until = date.today() - timedelta(days=1)
+        quote_accepted.valid_until = reference_date - timedelta(days=1)
+        # db_session is configured with autoflush=False (app/extensions.py) --
+        # without an explicit commit here, this backdate is never sent to
+        # Postgres before expire_stale_quotes() queries it below, so
+        # quote_accepted would sail through the "never expires" assertion
+        # vacuously (its valid_until in the DB is still the original, far-
+        # future default) regardless of whether the ACCEPTED-exemption logic
+        # is even correct. Found by mutation-proving this test: widening
+        # expire_stale_quotes()'s status filter to also match ACCEPTED did
+        # NOT turn this test red until this commit was added.
+        db_session.commit()
 
-        count = expire_stale_quotes()
+        count = expire_stale_quotes(as_of=reference_date)
         assert count == 1
         assert quote_sent.status == "EXPIRED"
         assert quote_accepted.status == "ACCEPTED"  # never silently expires

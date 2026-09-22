@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -117,7 +117,7 @@ def test_issue_invoice_sets_default_due_date(app, seeded):
     customer_id = _seed_customer(app, staff_id)
     plan_id = _seed_plan(app, "IC_PLAN")
     with app.app_context():
-        from app.commercial_sales.invoices import create_invoice_from_order, issue_invoice
+        from app.commercial_sales.invoices import DEFAULT_DUE_DAYS, create_invoice_from_order, issue_invoice
 
         order = _make_confirmed_order(app, staff_id, profile_id, customer_id, plan_id)
         invoice = create_invoice_from_order(order, actor_employee_profile_id=profile_id, actor_staff_user_id=staff_id, idempotency_key=str(uuid.uuid4()))
@@ -125,7 +125,34 @@ def test_issue_invoice_sets_default_due_date(app, seeded):
 
         assert invoice.status == "ISSUED"
         assert invoice.issued_at is not None
-        assert invoice.due_date == date.today() + timedelta(days=30)
+        # Was `invoice.due_date == date.today() + timedelta(days=30)`: that reads
+        # the wall clock a SECOND time, independently of the one issue_invoice()
+        # already used, and the two reads don't agree -- not just around a rare
+        # real-midnight rollover, but reliably: production computes due_date from
+        # utcnow().date() (UTC) while date.today() here reads the LOCAL calendar
+        # date, and on a host east of UTC (this machine is UTC+3, Asia/Gaza) the
+        # two disagree for hours every single day (measured live 2026-09-23 02:23
+        # local / 2026-09-22 UTC -- this exact test failed with due_date computed
+        # from UTC 09-22 while the assertion re-read local 09-23).
+        #
+        # Fix by asserting against the instant issue_invoice() actually persisted
+        # instead of re-reading any clock -- but `invoice.issued_at` alone isn't
+        # safe either: db_session.commit() above expires the ORM object, so the
+        # very next attribute access re-SELECTs it from Postgres, and Postgres
+        # returns a timestamptz converted to the *session's* timezone (also
+        # Asia/Gaza here), reintroducing the identical local-vs-UTC skew one
+        # layer down (confirmed: re-fetched issued_at printed as
+        # `2026-09-23T02:30:59+Asia/Gaza`, one calendar day ahead of the UTC day
+        # due_date was actually computed from). `.astimezone(timezone.utc)`
+        # normalizes the aware datetime back to the real UTC instant regardless
+        # of what tz Postgres/psycopg chose to display it in, reconstructing the
+        # exact calendar day production's utcnow().date() used. Net effect: zero
+        # clock reads in this test, immune to host timezone and to any rollover
+        # between "created" and "asserted". What it can no longer catch: issued_at
+        # itself drifting from real wall-clock "now" -- only that due_date
+        # correctly trails issued_at by DEFAULT_DUE_DAYS, whatever day issued_at
+        # fell on. That relationship is the actual business rule this test names.
+        assert invoice.due_date == invoice.issued_at.astimezone(timezone.utc).date() + timedelta(days=DEFAULT_DUE_DAYS)
 
 
 def test_void_invoice_with_no_payments(app, seeded):

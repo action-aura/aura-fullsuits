@@ -89,6 +89,30 @@ def _is_our_process(handle: ServerHandle) -> bool:
     return f"--port {handle.port}" in cmdline and "flask" in cmdline.lower()
 
 
+def _find_venv_python(owner_dir: Path) -> Path:
+    """Locate the interpreter to launch the dev server with.
+
+    `sys.executable` is the interpreter already running this process (i.e.
+    running the tests) -- the most honest source of truth, because it is
+    correct in every layout this repo runs from: the main checkout (where
+    `.venv` sits beside `owner/`) AND a git worktree (where `.venv` does NOT
+    exist beside `owner/` -- worktrees share the main checkout's venv at the
+    repo root, and pytest is invoked with that shared interpreter). Hardcoding
+    a second fixed path for the worktree case would just trade one layout
+    assumption for two.
+
+    Falls back to the historical `owner_dir.parent / .venv` guess only if
+    `sys.executable` doesn't exist (e.g. a frozen/embedded interpreter with no
+    real file path), and raises a clear error naming every candidate tried if
+    neither resolves."""
+    candidates = [Path(sys.executable), owner_dir.parent / ".venv" / "Scripts" / "python.exe"]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    tried = ", ".join(str(c) for c in candidates)
+    raise ServerStartError(f"venv python not found; tried: {tried}")
+
+
 def start_server(
     owner_dir: Path,
     database_url: str,
@@ -100,9 +124,7 @@ def start_server(
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     reap_stale_handle()
 
-    python_exe = owner_dir.parent / ".venv" / "Scripts" / "python.exe"
-    if not python_exe.exists():
-        raise ServerStartError(f"venv python not found at {python_exe}")
+    python_exe = _find_venv_python(owner_dir)
 
     port = pick_free_port()
     env = {"OWNER_DATABASE_URL": database_url}
