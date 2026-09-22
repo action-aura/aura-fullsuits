@@ -16,6 +16,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 // AutoMirrored, not the plain Filled variant: this app runs RTL in Arabic and
 // the mirrored glyph is the one that points the right way there.
@@ -343,6 +344,13 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
             if (RetailSession.hasCapability(CAP_REPORTS)) {
                 MoreItem(tr("By Employee"), tr("Takings and transactions per employee"),
                     Icons.Default.Groups) { onNavigate("employee_sales") }
+                // retail-hardware-viewports: schema v38/v39's general ledger
+                // (core/retail/general_ledger.py), read-only. Same
+                // `retail.reports` gate as the row above and as the
+                // desktop's own Insight-group nav entry (app-shell.js:
+                // { id: 'trial-balance', ..., capability: 'retail.reports' }).
+                MoreItem(tr("Trial Balance"), tr("Chart of accounts and the AR/AP tie-back"),
+                    Icons.Default.AccountBalance) { onNavigate("trial_balance") }
             }
 
             if (payments.isNotEmpty()) {

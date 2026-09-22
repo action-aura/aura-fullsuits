@@ -871,4 +871,56 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Failing" to "فاشل",
     "Last success" to "آخر نجاح",
     "never" to "أبدًا",
+
+    // ── Trial Balance (retail-hardware-viewports, schema v38/v39 general
+    //    ledger) -- ui/screens/TrialBalanceScreen.kt. Where a string also
+    //    appears on the desktop (products/retail/frontend/locales/{en,ar}.json,
+    //    the "Trial Balance"/"Ties" section), the Arabic here is copied
+    //    VERBATIM from that already-vetted catalogue rather than re-written,
+    //    so a shop switching between the till and the desktop reads the same
+    //    words for the same figures. ─────────────────────────────────────────
+    "Trial Balance" to "ميزان المراجعة",
+    "Chart of accounts and the AR/AP tie-back" to "شجرة الحسابات ومطابقة الذمم المدينة والدائنة",
+    "Only accounts with reports access can see the trial balance. " +
+        "Ask the owner to grant it." to
+        "يمكن فقط للحسابات التي تملك صلاحية التقارير الاطّلاع على ميزان المراجعة. اطلب من المالك منحك هذه الصلاحية.",
+    "Couldn't load the trial balance" to "تعذّر تحميل ميزان المراجعة",
+    "Something went wrong loading this report." to "حدث خطأ أثناء تحميل هذا التقرير.",
+    "Balanced" to "متوازن",
+    "Out of Balance" to "غير متوازن",
+    "Total debits equal total credits." to "إجمالي المدين يساوي إجمالي الدائن.",
+    "Total debits and total credits do not match. This needs attention." to
+        "إجمالي المدين وإجمالي الدائن غير متطابقين. يتطلب هذا الانتباه.",
+    // NOTHING_POSTED -- the state the desktop does not distinguish from
+    // Balanced (see trialBalanceStatus()'s doc comment): both totals at
+    // exactly zero, a brand-new shop's freshly-seeded chart of accounts.
+    "Nothing posted yet" to "لم يتم ترحيل أي حركة بعد",
+    "No sales, purchases or payments have posted to the ledger yet." to
+        "لم تُرحَّل أي مبيعات أو مشتريات أو دفعات إلى دفتر الأستاذ بعد.",
+    "Subledger Reconciliation" to "تسوية الدفاتر المساعدة",
+    "GL Accounts Receivable" to "المستحقات في دفتر الأستاذ العام",
+    "GL Accounts Payable" to "المستحقات الدائنة في دفتر الأستاذ العام",
+    "Customer Balances (Subledger)" to "أرصدة العملاء (الدفتر المساعد)",
+    "Supplier Balances (Subledger)" to "أرصدة الموردين (الدفتر المساعد)",
+    "Ties" to "متطابق",
+    "Does Not Tie" to "غير متطابق",
+    // UNKNOWN -- this client's own third tie state (arTieState/apTieState's
+    // doc comment): a missing/malformed subledger, never defaulted to either
+    // "Ties" or "Does Not Tie".
+    "Couldn't verify" to "تعذّر التحقق",
+    "Accounts" to "الحسابات",
+    "Debit Amount" to "المبلغ المدين",
+    "Credit Amount" to "المبلغ الدائن",
+    "No accounts posted yet" to "لا توجد حسابات مرحّلة بعد",
+    "Transactions will appear here once the general ledger starts recording them." to
+        "ستظهر الحركات هنا بمجرد أن يبدأ دفتر الأستاذ العام بتسجيلها.",
+    // account_type labels (accountTypeLabel()) -- 'revenue' deliberately
+    // reuses "Income"/"إيراد" rather than a new word; see that function's
+    // doc comment for why.
+    "Asset" to "أصل",
+    "Liability" to "خصوم",
+    "Equity" to "حقوق الملكية",
+    "Income" to "إيراد",
+    "Expense" to "مصروف",
+    "Other" to "أخرى",
 )

@@ -315,6 +315,15 @@ interface AuraApi {
     @GET("api/sub/retail/reports/by-employee")
     suspend fun reportByEmployee(@Query("days") days: Int = 30): ByEmployeeResponse
 
+    // General ledger trial balance (retail-hardware-viewports, schema v38/v39
+    // -- core/retail/general_ledger.py). Same `retail.reports` capability gate
+    // and the same {"success": true, "data": ...} envelope as the four report
+    // routes above; no `?days=`/branch filtering -- the route is company-wide,
+    // all branches, all time, by design (see report_trial_balance's own
+    // docstring in retail_api.py).
+    @GET("api/sub/retail/reports/trial-balance")
+    suspend fun trialBalance(): TrialBalanceResponse
+
     // Backup / restore (Wave 1A -- admin-only, see commercial_runtime/backup/routes.py)
     @POST("api/backup/create")
     suspend fun createBackup(): CreateBackupResponse

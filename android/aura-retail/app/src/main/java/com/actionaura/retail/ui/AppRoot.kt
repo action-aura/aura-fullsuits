@@ -437,6 +437,7 @@ private fun MainShell(onLogout: () -> Unit) {
         "payables" -> "Payables"
         "cash_summary" -> "Cash Summary"
         "aging" -> "Aging"
+        "trial_balance" -> "Trial Balance"
         "employees" -> "Employees"
         "retail_settings" -> "Settings"
         // These three were falling through to the "Action Aura" default, so
@@ -714,6 +715,11 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("payables") { PayablesScreen(snackbar) }
     b.composable("cash_summary") { DailyCashScreen(snackbar) }
     b.composable("aging") { AgingScreen(snackbar) }
+    // retail-hardware-viewports: schema v38/v39's general ledger, read-only
+    // (see ui/screens/TrialBalanceScreen.kt's header comment). Reached from
+    // ReportsScreen's own `retail.reports`-gated entry, same as
+    // "employee_sales" immediately above.
+    b.composable("trial_balance") { TrialBalanceScreen(snackbar) }
     // Phase 1 employee management (design doc §3). Registered here and
     // reachable from MoreScreen's "Team" section -- both halves are required:
     // SettingsScreen.kt is a fully-written screen that has never been in this

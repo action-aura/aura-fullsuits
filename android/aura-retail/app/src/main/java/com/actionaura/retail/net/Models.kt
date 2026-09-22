@@ -700,6 +700,77 @@ data class ByEmployeeResponse(
     val error: String? = null,
 )
 
+// ── Retail: general ledger trial balance (retail-hardware-viewports, schema
+//    v38/v39) ────────────────────────────────────────────────────────────────
+// GET /api/sub/retail/reports/trial-balance (retail_api.py::report_trial_balance)
+// -- read-only exposure of core/retail/general_ledger.py's `gl.trial_balance` +
+// `gl.subledger_tie`, the same {"success": true, "data": ...} envelope as its
+// siblings above.
+
+/**
+ * One row of `gl_accounts`, as `gl.trial_balance` returns it -- the chart of
+ * accounts `ensure_default_chart` seeds for every company (10 rows: Cash and
+ * Bank, Accounts Receivable, Inventory, Accounts Payable, Tax Payable, Owner's
+ * Equity, Sales Revenue, Sales Returns and Allowances, Loyalty Program
+ * Expense, Cost of Goods Sold), each with its lifetime debit/credit totals.
+ *
+ * `code`/`name`/`account_type`/`normal_balance` are String -- nullable for the
+ * same Gson explicit-null reason [Customer.name] is (a JSON `null` overwrites
+ * a non-primitive field's default regardless of the Kotlin type); `debit`/
+ * `credit`/`balance` are Double, a Gson-protected primitive (see
+ * [ByEmployeeResponse]'s doc comment), so `= 0.0` is safe.
+ */
+data class GlAccount(
+    val code: String? = null,
+    val name: String? = null,
+    val account_type: String? = null,
+    val normal_balance: String? = null,
+    val debit: Double = 0.0,
+    val credit: Double = 0.0,
+    val balance: Double = 0.0,
+)
+
+/**
+ * `gl.subledger_tie`'s output verbatim -- THE POINT of exposing the ledger at
+ * all (that function's own docstring: "a trial balance that ties back to the
+ * AR/AP subledger"). All six fields are Gson-protected primitives, so no
+ * per-field nullable hedge is needed -- but see [TrialBalance.subledger] for
+ * why the CONTAINER still is.
+ */
+data class SubledgerTie(
+    val ar_gl: Double = 0.0,
+    val ar_subledger: Double = 0.0,
+    val ar_ties: Boolean = false,
+    val ap_gl: Double = 0.0,
+    val ap_subledger: Double = 0.0,
+    val ap_ties: Boolean = false,
+)
+
+data class TrialBalance(
+    val currency: String? = null,
+    val accounts: List<GlAccount> = emptyList(),
+    val total_debit: Double = 0.0,
+    val total_credit: Double = 0.0,
+    val is_balanced: Boolean = false,
+    /**
+     * Nullable, deliberately, even though every field inside [SubledgerTie] is
+     * a Gson-protected primitive: the CONTAINER itself is not protected, and a
+     * malformed or absent `subledger` key must not silently read as
+     * `SubledgerTie()`'s all-false defaults -- which would draw a "does not
+     * tie" alarm the server never raised, over data it never sent. See
+     * ui/screens/TrialBalanceScreen.kt's `arTieState`/`apTieState`: a null
+     * subledger renders as its own third state ("couldn't verify"), never
+     * folded into either tie verdict.
+     */
+    val subledger: SubledgerTie? = null,
+)
+
+// `data` nullable for the same reason [ByEmployeeResponse.data] is -- see that
+// doc comment for the full Gson post-mortem. The screen's load path throws on
+// a null `data` rather than defaulting it, so a malformed 200 takes the same
+// error path as every other failure instead of rendering as an empty ledger.
+data class TrialBalanceResponse(val success: Boolean = false, val data: TrialBalance? = null)
+
 // ── Retail: returns / refunds ────────────────────────────────────────────────
 data class Return(
     val id: Int = 0, val return_number: String? = null, val sale_number: String? = null,
