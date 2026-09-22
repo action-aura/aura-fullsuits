@@ -405,10 +405,12 @@ so treat any claim in this document older than the code as unverified.
   a POS guard that refuses to sell a parent outright ("has variants — choose a
   specific variant to sell"). Retail schema **v25**.
   Restaurant-style **modifiers** are a separate matter: schema and the config
-  API both shipped (**v26**), but the POS picker screen and the cart merge-key
-  rework were deliberately cut to protect the money path, and the two modifier
-  routes are parked in `retail_route_reachability_test.py`'s
-  `INTENTIONALLY_UNREACHABLE` with that reason in writing.
+  API both shipped (**v26**), ~~but the POS picker screen and the cart
+  merge-key rework were deliberately cut to protect the money path, and the
+  two modifier routes are parked in `retail_route_reachability_test.py`'s
+  `INTENTIONALLY_UNREACHABLE` with that reason in writing.~~ **THE PICKER
+  SHIPPED 2026-09-22 — see round 6 corrections below.** The cut half of this
+  sentence was true for eight weeks and is not any more.
 
 ### Corrections — three things this list wrongly called missing
 
@@ -518,7 +520,8 @@ build next:**
   integration_test.py`). Full detail in ROADMAP.md's 2026-09-20 "v38
   CLAIMED" and 2026-09-21 "v38 CASHED IN" entries.
 
-  WHAT REMAINS TRUE from the old claim: no balance sheet, no P&L, no period
+  WHAT REMAINS TRUE from the old claim: no balance sheet, ~~no P&L~~ (P&L
+  SHIPPED 2026-09-22 — see round 6 corrections below), no period
   close, no fiscal-year rollover, no retained-earnings posting, no
   multi-currency — v38 is deliberately just the core, and each of those
   needs it to exist first. ~~And, not previously said anywhere in this
@@ -558,12 +561,15 @@ build next:**
   concurrent pass, so its count is not quoted here. Full detail in
   ROADMAP.md's 2026-09-21 "v39 CLAIMED" and "v39 CASHED IN" entries.
 
-  WHAT STILL REMAINS TRUE, even after v39: no balance sheet, no P&L, no
+  WHAT STILL REMAINS TRUE, even after v39: no balance sheet, ~~no P&L~~ (P&L
+  SHIPPED 2026-09-22 — see round 6 corrections below), no
   period close, no fiscal-year rollover, no retained-earnings posting, no
-  multi-currency, and — new to this correction — no PER-BRANCH cost basis:
+  multi-currency, ~~and — new to this correction — no PER-BRANCH cost basis:
   `avg_cost` lives on `products`, which is company-scoped, and inter-branch
   transfers still carry no cost, so branch-level inventory valuation stays
-  unavailable. `journal_entries`, the fossil this claim was originally
+  unavailable.~~ **PER-BRANCH COST BASIS SHIPPED AS SCHEMA v40, 2026-09-22 —
+  see round 6 corrections below; this gap lasted exactly one day.**
+  `journal_entries`, the fossil this claim was originally
   about, is STILL UNCHANGED — still zero INSERTs, zero SELECTs in this
   codebase's history, left in place and marked superseded in schema.py
   rather than dropped, because dropping it buys nothing and risks a
@@ -591,11 +597,16 @@ build next:**
   The AR/AP subledger comment this bullet used to quote — "a future
   double-entry GL CONSUMES these records" — is no longer aspirational; v38
   was that future for the ledger core, and v39 is the cost basis it needed
-  to post COGS from. Neither yet feeds a presentation layer (no
-  balance-sheet/P&L reads either). The "what's real and solid" list above
-  still does not mention any of this — that list is itself untouched by
-  this correction, per this document's own rule not to restructure sections
-  outside the one being corrected.
+  to post COGS from. ~~Neither yet feeds a presentation layer (no
+  balance-sheet/P&L reads either).~~ **AS OF 2026-09-22 THAT IS ONLY HALF
+  TRUE: an income statement now sits above AR/AP too** — see round 6
+  corrections below — **a balance sheet still does not**, and is in flight
+  under a separate, concurrent pass. AR/AP is no longer a subledger with
+  nothing reading it: a general ledger and an income statement both sit on
+  top of it now. The "what's real and solid" list above still does not
+  mention any of this — that list is itself untouched by this correction,
+  per this document's own rule not to restructure sections outside the one
+  being corrected.
 - **AR/AP IS ANDROID-ONLY, inverting the usual pattern.** Receivables,
   payables, aging, statements and daily cash exist in full on Android and are
   **absent from the desktop client** this document calls the most actively
@@ -634,6 +645,19 @@ same day, unlike v38, which was claimed one day and cashed in the next. v35
 remains the only unclaimed hole. Read `RETAIL_SCHEMA_VERSION` itself rather
 than trusting this paragraph to still be current by the time it is read; it
 has now been wrong three times running.
+
+**AND THAT LINE IS STALE YET AGAIN — retail schema is v40 as of 2026-09-22.**
+v40 is the per-branch cost basis the v39 correction above named as the one
+thing still missing: `inventory_balances.avg_cost` per (company, product,
+branch), a new `stock_transfer_items.unit_cost` so a receive can read back
+what a line cost when it left, and `transfer_out`/`transfer_in` — which used
+to write `unit_cost` 0 — now carry real cost, because moving stock between
+branches stopped being cost-neutral the moment cost is tracked per branch.
+ROADMAP.md carries the "v40 CLAIMED" and "v40 CASHED IN" entries, both dated
+2026-09-22, claimed and delivered the same day like v39 before it. v35
+remains the only unclaimed hole. Read `RETAIL_SCHEMA_VERSION` itself rather
+than trusting this paragraph to still be current by the time it is read; it
+has now been wrong four times running.
 
 ### Corrections (round 4, 2026-09-18) — the money path, measured
 
@@ -745,6 +769,75 @@ restored to green.
 was accurate when written on 2026-09-19 and wrong on 2026-09-20, because the
 work landed and the prose did not move. A session that trusted it would have
 spent its budget re-wiring 31 modals that were already wired.
+
+### Corrections (round 6, 2026-09-22) — an income statement lands above AR/AP, the modifiers picker ships, and the v39 per-branch gap closes in a day
+
+Three things this file was silent about, all closed the same day. Also the
+day three separate sentences ABOVE this one — the v38 "no P&L", the v39 "no
+P&L" and "no PER-BRANCH cost basis", and "neither yet feeds a presentation
+layer" — stopped being true; each is struck through in place, not just here,
+because a reader who reaches this section first should not have to guess
+which earlier claim it invalidates.
+
+- **A PROFIT AND LOSS STATEMENT now exists** — `core/retail/financial_
+  statements.py::income_statement`, `GET /api/sub/retail/reports/profit-and-
+  loss`, and a desktop screen in the Insight nav group. No schema bump; it
+  needed none. Derived by account TYPE, never an enumerated code list, so a
+  shop-added expense account appears in its own P&L with zero code changes —
+  the one deliberate exception is `gl.ACCOUNT_COGS`, pulled out of the
+  generic expense bucket by name so "gross profit" can exist as its own line.
+  Periods bucket on `gl_journals.business_date`, the accounting date, never
+  `posted_at`. THE SIGN CONVENTION is the part worth remembering: revenue
+  nets `credit - debit` across every revenue-type account regardless of that
+  account's OWN `normal_balance`, so 4900 Sales Returns and Allowances (a
+  contra-revenue account whose normal balance is a debit) subtracts itself
+  automatically. Signing per-account the way `general_ledger.trial_balance`
+  does was mutation-proved wrong in the same pass — it ADDS customer returns
+  to revenue. Two honesty flags ship with it, surfaced on the screen rather
+  than buried: `cost_basis_incomplete` (a period containing a pre-v39 sale
+  has understated COGS and therefore overstated gross profit) and
+  `has_activity` (nothing posted is not the same claim as broke even). This
+  closes the gap the round-3 corrections above named as commercially
+  decisive — "against an accounting-first competitor that omission matters
+  more than any single wrong bullet." Still absent: balance sheet, period
+  close, fiscal-year rollover, retained-earnings posting, multi-currency. **A
+  balance sheet is being built right now by a separate, concurrent agent** —
+  it is IN FLIGHT, not shipped; do not treat it as done and no test count for
+  it is claimed anywhere in this document.
+
+- **THE MODIFIERS PICKER SHIPPED**, closing the round-2 correction above. The
+  till picker exists (`RetailSystem._openModifierPicker`, subsystem-
+  retail.js), and the cart merge key is now `product_id` plus SORTED option
+  ids (`_cartLineKey`), so two identical selections merge and two different
+  ones do not — an ordinary product with no modifiers keeps its old merge
+  behaviour byte-for-byte because its key never changes. Money stays
+  server-side: `create_sale` re-reads the price itself through `modifier_
+  engine.resolve_line_modifiers` against the server's own loaded modifier
+  groups, and the client sends only option ids as intent, never a price — the
+  cart total the till shows before Charge is a preview, not a source of
+  truth. `modifier-groups` has LEFT `INTENTIONALLY_UNREACHABLE` in `retail_
+  route_reachability_test.py`; `modifier-options` STAYS PARKED there,
+  unchanged, because those are the admin edit/delete routes for an
+  already-created option and still have no Settings screen on either client.
+  Also closed in the same pass: a cold-start bug where the till had no
+  synchronous way to know a product carries modifier groups, so the first tap
+  committed a line without its options and told the cashier to remove it and
+  tap again — closed by a derived `has_modifiers` flag (an `EXISTS` subquery
+  riding the same query as the tile list, not a per-product round trip) added
+  to `list_products`, `lookup_product` and `list_product_variants`. One tap
+  now, cold or warm.
+
+- **PER-BRANCH COST BASIS SHIPPED AS SCHEMA v40** — see the schema-version
+  correction above for the full chain; not repeated here beyond noting that
+  this closes the exact gap the v39 correction above named the day before,
+  2026-09-21 — one day, not the same-day turnaround v38→v39 itself managed,
+  but still fast enough that a session reading yesterday's correction without
+  re-checking would already be wrong.
+
+Full detail for all three, including file:line citations and measured test
+counts, is in ROADMAP.md's three 2026-09-22 entries — this section
+summarises rather than duplicates, per this file's own preference for
+pointing at the ledger rather than re-typing it.
 
 ## How to give a good suggestion here
 

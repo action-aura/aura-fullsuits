@@ -5807,3 +5807,226 @@ makes that strictly harder, not easier.
   made-up figure is worse than valuation reading a zero it can see". A
   per-branch backfill has no better evidence available and should not pretend
   otherwise.
+
+## 2026-09-22 — retail schema v40 CASHED IN: a per-branch cost basis, delivered
+
+Claimed above, the same day ("2026-09-22 — retail schema v40 CLAIMED: a
+per-branch cost basis", immediately above). `RETAIL_SCHEMA_VERSION` is now
+**40**; v35 is still the untouched Aseel-parity hole.
+
+THE UNDECIDED POINTS the CLAIMED entry left open, both resolved:
+
+* **Storage shape:** a column on the existing per-branch stock table, not a
+  new one. `inventory_balances.avg_cost REAL DEFAULT 0` — the same table
+  `metrics.inventory_value` already read per branch — rather than a second
+  table this migration would then have to keep in step with it.
+* **What a transfer carries:** the SENDING branch's own average, read at send
+  time, not a separate snapshot mechanism. Removing stock at the branch's
+  existing average does not change what that average IS, so `send_stock_
+  transfer` (api/retail_api.py, ~line 4463) simply reads `inventory_
+  balances.avg_cost` for the source branch and writes it onto `stock_
+  transfer_items.unit_cost` — no recomputation, unlike the two places that DO
+  recompute an average (below).
+
+WHAT SHIPPED.
+
+`products/retail/backend/database/schema.py` — `RETAIL_SCHEMA_VERSION` is 40;
+`_migrate_add_branch_cost_basis` adds two columns and nothing else:
+
+    inventory_balances.avg_cost      REAL DEFAULT 0
+    stock_transfer_items.unit_cost   REAL DEFAULT 0
+
+`inventory_balances.avg_cost` IS BACKFILLED, once, from `products.avg_cost` —
+a disclosed plug, the identical shape v39's own `products.avg_cost` backfill
+from `cost_price` used, for a column that has to start somewhere.
+`stock_transfer_items.unit_cost` is DELIBERATELY NOT BACKFILLED: no historical
+transfer ever recorded a send-time cost (`transfer_out`/`transfer_in` wrote
+`unit_cost` 0 into `inventory_movements` since schema v28), so there is
+nothing truthful to plug in. `products.avg_cost` STAYS, unchanged, as the
+company-level fallback for a branch that has never received stock of its own.
+
+`products/retail/backend/api/retail_api.py`:
+
+* `receive_purchase_order` (~line 3956) now maintains `inventory_balances.
+  avg_cost` as its OWN moving weighted average, scoped to the receiving
+  branch, alongside the existing company-wide `products.avg_cost` write —
+  same formula, one level down.
+* `send_stock_transfer` (~line 4463) reads the source branch's average
+  (three-level fallback: branch avg_cost -> company avg_cost -> cost_price,
+  the identical chain `create_sale`'s cost snapshot already uses) and writes
+  it onto `stock_transfer_items.unit_cost` — TRANSFERS NOW CARRY COST, where
+  `transfer_out`/`transfer_in` used to write 0. Harmless while the average was
+  company-wide (moving stock inside a company does not change the company's
+  total cost, which is why v39 deliberately left transfers alone); not
+  harmless per-branch, because stock from a branch that paid 4.00 going to one
+  that paid 10.00 must carry its cost or the receiver values it at nothing.
+* `receive_stock_transfer` (~line 4695) recomputes the DESTINATION branch's
+  average from the transfer's carried `unit_cost`, the same weighted-average
+  formula, with the same zero/negative-denominator guard as the purchase-order
+  write.
+* `create_sale` (~line 6553) snapshots cost through a THREE-LEVEL fallback —
+  branch average, then company average, then `cost_price` — one level deeper
+  than v39's two-level chain, so a branch that has never received stock of its
+  own still gets the best available figure rather than a false zero.
+* The v39 negative-result guard (a legitimate negative on-hand quantity, from
+  the `behind_on_sync` oversell path, swinging the weighted-average formula
+  past zero) is matched per branch in all three write sites above: falls back
+  to the OBSERVED incoming/received cost, never a 0-clamp, because 0 is this
+  codebase's own sentinel for "no cost basis known at all" and clamping would
+  misreport a movement that DOES carry a known cost as one that has none.
+
+`products/retail/backend/core/retail/metrics.py` — `inventory_value` (~line
+1272) takes a new optional `branch_id`, third positional parameter, and reads
+`COALESCE(NULLIF(b.avg_cost, 0), NULLIF(p.avg_cost, 0), p.cost_price)` — the
+per-branch figure as a straight PARTITION of the same company-wide SQL, not a
+second formula, so a branch total and the company total agree by
+construction.
+
+A BUG CAUGHT BEFORE SHIPPING, in the same pass: `metrics.summary()` (~line
+1707) calls `revenue()`/`cogs()`/`tax_collected()` with `branch_id` as their
+own third positional parameter, and was about to pass `currency` positionally
+into `inventory_value(conn, cid, currency)` too — except schema v40 inserted
+`branch_id` as THAT function's new third positional slot, so a positional
+`currency` there would have silently bound to `branch_id` instead, turning a
+currency code into a branch filter no row could ever match. Every summary
+call would have reported `inventory_value: 0` forever, silently. Fixed by
+passing `currency` BY KEYWORD at that one call site — see the comment at
+metrics.py:1738 explaining why, in place, so the next positional-parameter
+addition to `inventory_value` does not reopen the same trap.
+
+`commercial_runtime/sync/sync_service.py` (~line 2668) — the `inventory_
+movement` apply branch now maintains `inventory_balances.avg_cost` too, for a
+device that only ever learns a branch's stock THROUGH SYNC and never through
+a local receipt or transfer-receive at that branch. Only `purchase_in`/
+`transfer_in` weight into the average, matching the two movement types that
+ever write this column locally; a movement carrying `unit_cost` 0 means NO
+COST INFORMATION and is skipped entirely rather than dragging a real average
+toward zero. Replay safety is inherited from the existing `if cur.rowcount:`
+guard already wrapping the quantity upsert this code sits inside, after
+`ON CONFLICT(uid) DO NOTHING`. DISCLOSED, not fixed: this module quantizes to
+a fixed 4dp (`Decimal('0.0001')`) rather than the company's own currency
+precision, because shared sync code cannot import a product's currency lookup
+without a layering violation — see the comment at sync_service.py:2745.
+
+A LESSON WORTH RECORDING, because this file's corrections sections exist for
+exactly this: a mutation adding `sale_out` to `sync_service.py`'s
+movement-type allowlist first came back GREEN, because every live `sale_out`
+emitter hardcodes `unit_cost` 0 today, so the zero-cost guard (line 2698)
+masked the movement-type guard and the test could not tell the two guards
+apart. Rebuilding the test with a hand-made `sale_out` event carrying a
+NONZERO `unit_cost` made the same mutation fail at the hand-computed figure —
+the guard the test actually needed to prove.
+
+ALSO STILL OUT OF SCOPE, unchanged from v39: period close, fiscal-year
+rollover, retained-earnings posting, multi-currency, balance sheet
+presentation (a P&L now exists — see this same date's separate entry below —
+but a balance sheet does not).
+
+MEASURED 2026-09-22, repo venv, one file per process:
+
+    retail_v40_branch_cost_test.py               10 passed
+    retail_branch_cost_convergence_test.py         7 passed
+    products/run_all_tests.py sync                23 files / 23 passed
+    full suite                                   318 files / 318 passed
+
+## 2026-09-22 — a profit and loss statement, derived from the ledger (no schema change)
+
+No `RETAIL_SCHEMA_VERSION` bump — this needed none. `core/retail/
+financial_statements.py::income_statement` plus `GET /api/sub/retail/
+reports/profit-and-loss` (retail_api.py:11101, `report_profit_and_loss`) and
+a desktop screen in the Insight nav group (app-shell.js:1020, `{ id:
+'profit-and-loss', label: 'Profit and Loss', ... }`). This is the
+presentation layer schema v38's own comment named as a future consumer of
+the ledger ("a future double-entry GL CONSUMES these records") and v39's own
+entry said had not arrived yet ("neither yet feeds a presentation layer") —
+it has now.
+
+DERIVED BY ACCOUNT TYPE, never an enumerated code list: `income_statement`
+asks the ledger "which accounts are `account_type='revenue'`/`'expense'` and
+what did they move in this period", never a hardcoded `WHERE code IN (...)`.
+A shop that adds a new expense account to its chart appears in its own P&L
+automatically, with zero edits to this module. The one deliberate exception
+is `gl.ACCOUNT_COGS`, pulled out of the generic expense bucket by name (not a
+hardcoded list) so "gross profit" can exist as its own line.
+
+THE SIGN CONVENTION is the interesting part. Revenue nets `credit - debit`
+across every revenue-type account regardless of that account's OWN
+`normal_balance` — never each account's own normal-balance-signed net, the
+way `general_ledger.trial_balance` computes a bare balance report. That
+distinction is what makes 4900 Sales Returns and Allowances (a CONTRA-revenue
+account, `normal_balance='debit'`) subtract itself from revenue with no
+special case anywhere in the code. Signing per-account the way `trial_
+balance` does was mutation-proved wrong in the same pass: it ADDS customer
+returns to revenue instead of subtracting them — see
+`financial_statements.py`'s own `_TYPE_CANONICAL_NORMAL` comment for the
+worked arithmetic.
+
+PERIOD SCOPING is `gl_journals.business_date`, the accounting date, never
+`posted_at` — a sale rung at 11:58pm and synced the next morning still lands
+in the day it actually happened, matching the reasoning schema.py already
+gives for keeping `stock_transfers`' `created_at`/`sent_at`/`received_at`
+distinct.
+
+TWO HONESTY FLAGS, both surfaced on the screen rather than buried:
+`cost_basis_incomplete` (true when any sale in the period has a line with
+`sale_items.unit_cost = 0` — a period containing a pre-v39 sale has
+UNDERSTATED cost_of_goods_sold and therefore OVERSTATED gross profit) and
+`has_activity` (false when nothing posted in the period at all, so a
+presentation layer can say "nothing was posted" instead of implying the shop
+broke even).
+
+This closes the gap CLAUDE.md's round-3 corrections named as commercially
+decisive: "against an accounting-first competitor that omission matters more
+than any single wrong bullet."
+
+STILL ABSENT: balance sheet, period close, fiscal-year rollover,
+retained-earnings posting, multi-currency. **A balance sheet is being built
+right now by a separate, concurrent agent** — it is IN FLIGHT, not shipped,
+and this entry does not claim it or quote a test count for it.
+
+## 2026-09-22 — the modifiers picker ships, closing a gap CLAUDE.md has carried since schema v26
+
+CLAUDE.md's round-2 corrections (2026-09-01) said modifiers shipped schema
+and the config API in v26 but "the POS picker screen and the cart merge-key
+rework were deliberately cut to protect the money path, and the two modifier
+routes are parked in `retail_route_reachability_test.py`'s
+`INTENTIONALLY_UNREACHABLE` with that reason in writing." That is now
+half-false, corrected in that document directly (struck through, not
+deleted) alongside this entry.
+
+WHAT SHIPPED: the till picker (`RetailSystem._openModifierPicker`,
+subsystem-retail.js, commit 3596d35), and the cart merge key is now
+`product_id` plus SORTED option ids —
+
+    _cartLineKey(productId, optionIds) {
+      return `${productId}::${(optionIds || []).slice().sort().join(',')}`;
+    }
+
+— so two identical selections merge into one cart line and two different
+selections of the same product do not, while an ordinary product with no
+modifiers keeps its old behaviour byte-for-byte because its key never
+changes (`_commitCartLine`, subsystem-retail.js:4151).
+
+MONEY STAYS SERVER-SIDE. The picker never computes a price the server has to
+trust: `create_sale` (retail_api.py:6608) re-reads `sell_price` itself
+through `modifier_engine.resolve_line_modifiers` against the server's own
+`load_product_modifier_groups` lookup, and the client sends only
+`modifier_option_ids` as INTENT. The cart total the till shows before Charge
+is a preview, not a source of truth.
+
+`modifier-groups` has LEFT `INTENTIONALLY_UNREACHABLE` in `retail_route_
+reachability_test.py` — the till's `GET /products/<id>/modifier-groups` call
+is what pulled it out. `modifier-options` STAYS PARKED there, unchanged and
+for the same reason as before: `PATCH`/`DELETE /modifier-options/<id>` are
+the admin edit/delete routes for an already-created option, and still have no
+Settings screen on either client — this wave only ever READS options, nested
+inside the groups fetch.
+
+A COLD-START BUG CLOSED IN THE SAME PASS, worth its own line: the first
+version had no synchronous way for the till to know a product carries
+modifier groups before the first tap, so the first tap committed a plain
+cart line without its options and told the cashier to remove it and tap
+again. Closed by adding a derived `has_modifiers` flag — an `EXISTS`
+subquery riding the SAME query as the tile list, not a per-product round
+trip — to `list_products` (retail_api.py:1684), `lookup_product` (:1821) and
+`list_product_variants` (:2400). One tap now, cold or warm.
