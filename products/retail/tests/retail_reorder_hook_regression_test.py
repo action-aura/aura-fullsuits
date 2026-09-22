@@ -67,17 +67,33 @@ def teardown_module(module):
 # change" this comment already anticipated. Reorder automation still never
 # adds a key; that claim is unaffected.
 #
-# `einvoice` added 2026-09-08 -- the second such contract change, and this
-# one couples a NEIGHBOURING best-effort hook into this file's assertions.
-# E-invoicing now defaults ON (commercial_runtime/einvoicing/settings.py
-# DEFAULTS 'enabled': '1'), so create_sale reaches the enqueue block at
-# retail_api.py:4816 -- the block immediately ABOVE the reorder hook this
-# file guards, sharing its "own connection, broad try/except, never fails
-# the sale" shape. The difference is that e-invoicing sets
-# response_data['einvoice'] when enqueue_sale(...) returns truthy, so a
-# failed or skipped enqueue now shows up here as a reorder-hook key-set
-# failure. The claim this file actually makes is still narrow and still
-# true: the REORDER hook adds no key, whether it fires, no-ops or raises.
+# `einvoice` was added 2026-09-08 -- the second such contract change, and it
+# coupled a NEIGHBOURING best-effort hook into this file's assertions:
+# E-invoicing defaulted ON then (commercial_runtime/einvoicing/settings.py
+# DEFAULTS 'enabled': '1'), so create_sale reached the enqueue block
+# immediately ABOVE the reorder hook this file guards, sharing its "own
+# connection, broad try/except, never fails the sale" shape.
+#
+# AUDIT 2026-09-22 -- REMOVED again: e-invoicing is opt-in now (that same
+# module's DEFAULTS['tax_regime'] flipped 'jordan' -> 'none', and
+# is_enabled() checks the regime BEFORE the 'enabled' toggle -- see its own
+# comment for the full reasoning). None of this file's companies ever opt
+# in, so create_sale's einvoice-enqueue try/except never sets
+# response_data['einvoice'] for any sale rung here. Putting the key back
+# would fail every test below with a real KeyError, not prove anything
+# about the reorder hook.
+#
+# WHAT THIS COSTS: test_hook_exception_produces_the_identical_response_a_
+# successful_hook_would_have used to prove, via an explicit
+# `data['einvoice'] == {...}` check (removed in this same change -- see
+# that test's own comment), that a RAISING reorder hook could not also take
+# the neighbouring e-invoicing enqueue down with it -- a real adjacent-
+# failure-mode concern, since the two blocks sit back to back in the same
+# function. That specific adjacency can no longer be observed from this
+# file, because e-invoicing never enqueues here at all any more, hook
+# raising or not -- both sides are equally inert. The claim this file
+# actually makes is still narrow and still true, and still fully proven:
+# the REORDER hook itself adds no key, whether it fires, no-ops or raises.
 # points_redeemed / points_redeemed_amount joined this set when loyalty
 # redemption shipped (v27). They are always present, zero when nothing was
 # redeemed, so the receipt and the sale-complete modal can show the SERVER's
@@ -86,7 +102,7 @@ def teardown_module(module):
 # an unexpected one appearing still fails.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+    'customer_id', 'customer_name', 'discount_amount', 'employee_name',
     'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
@@ -220,29 +236,26 @@ def test_hook_exception_produces_the_identical_response_a_successful_hook_would_
     monkeypatch.setattr(reorder_hook, 'maybe_trigger_reorder', _boom)
     fail_response = _sell(client_fail, pid_fail, 2).get_json()['data']
 
-    # 'einvoice' is per-sale-unique for the same reason 'id' is: its
-    # invoice_ref is f'AURA_RETAIL:sale:{sale_id}' (retail_api.py:4818), so
-    # two different sales can never compare equal and a raw == on it could
-    # only ever fail. Excluding it costs this loop the ability to notice a
-    # change in the einvoice payload's SHAPE, so that is asserted
-    # explicitly below against each response's own id instead.
-    excluded = {'id', 'sale_number', 'idempotency_key', 'lines', 'einvoice'}
+    excluded = {'id', 'sale_number', 'idempotency_key', 'lines'}
     for key in SALE_RESPONSE_KEYS:
         if key in excluded:
             continue
         assert ok_response[key] == fail_response[key], f"divergence on {key!r}"
 
-    # The excluded key, checked the only way it can be. This matters here
-    # more than anywhere: the e-invoicing enqueue sits in the try/except
-    # DIRECTLY ABOVE the reorder hook being blown up, so "a raising reorder
-    # hook took e-invoicing down with it" is a real, adjacent failure mode
-    # and the key-set assertion cannot see it (it would still pass if BOTH
-    # responses lost the key).
-    for label, data in (('hook ok', ok_response), ('hook raising', fail_response)):
-        assert data['einvoice'] == {
-            'invoice_ref': f"AURA_RETAIL:sale:{data['id']}",
-            'status': 'queued',
-        }, f"e-invoice payload wrong with the reorder {label}: {data['einvoice']!r}"
+    # AUDIT 2026-09-22: an explicit `data['einvoice'] == {...}` check used to
+    # stand here, comparing the enqueued payload between the hook-ok and
+    # hook-raising responses -- see SALE_RESPONSE_KEYS' own comment above
+    # for why it is gone rather than weakened: 'einvoice' is no longer part
+    # of this file's default response at all, because e-invoicing is opt-in
+    # now and neither company here ever opts in. WHAT THIS COSTS: this test
+    # can no longer prove that a raising reorder hook does not also take the
+    # neighbouring e-invoicing enqueue down with it, a real adjacent-
+    # failure-mode concern (the two blocks sit back to back in the same
+    # function) -- there is simply no einvoice key left to compare, on
+    # either side. If that specific adjacency ever needs re-proving, it
+    # needs a company opted into tax_regime='jordan', which this file
+    # deliberately does not do (its subject is the reorder hook, not
+    # e-invoicing).
 
     # `lines` differs only in product_id/branch_id (a different product AND
     # a different auto-created branch per client/company) -- every OTHER

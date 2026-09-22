@@ -157,33 +157,35 @@ def test_outbox_retry_requires_admin(app_and_db):
     assert r.status_code == 403
 
 
-# ─── enabled-by-default ─────────────────────────────────────────────────
+# ─── disabled-by-default (opt-in via tax_regime) ─────────────────────────
 #
-# AUDIT: e-invoicing now defaults ON (settings.py DEFAULTS['enabled']='1'
-# -- the Jordanian mandate means a fresh company records the obligation
-# without anyone touching a toggle). This test used to be named
-# test_status_shows_disabled_by_default and assert False here -- that
-# described the OLD default and is not what this endpoint does anymore, so
-# renaming and flipping the assertion is fixing a stale test, not
-# weakening one. This test alone can no longer catch an accidental flip
-# BACK to a disabled default (or any other regression that makes a fresh
-# company come up disabled) -- pair it with
+# AUDIT 2026-09-22 -- SUPERSEDES THE ORIGINAL VERSION OF THIS SECTION.
+# settings.py's DEFAULTS['tax_regime'] flipped to 'none', checked BEFORE
+# the `enabled` toggle in is_enabled() (see that key's own comment for the
+# full history -- nothing can actually be filed yet, so the old
+# enabled-by-default only minted unfileable e-invoice numbers).
+# DEFAULTS['enabled'] itself is UNCHANGED, still '1'. This test used to be
+# named test_status_shows_enabled_by_default and assert True here -- one
+# rename removed already (it used to be test_status_shows_disabled_by_default
+# before THAT), which is exactly why this rename states what it pins rather
+# than just flipping the assertion again under a name that would now lie
+# about it. This test alone can no longer catch a regression that makes a
+# fresh company come up enabled -- pair it with
 # test_default_on_and_unconfigured.py's
-# test_company_with_no_settings_row_is_enabled_by_default (same claim,
-# against settings.py directly) and its four
-# ..._still_beats_the_new_default tests (the four disable layers each
-# still winning over this default), which together cover what this single
-# route-level assertion no longer can.
+# test_company_with_no_settings_row_is_disabled_by_default_via_tax_regime
+# (same claim, against settings.py directly) and its
+# ..._still_beats_the_new_default tests, which together cover what this
+# single route-level assertion no longer can.
 
-def test_status_shows_enabled_by_default(app_and_db):
+def test_status_shows_disabled_by_default_with_no_tax_regime(app_and_db):
     client = _client(app_and_db)
     _login(client)
     r = client.get('/api/einvoicing/status')
     assert r.status_code == 200
     data = r.get_json()['data']
-    assert data['enabled'] is True
+    assert data['enabled'] is False
     # The DEFAULT provider setting, which became 'unconfigured' on 2026-09-08
-    # alongside the enabled-by-default flip -- see settings.DEFAULTS' comment.
+    # -- still the shipped default regardless of the regime opt-in change.
     # This asserts the SETTING (what the shop chose); the live provider object
     # is reported separately as 'provider_in_use'/'provider_configured'.
     assert data['provider'] == 'unconfigured'
@@ -193,7 +195,10 @@ def test_status_shows_enabled_by_default(app_and_db):
 def test_enabling_via_settings_reflects_in_status(app_and_db):
     client = _client(app_and_db)
     _login(client)
-    r = client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    # AUDIT 2026-09-22: `enabled` alone is meaningless outside a regime --
+    # tax_regime must be posted too, or is_enabled() resolves False before
+    # `enabled` is ever read (DEFAULTS['tax_regime']='none').
+    r = client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
     assert r.status_code == 200
     status = client.get('/api/einvoicing/status').get_json()['data']
     assert status['enabled'] is True
@@ -205,6 +210,12 @@ def test_posting_tax_regime_none_reports_disabled_on_status(app_and_db):
     settings.is_enabled() in isolation."""
     client = _client(app_and_db)
     _login(client)
+    # AUDIT 2026-09-22: a fresh company now starts disabled (tax_regime
+    # defaults to 'none'), so this test opts in first -- without that step
+    # it would trivially pass even if posting tax_regime='none' did nothing
+    # at all, because the company was never enabled to begin with.
+    r0 = client.post('/api/einvoicing/settings', json={'tax_regime': 'jordan'})
+    assert r0.status_code == 200
     assert client.get('/api/einvoicing/status').get_json()['data']['enabled'] is True
     r = client.post('/api/einvoicing/settings', json={'tax_regime': 'none'})
     assert r.status_code == 200
@@ -372,12 +383,23 @@ def test_killswitch_set_and_clear(app_and_db):
 
 
 # ─── per-company worker registry (multi-tenant correctness) ─────────────
+#
+# AUDIT 2026-09-22: _post_settings() only calls get_worker(cid) when the
+# RESOLVED post-write state (`now_enabled`) is True, and `enabled` alone no
+# longer resolves a company enabled -- tax_regime must be 'jordan' too
+# (settings.py DEFAULTS['tax_regime']='none', checked first in
+# is_enabled()). Posting {'enabled': '1'} alone here is not a route bug,
+# it's an incomplete opt-in: verified against routes.py::_post_settings
+# directly, this is the same "only start when genuinely enabled" behaviour
+# the route already documents in its own AUDIT comment, now gated on one
+# more layer. Each POST below that is meant to actually enable a company
+# now also posts tax_regime='jordan'.
 
 def test_enabling_starts_the_worker_for_that_company_only(app_with_worker_registry):
     app, workers = app_with_worker_registry
     client = app.test_client()
     _login(client, company_id=1)
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
     assert workers[1].started_with is not None
     assert 1 in workers
     assert 2 not in workers, "enabling for company 1 must not touch any other company's worker"
@@ -387,7 +409,7 @@ def test_disabling_stops_only_that_companys_worker(app_with_worker_registry):
     app, workers = app_with_worker_registry
     client = app.test_client()
     _login(client, company_id=1)
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
     client.post('/api/einvoicing/settings', json={'enabled': '0'})
     assert workers[1].stop_calls == 1
 
@@ -396,11 +418,11 @@ def test_two_companies_get_independent_workers(app_with_worker_registry):
     app, workers = app_with_worker_registry
     client_a = app.test_client()
     _login(client_a, company_id=1)
-    client_a.post('/api/einvoicing/settings', json={'enabled': '1'})
+    client_a.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
 
     client_b = app.test_client()
     _login(client_b, company_id=2)
-    client_b.post('/api/einvoicing/settings', json={'enabled': '1'})
+    client_b.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
 
     assert workers[1] is not workers[2]
     assert workers[1].started_with is not None

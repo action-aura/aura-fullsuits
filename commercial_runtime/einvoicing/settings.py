@@ -9,25 +9,28 @@ ladder):
   1. AURA_EINVOICING_DISABLED=1  -- build/ops hard off, no DB or file I/O.
   2. killswitch.py's DISABLED flag file -- fastest per-install override.
   3. This company's `tax_regime` setting in einvoice_settings -- WHICH TAX
-     AUTHORITY, IF ANY, THIS SHOP FILES WITH. Layers 1, 2 and 4 are all off
-     switches someone must know to throw; this one is a statement of fact
-     about the shop, added because the default at layer 4 was justified by a
-     Jordan-only mandate while applying to every install everywhere (see
-     DEFAULTS['tax_regime']'s own comment). Checked BEFORE layer 4 because
-     `enabled` only means something inside a regime. Any value that is not
-     exactly 'jordan' resolves the whole feature off -- covering both the
-     explicit 'none' and an unrecognised/corrupt stored value, in the same
-     fail-closed direction layer 4 already uses. Default 'jordan', so an
-     existing Jordanian install that never touches settings is unaffected.
+     AUTHORITY, IF ANY, THIS SHOP FILES WITH, and -- since 2026-09-22 -- THE
+     LAYER THAT ACTUALLY DECIDES OPT-IN/OPT-OUT (see DEFAULTS['tax_regime']'s
+     own comment for the full history: it used to default to 'jordan' and now
+     defaults to 'none'). Layers 1, 2 and 4 are all off switches someone must
+     know to throw; this one is a statement of fact about the shop. Checked
+     BEFORE layer 4 because `enabled` only means something inside a regime.
+     Any value that is not exactly 'jordan' resolves the whole feature off --
+     covering both the explicit 'none' and an unrecognised/corrupt stored
+     value, in the same fail-closed direction layer 4 already uses. Default
+     'none', so a fresh install files with nobody until an operator writes
+     'jordan' explicitly -- or, for an install that was already filing before
+     this default flipped, until schema.py's one-time preservation migration
+     writes that row for it automatically (see apply_einvoicing_schema()).
   4. This company's own `enabled` setting in einvoice_settings -- the normal
-     per-company opt-in. Default '1' (ON): Jordan has mandated e-invoicing
-     since 2024-05-31, and a shop that has to go find a toggle is not a
-     shop that's compliant, so a fresh install now records the obligation
-     without anyone touching a setting. "On" here does NOT mean documents
-     get submitted or clearance gets claimed -- with no provider configured
-     (the shipped default; see providers/unconfigured.py), the worker
-     enqueues and holds every document, waiting for the shop to complete
-     JoFotara portal registration. Layers 1-3 above are each still
+     per-company opt-in WITHIN a regime; it is meaningless outside one
+     (is_enabled() below does not even read it when layer 3 has already
+     resolved OFF). Stays '1' by default regardless -- see
+     DEFAULTS['enabled']'s own comment for why. "On" here does NOT mean
+     documents get submitted or clearance gets claimed -- with no provider
+     configured (the shipped default; see providers/unconfigured.py), the
+     worker enqueues and holds every document, waiting for the shop to
+     complete JoFotara portal registration. Layers 1-3 above are each still
      independently sufficient to turn the whole feature off, including
      against this default.
 
@@ -46,6 +49,20 @@ from typing import Optional
 from . import killswitch
 
 DEFAULTS = {
+    # `enabled` is meaningless OUTSIDE a regime -- is_enabled() below does not
+    # even read this key once `tax_regime` (right below) has already resolved
+    # the feature off (see the module docstring's layer 3/4 ordering). So the
+    # regime is now the ONE place that expresses "off by default"
+    # (DEFAULTS['tax_regime']='none'), and this stays '1' deliberately: a shop
+    # that DOES set tax_regime='jordan' should not also have to remember to
+    # flip a second, independent toggle just to be filing. Two switches that
+    # both have to be right is exactly how they drift apart -- this repo has
+    # paid for that shape of bug before (CLAUDE.md's round-4 correction: ~25
+    # money gates that all had to move together, "never make one of these
+    # finer on its own"; same failure mode, two things meant to agree,
+    # changed one at a time). Leaving this at '1' means the ONLY thing that
+    # changed the day the default flipped is the regime a fresh install
+    # starts with -- not a second variable to reason about.
     'enabled': '1',
     # AUDIT: which tax authority, if any, this shop actually files with.
     #
@@ -60,26 +77,61 @@ DEFAULTS = {
     # a missing fourth switch, and the fix is a regime the shop can STATE, not
     # another toggle nobody outside Jordan knows to go looking for.
     #
-    #   'jordan' -- JoFotara / ISTD. Exactly today's shipped behaviour.
+    #   'jordan' -- JoFotara / ISTD. The shop states it files under the
+    #               Jordan mandate. Does NOT by itself mean documents are
+    #               being transmitted -- see 'unconfigured' below.
     #   'none'   -- no e-invoicing regime at all. is_enabled() below resolves
     #               FALSE regardless of the stored `enabled` value. This is
     #               NOT a pause: nothing is filed with any tax authority, and
     #               nothing is being held back to file later either.
     #
-    # WHY THE DEFAULT IS 'jordan' AND NOT 'none' -- written down because the
-    # safer-LOOKING choice is the wrong one here. Every install that exists
-    # today is a Jordanian install operating under a live legal obligation,
-    # and not one of them has a tax_regime row (get_setting() below falls back
-    # to this dict when the key is absent). Defaulting to 'none' would switch
-    # e-invoicing OFF for every one of them on the next upgrade, silently,
-    # with no operator action -- turning a compliance feature off by shipping
-    # a patch. A shop outside Jordan sets this once and gets a correct,
-    # permanent OFF; a shop inside Jordan does nothing and stays exactly as
-    # compliant as it was yesterday.
+    # WHY THE DEFAULT IS 'none' AND NOT 'jordan' -- THIS SUPERSEDES THE
+    # REASONING BELOW. Dated 2026-09-22, the owner's decision: e-invoicing
+    # ships opt-in. The owner will turn it on per install once they have real
+    # ISTD portal credentials.
+    #
+    # THE OLD REASONING, KEPT RATHER THAN DELETED -- this repo's convention
+    # for a superseded decision (see docs/corrections/), and because this
+    # file's own history is the best argument for distrusting any single
+    # version of it. The default used to be 'jordan' because:
+    # every install that existed then was a Jordanian install operating under
+    # a live legal obligation, and not one of them had a tax_regime row
+    # (get_setting() below falls back to this dict when the key is absent).
+    # Defaulting to 'none' would switch e-invoicing OFF for every one of them
+    # on the next upgrade, silently, with no operator action -- turning a
+    # compliance feature off by shipping a patch. That read as the safer
+    # choice, so the default was set to 'jordan' instead of 'none'.
+    #
+    # WHY THAT WAS WRONG: its premise was that defaulting to 'jordan'
+    # PRESERVES COMPLIANCE. It never did. providers/direct_istd.py's
+    # submit_invoice() and check_status() both `raise NotImplementedError`,
+    # and the shipped provider is UnconfiguredProvider (see DEFAULTS
+    # ['provider'] below) -- so an install that defaults into 'jordan' files
+    # NOTHING with ISTD. All the old default actually did was mint a gapless
+    # e-invoice number and an einvoice_outbox row for every sale that this
+    # build can never submit. That is a WORSE position than not starting: it
+    # is the APPEARANCE of compliance (numbers issued, rows queued, a status
+    # screen reading "enabled") sitting on top of a growing pile of documents
+    # no tax authority has ever seen, with no way out except an operator
+    # noticing and either wiring real credentials or ripping the backlog out.
+    # Defaulting to 'none' ships exactly what is true instead: nobody is
+    # filing with anybody until an operator says otherwise.
+    #
+    # THE OLD REASONING'S OTHER HALF IS STILL RIGHT, AND IS ANSWERED
+    # ELSEWHERE, NOT WAVED AWAY: silently switching off a shop that IS
+    # genuinely using this -- real credentials wired, actually filing -- would
+    # still be wrong. See schema.py's apply_einvoicing_schema(), which now
+    # runs a one-time preservation migration: any company with evidence of
+    # prior use (a row in einvoice_outbox, or an einvoice_sequence that has
+    # advanced past zero) gets an explicit tax_regime='jordan' row written for
+    # it, so an install that was really filing keeps working across this
+    # upgrade. Only an install that was never actually submitting anything --
+    # which, per the paragraph above, is every install that exists today --
+    # changes behaviour.
     #
     # Note this is the ABSENT-KEY case only. A present-but-unrecognised value
     # is a different case and is NOT trusted as 'jordan' -- see is_enabled().
-    'tax_regime': 'jordan',
+    'tax_regime': 'none',
     # 'unconfigured', not 'mock', since the default flipped to enabled. This
     # value is never dispatched on -- it is recorded onto each outbox row and
     # shown on the status screen -- so its only job is to be TRUE. A shipped
@@ -196,10 +248,14 @@ def is_enabled(conn: sqlite3.Connection, app_data_dir: str, company_id: int) -> 
     # nobody could parse. Same fail-closed direction as `== '1'` below, which
     # test_garbage_enabled_value_fails_closed already pins as house style.
     #
-    # This does NOT contradict DEFAULTS['tax_regime']='jordan'. Two different
-    # cases: key ABSENT -> get_setting() falls back to DEFAULTS -> 'jordan'
-    # -> a live Jordanian install that never touched settings stays compliant.
-    # Key PRESENT but unrecognised -> not trusted -> OFF.
+    # Two different cases, and since 2026-09-22 both resolve OFF by default
+    # (see DEFAULTS['tax_regime']'s own comment for the full history of why):
+    # key ABSENT -> get_setting() falls back to DEFAULTS -> 'none' -> a fresh
+    # install files with nobody, which is now correct. Key PRESENT but
+    # unrecognised -> not trusted as 'jordan' either -> also OFF, same
+    # fail-closed direction. Only an explicit, exact 'jordan' row -- written
+    # by an operator, or by schema.py's one-time preservation migration for
+    # an install with evidence of prior use -- resolves this layer ON.
     #
     # 'jordan' is spelled as a literal here and in the tests rather than read
     # back from DEFAULTS: comparing the code against itself could no longer

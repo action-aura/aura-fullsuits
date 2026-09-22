@@ -19,10 +19,20 @@ file (commercial_runtime/backup/service.py only snapshots
 backed up).
 
 An install that never enables this feature ends up with these tables
-present but permanently empty -- apply_einvoicing_schema() itself never
-inserts a row.
+present but permanently empty. The one exception, added 2026-09-22 alongside
+DEFAULTS['tax_regime'] flipping from 'jordan' to 'none' in settings.py, is
+_preserve_prior_regime_for_installs_with_evidence() below: a ONE-TIME DATA
+migration (not schema) that writes an explicit tax_regime='jordan' row for
+any company that already has evidence of using the feature, so that upgrade
+does not silently switch a genuinely-filing shop off. See that function's own
+docstring, and settings.py's DEFAULTS['tax_regime'] comment, for the full
+reasoning. A fresh install has no outbox and no advanced sequence, so this
+finds no evidence and writes nothing -- "permanently empty" above is still
+accurate for every install that was never actually using the feature, which
+per that comment is every install that exists today.
 """
 import sqlite3
+from datetime import datetime, timezone
 
 
 def apply_einvoicing_schema(conn: sqlite3.Connection) -> None:
@@ -123,3 +133,67 @@ def apply_einvoicing_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_einvoice_audit_ref ON einvoice_audit(invoice_ref);
         """
     )
+    _preserve_prior_regime_for_installs_with_evidence(conn)
+
+
+def _preserve_prior_regime_for_installs_with_evidence(conn: sqlite3.Connection) -> None:
+    """ONE-TIME DATA migration, added 2026-09-22 in the same change that
+    flipped settings.py's DEFAULTS['tax_regime'] from 'jordan' to 'none'.
+
+    THE PROBLEM IT SOLVES: before this change, every install with no
+    einvoice_settings row read 'jordan' by fallback (DEFAULTS). After it,
+    the same absent-row install reads 'none' instead -- correct for an
+    install that was never really filing (see settings.py's DEFAULTS
+    ['tax_regime'] comment for why the old default never actually achieved
+    compliance), but WRONG for a company that has genuinely been using the
+    feature with an explicit provider wired in: that company's tax_regime
+    row is *also* usually absent (nothing in this module ever wrote one on
+    its behalf -- 'jordan' was simply the fallback), so it would be
+    silently switched off by this same upgrade. That is exactly the
+    still-valid half of the old comment this migration exists to answer:
+    an install that IS using the feature must keep working.
+
+    THE EVIDENCE RULE: a company counts as "already using the feature" if
+    it has EITHER
+      (a) any row in einvoice_outbox (it enqueued at least one document), OR
+      (b) an einvoice_sequence row with last_no > 0 (it has issued at least
+          one gapless e-invoice number).
+    These are the two tables this module's own sequence.py/outbox.py write
+    to on the real enqueue path, and both are self-contained to this
+    module (no read of any Retail/Clinic table), matching the rest of this
+    file's product-independence. A company can have (b) without (a) yet --
+    sequence.py reserves the number before outbox.py enqueues the row -- so
+    checking only outbox would miss a company that crashed between the two;
+    checking only the sequence would miss nothing sequence-related but is
+    checked anyway for defense in depth. Deliberately NOT using
+    einvoice_audit as evidence: an audit row is written on submission
+    attempts, is best-effort logging (see audit.py), and using it as the
+    ONLY signal would be circular with the very evidence (a) and (b)
+    already capture more reliably.
+
+    THE GUARD: `INSERT OR IGNORE`, keyed on this table's own
+    PRIMARY KEY (company_id, skey), so a company that already has ANY
+    explicit tax_regime row of its own -- 'jordan', 'none', or anything
+    else an operator wrote -- is never touched. This is what makes the
+    migration idempotent (a second run finds the same evidence and the
+    same INSERT OR IGNORE no-ops the second time -- no duplicate rows, the
+    PRIMARY KEY forbids it) and what makes it safe to run on every call to
+    apply_einvoicing_schema() -- including a fresh install with none of the
+    evidence tables populated yet (they were just CREATEd above, so both
+    queries below run against tables that exist and are simply empty) --
+    not just the first.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    companies_with_evidence = conn.execute(
+        """
+        SELECT company_id FROM einvoice_outbox
+        UNION
+        SELECT company_id FROM einvoice_sequence WHERE last_no > 0
+        """
+    ).fetchall()
+    for (company_id,) in companies_with_evidence:
+        conn.execute(
+            "INSERT OR IGNORE INTO einvoice_settings (company_id, skey, svalue, updated_at) "
+            "VALUES (?, 'tax_regime', 'jordan', ?)",
+            (company_id, now),
+        )

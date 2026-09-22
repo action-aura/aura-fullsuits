@@ -348,7 +348,31 @@ def test_a_series_and_an_einvoice_both_mint_independently_on_one_real_sale():
     from api import retail_api
     from database.schema import get_retail_conn
 
-    client.post('/api/einvoicing/settings', json={'enabled': '1', 'invoice_family': 'income'})
+    # AUDIT 2026-09-22: e-invoicing is opt-in now (commercial_runtime/
+    # einvoicing/settings.py DEFAULTS['tax_regime'] flipped 'jordan' ->
+    # 'none', and is_enabled() checks the regime BEFORE the 'enabled'
+    # toggle), so this test must opt in explicitly or its own outbox rows
+    # never get enqueued -- exactly the failure this line used to produce
+    # ("an outbox row is missing for one of the three sales") once the
+    # default flipped out from under it.
+    #
+    # Opts in by writing the settings DIRECTLY via set_setting(), not by
+    # POSTing to /api/einvoicing/settings: that route starts a real
+    # background OutboxWorker thread the moment the resolved state flips to
+    # enabled (routes.py's `get_worker(cid).start(...)`, unconditional on
+    # any write that resolves now_enabled=True), and this test has no
+    # reason to pay for one -- test_a_series_and_an_einvoice_both_mint_
+    # independently_on_one_real_sale only needs create_sale's own
+    # synchronous enqueue path. Matches the convention already established
+    # in retail_einvoicing_regression_test.py for the identical reason.
+    from commercial_runtime.einvoicing import settings as _einvoice_settings
+    _settings_conn = get_retail_conn()
+    _einvoice_settings.set_setting(_settings_conn, cid, 'tax_regime', 'jordan')
+    _einvoice_settings.set_setting(_settings_conn, cid, 'enabled', '1')
+    _einvoice_settings.set_setting(_settings_conn, cid, 'invoice_family', 'income')
+    _settings_conn.commit()
+    _settings_conn.close()
+
     series = client.post('/api/sub/retail/doc-series',
                           json={'doc_type': 'sale', 'code': 'A', 'label': 'Main', 'start_no': 500})
     assert series.status_code == 200, series.get_json()

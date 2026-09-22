@@ -318,6 +318,19 @@
     return b ? b.name : (t('Branch') + ' ' + branchId);
   }
 
+  // The recipients table used to render `r.report_types.join(', ')` directly
+  // -- the raw snake_case keys ('daily_sales_summary', 'ar_overdue_alert')
+  // this route stores, never the human label REPORT_TYPES already carries for
+  // the exact same key elsewhere on this page (the checkbox list in
+  // buildRecipientForm). Never passed through t() at all, so a recipient with
+  // reports assigned saw the internal identifier in EVERY language, English
+  // included. A key with no REPORT_TYPES match (future report type this build
+  // does not know about yet) falls back to the raw key rather than throwing.
+  function reportTypeLabel(key) {
+    const rt = REPORT_TYPES.find((x) => x.key === key);
+    return rt ? t(rt.label) : key;
+  }
+
   function renderRecipients(rows) {
     clearChildren(recipientsContent);
 
@@ -338,7 +351,7 @@
         tr.appendChild(el('td', { text: r.phone_e164 }));
         tr.appendChild(el('td', { text: r.role_label || '—' }));
         tr.appendChild(el('td', { text: branchName(r.branch_id) }));
-        tr.appendChild(el('td', { text: r.report_types.join(', ') || '—' }));
+        tr.appendChild(el('td', { text: r.report_types.map(reportTypeLabel).join(', ') || '—' }));
         tr.appendChild(el('td', { text: r.status === 'active' ? t('Yes') : t('No') }));
 
         const actionsCell = el('td');

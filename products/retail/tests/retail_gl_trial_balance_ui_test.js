@@ -75,7 +75,16 @@ const TB_URL = '/api/sub/retail/reports/trial-balance';
 const ACCOUNTS_BALANCED = [
   { code: '1000', name: 'Cash', account_type: 'asset', normal_balance: 'debit', debit: 1234.5, credit: 0, balance: 1234.5 },
   { code: '2000', name: 'Accounts Payable', account_type: 'liability', normal_balance: 'credit', debit: 0, credit: 500, balance: 500 },
-  { code: '4000', name: 'Sales Revenue', account_type: 'income', normal_balance: 'credit', debit: 0, credit: 734.5, balance: 734.5 },
+  // account_type 'revenue', NOT 'income' -- this fixture said 'income' and
+  // was wrong about the product. general_ledger.py's DEFAULT_CHART seeds
+  // 4000 Sales Revenue and 4900 Sales Returns and Allowances as 'revenue',
+  // so the screen's label map (which keyed 'income') matched nothing and
+  // rendered every revenue account as "Other" on every trial balance ever
+  // shown. The fixture agreeing with the buggy code instead of with the
+  // backend is exactly why this file stayed green through it: a fixture
+  // that manufactures the state which hides the defect is one of this
+  // repo's named recurring failure shapes.
+  { code: '4000', name: 'Sales Revenue', account_type: 'revenue', normal_balance: 'credit', debit: 0, credit: 734.5, balance: 734.5 },
 ];
 
 const TB_BALANCED_OK = {
@@ -322,6 +331,47 @@ async function testCapabilityRestrictedWhenMissingReports() {
     'the capability-restricted panel must still name the screen it is standing in for.');
 }
 
+async function testEverySeededAccountTypeGetsARealLabel() {
+  // The regression this exists for: `_TRIAL_BALANCE_TYPE_LABEL` keyed
+  // 'income' while the backend emits 'revenue', so both revenue accounts
+  // rendered as "Other" -- silently, because `_glAccountTypeLabel` degrades
+  // to `|| 'Other'` rather than failing. Found by the Android client's
+  // parity work, not here, because the tests above only assert that a ROW
+  // exists, and a row with the wrong type label is still a row.
+  //
+  // Driven from general_ledger.py's DEFAULT_CHART rather than a typed list,
+  // so a future account type added to the seeded chart fails this test
+  // instead of quietly joining "Other".
+  const glSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'backend', 'core', 'retail', 'general_ledger.py'), 'utf8');
+  // Slice to the tuple's own closing line (`\n)`), NOT to the first ')' --
+  // that one sits inside the FIRST entry, which made this parser see a
+  // single account type. Its own vacuity assertion below is what caught
+  // that, which is the point of having one.
+  const chartStart = glSrc.indexOf('DEFAULT_CHART');
+  const chart = glSrc.slice(chartStart, glSrc.indexOf('\n)', chartStart));
+  const seeded = new Set();
+  // Third field of each tuple. The NAME may be single- OR double-quoted --
+  // "Owner's Equity" carries an apostrophe and so is double-quoted in the
+  // source; a pattern that assumed single quotes would silently skip it.
+  for (const m of chart.matchAll(/\(\s*'[^']*'\s*,\s*(?:'[^']*'|"[^"]*")\s*,\s*'([a-z_]+)'/g)) seeded.add(m[1]);
+  assert.ok(seeded.size >= 5,
+    `parsed only ${seeded.size} account types out of DEFAULT_CHART -- the parser has drifted ` +
+    `from general_ledger.py and would pass vacuously. Got: ${[...seeded].join(', ')}`);
+
+  const ctx = await renderScreen({ trialBalance: TB_BALANCED_OK });
+  const RS = ctx.rs;
+  const unlabelled = [...seeded].filter((ty) => RS._glAccountTypeLabel(ty) === 'Other');
+  assert.deepStrictEqual(unlabelled, [],
+    `account type(s) ${unlabelled.join(', ')} are seeded by general_ledger.py's DEFAULT_CHART ` +
+    `but have no entry in _TRIAL_BALANCE_TYPE_LABEL, so they render as "Other" on the trial ` +
+    'balance. Add them to the map rather than to this test.');
+
+  // And the rendered table must actually show it, not merely the map.
+  assert.ok(ctx.tbody().indexOf('Other') === -1,
+    `a seeded account rendered with the fallback "Other" type label:\n${ctx.tbody()}`);
+}
+
 async function testAccountsTableRendersRowsAndTotals() {
   const ctx = await renderScreen({ trialBalance: TB_BALANCED_OK });
   const rows = dataRows(ctx.tbody());
@@ -484,6 +534,7 @@ async function main() {
   const checks = [
     ['the screen is reachable and gated on retail.reports', testTheScreenIsReachable],
     ['capability-restricted panel shown, no fetch, when retail.reports is missing', testCapabilityRestrictedWhenMissingReports],
+    ['every seeded account type gets a real label, not "Other"', testEverySeededAccountTypeGetsARealLabel],
     ['the accounts table renders rows and totals', testAccountsTableRendersRowsAndTotals],
     ['the empty state renders when there are no accounts', testEmptyStateWhenNoAccounts],
     ['the balanced badge reflects is_balanced', testBalancedBadgeReflectsIsBalanced],

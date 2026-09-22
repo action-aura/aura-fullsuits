@@ -283,18 +283,28 @@ def test_sale_response_is_unaffected_by_whatsapp_queueing(client, monkeypatch):
     # matching every other frozen SALE_RESPONSE_KEYS literal in this suite
     # (see retail_cash_drawer_test.py's own comment on its copy).
     #
-    # 'einvoice' added 2026-09-08. E-invoicing now defaults ON
-    # (commercial_runtime/einvoicing/settings.py DEFAULTS 'enabled': '1'),
-    # so create_sale always reaches the enqueue block at retail_api.py:4816
-    # and sets response_data['einvoice'] whenever enqueue_sale(...) returns
-    # truthy -- inside a broad try/except that logs and moves on. So a
-    # failed e-invoicing enqueue now surfaces as a WhatsApp-outbox key-set
-    # failure. What this assertion is actually about is unchanged: WhatsApp
-    # queueing adds nothing to the checkout response. A diff on this line is
-    # fixed upstream in e-invoicing, never by shortening the list.
+    # 'einvoice' was added 2026-09-08, when e-invoicing defaulted ON for
+    # every company. AUDIT 2026-09-22 -- REMOVED again: e-invoicing is
+    # opt-in now (commercial_runtime/einvoicing/settings.py DEFAULTS
+    # ['tax_regime'] flipped 'jordan' -> 'none', and is_enabled() checks the
+    # regime BEFORE the 'enabled' toggle), and this file's company never
+    # opts in, so create_sale's einvoice-enqueue try/except never sets
+    # response_data['einvoice'] for any sale rung here. Putting the key back
+    # would fail this test with a real KeyError, not prove anything about
+    # WhatsApp queueing.
+    #
+    # WHAT THIS COSTS: this test used to be able to catch a failed
+    # e-invoicing enqueue surfacing here as a spurious WhatsApp-outbox
+    # key-set failure (the key WAS present by default, and an enqueue
+    # failure would silently drop it). That coupling can no longer be
+    # observed from this file at all, because e-invoicing never enqueues
+    # here to begin with -- it isn't a weaker check, it's a check with
+    # nothing left to detect. What this assertion is actually about is
+    # unaffected: WhatsApp queueing adds nothing to the checkout response,
+    # and the remaining key list still proves exactly that.
     assert sorted(data.keys()) == sorted([
         'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-        'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+        'customer_id', 'customer_name', 'discount_amount', 'employee_name',
         'id', 'idempotency_key', 'lines',
         'oversold_past_recorded_stock',
         'points_redeemed', 'points_redeemed_amount',

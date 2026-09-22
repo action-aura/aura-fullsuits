@@ -1,16 +1,32 @@
-"""JoFotara e-invoicing -- default-ON + UnconfiguredProvider guard tests.
+"""JoFotara e-invoicing -- opt-in regime gate + UnconfiguredProvider guard
+tests.
 
-Jordan has mandated e-invoicing since 2024-05-31, so settings.py's
-DEFAULTS['enabled'] flipped from '0' to '1' -- a fresh install/company now
-records the obligation without anyone touching a toggle. That default flip
-is dangerous on its own: products/retail/backend/app.py and
+Jordan mandated e-invoicing since 2024-05-31, so settings.py's
+DEFAULTS['enabled'] flipped from '0' to '1' -- a fresh install/company used
+to record the obligation without anyone touching a toggle. That default
+flip was dangerous on its own: products/retail/backend/app.py and
 products/clinic/backend/app.py both used to hard-wire MockProvider (which
 reports CLEARED, with a QR, without ever contacting anybody) as the live
 provider. Simply turning the DB setting on would have made every shop print
 a receipt claiming "Jordan e-invoice cleared" for a document no tax
 authority ever saw.
 
-The fix has two independent parts, both covered here:
+AUDIT 2026-09-22 -- SUPERSEDES THE ENABLED-BY-DEFAULT FRAMING ABOVE.
+settings.py's DEFAULTS['tax_regime'] is now 'none', and is_enabled() checks
+it BEFORE the `enabled` toggle (see that key's own comment for the full
+history). DEFAULTS['enabled'] is UNCHANGED -- still '1', see its own
+comment for why -- but a fresh company now resolves disabled overall,
+because nobody has stated which tax authority, if any, it files with.
+Reason: nothing can actually be filed yet (providers/direct_istd.py's
+submit_invoice/check_status both raise NotImplementedError), so the old
+enabled-by-default only minted a gapless, unfileable e-invoice number per
+sale. The tests below that assert on `is_enabled()`/`enabled_at`/worker
+behaviour now opt a company into tax_regime='jordan' explicitly wherever
+they need the company to actually be enabled -- see _setup_db()'s and the
+first test's own comments for exactly why.
+
+The fix for the UnconfiguredProvider guard itself has two independent
+parts, both still covered here:
   1. providers/unconfigured.py's UnconfiguredProvider is the new shipped
      default -- it queues, it never claims clearance.
   2. worker.py's OutboxWorker.run_once() refuses to lease or touch a single
@@ -42,28 +58,65 @@ def conn():
     return c
 
 
-# ─── settings.py: the feature now defaults ON ───────────────────────────
+# ─── settings.py: the feature is opt-in again (tax_regime gate) ─────────
+#
+# AUDIT 2026-09-22 -- SUPERSEDES THIS SECTION'S ORIGINAL HEADING AND FIRST
+# TEST. settings.py's DEFAULTS['tax_regime'] flipped to 'none' and
+# is_enabled() now checks it BEFORE the `enabled` toggle (see settings.py's
+# DEFAULTS['tax_regime'] comment for the full history: nothing can actually
+# be filed -- providers/direct_istd.py raises NotImplementedError -- so the
+# old enabled-by-default only minted unfileable e-invoice numbers).
+# DEFAULTS['enabled'] itself is UNCHANGED, still '1' -- see that key's own
+# comment for why it stays that way. So a fresh company's `enabled` setting
+# still reads '1' on its own, but is_enabled() as a whole now resolves
+# False because tax_regime is absent/'none'.
 
-def test_company_with_no_settings_row_is_enabled_by_default(conn):
+def test_company_with_no_settings_row_is_disabled_by_default_via_tax_regime(conn):
     """A brand-new install/company that has never touched
-    /api/einvoicing/settings must already be enabled -- the whole point of
-    the mandate-driven default flip is that nobody has to find a toggle."""
+    /api/einvoicing/settings resolves DISABLED overall, even though the
+    `enabled` setting alone still defaults to '1' -- tax_regime is the
+    layer that now actually decides opt-in/opt-out, checked before
+    `enabled` is ever read. This test used to be named
+    test_company_with_no_settings_row_is_enabled_by_default and assert the
+    opposite; that described the OLD default (before the opt-in flip) and
+    is no longer what a fresh company does, so this rename goes with the
+    flipped assertion rather than leaving a passing test under a name that
+    would now be lying about what it pins."""
     assert settings.get_setting(conn, company_id=1, key='enabled') == '1'
-    assert settings.is_enabled(conn, app_data_dir='/tmp/unused', company_id=1) is True
+    assert settings.get_setting(conn, company_id=1, key='tax_regime') == 'none'
+    assert settings.is_enabled(conn, app_data_dir='/tmp/unused', company_id=1) is False
 
 
 def test_env_var_disable_still_beats_the_new_default(conn, tmp_path, monkeypatch):
+    # AUDIT 2026-09-22: tax_regime now defaults to 'none', which alone
+    # resolves is_enabled() False before layer 1 (this env var) is ever
+    # reached -- without opting this company into the regime first, this
+    # test would keep passing even with the env-var check deleted from
+    # is_enabled() entirely (it would fall through to the regime layer and
+    # still return False). Opt in explicitly so the env var is what
+    # actually has to do the disabling.
+    settings.set_setting(conn, 1, 'tax_regime', 'jordan')
     monkeypatch.setenv('AURA_EINVOICING_DISABLED', '1')
     assert settings.is_enabled(conn, str(tmp_path), 1) is False
 
 
 def test_killswitch_disable_still_beats_the_new_default(conn, tmp_path, monkeypatch):
+    # Same reasoning as test_env_var_disable_still_beats_the_new_default
+    # directly above: without an explicit regime, the killswitch check
+    # (layer 2) is never what makes this assertion true.
+    settings.set_setting(conn, 1, 'tax_regime', 'jordan')
     monkeypatch.delenv('AURA_EINVOICING_DISABLED', raising=False)
     killswitch.set_disabled(str(tmp_path), reason='drill')
     assert settings.is_enabled(conn, str(tmp_path), 1) is False
 
 
 def test_explicit_per_company_disable_still_beats_the_new_default(conn, tmp_path, monkeypatch):
+    # Same reasoning again: is_enabled() checks tax_regime (layer 3) BEFORE
+    # `enabled` (layer 4), so without an explicit regime here the `enabled`
+    # ='0' write below is never even read -- the company resolves disabled
+    # via the regime default regardless of it. Opt in first so layer 4 is
+    # genuinely what this test is proving.
+    settings.set_setting(conn, 1, 'tax_regime', 'jordan')
     monkeypatch.delenv('AURA_EINVOICING_DISABLED', raising=False)
     settings.set_setting(conn, 1, 'enabled', '0')
     assert settings.is_enabled(conn, str(tmp_path), 1) is False
@@ -113,6 +166,15 @@ def _setup_db(tmp_path):
     db_conn = sqlite3.connect(db_path)
     db_conn.execute("PRAGMA journal_mode=WAL")
     apply_einvoicing_schema(db_conn)
+    # AUDIT 2026-09-22: tax_regime now defaults to 'none' and is checked
+    # BEFORE `enabled` in is_enabled() -- without opting this company into
+    # the regime, every test below (the unconfigured-provider guard, the
+    # MockProvider control, and the enabled_at-materialization tests) would
+    # resolve disabled via the regime default alone, regardless of whether
+    # the guard each test actually names is working. This does not touch
+    # `enabled` itself -- tests that need a "default-only, never explicitly
+    # enabled" company still get that from DEFAULTS['enabled']='1'.
+    settings.set_setting(db_conn, 1, 'tax_regime', 'jordan')
     db_conn.commit()
     db_conn.close()
     return db_path
@@ -239,7 +301,13 @@ def _settings_conn(db_path):
 def test_a_tick_with_a_configured_provider_materializes_enabled_at_for_a_default_only_company(tmp_path):
     db_path = _setup_db(tmp_path)
     # No explicit settings.set_setting(..., 'enabled', ...) call anywhere --
-    # this company is enabled purely by DEFAULTS['enabled']='1'.
+    # this company is enabled purely by DEFAULTS['enabled']='1'. _setup_db()
+    # does write tax_regime='jordan' explicitly (2026-09-22 -- see its own
+    # comment): that is the opt-in prerequisite for is_enabled() to read
+    # `enabled` at all, not a substitute for it. `enabled` itself is still
+    # untouched here, so "default-only" continues to describe exactly what
+    # this test claims: the enabled_at materialization tied to the
+    # `enabled` default, not to the regime.
     sconn = _settings_conn(db_path)
     assert settings.enabled_at(sconn, 1) is None
     sconn.close()
@@ -258,7 +326,14 @@ def test_a_tick_never_resurrects_a_company_that_explicitly_disabled_itself(tmp_p
     """Both-directions proof for the same guard: materializing the default
     for an ENABLED-by-default company must never also apply to a company
     that explicitly turned the feature off -- that company must stay
-    disabled, with no enabled_at stamped, forever."""
+    disabled, with no enabled_at stamped, forever.
+
+    _setup_db() opts this company into tax_regime='jordan' (2026-09-22),
+    which matters here specifically: without it, the `enabled='0'` write
+    below would never even be read (is_enabled() checks tax_regime first),
+    so this assertion would pass whether or not the explicit-disable path
+    actually worked. With the regime opted in, `enabled='0'` is the thing
+    genuinely doing the disabling."""
     db_path = _setup_db(tmp_path)
     sconn = _settings_conn(db_path)
     settings.set_setting(sconn, 1, 'enabled', '0')

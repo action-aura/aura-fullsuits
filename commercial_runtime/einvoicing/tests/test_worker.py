@@ -34,6 +34,21 @@ def _setup_db(tmp_path, company_id=1, enabled=True):
     # unset -- this is a fixture correction, not a test weakening: the test
     # still proves exactly the same claim (a disabled company's queued row
     # is never touched), just against a state that's actually disabled.
+    #
+    # AUDIT 2026-09-22 -- SUPERSEDES THE PARAGRAPH ABOVE: `tax_regime` now
+    # defaults to 'none' (settings.py DEFAULTS['tax_regime']), and
+    # is_enabled() checks it BEFORE `enabled`. Writing only `enabled` here
+    # (whichever value) no longer decides is_enabled()'s result at all --
+    # every company using this fixture would resolve disabled via the
+    # regime layer regardless of `enabled`, which means
+    # test_run_once_does_nothing_when_disabled would keep passing even if
+    # the actual `enabled=False` guard it names were deleted from worker.py
+    # entirely (the exact vacuous-guard trap documented in this repo's
+    # engineering standard: a fixture that manufactures the state that
+    # hides the bug). Opt this company into the regime explicitly so
+    # `enabled` is once again the thing that actually decides the outcome
+    # for every test built on this fixture.
+    settings.set_setting(conn, company_id, 'tax_regime', 'jordan')
     settings.set_setting(conn, company_id, 'enabled', '1' if enabled else '0')
     conn.commit()
     conn.close()

@@ -71,6 +71,7 @@ app.config["TESTING"] = True
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
+from api.retail_api import _ensure_credit_schema  # noqa: E402
 
 
 def teardown_module(module):
@@ -88,15 +89,28 @@ def teardown_module(module):
 # still only conditionally adds its own 'einvoice' key; that claim is
 # unaffected.
 
-# AUDIT (2026-09-08): e-invoicing now defaults ON (settings.py
+# AUDIT (2026-09-08): e-invoicing used to default ON (settings.py
 # DEFAULTS['enabled']='1' -- the Jordanian mandate means a fresh company
 # records the obligation without anyone touching a toggle). A sale response
-# now carries an additional 'einvoice' key ({'invoice_ref':..., 'status':
-# 'queued'}) whenever the enqueue succeeds -- see retail_api.py::create_sale's
-# own comment on that block. This is a deliberate, reviewed shape change,
-# not a regression to "fix" back to the old list: verified the three actual
-# consumers of this response tolerate an unknown extra key before updating
-# this frozen literal --
+# then carried an additional 'einvoice' key ({'invoice_ref':..., 'status':
+# 'queued'}) whenever the enqueue succeeded -- see retail_api.py::create_sale's
+# own comment on that block. That was a deliberate, reviewed shape change,
+# not a regression to "fix" back to the old list -- at the time.
+#
+# AUDIT (2026-09-22) -- SUPERSEDES THE PARAGRAPH ABOVE AND REMOVES
+# 'einvoice' FROM THIS LIST. e-invoicing is opt-in again (settings.py
+# DEFAULTS['tax_regime']='none', checked before `enabled` in is_enabled())
+# -- see that key's own comment for the full history: nothing can actually
+# be filed yet, so defaulting a fresh company into enqueueing only minted
+# unfileable e-invoice numbers. A DEFAULT company's sale response (this
+# test's fixture never touches /api/einvoicing/settings) therefore no
+# longer carries 'einvoice' at all -- this frozen literal is right to
+# change because it is meant to describe the DEFAULT shape, and the default
+# shape genuinely changed again. THIS DOES NOT DELETE THE COVERAGE: see
+# test_sale_response_gains_einvoice_key_once_opted_into_tax_regime below,
+# which proves the key IS present for a company that explicitly opts in --
+# the same claim this list used to make for every company, now scoped to
+# the case where it's still true.
 #   1. Desktop (products/retail/frontend/subsystem-retail.js): _showReceipt/
 #      _einvoiceReceiptBlock already access saleData.einvoice by name and
 #      explicitly no-op when it's absent -- built for exactly this
@@ -119,11 +133,16 @@ def teardown_module(module):
 # an unexpected one appearing still fails.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+    'customer_id', 'customer_name', 'discount_amount', 'employee_name',
     'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
+# The exact same set PLUS 'einvoice' -- see SALE_RESPONSE_KEYS' own comment.
+# Kept as its own literal (rather than SALE_RESPONSE_KEYS + ['einvoice'] at
+# the call site) so both lists independently show, side by side, exactly
+# which one key differs.
+SALE_RESPONSE_KEYS_WITH_EINVOICE = sorted(SALE_RESPONSE_KEYS + ['einvoice'])
 # The return-settlement split (fix(money) 78469b70) added FOUR keys on
 # purpose. This file's docstring allows updating a frozen literal when "the
 # underlying product behavior change was itself deliberate and reviewed" --
@@ -193,6 +212,19 @@ SALE_ITEMS_TABLE_COLUMNS = [
     # identity, so a relayed line item can be named by something other than
     # this install's private autoincrement id.
     'uid',
+    # schema v39 (database/schema.py's _migrate_add_cost_basis, claimed in
+    # ROADMAP.md's 2026-09-21 entry): a per-line cost snapshot for Cost of
+    # Goods Sold, deliberately left at its DEFAULT 0/unbackfilled for every
+    # historical row (see that migration's own docstring for why -- a
+    # historical sale's true cost at the moment it happened is unknowable
+    # from here). Applied by the BOOT-TIME versioned migration chain (same
+    # category as session_id/the v13 identity triple/points_redeemed_amount
+    # above on SALES_TABLE_COLUMNS), not a lazy per-request addcol, so this
+    # guard still means something: the claim this test makes -- that the
+    # E-INVOICING migration (v7) added only new tables -- is unaffected,
+    # this column just did not exist yet the last time this literal was
+    # captured live.
+    'unit_cost',
 ]
 CUSTOMERS_TABLE_COLUMNS = [
     # 'status' and the created_at reorder are a real, expected shape change
@@ -300,6 +332,38 @@ def test_sale_response_keys_unchanged():
     assert sorted(r.get_json()['data'].keys()) == sorted(SALE_RESPONSE_KEYS)
 
 
+def test_sale_response_gains_einvoice_key_once_opted_into_tax_regime():
+    """Companion to test_sale_response_keys_unchanged above, added
+    2026-09-22 when 'einvoice' was removed from SALE_RESPONSE_KEYS -- that
+    removal only moved this coverage, it did not drop it. A company that
+    explicitly opts into tax_regime='jordan' (settings.py DEFAULTS
+    ['tax_regime']='none' otherwise) must still see its sale enqueue, with
+    the exact same response shape SALE_RESPONSE_KEYS used to pin
+    unconditionally for every company.
+
+    Opts in by writing the setting directly rather than POSTing to
+    /api/einvoicing/settings -- see
+    test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot's
+    comment on the same choice: that live route starts a real worker
+    thread the moment the resolved state flips to enabled, and this whole
+    file (teardown_module never stops any worker) is written on the
+    assumption that no test in it ever does that."""
+    client, cid, pid, bid = _make_admin_and_product()
+    from commercial_runtime.einvoicing import settings as _einvoice_settings
+    _sconn = get_retail_conn()
+    _einvoice_settings.set_setting(_sconn, cid, 'tax_regime', 'jordan')
+    _sconn.commit()
+    _sconn.close()
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'amount_paid': 999999, 'payment_method': 'cash', 'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 200, r.get_json()
+    data = r.get_json()['data']
+    assert sorted(data.keys()) == SALE_RESPONSE_KEYS_WITH_EINVOICE
+    assert data['einvoice']['status'] == 'queued'
+
+
 def test_return_response_keys_unchanged():
     client, cid, pid, bid = _make_admin_and_product()
     sale = client.post('/api/sub/retail/sales', json={
@@ -325,8 +389,24 @@ def test_dashboard_stats_response_keys_unchanged():
 
 def test_no_alter_ran_on_existing_tables():
     """Proves the einvoicing migration only added new tables -- it never
-    touched an existing Retail table's column set."""
+    touched an existing Retail table's column set.
+
+    AUDIT 2026-09-22 -- fixes a real order-dependency, diagnosed rather than
+    papered over: `sales.due_date` (see SALES_TABLE_COLUMNS' own comment)
+    and `returns.idempotency_key` (see RETURNS_TABLE_COLUMNS') are LAZY
+    columns api.retail_api._ensure_credit_schema() only adds the first time
+    any request in this process reaches it (create_sale, create_return,
+    etc.), gated on an in-process flag, not on `user_version`. This test
+    used to rely on an earlier test in this same file (test_sale_response_
+    keys_unchanged, which posts a real sale) having already triggered that
+    lazy migration before this one ran -- so
+    `pytest ...::test_no_alter_ran_on_existing_tables` in isolation failed
+    with 'due_date' missing, a landmine this file never documented. Calling
+    the same lazy migration directly makes this test prove its own claim
+    regardless of what ran before it.
+    """
     conn = get_retail_conn()
+    _ensure_credit_schema(conn)
     assert [c[1] for c in conn.execute("PRAGMA table_info(sales)").fetchall()] == SALES_TABLE_COLUMNS
     assert [c[1] for c in conn.execute("PRAGMA table_info(sale_items)").fetchall()] == SALE_ITEMS_TABLE_COLUMNS
     assert [c[1] for c in conn.execute("PRAGMA table_info(customers)").fetchall()] == CUSTOMERS_TABLE_COLUMNS
@@ -337,28 +417,42 @@ def test_no_alter_ran_on_existing_tables():
 def test_einvoice_outbox_gets_exactly_one_row_for_the_sale_not_the_return():
     """AUDIT (2026-09-08): renamed from
     test_einvoice_outbox_stays_empty_through_a_full_sale_and_return_cycle.
-    That claim described the OLD default (OFF) and is now false by design
-    -- e-invoicing defaults ON, so the sale in this same cycle DOES enqueue.
-    What's still true, and still worth a regression test: a return never
-    enqueues anything of its own -- Retail has no credit-note/e-invoice
-    handling for returns at all (grep core/retail/einvoice_adapter.py and
-    retail_api.py's create_return: neither references an enqueue call), so
-    exactly ONE outbox row -- the sale's -- must exist after a sale+return
-    cycle, not two and not zero.
+    That claim described the OLD default (OFF) and was false by design at
+    the time -- e-invoicing defaulted ON, so the sale in this same cycle
+    enqueued. What's still true, and still worth a regression test: a
+    return never enqueues anything of its own -- Retail has no credit-note/
+    e-invoice handling for returns at all (grep core/retail/
+    einvoice_adapter.py and retail_api.py's create_return: neither
+    references an enqueue call), so exactly ONE outbox row -- the sale's --
+    must exist after a sale+return cycle, not two and not zero.
+
+    AUDIT 2026-09-22 -- SUPERSEDES "e-invoicing defaults ON" ABOVE: it is
+    opt-in again (settings.py DEFAULTS['tax_regime']='none', see that key's
+    own comment). This test now opts in explicitly, by writing the setting
+    directly rather than POSTing to /api/einvoicing/settings -- see
+    test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot's
+    comment on why the live route is avoided in this file. Without opting
+    in at all, `'einvoice' in sale` would fail before this test ever
+    reaches the claim it actually exists to prove (that a return
+    adds no row of its own).
 
     Scoped to THIS test's own company_id: einvoice_outbox has no company
     filter of its own, and other tests in this same module share one
-    physical db across the whole process -- with the feature defaulting ON,
-    every other test's own sale also adds a row to this same table, so an
+    physical db across the whole process -- other tests that also opt into
+    tax_regime='jordan' add their own rows to this same table, so an
     unscoped COUNT(*) here would assert on cross-test leakage, not on this
-    test's own behavior (it happened to read 3 before this fix, which was
-    never a stable number)."""
+    test's own behavior."""
     client, cid, pid, bid = _make_admin_and_product(stock=10)
+    from commercial_runtime.einvoicing import settings as _einvoice_settings
+    _sconn = get_retail_conn()
+    _einvoice_settings.set_setting(_sconn, cid, 'tax_regime', 'jordan')
+    _sconn.commit()
+    _sconn.close()
     sale = client.post('/api/sub/retail/sales', json={
         'items': [{'product_id': pid, 'quantity': 2}],
         'amount_paid': 999999, 'payment_method': 'cash', 'idempotency_key': str(uuid.uuid4()),
     }).get_json()['data']
-    assert 'einvoice' in sale, "the sale itself must have enqueued -- e-invoicing defaults ON"
+    assert 'einvoice' in sale, "the sale itself must have enqueued once opted into tax_regime='jordan'"
     client.post('/api/sub/retail/returns', json={
         'sale_id': sale['id'],
         'items': [{'product_id': pid, 'quantity': 1}],
@@ -379,10 +473,10 @@ def test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot():
     test_no_background_thread_exists_when_feature_never_enabled, and BOTH
     halves of that name were false by the time anyone read it:
 
-      * "never enabled" -- e-invoicing defaults ON
+      * "never enabled" -- e-invoicing defaulted ON at the time
         (commercial_runtime/einvoicing/settings.py DEFAULTS 'enabled': '1'),
-        which is why the test above this one asserts `'einvoice' in sale`.
-        Every company in this process has the feature on.
+        which is why the test above this one asserted `'einvoice' in sale`
+        unconditionally. Every company in that process had the feature on.
       * the old docstring's "trivially true, no worker module exists yet" --
         app.py:248 defines _get_or_create_einvoicing_worker and app.py:944
         starts real OutboxWorkers through _resume_einvoicing_workers().
@@ -390,6 +484,13 @@ def test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot():
     So the failure message was a statement about a fixture that does not
     exist, and the obvious next move -- starting the worker on enqueue --
     would have turned it red for doing the right thing.
+
+    AUDIT 2026-09-22 -- SUPERSEDES "every company in this process has the
+    feature on" ABOVE: e-invoicing is opt-in again (settings.py
+    DEFAULTS['tax_regime']='none'). This test now opts this company in
+    explicitly so the sale below still enqueues a real row -- the
+    anti-vacuity check right after it already demands exactly that,
+    unchanged from before.
 
     What is actually pinned here, and it is worth pinning: the boot sweep,
     _resume_einvoicing_workers() at app.py:952. It runs once at init_app()
@@ -413,6 +514,22 @@ def test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot():
     could -- is a worker started for ONE company while another company's
     stayed off."""
     client, cid, pid, bid = _make_admin_and_product()
+    # AUDIT 2026-09-22: opt this company into tax_regime='jordan' by writing
+    # the setting directly, NOT via POST /api/einvoicing/settings. That
+    # route starts a real worker thread the moment the resolved state flips
+    # to enabled (routes.py::_post_settings, `if now_enabled: get_worker
+    # (cid).start(...)`) -- going through it here would start a genuine
+    # e-invoicing worker thread and fail THIS test's own assertion (no
+    # worker thread exists) for a reason that has nothing to do with the
+    # boot sweep it exists to pin. Writing the setting directly satisfies
+    # enqueue_sale's is_enabled() check below without touching the worker
+    # registry at all, same as the boot sweep finding an empty outbox did
+    # before this fix.
+    from commercial_runtime.einvoicing import settings as _einvoice_settings
+    _sconn = get_retail_conn()
+    _einvoice_settings.set_setting(_sconn, cid, 'tax_regime', 'jordan')
+    _sconn.commit()
+    _sconn.close()
     client.post('/api/sub/retail/sales', json={
         'items': [{'product_id': pid, 'quantity': 1}],
         'amount_paid': 999999, 'payment_method': 'cash', 'idempotency_key': str(uuid.uuid4()),

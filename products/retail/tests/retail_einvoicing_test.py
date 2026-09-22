@@ -134,7 +134,17 @@ def test_disabled_sale_response_has_no_einvoice_key():
     # calling the enable endpoint. Fixture correction, not a weakened test:
     # it still proves the same claim (a disabled company's sale response
     # carries no 'einvoice' key), against a state that's actually disabled.
+    #
+    # AUDIT 2026-09-22 -- SUPERSEDES THE PARAGRAPH ABOVE: tax_regime now
+    # defaults to 'none' and is checked before `enabled` in is_enabled(),
+    # so a fresh company is ALREADY disabled with no write at all -- without
+    # opting into the regime first, the `enabled='0'` POST below is never
+    # even read (einvoice_adapter.enqueue_sale's is_enabled() check returns
+    # False at the regime layer already), and this test would keep passing
+    # even if the explicit-disable path it names were deleted entirely.
+    # Opt in first so `enabled='0'` is what's genuinely doing the work.
     client, cid, pid, bid = _make_admin_and_product()
+    client.post('/api/einvoicing/settings', json={'tax_regime': 'jordan'})
     client.post('/api/einvoicing/settings', json={'enabled': '0'})
     data = _sell(client, pid)
     assert 'einvoice' not in data
@@ -142,7 +152,10 @@ def test_disabled_sale_response_has_no_einvoice_key():
 
 def test_enable_then_sale_enqueues_with_gapless_number():
     client, cid, pid, bid = _make_admin_and_product()
-    r = client.post('/api/einvoicing/settings', json={'enabled': '1', 'provider': 'mock'})
+    # AUDIT 2026-09-22: tax_regime now defaults to 'none' and gates
+    # is_enabled() before `enabled` is ever read -- posting `enabled` alone
+    # no longer turns the feature on.
+    r = client.post('/api/einvoicing/settings', json={'enabled': '1', 'provider': 'mock', 'tax_regime': 'jordan'})
     assert r.status_code == 200, r.get_json()
 
     sale1 = _sell(client, pid)
@@ -161,7 +174,9 @@ def test_enable_then_sale_enqueues_with_gapless_number():
 
 def test_run_once_clears_and_qr_becomes_available():
     client, cid, pid, bid = _make_admin_and_product()
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    # AUDIT 2026-09-22: tax_regime must be opted in explicitly -- see
+    # test_enable_then_sale_enqueues_with_gapless_number's comment above.
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
     sale = _sell(client, pid)
     ref = sale['einvoice']['invoice_ref']
 
@@ -183,7 +198,12 @@ def test_slow_provider_does_not_slow_the_sale_response():
     e-invoice submission would be -- submission is async, via the worker,
     never inline with checkout."""
     client, cid, pid, bid = _make_admin_and_product()
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    # AUDIT 2026-09-22: without tax_regime='jordan', enqueue_sale's own
+    # is_enabled() check returns False immediately and the enqueue never
+    # runs at all -- this assertion would then be trivially true (nothing
+    # ran) rather than proving checkout doesn't block on a REAL enqueue.
+    # Opt in so there is something real not to block on.
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
 
     start = time.monotonic()
     _sell(client, pid)
@@ -194,6 +214,11 @@ def test_slow_provider_does_not_slow_the_sale_response():
 def test_enqueue_exception_does_not_fail_the_sale(monkeypatch):
     client, cid, pid, bid = _make_admin_and_product()
     client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    # NOTE: no tax_regime opt-in needed here -- adapter.enqueue_sale is
+    # replaced wholesale by monkeypatch.setattr below, so this test never
+    # reaches the real function's is_enabled() gate at all; it proves the
+    # sale survives ANY exception out of the enqueue hook, regardless of
+    # why the hook would normally run or not.
 
     import core.retail.einvoice_adapter as adapter
 
@@ -213,7 +238,15 @@ def test_reconciliation_sweep_picks_up_a_lost_enqueue():
     to) -- the sale exists but no outbox row does. The worker's
     reconciliation sweep (via run-once) must find and enqueue it."""
     client, cid, pid, bid = _make_admin_and_product()
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    # AUDIT 2026-09-22: the worker-level reconciliation sweep this test
+    # exercises (via run-once) is gated on settings.is_enabled() same as
+    # the sale-time enqueue, and tax_regime now has to be opted in
+    # explicitly for that to resolve True -- without it, run-once returns
+    # {'ran': False, 'reason': 'disabled'} before reconcile_missing_sales
+    # is ever called, and this test would pass with an empty outbox for
+    # the wrong reason (nothing ran) rather than proving the sweep found
+    # the lost sale.
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
 
     import core.retail.einvoice_adapter as adapter
     original = adapter.enqueue_sale
@@ -250,7 +283,10 @@ def test_build_document_uses_outbox_row_invoice_family_not_live_setting():
     submit a document whose declared invoice_family disagrees with the
     number series already baked into its own einvoice_no."""
     client, cid, pid, bid = _make_admin_and_product()
-    client.post('/api/einvoicing/settings', json={'enabled': '1', 'invoice_family': 'income'})
+    # AUDIT 2026-09-22: tax_regime must be opted in for the sale below to
+    # actually enqueue (see test_enable_then_sale_enqueues_with_gapless_
+    # number's comment).
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'invoice_family': 'income', 'tax_regime': 'jordan'})
 
     sale = _sell(client, pid)
     ref = sale['einvoice']['invoice_ref']
@@ -286,7 +322,10 @@ def test_build_document_respects_configured_tax_calculation_mode():
     client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=16.0)
     r = client.post('/api/sub/retail/settings/tax', json={'tax_calculation_mode': 'before_discount'})
     assert r.status_code == 200, r.get_json()
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    # AUDIT 2026-09-22: tax_regime must be opted in for the sale below to
+    # actually enqueue (see test_enable_then_sale_enqueues_with_gapless_
+    # number's comment).
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
 
     sale = _sell(client, pid, extra={'items': [{'product_id': pid, 'quantity': 1, 'discount_pct': 10}]})
     ref = sale['einvoice']['invoice_ref']
@@ -320,6 +359,19 @@ def test_enabled_at_prevents_backfilling_pre_enablement_sales():
     # enabled by the new default and this pre-sale would wrongly enqueue.
     # Fixture correction: the test still proves the same claim (a sale from
     # before enablement is never retroactively submitted).
+    #
+    # AUDIT 2026-09-22 -- SUPERSEDES THE PARAGRAPH ABOVE, AND MATTERS FOR
+    # THE SECOND POST BELOW TOO: tax_regime now defaults to 'none' and
+    # gates is_enabled() before `enabled`. Without opting into the regime
+    # on the POST that's meant to enable the company (below), is_enabled()
+    # would stay False even after it, so worker.run_once() would keep
+    # returning {'ran': False, 'reason': 'disabled'} and
+    # reconcile_missing_sales() would never be called at all -- this test
+    # would then pass with `matching == []` because NOTHING ran, not
+    # because the enabled_at guard it claims to prove correctly excluded
+    # the pre-sale. Same vacuous-guard shape as the other fixtures in this
+    # file; the first POST (still just `enabled='0'`) needs no regime since
+    # the company must stay disabled at that point regardless.
     client.post('/api/einvoicing/settings', json={'enabled': '0'})
     # Sale happens BEFORE the feature is ever enabled.
     pre_sale = _sell(client, pid)
@@ -332,7 +384,7 @@ def test_enabled_at_prevents_backfilling_pre_enablement_sales():
     # tie, not the real "before enablement" guarantee.
     time.sleep(1.1)
 
-    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'tax_regime': 'jordan'})
     client.post('/api/einvoicing/outbox/run-once')  # runs the reconciliation sweep
 
     outbox = client.get('/api/einvoicing/outbox').get_json()['data']

@@ -8770,6 +8770,23 @@ const RetailSystem = {
           </table>
         </div>
       </div>
+      <div class="sub-chart-card" id="einvoicing-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Jordan E-Invoicing (JoFotara)')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.')}
+        </p>
+        <div id="einvoicing-status-line" style="margin:0 0 16px;padding:10px 12px;border-radius:8px;background:var(--surface-sunken);color:var(--text-secondary);font-size:12px"></div>
+        <div class="ret-field" style="margin:0"><label for="einvoicing-regime">${t("The shop's tax regime")}</label>
+          <select id="einvoicing-regime">
+            <option value="jordan">${t('Jordan — JoFotara (ISTD)')}</option>
+            <option value="none">${t('No e-invoicing regime — nothing is filed with any tax authority')}</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+          <button class="ret-btn ret-btn-primary" id="einvoicing-save-btn" onclick="RetailSystem._saveEinvoicingRegime()">${t('Save')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="location.href='/static/einvoicing.html'">${t('Manage E-Invoicing')}</button>
+        </div>
+      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('WhatsApp Reports')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -8789,6 +8806,129 @@ const RetailSystem = {
     await this._loadDeviceBranchForm();
     await this._loadBusinessDayForm();
     await this._loadDocSeriesCard();
+    await this._loadEinvoicingCard();
+  },
+
+  // ── E-Invoicing (Admin Center) ──────────────────────────────────────────
+  // ci-hardening-w0.3 continuation, "the doorway", fourth one in this file:
+  // GET/POST /api/einvoicing/settings (commercial_runtime/einvoicing/
+  // routes.py) have been complete since Phase 1 shipped, and the only
+  // client that ever called them was einvoicing.html/.js -- a standalone
+  // document nothing in this app links TO (see that file's own header
+  // comment: "no shared SubsystemApp shell exists to plug into"). The
+  // branding-einvoice-block above (this screen, further up) already reads
+  // the shop's e-invoicing seller identity and tells the owner it is
+  // "configured separately under E-Invoicing" -- a promise this codebase
+  // could not keep, since nothing anywhere linked there. This card is the
+  // switch that promise depends on, plus the link that finally makes it
+  // true (Manage E-Invoicing button below -> /static/einvoicing.html,
+  // matching the WhatsApp Reports/Shop Network cards' own "manage the rest
+  // over there" pattern).
+  //
+  // Deliberately a <select> with two NAMED options, never free text or a
+  // bare on/off checkbox: `tax_regime` (commercial_runtime/einvoicing/
+  // settings.py) is a STATEMENT OF FACT about which tax authority this shop
+  // files with, and settings.py::is_enabled() treats any value that is not
+  // exactly the literal 'jordan' -- including a typo -- as OFF. A free-text
+  // box would let a typo look like a valid "on" state; this select cannot.
+  //
+  // The status line is the part that matters most (brief: "do not ship a
+  // bare on/off toggle -- it would be actively misleading"). Both
+  // providers/direct_istd.py's submit_invoice and check_status raise
+  // NotImplementedError today, and the shipped default provider is
+  // 'unconfigured' -- so turning this on does NOT mean anything is filed
+  // with ISTD. It means every sale starts allocating a gapless e-invoice
+  // number and queuing an outbox row that is HELD, not submitted, until
+  // JoFotara portal registration is complete and real credentials are
+  // entered (routes.py's GET /status: provider_configured/counts_by_state
+  // are exactly the two facts that turn "on" into something a shopkeeper
+  // can verify instead of take on faith -- the QUEUED count is a number the
+  // owner can watch grow, the most honest indicator available today).
+  async _loadEinvoicingCard() {
+    try {
+      const [statusResp, settingsResp] = await Promise.all([
+        this._get('/api/einvoicing/status'),
+        this._get('/api/einvoicing/settings'),
+      ]);
+      const status = (statusResp && statusResp.data) || {};
+      const settings = (settingsResp && settingsResp.data && settingsResp.data.settings) || {};
+      // The RAW persisted value, not a derived boolean -- same reasoning
+      // _loadEmailNotifications documents for its own `enabled` read: this
+      // is what POST /settings actually wrote, and the only value that can
+      // tell the owner what THEY asked for even when the resolved/effective
+      // answer differs (e.g. a regime of 'jordan' with no provider
+      // configured still resolves "on" here -- see is_enabled()'s own
+      // docstring on why `enabled` is checked only AFTER `tax_regime`).
+      const regime = settings.tax_regime;
+
+      const KNOWN_REGIMES = ['jordan', 'none'];
+      const select = document.getElementById('einvoicing-regime');
+      if (select) {
+        // Same safety einvoicing.js's own regime picker needs: a plain
+        // <select> with no option marked `selected` auto-selects index 0 in
+        // every browser, which would silently show "Jordan" for a value the
+        // backend is actually treating as OFF (settings.py::is_enabled --
+        // "any value that is not exactly 'jordan' resolves the whole
+        // feature off"). A hidden, disabled, pre-selected placeholder is
+        // what actually prevents the misreport; the two static options
+        // above cannot express a third/unrecognised value on their own.
+        const stale = select.querySelector && select.querySelector('option[data-unrecognized]');
+        if (stale && stale.remove) stale.remove();
+        if (!KNOWN_REGIMES.includes(regime)) {
+          const opt = document.createElement('option');
+          opt.value = regime || '';
+          opt.textContent = t('Unrecognised regime — filing is off');
+          if (opt.setAttribute) opt.setAttribute('data-unrecognized', '1');
+          opt.selected = true;
+          opt.disabled = true;
+          opt.hidden = true;
+          if (select.insertBefore) select.insertBefore(opt, select.firstChild);
+        } else {
+          select.value = regime;
+        }
+      }
+
+      const isJordan = regime === 'jordan';
+      const line = document.getElementById('einvoicing-status-line');
+      if (line) {
+        if (isJordan) {
+          const providerKey = status.provider_in_use != null ? status.provider_in_use : status.provider;
+          const providerLabels = { unconfigured: t('Not connected'), mock: t('Test mode — no live submissions') };
+          const providerLabel = providerLabels[providerKey] || this._esc(providerKey || '');
+          const held = Number((status.counts_by_state && status.counts_by_state.QUEUED) || 0);
+          line.innerHTML =
+            `<p style="margin:0 0 8px">${t('E-invoicing is on. Every sale prepares an e-invoice, but it is held here — not filed with the tax authority — until this installation is connected to JoFotara and its credentials are entered.')}</p>` +
+            `<div style="display:flex;gap:16px;flex-wrap:wrap">` +
+            `<span>${t('Provider')}: ${providerLabel}</span>` +
+            `<span>${t('Queued')}: ${held}</span>` +
+            `</div>`;
+        } else {
+          line.textContent = t('Choose the regime this shop actually files under. With no regime selected, Aura files nothing with any tax authority at all — this is not a pause, and nothing is queued to be sent later.');
+        }
+      }
+    } catch (e) { console.error(e); }
+  },
+
+  async _saveEinvoicingRegime() {
+    const btn = document.getElementById('einvoicing-save-btn');
+    const select = document.getElementById('einvoicing-regime');
+    const value = select ? select.value : 'none';
+    if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    try {
+      const d = await this._post('/api/einvoicing/settings', { tax_regime: value });
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(t('Settings saved.'), 'success');
+      } else {
+        // Surfaced VERBATIM, same convention as _saveEmailNotifications'
+        // 400 handling -- the server's own message (routes.py) is written
+        // to be read, not replaced with a generic failure toast.
+        SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'), 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+    await this._loadEinvoicingCard();
   },
 
   // ── Branding (Admin Center) ─────────────────────────────────────────────
@@ -14000,7 +14140,23 @@ const RetailSystem = {
   // reason to trust an arbitrary string into t()/the DOM.
   _TRIAL_BALANCE_TYPE_LABEL: {
     asset: 'Asset', liability: 'Liability', equity: 'Equity',
-    income: 'Income', expense: 'Expense',
+    // KEYED ON WHAT THE BACKEND ACTUALLY EMITS, which is 'revenue', not
+    // 'income'. general_ledger.py's DEFAULT_CHART seeds 4000 Sales Revenue
+    // and 4900 Sales Returns and Allowances with account_type 'revenue', so
+    // the original 'income' key matched nothing and BOTH revenue accounts
+    // fell through _glAccountTypeLabel's `|| 'Other'` and rendered as
+    // "Other" -- on every trial balance, from the first one ever shown.
+    // Found by the Android client's parity work, not by this screen's own
+    // tests, because those assert the table renders rather than what a
+    // single cell says; a label lookup that silently degrades to a default
+    // is invisible to a test that only checks the row exists.
+    //
+    // 'income' is kept alongside it deliberately: it costs nothing, and the
+    // shipped value is a seeded string rather than a constrained enum, so a
+    // chart authored with the other spelling must not regress to "Other".
+    // The DISPLAY word stays "Income" for both, reusing the locale key that
+    // already exists rather than minting a second one for the same concept.
+    revenue: 'Income', income: 'Income', expense: 'Expense',
   },
   _glAccountTypeLabel(type) {
     return t(this._TRIAL_BALANCE_TYPE_LABEL[type] || 'Other');

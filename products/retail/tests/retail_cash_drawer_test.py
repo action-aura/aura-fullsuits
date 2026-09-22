@@ -67,20 +67,31 @@ def teardown_module(module):
 # away. Cash-drawer state still never affects its value -- the equality
 # loop below covers it like every other key.
 #
-# `einvoice` added 2026-09-08, and it brings a coupling worth stating here
-# because this file is about cash drawers, not tax authorities. E-invoicing
-# now defaults ON (commercial_runtime/einvoicing/settings.py DEFAULTS
-# 'enabled': '1'), so create_sale reaches the enqueue block at
-# retail_api.py:4816 on every sale. That block is wrapped in a broad
-# try/except and sets `response_data['einvoice']` ONLY when
-# enqueue_sale(...) returns truthy -- so from now on, a failed or skipped
-# e-invoicing enqueue makes THIS cash-drawer test fail with a key-set diff,
-# not an e-invoicing test. That is the honest reading of the contract (the
-# response really does carry the key now) and the reason the four sibling
-# copies of this list were all missed when the default flipped: only
-# retail_einvoicing_regression_test.py was updated with it. If this list
-# ever disagrees with the live response again, check the e-invoicing
-# settings default and that enqueue path FIRST.
+# `einvoice` was added to this list 2026-09-08, when e-invoicing defaulted
+# ON for every company. AUDIT 2026-09-22 -- REMOVED again: the owner made
+# e-invoicing opt-in (commercial_runtime/einvoicing/settings.py DEFAULTS
+# ['tax_regime'] flipped 'jordan' -> 'none', and is_enabled() checks the
+# regime BEFORE the 'enabled' toggle -- see that module's own comment for
+# the full reasoning). None of this file's companies ever opt in, so
+# create_sale's einvoice-enqueue try/except (retail_api.py, immediately
+# above the reorder hook) now returns without ever setting
+# `response_data['einvoice']`, for every sale this file rings, cash session
+# open or closed alike. Putting the key back in this list would fail every
+# test below with a real KeyError, not prove anything about cash drawers.
+#
+# WHAT THIS COSTS, STATED RATHER THAN LEFT IMPLICIT: this file used to prove
+# (via an explicit `data['einvoice'] == {...}` check that stood at the tail
+# of test_create_sale_response_byte_for_byte_unchanged_whether_or_not_a_
+# cash_session_is_open, removed in this same change -- see that test's own
+# comment) that cash-drawer state never affects WHETHER a sale's e-invoice
+# enqueues, or WHAT it enqueues under. That coupling can no longer be
+# observed here: e-invoicing is inert for this file's companies regardless
+# of cash-drawer state, so there is nothing left that could diverge either
+# way. The underlying property -- a session-scoped feature must not perturb
+# a tax-authority-scoped one -- is retained where it can still actually be
+# exercised: retail_doc_series_einvoice_firewall_test.py opts a company into
+# tax_regime='jordan' and proves e-invoicing's own sequence mints
+# independently of everything else touching that sale.
 # points_redeemed / points_redeemed_amount joined this set when loyalty
 # redemption shipped (v27). They are always present, zero when nothing was
 # redeemed, so the receipt and the sale-complete modal can show the SERVER's
@@ -102,7 +113,7 @@ def teardown_module(module):
 # equality loop below covers them like every other key.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'customer_id', 'customer_name', 'discount_amount', 'einvoice', 'employee_name',
+    'customer_id', 'customer_name', 'discount_amount', 'employee_name',
     'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'points_redeemed', 'points_redeemed_amount',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
@@ -408,33 +419,26 @@ def test_create_sale_response_byte_for_byte_unchanged_whether_or_not_a_cash_sess
     data_closed = _sell_cash(client_closed, pid_closed, qty=1, amount_paid=75.0).get_json()['data']
 
     assert sorted(data_open.keys()) == sorted(data_closed.keys()) == sorted(SALE_RESPONSE_KEYS)
-    # 'einvoice' joins the per-sale-unique exclusions for the same reason
-    # 'id' and 'sale_number' are already here, not to get this green: its
-    # invoice_ref is literally f'AURA_RETAIL:sale:{sale_id}'
-    # (retail_api.py:4818), so two DIFFERENT sales can never produce an
-    # equal value and a raw == here could only ever fail. What that gives
-    # up is the ability to catch a change in the einvoice payload's shape
-    # from this loop -- so it is checked explicitly below instead, against
-    # each response's own id, which is a stronger statement than equality
-    # would have been.
-    excluded = {'id', 'sale_number', 'idempotency_key', 'lines', 'einvoice'}
+    excluded = {'id', 'sale_number', 'idempotency_key', 'lines'}
     for key in SALE_RESPONSE_KEYS:
         if key in excluded:
             continue
         assert data_open[key] == data_closed[key], f"divergence on {key!r}"
 
-    # The excluded 'einvoice' key, checked the only way it can be: the
-    # drawer must not change WHETHER the sale enqueued, nor the ref it
-    # enqueued under. A missing key here means the enqueue silently failed
-    # for the session-open till but not the session-closed one (or the
-    # reverse) -- exactly the drawer-coupled divergence this test exists to
-    # refuse, and invisible to the key-set assertion above, which would
-    # still pass if BOTH lost the key.
-    for label, data in (('session open', data_open), ('session closed', data_closed)):
-        assert data['einvoice'] == {
-            'invoice_ref': f"AURA_RETAIL:sale:{data['id']}",
-            'status': 'queued',
-        }, f"e-invoice payload wrong with a cash {label}: {data['einvoice']!r}"
+    # AUDIT 2026-09-22: an explicit `data['einvoice'] == {...}` check used to
+    # stand here, comparing the enqueued payload for the session-open and
+    # session-closed sales. It is gone, not weakened -- 'einvoice' is no
+    # longer part of this file's default response at all (see
+    # SALE_RESPONSE_KEYS' own comment above: e-invoicing is opt-in now and
+    # neither client here ever opts in), so there is no key left to read.
+    # WHAT THIS COSTS: this test can no longer catch cash-drawer state
+    # silently affecting WHETHER or how a sale's e-invoice enqueues, because
+    # e-invoicing never enqueues for either client in this file any more --
+    # both sides are equally inert, so nothing here could diverge either
+    # way. That property is retained where it can still be exercised:
+    # retail_doc_series_einvoice_firewall_test.py opts a company into
+    # tax_regime='jordan' and proves e-invoicing's own sequence mints
+    # correctly on a real sale.
 
     line_open = data_open['lines'][0]
     line_closed = data_closed['lines'][0]
