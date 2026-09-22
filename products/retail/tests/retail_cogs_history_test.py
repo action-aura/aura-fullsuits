@@ -88,6 +88,22 @@ def teardown_module(module):
 # products.deleted_at_utc added -- inventory_value()'s own WHERE clause
 # names it, so it has to exist for that query to run at all, not merely to
 # be exercised.
+#
+# Schema v40 (per-branch cost basis) ADDS inventory_balances.avg_cost here
+# too, for the identical "has to exist for the query to run at all" reason:
+# metrics.inventory_value() now reads `b.avg_cost` before falling back to
+# `p.avg_cost`/`p.cost_price` (see that function's own docstring), so this
+# hand-built table needs the column even though no row below ever sets it.
+# EVERY row in this fixture leaves it at the column default (0), so
+# `NULLIF(b.avg_cost, 0)` is always NULL here and the fallback chain lands
+# on exactly the same `p.avg_cost`/`p.cost_price` tier it did before v40 --
+# `test_inventory_value_prefers_avg_cost_and_falls_back_to_cost_price` below
+# is therefore unchanged BYTE FOR BYTE, same assertion, same expected
+# figures. What it can no longer be read as covering: it does NOT exercise
+# the new branch-level tier of the fallback chain at all (a row with a real,
+# nonzero `b.avg_cost` that should win over `p.avg_cost`) -- that property
+# is proven instead in retail_v40_branch_cost_test.py, which drives real
+# branches through the real HTTP routes rather than a hand-built row.
 
 _BASE_DDL = """
 CREATE TABLE branches (
@@ -104,6 +120,7 @@ CREATE TABLE inventory_balances (
     id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1,
     product_id TEXT NOT NULL, branch_id INTEGER NOT NULL,
     quantity_on_hand REAL DEFAULT 0, quantity_reserved REAL DEFAULT 0,
+    avg_cost REAL DEFAULT 0,
     UNIQUE(company_id, product_id, branch_id));
 CREATE TABLE sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1, sale_number TEXT UNIQUE,

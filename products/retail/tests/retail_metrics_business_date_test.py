@@ -297,6 +297,18 @@ def teardown_module(module):
 # bases it is computed from -- the snapshot-vs-fallback question belongs to,
 # and is covered by, retail_v39_cost_basis_test.py / retail_cogs_history_
 # test.py / retail_gl_cogs_test.py, none of which this file duplicates.
+#
+# Schema v40 (per-branch cost basis) ADDS inventory_balances.avg_cost below
+# for the same reason products.avg_cost is already here: metrics.summary()
+# (called throughout this file) always computes `inventory_value`, which now
+# reads `b.avg_cost` before falling back to `p.avg_cost`/`p.cost_price` --
+# without this column, every `metrics.summary()` call in this file would hit
+# a SQL error, not a degraded result. Every row this file inserts leaves it
+# at the column default (0), so the fallback lands on the SAME `p.avg_cost`/
+# `p.cost_price` tier it always did -- no assertion in this file reads
+# `inventory_value` at all (confirmed by grep), so nothing here changes
+# meaning; this addition exists purely so the query underneath `summary()`
+# continues to parse.
 
 _BASE_DDL = """
 CREATE TABLE branches (
@@ -313,6 +325,7 @@ CREATE TABLE inventory_balances (
     id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1,
     product_id TEXT NOT NULL, branch_id INTEGER NOT NULL,
     quantity_on_hand REAL DEFAULT 0, quantity_reserved REAL DEFAULT 0,
+    avg_cost REAL DEFAULT 0,
     UNIQUE(company_id, product_id, branch_id));
 CREATE TABLE sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1, sale_number TEXT UNIQUE,

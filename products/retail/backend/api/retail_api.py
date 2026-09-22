@@ -1657,7 +1657,31 @@ def list_products():
         params.extend([like, like, like])
     sql = (
         "SELECT p.*, c.name as category_name, "
-        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock, "
+        # Modifier picker cold-start fix (launch-readiness "restaurant
+        # modifiers, wave 2 follow-up"): the till used to have no way to
+        # know a product carries modifier groups until it separately asked
+        # `GET /products/<id>/modifier-groups`, so subsystem-retail.js's
+        # _addToCart committed a product's FIRST tap each session without
+        # its modifiers and flagged the mismatch afterwards -- a cashier
+        # had to undo a cart line mid-queue. This EXISTS subquery answers
+        # "does this product have any LIVE modifier group attached" in the
+        # SAME query as the tile list itself (one indexed correlated
+        # lookup per row via idx_product_modifier_groups_product(company_id,
+        # product_id), never a per-product round trip -- see this route's
+        # own has_modifiers precedent, has_variants, immediately below in
+        # lookup_product), so the client can decide synchronously on the
+        # very first tap. Mirrors load_product_modifier_groups' (core/
+        # retail/modifiers.py) own WHERE conditions exactly -- a group or
+        # attachment invisible to that resolver must be invisible here too,
+        # or the flag and the actual picker contents could disagree.
+        "EXISTS("
+        "  SELECT 1 FROM product_modifier_groups pmg "
+        "  JOIN modifier_groups g ON g.id = pmg.group_id AND g.company_id = pmg.company_id "
+        "  WHERE pmg.company_id = p.company_id AND pmg.product_id = p.id "
+        "  AND pmg.deleted_at_utc IS NULL "
+        "  AND g.deleted_at_utc IS NULL AND g.status='active'"
+        ") AS has_modifiers "
         "FROM products p "
         "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
         "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
@@ -1781,7 +1805,20 @@ def lookup_product():
         "  SELECT 1 FROM products c2 WHERE c2.parent_product_id = p.id "
         "  AND c2.company_id = p.company_id AND c2.deleted_at_utc IS NULL "
         "  AND c2.status='active'"
-        ") AS has_variants "
+        ") AS has_variants, "
+        # Modifier picker cold-start fix -- see list_products' own comment on
+        # its identical EXISTS clause for the full reasoning. The scan path
+        # (this route's primary caller, _findByCode/_posScan in
+        # subsystem-retail.js) needs this exactly as much as the tile grid:
+        # a scanned modifier product deserves the picker on its first scan,
+        # not a bare line and an after-the-fact toast.
+        "EXISTS("
+        "  SELECT 1 FROM product_modifier_groups pmg "
+        "  JOIN modifier_groups g ON g.id = pmg.group_id AND g.company_id = pmg.company_id "
+        "  WHERE pmg.company_id = p.company_id AND pmg.product_id = p.id "
+        "  AND pmg.deleted_at_utc IS NULL "
+        "  AND g.deleted_at_utc IS NULL AND g.status='active'"
+        ") AS has_modifiers "
         "FROM products p "
         "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
         "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
@@ -2346,7 +2383,21 @@ def list_product_variants(pid):
     conn = get_retail_conn()
     rows = conn.execute(
         "SELECT p.*, c.name as category_name, "
-        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock, "
+        # Same row shape as list_products/lookup_product, per this route's
+        # own docstring above -- has_modifiers travels here too (see
+        # list_products' comment for the full reasoning) so a variant tile
+        # tapped from _openVariantPicker gets the identical cold-start fix
+        # a top-level product tile gets, instead of silently falling back
+        # to "no modifiers known" forever now that the background-probe
+        # workaround is gone.
+        "EXISTS("
+        "  SELECT 1 FROM product_modifier_groups pmg "
+        "  JOIN modifier_groups g ON g.id = pmg.group_id AND g.company_id = pmg.company_id "
+        "  WHERE pmg.company_id = p.company_id AND pmg.product_id = p.id "
+        "  AND pmg.deleted_at_utc IS NULL "
+        "  AND g.deleted_at_utc IS NULL AND g.status='active'"
+        ") AS has_modifiers "
         "FROM products p "
         "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
         "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
@@ -3900,14 +3951,56 @@ def receive_purchase_order(po_id):
                     _queue_sync_event(cur, 'product', item['product_id'], 'update',
                                        dict(product_row) | {'id': item['product_id'],
                                                              '_changed_fields': ['avg_cost']})
+
+            # Schema v40 (per-branch cost basis): maintain `inventory_
+            # balances.avg_cost` as its OWN moving weighted average, scoped
+            # to (product_id, branch_id) -- see database/schema.py's v40
+            # migration docstring for why this lives on `inventory_balances`
+            # rather than a new table, and ROADMAP.md's v40 entry for why a
+            # company-wide figure alone is wrong for a multi-branch shop.
+            #
+            # Weighted by THIS BRANCH's own `quantity_on_hand`, never the
+            # company-wide sum the block above reads -- a receipt at an
+            # empty second branch must not appear to widen an average a busy
+            # first branch already built. Read BEFORE the INSERT OR IGNORE/
+            # UPDATE below moves the figure, identical "read before this
+            # item's own write" ordering the company-wide block above
+            # already follows, for the identical reason.
+            branch_bal_row = cur.execute(
+                "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
+                "WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, item['product_id'], bid)
+            ).fetchone()
+            branch_qty_on_hand = float(branch_bal_row['quantity_on_hand']) if branch_bal_row else 0.0
+            branch_old_avg = float(branch_bal_row['avg_cost'] or 0) if branch_bal_row else 0.0
+            branch_denom = branch_qty_on_hand + float(qty)
+            # Same zero/negative-denominator and negative-numerator guards
+            # as the company-wide block above, applied per branch -- see
+            # that block's own AUDIT comment (2026-09-21) for the full
+            # "old_avg gets weighted by a negative quantity" reasoning this
+            # mirrors. `behind_on_sync` oversells are recorded against a
+            # branch's own balance (create_sale's `on_hand` read is already
+            # branch-scoped), so the same corruption this guards against
+            # company-wide can equally happen to a single branch.
+            if branch_denom > 0:
+                branch_new_avg = (
+                    Decimal(str(branch_qty_on_hand)) * Decimal(str(branch_old_avg))
+                    + Decimal(str(qty)) * Decimal(str(item['unit_cost']))
+                ) / Decimal(str(branch_denom))
+                if branch_new_avg < 0:
+                    branch_new_avg = Decimal(str(item['unit_cost']))
+                branch_new_avg_cost = _money(branch_new_avg, currency)
+            else:
+                branch_new_avg_cost = _money(branch_old_avg, currency)
+
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
             """, (cid, item['product_id'], bid))
             cur.execute("""
-                UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+                UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ?
                 WHERE company_id=? AND product_id=? AND branch_id=?
-            """, (qty, cid, item['product_id'], bid))
+            """, (qty, branch_new_avg_cost, cid, item['product_id'], bid))
             movement_uid = _new_uid()
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
@@ -4356,20 +4449,31 @@ def send_stock_transfer(transfer_id):
         reference = f'XFER-{transfer_id}'
         actor, terminal, utc_now = _stamp()
         source_branch_uid = _branch_uid(conn, source_bid)
+        # Schema v40 (per-branch cost basis): drives the quantization of the
+        # cost this loop snapshots below -- see `_money`'s own docstring,
+        # same reasoning receive_purchase_order's identical line already
+        # states.
+        currency = _company_currency(conn, cid)
         for item in items:
             pid = item['product_id']
             qty = float(item['quantity_sent'])
             # Same seed-then-read-then-update shape as adjust_stock above --
             # a branch that has never stocked this product yet gets a zero
             # row rather than a missing one, so the SELECT just below always
-            # finds a row to read.
+            # finds a row to read. `avg_cost` added to this SELECT (schema
+            # v40): the source branch's OWN weighted average, read here so
+            # the movement below can carry it -- removing stock at the
+            # existing average does not change a weighted average, so this
+            # read needs no recomputation, unlike receive_purchase_order's
+            # or receive_stock_transfer's own weighted-average updates.
             cur.execute(
                 "INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) "
                 "VALUES (?,?,?,0)",
                 (cid, pid, source_bid)
             )
             row = cur.execute(
-                "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+                "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
+                "WHERE company_id=? AND product_id=? AND branch_id=?",
                 (cid, pid, source_bid)
             ).fetchone()
             on_hand = float(row['quantity_on_hand'] or 0) if row else 0.0
@@ -4383,10 +4487,44 @@ def send_stock_transfer(transfer_id):
                 return jsonify({'status': 'error',
                                  'message': f'Cannot send {qty} of product {pid} -- '
                                             f'only {on_hand} on hand at the source branch.'}), 400
+            # Schema v40: the SAME three-level fallback chain create_sale's
+            # own cost snapshot now reads (branch avg_cost -> products.
+            # avg_cost -> products.cost_price) -- a source branch that has
+            # never received stock of its own (this row's `avg_cost` still
+            # 0, the column default) falls through to the company-wide
+            # figure rather than transferring stock at a false zero cost.
+            # No negative-result guard needed here, unlike the weighted-
+            # average WRITES elsewhere in this file: this is a plain READ of
+            # an already-guarded figure, never a new computation that could
+            # itself go negative.
+            branch_avg_cost = float(row['avg_cost'] or 0) if row else 0.0
+            product_cost_row = cur.execute(
+                "SELECT avg_cost, cost_price FROM products WHERE id=? AND company_id=?",
+                (pid, cid)
+            ).fetchone()
+            company_avg_cost = float(product_cost_row['avg_cost'] or 0) if product_cost_row else 0.0
+            product_cost_price = float(product_cost_row['cost_price'] or 0) if product_cost_row else 0.0
+            transfer_unit_cost = _money(
+                branch_avg_cost if branch_avg_cost else (
+                    company_avg_cost if company_avg_cost else product_cost_price),
+                currency
+            )
             cur.execute(
                 "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ? "
                 "WHERE company_id=? AND product_id=? AND branch_id=?",
                 (qty, cid, pid, source_bid)
+            )
+            # Schema v40: persist the snapshot onto THIS line's own
+            # stock_transfer_items row (keyed by item id, not product_id --
+            # see database/schema.py's v40 migration docstring for why: a
+            # transfer may carry two lines for the same product, and only
+            # the item id disambiguates which line a given receive-time
+            # count belongs to, the identical reason `quantity_received`
+            # already keys by item id). `receive_stock_transfer` reads this
+            # back to weight it into the destination branch's average.
+            cur.execute(
+                "UPDATE stock_transfer_items SET unit_cost=? WHERE id=?",
+                (transfer_unit_cost, item['id'])
             )
             # v13 stamp + ledger row, identical shape to adjust_stock's own
             # INSERT above -- 'transfer_out' is a new, self-describing
@@ -4396,17 +4534,22 @@ def send_stock_transfer(transfer_id):
             # `quantity` itself is signed (-qty), which is what
             # stock_reconciliation.compute_drift's SUM(quantity) actually
             # relies on -- the label is documentation, the sign is the math.
+            # `unit_cost` now carries the real snapshot (schema v40) rather
+            # than the column's own DEFAULT 0 -- stock moving between
+            # branches now carries its cost with it, per ROADMAP.md's v40
+            # entry, rather than the "harmless while cost was company-wide"
+            # zero v39 deliberately left in place.
             movement_uid = _new_uid()
             cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
-                VALUES (?,?,?,'transfer_out',?,?,?,?,?,?,?,?)
-            """, (cid, pid, source_bid, -qty, reference,
+                VALUES (?,?,?,'transfer_out',?,?,?,?,?,?,?,?,?)
+            """, (cid, pid, source_bid, -qty, transfer_unit_cost, reference,
                   f'Transfer to branch {transfer["destination_branch_id"]}', _uid(),
                   movement_uid, actor, terminal, utc_now))
             _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                 'uid': movement_uid, 'product_id': pid, 'branch_id': source_bid, 'branch_uid': source_branch_uid,
-                'movement_type': 'transfer_out', 'quantity': -qty, 'unit_cost': 0,
+                'movement_type': 'transfer_out', 'quantity': -qty, 'unit_cost': transfer_unit_cost,
                 'reference': reference, 'notes': f'Transfer to branch {transfer["destination_branch_id"]}',
                 'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
             })
@@ -4525,6 +4668,11 @@ def receive_stock_transfer(transfer_id):
         reference = f'XFER-{transfer_id}'
         actor, terminal, utc_now = _stamp()
         dest_branch_uid = _branch_uid(conn, dest_bid)
+        # Schema v40 (per-branch cost basis): drives the quantization of the
+        # destination branch's weighted-average update below -- same
+        # `currency` every other moving-average write in this file is
+        # quantized at.
+        currency = _company_currency(conn, cid)
         shortages = []
         for item in items:
             pid = item['product_id']
@@ -4535,30 +4683,78 @@ def receive_stock_transfer(transfer_id):
                 (qty_received, item['id'])
             )
             if qty_received > 0:
+                # Schema v40: the cost THIS line left the source branch at,
+                # snapshotted by send_stock_transfer onto this SAME row (see
+                # that route's own comment) -- the figure being carried into
+                # the destination branch's average below. 0 only for a
+                # transfer sent before this column existed (never
+                # backfilled -- see database/schema.py's v40 migration
+                # docstring), in which case the weighted-average formula
+                # below degrades to "incoming stock arrives at zero cost",
+                # identical to every v39-and-earlier transfer's actual
+                # behaviour, not a new defect this migration introduces.
+                incoming_unit_cost = float(item['unit_cost'] or 0)
                 # Same seed-then-update shape as receive_purchase_order's own
                 # item loop above -- a destination branch that has never
-                # stocked this product yet gets a zero row first.
+                # stocked this product yet gets a zero row first. Read
+                # BEFORE the UPDATE below moves `quantity_on_hand`, same
+                # "weight the stock already on hand against the stock
+                # arriving now" ordering receive_purchase_order's own
+                # company-wide computation already follows.
                 cur.execute(
                     "INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) "
                     "VALUES (?,?,?,0)",
                     (cid, pid, dest_bid)
                 )
-                cur.execute(
-                    "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ? "
+                dest_bal_row = cur.execute(
+                    "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
                     "WHERE company_id=? AND product_id=? AND branch_id=?",
-                    (qty_received, cid, pid, dest_bid)
+                    (cid, pid, dest_bid)
+                ).fetchone()
+                dest_qty_on_hand = float(dest_bal_row['quantity_on_hand']) if dest_bal_row else 0.0
+                dest_old_avg = float(dest_bal_row['avg_cost'] or 0) if dest_bal_row else 0.0
+                dest_denom = dest_qty_on_hand + qty_received
+                # Identical zero/negative-denominator and negative-numerator
+                # guards as receive_purchase_order's own moving-average
+                # write -- see that route's AUDIT comment (2026-09-21) for
+                # the full reasoning this mirrors per branch. An EMPTY
+                # destination branch (`dest_qty_on_hand == 0`, no balance row
+                # or a zeroed one) collapses this formula to exactly
+                # `incoming_unit_cost` -- "transferring into an empty branch
+                # gives it exactly the sender's cost" falls out of the
+                # weighted-average arithmetic with no special-casing needed,
+                # the same way a first PO receipt does.
+                if dest_denom > 0:
+                    dest_new_avg = (
+                        Decimal(str(dest_qty_on_hand)) * Decimal(str(dest_old_avg))
+                        + Decimal(str(qty_received)) * Decimal(str(incoming_unit_cost))
+                    ) / Decimal(str(dest_denom))
+                    if dest_new_avg < 0:
+                        dest_new_avg = Decimal(str(incoming_unit_cost))
+                    dest_new_avg_cost = _money(dest_new_avg, currency)
+                else:
+                    dest_new_avg_cost = _money(dest_old_avg, currency)
+                cur.execute(
+                    "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ? "
+                    "WHERE company_id=? AND product_id=? AND branch_id=?",
+                    (qty_received, dest_new_avg_cost, cid, pid, dest_bid)
                 )
+                # `unit_cost` now carries the real incoming snapshot (schema
+                # v40) rather than the column's own DEFAULT 0 -- the SAME
+                # figure just weighted into the destination average above,
+                # so the immutable ledger row and the mutable cache it feeds
+                # agree by construction.
                 movement_uid = _new_uid()
                 cur.execute("""
-                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
                                                      uid,actor_user_uid,terminal_id,created_at_utc)
-                    VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?)
-                """, (cid, pid, dest_bid, qty_received, reference,
+                    VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?,?)
+                """, (cid, pid, dest_bid, qty_received, incoming_unit_cost, reference,
                       f'Transfer from branch {transfer["source_branch_id"]}', _uid(),
                       movement_uid, actor, terminal, utc_now))
                 _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                     'uid': movement_uid, 'product_id': pid, 'branch_id': dest_bid, 'branch_uid': dest_branch_uid,
-                    'movement_type': 'transfer_in', 'quantity': qty_received, 'unit_cost': 0,
+                    'movement_type': 'transfer_in', 'quantity': qty_received, 'unit_cost': incoming_unit_cost,
                     'reference': reference, 'notes': f'Transfer from branch {transfer["source_branch_id"]}',
                     'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
                 })
@@ -6235,8 +6431,14 @@ def create_sale():
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'Quantity must be greater than zero.'}), 400
 
+            # `avg_cost` added to this SELECT (schema v40, per-branch cost
+            # basis): this is the only place this loop reads this branch's
+            # own `inventory_balances` row before pricing/writing the sale_
+            # items line, so it is also the right place to read the
+            # BRANCH-level cost basis `unit_cost`'s snapshot below needs --
+            # see the `cost_basis`/`unit_cost` computation further down.
             balance = cur.execute(
-                "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+                "SELECT quantity_on_hand, avg_cost FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
                 (cid, pid, bid)
             ).fetchone()
             on_hand = float(balance['quantity_on_hand']) if balance else 0.0
@@ -6347,12 +6549,28 @@ def create_sale():
             # case -- the SAME fallback the v39 migration used to seed
             # `avg_cost`'s own starting value company-wide.
             #
+            # Schema v40 (per-branch cost basis): a THIRD level is tried
+            # FIRST -- this BRANCH's own `inventory_balances.avg_cost` (read
+            # above alongside `on_hand`) -- before falling through to the
+            # company-wide `products.avg_cost` and then `cost_price`. This
+            # is the whole reason v40 exists: the same SKU sold from two
+            # branches that paid different prices must snapshot two
+            # different costs on the same day. A branch that has never
+            # received stock of its own (avg_cost still 0, the column's
+            # default) falls straight through to the v39 chain unchanged --
+            # byte-identical to pre-v40 behaviour for a single-branch shop
+            # or a branch this column was never populated for (an imported
+            # or sync-only balance -- see database/schema.py's v40 migration
+            # docstring, "NOT MAINTAINED BY THIS MIGRATION").
+            #
             # Quantized through `_money(..., currency)`, the SAME money
             # helper every other coerced figure in this route already goes
             # through -- `avg_cost`/`cost_price` are raw REAL columns that
             # never passed through `calculate_line`'s own quantization, so
             # this is the one place that has to happen for them.
-            cost_basis = product['avg_cost'] if product['avg_cost'] else product['cost_price']
+            branch_avg_cost = float(balance['avg_cost']) if balance and balance['avg_cost'] else 0.0
+            cost_basis = branch_avg_cost if branch_avg_cost else (
+                product['avg_cost'] if product['avg_cost'] else product['cost_price'])
             unit_cost = _money(cost_basis, currency)
 
             # Launch-readiness "restaurant modifiers, wave 1" (schema v26,

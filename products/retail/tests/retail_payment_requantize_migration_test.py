@@ -397,8 +397,21 @@ def test_the_real_chain_advances_the_version_and_keeps_integrity():
     try:
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert conn.execute('PRAGMA user_version').fetchone()[0] == sch.RETAIL_SCHEMA_VERSION
-        assert sch.RETAIL_SCHEMA_VERSION == 39, (
-            f"this suite is written against v39; constant is {sch.RETAIL_SCHEMA_VERSION}")
+        # Bumped 39 -> 40 (schema v40, "a per-branch cost basis" --
+        # ROADMAP.md's 2026-09-22 entry): v40 only ADD COLUMNs
+        # (inventory_balances.avg_cost, stock_transfer_items.unit_cost) and
+        # its backfill reads only products.avg_cost/cost_price -- neither
+        # touched by this file's payments-requantize scenario -- so the
+        # chain above still applies v37's correction the same way. What
+        # THIS TRIPWIRE can no longer catch, same as every bump before it:
+        # it does not re-verify that v40's own migration behaves correctly
+        # in the same upgrade run -- that is retail_v40_branch_cost_test.py
+        # and retail_v39_cost_basis_test.py's job. This assertion only
+        # proves the version constant and this file's chain still agree,
+        # so a future bump that forgets to update this line fails LOUDLY
+        # here rather than silently leaving the suite's docstring wrong.
+        assert sch.RETAIL_SCHEMA_VERSION == 40, (
+            f"this suite is written against v40; constant is {sch.RETAIL_SCHEMA_VERSION}")
         assert _amount(conn, pay_id) == 4.007, (
             f"the chain must have applied the correction, got {_amount(conn, pay_id)!r}")
     finally:

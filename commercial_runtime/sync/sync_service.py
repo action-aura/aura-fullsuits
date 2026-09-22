@@ -337,6 +337,7 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Callable, Iterable, NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -2665,6 +2666,99 @@ class SyncService:
             # create_sale/create_return/receive_purchase_order/bulk-import
             # already keep locally, now kept across devices too.
             if cur.rowcount:
+                # Schema v40 (per-branch cost basis): maintain `inventory_
+                # balances.avg_cost` the same way the two LOCAL write paths
+                # already do (api/retail_api.py's receive_purchase_order and
+                # receive_stock_transfer) -- see database/schema.py's v40
+                # migration docstring, "NOT MAINTAINED BY THIS MIGRATION",
+                # for the gap this closes: a device that only ever learns a
+                # branch's stock THROUGH SYNC -- never through a local
+                # receipt or a local transfer-receive at that branch --
+                # never converged its own avg_cost otherwise.
+                #
+                # Only 'purchase_in'/'transfer_in' weight into the average --
+                # the only two movement_types that EVER write inventory_
+                # balances.avg_cost locally. A movement that REMOVES stock
+                # ('sale_out', 'transfer_out') does not change what the
+                # remaining stock cost, even though it too carries a real
+                # unit_cost on the wire now, so it is deliberately excluded.
+                #
+                # `unit_cost` 0 means "no cost information" (a manual
+                # adjustment, an opening count, or a pre-v40 transfer_in
+                # replayed from before this column existed) and must not
+                # drag a real average toward zero -- skip the update
+                # entirely rather than weight in a false zero.
+                #
+                # Nested inside this SAME `if cur.rowcount:` as the quantity
+                # update below -- HAZARD 1's own guard -- so a replayed event
+                # (a `DO NOTHING` conflict on the movement INSERT above)
+                # moves this average exactly as many times as it moves the
+                # quantity: zero.
+                incoming_unit_cost = p.get("unit_cost") or 0
+                if p.get("movement_type") in ("purchase_in", "transfer_in") and incoming_unit_cost:
+                    # Read BEFORE the quantity upsert two statements below
+                    # moves `quantity_on_hand` -- weighting the stock already
+                    # on hand against the stock THIS movement carries would
+                    # double-count this movement's own quantity if read
+                    # after, the identical ordering both local write paths
+                    # already follow. Seed a zero row first (INSERT OR
+                    # IGNORE) so the SELECT always finds one, matching
+                    # receive_purchase_order/receive_stock_transfer's own
+                    # "seed-then-read-then-update" shape for a branch that
+                    # has never stocked this product before.
+                    conn.execute(
+                        "INSERT OR IGNORE INTO inventory_balances (company_id, product_id, branch_id, quantity_on_hand) "
+                        "VALUES (?,?,?,0)",
+                        (local_company_id, p.get("product_id"), resolved_branch_id),
+                    )
+                    bal_row = conn.execute(
+                        "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
+                        "WHERE company_id=? AND product_id=? AND branch_id=?",
+                        (local_company_id, p.get("product_id"), resolved_branch_id),
+                    ).fetchone()
+                    prior_qty = Decimal(str(bal_row[0] or 0))
+                    prior_avg = Decimal(str(bal_row[1] or 0))
+                    incoming_qty = Decimal(str(p.get("quantity") or 0))
+                    denom = prior_qty + incoming_qty
+                    # Same zero/negative-denominator guard as both local
+                    # writers: keep the existing average rather than divide
+                    # by zero or compound a pre-existing on-hand corruption
+                    # into the cost ledger too.
+                    if denom > 0:
+                        new_avg = (
+                            prior_qty * prior_avg + incoming_qty * Decimal(str(incoming_unit_cost))
+                        ) / denom
+                        # Same negative-result fallback as api/retail_api.py's
+                        # AUDIT (2026-09-21) fix: a negative `prior_qty` (the
+                        # `behind_on_sync` oversell path can legitimately
+                        # drive a branch's on-hand total below zero) can swing
+                        # this formula past zero even though `incoming_unit_
+                        # cost` -- the price actually carried on THIS
+                        # movement -- is an ordinary positive number. Fall
+                        # back to the OBSERVED incoming cost, never a
+                        # 0-clamp: 0 is this codebase's own sentinel for "no
+                        # cost basis known at all", and clamping would
+                        # misreport a movement that DOES carry a known cost
+                        # as one that has none.
+                        if new_avg < 0:
+                            new_avg = Decimal(str(incoming_unit_cost))
+                        # Quantized to a fixed, currency-agnostic precision
+                        # (finer than any minor unit this product supports,
+                        # e.g. JOD's 3dp) rather than replicating api/
+                        # retail_api.py's own per-company `_money()` quantum:
+                        # this module is shared across products and must not
+                        # import a retail-specific currency lookup to answer
+                        # "how many decimals does this company's currency
+                        # use". Only cleans up binary-float noise; it is not
+                        # a claim that this matches `_money()`'s rounding bit
+                        # for bit on a value that does not already terminate
+                        # within it.
+                        new_avg_cost = float(new_avg.quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP))
+                        conn.execute(
+                            "UPDATE inventory_balances SET avg_cost=? "
+                            "WHERE company_id=? AND product_id=? AND branch_id=?",
+                            (new_avg_cost, local_company_id, p.get("product_id"), resolved_branch_id),
+                        )
                 conn.execute(
                     "INSERT INTO inventory_balances (company_id, product_id, branch_id, quantity_on_hand) "
                     "VALUES (?,?,?,?) "

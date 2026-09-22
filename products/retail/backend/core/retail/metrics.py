@@ -1269,43 +1269,65 @@ def cogs(conn, cid, period, branch_id=None, currency=None):
     return _money(float(sold or 0) - float(returned or 0), currency)
 
 
-def inventory_value(conn, cid, currency=None):
-    """Stock on hand at current cost. Not period- or branch-scoped: it is a
-    snapshot of right now, which is why it takes no Period.
+def inventory_value(conn, cid, branch_id=None, currency=None):
+    """Stock on hand at current cost. Not period-scoped -- it is a snapshot
+    of right now, which is why it takes no Period -- but IS branch-scoped as
+    of schema v40, via the optional `branch_id` (same name/position
+    convention `revenue()`/`cogs()` already use, default None meaning "every
+    branch", preserving this function's own pre-v40 signature for the one
+    caller (`summary()`, below) that has never passed one).
 
-    COST BASIS, schema v39 onward (database/schema.py::_migrate_add_cost_
-    basis): prefers `p.avg_cost`, the moving weighted-average cost maintained
-    at purchase-order receipt (see this module's KNOWN GAP section), and
-    falls back to `p.cost_price`, the manually-typed figure, when avg_cost is
-    zero -- the identical `COALESCE(NULLIF(x,0), fallback)` shape `cogs()`
-    now uses for the same reason. `avg_cost` IS backfilled from `cost_price`
-    at migration time, so on a freshly-migrated install the two columns are
-    identical and this changes nothing on day one; the fallback exists for a
-    hand-built fixture (or a database rebuilt outside the normal migration
-    chain) that carries `avg_cost=0` beside a real `cost_price`, the same
-    defensive posture every other v39-basis read in this module takes.
+    COST BASIS, schema v40 onward (database/schema.py::_migrate_add_branch_
+    cost_basis): each `inventory_balances` ROW is now valued at ITS OWN
+    branch-level `b.avg_cost` FIRST, falling back to the company-wide `p.
+    avg_cost` (schema v39), then to `p.cost_price` -- the identical
+    three-level chain api/retail_api.py's create_sale now reads for its own
+    cost snapshot, `COALESCE(NULLIF(x,0), fallback)` chained one level
+    deeper than the v39 version of this function used. `b.avg_cost` IS
+    backfilled at migration time from the SAME company-wide figure this
+    function used to read alone, so a freshly-migrated install values
+    identically to before v40 on day one; the chain diverges only once a
+    receipt or a transfer receipt gives some branch its own, different
+    average -- which is the entire point of v40 existing.
 
-    WHY avg_cost IS THE BETTER BASIS FOR A "RIGHT NOW" FIGURE. `cost_price`
-    is a manual, point-in-time entry nobody is obliged to revisit; `avg_cost`
-    is a running figure MAINTAINED by every purchase-order receipt (a moving
-    weighted average over what stock actually cost to bring in -- see the
-    KNOWN GAP section for why weighted-average rather than FIFO). A snapshot
-    of "what is my stock worth right now" should read the figure the system
-    keeps current, not the one a shopkeeper may have typed once and never
-    looked at again.
+    WHY THIS MAKES THE PER-BRANCH AND COMPANY-WIDE READS AGREE BY
+    CONSTRUCTION, not by a separate reconciliation: valuing EVERY row
+    (company-wide call, `branch_id=None`) by its own branch-level figure,
+    rather than by a single blended `p.avg_cost` for the whole company,
+    means the company total is exactly the SUM of what each branch call
+    would report for its own rows -- a straight partition of one SQL
+    expression by `branch_id`, not two different formulas that happen to be
+    reconciled. Valuing the company-wide call by the OLD single blended
+    `p.avg_cost` instead would NOT have this property once branches
+    diverge: `qty_A*avg_A + qty_B*avg_B` (the true, branch-aware total) is
+    mathematically not the same figure as `(qty_A+qty_B)*company_avg` the
+    moment the two branch averages differ, which is exactly what v40 makes
+    possible.
+
+    WHY avg_cost IS THE BETTER BASIS FOR A "RIGHT NOW" FIGURE, unchanged
+    reasoning from v39. `cost_price` is a manual, point-in-time entry nobody
+    is obliged to revisit; `avg_cost` (branch or company) is a running
+    figure MAINTAINED by every purchase-order receipt and, as of v40, every
+    inter-branch transfer receipt too (a moving weighted average over what
+    stock actually cost to bring in -- see the KNOWN GAP section for why
+    weighted-average rather than FIFO). A snapshot of "what is my stock
+    worth right now" should read the figure the system keeps current, not
+    the one a shopkeeper may have typed once and never looked at again.
 
     launch-readiness Phase 6 stage 6b-iii-a: `AND p.deleted_at_utc IS NULL`
-    added alongside the existing `p.status='active'` -- this is a "right now"
+    alongside the existing `p.status='active'` -- this is a "right now"
     snapshot, so a tombstoned product's leftover balance would otherwise
     inflate it forever, exactly the failure mode `docs/launch-readiness/
     phase6b-deltas-and-tombstones.md` names this function for. Both filters
     are unchanged by this pass."""
-    row = conn.execute("""
+    branch_clause = " AND b.branch_id=?" if branch_id is not None else ""
+    params = (cid, branch_id) if branch_id is not None else (cid,)
+    row = conn.execute(f"""
         SELECT COALESCE(SUM(b.quantity_on_hand *
-                             COALESCE(NULLIF(p.avg_cost, 0), p.cost_price)), 0)
+                             COALESCE(NULLIF(b.avg_cost, 0), NULLIF(p.avg_cost, 0), p.cost_price)), 0)
         FROM inventory_balances b JOIN products p ON b.product_id=p.id
-        WHERE b.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
-    """, (cid,)).fetchone()
+        WHERE b.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL{branch_clause}
+    """, params).fetchone()
     return _money(row[0], currency)
 
 
@@ -1713,5 +1735,14 @@ def summary(conn, cid, period, branch_id=None, currency=None):
         'gross_profit': gross_profit,
         # NOT money -- a percentage, no currency precision applies.
         'margin_pct': round(gross_profit / cur_rev * 100, 1) if cur_rev > 0 else 0,
-        'inventory_value': inventory_value(conn, cid, currency),
+        # `currency` passed by KEYWORD, deliberately -- schema v40 inserted
+        # `branch_id` as inventory_value()'s new third positional parameter
+        # (matching revenue()/cogs()'s own name/position convention), and a
+        # positional `currency` here would silently bind to THAT slot
+        # instead, turning a currency code into a `branch_id` filter no row
+        # could ever match (inventory_value would report 0 forever). This
+        # summary card stays COMPANY-WIDE regardless of `branch_id` above --
+        # see inventory_value()'s own docstring for why that is a documented
+        # choice, not an oversight.
+        'inventory_value': inventory_value(conn, cid, currency=currency),
     }

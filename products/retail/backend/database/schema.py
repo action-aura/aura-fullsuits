@@ -1048,7 +1048,28 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # schema.py:3743-3745, already refuses in writing). See ROADMAP.md's v39 entry
 # for the full "why weighted-average, not FIFO" reasoning and
 # _migrate_add_cost_basis's own docstring for the column-by-column detail.
-RETAIL_SCHEMA_VERSION = 39
+#
+# v40 (2026-09-22): a per-BRANCH cost basis, and a transfer that carries
+# cost. Claimed in writing in ROADMAP.md's 2026-09-22 "retail schema v40
+# CLAIMED: a per-branch cost basis" entry before this constant was touched --
+# v35 is STILL the open Aseel-parity reservation, untouched by this. Two
+# additive columns: `inventory_balances.avg_cost` (a per-branch moving
+# weighted-average, keyed by the SAME `UNIQUE(company_id,product_id,
+# branch_id)` `inventory_balances` already declares, backfilled best-effort
+# from `products.avg_cost` -- falling back to `products.cost_price` -- the
+# only cost evidence any branch has before this column existed) and
+# `stock_transfer_items.unit_cost` (a per-line snapshot of what the SENDING
+# branch's average was at the moment stock left, written by another agent's
+# runtime change so `receive_stock_transfer` can weight that SAME figure into
+# the destination branch's average -- deliberately left at 0 for every
+# historical row, unbackfilled, identical reasoning to v39's own `sale_items.
+# unit_cost`). `products.avg_cost` STAYS as the company-level fallback for a
+# branch that has never received stock of its own. See ROADMAP.md's v40
+# entry for the full "why inter-branch transfers had to start carrying cost"
+# reasoning and _migrate_add_branch_cost_basis's own docstring for the
+# column-by-column detail, including the sync apply-path gap it discloses
+# rather than silently leaves for a future session to rediscover.
+RETAIL_SCHEMA_VERSION = 40
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2143,6 +2164,16 @@ def _migrate_retail_schema(conn):
     # above and _migrate_add_cost_basis's own docstring for the full
     # reasoning.
     _migrate_add_cost_basis(conn)
+    # v39 -> v40 (a per-branch cost basis, and a transfer that carries
+    # cost): appended LAST, same convention as every step above except v37
+    # itself (which has its own, data-dependent reason to run early -- see
+    # that block's comment). v40 has no such constraint: it only ADD
+    # COLUMNs `inventory_balances.avg_cost` and `stock_transfer_items.
+    # unit_cost`, and its backfill reads only `products.avg_cost`/
+    # `cost_price`, which no step above this line writes. See the
+    # RETAIL_SCHEMA_VERSION v40 comment above and _migrate_add_branch_cost_
+    # basis's own docstring for the full reasoning.
+    _migrate_add_branch_cost_basis(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -9973,3 +10004,178 @@ def _migrate_add_cost_basis(conn):
             # unit_cost is DELIBERATELY NOT BACKFILLED": 0 here means "no
             # snapshot was taken", not "this sale cost nothing".
             conn.execute('ALTER TABLE sale_items ADD COLUMN unit_cost REAL DEFAULT 0')
+
+
+def _migrate_add_branch_cost_basis(conn):
+    """One-time migration (schema v39 -> v40): a PER-BRANCH cost basis, and a
+    transfer that carries cost. Claimed in writing in ROADMAP.md's
+    2026-09-22 "retail schema v40 CLAIMED: a per-branch cost basis" entry --
+    this migration is CASHING IN that claim, not re-claiming it (v35 is
+    STILL the open Aseel-parity reservation, untouched by this; v40 is the
+    next number above the live head, same rule every entry in this chain
+    since v34/v35 already applies).
+
+    Two new, additive-only columns (column-existence-checked ADD COLUMN,
+    same guard shape every other additive step in this chain uses):
+
+        inventory_balances.avg_cost    REAL DEFAULT 0
+        stock_transfer_items.unit_cost REAL DEFAULT 0
+
+    THE PROBLEM THIS EXISTS TO SOLVE, restated from ROADMAP.md's v40 entry:
+    v39's `products.avg_cost` is COMPANY-scoped, so a multi-branch shop that
+    pays two different prices for the same SKU at two different branches
+    sees one blended average, and neither branch's cost of goods sold is
+    right. Worse, `transfer_out`/`transfer_in` (`_migrate_add_stock_
+    transfers`, schema v28) wrote `unit_cost` 0 into `inventory_movements` --
+    harmless while cost was company-wide (moving stock inside a company does
+    not change the company's total cost, which is arithmetically correct and
+    is why v39 deliberately left transfers alone), and wrong the moment cost
+    is tracked per branch: stock leaving a branch that paid 4.00 and landing
+    at one that paid 10.00 must carry its 4.00 with it, or the receiver
+    values it at nothing and the sender keeps value it no longer holds.
+
+    WHERE THE FIGURE LIVES, AND WHY. `inventory_balances` is the existing
+    per-branch stock table -- `UNIQUE(company_id, product_id, branch_id)`
+    (see its own `CREATE TABLE` above) -- so `avg_cost` lives there rather
+    than on a new table, the same way `products.avg_cost` rides the
+    company-scoped table it is already keyed by; `metrics.py::inventory_
+    value` already read `inventory_balances.quantity_on_hand` keyed exactly
+    this way, confirmed by reading that function before choosing this home
+    rather than assumed. `products.avg_cost` STAYS, unchanged, as the
+    company-level FALLBACK for a branch that has never received stock of its
+    own -- api/retail_api.py's create_sale, receive_purchase_order and
+    send_stock_transfer now read a three-level fallback chain (branch
+    avg_cost -> products.avg_cost -> products.cost_price), the identical
+    shape `_migrate_add_cost_basis`'s own products.avg_cost -> cost_price
+    fallback already established, extended by one level.
+
+    `stock_transfer_items.unit_cost` is what lets `send_stock_transfer`
+    SNAPSHOT the sending branch's average at the moment stock leaves, and
+    `receive_stock_transfer` read that SAME figure back to weight it into
+    the destination branch's average -- rather than re-deriving it from
+    `reference` string matching against `inventory_movements`, which would
+    be ambiguous: a transfer may carry two lines for the same product (that
+    route's own docstring), and only `stock_transfer_items.id` disambiguates
+    which line a given receive-time count belongs to -- the identical
+    reason the existing `quantity_received` column is keyed by item id
+    rather than product id. This column is NOT itself synced (see the "NOT
+    MAINTAINED BY THIS MIGRATION" section below for why that is safe).
+
+    MAINTAINED GOING FORWARD by a runtime change to api/retail_api.py
+    (receive_purchase_order, send_stock_transfer, receive_stock_transfer,
+    create_sale) written in the same pass as this migration -- this
+    migration only creates the two columns and seeds `inventory_balances.
+    avg_cost`'s starting value.
+
+    `inventory_balances.avg_cost` IS BACKFILLED, from `products.avg_cost`
+    (falling back to `products.cost_price` when that is itself 0 or NULL) --
+    the company-wide figure seeded onto EVERY branch row of that product,
+    same disclosed-plug convention `_migrate_add_cost_basis` already used
+    for `products.avg_cost` itself. Today's company-wide average is the
+    ONLY cost evidence that exists for any individual branch -- no
+    per-branch receipt history was ever recorded before this column
+    existed -- so it is the best available starting figure, and strictly
+    better than starting every branch at a false zero (which would make
+    that branch's very next sale post a zero-cost COGS line, overstating
+    margin for stock that plainly has a real cost). This is DELIBERATELY
+    NOT a claim that any branch's true historical cost was ever this figure
+    -- it is the same honest plug v39 already disclosed for `products.
+    avg_cost`, one level down the identical fallback chain.
+
+    `stock_transfer_items.unit_cost` is DELIBERATELY NOT BACKFILLED. Every
+    historical row is left at its default, 0 -- identical reasoning to
+    `_migrate_add_cost_basis`'s own `sale_items.unit_cost`: no historical
+    transfer ever recorded what it cost at send time, so there is no
+    evidence to backfill from, and nothing reads this column for a
+    completed historical transfer anyway -- a `received`/`cancelled`
+    transfer's own effect on `inventory_balances.avg_cost` already happened,
+    under the OLD zero-cost behaviour, at the time it was applied; replaying
+    it now against a manufactured figure would restate history rather than
+    correct it.
+
+    GUARDED ON TABLE EXISTENCE, same reasoning as every other additive step
+    in this chain (search "existing_tables" in this file): a minimal test
+    fixture that hand-builds its own schema and calls `_migrate_retail_
+    schema` directly may carry `inventory_balances` without `stock_
+    transfer_items`, or neither, or `inventory_balances` without `products`
+    (the backfill's own dependency, guarded separately below). Each column
+    is ALSO individually existence-checked via `PRAGMA table_info` before
+    its own `ALTER TABLE`, following the same `added_any`-per-column
+    idempotency shape v36/v38/v39 already use: if a column already exists,
+    its ALTER (and, for `inventory_balances.avg_cost`, its backfill) is
+    skipped entirely -- a second call to this function, including one
+    replayed against a database restored from a mid-upgrade backup, is a
+    clean no-op that never re-derives avg_cost from a products row the
+    runtime has since moved on.
+
+    NOT MAINTAINED BY THIS MIGRATION, reported rather than silently left for
+    a future session to rediscover the hard way. `inventory_balances` is
+    not itself a synced entity -- confirmed by reading commercial_runtime/
+    sync/sync_service.py before writing this paragraph, rather than
+    assumed: balances are DERIVED locally on each device by replaying
+    `inventory_movement` events (sync_service.py's own "HAZARD 1" comment,
+    roughly lines 2636-2674), the same way `quantity_on_hand` already is,
+    never synced as their own row. `inventory_movements.unit_cost` now
+    carries the real per-branch cost for `transfer_out`/`transfer_in`
+    (previously always a literal 0) and is already on the wire -- it is an
+    EXISTING, already-tracked column in retail_sync_payload_coverage_
+    test.py's TRACKED_TABLES (the payload dict already carried the key
+    `unit_cost`, only the VALUE changes), so no new column reaches that
+    ratchet and none of its tests needed touching for this. But sync_
+    service.py's own `inventory_movement` apply branch, as of this
+    migration, maintains ONLY `quantity_on_hand` from `p.get("quantity")`
+    (the atomic upsert immediately after its own HAZARD 1 comment) -- it has
+    no equivalent maintenance of `avg_cost` from `p.get("unit_cost")`. Until
+    that file (not owned by this migration's author; another agent was live
+    in it at the time this was written) grows the matching weighted-average
+    update, gated on the identical `if cur.rowcount:` guard its own HAZARD 1
+    comment already explains, and the identical negative-result guard
+    api/retail_api.py's own per-branch average now carries, a peer device
+    that only ever learns a branch's stock through sync -- never through a
+    local receipt or a local transfer receive at that branch -- will not
+    converge its own `inventory_balances.avg_cost` to match. Every LOCAL
+    write path (this device's own PO receipts and transfer receives, at any
+    branch) maintains it correctly regardless; the gap is single-device-only
+    cost divergence across a synced fleet, not a locally-wrong figure.
+    `import_api.py`'s bulk-import stock-declaration path (also not owned
+    here) never writes `inventory_balances.avg_cost` either, by inspection --
+    it is unaffected by this gap specifically because the three-level
+    fallback chain above (branch avg_cost -> products.avg_cost -> cost_
+    price) already degrades gracefully to the company-level figure for any
+    branch this column was never populated for, imported or synced alike.
+    """
+    existing_tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+    if 'inventory_balances' in existing_tables:
+        balances_cols = {row[1] for row in conn.execute('PRAGMA table_info(inventory_balances)').fetchall()}
+        if 'avg_cost' not in balances_cols:
+            conn.execute('ALTER TABLE inventory_balances ADD COLUMN avg_cost REAL DEFAULT 0')
+            # Best-effort backfill -- see docstring's "inventory_balances.
+            # avg_cost IS BACKFILLED" section. Runs only the FIRST time the
+            # column is added (the guard above), exactly like _migrate_add_
+            # cost_basis's own products.avg_cost backfill -- so a replay can
+            # never re-derive it from a products row the runtime has since
+            # moved on. Guarded on `products` existing too: a fixture that
+            # hand-builds `inventory_balances` alone (no `products` table at
+            # all) would otherwise hit "no such table: products" here.
+            if 'products' in existing_tables:
+                conn.execute("""
+                    UPDATE inventory_balances
+                    SET avg_cost = COALESCE((
+                        SELECT COALESCE(NULLIF(p.avg_cost, 0), p.cost_price, 0)
+                        FROM products p
+                        WHERE p.id = inventory_balances.product_id
+                          AND p.company_id = inventory_balances.company_id
+                    ), 0)
+                """)
+
+    if 'stock_transfer_items' in existing_tables:
+        transfer_item_cols = {row[1] for row in conn.execute('PRAGMA table_info(stock_transfer_items)').fetchall()}
+        if 'unit_cost' not in transfer_item_cols:
+            # DEFAULT 0, and -- unlike `inventory_balances.avg_cost` above --
+            # deliberately NEVER backfilled. See docstring's "stock_
+            # transfer_items.unit_cost is DELIBERATELY NOT BACKFILLED":
+            # there is no historical evidence of what a completed transfer
+            # cost at send time, and nothing reads this column for one.
+            conn.execute('ALTER TABLE stock_transfer_items ADD COLUMN unit_cost REAL DEFAULT 0')

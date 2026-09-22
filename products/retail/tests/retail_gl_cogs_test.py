@@ -289,7 +289,29 @@ def _force_product_cost(cid, pid, avg_cost=None, cost_price=None):
     stands in for 'a much bigger purchase arrived later' without needing a
     second real PO receipt to get there, and lets `avg_cost`/`cost_price`
     be pushed to the SAME deliberately-implausible figure so neither one
-    can accidentally satisfy the test's assertion by coincidence."""
+    can accidentally satisfy the test's assertion by coincidence.
+
+    Schema v40 (per-branch cost basis) ADDS: when `avg_cost` is pushed,
+    every `inventory_balances` row this product already has is pushed to
+    the SAME figure too, not just `products.avg_cost`. Real production
+    never lets these two disagree the way a bare `UPDATE products` alone
+    now would -- create_sale reads a branch's OWN `inventory_balances.
+    avg_cost` FIRST (see that route's own three-level fallback chain
+    comment), falling through to `products.avg_cost` only when the branch
+    figure is unset. Every scenario in this file has exactly one
+    `inventory_balances` row per product (`_seed_product`'s own
+    `initial_stock=0` seeds exactly one, on the one working branch), so a
+    bare `WHERE company_id=? AND product_id=?` (no branch filter, mirroring
+    `_force_negative_stock`'s identical company-wide UPDATE immediately
+    below) always lands on that SAME single row, unambiguously. Without
+    this, `test_receipt_that_would_go_negative_never_reaches_a_sale_
+    snapshot_negative` failed with a REAL defect this file's own fixture
+    was masking, not exposing: the branch-level average, never pushed to
+    match the forced company-wide figure, computed its own (wrong) weighted
+    average from a stale branch-local starting point of 0 instead of the
+    forced 10.0, and a later sale snapshotted THAT wrong figure instead of
+    the correctly-guarded company-wide fallback. Confirmed by running this
+    file before this fix landed and reading the failure."""
     conn = get_retail_conn()
     sets, vals = [], []
     if avg_cost is not None:
@@ -298,6 +320,10 @@ def _force_product_cost(cid, pid, avg_cost=None, cost_price=None):
         sets.append('cost_price=?'); vals.append(cost_price)
     vals += [pid, cid]
     conn.execute(f"UPDATE products SET {', '.join(sets)} WHERE id=? AND company_id=?", vals)
+    if avg_cost is not None:
+        conn.execute(
+            "UPDATE inventory_balances SET avg_cost=? WHERE company_id=? AND product_id=?",
+            (avg_cost, cid, pid))
     conn.commit(); conn.close()
 
 

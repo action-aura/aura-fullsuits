@@ -583,6 +583,76 @@ def test_tenancy_another_companys_modifier_group_cannot_be_attached_or_applied(s
         f"company A's sale must not be able to apply company B's modifier option; got {r2.get_json()}")
 
 
+# ── 10. has_modifiers -- the modifier picker cold-start fix ─────────────────
+#
+# subsystem-retail.js's `_addToCart` used to have no way to know a product
+# carries modifier groups until it separately asked `GET /products/<id>/
+# modifier-groups` -- so the FIRST tap of a modifier product each session
+# committed a bare cart line and flagged the mismatch afterwards, forcing a
+# cashier to undo a line mid-queue (see that function's own comment in
+# subsystem-retail.js for the full story, and retail_modifiers_pos_test.js
+# for the till-side proof). This section proves the backend half of the fix:
+# `has_modifiers`, a DERIVED (never stored -- see retail_sync_payload_
+# coverage_test.py's own comment on why a derived flag must never ride the
+# sync wire) EXISTS subquery added to list_products, lookup_product AND
+# list_product_variants (that route's own docstring already commits to the
+# same row shape as the other two), so the client can decide synchronously.
+
+def test_has_modifiers_flag_on_product_list_lookup_and_variant_routes(shop):
+    cid, client = shop
+    plain_pid = _create_product(client, sell_price=1.0)
+    coffee_pid = _create_product(client, sell_price=2.0, sku=f'COFFEE-{uuid.uuid4().hex[:8]}')
+    group = _create_group(client, name='Size', min_select=1, max_select=1)
+    _create_option(client, group, name='Small', price_delta=0.0, is_default=True)
+    _attach(client, coffee_pid, group)
+
+    def _by_id(rows, pid):
+        match = [r for r in rows if r['id'] == pid]
+        assert len(match) == 1, f'expected exactly one row for {pid}, got {match}'
+        return match[0]
+
+    # -- 1. list_products: false for a plain product, true for an attached one --
+    listed = client.get(f'{API}/products').get_json()['data']
+    plain_row = _by_id(listed, plain_pid)
+    coffee_row = _by_id(listed, coffee_pid)
+    assert not plain_row['has_modifiers'], 'a plain product must report has_modifiers falsy.'
+    assert coffee_row['has_modifiers'], 'a product with a live group attached must report has_modifiers truthy.'
+
+    # -- lookup_product (the scan path) must agree with list_products --
+    plain_lookup = client.get(f"{API}/products/lookup?code={plain_row['sku']}").get_json()['data']
+    coffee_lookup = client.get(f"{API}/products/lookup?code={coffee_row['sku']}").get_json()['data']
+    assert not plain_lookup['has_modifiers'], 'lookup_product must agree with list_products for the plain product.'
+    assert coffee_lookup['has_modifiers'], 'lookup_product must agree with list_products for the modifier product.'
+
+    # -- list_product_variants: same row shape, must carry the flag too --
+    variant_resp = client.post(f'{API}/products', json={
+        'name': 'Coffee Large', 'sku': f'COFFEE-VAR-{uuid.uuid4().hex[:8]}',
+        'sell_price': 2.5, 'cost_price': 1.0, 'tax_rate': 0, 'initial_stock': 100,
+        'parent_product_id': coffee_pid, 'variant_label': 'Large',
+    })
+    assert variant_resp.status_code == 200, variant_resp.get_json()
+    variant_id = variant_resp.get_json()['data']['id']
+    variant_group = _create_group(client, name='Milk', min_select=0)
+    _create_option(client, variant_group, name='Oat milk', price_delta=0.4)
+    _attach(client, variant_id, variant_group)
+
+    variants = client.get(f'{API}/products/{coffee_pid}/variants').get_json()['data']
+    assert _by_id(variants, variant_id)['has_modifiers'], (
+        "list_product_variants must carry has_modifiers too -- same row shape as "
+        "list_products/lookup_product, per this route's own docstring.")
+
+    # -- 3. detach the coffee product's ONLY group: must flip back to falsy --
+    detach = client.delete(f'{API}/products/{coffee_pid}/modifier-groups/{group}')
+    assert detach.status_code == 200, detach.get_json()
+    listed_after = client.get(f'{API}/products').get_json()['data']
+    assert not _by_id(listed_after, coffee_pid)['has_modifiers'], (
+        "has_modifiers must go back to falsy once the product's only group is "
+        "detached -- it tracks the LIVE attachment (product_modifier_groups."
+        "deleted_at_utc IS NULL), never merely 'was a group ever configured'.")
+    lookup_after = client.get(f"{API}/products/lookup?code={coffee_row['sku']}").get_json()['data']
+    assert not lookup_after['has_modifiers'], 'lookup_product must also reflect the detach.'
+
+
 # ── Route-level validation ────────────────────────────────────────────────────
 
 def test_create_modifier_group_rejects_max_select_below_min_select(shop):
