@@ -1,8 +1,10 @@
 # Getting Owner Control Center back online, on free hosting
 
-Written 2026-09-22. DigitalOcean is gone (account 401s, droplets destroyed,
-owner's explicit instruction: "remove anything that has to do with digital
-ocean"). Until Owner is reachable somewhere, **every Aura Retail and Aura
+Written 2026-09-22. The previous hosting is gone and is not coming back — the
+account is unreachable, the servers were destroyed, and the owner's
+instruction was to remove every trace of that provider from this repo. There
+is currently NO hosted environment at all. Until Owner is reachable
+somewhere, **every Aura Retail and Aura
 Clinic install is read-only and cannot ring a sale** — an install with no
 licensing configured resolves to `NOT_CONFIGURED`, which is not in
 `ACTIVE_FAMILY`, so `require_license_capability` denies anything outside a
