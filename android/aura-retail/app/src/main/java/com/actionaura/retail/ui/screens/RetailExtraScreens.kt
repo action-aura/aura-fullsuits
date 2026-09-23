@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
@@ -351,6 +352,14 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
                 // { id: 'trial-balance', ..., capability: 'retail.reports' }).
                 MoreItem(tr("Trial Balance"), tr("Chart of accounts and the AR/AP tie-back"),
                     Icons.Default.AccountBalance) { onNavigate("trial_balance") }
+                // The desktop's other two accounting surfaces
+                // (core/retail/financial_statements.py), same gate, now
+                // reachable here too -- see ui/screens/ProfitAndLossScreen.kt
+                // and BalanceSheetScreen.kt header comments.
+                MoreItem(tr("Profit and Loss"), tr("Revenue, cost of goods and net profit for a period"),
+                    Icons.AutoMirrored.Filled.TrendingUp) { onNavigate("profit_and_loss") }
+                MoreItem(tr("Balance Sheet"), tr("Assets, liabilities and equity as of a date"),
+                    Icons.Default.AccountBalance) { onNavigate("balance_sheet") }
             }
 
             if (payments.isNotEmpty()) {

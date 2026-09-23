@@ -324,6 +324,31 @@ interface AuraApi {
     @GET("api/sub/retail/reports/trial-balance")
     suspend fun trialBalance(): TrialBalanceResponse
 
+    // Profit & loss (income statement) -- retail-hardware-viewports, core/
+    // retail/financial_statements.py::income_statement via retail_api.py::
+    // report_profit_and_loss. Same `retail.reports` capability gate and
+    // {"success": true, "data": ...} envelope as trial-balance above. BOTH
+    // dates are required server-side (StatementPeriodError -> 400, no default
+    // range -- see that route's own docstring); this client always sends
+    // both, computed client-side from the selected month (see ui/screens/
+    // ProfitAndLossScreen.kt's monthToDateRange()) so a request whose refusal
+    // is already known is never sent. No `branch_id` -- company-wide only,
+    // matching trialBalance()'s own precedent immediately above.
+    @GET("api/sub/retail/reports/profit-and-loss")
+    suspend fun profitAndLoss(
+        @Query("start_date") startDate: String,
+        @Query("end_date") endDate: String,
+    ): IncomeStatementResponse
+
+    // Balance sheet -- same wave, core/retail/financial_statements.py::
+    // balance_sheet via retail_api.py::report_balance_sheet. A SNAPSHOT, not a
+    // period: one required `as_of_date`, never a range -- see BalanceSheet's
+    // own doc comment in Models.kt for why that is the one structural
+    // difference from profitAndLoss() immediately above. No `branch_id`, same
+    // reasoning as profitAndLoss().
+    @GET("api/sub/retail/reports/balance-sheet")
+    suspend fun balanceSheet(@Query("as_of_date") asOfDate: String): BalanceSheetResponse
+
     // Backup / restore (Wave 1A -- admin-only, see commercial_runtime/backup/routes.py)
     @POST("api/backup/create")
     suspend fun createBackup(): CreateBackupResponse

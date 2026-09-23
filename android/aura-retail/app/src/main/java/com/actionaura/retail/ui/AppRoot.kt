@@ -438,6 +438,8 @@ private fun MainShell(onLogout: () -> Unit) {
         "cash_summary" -> "Cash Summary"
         "aging" -> "Aging"
         "trial_balance" -> "Trial Balance"
+        "profit_and_loss" -> "Profit and Loss"
+        "balance_sheet" -> "Balance Sheet"
         "employees" -> "Employees"
         "retail_settings" -> "Settings"
         // These three were falling through to the "Action Aura" default, so
@@ -720,6 +722,13 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     // ReportsScreen's own `retail.reports`-gated entry, same as
     // "employee_sales" immediately above.
     b.composable("trial_balance") { TrialBalanceScreen(snackbar) }
+    // retail-hardware-viewports: core/retail/financial_statements.py's income
+    // statement + balance sheet, read-only (see ui/screens/
+    // ProfitAndLossScreen.kt / BalanceSheetScreen.kt header comments). Reached
+    // from ReportsScreen's own `retail.reports`-gated entries, same as
+    // "trial_balance" immediately above.
+    b.composable("profit_and_loss") { ProfitAndLossScreen(snackbar) }
+    b.composable("balance_sheet") { BalanceSheetScreen(snackbar) }
     // Phase 1 employee management (design doc §3). Registered here and
     // reachable from MoreScreen's "Team" section -- both halves are required:
     // SettingsScreen.kt is a fully-written screen that has never been in this

@@ -771,6 +771,127 @@ data class TrialBalance(
 // error path as every other failure instead of rendering as an empty ledger.
 data class TrialBalanceResponse(val success: Boolean = false, val data: TrialBalance? = null)
 
+// ── Retail: profit & loss (income statement) + balance sheet
+//    (retail-hardware-viewports, core/retail/financial_statements.py) ────────
+// GET .../reports/profit-and-loss?start_date=&end_date=[&branch_id=] and
+// GET .../reports/balance-sheet?as_of_date=[&branch_id=] (retail_api.py::
+// report_profit_and_loss / report_balance_sheet) -- the same `retail.reports`
+// capability gate and {"success": true, "data": ...} envelope as trial-balance
+// above. This client sends no `branch_id` (company-wide only), matching
+// trial-balance's own precedent -- see AuraApi.kt's declarations. A validation
+// refusal (StatementPeriodError, e.g. a missing/malformed date) is a 400, so
+// it never reaches these classes at all: Retrofit throws HttpException before
+// any body here is deserialized, and net/ApiErrors.kt decodes that body's
+// {"status":"error","message":...} shape the same way every other failure
+// route in this API is decoded.
+
+/** Echoed request period/scope -- financial_statements.py's own `period` key
+ *  on income_statement's response. Modelled for wire fidelity though this
+ *  screen never renders it back (the selected range is already known
+ *  client-side); matches [TrialBalance.currency]'s own precedent of carrying
+ *  a field the current screen does not display. */
+data class StatementPeriod(val start_date: String? = null, val end_date: String? = null, val branch_id: Int? = null)
+
+/** One `accounts[]` row inside `operating_expenses`/`assets`/`liabilities`/
+ *  `equity` -- a single signed amount, not a debit/credit pair like
+ *  [GlAccount]: both statements below report each account's TYPE-canonical
+ *  net (see financial_statements.py's own `_TYPE_CANONICAL_NORMAL`/
+ *  `_BALANCE_SHEET_TYPE_CANONICAL_NORMAL` module comments for why), never the
+ *  raw debit/credit totals trial-balance's own rows carry. */
+data class LedgerAmount(val code: String? = null, val name: String? = null, val amount: Double = 0.0)
+
+data class OperatingExpenses(val total: Double = 0.0, val accounts: List<LedgerAmount> = emptyList())
+
+/**
+ * `income_statement`'s response verbatim (financial_statements.py) -- see
+ * that function's own docstring for the full accounting reasoning; only the
+ * wire shape is repeated here.
+ *
+ * `gross_margin` is nullable ON PURPOSE: `None` when revenue is not
+ * meaningfully nonzero (the server's own currency-epsilon guard), never a
+ * misleading `0.0` -- a 0% margin claims "the shop broke even on every unit
+ * sold", a completely different claim from "there was no revenue to measure
+ * a margin against". [ui.screens.grossMarginPercentLabel] is the one place
+ * this client reads it.
+ *
+ * `has_activity`/`cost_basis_incomplete` are Gson-protected `Boolean`
+ * primitives (see [ByEmployeeResponse]'s doc comment for why a primitive
+ * field cannot be silently null-overwritten the way an object field can) --
+ * [ui.screens.incomeStatementActivity]/[ui.screens.costBasisWarning] are the
+ * pure decision functions this screen reads them through, never a bare `if`
+ * inline in the composable.
+ */
+data class IncomeStatement(
+    val currency: String? = null,
+    val period: StatementPeriod? = null,
+    val revenue: Double = 0.0,
+    val gross_revenue: Double = 0.0,
+    val sales_returns: Double = 0.0,
+    val cost_of_goods_sold: Double = 0.0,
+    val gross_profit: Double = 0.0,
+    val gross_margin: Double? = null,
+    val operating_expenses: OperatingExpenses = OperatingExpenses(),
+    val net_profit: Double = 0.0,
+    val has_activity: Boolean = false,
+    val cost_basis_incomplete: Boolean = false,
+    val cost_basis_incomplete_sale_count: Int = 0,
+)
+// `data` nullable for the same reason [TrialBalanceResponse.data] is -- the
+// screen's load path throws on a null `data` rather than defaulting it, so a
+// malformed 200 takes the same error path as every other failure instead of
+// rendering as an empty ("nothing posted") period.
+data class IncomeStatementResponse(val success: Boolean = false, val data: IncomeStatement? = null)
+
+data class LedgerAmountGroup(val total: Double = 0.0, val accounts: List<LedgerAmount> = emptyList())
+
+/** `equity`'s own shape -- `owners_equity` is the ledger's own equity-type
+ *  account balance (`accounts` restated as one total); `retained_earnings` is
+ *  the DERIVED, never-posted figure balance_sheet's own docstring describes
+ *  at length ("THE NO-PERIOD-CLOSE PROBLEM") -- never a ledger account and
+ *  never inside `accounts`, so it is its own field here rather than folded
+ *  into the list. `total` is their sum. */
+data class EquitySection(
+    val owners_equity: Double = 0.0,
+    val retained_earnings: Double = 0.0,
+    val total: Double = 0.0,
+    val accounts: List<LedgerAmount> = emptyList(),
+)
+
+/**
+ * `balance_check`'s six Gson-protected primitives verbatim. Nullable at the
+ * CONTAINER level, deliberately -- the exact same reasoning
+ * [TrialBalance.subledger]'s doc comment gives for [SubledgerTie]: a
+ * malformed/absent `balance_check` must read as "couldn't verify", never as
+ * a false "Balanced" (defaulting `is_balanced` to `false` would be scarcely
+ * better -- a false "Out of Balance" alarm the server never raised). See
+ * `ui.screens.balanceCheckState`.
+ */
+data class BalanceCheck(
+    val assets_total: Double = 0.0,
+    val liabilities_and_equity_total: Double = 0.0,
+    val is_balanced: Boolean = false,
+    val difference: Double = 0.0,
+)
+
+/** `balance_sheet`'s response verbatim (financial_statements.py) -- a
+ *  SNAPSHOT as of one date, never a period; see that function's own
+ *  docstring for the full "no period close" reasoning behind `equity`'s two-
+ *  line shape and the `balance_check`. */
+data class BalanceSheet(
+    val currency: String? = null,
+    val as_of_date: String? = null,
+    val branch_id: Int? = null,
+    val assets: LedgerAmountGroup = LedgerAmountGroup(),
+    val liabilities: LedgerAmountGroup = LedgerAmountGroup(),
+    val equity: EquitySection = EquitySection(),
+    val total_liabilities_and_equity: Double = 0.0,
+    val balance_check: BalanceCheck? = null,
+    val has_activity: Boolean = false,
+    val cost_basis_incomplete: Boolean = false,
+    val cost_basis_incomplete_sale_count: Int = 0,
+)
+data class BalanceSheetResponse(val success: Boolean = false, val data: BalanceSheet? = null)
+
 // ── Retail: returns / refunds ────────────────────────────────────────────────
 data class Return(
     val id: Int = 0, val return_number: String? = null, val sale_number: String? = null,

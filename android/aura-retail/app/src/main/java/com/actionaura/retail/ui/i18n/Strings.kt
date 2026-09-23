@@ -930,4 +930,84 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Income" to "إيراد",
     "Expense" to "مصروف",
     "Other" to "أخرى",
+
+    // ── Profit & Loss / Balance Sheet (retail-hardware-viewports,
+    //    core/retail/financial_statements.py) -- ui/screens/
+    //    ProfitAndLossScreen.kt, BalanceSheetScreen.kt. Every string that
+    //    also appears on the desktop (products/retail/frontend/locales/
+    //    {en,ar}.json's own Profit and Loss / Balance Sheet sections) is
+    //    copied VERBATIM from that already-vetted catalogue, same reasoning
+    //    and same discipline the Trial Balance section above states for
+    //    itself -- so a shop switching between the till and the desktop
+    //    reads the same words for the same figures. The few keys with no
+    //    desktop equivalent (the two MoreItem subtitles, the four gate/
+    //    error strings) are this screen's own, written to match the exact
+    //    phrasing pattern the Trial Balance section already established for
+    //    the identical situation ("Only accounts with reports access can
+    //    see the trial balance..." / "Couldn't load the trial balance").
+    //    Checked against ui/i18n/Strings.kt's existing "Credit"/"آجل" trap
+    //    before writing any of these -- none of them touch that word. ──────
+    "Profit and Loss" to "الأرباح والخسائر",
+    "Revenue, cost of goods and net profit for a period" to "الإيرادات وتكلفة البضاعة وصافي الربح لفترة معينة",
+    "Balance Sheet" to "الميزانية العمومية",
+    "Assets, liabilities and equity as of a date" to "الأصول والخصوم وحقوق الملكية حتى تاريخ معيّن",
+    "Only accounts with reports access can see the profit and loss statement. " +
+        "Ask the owner to grant it." to
+        "يمكن فقط للحسابات التي تملك صلاحية التقارير الاطّلاع على قائمة الأرباح والخسائر. اطلب من المالك منحك هذه الصلاحية.",
+    "Only accounts with reports access can see the balance sheet. " +
+        "Ask the owner to grant it." to
+        "يمكن فقط للحسابات التي تملك صلاحية التقارير الاطّلاع على الميزانية العمومية. اطلب من المالك منحك هذه الصلاحية.",
+    "Couldn't load the profit and loss statement" to "تعذّر تحميل قائمة الأرباح والخسائر",
+    "Couldn't load the balance sheet" to "تعذّر تحميل الميزانية العمومية",
+    "As of Date" to "كما في تاريخ",
+    "Gross Revenue" to "إجمالي الإيرادات",
+    "Sales Returns" to "مرتجعات المبيعات",
+    "Cost of Goods Sold" to "تكلفة البضاعة المباعة",
+    "Gross Margin" to "هامش الربح الإجمالي",
+    "Operating Expenses" to "المصروفات التشغيلية",
+    "No operating expenses recorded in this period." to "لا توجد مصروفات تشغيلية مسجّلة في هذه الفترة.",
+    "Net Profit" to "صافي الربح",
+    // The cost-basis honesty flag -- income_statement's own module docstring
+    // point 5. TWO different warning bodies for the SAME root cause (this
+    // statement's own numbers vs. the balance sheet's), matching
+    // financial_statements.py's own distinction -- see CostBasisWarningCard's
+    // doc comment.
+    "Cost basis is incomplete for this period" to "أساس التكلفة غير مكتمل لهذه الفترة",
+    "sale(s) affected" to "عملية بيع متأثرة",
+    "These sales have no recorded cost of goods. Cost of goods sold is understated, " +
+        "and the gross profit and net profit shown below are overstated." to
+        "لا تحمل عمليات البيع هذه أي تكلفة مسجّلة للبضاعة، لذلك فإن تكلفة البضاعة المباعة أقل من الواقع، " +
+        "وإجمالي الربح وصافي الربح الموضّحان أدناه أعلى من الواقع الفعلي.",
+    "Cost basis is incomplete" to "أساس التكلفة غير مكتمل",
+    "These sales have no recorded cost of goods. Inventory and retained earnings " +
+        "shown below are overstated." to
+        "لا تحمل عمليات البيع هذه أي تكلفة مسجّلة للبضاعة، لذلك فإن المخزون والأرباح المحتجزة الموضّحين " +
+        "أدناه أعلى من الواقع الفعلي.",
+    // NOTHING_POSTED, for a whole period/as-of-date -- the same "zeros are
+    // not the same claim as nothing recorded" instinct TrialBalanceStatus's
+    // own NOTHING_POSTED state carries.
+    "Nothing was posted in this period" to "لم يتم ترحيل أي شيء في هذه الفترة",
+    "No sale, return, purchase or expense was recorded in this date range. " +
+        "This is not a zero profit -- there is nothing to measure yet." to
+        "لم يتم تسجيل أي عملية بيع أو إرجاع أو شراء أو مصروف خلال هذا النطاق الزمني. " +
+        "هذا لا يعني ربحًا صفريًا -- فلا يوجد بعد ما يمكن قياسه.",
+    "Nothing has been posted as of this date" to "لم يتم ترحيل أي شيء حتى هذا التاريخ",
+    "No sale, return, purchase or expense was recorded on or before this date. " +
+        "This is not a zero balance sheet -- there is nothing to measure yet." to
+        "لم يتم تسجيل أي عملية بيع أو إرجاع أو شراء أو مصروف في هذا التاريخ أو قبله. " +
+        "هذا لا يعني ميزانية عمومية صفرية -- فلا يوجد بعد ما يمكن قياسه.",
+    "Assets" to "الأصول",
+    "No asset accounts recorded as of this date." to "لا توجد حسابات أصول مسجَّلة حتى هذا التاريخ.",
+    "Liabilities" to "الخصوم",
+    "No liability accounts recorded as of this date." to "لا توجد حسابات خصوم مسجَّلة حتى هذا التاريخ.",
+    "No equity accounts recorded as of this date." to "لا توجد حسابات حقوق ملكية مسجَّلة حتى هذا التاريخ.",
+    "Retained Earnings" to "الأرباح المحتجزة",
+    "Accumulated profit since the ledger began. This product has no period-close " +
+        "step, so this figure is always current rather than a posted ledger entry." to
+        "أرباح متراكمة منذ بداية دفتر الأستاذ العام. لا يتضمن هذا المنتج خطوة إقفال للفترة المحاسبية، " +
+        "لذلك يبقى هذا الرقم محدَّثًا دائمًا بدلاً من أن يكون قيدًا مُرحَّلاً في دفتر الأستاذ.",
+    "Total Equity" to "إجمالي حقوق الملكية",
+    "Total Assets" to "إجمالي الأصول",
+    "Total Liabilities and Equity" to "إجمالي الخصوم وحقوق الملكية",
+    "Difference" to "الفرق",
 )
