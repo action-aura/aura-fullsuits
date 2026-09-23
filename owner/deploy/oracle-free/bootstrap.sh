@@ -4,8 +4,23 @@
 # Paste this whole block into a fresh Oracle Ubuntu VM (SSH'd in as the
 # default user, e.g. `ssh ubuntu@<vm-ip>`), or download and run it:
 #
-#   curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
+#   curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/worktree-retail-hardware-viewports/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
 #   bash bootstrap.sh
+#
+# NOTE THE BRANCH IN THAT URL -- it is deliberately not `master`. None of the
+# free-hosting deploy content exists on master yet (verified by HTTP: master's
+# copies of this script, restore_signing_key.py, fly.toml and the runbook all
+# return 404, while the branch's return 200). master's last substantive commit
+# predates all of it by more than a month, and this branch is over a thousand
+# commits ahead of it, so "just merge to master" is not a tidy-up -- it is the
+# whole project's divergent history, and not something to do in order to fix a
+# download URL.
+#
+# When master does catch up, change REPO_BRANCH's default below and this URL
+# together, in one commit. They must agree: the URL decides which copy of this
+# script you download, REPO_BRANCH decides which copy of the repo it then
+# clones onto the VM, and a mismatch means running one version's script
+# against another version's compose file.
 #
 # What it does, in order: installs Docker if missing, clones/updates the
 # repo, checks .env.oracle exists and every required value is filled in
@@ -25,6 +40,13 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/action-aura/aura-fullsuits.git}"
+# Which branch to deploy from. NOT master -- see the note at the top of this
+# file: master does not carry the free-hosting deploy content at all, so a
+# bare `git clone` (which takes the remote's default branch) would put a repo
+# on the VM that has no owner/deploy/oracle-free directory, and this script
+# would then fail several steps later on a missing compose file rather than
+# here, where the cause is obvious.
+REPO_BRANCH="${REPO_BRANCH:-worktree-retail-hardware-viewports}"
 REPO_DIR="${REPO_DIR:-$HOME/aura-fullsuits}"
 COMPOSE_DIR="$REPO_DIR/owner/deploy/oracle-free"
 ENV_FILE="$COMPOSE_DIR/.env.oracle"
@@ -49,12 +71,28 @@ docker compose version >/dev/null 2>&1 \
 # 2. Get the code.
 # ---------------------------------------------------------------------------
 if [ -d "$REPO_DIR/.git" ]; then
-  bold "Repo already present at $REPO_DIR -- pulling latest master."
-  git -C "$REPO_DIR" pull
+  # Re-running after a branch change must actually move the checkout, not just
+  # pull whatever branch happens to be out. A bare `git pull` on a re-run left
+  # the VM on the old branch silently, which is the worst shape of this bug:
+  # the script succeeds and deploys the wrong code.
+  bold "Repo already present at $REPO_DIR -- fetching and checking out $REPO_BRANCH."
+  git -C "$REPO_DIR" fetch origin "$REPO_BRANCH" \
+    || fail "Could not fetch branch '$REPO_BRANCH' from $REPO_URL. Check the branch name and that the VM has outbound network."
+  git -C "$REPO_DIR" checkout "$REPO_BRANCH" \
+    || fail "Could not check out '$REPO_BRANCH'. If you have local edits on the VM, commit or discard them first -- this script will not throw away your work for you."
+  git -C "$REPO_DIR" pull --ff-only origin "$REPO_BRANCH" \
+    || fail "Fast-forward pull of '$REPO_BRANCH' failed, which means the VM's copy has diverged from the remote. Resolve that by hand -- refusing to merge or reset on your behalf."
 else
-  bold "Cloning $REPO_URL into $REPO_DIR..."
-  git clone "$REPO_URL" "$REPO_DIR"
+  bold "Cloning $REPO_URL (branch $REPO_BRANCH) into $REPO_DIR..."
+  git clone --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR" \
+    || fail "Clone failed. If the error mentions the branch, confirm '$REPO_BRANCH' still exists on the remote -- branches get renamed and merged, and this default will need updating when the deploy content reaches master."
 fi
+
+# Prove the clone actually contains what the rest of this script depends on,
+# HERE, where the cause is still obvious -- rather than four steps later with
+# a confusing "no such file" about a compose file.
+[ -f "$COMPOSE_DIR/docker-compose.yml" ] \
+  || fail "Cloned '$REPO_BRANCH' but $COMPOSE_DIR/docker-compose.yml is missing. That branch does not carry the free-hosting deploy content. Set REPO_BRANCH to one that does."
 
 # ---------------------------------------------------------------------------
 # 3. .env.oracle must exist -- never auto-generate secrets silently. A

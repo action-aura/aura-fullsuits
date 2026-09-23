@@ -249,9 +249,29 @@ fixing whatever it flagged.
 
 ```bash
 ssh ubuntu@<vm-ip>
-curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/worktree-retail-hardware-viewports/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 ```
+
+> **That URL says a branch name, not `master`, and that is deliberate.**
+> None of the free-hosting deploy content is on `master` — verified by
+> HTTP, not assumed: `master`'s copies of `bootstrap.sh`,
+> `restore_signing_key.py`, `fly.toml` and this runbook all return **404**,
+> while the branch's return **200**. `master`'s last substantive commit
+> predates this work by over a month and the branch is more than a thousand
+> commits ahead of it, so merging is the whole project's divergent history
+> rather than a tidy-up, and is not something to do in order to fix a
+> download URL.
+>
+> `bootstrap.sh` carries a matching `REPO_BRANCH` default, because the
+> script *also* clones the repo onto the VM and a bare `git clone` takes the
+> remote's default branch — `master` — which would put a checkout on the
+> server with no `owner/deploy/oracle-free` directory in it at all. The
+> download URL and `REPO_BRANCH` must always name the same branch; when this
+> content does reach `master`, change both in one commit.
+>
+> To deploy a different branch without editing anything:
+> `REPO_BRANCH=some-branch bash bootstrap.sh`
 
 First run will stop and tell you to fill in `~/aura-fullsuits/owner/deploy/oracle-free/.env.oracle`
 (it creates it from `.env.example` if it doesn't exist yet) — open it, fill
