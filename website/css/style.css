@@ -329,6 +329,7 @@ html[lang="ar"] .plan-price .amount { font-family: var(--font-body-ar); }
 .plan ul { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: var(--space-lg); flex: 1; }
 .plan li { display: flex; gap: 0.6rem; font-size: var(--step-sm); color: var(--text-secondary); align-items: flex-start; }
 .plan li .icon { flex: none; width: 17px; height: 17px; margin-top: 0.2em; color: var(--money-positive); }
+.plan li.plan-feature--highlight { font-weight: 700; color: var(--navy); }
 
 .addon-table { width: 100%; border-collapse: collapse; margin-top: var(--space-lg); background: var(--surface-raised); border-radius: var(--radius-card); overflow: hidden; border: 1px solid var(--border-hairline); }
 .addon-table th, .addon-table td { padding: 0.9rem var(--space-md); text-align: start; font-size: var(--step-sm); border-bottom: 1px solid var(--border-hairline); }

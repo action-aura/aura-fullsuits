@@ -1,6 +1,7 @@
 /*
-  Aura Retail marketing site -- interaction glue (mobile nav, contact form).
-  Plain JS, no dependencies, matches the rest of the site's no-build-step rule.
+  Aura Retail marketing site -- interaction glue (mobile nav, contact links,
+  contact form). Plain JS, no dependencies, matches the rest of the site's
+  no-build-step rule.
 */
 (function () {
   "use strict";
@@ -19,6 +20,32 @@
         header.classList.remove("nav-open");
         toggle.setAttribute("aria-expanded", "false");
       });
+    });
+  }
+
+  // Populate every element carrying data-contact-link="<key>" from the
+  // single source of truth in js/content.js's AURA_CONTACT object -- see
+  // that file's comment above CONTACT and website/README.md's "The
+  // contact placeholders". This is what keeps the footer's mailto: link
+  // (repeated on all four pages) and contact.html's own "reach us
+  // directly" panel in sync with one edit, instead of several hardcoded
+  // copies quietly drifting apart. A falsy value (phone is empty until a
+  // real one exists) removes the element instead of showing a blank or
+  // fake link -- see CONTACT's own comment for why.
+  function initContactLinks() {
+    var contact = window.AURA_CONTACT;
+    if (!contact) return;
+    document.querySelectorAll("[data-contact-link]").forEach(function (el) {
+      var key = el.getAttribute("data-contact-link");
+      var value = contact[key];
+      if (!value) { el.remove(); return; }
+      if (key === "email") {
+        el.href = "mailto:" + value;
+        el.textContent = value;
+      } else if (key === "phone") {
+        el.href = "tel:" + value.replace(/\s+/g, "");
+        el.textContent = value;
+      }
     });
   }
 
@@ -64,6 +91,7 @@
 
   function init() {
     initMobileNav();
+    initContactLinks();
     initContactForm();
   }
 

@@ -114,14 +114,14 @@
             <span class="icon-wrap"><svg class="icon"><use href="assets/icons.svg#icon-mail"></use></svg></span>
             <div>
               <strong data-i18n="contact_page.alt_email_label">Email</strong><br>
-              <a href="mailto:hello@actionaura.jo">hello@actionaura.jo</a>
-            </div>
-          </div>
-          <div class="item">
-            <span class="icon-wrap"><svg class="icon"><use href="assets/icons.svg#icon-phone"></use></svg></span>
-            <div>
-              <strong data-i18n="contact_page.alt_phone_label">Call or WhatsApp</strong><br>
-              <a href="tel:+962799990000">+962 7 9999 0000</a>
+              <!-- Email is the ONE editable value driving this link -- see
+                   the CONTACT comment in js/content.js. data-contact-link
+                   lets js/main.js's initContactLinks() keep this in sync
+                   with every other mailto: on the site automatically. No
+                   phone number is shown here on purpose: there isn't a
+                   real one yet, and a fake one would be worse than none
+                   -- see website/README.md's "The contact placeholders". -->
+              <a data-contact-link="email" href="mailto:hello@actionaura.jo">hello@actionaura.jo</a>
             </div>
           </div>
         </div>
@@ -151,7 +151,7 @@
         <h5 data-i18n="footer.company_h">Get in touch</h5>
         <ul>
           <li><a href="contact.html" data-i18n="nav.contact">Contact</a></li>
-          <li><a href="mailto:hello@actionaura.jo">hello@actionaura.jo</a></li>
+          <li><a data-contact-link="email" href="mailto:hello@actionaura.jo">hello@actionaura.jo</a></li>
         </ul>
       </div>
       <div class="footer-col">

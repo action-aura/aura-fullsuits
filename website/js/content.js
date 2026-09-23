@@ -6,8 +6,17 @@
   is written as Arabic, not translated word-for-word from the English --
   see website/README.md for how to edit either language safely.
 
-  PRICING NUMBERS live in one place: the PRICING block near the bottom of
-  this file. That is the only place to change a figure.
+  PRICING NUMBERS live in one place: the PRICING block near the top of
+  this file, right below the CONTACT block. That is the only place to
+  change a figure. Pricing is a ONE-TIME purchase, decided 2026-09-23 --
+  a shop pays once per licence, never a subscription or a renewal. See
+  that decision reflected in `pricing_page` and `pricing_teaser` below,
+  and in website/README.md's "Where the pricing numbers live".
+
+  CONTACT DETAILS (email/phone) also live in one place: the CONTACT
+  block immediately below this comment. See its own comment for exactly
+  how it is wired to the rest of the site -- do not hardcode a second
+  copy of the email or phone anywhere else.
 
   Product terminology (branch/فرع, supplier/المورد, quotation/عرض سعر,
   barcode scanner/قارئ الباركود, offline grace period/فترة سماح دون اتصال,
@@ -20,10 +29,31 @@
 (function (global) {
   "use strict";
 
+  // ============================================================
+  // CONTACT DETAILS -- edit ONLY here. Nowhere else on the site
+  // hardcodes a second copy.
+  // ============================================================
+  // `email` is a PLACEHOLDER: Action Aura has no official project email
+  // live yet (one is being set up, as of 2026-09-23). Change the string
+  // below and it updates everywhere automatically -- the footer on all
+  // four pages, the "Prefer to reach us directly?" panel on
+  // contact.html, and the contact form's own mailto: submission in
+  // js/main.js -- every one of those reads THIS value, either directly
+  // (`window.AURA_CONTACT.email` in js/main.js) or via an element
+  // carrying `data-contact-link="email"` (populated by
+  // `initContactLinks()` in js/main.js). There is nothing else to hunt
+  // for.
+  //
+  // `phone` is deliberately EMPTY. There is no real phone/WhatsApp
+  // number yet, and a fake-looking one on a sales site is worse than
+  // none, so nothing on the site currently displays a phone number.
+  // Once a real one exists: put it here (digits and a leading "+", e.g.
+  // "+962791234567"), then add a `data-contact-link="phone"` element
+  // where it should appear -- js/main.js's `initContactLinks()` already
+  // knows how to wire a "phone" link the same way it wires "email".
   var CONTACT = {
     email: "hello@actionaura.jo",
-    phone: "+962 7 9999 0000",
-    whatsapp: "+962799990000"
+    phone: ""
   };
 
   var PRICING = {
@@ -39,11 +69,11 @@
     en: {
       meta: {
         home_title: "Aura Retail — the till that keeps working when the internet doesn't",
-        home_desc: "Arabic-first point of sale for Jordanian shops. Real double-entry accounting, offline-first selling, and one licence for your till and your phone.",
+        home_desc: "Arabic-first point of sale for Jordanian shops. Real double-entry accounting, offline-first selling, and one licence for your till and your phone — paid once, not a subscription.",
         features_title: "Features — Aura Retail",
         features_desc: "Barcode scanning, receipt printing, real accounting, multi-branch stock transfers, loyalty points and multi-device sync, built for shops that can't always rely on the internet.",
         pricing_title: "Pricing — Aura Retail",
-        pricing_desc: "One licence covers two devices. See exactly what a shop pays to run Aura Retail.",
+        pricing_desc: "One licence covers two devices, paid once — not a subscription. See exactly what a shop pays to run Aura Retail.",
         contact_title: "Request a demo — Aura Retail",
         contact_desc: "Talk to us about bringing Aura Retail to your shop."
       },
@@ -179,7 +209,7 @@
       requirements: [
         { icon: "icon-laptop", title: "A Windows PC", desc: "Any everyday Windows laptop or desktop at the counter — the app installs like any other program." },
         { icon: "icon-phone", title: "An Android phone", desc: "A mid-range Android phone works for the owner or manager's device." },
-        { icon: "icon-sync", title: "The shop's own wifi", desc: "For multi-device sync — no cloud account, no monthly server bill, no IT visit." }
+        { icon: "icon-sync", title: "The shop's own wifi", desc: "For multi-device sync — no cloud account, no server bill, no IT visit." }
       ],
       steps_title: "Getting started",
       steps: [
@@ -188,19 +218,20 @@
         { title: "Start selling", desc: "With the internet up or down. Everything else — accounting, stock, reports — follows from there." }
       ],
       pricing_teaser: {
-        eyebrow: "Pricing",
+        eyebrow: "Pricing — paid once",
         title: "Straightforward, by the device.",
-        desc: "One licence, one shop, two devices included. Add a device or a branch only when you need one.",
+        desc: "One licence, one shop, two devices included — paid once, not a subscription. Add a device or a branch only when you need one, also paid once.",
         cta: "See full pricing"
       },
       pricing_page: {
         eyebrow: "Pricing",
         h1: "One licence per shop. Add only what you grow into.",
-        lede: "Prices are in Jordanian dinar. This is the current price list — confirm the billing period and any current promotion with our team before you commit.",
+        lede: "Prices are in Jordanian dinar, paid once. There is no subscription, no monthly fee, and nothing that renews.",
         plan_title: "Shop licence",
         plan_desc: "Everything a single shop needs to run its counter and its books.",
-        plan_per: "one licence",
+        plan_per: "one-time",
         plan_features: [
+          "Paid once — no subscription, no monthly fee, ever",
           "2 devices included — a till and a manager's phone",
           "Full Arabic and English interface",
           "Barcode scanning, receipt printing, cash drawer",
@@ -211,7 +242,7 @@
         ],
         plan_cta: "Request this licence",
         multi_title: "Growing to more branches?",
-        multi_desc: "Add branches and extra devices as the shop grows — the price list is the same table below, we'll work out the total together.",
+        multi_desc: "Add branches and extra devices as the shop grows — each is a one-time addition, priced in the table below.",
         multi_cta: "Talk to us",
         addon_title: "Add-ons",
         addon_col_desc: "What it adds",
@@ -220,7 +251,7 @@
         addon_device_unit: "/ device",
         addon_branch_label: "Extra branch — its own stock, staff and till",
         addon_branch_unit: "/ branch",
-        note: "* Whether the licence is billed once or renews annually is still being finalised — ask our team for current terms before you commit to a figure."
+        note: "Extra devices and branches are added to your licence the same way — a one-time payment, not a recurring charge."
       },
       contact_page: {
         eyebrow: "Contact",
@@ -236,7 +267,6 @@
         form_note: "This site has no server behind it. Sending opens your email app with this message pre-filled, addressed to us — nothing is uploaded anywhere.",
         alt_title: "Prefer to reach us directly?",
         alt_email_label: "Email",
-        alt_phone_label: "Call or WhatsApp",
         subject: "Demo request — Aura Retail"
       },
       footer: {
@@ -244,7 +274,7 @@
         product_h: "Product",
         company_h: "Get in touch",
         note_h: "Good to know",
-        note1: "Prices shown in JD, confirmed at the time of purchase.",
+        note1: "Prices shown in JD, paid once — not a subscription.",
         note2: "E-invoicing is built but not yet switched on — see the Features page.",
         note3: "No cloud account required for sync between your own devices.",
         rights: "Action Aura. All rights reserved."
@@ -253,11 +283,11 @@
     ar: {
       meta: {
         home_title: "أورا ريتيل — نظام كاشير يواصل العمل حتى بلا إنترنت",
-        home_desc: "نظام نقاط بيع عربي أولاً للمحلات الأردنية. محاسبة قيد مزدوج حقيقية، وبيع لا يتوقف بانقطاع الإنترنت، وترخيص واحد لجهاز الكاشير والهاتف.",
+        home_desc: "نظام نقاط بيع عربي أولاً للمحلات الأردنية. محاسبة قيد مزدوج حقيقية، وبيع لا يتوقف بانقطاع الإنترنت، وترخيص واحد لجهاز الكاشير والهاتف — يُدفع مرة واحدة فقط، وليس اشتراكاً.",
         features_title: "المزايا — أورا ريتيل",
         features_desc: "قارئ باركود، طباعة إيصالات، محاسبة حقيقية، تحويلات مخزون بين الفروع، نقاط ولاء، ومزامنة بين الأجهزة — لمحلات لا تضمن اتصالاً دائماً بالإنترنت.",
         pricing_title: "الأسعار — أورا ريتيل",
-        pricing_desc: "ترخيص واحد يغطي جهازين. اطّلع بدقة على ما يدفعه المحل لتشغيل أورا ريتيل.",
+        pricing_desc: "ترخيص واحد يغطي جهازين، يُدفع مرة واحدة فقط — وليس اشتراكاً. اطّلع بدقة على ما يدفعه المحل لتشغيل أورا ريتيل.",
         contact_title: "اطلب عرضاً تجريبياً — أورا ريتيل",
         contact_desc: "تواصل معنا لتشغيل أورا ريتيل في محلك."
       },
@@ -393,7 +423,7 @@
       requirements: [
         { icon: "icon-laptop", title: "جهاز ويندوز", desc: "أي حاسوب محمول أو مكتبي عادي يعمل بويندوز على الصندوق — يُثبَّت البرنامج كأي برنامج آخر." },
         { icon: "icon-phone", title: "هاتف أندرويد", desc: "هاتف أندرويد متوسط الفئة يكفي لجهاز المالك أو المدير." },
-        { icon: "icon-sync", title: "واي فاي المحل نفسه", desc: "للمزامنة بين الأجهزة — دون حساب سحابي، ودون فاتورة خادم شهرية، ودون زيارة فني." }
+        { icon: "icon-sync", title: "واي فاي المحل نفسه", desc: "للمزامنة بين الأجهزة — دون حساب سحابي، ودون فاتورة خادم، ودون زيارة فني." }
       ],
       steps_title: "خطوات البدء",
       steps: [
@@ -402,19 +432,20 @@
         { title: "ابدأ البيع", desc: "سواء توفر الإنترنت أم لا. وكل شيء آخر — المحاسبة، المخزون، التقارير — يتبع ذلك تلقائياً." }
       ],
       pricing_teaser: {
-        eyebrow: "الأسعار",
+        eyebrow: "الأسعار — دفعة واحدة",
         title: "واضحة، بحسب الجهاز.",
-        desc: "ترخيص واحد، لمحل واحد، مع جهازين ضمن السعر. أضف جهازاً أو فرعاً فقط عند الحاجة إليه.",
+        desc: "ترخيص واحد، لمحل واحد، مع جهازين ضمن السعر — يُدفع مرة واحدة فقط، لا كاشتراك. أضف جهازاً أو فرعاً فقط عند الحاجة إليه، وأيضاً بدفعة واحدة.",
         cta: "شاهد الأسعار كاملة"
       },
       pricing_page: {
         eyebrow: "الأسعار",
         h1: "ترخيص واحد لكل محل. أضف فقط ما تكبر إليه.",
-        lede: "الأسعار بالدينار الأردني. هذه قائمة الأسعار الحالية — يُرجى تأكيد طريقة الدفع وأي عرض حالي مع فريقنا قبل الالتزام.",
+        lede: "الأسعار بالدينار الأردني، وتُدفع دفعة واحدة. لا اشتراك، ولا رسوم شهرية، ولا أي شيء يتجدد.",
         plan_title: "ترخيص المحل",
         plan_desc: "كل ما يحتاجه محل واحد لتشغيل صندوقه ودفاتره.",
-        plan_per: "ترخيص واحد",
+        plan_per: "دفعة واحدة",
         plan_features: [
+          "دفعة واحدة فقط — بلا اشتراك وبلا رسوم شهرية أبداً",
           "جهازان ضمن السعر — كاشير وهاتف مدير",
           "واجهة كاملة بالعربية والإنجليزية",
           "قارئ باركود، طباعة إيصالات، درج نقد",
@@ -425,7 +456,7 @@
         ],
         plan_cta: "اطلب هذا الترخيص",
         multi_title: "تتوسع لأكثر من فرع؟",
-        multi_desc: "أضف فروعاً وأجهزة إضافية مع نمو المحل — القائمة نفسها أدناه، وسنحسب المجموع معاً.",
+        multi_desc: "أضف فروعاً وأجهزة إضافية مع نمو المحل — كل إضافة تُدفع مرة واحدة، بالأسعار الموضحة في الجدول أدناه.",
         multi_cta: "تواصل معنا",
         addon_title: "الإضافات",
         addon_col_desc: "ما الذي تضيفه",
@@ -434,7 +465,7 @@
         addon_device_unit: "/ جهاز",
         addon_branch_label: "فرع إضافي — بمخزونه وموظفيه وكاشيره الخاص",
         addon_branch_unit: "/ فرع",
-        note: "* ما إذا كان الترخيص يُدفع مرة واحدة أو يتجدد سنوياً لا يزال قيد التحديد — يُرجى سؤال فريقنا عن الشروط الحالية قبل الالتزام برقم."
+        note: "الأجهزة والفروع الإضافية تُضاف إلى ترخيصك بالطريقة نفسها — دفعة واحدة، لا رسوم متكررة."
       },
       contact_page: {
         eyebrow: "تواصل معنا",
@@ -450,7 +481,6 @@
         form_note: "لا يوجد خادم خلف هذا الموقع. الإرسال يفتح برنامج بريدك الإلكتروني برسالة معبأة مسبقاً وموجهة إلينا — لا يُرفع شيء إلى أي مكان.",
         alt_title: "تفضّل التواصل المباشر؟",
         alt_email_label: "البريد الإلكتروني",
-        alt_phone_label: "اتصال أو واتساب",
         subject: "طلب عرض تجريبي — أورا ريتيل"
       },
       footer: {
@@ -458,7 +488,7 @@
         product_h: "المنتج",
         company_h: "تواصل معنا",
         note_h: "يجدر معرفته",
-        note1: "الأسعار المعروضة بالدينار الأردني، وتُؤكَّد وقت الشراء.",
+        note1: "الأسعار المعروضة بالدينار الأردني تُدفع دفعة واحدة فقط — وليست اشتراكاً.",
         note2: "الفوترة الإلكترونية جاهزة ولم تُفعَّل بعد — راجع صفحة المزايا.",
         note3: "لا حاجة لحساب سحابي للمزامنة بين أجهزتك الخاصة.",
         rights: "أكشن أورا. جميع الحقوق محفوظة."

@@ -25,12 +25,15 @@ website/
     tokens.css       Design tokens (colour, type scale, spacing, shape)
     style.css        Everything else — layout, components, responsive
   js/
-    content.js       ALL bilingual copy, plus the one PRICING object
+    content.js       ALL bilingual copy, plus the one PRICING object and
+                      the one CONTACT object (email/phone placeholders —
+                      see "The contact placeholders" below)
     i18n.js          The language engine (applies content.js, toggles
                       dir/lang, persists the choice, fires
                       `aura:langchange` when it does)
-    main.js          Mobile nav open/close, the contact form's mailto
-                      builder
+    main.js          Mobile nav open/close, populating every
+                      data-contact-link element from CONTACT, and the
+                      contact form's mailto builder
   assets/
     icons.svg        Hand-built icon sprite (see "Icons" below — this file
                       MUST stay valid XML, not just valid HTML)
@@ -90,10 +93,23 @@ appears — there is no second copy of a price baked into the HTML.
 
 These figures came from the project's own commercial-model notes (250 JD
 for a licence covering 2 devices, +50 JD per extra device, +250 JD per
-extra branch) as of 2026-09-05, which is why `pricing_page.note` in
-`content.js` says the billing period (one-time vs. recurring) is still
-being confirmed — don't remove that caveat without checking with whoever
-owns pricing first.
+extra branch) as of 2026-09-05.
+
+**Billing period is decided: ONE-TIME.** The owner confirmed on
+2026-09-23 that a shop pays once per licence — not a subscription, not
+monthly, not an annual renewal. That is now stated plainly (in both
+languages) in several places, not just on the pricing page itself, since
+it's a real selling point against subscription-priced competitors:
+`meta.home_desc`, `meta.pricing_desc`, `pricing_teaser.eyebrow`/`desc`,
+`pricing_page.lede`/`plan_per`/`plan_features.0`/`note`, and
+`footer.note1` in `content.js`. If this ever changes again, all of those
+keys need updating together, in both `en` and `ar` — grep the file for
+"once" / "مرة واحدة" to find them all.
+
+Do not extend this into promising anything about free updates or support
+duration — "paid once" is a fact about the purchase, not a commitment
+about what happens after it, and nothing in this repo backs a stronger
+claim than that.
 
 ## Adding the customer portal later
 
@@ -132,10 +148,41 @@ success state — that would be lying to a shopkeeper about whether their
 message actually went anywhere, which is exactly the kind of dishonest UI
 CLAUDE.md's engineering standard exists to rule out.
 
-**Before publishing**: `js/content.js`'s `AURA_CONTACT` object
-(`hello@actionaura.jo`, `+962 7 9999 0000`) is a **placeholder** — this
-repo has no publicly-documented support email or phone on record as of
-this writing. Replace both with the real ones before the site goes live.
+## The contact placeholders — exactly where to edit them
+
+`js/content.js` **line 33** starts the `CONTACT` block's comment (the
+object itself is declared at **line 54** — search the file for
+`CONTACT DETAILS -- edit ONLY here` if either line number has drifted).
+That is the one and only place to change the site's email or phone —
+nothing else needs touching:
+
+```js
+var CONTACT = {
+  email: "hello@actionaura.jo",   // placeholder -- real project email TBD
+  phone: ""                       // deliberately empty -- no real number yet
+};
+```
+
+- **`email`** is a placeholder (`hello@actionaura.jo`) — Action Aura does
+  not have an official project email live yet, one is being set up.
+  Change the string and it updates everywhere automatically: the footer
+  on all four pages, the "Prefer to reach us directly?" panel on
+  `contact.html`, and the contact form's own `mailto:` target. This works
+  because those elements carry `data-contact-link="email"` and
+  `js/main.js`'s `initContactLinks()` populates both their visible text
+  and `href` from `AURA_CONTACT` on every page load — there is no second,
+  hardcoded copy of the email anywhere in the HTML to forget about.
+- **`phone`** is empty on purpose. There is no real phone/WhatsApp number
+  yet, and a fake-looking one on a sales site is worse than showing none
+  at all — so the "Call or WhatsApp" block that used to sit on
+  `contact.html` next to the email has been removed rather than left
+  showing a placeholder digit string. When a real number exists: put it
+  in `phone` (e.g. `"+962791234567"`), then add an element carrying
+  `data-contact-link="phone"` wherever it should appear (the empty slot
+  next to the email item in `contact.html`'s `.contact-alt` block is the
+  natural place) — `initContactLinks()` already knows how to wire a
+  `"phone"` key the same way it wires `"email"`, including turning it
+  into a `tel:` link.
 
 ## Icons — a real trap, read this before touching `assets/icons.svg`
 
