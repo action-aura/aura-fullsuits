@@ -273,6 +273,16 @@ bash bootstrap.sh
 > To deploy a different branch without editing anything:
 > `REPO_BRANCH=some-branch bash bootstrap.sh`
 
+> **If you just pushed a change to `bootstrap.sh`, wait a few minutes before
+> curling it onto the VM.** `raw.githubusercontent.com` is a CDN and serves a
+> cached copy for a short while after a push — observed directly while writing
+> this: the commit was confirmed present on the branch via the GitHub API
+> while the raw URL was still handing back the previous version of the file.
+> The failure is silent and very convincing: you fix something, download it,
+> run it, and watch the old bug happen again. If that occurs, check the first
+> few lines of the file you actually downloaded before assuming the fix did
+> not work.
+
 First run will stop and tell you to fill in `~/aura-fullsuits/owner/deploy/oracle-free/.env.oracle`
 (it creates it from `.env.example` if it doesn't exist yet) — open it, fill
 in every value per the comments in the file itself, then re-run
