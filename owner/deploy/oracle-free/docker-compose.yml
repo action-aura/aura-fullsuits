@@ -69,6 +69,24 @@ services:
       # which is why the runbook's backup step is not optional.
       - owner_signing_keys:/app/owner/var/signing-keys
       - owner_backups:/app/owner/var/backups
+      # Read-only. scripts/deploy/restore_signing_key.py registers an
+      # EXISTING signing key's metadata in a fresh database before
+      # activating it (see docs/ops/free-hosting-owner.md section 4.4a --
+      # there is no `flask licensing` command for this, only for a
+      # brand-new key). It lives outside owner/Dockerfile.staging's build
+      # context (which COPYs owner/ only), hence the bind mount rather than
+      # relying on the image.
+      #
+      # Deliberately NOT also mounting trust_anchor.json here the same way:
+      # commercial_runtime/licensing_contracts/trust_anchor.json is
+      # gitignored (.gitignore:119) -- permanently, not just "not yet
+      # committed" -- so it will not exist after a fresh `git clone` on a
+      # new VM, and an unconditional bind mount of a missing host FILE can
+      # make Docker create an empty DIRECTORY at that path instead and break
+      # `docker compose up` outright. Section 4.4a has you copy it onto the
+      # VM explicitly, next to the PEM, the same way the PEM itself is
+      # already handled -- never assumed present in the checkout.
+      - ../../../scripts/deploy:/app/scripts/deploy:ro
     # No `ports:` mapping to the host -- reachable only via the `proxy`
     # service. Nothing should ever talk to gunicorn directly.
     # `seed-plans` (added 2026-09-22, after seed-catalog since it requires

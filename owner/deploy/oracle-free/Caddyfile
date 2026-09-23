@@ -6,13 +6,20 @@
 #
 # TLS: no `tls` directive below, so Caddy does the default thing and
 # obtains a real Let's Encrypt certificate automatically as soon as
-# {$OWNER_DOMAIN} resolves publicly to this VM's IP. Ports 80 and 443 must
+# {$SITE_DOMAIN} resolves publicly to this VM's IP. Ports 80 and 443 must
 # be open in BOTH the Oracle Cloud security list/NSG AND the VM's own
 # firewall (iptables/firewalld) -- Oracle Always Free VMs block inbound
 # traffic at the cloud level by default even before the OS firewall is
 # considered; see docs/ops/free-hosting-owner.md step on opening ports.
+#
+# SITE_DOMAIN, not OWNER_DOMAIN: this variable is only read by Caddy, but it
+# still flows into BOTH containers (one shared .env.oracle / env_file). A
+# name starting with "OWNER_" would also land in the `owner` container's
+# process environment, where OWNER_STRICT_CONFIG=true makes config.py
+# refuse to boot on any OWNER_* variable it doesn't recognize -- reproduced
+# locally 2026-09-23 with the old OWNER_DOMAIN name before the rename.
 
-{$OWNER_DOMAIN} {
+{$SITE_DOMAIN} {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"

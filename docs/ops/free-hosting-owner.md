@@ -35,6 +35,19 @@ that, on hosting that costs nothing.
   below.
 - Both paths use the same free Postgres (Neon) and the same verification
   steps. Pick a path, do not mix compute providers.
+- **The mechanical Oracle setup is one script now:**
+  `owner/deploy/oracle-free/bootstrap.sh` — paste it on a fresh VM, fill in
+  `.env.oracle` when it tells you to, re-run. Section 4.3.
+- **Restoring an existing signing key onto a new deploy needs a script, not
+  just a copy.** `flask licensing activate-signing-key` alone fails on a
+  fresh database (`No such signing key`) — `scripts/deploy/
+  restore_signing_key.py` closes that gap and refuses if the PEM doesn't
+  match what your installers already trust. Section 4.4a — read it before
+  touching the signing key on any redeploy.
+- **A spare laptop is a legitimate alternative to both cloud paths**, given
+  the task's own finding that Owner only needs to be reachable for about a
+  minute per activation. See **Path C**, section 5b, for the honest
+  trade-off and a concrete recommendation.
 
 ---
 
@@ -224,7 +237,32 @@ compose file's own comment if you'd rather self-host Postgres there instead).
 
 ### 4.3 Install Docker and bring the stack up
 
-SSH into the VM (`ssh ubuntu@<vm-ip>`), then:
+**The fast path: one script.** `owner/deploy/oracle-free/bootstrap.sh`
+collapses the mechanical part of this section (install Docker, clone/pull
+the repo, sanity-check `.env.oracle` is actually filled in, build, start,
+wait for healthy, run `commercial preflight`) into one paste. It refuses
+loudly and tells you exactly what to fix rather than guessing or silently
+continuing on a placeholder value — it does not touch secrets, the signing
+key, seeding a plan, or creating the admin; those stay deliberate manual
+steps below (4.4-4.5), on purpose. It is idempotent — safe to re-run after
+fixing whatever it flagged.
+
+```bash
+ssh ubuntu@<vm-ip>
+curl -fsSL https://raw.githubusercontent.com/<org>/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
+bash bootstrap.sh
+```
+
+First run will stop and tell you to fill in `~/aura-fullsuits/owner/deploy/oracle-free/.env.oracle`
+(it creates it from `.env.example` if it doesn't exist yet) — open it, fill
+in every value per the comments in the file itself, then re-run
+`bash bootstrap.sh`. It will stop again if Docker was *just* installed (your
+shell's group membership needs a fresh login to pick up `docker` group
+access) — log out, back in, re-run once more. Three runs, at most, gets you
+to a healthy container.
+
+**What it's actually doing, if you'd rather run it by hand (or the script
+fails and you need to see each step):**
 
 ```bash
 # Docker + Compose plugin
@@ -242,16 +280,26 @@ cp owner/deploy/oracle-free/.env.example owner/deploy/oracle-free/.env.oracle
 nano owner/deploy/oracle-free/.env.oracle   # fill in every value -- see the comments in the file itself
 ```
 
-**Keep `.env.oracle` in this exact directory, next to `docker-compose.yml`.**
-Docker Compose resolves every relative path written inside a Compose file
-(this one's `env_file: - .env.oracle` and `./Caddyfile` mount) against the
-directory the Compose file itself lives in, not against wherever you happen
-to run the `docker compose` command from -- so this is not a matter of
-taste. (`.gitignore` already excludes `.env.*` everywhere in the repo, so
-this is never at risk of being committed regardless of where it sits.)
+**Keep `.env.oracle` in this exact directory, next to `docker-compose.yml`
+(`owner/deploy/oracle-free/`) — NOT at the repo root.** Docker Compose
+resolves every relative path written inside a Compose file (this one's
+`env_file: - .env.oracle` and `./Caddyfile` mount) against the directory the
+Compose file itself lives in, not against wherever you happen to run the
+`docker compose` command from — so this is not a matter of taste. An earlier
+version of `.env.example`'s own header comment said "repo root", which was
+wrong; it has been corrected in the file itself. (`.gitignore` already
+excludes `.env.*` everywhere in the repo, so this is never at risk of being
+committed regardless of where it sits.)
 
 Fill in `.env.oracle`:
-- `OWNER_DOMAIN` — the domain you pointed at the VM in step 4.2.5.
+- `SITE_DOMAIN` — the domain you pointed at the VM in step 4.2.5. **Not**
+  `OWNER_DOMAIN`: everything prefixed `OWNER_` in this file is also injected
+  into the `owner` container (both services share one `env_file`), and
+  `OWNER_STRICT_CONFIG=true` below makes `config.py` refuse to boot on any
+  `OWNER_*` variable it doesn't recognize. An earlier version of this file
+  used `OWNER_DOMAIN` here, which tripped exactly that check —
+  reproduced locally 2026-09-23 (`ConfigError: ... unrecognized OWNER_*
+  environment variable(s) (possible typo): OWNER_DOMAIN`) before the rename.
 - `OWNER_SECRET_KEY` / `OWNER_LICENSE_PEPPER` — generate each with
   `python3 -c "import secrets;print(secrets.token_urlsafe(48))"`
   (two *different* random values).
@@ -259,7 +307,9 @@ Fill in `.env.oracle`:
   `postgresql+psycopg://` form (Owner reads `+psycopg`, not bare
   `postgresql://`, and refuses anything else — config.py:352-354). Keep
   `?sslmode=require`.
-- `OWNER_ALLOWED_HOSTS` — same value as `OWNER_DOMAIN`.
+- `OWNER_ALLOWED_HOSTS` — same value as `SITE_DOMAIN` above, kept as a
+  separate line because env files can't expand one variable inside another.
+  This is the one `config.py` itself reads.
 - `OWNER_BACKUP_TARGET_URL` — a **remote** URI (config.py rejects a local
   path outright). Cloudflare R2 and Backblaze B2 both have free tiers large
   enough for this; anything is fine as long as it's off this VM. This isn't
@@ -278,14 +328,97 @@ docker compose -f owner/deploy/oracle-free/docker-compose.yml logs -f owner   # 
 ```
 
 The `owner` service's command runs `alembic upgrade head`, then
-`seed-rbac`/`seed-catalog`/`seed-offline-policy`, then starts gunicorn —
-all idempotent, safe to re-run on every redeploy.
+`seed-rbac`/`seed-catalog`/`seed-plans`/`seed-offline-policy`, then starts
+gunicorn — all idempotent, safe to re-run on every redeploy. Note
+`seed-plans` now runs automatically here (added to this compose file
+2026-09-22); it does not need a separate manual step, unlike an earlier
+version of this runbook which showed it as one in section 4.5 below.
 
-### 4.4 Generate and activate the signing key
+### 4.4 The signing key — read this before running anything in this section
 
-This does not happen automatically — it's a deliberate admin action, and it
-only needs to happen once (rotation later is `flask licensing
-rotate-signing-key`, not this):
+**Answer this first: does a signing key already exist that any real or
+rehearsal till trusts — i.e. does
+`commercial_runtime/licensing_contracts/trust_anchor.json` in this repo list
+a key you need to keep serving?** As of this writing that file lists exactly
+one key, `owner-ed25519-20260903T160641Z-cdcaa65b`, and it is baked into
+every installer already built. If that is the key your shops need to keep
+trusting, you are in path **4.4a**. Only a genuinely first-ever deploy, with
+zero installers built and zero existing licensed installs anywhere, is path
+**4.4b**. When in doubt, treat it as 4.4a — generating a new key you didn't
+need to is the unrecoverable mistake; restoring a key you didn't strictly
+need to was always safe.
+
+#### 4.4a — Restore the EXISTING key (the path almost everyone needs)
+
+`flask licensing activate-signing-key` alone is **not enough** here, and
+this is a real gap this runbook did not previously cover: that command
+requires a matching `owner_signing_keys` database row to already exist
+(`owner/app/licensing_service/signing.py::activate_signing_key`), and a
+brand-new Neon database has no such row for a key a previous, now-gone
+deployment created — only the PEM file itself gets copied over, and copying
+the PEM alone leaves the database with no record of it. Following only "copy
+the PEM in, then activate it" fails at the activate step with
+`SigningKeyError: No such signing key`, and the only *other* command
+available, `generate-signing-key`, mints a brand-new, different key —
+exactly the outcome this whole section exists to prevent.
+
+`scripts/deploy/restore_signing_key.py` closes that gap: it re-derives the
+key's public half from the PEM file itself (never trusts anything typed on
+the command line), cross-checks it against `trust_anchor.json` and REFUSES
+if they don't match, registers the row, then calls the real
+`activate_signing_key()` to do the retire/activate step — proven locally
+2026-09-23 against a real Postgres database in both directions: it correctly
+restored a key from a PEM-only state (database row deleted, PEM left in
+place), and it correctly REFUSED when given a PEM whose derived public key
+didn't match the key_id's entry in `trust_anchor.json`, exiting nonzero
+without writing anything.
+
+```bash
+# 1. Get the existing private key PEM onto the VM, named exactly
+#    <key_id>.pem -- e.g. from wherever you backed it up per section 4.6 of
+#    a previous deployment, or from a local dev/rehearsal instance's own
+#    OWNER_SIGNING_KEY_DIRECTORY. This step is on you -- deliberately not
+#    scripted here, and nothing in this repo should ever copy this file for
+#    you. If it's encrypted (section 4.6's backup format), decrypt it
+#    locally first: `gpg --decrypt owner-signing-keys.tgz.gpg | tar xzf -`.
+#    Also bring commercial_runtime/licensing_contracts/trust_anchor.json --
+#    it is gitignored (permanently, not just "not yet committed"), so it
+#    will NOT be on the VM from `git clone` alone; the restore script uses
+#    it to cross-check the PEM and REFUSE a mismatch, so bring the real one
+#    from wherever your repo checkout has it, not a fresh/empty one.
+scp owner-ed25519-20260903T160641Z-cdcaa65b.pem trust_anchor.json ubuntu@<vm-ip>:~/
+ssh ubuntu@<vm-ip>
+OWNER_CID="$(docker compose -f aura-fullsuits/owner/deploy/oracle-free/docker-compose.yml ps -q owner)"
+docker cp ~/owner-ed25519-20260903T160641Z-cdcaa65b.pem "$OWNER_CID":/app/owner/var/signing-keys/
+docker cp ~/trust_anchor.json "$OWNER_CID":/app/trust_anchor.reference.json
+rm ~/owner-ed25519-20260903T160641Z-cdcaa65b.pem   # don't leave the private key sitting outside the volume
+
+# 2. Register it and activate it. This is the script from above --
+#    docker-compose.yml already bind-mounts scripts/deploy/ for exactly
+#    this (trust_anchor.json is copied by hand above, not mounted, for the
+#    gitignore reason noted there).
+cd aura-fullsuits
+docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner \
+  python /app/scripts/deploy/restore_signing_key.py owner-ed25519-20260903T160641Z-cdcaa65b
+
+# 3. Confirm.
+docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner \
+  flask --app app:create_app commercial preflight
+```
+
+If step 2 refuses with a public-key mismatch, **stop** — you have the wrong
+PEM file for this key_id. Do not pass `--skip-trust-anchor-check` to get
+past it; get the correct file instead. If step 2 instead prints a WARNING
+that no trust-anchor file was found at all, step 1's `docker cp` of
+`trust_anchor.json` didn't happen or landed at the wrong path -- fix that
+before trusting the result, don't just proceed.
+
+#### 4.4b — Generate a brand-new key (ONLY for a genuinely first-ever deploy)
+
+Only do this if section 4.4's opening question was genuinely "no existing
+installer or install anywhere trusts anything yet." This does not happen
+automatically — it's a deliberate admin action, and it only needs to happen
+once (rotation later is `flask licensing rotate-signing-key`, not this):
 
 ```bash
 docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner \
@@ -296,14 +429,18 @@ docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner \
   flask licensing activate-signing-key owner-ed25519-XXXXXXXXTXXXXXXZ-xxxxxxxx
 ```
 
+Immediately update `commercial_runtime/licensing_contracts/trust_anchor.json`
+with this new key_id/public_key before building or shipping another
+installer — every future installer needs to trust it.
+
 ### 4.5 Seed a sellable plan and create the first admin
 
-```bash
-# Placeholder $99 flat price per product -- override real pricing from the
-# Owner UI afterward. Without this step there is nothing to issue a licence
-# against.
-docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner flask seed-plans
+`seed-plans` now runs automatically as part of the `owner` container's
+startup command (section 4.3) — you do not need to run it by hand.
+`create-superadmin` deliberately stays its own explicit, password-bearing,
+one-time step:
 
+```bash
 docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner \
   flask create-superadmin --non-interactive --email you@example.com --display-name "Your Name"
 ```
@@ -314,7 +451,10 @@ from `.env.oracle` and re-run
 `docker compose -f owner/deploy/oracle-free/docker-compose.yml up -d`
 (a plain `restart` reuses the container's existing environment and would
 NOT pick up the edit -- `up -d` recreates it from the changed env file) so
-the password is no longer sitting in a readable file.
+the password is no longer sitting in a readable file. Real pricing is still
+a manual step from here — `seed-plans` only seeds a placeholder $99 flat
+price per product so there is something to issue a licence against;
+override it from the Owner UI before selling anything for real.
 
 ### 4.6 Back up the signing key — before your first real customer
 
@@ -362,6 +502,52 @@ automatic TLS, no Caddy to configure, a platform that pages you (via its own
 monitoring) rather than you finding out from Oracle's idle-reclamation
 policy.
 
+## 5b. Path C — a laptop/spare PC, considered honestly
+
+Owner only needs to be reachable for roughly a minute per activation (proven
+twice: a till activated once runs offline indefinitely — 14-day grace,
+`WARN_ONLY` hard-expiry — and a real phone stayed licensed 9 days with the
+authority unreachable). That fact genuinely weakens the case for an
+always-on cloud VM, so this deserves a real answer, not a dismissal.
+
+**The cost comparison is a wash, not a win.** Oracle Always Free + Neon is
+already $0/month (Path A) — a laptop doesn't undercut it on price. The real
+trade-offs are reachability and per-activation friction:
+
+- **A laptop exposed to the public internet as a lightweight home server**
+  (port-forwarded, dynamic-DNS'd, Caddy doing the same TLS dance as Path A)
+  carries *all* of a VM's operational burden — DDNS instead of a static IP,
+  router port-forwarding, firewall rules, the same signing-key backup
+  discipline — while adding new risks a cloud VM doesn't have: residential
+  ISPs sometimes sit behind CGNAT with no public IP obtainable at all; the
+  machine competes with whatever else it's used for (OS updates that reboot
+  it, sleep/hibernate, someone reinstalling Windows); and every activation
+  now depends on remembering to boot it, confirm the network path still
+  works, and bring the stack up — more manual steps at the exact moment a
+  customer is waiting, not fewer. **Not recommended** — it is strictly more
+  fragile than Path A for no cost saving.
+- **A laptop carried to the shop and run on its own LAN for that one
+  activation** is a genuinely different, better shape: no public exposure,
+  no TLS/DDNS/port-forwarding at all, the till reaches Owner over the same
+  Wi-Fi it's already on. This sidesteps nearly every downside above, and
+  this codebase's own LAN site-relay work (`commercial_runtime/sync/
+  site_relay/`) is direct proof that local-network flows here are solid.
+  **This is a reasonable choice if — and only if — someone is physically
+  present at every new shop during setup anyway**, which is plausible for "a
+  handful of pilot shops." It stops being reasonable the moment activation
+  needs to happen without anyone travelling there.
+
+**Recommendation:** default to Path A (Oracle + Neon) — it is equally free,
+reachable without anyone travelling anywhere, and the signing key sits on a
+machine whose only job is being this service. Use the on-site-laptop variant
+as a legitimate *stopgap* for the very first activation or two while an
+Oracle account is still being verified (card/ID check can take a day), then
+migrate to Path A once it's ready — both share the same Neon database and
+the same signing-key restore procedure (section 4.4a), so nothing about an
+early activation is lost by moving later. Do not build the
+publicly-exposed-laptop variant; it is worse than Path A on every axis that
+matters here.
+
 ## 6. Point a till at it
 
 Retail/Clinic read the licensing base URL from **`AURA_OWNER_LICENSING_URL`**
@@ -401,7 +587,9 @@ curl -s https://owner.yourdomain.com/api/licensing/v1/service-info
 #     "active_signing_key_id": "owner-ed25519-20260922T..."}
 #
 # If active_signing_key_id is null, or "status" is "DEGRADED", section 4.4
-# (or Fly's equivalent) was not completed -- generate and activate a key.
+# (or Fly's equivalent) was not completed. Restore the existing key (4.4a)
+# unless this is genuinely a first-ever deploy with nothing to restore
+# (4.4b) -- do not reach for `generate-signing-key` by default.
 # If this 404s instead of returning JSON, OWNER_EXTERNAL_API_ENABLED is not
 # actually true -- the landmine from section 1.
 
@@ -433,7 +621,10 @@ docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner flask c
 | A till gets `SERVICE_TEMPORARILY_UNAVAILABLE` on first activation after a quiet week | Neon's compute was autosuspended and is waking up (sub-second to a few seconds normally, but a redeploy's cold TLS handshake can stack with it) | Retry once after a few seconds; this is expected/acceptable per the task's own cold-start tolerance |
 | A till gets the same error and it does NOT clear on retry | You chose Supabase instead of Neon and its 7-day pause requires a manual dashboard "Restore project" click | Restore it manually, or switch to Neon |
 | `flask create-superadmin` refuses with "A Super Admin already exists" | Expected — it's a one-time bootstrap, by design | Use the Owner UI to create additional admins from here on |
-| A licence can't be issued even though everything else checks out | `flask seed-plans` was never run (section 1) — there's no plan to issue against | Run it once, then set real prices in the Owner UI |
+| A licence can't be issued even though everything else checks out | `flask seed-plans` never ran | It runs automatically on container start as of 2026-09-22 (section 4.3) — if you still hit this, check the container's startup logs for a seeding failure rather than assuming the step was skipped |
+| `flask licensing activate-signing-key <id>` fails with `SigningKeyError: No such signing key: <id>` | You copied an existing PEM into the volume but the database (fresh on this deploy) has no row for it — `activate-signing-key` alone can't create one | Use `scripts/deploy/restore_signing_key.py` instead — section 4.4a. This is the gap that made 4.4a exist. |
+| The restore script refuses with a public-key mismatch against `trust_anchor.json` | The PEM file you copied in is not the same key that `trust_anchor.json` — and therefore every already-built installer — actually trusts under that key_id | Stop. Find the correct PEM; do not pass `--skip-trust-anchor-check` to force past this |
+| Container refuses to start, log says `unrecognized OWNER_* environment variable(s) (possible typo)` | `OWNER_STRICT_CONFIG=true` caught a var name it doesn't recognize — either a real typo, or a new var that needs adding to `KNOWN_CONFIG_ENV_VARS` in `owner/app/config.py` | Fix the typo, or (if it's a deliberate new var) get it added to that allowlist — do not just set `OWNER_STRICT_CONFIG=false` to silence it |
 
 ## 9. Honest limitations, summarized
 

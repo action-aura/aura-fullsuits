@@ -103,6 +103,59 @@ fly secrets set --app aura-owner \
   OWNER_DATABASE_URL="postgresql+psycopg://<user>:<pass>@<neon-host>/<db>?sslmode=require"
 ```
 
+## The signing key -- CORRECTED 2026-09-23, this step was missing entirely
+
+**This file previously jumped straight from `fly deploy` to `commercial
+preflight` with no signing-key step in between at all.** Followed literally,
+that leaves no ACTIVE signing key, and `preflight` (correctly) hard-fails on
+it -- there was no instruction here for what to do about that. Fixed below.
+
+**First, answer this: does an existing signing key already exist that some
+till needs to keep trusting** -- i.e. does
+`commercial_runtime/licensing_contracts/trust_anchor.json` in this repo list
+a key_id you must keep serving? As of this writing it lists exactly one,
+`owner-ed25519-20260903T160641Z-cdcaa65b`, baked into every installer
+already built. If that's your key, restore it -- do NOT generate a new one:
+
+```bash
+# Copy the existing PEM onto the machine, named exactly <key_id>.pem, then:
+fly ssh sftp shell --app aura-owner
+# (sftp> put owner-ed25519-20260903T160641Z-cdcaa65b.pem /app/var/signing-keys/)
+
+# flask licensing activate-signing-key ALONE is not enough here -- it needs
+# a matching database row that a fresh deploy's database doesn't have yet.
+# scripts/deploy/restore_signing_key.py (same script Path A uses) creates
+# it, cross-checks the PEM against trust_anchor.json, and refuses on a
+# mismatch instead of silently registering the wrong key under a trusted
+# id. It isn't baked into this image (owner/Dockerfile only COPYs owner/),
+# so copy it over the same way:
+fly ssh sftp shell --app aura-owner
+# (sftp> put ../../../scripts/deploy/restore_signing_key.py /app/restore_signing_key.py)
+# (sftp> put ../../../commercial_runtime/licensing_contracts/trust_anchor.json /app/trust_anchor.reference.json)
+
+fly ssh console --app aura-owner -C \
+  "python /app/restore_signing_key.py owner-ed25519-20260903T160641Z-cdcaa65b --trust-anchor /app/trust_anchor.reference.json"
+```
+
+(`fly ssh sftp shell` is real flyctl functionality for moving files onto a
+Machine over SSH, but the exact interactive-session syntax above was not
+verified against a live `flyctl` install or Fly account in this session --
+confirm with `fly ssh sftp shell --help` before relying on it verbatim. Path
+A's Docker-based restore flow, which this was ported from, WAS verified
+against a real Postgres database -- see docs/ops/free-hosting-owner.md
+section 4.4a.)
+
+Only if this is a genuinely first-ever deploy, with zero existing installers
+or installs anywhere, generate a brand-new key instead -- and then update
+`trust_anchor.json` before building another installer:
+
+```bash
+fly ssh console --app aura-owner -C "flask --app app:create_app licensing generate-signing-key"
+# -> "Generated signing key owner-ed25519-XXXXXXXXTXXXXXXZ-xxxxxxxx (status=DRAFT)..."
+fly ssh console --app aura-owner -C \
+  "flask --app app:create_app licensing activate-signing-key owner-ed25519-XXXXXXXXTXXXXXXZ-xxxxxxxx"
+```
+
 ## Then verify — do not assume
 
 ```bash
