@@ -54,12 +54,22 @@ import sys
 
 DEFAULT_DOMAIN = "actionaura.me"
 
-# Common DKIM selectors to try, in the order given in the spec for this tool.
-# There is no way to enumerate selectors from outside DNS -- this is a guess
-# list, not an exhaustive one. See check_dkim()'s UNKNOWN path.
+# Common DKIM selectors to try. There is no way to enumerate selectors from
+# outside DNS -- this is a guess list, not an exhaustive one, and a miss is
+# reported as UNKNOWN rather than FAIL. See check_dkim()'s UNKNOWN path.
+#
+# `privateemail` is FIRST because it is this project's own provider, and its
+# omission was a real defect rather than a gap: the tool was written against
+# actionaura.me, reported UNKNOWN for it, and that was taken as "DKIM is not
+# set up yet" -- when Namecheap had in fact published a 2048-bit key all
+# along, under a selector the list did not carry. A guess list that misses
+# the one domain the tool exists to check is worse than no list, because
+# UNKNOWN reads as absence to anyone who is not reading carefully.
 DKIM_SELECTORS = [
-    "default", "dkim", "mail", "selector1", "selector2", "google",
-    "k1", "s1", "s2", "pm", "mandrill", "zoho",
+    "privateemail", "default", "dkim", "mail", "selector1", "selector2",
+    "google", "k1", "s1", "s2", "pm", "mandrill", "zoho",
+    # Other provider-specific names seen in the wild, cheap to try:
+    "namecheap", "fm1", "fm2", "fm3", "protonmail", "mailjet", "sendgrid",
 ]
 
 # Per-nslookup-call tuning. Kept modest because DKIM alone issues up to
