@@ -151,26 +151,44 @@ CLAUDE.md's engineering standard exists to rule out.
 ## The contact placeholders — exactly where to edit them
 
 `js/content.js` **line 33** starts the `CONTACT` block's comment (the
-object itself is declared at **line 54** — search the file for
+object itself is declared at **line 70** — search the file for
 `CONTACT DETAILS -- edit ONLY here` if either line number has drifted).
 That is the one and only place to change the site's email or phone —
 nothing else needs touching:
 
 ```js
 var CONTACT = {
-  email: "info@actionaura.me",    // domain owned; MAILBOX NOT SET UP YET
+  email: "info@actionaura.me",    // mailbox ORDERED, not yet confirmed live
   phone: ""                       // deliberately empty -- no real number yet
 };
 ```
 
 - **`email`** uses the real registered domain (`actionaura.me`, held at
-  Namecheap through Aug 2027), but **the mailbox does not exist yet** — no
-  mail is configured on that domain, so nothing sent there arrives today.
-  Set one up before the site goes public: Zoho Mail's free tier accepts a
-  custom domain, or Google Workspace if you prefer paid. Send yourself a
-  test message and confirm it lands before treating this as live. An
-  address on a sales page that silently swallows enquiries is worse than no
-  address at all, because the visitor believes they reached you.
+  Namecheap through Aug 2027). A mailbox was **ordered on 2026-09-24** —
+  Namecheap Private Email, roughly $14/year, bought from the domain's own
+  Manage page so that it writes its own MX records rather than needing them
+  typed by hand.
+
+  **Ordered is not live.** Live means a test message sent from an OUTSIDE
+  address was seen to arrive — not that the mailbox was created. Do that
+  before the site goes public. An address on a sales page that silently
+  swallows enquiries is worse than no address at all, because the visitor
+  believes they reached you and stops trying.
+
+  Two things worth knowing about that mailbox, because both are easy to get
+  wrong later:
+
+  - **Never run a second mail service on this domain.** Cloudflare Email
+    Routing (free forwarding) was the alternative considered, and it works —
+    but it and Private Email both claim the domain's MX records. Two sets of
+    MX records is delivery roulette, not redundancy. One or the other.
+  - **When wiring the address into Gmail's "Send mail as", choose SMTP
+    through `mail.privateemail.com:587` (TLS), not "send through Gmail".**
+    Sending through Gmail's own servers DKIM-signs the message as
+    `gmail.com`, which breaks DMARC alignment against `actionaura.me` and
+    shows a "via gmail.com" note to the recipient. Routing it through the
+    real mailbox's SMTP signs it as the domain, which is the entire reason
+    for paying for a mailbox instead of using free forwarding.
   Change the string and it updates everywhere automatically: the footer
   on all four pages, the "Prefer to reach us directly?" panel on
   `contact.html`, and the contact form's own `mailto:` target. This works

@@ -56,13 +56,17 @@
   // till with his money reads `info@` as a business and `hello@` as a
   // side project.
   //
-  // STILL A PLACEHOLDER UNTIL THE MAILBOX EXISTS. The domain is owned but no
-  // mail is configured on it yet, so this address does not receive anything
-  // today. Set up a mailbox (Zoho Mail's free tier takes a custom domain, or
-  // Google Workspace if you want it paid and familiar), send yourself a test
-  // message, and only then treat this line as live. An address printed on a
+  // MAILBOX ORDERED 2026-09-24: Namecheap Private Email (~$14/year), bought
+  // from the domain's own Manage page so it writes its MX records itself.
+  // NOT YET CONFIRMED LIVE -- confirmed means a test message sent FROM AN
+  // OUTSIDE ADDRESS was seen to arrive, not that the mailbox was created.
+  // Until then this address is still a placeholder. An address printed on a
   // sales page that silently drops enquiries is worse than no address --
-  // the visitor believes they contacted you.
+  // the visitor believes they contacted you and stops trying.
+  //
+  // DO NOT also enable Cloudflare Email Routing (or any other forwarder) on
+  // this domain. Both it and Private Email want to own the MX records, and
+  // two sets of MX records is delivery roulette, not redundancy.
   var CONTACT = {
     email: "info@actionaura.me",
     phone: ""
