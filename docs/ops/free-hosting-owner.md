@@ -249,7 +249,7 @@ fixing whatever it flagged.
 
 ```bash
 ssh ubuntu@<vm-ip>
-curl -fsSL https://raw.githubusercontent.com/<org>/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 ```
 

@@ -4,7 +4,7 @@
 # Paste this whole block into a fresh Oracle Ubuntu VM (SSH'd in as the
 # default user, e.g. `ssh ubuntu@<vm-ip>`), or download and run it:
 #
-#   curl -fsSL https://raw.githubusercontent.com/<org>/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
+#   curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/master/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
 #   bash bootstrap.sh
 #
 # What it does, in order: installs Docker if missing, clones/updates the
