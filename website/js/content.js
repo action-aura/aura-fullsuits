@@ -56,13 +56,21 @@
   // till with his money reads `info@` as a business and `hello@` as a
   // side project.
   //
-  // MAILBOX ORDERED 2026-09-24: Namecheap Private Email (~$14/year), bought
-  // from the domain's own Manage page so it writes its MX records itself.
-  // NOT YET CONFIRMED LIVE -- confirmed means a test message sent FROM AN
-  // OUTSIDE ADDRESS was seen to arrive, not that the mailbox was created.
-  // Until then this address is still a placeholder. An address printed on a
-  // sales page that silently drops enquiries is worse than no address --
-  // the visitor believes they contacted you and stops trying.
+  // LIVE AND RECEIVING, confirmed 2026-09-24. Namecheap Private Email
+  // (~$14/year). A message sent from an OUTSIDE address (a live.com account)
+  // was seen to arrive in the mailbox -- not merely "the mailbox was
+  // created", which is the weaker claim people mistake for this one. So this
+  // address is safe to print on a public page: enquiries reach a human.
+  //
+  // All four DNS records verified from outside the dashboard, via
+  // `python scripts/ops/check_mail_dns.py actionaura.me` -- MX, SPF, DKIM
+  // (selector `privateemail`, published by Namecheap automatically) and
+  // DMARC at `p=none`. Re-run that after ANY change to the domain's DNS.
+  //
+  // STILL UNPROVEN: outbound. Nobody has yet sent FROM this address to an
+  // external inbox and checked whether it landed in spam. That does not
+  // affect enquiries arriving, which is what this page's address is for,
+  // but it does affect every reply. Check before relying on replies.
   //
   // DO NOT also enable Cloudflare Email Routing (or any other forwarder) on
   // this domain. Both it and Private Email want to own the MX records, and

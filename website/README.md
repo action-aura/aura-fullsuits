@@ -164,16 +164,26 @@ var CONTACT = {
 ```
 
 - **`email`** uses the real registered domain (`actionaura.me`, held at
-  Namecheap through Aug 2027). A mailbox was **ordered on 2026-09-24** —
-  Namecheap Private Email, roughly $14/year, bought from the domain's own
-  Manage page so that it writes its own MX records rather than needing them
-  typed by hand.
+  Namecheap through Aug 2027). The mailbox is **LIVE AND RECEIVING as of
+  2026-09-24** — Namecheap Private Email, roughly $14/year, bought from the
+  domain's own Manage page so that it writes its own MX records rather than
+  needing them typed by hand.
 
-  **Ordered is not live.** Live means a test message sent from an OUTSIDE
-  address was seen to arrive — not that the mailbox was created. Do that
-  before the site goes public. An address on a sales page that silently
+  **Live means proven, not created.** A message sent from an OUTSIDE address
+  was seen to arrive in the mailbox. That is the bar, and it is deliberately
+  higher than "the mailbox exists" — an address on a sales page that silently
   swallows enquiries is worse than no address at all, because the visitor
-  believes they reached you and stops trying.
+  believes they reached you and stops trying. All four DNS records were also
+  verified from outside the dashboard with
+  `python scripts/ops/check_mail_dns.py actionaura.me`: MX, SPF, DKIM
+  (selector `privateemail`, which Namecheap publishes automatically) and
+  DMARC at `p=none`. Re-run that command after any DNS change on the domain.
+
+  **Still unproven: outbound.** Nobody has yet sent FROM this address to an
+  external inbox and checked whether it landed in spam rather than the inbox.
+  That does not affect enquiries ARRIVING — which is all this page's address
+  is for — but it affects every reply, so check it before relying on replies
+  reaching anyone.
 
   Two things worth knowing about that mailbox, because both are easy to get
   wrong later:
