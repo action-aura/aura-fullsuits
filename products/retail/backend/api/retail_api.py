@@ -11197,6 +11197,60 @@ def report_balance_sheet():
     conn.close()
     return jsonify({'success': True, 'data': data})
 
+# core/retail/financial_statements.py's THIRD GL-derived statement
+# (retail-hardware-viewports): the cash flow statement, DIRECT method -- see
+# fin_statements.cash_flow's own docstring for why the direct method (not
+# the indirect one) is the honest choice against a real ledger. `?start_
+# date=`/`?end_date=` (both required, 'YYYY-MM-DD', BOTH ENDS INCLUSIVE) and
+# an optional `?branch_id=` -- a period statement like report_profit_and_
+# loss immediately above it, not a snapshot like report_balance_sheet.
+# Decorator order and the branch-scope coercion are copied from both routes
+# verbatim -- see retail_route_capability_matrix_test.py's ratchet on
+# decorator order for why this is not a style choice.
+@retail_bp.route('/reports/cash-flow', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def report_cash_flow():
+    """`?start_date=`/`?end_date=` (both required, 'YYYY-MM-DD', BOTH ENDS
+    INCLUSIVE) and an optional `?branch_id=`. A missing or malformed date is
+    refused with a 400, never silently defaulted to "today" or "all time" --
+    see `fin_statements.StatementPeriodError` and this route's own
+    validation below, the identical posture report_profit_and_loss's own
+    docstring states for its dates.
+
+    `branch_id`, if given, must parse as an integer -- refused with a 400
+    otherwise, same posture. Passed through `_coerce_branch_id_for_scope`
+    BEFORE being handed to `cash_flow`, so a scoped caller always gets their
+    own branch back regardless of what (if anything) they asked for, exactly
+    like every other branch-filterable report route.
+    """
+    cid = _cid()
+    start_date = request.args.get('start_date', '').strip()
+    end_date = request.args.get('end_date', '').strip()
+
+    raw_branch = request.args.get('branch_id', '').strip()
+    branch_id = None
+    if raw_branch:
+        try:
+            branch_id = int(raw_branch)
+        except ValueError:
+            return jsonify({'status': 'error',
+                             'message': f'Invalid branch_id {raw_branch!r} -- must be an integer.'}), 400
+
+    conn = get_retail_conn()
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
+    try:
+        data = fin_statements.cash_flow(conn, cid, start_date, end_date, branch_id=branch_id)
+    except fin_statements.StatementPeriodError as exc:
+        conn.close()
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    conn.close()
+    return jsonify({'success': True, 'data': data})
+
 def _render_report_email_body(data, currency):
     """Plain-text only, no templating engine (matches this whole feature's
     "no templating engine dependency" scope, same restraint

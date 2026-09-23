@@ -1559,5 +1559,22 @@
   "Nothing has been posted as of this date": "لم يتم ترحيل أي شيء حتى هذا التاريخ",
   "No sale, return, purchase or expense was recorded on or before this date. This is not a zero balance sheet -- there is nothing to measure yet.": "لم يتم تسجيل أي عملية بيع أو إرجاع أو شراء أو مصروف في هذا التاريخ أو قبله. هذا لا يعني ميزانية عمومية صفرية -- فلا يوجد بعد ما يمكن قياسه.",
   "Cost basis is incomplete": "أساس التكلفة غير مكتمل",
-  "These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated.": "لا تحمل عمليات البيع هذه أي تكلفة مسجّلة للبضاعة، لذلك فإن المخزون والأرباح المحتجزة الموضّحين أدناه أعلى من الواقع الفعلي."
+  "These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated.": "لا تحمل عمليات البيع هذه أي تكلفة مسجّلة للبضاعة، لذلك فإن المخزون والأرباح المحتجزة الموضّحين أدناه أعلى من الواقع الفعلي.",
+  "Reconciled": "متطابق",
+  "Not Reconciled": "غير متطابق",
+  "Opening Cash": "رصيد النقدية الافتتاحي",
+  "Closing Cash": "رصيد النقدية الختامي",
+  "Net Change in Cash": "صافي التغيّر في النقدية",
+  "Cash In (Operating)": "النقد الداخل (تشغيلي)",
+  "Cash Out (Operating)": "النقد الخارج (تشغيلي)",
+  "Nothing moved in this period": "لم تتحرك أي نقدية في هذه الفترة",
+  "No cash came in during this period.": "لم يدخل أي نقد خلال هذه الفترة.",
+  "No cash went out during this period.": "لم يخرج أي نقد خلال هذه الفترة.",
+  "Cash Sales Receipts": "متحصلات المبيعات النقدية",
+  "Refunds Paid to Customers": "مبالغ مستردة للعملاء",
+  "Customer Account Payments Received": "دفعات مستلمة من حسابات العملاء",
+  "Payments to Suppliers": "مدفوعات للموردين",
+  "Cash Paid for Inventory Purchases": "نقد مدفوع لشراء المخزون",
+  "No sale, return, payment or purchase moved cash in this date range. This is not a zero movement -- there is nothing to measure yet.": "لم تُحرّك أي عملية بيع أو إرجاع أو دفعة أو شراء أي نقد خلال هذا النطاق الزمني. هذا لا يعني حركة صفرية -- فلا يوجد بعد ما يمكن قياسه.",
+  "This chart of accounts has no investing or financing accounts (no loans, no owner draws), so every cash movement shown here is from day-to-day operations.": "لا يحتوي دليل الحسابات هذا على حسابات استثمارية أو تمويلية (لا قروض ولا مسحوبات مالك)، لذلك فإن كل حركة نقدية معروضة هنا هي من صميم العمليات التشغيلية اليومية."
 }

@@ -548,7 +548,20 @@ async function testEveryGuardIsProvenByBreakingIt() {
   // ── HONESTY FLAG #2 — empty period renders zeros, not "nothing posted" ────
   proved.push(await provesMutation(
     '4. HONESTY FLAG — has_activity:false falls through to the (all-zero) statement instead of the nothing-posted state',
-    [['      if (!data.has_activity) {\n', '      if (false) {\n']],
+    // RE-ANCHORED 2026-09-23. The old anchor was just
+// `if (!data.has_activity) {` and it stopped being unique the moment the
+// Cash Flow screen shipped -- that screen was modelled on this one and
+// copied the line verbatim, so the anchor matched twice and this file's
+// own guard refused to run rather than prove nothing. That refusal is the
+// harness working: an anchor matching 0 or 2+ times would let the proof
+// below pass while testing nothing at all.
+//
+// The two screens diverge on the very next lines -- this one's empty state
+// is 'trending-up', Cash Flow's is 'banknote' -- so the anchor now reaches
+// far enough to name which screen it means. Anchor to something the
+// SIBLING cannot accidentally copy.
+[['      if (!data.has_activity) {\n        body.innerHTML = this._emptyState({\n          icon: \'trending-up\',',
+  '      if (false) {\n        body.innerHTML = this._emptyState({\n          icon: \'trending-up\',']],
     async (src) => {
       const ctx = await renderScreen({ source: src, pnl: PNL_NO_ACTIVITY });
       assert.ok(ctx.body().indexOf('Nothing was posted in this period') !== -1,

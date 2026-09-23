@@ -1559,5 +1559,22 @@
   "Nothing has been posted as of this date": "Nothing has been posted as of this date",
   "No sale, return, purchase or expense was recorded on or before this date. This is not a zero balance sheet -- there is nothing to measure yet.": "No sale, return, purchase or expense was recorded on or before this date. This is not a zero balance sheet -- there is nothing to measure yet.",
   "Cost basis is incomplete": "Cost basis is incomplete",
-  "These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated.": "These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated."
+  "These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated.": "These sales have no recorded cost of goods. Inventory and retained earnings shown below are overstated.",
+  "Reconciled": "Reconciled",
+  "Not Reconciled": "Not Reconciled",
+  "Opening Cash": "Opening Cash",
+  "Closing Cash": "Closing Cash",
+  "Net Change in Cash": "Net Change in Cash",
+  "Cash In (Operating)": "Cash In (Operating)",
+  "Cash Out (Operating)": "Cash Out (Operating)",
+  "Nothing moved in this period": "Nothing moved in this period",
+  "No cash came in during this period.": "No cash came in during this period.",
+  "No cash went out during this period.": "No cash went out during this period.",
+  "Cash Sales Receipts": "Cash Sales Receipts",
+  "Refunds Paid to Customers": "Refunds Paid to Customers",
+  "Customer Account Payments Received": "Customer Account Payments Received",
+  "Payments to Suppliers": "Payments to Suppliers",
+  "Cash Paid for Inventory Purchases": "Cash Paid for Inventory Purchases",
+  "No sale, return, payment or purchase moved cash in this date range. This is not a zero movement -- there is nothing to measure yet.": "No sale, return, payment or purchase moved cash in this date range. This is not a zero movement -- there is nothing to measure yet.",
+  "This chart of accounts has no investing or financing accounts (no loans, no owner draws), so every cash movement shown here is from day-to-day operations.": "This chart of accounts has no investing or financing accounts (no loans, no owner draws), so every cash movement shown here is from day-to-day operations."
 }

@@ -152,10 +152,82 @@ then read 0 going forward -- that is still unbuilt, and this function does
 not simulate it, only compensates for its absence in the one report that
 would otherwise be visibly wrong without it.
 
+THE CASH FLOW STATEMENT, AND WHY IT IS THE DIRECT METHOD.
+`cash_flow` below is this module's THIRD statement, added retail-hardware-
+viewports. There are two textbook ways to build one: the INDIRECT method
+starts from net profit and backs into a cash figure by adjusting for
+non-cash items and working-capital changes -- the tool you reach for when
+all you HAVE is a P&L and two balance sheets and cash itself is not
+separately recorded anywhere. The DIRECT method instead reads actual cash
+movements straight off the ledger. This codebase has a real general ledger
+with every debit/credit to `gl.ACCOUNT_CASH` individually posted and
+traceable to a source document (`post_sale`/`post_return`/`post_customer_
+payment`/`post_supplier_payment`/`post_purchase_order`, general_ledger.py),
+so the indirect method's whole reason to exist -- not having the real
+movements -- does not apply here, and reaching for it anyway would be
+reconstructing an approximation of a number this module can simply read.
+The direct method is also the more HONEST one for the reader this statement
+is for: "money in from customers, money out to suppliers" is a sentence a
+shopkeeper recognises, where "net profit, adjusted for a 1,240 increase in
+accounts receivable" is not.
+
+GROUPED BY `gl_journals.source_type` -- the document that caused the cash
+movement -- never by an enumerated code list, for the same "derive
+generically" reason point 1 above gives `income_statement`'s own account
+selection. A cash-touching journal's `source_type` already carries a single,
+well-defined business meaning (each of `post_sale`/`post_return`/`post_
+customer_payment`/`post_supplier_payment`/`post_purchase_order`'s own
+docstrings states exactly what the OTHER side of that journal is), so
+grouping at the document level is a faithful reading of "what the other side
+was" without having to arbitrate which of several non-cash lines in one
+journal a single cash leg is "really" against -- a purchase order journal
+can carry a Cash leg, an Accounts Payable leg and an Inventory debit all at
+once, and there is no single correct way to allocate the cash portion
+between the other two. `_CASH_FLOW_LABELS` below gives the known source
+types a shopkeeper-readable label (and merges `supplier_payment`/
+`po_payment` into ONE "Payments to Suppliers" line, because post_supplier_
+payment's own docstring is explicit that the two are "ONE helper... the
+accounting entry is identical in both cases"); an UNKNOWN future source
+type still shows up, generically titled, rather than being silently
+dropped -- the label is cosmetic, the SQL that finds it is not.
+
+OPERATING ONLY -- NO INVESTING/FINANCING SECTION IS INVENTED. The current
+chart of accounts (`general_ledger.DEFAULT_CHART`) has no fixed-asset, loan
+or owner-contribution/draw account, so no journal this codebase can produce
+touches cash for an investing or a financing reason; `investing_activities`/
+`financing_activities` below are `None`, not empty `{total: 0, lines: []}`
+placeholders, and `investing_and_financing_note` says why in words a
+presentation layer can show. An honest two-section statement beats a padded
+three-section one that would otherwise report a bank loan or an owner draw
+as "0.00" -- a claim about something that was measured, not about something
+that cannot happen with today's chart.
+
+THE RECONCILIATION REUSES `balance_sheet`, NEVER A SECOND CASH DERIVATION.
+Opening and closing cash are each read by calling `balance_sheet` (this
+module's own second statement, immediately above) at the day before
+`start_date` and at `end_date` respectively, and pulling `gl.ACCOUNT_CASH`'s
+own balance out of its `assets.accounts` list -- the SAME lifetime-balance
+machinery `balance_sheet` already uses for every other asset account, not a
+parallel SUM over `gl_journal_lines` written a second time in this
+function. `total_cash_in`/`total_cash_out` (this function's OWN direct-
+method summation over just `[start_date, end_date]`) then independently
+predicts a closing figure (`opening_cash + net_change_in_cash`), and
+`reconciliation.is_reconciled` compares that prediction against `balance_
+sheet`'s own answer. For a healthy ledger the two are equal by construction
+-- a balance's change over a window is definitionally the sum of what moved
+it during that window -- so this is the same "provably true, but MEASURED
+anyway" posture `balance_sheet`'s own `balance_check` documents for itself,
+compared to within `_epsilon(currency)` and never inferred from the
+architecture holding. `opening_cash` needs the calendar day immediately
+before `start_date`; the one edge case (`start_date` itself is the
+'0001-01-01' all-time sentinel `income_statement`'s own retained-earnings
+call uses) has no earlier day to ask about and reports `opening_cash` as a
+literal 0 rather than underflowing a date.
+
 NOT BUILT HERE, deliberately, matching general_ledger.py's own "NOT BUILT"
-posture: a cash-flow statement, period close / retained-earnings ROLLOVER
-(the actual posting of net income into 3000 -- see the paragraph above for
-why `balance_sheet` works around its absence instead of assuming it),
+posture: period close / retained-earnings ROLLOVER (the actual posting of
+net income into 3000 -- see the balance sheet's own docstring for why
+`balance_sheet` works around its absence instead of assuming it),
 multi-currency consolidation, or a drill-through from a statement line back
 to its individual journals (that last one is the same kind of follow-up
 report_trial_balance's own comment names for a future journal-browse route
@@ -163,7 +235,7 @@ report_trial_balance's own comment names for a future journal-browse route
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from commercial_runtime.currency import DEFAULT_BASE_CURRENCY, currency_quantum
@@ -757,4 +829,284 @@ def balance_sheet(conn, cid, as_of_date, branch_id=None):
         'has_activity': has_activity,
         'cost_basis_incomplete': earnings['cost_basis_incomplete'],
         'cost_basis_incomplete_sale_count': earnings['cost_basis_incomplete_sale_count'],
+    }
+
+
+#: source_type (gl_journals.source_type) -> a shopkeeper-readable label for
+#: the cash movement it represents. See `cash_flow`'s own module-docstring
+#: section ("GROUPED BY gl_journals.source_type") for why grouping at the
+#: DOCUMENT level, not the individual account level, is the honest reading
+#: of "what the other side of this cash movement was".
+#:
+#: 'supplier_payment' and 'po_payment' are DELIBERATELY merged onto the same
+#: label -- `general_ledger.post_supplier_payment`'s own docstring: "ONE
+#: helper for BOTH `supplier_payment`... and `pay_purchase_order`... the
+#: accounting entry is identical in both cases". Two source_types, one line
+#: a shopkeeper reads as "money I paid suppliers".
+#:
+#: 'purchase_order' stays a SEPARATE line from those two on purpose: its cash
+#: leg (`post_purchase_order`'s optional `amount_paid` down payment) sits
+#: alongside a Dr Inventory line, not an Accounts Payable settlement -- "cash
+#: paid to receive goods" is a different fact from "cash paid to clear a debt
+#: already on the books", even though both eventually reach the same
+#: supplier's pocket.
+#:
+#: A source_type NOT in this map still appears in the statement (the SQL
+#: below is not filtered by this dict's keys) with a generic, `source_type`-
+#: derived label -- see `cash_flow`'s own fallback -- so a future cash-
+#: touching document type is reported, merely unprettified, never dropped.
+_CASH_FLOW_LABELS = {
+    'sale': 'Cash Sales Receipts',
+    'return': 'Refunds Paid to Customers',
+    'customer_payment': 'Customer Account Payments Received',
+    'supplier_payment': 'Payments to Suppliers',
+    'po_payment': 'Payments to Suppliers',
+    'purchase_order': 'Cash Paid for Inventory Purchases',
+}
+
+
+def _cash_balance(balance_sheet_result):
+    """`gl.ACCOUNT_CASH`'s own balance out of a `balance_sheet()` result's
+    `assets.accounts` list -- 0.0 if the cash account has never been posted
+    to as of that snapshot (an account with no activity is OMITTED from
+    `balance_sheet`'s `accounts` list, matching that function's own "nothing
+    to report" convention, never listed at a phantom 0). Reading it out of an
+    already-computed `balance_sheet()` result, rather than summing
+    `gl_journal_lines` a second time, is the whole point of `cash_flow`'s own
+    "reuse balance_sheet, never a second cash derivation" design -- see this
+    module's docstring section on the reconciliation.
+    """
+    for account in balance_sheet_result['assets']['accounts']:
+        if account['code'] == gl.ACCOUNT_CASH:
+            return Decimal(str(account['amount']))
+    return Decimal('0')
+
+
+def cash_flow(conn, cid, start_date, end_date, branch_id=None):
+    """The cash flow statement for company `cid` over `[start_date,
+    end_date]`, BOTH ENDS INCLUSIVE -- the identical inclusive-period
+    convention `income_statement` documents for itself. `start_date`/
+    `end_date` are `'YYYY-MM-DD'` strings; `branch_id`, when given, is an
+    integer `branches.id` (or `None` for the whole company) -- this function
+    trusts its caller to have already resolved/validated that value, the
+    same "callers pass clean types" contract `income_statement`/`balance_
+    sheet` both document for themselves (the route does the query-string
+    parsing and multi-branch-scope coercion; see api/retail_api.py's
+    `report_cash_flow`).
+
+    DIRECT METHOD. See this module's own docstring, "THE CASH FLOW
+    STATEMENT, AND WHY IT IS THE DIRECT METHOD", for the full reasoning: this
+    codebase has a real ledger with every cash movement individually posted
+    and traceable to a source document, so reconstructing cash from net
+    profit and working-capital deltas (the indirect method) would be
+    building an approximation of a number this function can simply read.
+
+    Raises `StatementPeriodError` (reusing `income_statement`'s own
+    exception type, exactly like `balance_sheet` does) if `start_date`/
+    `end_date` are not valid dates or `start_date` is after `end_date`.
+    Never silently swaps them, never silently defaults to "today".
+
+    BRANCH SCOPING MATCHES `income_statement`/`balance_sheet` EXACTLY
+    (that function's module-docstring point 4): branch-less journals ride
+    along with EVERY branch's report, so summing every individual branch's
+    cash flow statement double-counts a branch-less figure once per branch,
+    while the whole-company report (no branch filter) is always exactly
+    correct.
+
+    Returns a dict:
+        currency                 -- this company's base currency code
+        method                   -- always 'direct' -- see this module's own
+                                     docstring for why
+        period                   -- {start_date, end_date, branch_id} echoed
+                                     back
+        opening_cash             -- `gl.ACCOUNT_CASH`'s balance the day
+                                     before `start_date`, read via
+                                     `balance_sheet` (0 when `start_date` is
+                                     the '0001-01-01' all-time sentinel --
+                                     there is no earlier day to ask about)
+        closing_cash             -- `gl.ACCOUNT_CASH`'s balance as of
+                                     `end_date`, read via `balance_sheet` --
+                                     the AUTHORITATIVE figure this statement
+                                     reports as "closing cash", independent
+                                     of this function's own `total_cash_in`/
+                                     `total_cash_out` summation
+        total_cash_in             -- sum of every debit this period posted to
+                                     `gl.ACCOUNT_CASH` (an asset account:
+                                     debit increases it)
+        total_cash_out            -- sum of every credit this period posted
+                                     to `gl.ACCOUNT_CASH`
+        net_change_in_cash        -- total_cash_in - total_cash_out
+        operating_activities      -- {cash_in: {total, lines: [{label,
+                                     amount, source_types}]}, cash_out:
+                                     {total, lines: [...]}, net} -- see
+                                     `_CASH_FLOW_LABELS` above for how a
+                                     journal's `source_type` becomes a line's
+                                     `label`; `source_types` lists which raw
+                                     source_type(s) were merged onto that
+                                     label (traceability, not display)
+        investing_activities      -- always `None` -- see this module's own
+                                     docstring, "OPERATING ONLY"
+        financing_activities      -- always `None`, same reason
+        investing_and_financing_note -- a sentence explaining the `None`s
+                                     above, for a presentation layer to show
+                                     in place of an (empty) section
+        reconciliation            -- {opening_cash, net_change_in_cash,
+                                     computed_closing_cash (opening_cash +
+                                     net_change_in_cash, this function's OWN
+                                     prediction), closing_cash (balance_
+                                     sheet's answer -- duplicated here so the
+                                     whole check reads from one dict),
+                                     is_balanced, difference} -- the
+                                     identical is_balanced/difference SHAPE
+                                     `balance_sheet`'s own `balance_check`
+                                     uses, compared to within
+                                     `_epsilon(currency)`, never inferred
+                                     from "the architecture guarantees it"
+        has_activity               -- False when NOT ONE journal posted a
+                                     cash movement in this period -- lets a
+                                     presentation layer say "nothing moved"
+                                     instead of a tidy set of zeros for what
+                                     is really an empty period
+
+    NO `cost_basis_incomplete` HERE, DELIBERATELY -- unlike income_statement/
+    balance_sheet, which both carry it (module docstring point 5). That flag
+    exists because an unknown `sale_items.unit_cost` UNDERSTATES `gl.
+    ACCOUNT_COGS` (5900), and COGS never touches Cash (1000) at all --
+    `post_cogs` is Dr Cost of Goods Sold / Cr Inventory, a memo entry with no
+    cash leg. A cash flow statement built off account 1000 alone is
+    therefore unaffected by that honesty caveat by construction, not by
+    oversight; inventing the flag here would imply a real cash figure is
+    ever in doubt for the reason it is in doubt on the other two statements.
+    """
+    gl.ensure_default_chart(conn, cid)
+    start = _parse_period_date('start_date', start_date)
+    end = _parse_period_date('end_date', end_date)
+    if start > end:
+        raise StatementPeriodError(
+            f"start_date {start_date!r} is after end_date {end_date!r} -- "
+            f"a reporting period cannot run backwards."
+        )
+
+    currency = _resolve_currency(conn, cid)
+    quant = currency_quantum(currency)
+    eps = _epsilon(currency)
+
+    def q(value):
+        return float(value.quantize(quant, rounding=ROUND_HALF_UP))
+
+    # ── Direct-method cash movements, grouped by the document that caused
+    # them (gl_journals.source_type) -- see this module's own docstring
+    # section on why the document level, not an individual counter-account,
+    # is the honest grain for "what the other side was". Branch-less
+    # journals ride along with EVERY branch filter, the identical convention
+    # income_statement/balance_sheet both use (see either's own docstring,
+    # point 4) -- short aliases (`gj`/`gjl`/`a`) inside this query only.
+    branch_sql = ''
+    period_params = [cid, gl.ACCOUNT_CASH, cid, start_date, end_date]
+    if branch_id is not None:
+        branch_sql = ' AND (gj.branch_id IS NULL OR gj.branch_id = ?)'
+        period_params.append(branch_id)
+
+    # INNER JOINs throughout, deliberately unlike income_statement's/balance_
+    # sheet's LEFT JOIN over the whole chart: this query starts from "which
+    # journal LINES actually touched the cash account", not "every account,
+    # padded with zeros where nothing happened" -- there is exactly one cash
+    # account, so a row here always means real activity, and an empty result
+    # set (rather than one zero-value row) is the correct "nothing moved"
+    # signal `has_activity` below reads.
+    rows = conn.execute(
+        "SELECT gj.source_type, "
+        "       COALESCE(SUM(gjl.debit), 0) AS total_debit, "
+        "       COALESCE(SUM(gjl.credit), 0) AS total_credit "
+        "FROM gl_journal_lines gjl "
+        "JOIN gl_journals gj ON gj.id = gjl.journal_id "
+        "JOIN gl_accounts a ON a.id = gjl.account_id "
+        "WHERE gj.company_id = ? AND a.code = ? AND a.company_id = ? "
+        "AND gj.business_date >= ? AND gj.business_date <= ?"
+        + branch_sql +
+        " GROUP BY gj.source_type ORDER BY gj.source_type",
+        period_params
+    ).fetchall()
+
+    cash_in_lines = {}   # label -> {'amount': Decimal, 'source_types': [str, ...]}
+    cash_out_lines = {}  # label -> {'amount': Decimal, 'source_types': [str, ...]}
+    total_cash_in = Decimal('0')
+    total_cash_out = Decimal('0')
+
+    for r in rows:
+        source_type = r['source_type'] or 'other'
+        debit = Decimal(str(r['total_debit']))
+        credit = Decimal(str(r['total_credit']))
+        label = _CASH_FLOW_LABELS.get(source_type, source_type.replace('_', ' ').strip().title())
+        if debit > 0:
+            bucket = cash_in_lines.setdefault(label, {'amount': Decimal('0'), 'source_types': []})
+            bucket['amount'] += debit
+            bucket['source_types'].append(source_type)
+            total_cash_in += debit
+        if credit > 0:
+            bucket = cash_out_lines.setdefault(label, {'amount': Decimal('0'), 'source_types': []})
+            bucket['amount'] += credit
+            bucket['source_types'].append(source_type)
+            total_cash_out += credit
+
+    def _lines(bucket_map):
+        return [
+            {'label': label, 'amount': q(b['amount']), 'source_types': sorted(b['source_types'])}
+            for label, b in sorted(bucket_map.items())
+        ]
+
+    net_change_in_cash = total_cash_in - total_cash_out
+
+    # ── Opening/closing cash -- BOTH read via balance_sheet(), never a
+    # second SUM over gl_journal_lines. See this module's own docstring
+    # section on the reconciliation for why.
+    if start <= date.min:
+        # No earlier day exists to ask balance_sheet about -- start_date is
+        # income_statement's own '0001-01-01' all-time sentinel. Nothing
+        # could have happened before the dawn of this ledger's calendar.
+        opening_cash = Decimal('0')
+    else:
+        day_before_start = date.fromordinal(start.toordinal() - 1).isoformat()
+        opening_bs = balance_sheet(conn, cid, day_before_start, branch_id=branch_id)
+        opening_cash = _cash_balance(opening_bs)
+
+    closing_bs = balance_sheet(conn, cid, end_date, branch_id=branch_id)
+    closing_cash = _cash_balance(closing_bs)
+
+    computed_closing_cash = opening_cash + net_change_in_cash
+    difference = computed_closing_cash - closing_cash
+
+    return {
+        'currency': currency,
+        'method': 'direct',
+        'period': {'start_date': start_date, 'end_date': end_date, 'branch_id': branch_id},
+        'opening_cash': q(opening_cash),
+        'closing_cash': q(closing_cash),
+        'total_cash_in': q(total_cash_in),
+        'total_cash_out': q(total_cash_out),
+        'net_change_in_cash': q(net_change_in_cash),
+        'operating_activities': {
+            'cash_in': {'total': q(total_cash_in), 'lines': _lines(cash_in_lines)},
+            'cash_out': {'total': q(total_cash_out), 'lines': _lines(cash_out_lines)},
+            'net': q(net_change_in_cash),
+        },
+        'investing_activities': None,
+        'financing_activities': None,
+        'investing_and_financing_note': (
+            "No investing or financing accounts exist in this company's chart of "
+            "accounts (no fixed-asset, loan, or owner-contribution/draw account -- "
+            "see general_ledger.DEFAULT_CHART), so no journal today can produce an "
+            "investing or a financing cash movement. Every cash movement this "
+            "period is operating. Adding such an account to the chart would make "
+            "this statement report it automatically, with no change to this module."
+        ),
+        'reconciliation': {
+            'opening_cash': q(opening_cash),
+            'net_change_in_cash': q(net_change_in_cash),
+            'computed_closing_cash': q(computed_closing_cash),
+            'closing_cash': q(closing_cash),
+            'is_balanced': abs(difference) <= eps,
+            'difference': q(difference),
+        },
+        'has_activity': bool(rows),
     }

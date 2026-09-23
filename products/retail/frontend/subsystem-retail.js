@@ -455,6 +455,13 @@ const RetailSystem = {
       // no-period-close/retained-earnings reasoning the route was built to
       // carry.
       case 'balance-sheet': return this._renderBalanceSheet(c);
+      // financial_statements.py's THIRD GL-derived statement
+      // (retail-hardware-viewports): the cash flow statement (retail_api.py's
+      // report_cash_flow, core/retail/financial_statements.py::cash_flow).
+      // See app-shell.js's nav entry and _renderCashFlow below for the
+      // capability gate and for the direct-method/reconciliation reasoning
+      // the route was built to carry.
+      case 'cash-flow': return this._renderCashFlow(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -15069,6 +15076,246 @@ const RetailSystem = {
           ${t('Could not load this list. Check the connection and try again.')}</div>`;
       }
       if (warnEl) warnEl.innerHTML = '';
+    }
+  },
+
+  // ── GENERAL LEDGER: CASH FLOW (financial_statements.py's THIRD GL-derived
+  // statement, retail-hardware-viewports) ──────────────────────────────────
+  //
+  // core/retail/financial_statements.py::cash_flow reads the same GL
+  // _renderTrialBalance/_renderProfitAndLoss/_renderBalanceSheet above
+  // already surface, and derives a real cash flow statement from it
+  // (retail_api.py's report_cash_flow, GET /api/sub/retail/reports/
+  // cash-flow) -- shipped complete and gated, this screen as its doorway,
+  // the same "doorway" shape every GL screen in this file has been.
+  //
+  // A PERIOD statement (#cf-from/#cf-to), matching _renderProfitAndLoss
+  // rather than _renderBalanceSheet's single as-of date -- see cash_flow's
+  // own docstring for why a cash flow statement is read over a window, not
+  // as of one moment.
+  //
+  // THE RECONCILIATION IS THE POINT OF THIS SCREEN, the identical "the one
+  // figure this whole screen exists to surface" reasoning
+  // _renderTrialBalance's is_balanced badge and _renderBalanceSheet's
+  // balance_check both carry: opening cash plus this period's net movement
+  // must equal closing cash, and closing cash is read from the SAME
+  // balance_sheet() call cash_flow's own backend reuses rather than
+  // deriving cash a second way -- see that function's own docstring. Shown
+  // PLAINLY, first thing under the controls, never buried.
+  //
+  // has_activity -- false when NOT ONE journal posted a cash movement in the
+  // period. Rendered as "nothing moved", never a row of zeros -- the same
+  // "these are two different claims" reasoning _renderProfitAndLoss's/
+  // _renderBalanceSheet's own section comments give for their own
+  // has_activity flags.
+  async _renderCashFlow(c) {
+    this._injectStyles();
+    // Same defence-in-depth every other retail.reports screen in this file
+    // carries (see _renderBalanceSheet's identical guard immediately above)
+    // -- hiding the nav entry (app-shell.js) is not the enforcement.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: 'banknote',
+        title: t('Cash Flow'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+
+    // Default period: MONTH-TO-DATE, matching _renderProfitAndLoss's own
+    // default and its own reasoning -- a cash flow statement is
+    // conventionally read the same way a P&L is, "this month so far".
+    const today = new Date();
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const toISO = (d) => d.toISOString().slice(0, 10);
+
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title"><span aria-hidden="true">${this._icon('banknote', 18, '💵')}</span> <span>${t('Cash Flow')}</span></h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <select id="cf-branch" class="ret-input" onchange="RetailSystem._loadCashFlow()">
+            <option value="">${this._esc(t('All branches'))}</option>
+          </select>
+          <input type="date" id="cf-from" class="ret-input" value="${toISO(monthStart)}"
+            title="${this._esc(t('From'))}" onchange="RetailSystem._loadCashFlow()" />
+          <input type="date" id="cf-to" class="ret-input" value="${toISO(today)}"
+            title="${this._esc(t('To'))}" onchange="RetailSystem._loadCashFlow()" />
+        </div>
+      </div>
+      <div class="sub-chart-card" id="cf-body" style="margin-bottom:16px">
+        <div style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</div>
+      </div>`;
+    // Belt-and-suspenders alongside the `value="..."` attributes just
+    // written -- see _renderProfitAndLoss's identical comment for why this
+    // matters on the very first synchronous read below.
+    const fromEl = document.getElementById('cf-from');
+    const toEl = document.getElementById('cf-to');
+    if (fromEl) fromEl.value = toISO(monthStart);
+    if (toEl) toEl.value = toISO(today);
+    await this._loadCfBranchFilter();
+    await this._loadCashFlow();
+  },
+
+  // GET /api/sub/retail/branches, populating #cf-branch. Its own small
+  // function rather than generalizing _loadPnlBranchFilter/_loadBsBranchFilter
+  // (hardcoded to their own selects) -- the same "one small query duplicated
+  // rather than a cross-screen coupling" reasoning those functions' own
+  // comments give.
+  async _loadCfBranchFilter() {
+    try {
+      const branches = (await this._get('/api/sub/retail/branches')).data || [];
+      const sel = document.getElementById('cf-branch');
+      if (!sel) return;
+      sel.innerHTML = `<option value="">${this._esc(t('All branches'))}</option>` +
+        branches.map(b => `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
+    } catch (e) { console.error('Failed to load branches for cash flow filter', e); }
+  },
+
+  async _loadCashFlow() {
+    // Per-operation reload guard, same mechanism/reasoning
+    // _loadProfitAndLoss's opToken carries immediately above in this file.
+    const opToken = this._beginOp('cash-flow');
+    const fromEl = document.getElementById('cf-from');
+    const toEl = document.getElementById('cf-to');
+    const branchEl = document.getElementById('cf-branch');
+    const startDate = fromEl ? fromEl.value : '';
+    const endDate = toEl ? toEl.value : '';
+    const branchId = branchEl ? branchEl.value : '';
+    const body = document.getElementById('cf-body');
+
+    // report_cash_flow requires both dates (StatementPeriodError -> a 400
+    // with no default range -- see that route's own docstring) -- refused
+    // client-side for the same reason _loadProfitAndLoss never sends a date
+    // bound it already knows will be refused.
+    if (!startDate || !endDate) {
+      if (body) body.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:30px">${t('Choose a start and end date.')}</div>`;
+      return;
+    }
+
+    try {
+      const branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
+      const resp = await this._get(
+        `/api/sub/retail/reports/cash-flow?start_date=${encodeURIComponent(startDate)}` +
+        `&end_date=${encodeURIComponent(endDate)}${branchQS}`
+      );
+      if (this._isStaleOp('cash-flow', opToken)) return;
+
+      // A validation refusal (StatementPeriodError -> 400) resolves
+      // normally -- it does NOT throw -- and carries no `data` key, only
+      // {status:'error', message}. Reading `resp.data || {}` on that
+      // envelope would silently resolve to {}, and `{}.has_activity` is
+      // undefined -- falsy -- which this screen's OWN empty-period branch
+      // below would then render as "nothing moved". Read and shown BEFORE
+      // anything touches data.has_activity, matching _loadProfitAndLoss's/
+      // _loadBalanceSheet's identical fix for the identical bug class.
+      if (resp && resp.status === 'error') {
+        if (body) body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">${this._esc(resp.message) || t('Could not load this list. Check the connection and try again.')}</div>`;
+        return;
+      }
+
+      const data = resp.data || {};
+
+      if (!body) return;
+
+      // has_activity === false: "nothing moved", never a row of zeros -- see
+      // the section comment above _renderCashFlow for why those are
+      // different claims. Matches _renderProfitAndLoss's/_renderBalanceSheet's
+      // identical empty state, not folded into the statement below with
+      // every figure defaulted to 0.
+      if (!data.has_activity) {
+        body.innerHTML = this._emptyState({
+          icon: 'banknote',
+          title: t('Nothing moved in this period'),
+          hint: t('No sale, return, payment or purchase moved cash in this date range. This is not a zero movement -- there is nothing to measure yet.'),
+        });
+        return;
+      }
+
+      // ── The reconciliation -- shown PLAINLY, first thing under the
+      // controls, matching _renderTrialBalance's/_renderBalanceSheet's own
+      // "the one figure this whole screen exists to surface" reasoning.
+      const rec = data.reconciliation || {};
+      const reconciledBadge = rec.is_balanced
+        ? this._badge(t('Reconciled'), 'green')
+        : this._badge(t('Not Reconciled'), 'red');
+      const differenceLine = rec.is_balanced ? '' :
+        `<div style="color:var(--state-danger-text);font-weight:700">${t('Difference')}: ${this._fmt(rec.difference)}</div>`;
+      const reconciliationBlock = `
+        <div class="sub-chart-card" style="margin-bottom:16px">
+          <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
+            <div>
+              <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Opening Cash')}</span><br/>
+              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.opening_cash)}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Net Change in Cash')}</span><br/>
+              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.net_change_in_cash)}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Closing Cash')}</span><br/>
+              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.closing_cash)}</span>
+            </div>
+            <div>${reconciledBadge}</div>
+            ${differenceLine}
+          </div>
+        </div>`;
+
+      // Every interpolated line label is escaped, the same convention
+      // _loadProfitAndLoss's/_loadBalanceSheet's own account rows use --
+      // a label is server-derived text (a source_type reshaped into a
+      // title, or a future one this screen has never seen) and treated
+      // exactly like shop-editable data. THREE columns, matching the Code/
+      // Account/Amount shape every other GL table in this file uses: the
+      // middle column is the raw `source_type`(s) a label was built from --
+      // real traceability (a shopkeeper or support agent can see exactly
+      // which document types fed one line), not decoration.
+      const lineRows = (lines) => lines.map(l => `<tr>
+        <td style="font-weight:600">${this._esc(l.label)}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi((l.source_types || []).join(', '))}</td>
+        <td style="white-space:nowrap">${this._fmt(l.amount)}</td>
+      </tr>`).join('');
+      const lineTable = (lines, total, emptyLabel) => {
+        const rows = lineRows(lines);
+        return rows
+          ? `<table class="ret-table"><thead><tr><th>${t('Description')}</th><th>${t('Type')}</th><th>${t('Amount')}</th></tr></thead>
+              <tbody>${rows}
+                <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td>${this._fmt(total)}</td></tr>
+              </tbody></table>`
+          : `<div style="color:var(--text-muted);padding:8px 0">${emptyLabel}</div>`;
+      };
+
+      const cashIn = (data.operating_activities && data.operating_activities.cash_in) || { total: 0, lines: [] };
+      const cashOut = (data.operating_activities && data.operating_activities.cash_out) || { total: 0, lines: [] };
+
+      // Statement order, top to bottom: the reconciliation first (the one
+      // question this screen exists to answer, matching _renderBalanceSheet's
+      // own balance-check-first precedent), then money in, money out, the
+      // net figure restated at the bottom the way _renderProfitAndLoss's own
+      // net_profit closes that screen, and a fixed, TRANSLATED sentence
+      // about investing/financing (authored here, not echoed from the
+      // server's own `investing_and_financing_note` -- every other
+      // explanatory sentence in this file is frontend-owned and wrapped in
+      // t(), matching that convention rather than rendering server prose
+      // verbatim on an Arabic page).
+      body.innerHTML = `
+        ${reconciliationBlock}
+        <div style="margin:4px 0 8px;font-weight:600;color:var(--text-primary)">${t('Cash In (Operating)')}</div>
+        ${lineTable(cashIn.lines, cashIn.total, t('No cash came in during this period.'))}
+        <div style="margin:20px 0 8px;font-weight:600;color:var(--text-primary)">${t('Cash Out (Operating)')}</div>
+        ${lineTable(cashOut.lines, cashOut.total, t('No cash went out during this period.'))}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;margin-top:16px;border-top:2px solid var(--border-default);border-radius:8px;background:var(--surface-active);font-size:20px;font-weight:800">
+          <span style="color:var(--text-primary)">${t('Net Change in Cash')}</span>
+          <span>${this._money(data.net_change_in_cash, data.net_change_in_cash > 0 ? 'money--positive' : '')}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:12px;max-width:560px">${t('This chart of accounts has no investing or financing accounts (no loans, no owner draws), so every cash movement shown here is from day-to-day operations.')}</div>`;
+    } catch (e) {
+      // VISIBLE failure, matching _loadBalanceSheet's identical fix
+      // immediately above in this file.
+      console.error(e);
+      if (this._isStaleOp('cash-flow', opToken)) return;
+      if (body) {
+        body.innerHTML = `<div style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
+          ${t('Could not load this list. Check the connection and try again.')}</div>`;
+      }
     }
   },
 };

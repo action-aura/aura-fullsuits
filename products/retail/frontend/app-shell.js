@@ -1099,6 +1099,18 @@ const SubsystemApp = {
         // equity on this screen is Owner's Equity plus a derived, never-
         // closed retained-earnings line rather than one ledger balance.
         { id: 'balance-sheet', label: 'Balance Sheet', icon: '🏦', capability: 'retail.reports' },
+        // financial_statements.py's THIRD GL-derived statement
+        // (retail-hardware-viewports), the cash flow statement -- same wave
+        // as 'profit-and-loss'/'balance-sheet' immediately above, same
+        // reasoning: GET /api/sub/retail/reports/cash-flow (retail_api.py,
+        // report_cash_flow) carries @mt_require_capability(CAP_REPORTS),
+        // matching `capability: 'retail.reports'` here. Like
+        // 'profit-and-loss' (and unlike 'balance-sheet'), this is a PERIOD
+        // statement, not a snapshot -- see financial_statements.cash_flow's
+        // own docstring for why the DIRECT method is the honest choice
+        // against a real ledger, and why opening/closing cash are read by
+        // reusing `balance_sheet` rather than by a second cash derivation.
+        { id: 'cash-flow', label: 'Cash Flow', icon: '💵', capability: 'retail.reports' },
       ],
 
       // Sidebar section grouping (launch-readiness 2026-08-29: "the left
@@ -1136,7 +1148,7 @@ const SubsystemApp = {
       navGroups: [
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss', 'balance-sheet'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow'] },
         { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },

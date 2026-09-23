@@ -561,6 +561,12 @@ EXPECTED_READ_CAPABILITIES = {
     # disclosure tier: the company's full asset/liability/equity position
     # as of a date, not a till operation.
     'report_balance_sheet': CAP_REPORTS,
+    # `report_cash_flow` (GET /reports/cash-flow) -- financial_statements.py's
+    # THIRD GL-derived statement (retail-hardware-viewports), same wave as
+    # report_profit_and_loss/report_balance_sheet immediately above it.
+    # Identical disclosure tier: a full period's cash receipts/payments, not
+    # a till operation.
+    'report_cash_flow': CAP_REPORTS,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

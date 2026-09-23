@@ -1191,6 +1191,73 @@ const BALANCE_SHEET = {
   cost_basis_incomplete_sale_count: 0,
 };
 
+/* GET /api/sub/retail/reports/cash-flow, financial_statements.py's THIRD
+ * GL-derived statement (report_cash_flow in retail_api.py; core/retail/
+ * financial_statements.py::cash_flow does the derivation off the SAME
+ * ledger TRIAL_BALANCE/PROFIT_AND_LOSS/BALANCE_SHEET above already exercise
+ * -- the direct method, reading real cash movements grouped by the document
+ * that caused them, never a second re-derivation of the other statements'
+ * own numbers).
+ *
+ * ONE fixture, matching BALANCE_SHEET's own precedent rather than PROFIT_
+ * AND_LOSS's two: the "healthy, reconciled" state (reconciliation.
+ * is_balanced: true) is what this corpus's contrast/opacity/touch-target
+ * loops need to reach every colour token this screen uses in its ordinary
+ * path -- the LOUD, danger-coloured "Not Reconciled" badge is functionally
+ * proven, both directions, by retail_cash_flow_ui_test.js's own mutation
+ * proofs (a structural test, not a contrast one), the identical division of
+ * labour BALANCE_SHEET's own comment states for `.ret-badge-red`.
+ *
+ * Internally consistent by construction, not coincidence: opening_cash
+ * (2100) + net_change_in_cash (1100 = total_cash_in 4400 - total_cash_out
+ * 3300) = closing_cash (3200) -- and 3200 is deliberately the SAME figure
+ * BALANCE_SHEET's own Cash and Bank line (1000) carries, because both
+ * fixtures describe the SAME company's ledger at the same as_of/end date,
+ * and the whole point of the reconciliation this screen renders is that the
+ * two must agree.
+ */
+const CASH_FLOW = {
+  currency: 'JOD',
+  method: 'direct',
+  period: { start_date: '2026-09-01', end_date: '2026-09-22', branch_id: null },
+  opening_cash: 2100.000,
+  closing_cash: 3200.000,
+  total_cash_in: 4400.000,
+  total_cash_out: 3300.000,
+  net_change_in_cash: 1100.000,
+  operating_activities: {
+    cash_in: {
+      total: 4400.000,
+      lines: [
+        { label: 'Cash Sales Receipts', amount: 3900.000, source_types: ['sale'] },
+        { label: 'Customer Account Payments Received', amount: 500.000, source_types: ['customer_payment'] },
+      ],
+    },
+    cash_out: {
+      total: 3300.000,
+      lines: [
+        { label: 'Cash Paid for Inventory Purchases', amount: 800.000, source_types: ['purchase_order'] },
+        { label: 'Payments to Suppliers', amount: 2200.000, source_types: ['po_payment', 'supplier_payment'] },
+        { label: 'Refunds Paid to Customers', amount: 300.000, source_types: ['return'] },
+      ],
+    },
+    net: 1100.000,
+  },
+  investing_activities: null,
+  financing_activities: null,
+  investing_and_financing_note:
+    "No investing or financing accounts exist in this company's chart of accounts, so every cash movement this period is operating.",
+  reconciliation: {
+    opening_cash: 2100.000,
+    net_change_in_cash: 1100.000,
+    computed_closing_cash: 3200.000,
+    closing_cash: 3200.000,
+    is_balanced: true,
+    difference: 0,
+  },
+  has_activity: true,
+};
+
 /**
  * The response for a URL. Routed, because the screens below fan out across nine
  * endpoints and a single blanket payload would render every table as its EMPTY
@@ -1225,6 +1292,10 @@ function apiResponseFor(url) {
   // BALANCE_SHEET fixture's own comment for why one fixture (not two)
   // matches TRIAL_BALANCE's precedent here.
   if (/\/reports\/balance-sheet/.test(u)) return ok(BALANCE_SHEET);
+  // financial_statements.py's THIRD GL-derived statement. See the
+  // CASH_FLOW fixture's own comment for why one fixture (not two) matches
+  // BALANCE_SHEET's precedent here.
+  if (/\/reports\/cash-flow/.test(u)) return ok(CASH_FLOW);
   // Before the /products rule below for the same reason `top-products` is:
   // this URL contains no "products", but it WOULD fall through to the
   // catch-all, and STATS carries no `rows`/`pairs_examined` — which the Stock
@@ -1720,6 +1791,19 @@ async function buildCorpus() {
     screens.push(screenFrom('balance-sheet', ctx, content.innerHTML));
   }
 
+  // financial_statements.py's THIRD GL-derived statement (app-shell.js nav
+  // entry under Insight, gated 'retail.reports' -- the identical gate
+  // balance-sheet immediately above already carries). ONE render, not two
+  // -- see the CASH_FLOW fixture's own comment for why this follows
+  // trial-balance's/balance-sheet's precedent rather than profit-and-loss's.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderCashFlow(content);
+    await settle();
+    screens.push(screenFrom('cash-flow', ctx, content.innerHTML));
+  }
+
   // ── The three modals. The dark `.ret-modal` island and everything inside it
   //    (its fields, its <option>s, its wide invoice table) is a large family of
   //    colour rules that NO amount of list-screen rendering reaches, and the
@@ -1972,6 +2056,12 @@ const DECLARED_SCREENS = [
   // 'trial-balance' immediately above rather than the profit-and-loss
   // pair -- see the BALANCE_SHEET fixture's own comment.
   'balance-sheet',
+  // financial_statements.py's THIRD GL-derived statement -- same BUILD-
+  // order reasoning, immediately after 'balance-sheet' because that is
+  // where buildCorpus() renders it. ONE screen, not two, matching
+  // 'trial-balance'/'balance-sheet' immediately above rather than the
+  // profit-and-loss pair -- see the CASH_FLOW fixture's own comment.
+  'cash-flow',
   'customer-modal', 'sale-modal', 'held-sales-modal',
   // The pre-login surface. Not a router section -- it renders before any
   // section exists.
@@ -2035,6 +2125,7 @@ const SCREEN_ROUTES = {
   'profit-and-loss': 'profit-and-loss',
   'profit-and-loss-clean': 'profit-and-loss',
   'balance-sheet': 'balance-sheet',
+  'cash-flow': 'cash-flow',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.

@@ -125,7 +125,12 @@ const GROUPS = [
   // immediately before it: a snapshot AS OF a date rather than a period,
   // but the same "reads the identical GL" family as this group's other
   // members.
-  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss', 'balance-sheet'] },
+  // 'cash-flow' appended when financial_statements.py's THIRD GL-derived
+  // statement (retail-hardware-viewports) got its own desktop surface --
+  // same group, same retail.reports gate, as 'balance-sheet' immediately
+  // before it: a period statement (like 'profit-and-loss') built on the
+  // direct method, reading the same GL this group's other members expose.
+  { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow'] },
   { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
@@ -316,15 +321,16 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  // 27 = dashboard + 26 grouped entries. Was 22 before AR/AP (receivables,
+  // 28 = dashboard + 27 grouped entries. Was 22 before AR/AP (receivables,
   // payables) reached the desktop client, 24 before schema v38's general
   // ledger got its 'trial-balance' screen, 25 before schema v39's income
-  // statement got its 'profit-and-loss' screen, and 26 before the balance
-  // sheet ('balance-sheet') got its own desktop surface. The message and
-  // the number are bumped TOGETHER on purpose: this assertion exists to
+  // statement got its 'profit-and-loss' screen, 26 before the balance sheet
+  // ('balance-sheet') got its own desktop surface, and 27 before the cash
+  // flow statement ('cash-flow') got its own desktop surface. The message
+  // and the number are bumped TOGETHER on purpose: this assertion exists to
   // catch GROUPS drifting from the product, so a count that disagrees with
   // its own prose is the exact failure it is supposed to make loud.
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 27, 'sanity: this file\'s own expectation list drifted from 27 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 28, 'sanity: this file\'s own expectation list drifted from 28 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
