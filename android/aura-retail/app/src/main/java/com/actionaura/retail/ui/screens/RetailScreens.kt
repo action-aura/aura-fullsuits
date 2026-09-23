@@ -388,13 +388,37 @@ fun PosScreen(snackbar: SnackbarHostState) {
         ModalBottomSheet(onDismissRequest = { showCart = false }, sheetState = sheet) {
             // imePadding() so the redeem-points and down-payment fields --
             // and the Charge button below them -- stay reachable above the
-            // keyboard instead of being covered by it. This Column has no
-            // verticalScroll, so without this the IME can cover whichever
-            // field is focused and push Charge off-screen entirely.
-            // ModalBottomSheet's default windowInsets covers navigationBars
-            // only, never ime; imePadding() is additive (0dp while the
-            // keyboard is closed) so this does not double-pad that inset.
-            Column(Modifier.padding(20.dp).padding(bottom = 24.dp).imePadding()) {
+            // keyboard instead of being covered by it. ModalBottomSheet's
+            // default windowInsets covers navigationBars only, never ime;
+            // imePadding() is additive (0dp while the keyboard is closed) so
+            // this does not double-pad that inset.
+            //
+            // verticalScroll() added (retail-hardware-viewports): this
+            // Column's content is NOT bounded -- customer picker, the
+            // conditional outstanding-credit line, the whole loyalty-
+            // redemption block, the cart lines, subtotal, the payment-method
+            // chips, the conditional down-payment field, then Hold sale and
+            // Charge -- and ModalBottomSheet does not scroll its content for
+            // you (unlike LoginScreen.kt, which already had this and is
+            // where this exact bug shape was first found and fixed). With
+            // loyaltyEligible true, a credit sale selected (down-payment
+            // field visible) and the keyboard open, the combined height
+            // comfortably exceeds a typical device's post-IME viewport,
+            // which would leave Charge -- the actual money button, on the
+            // app's highest-frequency, queue-under-pressure screen --
+            // unreachable with no way to recover short of dismissing the
+            // keyboard first. The nested cart LazyColumn keeps its own
+            // `heightIn(max = 340.dp)` bound, so nesting it inside a
+            // scrolling Column here is safe (a bounded-height LazyColumn
+            // inside a scrollable Column does not hit Compose's "infinite
+            // height" crash -- only an unbounded one would).
+            Column(
+                Modifier
+                    .padding(20.dp)
+                    .padding(bottom = 24.dp)
+                    .verticalScroll(rememberScrollState())
+                    .imePadding(),
+            ) {
                 Text(tr("Current Sale"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
                 // Customer (required for credit; walk-in otherwise)

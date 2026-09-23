@@ -14,6 +14,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.CreateAdminRequest
+import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.ui.i18n.tr
 import kotlinx.coroutines.launch
 
@@ -37,7 +38,15 @@ fun SetupScreen(onDone: () -> Unit) {
                     CreateAdminRequest(name.trim(), email.trim(), password, company.trim()))
                 if (r.success) onDone() else error = r.error ?: tr("Couldn't create account")
             } catch (e: Exception) {
-                error = tr("Couldn't reach the server. Try again.")
+                // net/ApiErrors.kt's apiErrorMessage, not a blanket
+                // "Couldn't reach the server" -- createAdmin() is the same
+                // bare-body Retrofit suspend-fun shape as login() (see
+                // LoginScreen.kt's identical fix for the on-device proof of
+                // this bug class), so an untyped catch here would collapse
+                // a real validation failure (duplicate email, weak password
+                // -- both 400s carrying the server's own message) into the
+                // same lie about the network being down.
+                error = apiErrorMessage(e)
             } finally { loading = false }
         }
     }

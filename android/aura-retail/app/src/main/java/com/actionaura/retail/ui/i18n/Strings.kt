@@ -303,6 +303,13 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // ── Login / Setup ─────────────────────────────────────────────────────────
     "Enter email and password" to "أدخل البريد الإلكتروني وكلمة المرور",
     "Invalid credentials" to "بيانات الدخول غير صحيحة",
+    // The server's own literal from mt_auth.py's login handler (net/
+    // ApiErrors.kt's loginErrorMessage), shown for a genuine wrong password
+    // -- no equivalent string exists in the desktop catalogue
+    // (products/retail/frontend/locales/ar.json has no login screen at all,
+    // desktop sessions start pre-authenticated) to reuse, so this is a new
+    // translation rather than a borrowed one.
+    "Invalid email or password." to "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
     "Couldn't reach the server. Try again." to "تعذّر الوصول إلى الخادم. حاول مرة أخرى.",
     "Sign in to your workspace" to "سجّل الدخول إلى مساحة عملك",
     "Email" to "البريد الإلكتروني",

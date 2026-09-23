@@ -428,10 +428,24 @@ class BrandMarkWiringContractTest {
 
     @Test
     fun login_screen_placeholders_are_examples_not_the_labels_above_them() {
-        // "EMAIL" / "Email" and "PASSWORD" / "Password" said nothing twice.
+        // "EMAIL" / "Email" said nothing twice -- the email field's example
+        // address placeholder stands as it always did.
         assertThat(loginScreen).contains("tr(\"name@shop.com\")")
-        assertThat(loginScreen).contains("••••••••")
         assertThat(loginScreen).doesNotContain("placeholder = { Text(tr(\"Email\")) }")
+
+        // The password field's OWN "••••••••" placeholder -- this assertion's
+        // previous form, `contains("••••••••")` -- was retired
+        // (retail-hardware-viewports, real-device QA pass): a FIXED bullet
+        // run made an EMPTY field look like it already held a saved
+        // password, and the "show password" eye then toggled its icon over
+        // nothing to reveal. What this can no longer catch: a regression
+        // back to a "PASSWORD"/"Password"-echoing placeholder specifically
+        // (this test's original complaint). That regression is still
+        // covered -- LoginScreenWiringContractTest's
+        // the_password_field_has_no_hardcoded_bullet_placeholder pins "no
+        // placeholder at all" for this exact field and is mutation-proven
+        // against a reintroduced "••••••••" in that test's own history.
+        assertThat(loginScreen).doesNotContain("••••••••")
         assertThat(loginScreen).doesNotContain("placeholder = { Text(tr(\"Password\")) }")
     }
 

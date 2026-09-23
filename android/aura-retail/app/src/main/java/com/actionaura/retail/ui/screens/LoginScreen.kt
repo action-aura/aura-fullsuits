@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.LoginRequest
+import com.actionaura.retail.net.loginErrorMessage
 import com.actionaura.retail.ui.brand.AuraAurora
 import com.actionaura.retail.ui.brand.AuraMark
 import com.actionaura.retail.ui.brand.AuraWordmark
@@ -84,6 +85,23 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+
+    // A failed submit shows ErrorBanner between the password field and the
+    // Sign In button, but Compose's own focus-follow only re-brings the
+    // FOCUSED field into view above the keyboard -- it never re-measures the
+    // button sitting below it. So the banner's extra height, inserted right
+    // where the button used to have clearance, eats directly into it.
+    // Measured across eight keyboard-open screenshots on a real device: the
+    // button stayed technically visible, but margin above the keyboard went
+    // from comfortable (no banner) to essentially 0px the moment the banner
+    // appeared and the field re-focused. Explicitly re-scrolling to the
+    // bottom whenever an error appears keeps the button (and the footer
+    // below it) clear of the keyboard regardless of how tall the banner or
+    // the IME turns out to be, instead of relying on auto-follow to guess it.
+    LaunchedEffect(error) {
+        if (error != null) scrollState.animateScrollTo(scrollState.maxValue)
+    }
 
     fun submit() {
         if (email.isBlank() || password.isBlank()) { error = tr("Enter email and password"); return }
@@ -98,7 +116,19 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                     onLoggedIn()
                 } else error = r.error ?: tr("Invalid credentials")
             } catch (e: Exception) {
-                error = tr("Couldn't reach the server. Try again.")
+                // net/ApiErrors.kt's loginErrorMessage -- NOT a blanket
+                // "Couldn't reach the server": ApiClient.get().login() is a
+                // bare-body Retrofit suspend fun, so it throws HttpException
+                // on any non-2xx, including the 401 mt_auth answers a wrong
+                // password with. A plain `catch (e: Exception)` around it
+                // collapsed THAT into the same string as an actual dropped
+                // connection. PROVEN on a real device: a healthy embedded
+                // backend (`GET /api/health` -> 200) answering
+                // `401 {"error":"Invalid email or password."}` for a
+                // mistyped password was reported here as "Couldn't reach the
+                // server", sending the cashier off to check their wifi
+                // instead of retyping their password.
+                error = loginErrorMessage(e)
             } finally { loading = false }
         }
     }
@@ -112,7 +142,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 // imePadding() so a focused field never leaves the Sign In
                 // button stranded behind the keyboard. This screen is
                 // edge-to-edge (enableEdgeToEdge, MainActivity.kt) with no
@@ -279,10 +309,12 @@ private fun LoginCard(
             OutlinedTextField(
                 value = password,
                 onValueChange = onPasswordChange,
-                // A literal, not tr(): a run of bullets is not natural-
-                // language text, so there is nothing here for Arabic (or
-                // any locale) to translate differently.
-                placeholder = { Text("••••••••") },
+                // No placeholder here, deliberately -- a fixed run of bullet
+                // characters made an EMPTY field look like it already held a
+                // saved password, and the "show password" eye then toggled
+                // its icon over nothing to reveal. Two confusing behaviours
+                // from the one hardcoded literal; the FieldLabel above
+                // ("PASSWORD") is label enough without it.
                 singleLine = true,
                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
