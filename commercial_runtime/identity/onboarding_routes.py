@@ -337,7 +337,64 @@ def create_admin():
                 _accounts._queue_user_permission_sync_event(conn, existing_admin['id'], _sub, 'delete')
             conn.execute("DELETE FROM users WHERE role='admin'")
 
-        company_id = cfg.get('company_id') or hashlib.md5(email.encode()).hexdigest()
+        # THE LANDMINE (found by a live two-device licensing test): a till
+        # can be brought up UI-order (create-admin, then activate) or
+        # reverse-order (activate, then create-admin -- what fleet-
+        # provisioning tooling driving this API directly would naturally
+        # do). In reverse order, activation has ALREADY run
+        # `company_rebind.seed_company_settings_for_joining_device` /
+        # `rebind_company_id_after_activation`, which seed exactly one
+        # `company_settings` row carrying the Owner-issued
+        # `license_public_id` (see company_rebind.py). Deriving company_id
+        # from `cfg.get('company_id')` (config.json -- and note that key
+        # actually holds the display company NAME, not a tenant id) or a
+        # fresh `md5(email)` ignores that row entirely, so the admin this
+        # call creates lands under a SECOND, unrelated tenant key and
+        # identity silently splits: this device's rows and the rest of the
+        # shop's rows never agree on which company they belong to again.
+        #
+        # Fix: identity the identity layer has ALREADY established is
+        # authoritative and must never be silently overridden by a
+        # locally-derived hash. Read `company_settings` from THIS SAME
+        # connection/transaction (registry.db, where activation just wrote
+        # it) rather than re-resolving licensing.db here -- that keeps this
+        # read atomic with the INSERT below and, just as importantly, means
+        # create_admin never has to arbitrate between two candidate ids: if
+        # `company_settings` already has a row, adopt it, full stop. Because
+        # `seed_company_settings_for_joining_device` only ever seeds when NO
+        # `company_settings` row exists yet (see its own docstring), there
+        # can never be more than one candidate sitting here for this query
+        # to choose between -- even a licence that gets swapped after the
+        # first activation does not create a second row, so this SELECT can
+        # never return two different answers. That is also the conflict
+        # answer: if a *fresh* read of licensing.db would now disagree with
+        # the row already sitting here, this function does not notice or
+        # reconcile it -- it just keeps deferring to the already-established
+        # local identity, which is the non-destructive choice. Silently
+        # re-parenting this install's (possibly already-synced) data onto a
+        # newer licence the moment an admin happens to be created would risk
+        # moving a shop's rows under the wrong tenant; that reconciliation,
+        # if it should ever happen at all, belongs to `rebind_company_id`
+        # (which already refuses an unresolvable multi-tenant registry
+        # rather than guess), not to this route.
+        #
+        # The three other cases are unaffected: an admin already exists ->
+        # already rejected with 409 above, before this line ever runs. No
+        # Owner id and no company_settings row (the genuinely-first-device
+        # case) -> the SELECT returns nothing and behaviour falls through to
+        # the unchanged `cfg.get('company_id') or md5(email)` chain below.
+        # An install that activates AFTER create_admin is untouched too --
+        # `seed_company_settings_for_joining_device` finds an admin already
+        # present and does not seed, so this SELECT still returns nothing
+        # and today's `rebind_company_id_after_activation()` convergence
+        # path (unchanged by this fix) is what moves that admin's row.
+        _existing_company_settings = conn.execute(
+            "SELECT company_id FROM company_settings WHERE company_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+        _owner_issued_company_id = (
+            _existing_company_settings['company_id'] if _existing_company_settings else None
+        )
+        company_id = _owner_issued_company_id or cfg.get('company_id') or hashlib.md5(email.encode()).hexdigest()
         user_id    = str(uuid.uuid4())
         pwd_hash   = hash_password(password)
 
