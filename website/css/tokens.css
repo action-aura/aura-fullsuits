@@ -1,0 +1,97 @@
+/*
+  Aura Retail marketing site -- design tokens.
+
+  Palette is the Action Aura master brand (Navy / Ivory) plus Aura Retail's
+  OWN accent trio, per products/retail/frontend/brand/Action-Aura-Brand-Guide.md
+  and DESIGN.md section 3-4. Teal (#2F7B7B / #8FD0D0) is the MASTER brand's
+  accent and is deliberately never used here -- Retail owns exactly two
+  things: the amber trio below, and the square counter glyph (see the
+  ".sq" motif in style.css). Do not add teal to this file.
+
+  Money colours (--money-positive / --money-negative) are lifted verbatim
+  from the product's own Day theme (--text-money-positive / --text-money-negative
+  in products/retail/frontend/css/main.css) rather than invented, so a
+  screenshot of the till and a screenshot of this site read as the same
+  product family.
+*/
+
+:root {
+  /* ---- Brand ---- */
+  --navy: #16233D;
+  --navy-lifted: #22304A;
+  --navy-ink: #0F1830;
+  --ivory: #F6F4EF;
+
+  --retail-dark: #A06030;
+  --retail-mid: #C97B3D;
+  --retail-light: #F0B87A;
+
+  --money-positive: #0A5832;
+  --money-negative: #98170F;
+  --warning: #6E4300;
+  --warning-surface: #FBF1E0;
+  --warning-border: #E8CFA2;
+
+  /* ---- Surfaces (light, the site's home ground) ---- */
+  --surface-app: var(--ivory);
+  --surface-panel: #FCFBFA;
+  --surface-raised: #FFFFFF;
+  --surface-sunken: #EFEAE0;
+  --surface-hover: #F1EADF;
+  --border-hairline: #E3DACA;
+  --border-default: #D8CCB6;
+  --border-strong: #B7AB99;
+
+  /* ---- Text (light) ---- */
+  --text-primary: var(--navy);
+  --text-secondary: #4D4034;
+  --text-tertiary: #6B5E4F;
+  --text-on-navy: var(--ivory);
+  --text-on-accent: #FFFFFF;
+
+  /* ---- Surfaces (dark sections: hero, footer, night panels) ---- */
+  --dark-app: var(--navy);
+  --dark-panel: var(--navy-lifted);
+  --dark-raised: #2A3A58;
+  --dark-text-primary: #F1EEE6;
+  --dark-text-secondary: #C3CDDB;
+  --dark-border: #33456A;
+
+  /* ---- Type ---- */
+  --font-display: 'Outfit', 'Segoe UI', sans-serif;
+  --font-body-en: 'Inter Tight', 'Segoe UI', sans-serif;
+  --font-body-ar: 'IBM Plex Sans Arabic', 'Segoe UI', 'Tahoma', sans-serif;
+
+  /* type scale -- same spirit as the product's 11/12/14/15/17/22/30/40,
+     widened at the top for a marketing hero */
+  --step-xs: 0.8125rem;
+  --step-sm: 0.9375rem;
+  --step-base: 1.0625rem;
+  --step-md: 1.25rem;
+  --step-lg: 1.625rem;
+  --step-xl: clamp(1.9rem, 1.6rem + 1.2vw, 2.5rem);
+  --step-2xl: clamp(2.6rem, 2rem + 2.4vw, 3.75rem);
+  --step-hero: clamp(2.6rem, 1.8rem + 4vw, 4.75rem);
+
+  /* ---- Space ---- */
+  --space-2xs: 0.375rem;
+  --space-xs: 0.625rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2.5rem;
+  --space-xl: 4rem;
+  --space-2xl: clamp(4rem, 3rem + 4vw, 7rem);
+  --space-section: clamp(4.5rem, 3.5rem + 5vw, 9rem);
+
+  /* ---- Shape / elevation / motion ---- */
+  --radius-control: 10px;
+  --radius-card: 16px;
+  --radius-pill: 999px;
+  --elevation-card: 0 1px 2px rgba(22, 35, 61, 0.06), 0 12px 32px rgba(22, 35, 61, 0.09);
+  --elevation-raised: 0 2px 6px rgba(22, 35, 61, 0.08), 0 24px 48px rgba(22, 35, 61, 0.14);
+  --duration-fast: 160ms;
+  --duration-normal: 320ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --content-max: 1180px;
+}

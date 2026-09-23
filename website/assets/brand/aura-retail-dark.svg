@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="t">
+  <title id="t">Aura Retail mark, dark ground</title>
+  <!-- BRAND KIT v2 (2026-09-20), NEW in this kit. The Retail product's own
+       3D mark for DARK grounds: same pierced-A construction and same
+       Retail accent trio (#A06030/#C97B3D/#F0B87A) as aura-retail-light.svg,
+       but the shadow facet (the fr letterform gradient's end stop and the
+       rb ring-back gradient's start stop) uses "Lifted navy" #22304A
+       instead of #16233D, per Action-Aura-Brand-Guide.md's family rule:
+       "the shadow facet always falls to navy (#16233D on light, #22304A on
+       dark) ... so the letter doesn't sink". v1 of this kit did not deliver
+       a dedicated dark-ground Retail trio, only a dark-ground brightening
+       of the MASTER teal mark applied by ratio to Retail's own colours (a
+       derived, not delivered, set of hex values) -- this file replaces that
+       derivation with the owner's actual delivered artwork. This is the
+       canonical source AuraIcons.mark() (../icons.js) reproduces inline for
+       sizes >= 64px on dark/night/dusk surfaces; aura-mark-on-dark.svg
+       mirrors this file's content for older consumers that still reference
+       that name. -->
+  <defs>
+    <linearGradient id="fl" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#F0B87A"/><stop offset="100%" stop-color="#C97B3D"/></linearGradient>
+    <linearGradient id="fr" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#A06030"/><stop offset="100%" stop-color="#22304A"/></linearGradient>
+    <linearGradient id="rb" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#22304A"/><stop offset="100%" stop-color="#C97B3D"/></linearGradient>
+    <linearGradient id="rf" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#C97B3D"/><stop offset="100%" stop-color="#F0B87A"/></linearGradient>
+  </defs>
+  <path d="M 24 69 A 36 8 0 0 1 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#rb)" stroke-width="5" opacity="0.6"/>
+  <path d="M60 12.6 L60 56 L40 104 L22 104 Z" fill="url(#fl)"/>
+  <path d="M60 12.6 L98 104 L80 104 L60 56 Z" fill="url(#fr)"/>
+  <line x1="60" y1="12.6" x2="60" y2="56" stroke="#FBE3C4" stroke-width="1.3" opacity="0.95"/>
+  <rect x="55.5" y="81.5" width="9" height="9" rx="2" fill="#F0B87A"/>
+  <path d="M 24 69 A 36 8 0 0 0 96 69" transform="rotate(-12 60 69)" fill="none" stroke="url(#rf)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="95.2" cy="61.5" r="7.5" fill="#F0B87A" opacity="0.3"/>
+  <circle cx="95.2" cy="61.5" r="4" fill="#FBE3C4"/>
+</svg>

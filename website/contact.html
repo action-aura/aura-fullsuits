@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem("aura_lang");
+      if (saved === "en") { document.documentElement.lang = "en"; document.documentElement.dir = "ltr"; }
+    } catch (e) {}
+  })();
+</script>
+<title data-i18n="meta.contact_title">Aura Retail — Contact</title>
+<meta name="description" content="" data-i18n-attr="content:meta.contact_desc">
+<link rel="icon" type="image/svg+xml" href="assets/brand/aura-mark-1bit.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main" data-i18n="nav.home">Home</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <img src="assets/brand/aura-retail.svg" alt="Aura" width="34" height="34">
+      <span>AURA<span class="line2" data-i18n="brand.line2">RETAIL</span></span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="index.html" data-i18n="nav.home">Home</a>
+      <a href="features.html" data-i18n="nav.features">Features</a>
+      <a href="pricing.html" data-i18n="nav.pricing">Pricing</a>
+      <a href="contact.html" aria-current="page" data-i18n="nav.contact">Contact</a>
+    </nav>
+    <div class="header-actions">
+      <div class="lang-toggle lang-toggle-desktop" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="ar" aria-pressed="true">AR</button>
+        <button type="button" data-lang-btn="en" aria-pressed="false">EN</button>
+      </div>
+      <a class="btn btn-primary" href="#contact-form" data-i18n="nav.cta">Request a demo</a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="mobile-panel" aria-label="Menu">
+        <svg class="icon icon-menu"><use href="assets/icons.svg#icon-menu"></use></svg>
+        <svg class="icon icon-close"><use href="assets/icons.svg#icon-close"></use></svg>
+      </button>
+    </div>
+    <div class="mobile-panel" id="mobile-panel">
+      <a href="index.html" data-i18n="nav.home">Home</a>
+      <a href="features.html" data-i18n="nav.features">Features</a>
+      <a href="pricing.html" data-i18n="nav.pricing">Pricing</a>
+      <a href="contact.html" data-i18n="nav.contact">Contact</a>
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="ar" aria-pressed="true">AR</button>
+        <button type="button" data-lang-btn="en" aria-pressed="false">EN</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="section--tight">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow"><span class="sq"></span><span data-i18n="contact_page.eyebrow">Contact</span></p>
+        <h1 style="font-size:var(--step-2xl);margin-top:.4rem;" data-i18n="contact_page.h1">Tell us about your shop.</h1>
+        <p data-i18n="contact_page.lede">We'll reply with next steps.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="wrap">
+      <div class="contact-grid">
+        <form class="contact-form" id="contact-form">
+          <div class="field">
+            <label for="f-name" data-i18n="contact_page.form_name">Your name</label>
+            <input type="text" id="f-name" name="name" required>
+          </div>
+          <div class="field">
+            <label for="f-shop" data-i18n="contact_page.form_shop">Shop name</label>
+            <input type="text" id="f-shop" name="shop" required>
+          </div>
+          <div class="field">
+            <label for="f-city" data-i18n="contact_page.form_city">City</label>
+            <input type="text" id="f-city" name="city">
+          </div>
+          <div class="field">
+            <label for="f-phone" data-i18n="contact_page.form_phone">Phone or WhatsApp</label>
+            <input type="tel" id="f-phone" name="phone">
+          </div>
+          <div class="field">
+            <label for="f-email" data-i18n="contact_page.form_email">Email</label>
+            <input type="email" id="f-email" name="email" required>
+          </div>
+          <div class="field">
+            <label for="f-message" data-i18n="contact_page.form_message">Anything we should know?</label>
+            <textarea id="f-message" name="message"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg">
+            <svg class="icon"><use href="assets/icons.svg#icon-mail"></use></svg>
+            <span data-i18n="contact_page.form_submit">Send via email</span>
+          </button>
+          <p class="form-note">
+            <svg class="icon"><use href="assets/icons.svg#icon-warn"></use></svg>
+            <span data-i18n="contact_page.form_note">This site has no server behind it.</span>
+          </p>
+        </form>
+
+        <div class="contact-alt">
+          <h3 data-i18n="contact_page.alt_title">Prefer to reach us directly?</h3>
+          <div class="item">
+            <span class="icon-wrap"><svg class="icon"><use href="assets/icons.svg#icon-mail"></use></svg></span>
+            <div>
+              <strong data-i18n="contact_page.alt_email_label">Email</strong><br>
+              <a href="mailto:hello@actionaura.jo">hello@actionaura.jo</a>
+            </div>
+          </div>
+          <div class="item">
+            <span class="icon-wrap"><svg class="icon"><use href="assets/icons.svg#icon-phone"></use></svg></span>
+            <div>
+              <strong data-i18n="contact_page.alt_phone_label">Call or WhatsApp</strong><br>
+              <a href="tel:+962799990000">+962 7 9999 0000</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="index.html">
+          <img src="assets/brand/aura-retail-dark.svg" alt="Aura" width="34" height="34">
+          <span>AURA<span class="line2" data-i18n="brand.line2">RETAIL</span></span>
+        </a>
+        <p data-i18n="footer.desc">Arabic-first point of sale.</p>
+      </div>
+      <div class="footer-col">
+        <h5 data-i18n="footer.product_h">Product</h5>
+        <ul>
+          <li><a href="features.html" data-i18n="nav.features">Features</a></li>
+          <li><a href="pricing.html" data-i18n="nav.pricing">Pricing</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5 data-i18n="footer.company_h">Get in touch</h5>
+        <ul>
+          <li><a href="contact.html" data-i18n="nav.contact">Contact</a></li>
+          <li><a href="mailto:hello@actionaura.jo">hello@actionaura.jo</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5 data-i18n="footer.note_h">Good to know</h5>
+        <ul>
+          <li style="font-size:var(--step-xs);color:#93A2BC;" data-i18n="footer.note1">Prices in JD.</li>
+          <li style="font-size:var(--step-xs);color:#93A2BC;" data-i18n="footer.note2">E-invoicing built, not switched on.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="year">2026</span> <span data-i18n="footer.rights">Action Aura. All rights reserved.</span></span>
+    </div>
+  </div>
+</footer>
+
+<script>document.getElementById("year").textContent = new Date().getFullYear();</script>
+<script src="js/content.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

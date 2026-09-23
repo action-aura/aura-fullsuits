@@ -1,0 +1,440 @@
+/* Aura Retail marketing site -- base styles, layout and components.
+   Plain CSS, no preprocessor, no build step (see website/README.md). */
+
+/* ============================= RESET ============================= */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font-family: var(--font-body-en);
+  font-size: var(--step-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+html[lang="ar"] body { font-family: var(--font-body-ar); }
+img, svg { max-width: 100%; display: block; }
+a { color: inherit; text-decoration: none; }
+ul { margin: 0; padding: 0; list-style: none; }
+h1, h2, h3, h4, p { margin: 0; }
+button { font: inherit; cursor: pointer; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+h1, h2, h3, .display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  /* A single long word ("Straightforward,") at hero/CTA font sizes can be
+     wider than a 320px phone screen even though the block around it is
+     fully fluid -- overflow-wrap lets that one word break instead of
+     forcing the whole page into horizontal scroll. Found on the pricing
+     CTA banner at 320px; see website/README.md's responsive note. */
+  overflow-wrap: break-word;
+}
+html[lang="ar"] h1, html[lang="ar"] h2, html[lang="ar"] h3, html[lang="ar"] .display {
+  font-family: var(--font-body-ar);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.icon { width: 1em; height: 1em; }
+
+:focus-visible {
+  outline: 2.5px solid var(--retail-dark);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ============================= LAYOUT ============================= */
+.wrap {
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding-inline: var(--space-md);
+}
+.section { padding-block: var(--space-section); }
+.section--tight { padding-block: var(--space-xl); }
+.section--dark { background: var(--dark-app); color: var(--dark-text-primary); }
+.section--dark h1, .section--dark h2, .section--dark h3 { color: var(--dark-text-primary); }
+.section--panel { background: var(--surface-panel); }
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: var(--step-xs);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--retail-dark);
+}
+html[lang="ar"] .eyebrow { letter-spacing: 0.02em; text-transform: none; }
+.section--dark .eyebrow { color: var(--retail-light); }
+.eyebrow .sq { width: 8px; height: 8px; background: currentColor; border-radius: 2px; flex: none; }
+
+.section-head { max-width: 46rem; margin-bottom: var(--space-lg); }
+.section-head h2 { font-size: var(--step-2xl); line-height: 1.08; margin-block: var(--space-xs) 0; }
+.section-head p { font-size: var(--step-md); color: var(--text-secondary); margin-top: var(--space-sm); max-width: 40rem; }
+.section--dark .section-head p { color: var(--dark-text-secondary); }
+.section-head.center { margin-inline: auto; text-align: center; }
+
+/* ============================= HEADER ============================= */
+.site-header {
+  position: sticky; top: 0; z-index: 40;
+  background: rgba(246, 244, 239, 0.88);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.site-header .wrap { display: flex; align-items: center; justify-content: space-between; min-height: 76px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 0.65rem; font-family: var(--font-display); font-weight: 700; font-size: 1.15rem; color: var(--navy); }
+html[lang="ar"] .brand { font-family: var(--font-body-ar); }
+.brand img { width: 34px; height: 34px; }
+.brand .line2 { font-size: 0.62em; font-weight: 300; letter-spacing: 0.28em; text-transform: uppercase; color: var(--retail-dark); display: block; }
+html[lang="ar"] .brand .line2 { letter-spacing: 0.05em; }
+
+.nav-links { display: flex; align-items: center; gap: var(--space-lg); }
+.nav-links a {
+  font-size: var(--step-sm); font-weight: 600; color: var(--text-secondary);
+  padding-block: 0.4rem; border-bottom: 2px solid transparent;
+  transition: color var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
+}
+.nav-links a:hover, .nav-links a[aria-current="page"] { color: var(--navy); border-color: var(--retail-mid); }
+
+.header-actions { display: flex; align-items: center; gap: var(--space-sm); }
+.lang-toggle {
+  display: inline-flex; border: 1.5px solid var(--border-default); border-radius: var(--radius-pill);
+  padding: 3px; background: var(--surface-raised);
+}
+.lang-toggle button {
+  border: none; background: transparent; padding: 0.35rem 0.85rem; border-radius: var(--radius-pill);
+  font-size: var(--step-xs); font-weight: 700; color: var(--text-tertiary);
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.lang-toggle button[aria-pressed="true"] { background: var(--navy); color: var(--ivory); }
+
+.nav-toggle {
+  display: none; border: 1.5px solid var(--border-default); background: var(--surface-raised);
+  border-radius: var(--radius-control); width: 42px; height: 42px; align-items: center; justify-content: center;
+}
+.nav-toggle .icon { width: 20px; height: 20px; }
+.nav-toggle .icon-close { display: none; }
+.nav-open .nav-toggle .icon-menu { display: none; }
+.nav-open .nav-toggle .icon-close { display: block; }
+
+/* ============================= BUTTONS ============================= */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5em;
+  padding: 0.85rem 1.6rem; border-radius: var(--radius-control);
+  font-weight: 700; font-size: var(--step-sm); border: 1.5px solid transparent;
+  transition: transform var(--duration-fast) var(--ease-out-expo), background var(--duration-fast), box-shadow var(--duration-fast), border-color var(--duration-fast);
+  white-space: nowrap;
+}
+.btn .icon { width: 18px; height: 18px; }
+html[dir="rtl"] .btn .icon-arrow { transform: scaleX(-1); }
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--retail-dark); color: #fff; box-shadow: 0 10px 24px -8px rgba(160, 96, 48, 0.55); }
+.btn-primary:hover { background: #895328; box-shadow: 0 14px 30px -8px rgba(160, 96, 48, 0.6); }
+.btn-ghost-dark { border-color: rgba(241, 238, 230, 0.35); color: var(--ivory); background: rgba(255,255,255,0.04); }
+.btn-ghost-dark:hover { border-color: rgba(241, 238, 230, 0.7); background: rgba(255,255,255,0.09); }
+.btn-outline { border-color: var(--border-strong); color: var(--navy); background: transparent; }
+.btn-outline:hover { border-color: var(--navy); background: var(--surface-hover); }
+.btn-block { width: 100%; }
+.btn-lg { padding: 1.05rem 2rem; font-size: var(--step-base); }
+
+.hero-actions, .cta-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+
+/* ============================= HERO ============================= */
+.hero {
+  position: relative; overflow: hidden;
+  background: radial-gradient(120% 140% at 82% -10%, #24365a 0%, var(--navy) 55%, #101a30 100%);
+  color: var(--ivory);
+  padding-block: clamp(3rem, 4vw, var(--space-2xl)) var(--space-2xl);
+}
+.hero-ring {
+  position: absolute; inset: auto -18% -32% auto; width: 62vw; max-width: 820px; opacity: 0.5;
+  pointer-events: none;
+}
+html[dir="rtl"] .hero-ring { inset: auto auto -32% -18%; }
+.hero .wrap { position: relative; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: var(--space-xl); align-items: center; }
+/* Grid/flex children default to min-width:auto, which floors their size at
+   their CONTENT's unwrapped width -- on a narrow phone that floor can be
+   wider than the viewport itself, overflowing it even though every rule
+   here uses fr/%, not a fixed px width. min-width:0 on the direct children
+   below is what actually lets long headings and grid tracks shrink and
+   wrap text instead of forcing horizontal scroll (found at 320px width;
+   see website/README.md's RTL/responsive verification note). */
+.hero .wrap > *, .feature-row > *, .contact-grid > *, .footer-grid > * { min-width: 0; }
+.bento-card { min-width: 0; }
+.cta-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); flex-wrap: wrap; }
+.cta-banner > * { min-width: 0; flex: 1 1 18rem; }
+.contact-alt .item > div { min-width: 0; }
+.contact-alt a { overflow-wrap: anywhere; }
+.hero-copy h1 { font-size: var(--step-hero); line-height: 1.04; color: #fff; }
+.hero-copy .lede { font-size: var(--step-md); color: var(--dark-text-secondary); margin-top: var(--space-md); max-width: 34rem; }
+.hero-copy .hero-actions { margin-top: var(--space-lg); }
+.hero-copy .fine-print { margin-top: var(--space-md); font-size: var(--step-xs); color: #9AAABD; }
+
+.hero-proof { display: flex; gap: var(--space-lg); margin-top: var(--space-xl); flex-wrap: wrap; }
+.hero-proof .stat b { display: block; font-family: var(--font-display); font-size: var(--step-lg); color: var(--retail-light); }
+html[lang="ar"] .hero-proof .stat b { font-family: var(--font-body-ar); }
+.hero-proof .stat span { font-size: var(--step-xs); color: #9AAABD; }
+
+/* ---- Till mockup ---- */
+.till-card {
+  background: var(--surface-raised); color: var(--text-primary);
+  border-radius: var(--radius-card); box-shadow: var(--elevation-raised);
+  padding: var(--space-md); position: relative; z-index: 1;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.till-card__head { display: flex; align-items: center; justify-content: space-between; padding-bottom: var(--space-xs); border-bottom: 1px dashed var(--border-default); }
+.till-card__head .dot { width: 9px; height: 9px; border-radius: 2px; background: var(--retail-mid); }
+.till-card__head span { font-size: var(--step-xs); color: var(--text-tertiary); font-weight: 700; letter-spacing: 0.06em; }
+.till-card__badge { display: inline-flex; align-items: center; gap: 0.4em; font-size: var(--step-xs); font-weight: 700; color: var(--money-positive); background: #E7F4ED; padding: 0.2rem 0.6rem; border-radius: var(--radius-pill); }
+.till-card__badge .icon { width: 13px; height: 13px; }
+.till-rows { padding-block: var(--space-sm); display: flex; flex-direction: column; gap: 0.55rem; }
+.till-row { display: flex; justify-content: space-between; font-size: var(--step-sm); color: var(--text-secondary); }
+.till-row b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.till-total { display: flex; justify-content: space-between; align-items: baseline; padding-top: var(--space-sm); border-top: 1px solid var(--border-default); }
+.till-total span { font-size: var(--step-sm); color: var(--text-tertiary); font-weight: 700; }
+.till-total b { font-family: var(--font-display); font-size: clamp(2rem, 1.6rem + 1.5vw, 2.7rem); font-variant-numeric: tabular-nums; color: var(--navy); }
+html[lang="ar"] .till-total b { font-family: var(--font-body-ar); }
+.till-card__foot { margin-top: var(--space-sm); display: flex; align-items: center; gap: 0.5em; font-size: var(--step-xs); color: var(--text-tertiary); }
+.till-card__foot .icon { width: 15px; height: 15px; color: var(--money-positive); }
+
+/* ============================= PROOF BAR ============================= */
+.proof-bar { background: var(--surface-panel); border-block: 1px solid var(--border-hairline); }
+.proof-bar .wrap { display: flex; flex-wrap: wrap; gap: var(--space-lg) var(--space-xl); padding-block: var(--space-md); justify-content: space-between; }
+.proof-item { display: flex; gap: 0.75rem; align-items: flex-start; flex: 1 1 220px; }
+.proof-item .icon-wrap { flex: none; width: 38px; height: 38px; border-radius: 10px; background: var(--surface-sunken); display: flex; align-items: center; justify-content: center; color: var(--retail-dark); }
+.proof-item .icon-wrap .icon { width: 19px; height: 19px; }
+.proof-item strong { display: block; font-size: var(--step-sm); color: var(--navy); }
+.proof-item span { font-size: var(--step-xs); color: var(--text-tertiary); }
+
+/* ============================= BENTO GRID ============================= */
+.bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-md); }
+.bento-card {
+  background: var(--surface-raised); border: 1px solid var(--border-hairline); border-radius: var(--radius-card);
+  padding: var(--space-md); box-shadow: var(--elevation-card);
+  transition: transform var(--duration-normal) var(--ease-out-expo), box-shadow var(--duration-normal) var(--ease-out-expo), border-color var(--duration-normal);
+}
+.bento-card:hover { transform: translateY(-4px); box-shadow: var(--elevation-raised); border-color: var(--retail-light); }
+.bento-card .icon-badge { width: 46px; height: 46px; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-bottom: var(--space-sm); }
+.bento-card .icon-badge .icon { width: 23px; height: 23px; }
+.bento-card h3 { font-size: var(--step-md); margin-bottom: 0.5rem; }
+.bento-card p { color: var(--text-secondary); font-size: var(--step-sm); }
+.bento-card--wide { grid-column: span 3; }
+.bento-card--third { grid-column: span 2; }
+.bento-card--lead { grid-column: span 4; background: linear-gradient(155deg, var(--navy) 0%, #223258 100%); color: var(--ivory); border: none; }
+.bento-card--lead h3, .bento-card--lead p { color: var(--ivory); }
+.bento-card--lead p { color: var(--dark-text-secondary); }
+.bento-card--lead .icon-badge { background: rgba(240,184,122,0.18); color: var(--retail-light); }
+.bento-card--accent { grid-column: span 2; background: var(--retail-dark); color: #fff; border: none; }
+.bento-card--accent h3, .bento-card--accent p { color: #fff; }
+.bento-card--accent p { color: rgba(255,255,255,0.82); }
+.bento-card--accent .icon-badge { background: rgba(255,255,255,0.18); color: #fff; }
+
+.tone-amber .icon-badge { background: #FBF1E0; color: var(--retail-dark); }
+.tone-navy .icon-badge { background: #E8EEF7; color: var(--navy); }
+.tone-money .icon-badge { background: #E7F4ED; color: var(--money-positive); }
+
+/* ============================= FEATURE ROW (image-alternating) ============================= */
+.feature-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xl); align-items: center; }
+.feature-row + .feature-row { margin-top: var(--space-2xl); }
+/* ".reverse" swaps which side the visual lands on via grid `order` only --
+   never via the `direction` property. `direction` is inherited (rtl on
+   Arabic pages, ltr on English ones) and must stay that way all the way
+   down to the paragraph/list text, or Arabic body copy silently renders
+   left-aligned inside a row that was only supposed to mirror its LAYOUT.
+   `order` reorders grid tracks without touching text direction at all,
+   so this produces a real zigzag in both languages with no bidi side
+   effect -- see website/README.md's RTL note for the story here. */
+.feature-row.reverse .feature-visual { order: -1; }
+.feature-row h3 { font-size: var(--step-xl); line-height: 1.12; }
+.feature-row .lede { font-size: var(--step-base); color: var(--text-secondary); margin-top: var(--space-sm); }
+.feature-row ul { margin-top: var(--space-md); display: flex; flex-direction: column; gap: 0.65rem; }
+.feature-row li { display: flex; gap: 0.65rem; align-items: flex-start; font-size: var(--step-sm); color: var(--text-secondary); }
+.feature-row li .icon { flex: none; width: 18px; height: 18px; margin-top: 0.15em; color: var(--money-positive); }
+.feature-visual { position: relative; }
+
+/* ---- ledger mockup ---- */
+.ledger-card { background: var(--surface-raised); border-radius: var(--radius-card); box-shadow: var(--elevation-card); border: 1px solid var(--border-hairline); overflow: hidden; }
+.ledger-card__head { background: var(--navy); color: var(--ivory); padding: var(--space-sm) var(--space-md); display: flex; justify-content: space-between; align-items: center; }
+.ledger-card__head span:first-child { font-weight: 700; font-size: var(--step-sm); }
+.ledger-card__head span:last-child { font-size: var(--step-xs); color: var(--retail-light); font-weight: 700; }
+.ledger-table { width: 100%; border-collapse: collapse; }
+.ledger-table td { padding: 0.6rem var(--space-md); font-size: var(--step-sm); border-bottom: 1px solid var(--border-hairline); }
+.ledger-table tr:last-child td { border-bottom: none; }
+.ledger-table td:first-child { color: var(--text-secondary); }
+.ledger-table td:last-child { text-align: end; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--navy); }
+.ledger-table tr.total td { font-weight: 700; background: var(--surface-panel); }
+.ledger-table tr.total td:last-child { color: var(--money-positive); }
+
+/* ---- sync mockup ---- */
+.sync-visual { background: var(--surface-raised); border-radius: var(--radius-card); box-shadow: var(--elevation-card); border: 1px solid var(--border-hairline); padding: var(--space-lg); display: flex; align-items: center; justify-content: space-around; gap: var(--space-sm); }
+.sync-device { text-align: center; }
+.sync-device .icon-wrap { width: 64px; height: 64px; border-radius: 16px; background: var(--surface-sunken); display: flex; align-items: center; justify-content: center; margin-inline: auto; color: var(--navy); }
+.sync-device .icon-wrap .icon { width: 30px; height: 30px; }
+.sync-device span { display: block; margin-top: 0.5rem; font-size: var(--step-xs); font-weight: 700; color: var(--text-secondary); }
+.sync-link { flex: 1; position: relative; height: 2px; background: repeating-linear-gradient(90deg, var(--retail-mid) 0 6px, transparent 6px 12px); }
+.sync-link .icon { position: absolute; inset-block-start: -9px; inset-inline-start: 50%; transform: translateX(-50%); width: 20px; height: 20px; color: var(--retail-dark); background: var(--surface-raised); border-radius: 999px; }
+html[dir="rtl"] .sync-link .icon-sync { transform: translateX(50%) scaleX(-1); }
+
+/* ============================= E-INVOICING CALLOUT ============================= */
+.callout {
+  display: flex; gap: var(--space-md); align-items: flex-start;
+  background: var(--warning-surface); border: 1px solid var(--warning-border);
+  border-radius: var(--radius-card); padding: var(--space-md) var(--space-lg);
+}
+.callout .icon-wrap { flex: none; width: 40px; height: 40px; border-radius: 10px; background: rgba(110,67,0,0.12); display: flex; align-items: center; justify-content: center; color: var(--warning); }
+.callout .icon-wrap .icon { width: 20px; height: 20px; }
+.callout h4 { font-size: var(--step-md); color: var(--warning); margin-bottom: 0.35rem; }
+.callout p { font-size: var(--step-sm); color: #5A4324; }
+.callout p + p { margin-top: 0.5rem; }
+
+/* ============================= REQUIREMENTS ============================= */
+.req-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); }
+/* Column-count variants for feature-grouped grids (features.html). Kept as
+   real classes, never inline styles -- an inline `style` attribute beats
+   the responsive rules below at every viewport, which is exactly how a
+   4-column grid ended up overflowing a 390px phone screen once already. */
+.req-grid--2 { grid-template-columns: repeat(2, 1fr); max-width: 780px; margin-inline: auto; }
+.req-grid--4 { grid-template-columns: repeat(4, 1fr); }
+.req-card { background: var(--surface-raised); border: 1px solid var(--border-hairline); border-radius: var(--radius-card); padding: var(--space-md); }
+.req-card .icon-wrap { width: 42px; height: 42px; border-radius: 10px; background: var(--surface-sunken); color: var(--navy); display: flex; align-items: center; justify-content: center; margin-bottom: var(--space-sm); }
+.req-card .icon-wrap .icon { width: 21px; height: 21px; }
+.req-card h4 { font-size: var(--step-base); margin-bottom: 0.4rem; }
+.req-card p { font-size: var(--step-sm); color: var(--text-secondary); }
+
+/* ============================= PRICING ============================= */
+.pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); align-items: stretch; }
+.pricing-grid--two { grid-template-columns: repeat(2, 1fr); max-width: 900px; margin-inline: auto; }
+.plan--contact { display: flex; flex-direction: column; justify-content: space-between; background: var(--surface-panel); }
+.plan--contact .plan-price-alt { font-family: var(--font-display); font-size: var(--step-xl); color: var(--navy); margin-block: var(--space-md); }
+html[lang="ar"] .plan--contact .plan-price-alt { font-family: var(--font-body-ar); }
+.plan { background: var(--surface-raised); border: 1.5px solid var(--border-hairline); border-radius: var(--radius-card); padding: var(--space-lg) var(--space-md); display: flex; flex-direction: column; box-shadow: var(--elevation-card); }
+.plan--featured { border-color: var(--retail-dark); box-shadow: var(--elevation-raised); position: relative; background: linear-gradient(180deg, #FFFDFA 0%, var(--surface-raised) 30%); }
+.plan-badge { position: absolute; inset-block-start: -13px; inset-inline-start: var(--space-md); background: var(--retail-dark); color: #fff; font-size: var(--step-xs); font-weight: 700; padding: 0.3rem 0.8rem; border-radius: var(--radius-pill); }
+.plan h3 { font-size: var(--step-md); }
+.plan .plan-desc { font-size: var(--step-xs); color: var(--text-tertiary); margin-top: 0.3rem; min-height: 2.4em; }
+.plan-price { margin-block: var(--space-md); display: flex; align-items: baseline; gap: 0.4rem; font-variant-numeric: tabular-nums; }
+.plan-price .amount { font-family: var(--font-display); font-size: clamp(2.1rem, 1.8rem + 1vw, 2.7rem); color: var(--navy); }
+html[lang="ar"] .plan-price .amount { font-family: var(--font-body-ar); }
+.plan-price .cur { font-size: var(--step-sm); font-weight: 700; color: var(--text-tertiary); }
+.plan-price .per { font-size: var(--step-xs); color: var(--text-tertiary); }
+.plan ul { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: var(--space-lg); flex: 1; }
+.plan li { display: flex; gap: 0.6rem; font-size: var(--step-sm); color: var(--text-secondary); align-items: flex-start; }
+.plan li .icon { flex: none; width: 17px; height: 17px; margin-top: 0.2em; color: var(--money-positive); }
+
+.addon-table { width: 100%; border-collapse: collapse; margin-top: var(--space-lg); background: var(--surface-raised); border-radius: var(--radius-card); overflow: hidden; border: 1px solid var(--border-hairline); }
+.addon-table th, .addon-table td { padding: 0.9rem var(--space-md); text-align: start; font-size: var(--step-sm); border-bottom: 1px solid var(--border-hairline); }
+.addon-table th { background: var(--surface-panel); font-size: var(--step-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); }
+html[lang="ar"] .addon-table th { text-transform: none; letter-spacing: 0; }
+.addon-table td:last-child, .addon-table th:last-child { text-align: end; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy); }
+.addon-table tr:last-child td { border-bottom: none; }
+
+.pricing-note { margin-top: var(--space-md); font-size: var(--step-xs); color: var(--text-tertiary); display: flex; gap: 0.5em; }
+.pricing-note .icon { flex: none; width: 16px; height: 16px; margin-top: 0.1em; }
+
+/* ============================= LOGOS / STEPS ============================= */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); counter-reset: step; }
+.step { position: relative; padding-inline-start: var(--space-lg); }
+html[dir="rtl"] .step { padding-inline-start: 0; padding-inline-end: var(--space-lg); }
+.step::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; inset-inline-start: 0; inset-block-start: 0;
+  width: 34px; height: 34px; border-radius: 9px; background: var(--navy); color: var(--retail-light);
+  display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700;
+}
+.step h4 { font-size: var(--step-base); margin-bottom: 0.35rem; }
+.step p { font-size: var(--step-sm); color: var(--text-secondary); }
+
+/* ============================= CONTACT ============================= */
+.contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2xl); align-items: start; }
+.contact-form { background: var(--surface-raised); border: 1px solid var(--border-hairline); border-radius: var(--radius-card); padding: var(--space-lg); box-shadow: var(--elevation-card); }
+.field { margin-bottom: var(--space-md); }
+.field label { display: block; font-size: var(--step-xs); font-weight: 700; color: var(--text-secondary); margin-bottom: 0.4rem; }
+.field input, .field textarea, .field select {
+  width: 100%; border: 1.5px solid var(--border-default); border-radius: var(--radius-control);
+  padding: 0.75rem 0.9rem; font: inherit; background: var(--surface-panel); color: var(--text-primary);
+  transition: border-color var(--duration-fast);
+}
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--retail-dark); outline: none; }
+.field textarea { resize: vertical; min-height: 110px; }
+.form-note { display: flex; gap: 0.6rem; font-size: var(--step-xs); color: var(--text-tertiary); margin-top: var(--space-sm); }
+.form-note .icon { flex: none; width: 16px; height: 16px; margin-top: 0.1em; }
+.contact-alt { display: flex; flex-direction: column; gap: var(--space-md); }
+.contact-alt .item { display: flex; gap: 0.8rem; align-items: flex-start; }
+.contact-alt .icon-wrap { flex: none; width: 42px; height: 42px; border-radius: 10px; background: var(--surface-sunken); color: var(--navy); display: flex; align-items: center; justify-content: center; }
+.contact-alt .icon-wrap .icon { width: 20px; height: 20px; }
+.contact-alt strong { display: block; font-size: var(--step-base); }
+.contact-alt span, .contact-alt a { font-size: var(--step-sm); color: var(--text-secondary); }
+.contact-alt a:hover { color: var(--retail-dark); }
+
+/* ============================= FOOTER ============================= */
+.site-footer { background: var(--navy); color: var(--dark-text-secondary); padding-block: var(--space-xl) var(--space-lg); }
+.footer-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: var(--space-lg); }
+.footer-brand .brand { color: var(--ivory); }
+.footer-brand p { margin-top: var(--space-sm); font-size: var(--step-sm); max-width: 26rem; color: var(--dark-text-secondary); }
+.footer-col h5 { font-size: var(--step-xs); text-transform: uppercase; letter-spacing: 0.1em; color: #7C8BA6; margin-bottom: var(--space-sm); }
+html[lang="ar"] .footer-col h5 { text-transform: none; letter-spacing: 0; }
+.footer-col ul { display: flex; flex-direction: column; gap: 0.6rem; }
+.footer-col a { font-size: var(--step-sm); color: var(--dark-text-secondary); }
+.footer-col a:hover { color: var(--retail-light); }
+.footer-bottom { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-xl); padding-top: var(--space-md); border-top: 1px solid var(--dark-border); font-size: var(--step-xs); color: #7C8BA6; }
+
+/* ============================= 404 helpers ============================= */
+.skip-link {
+  /* Visually-hidden-until-focused, not an off-canvas -999px push: a large
+     negative inset on an absolutely-positioned element was measured to
+     expand document.documentElement.scrollWidth on some pages (a real
+     phone-width horizontal-scroll bug with no visible cause, since the
+     element itself is invisible) -- clipping to a 1px box keeps it out of
+     layout entirely until :focus restores it. */
+  position: absolute; top: 0; inset-inline-start: 0; z-index: 100;
+  width: 1px; height: 1px; overflow: hidden; white-space: nowrap;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+  background: var(--navy); color: #fff; padding: 0.75rem 1.25rem; border-radius: 0 0 8px 8px;
+}
+.skip-link:focus {
+  width: auto; height: auto; overflow: visible; clip: auto; clip-path: none;
+}
+
+/* ============================= RESPONSIVE ============================= */
+@media (max-width: 980px) {
+  .hero .wrap { grid-template-columns: 1fr; }
+  .hero-ring { display: none; }
+  .bento { grid-template-columns: repeat(2, 1fr); }
+  .bento-card--wide, .bento-card--lead, .bento-card--third, .bento-card--accent { grid-column: span 2; }
+  .feature-row { grid-template-columns: 1fr; }
+  .feature-row .feature-visual { order: -1; }
+  .pricing-grid { grid-template-columns: 1fr; max-width: 420px; margin-inline: auto; }
+  .req-grid, .req-grid--2, .req-grid--4 { grid-template-columns: repeat(2, 1fr); }
+  .footer-grid { grid-template-columns: 1fr 1fr; }
+  .contact-grid { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .nav-links, .header-actions .lang-toggle-desktop { display: none; }
+  .nav-toggle { display: inline-flex; }
+  .site-header .wrap { flex-wrap: wrap; }
+  /* flex-basis:100% forces this onto its own row inside the now-wrapping
+     .site-header .wrap once it becomes visible, so the header's box grows
+     with it (min-height, not a fixed height) instead of the panel painting
+     outside the header and overlapping whatever section comes next --
+     found by screenshotting the open state, not by reading the CSS. */
+  .mobile-panel { display: none; flex-basis: 100%; padding-block: var(--space-sm) var(--space-md); border-top: 1px solid var(--border-hairline); margin-top: var(--space-sm); }
+  .nav-open .mobile-panel { display: flex; flex-direction: column; gap: var(--space-sm); }
+  .mobile-panel a { font-weight: 700; font-size: var(--step-md); padding-block: 0.35rem; }
+  .proof-bar .wrap { flex-direction: column; }
+  .req-grid, .req-grid--2, .req-grid--4 { grid-template-columns: 1fr; }
+  .footer-grid { grid-template-columns: 1fr; gap: var(--space-lg); }
+  .hero-proof { gap: var(--space-md); }
+}
+@media (min-width: 721px) {
+  .mobile-panel { display: none !important; }
+}

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem("aura_lang");
+      if (saved === "en") { document.documentElement.lang = "en"; document.documentElement.dir = "ltr"; }
+    } catch (e) {}
+  })();
+</script>
+<title data-i18n="meta.pricing_title">Aura Retail — Pricing</title>
+<meta name="description" content="" data-i18n-attr="content:meta.pricing_desc">
+<link rel="icon" type="image/svg+xml" href="assets/brand/aura-mark-1bit.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main" data-i18n="nav.home">Home</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <img src="assets/brand/aura-retail.svg" alt="Aura" width="34" height="34">
+      <span>AURA<span class="line2" data-i18n="brand.line2">RETAIL</span></span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="index.html" data-i18n="nav.home">Home</a>
+      <a href="features.html" data-i18n="nav.features">Features</a>
+      <a href="pricing.html" aria-current="page" data-i18n="nav.pricing">Pricing</a>
+      <a href="contact.html" data-i18n="nav.contact">Contact</a>
+    </nav>
+    <div class="header-actions">
+      <div class="lang-toggle lang-toggle-desktop" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="ar" aria-pressed="true">AR</button>
+        <button type="button" data-lang-btn="en" aria-pressed="false">EN</button>
+      </div>
+      <a class="btn btn-primary" href="contact.html" data-i18n="nav.cta">Request a demo</a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="mobile-panel" aria-label="Menu">
+        <svg class="icon icon-menu"><use href="assets/icons.svg#icon-menu"></use></svg>
+        <svg class="icon icon-close"><use href="assets/icons.svg#icon-close"></use></svg>
+      </button>
+    </div>
+    <div class="mobile-panel" id="mobile-panel">
+      <a href="index.html" data-i18n="nav.home">Home</a>
+      <a href="features.html" data-i18n="nav.features">Features</a>
+      <a href="pricing.html" data-i18n="nav.pricing">Pricing</a>
+      <a href="contact.html" data-i18n="nav.contact">Contact</a>
+      <div class="lang-toggle" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="ar" aria-pressed="true">AR</button>
+        <button type="button" data-lang-btn="en" aria-pressed="false">EN</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="section--tight">
+    <div class="wrap">
+      <div class="section-head center">
+        <p class="eyebrow" style="justify-content:center;"><span class="sq"></span><span data-i18n="pricing_page.eyebrow">Pricing</span></p>
+        <h1 style="font-size:var(--step-2xl);margin-top:.4rem;" data-i18n="pricing_page.h1">One licence per shop.</h1>
+        <p data-i18n="pricing_page.lede">Prices are in Jordanian dinar.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="wrap">
+      <div class="pricing-grid pricing-grid--two">
+        <div class="plan plan--featured">
+          <span class="plan-badge" data-i18n="nav.cta">Request a demo</span>
+          <h3 data-i18n="pricing_page.plan_title">Shop licence</h3>
+          <p class="plan-desc" data-i18n="pricing_page.plan_desc">Everything a single shop needs.</p>
+          <div class="plan-price">
+            <span class="amount" data-price="base_price">250</span>
+            <span class="cur" data-price="currency">JD</span>
+            <span class="per">— <span data-i18n="pricing_page.plan_per">one licence</span></span>
+          </div>
+          <ul>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.0">2 devices included</span></li>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.1">Full Arabic and English interface</span></li>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.2">Barcode scanning, receipt printing, cash drawer</span></li>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.3">Real double-entry accounting</span></li>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.4">Customer accounts, supplier payables, loyalty, quotations</span></li>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.5">Offline selling with a 14-day grace period</span></li>
+            <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pricing_page.plan_features.6">Multi-device sync over the shop's own wifi</span></li>
+          </ul>
+          <a class="btn btn-primary btn-block btn-lg" href="contact.html" data-i18n="pricing_page.plan_cta">Request this licence</a>
+        </div>
+
+        <div class="plan plan--contact">
+          <div>
+            <h3 data-i18n="pricing_page.multi_title">Growing to more branches?</h3>
+            <p class="plan-desc" style="min-height:0;margin-top:.6rem;" data-i18n="pricing_page.multi_desc">Add branches and devices as you grow.</p>
+            <p class="plan-price-alt" data-i18n="pricing_page.multi_cta">Talk to us</p>
+            <ul>
+              <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="extras.3.title">Multi-branch</span></li>
+              <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="extras.4.title">Stock transfers</span></li>
+              <li><svg class="icon"><use href="assets/icons.svg#icon-check"></use></svg><span data-i18n="pillars.sync.title">Multi-device sync</span></li>
+            </ul>
+          </div>
+          <a class="btn btn-outline btn-block btn-lg" href="contact.html" data-i18n="pricing_page.multi_cta">Talk to us</a>
+        </div>
+      </div>
+
+      <h2 style="font-size:var(--step-lg);margin-top:var(--space-2xl);" data-i18n="pricing_page.addon_title">Add-ons</h2>
+      <table class="addon-table">
+        <thead>
+          <tr><th data-i18n="pricing_page.addon_col_desc">What it adds</th><th data-i18n="pricing_page.addon_col_price">Price</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-i18n="pricing_page.addon_device_label">Extra device</td>
+            <td><span data-price="extra_device_price">50</span> <span data-price="currency">JD</span> <span style="font-weight:400;color:var(--text-tertiary);" data-i18n="pricing_page.addon_device_unit">/ device</span></td>
+          </tr>
+          <tr>
+            <td data-i18n="pricing_page.addon_branch_label">Extra branch</td>
+            <td><span data-price="extra_branch_price">250</span> <span data-price="currency">JD</span> <span style="font-weight:400;color:var(--text-tertiary);" data-i18n="pricing_page.addon_branch_unit">/ branch</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="pricing-note">
+        <svg class="icon"><use href="assets/icons.svg#icon-warn"></use></svg>
+        <span data-i18n="pricing_page.note">Billing period is being finalised.</span>
+      </p>
+    </div>
+  </section>
+
+  <section class="section--tight section--dark">
+    <div class="wrap cta-banner">
+      <h2 style="font-size:var(--step-2xl);" data-i18n="contact_page.h1">Tell us about your shop.</h2>
+      <a class="btn btn-primary btn-lg" href="contact.html" data-i18n="nav.cta">Request a demo</a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="index.html">
+          <img src="assets/brand/aura-retail-dark.svg" alt="Aura" width="34" height="34">
+          <span>AURA<span class="line2" data-i18n="brand.line2">RETAIL</span></span>
+        </a>
+        <p data-i18n="footer.desc">Arabic-first point of sale.</p>
+      </div>
+      <div class="footer-col">
+        <h5 data-i18n="footer.product_h">Product</h5>
+        <ul>
+          <li><a href="features.html" data-i18n="nav.features">Features</a></li>
+          <li><a href="pricing.html" data-i18n="nav.pricing">Pricing</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5 data-i18n="footer.company_h">Get in touch</h5>
+        <ul>
+          <li><a href="contact.html" data-i18n="nav.contact">Contact</a></li>
+          <li><a href="mailto:hello@actionaura.jo">hello@actionaura.jo</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5 data-i18n="footer.note_h">Good to know</h5>
+        <ul>
+          <li style="font-size:var(--step-xs);color:#93A2BC;" data-i18n="footer.note1">Prices in JD.</li>
+          <li style="font-size:var(--step-xs);color:#93A2BC;" data-i18n="footer.note2">E-invoicing built, not switched on.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© <span id="year">2026</span> <span data-i18n="footer.rights">Action Aura. All rights reserved.</span></span>
+    </div>
+  </div>
+</footer>
+
+<script>document.getElementById("year").textContent = new Date().getFullYear();</script>
+<script src="js/content.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/main.js"></script>
+<script>
+  // Pricing figures come from a single source of truth (js/content.js's
+  // AURA_PRICING) so there is exactly one place to edit a number -- see
+  // website/README.md "Where the pricing numbers live".
+  (function () {
+    function applyPricing() {
+      var lang = document.documentElement.lang === "ar" ? "ar" : "en";
+      var P = window.AURA_PRICING;
+      if (!P) return;
+      document.querySelectorAll("[data-price]").forEach(function (el) {
+        var key = el.getAttribute("data-price");
+        if (key === "currency") { el.textContent = lang === "ar" ? P.currency_ar : P.currency_en; return; }
+        if (P[key] !== undefined) el.textContent = P[key];
+      });
+    }
+    document.addEventListener("DOMContentLoaded", applyPricing);
+    // Re-render off the language actually having changed (dispatched by
+    // js/i18n.js's applyLang), not off the button's own click -- two
+    // independent click listeners on the same button fire in attachment
+    // order, and this one used to sometimes run before i18n.js's, reading
+    // the OLD document.documentElement.lang and leaving the currency
+    // symbol one click behind the rest of the page.
+    document.addEventListener("aura:langchange", applyPricing);
+  })();
+</script>
+</body>
+</html>
