@@ -158,13 +158,19 @@ nothing else needs touching:
 
 ```js
 var CONTACT = {
-  email: "hello@actionaura.jo",   // placeholder -- real project email TBD
+  email: "info@actionaura.me",    // domain owned; MAILBOX NOT SET UP YET
   phone: ""                       // deliberately empty -- no real number yet
 };
 ```
 
-- **`email`** is a placeholder (`hello@actionaura.jo`) — Action Aura does
-  not have an official project email live yet, one is being set up.
+- **`email`** uses the real registered domain (`actionaura.me`, held at
+  Namecheap through Aug 2027), but **the mailbox does not exist yet** — no
+  mail is configured on that domain, so nothing sent there arrives today.
+  Set one up before the site goes public: Zoho Mail's free tier accepts a
+  custom domain, or Google Workspace if you prefer paid. Send yourself a
+  test message and confirm it lands before treating this as live. An
+  address on a sales page that silently swallows enquiries is worse than no
+  address at all, because the visitor believes they reached you.
   Change the string and it updates everywhere automatically: the footer
   on all four pages, the "Prefer to reach us directly?" panel on
   `contact.html`, and the contact form's own `mailto:` target. This works

@@ -51,8 +51,20 @@
   // "+962791234567"), then add a `data-contact-link="phone"` element
   // where it should appear -- js/main.js's `initContactLinks()` already
   // knows how to wire a "phone" link the same way it wires "email".
+  // The domain IS registered: actionaura.me (Namecheap, through Aug 2027).
+  // `info@` rather than `hello@` -- a shopkeeper deciding whether to trust a
+  // till with his money reads `info@` as a business and `hello@` as a
+  // side project.
+  //
+  // STILL A PLACEHOLDER UNTIL THE MAILBOX EXISTS. The domain is owned but no
+  // mail is configured on it yet, so this address does not receive anything
+  // today. Set up a mailbox (Zoho Mail's free tier takes a custom domain, or
+  // Google Workspace if you want it paid and familiar), send yourself a test
+  // message, and only then treat this line as live. An address printed on a
+  // sales page that silently drops enquiries is worse than no address --
+  // the visitor believes they contacted you.
   var CONTACT = {
-    email: "hello@actionaura.jo",
+    email: "info@actionaura.me",
     phone: ""
   };
 
