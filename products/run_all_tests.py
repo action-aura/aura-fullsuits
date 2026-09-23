@@ -256,6 +256,22 @@ MUST_RUN_SERIAL = frozenset({
     # would surface on a different machine or a different -j.
     'retail_site_relay_election_wiring_test.py',
     'retail_site_relay_boots_when_enabled_test.py',
+    # THE RUNNER'S OWN TEST, added 2026-09-23 after it failed in a full
+    # parallel run and then passed 6/6 standalone moments later. Not flaky,
+    # and not a defect in the runner -- a category error in where it ran.
+    #
+    # It MEASURES WALL-CLOCK SPEEDUP: it asserts that N files at -j 4 finish
+    # meaningfully faster than the serial sum. That assertion is only
+    # meaningful on a machine with spare cores. Run it as one of eight
+    # workers while the other seven are saturating the CPU -- and while
+    # other agents are building on the same box -- and its own measurement
+    # is what gets invalidated, not the thing it measures.
+    #
+    # A test whose subject is TIMING cannot be scheduled against arbitrary
+    # concurrent load, for the same reason the beacon tests above cannot be
+    # scheduled against each other: the resource it depends on is not a
+    # port, it is the machine's idle capacity.
+    'retail_test_runner_parallel_test.py',
     'test_site_relay_beacon.py',
     'test_site_relay_election.py',
     'test_site_relay_coordinator.py',
@@ -280,7 +296,25 @@ MUST_RUN_SERIAL = frozenset({
 # retail_test_runner_parallel_test.py, and the ALLOW_MISSING_NODE_ENV
 # escape hatch above for the same "explicit env var, not a CLI flag nobody
 # will remember exists" pattern already used in this file.
-PER_FILE_TIMEOUT_SECONDS = int(os.environ.get('AURA_TEST_RUNNER_TIMEOUT_S', '600'))
+# RAISED 600 -> 1200 on 2026-09-23, by measurement rather than by taste.
+# The 600s figure was justified above on the reasoning that any single file
+# needing close to ten minutes ALONE would already be a major outlier. That
+# reasoning was sound and the premise turned out to be false:
+# `retail_stock_sync_test.py` takes 329s -- five and a half minutes -- on an
+# otherwise idle machine, timed directly. It is a two-device sync test and it
+# earns most of that honestly.
+#
+# Serial, 329s sits comfortably inside 600. Under -j 8 on a 16GB box with
+# other work running, the same file was killed at the timeout mid-run, and
+# then passed standing alone moments later. So the old bound was not catching
+# a hang; it was catching contention.
+#
+# 1200 keeps the property that actually matters -- a genuine hang is
+# unbounded, so it still gets caught, just later -- while giving the one
+# known slow file roughly 3.6x its measured runtime of headroom. If a file
+# ever legitimately approaches THIS bound, that is the outlier worth
+# investigating the original comment had in mind.
+PER_FILE_TIMEOUT_SECONDS = int(os.environ.get('AURA_TEST_RUNNER_TIMEOUT_S', '1200'))
 
 # Default worker count, used only when -j/--jobs is not given. Capped, and
 # never hardcoded to one machine's core count:
