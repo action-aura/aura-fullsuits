@@ -360,12 +360,39 @@ def discover_js(dirs):
     return files
 
 
+def _child_test_env():
+    """Environment for each test subprocess: the runner's own, with LAN hub
+    mode OFF unless the operator of this run set AURA_SITE_RELAY_ENABLED
+    explicitly.
+
+    WHY (measured 2026-09-24 by the adversarial verifier of the sync
+    hot-start fix): `init_app()` -- and now also a successful activation --
+    starts the LAN site-relay election on any Windows test process that has an
+    ACTIVE licence record, and the default for an unset variable is AUTOMATIC.
+    During an ordinary sweep, `retail_branch_scope_enforcement_test.py` was
+    found LISTENING ON 0.0.0.0:5443 and `retail_capability_guard_test.py`
+    holding UDP 45455, broadcasting real signed beacons onto the office
+    wifi. The election does not filter beacons by licence, so a test
+    process's beacon takes part in a REAL shop's hub election on the same
+    network (and makes a real till stand down if its installation id sorts
+    lower). A test run must never become a hub on somebody's LAN.
+
+    Tests that exercise hub mode on purpose set or pop the variable
+    themselves, so this default reaches only the ones that never meant to
+    open a LAN socket in the first place.
+    """
+    env = dict(os.environ)
+    env.setdefault('AURA_SITE_RELAY_ENABLED', '0')
+    return env
+
+
 def run_one(path):
     start = time.time()
     try:
         proc = subprocess.run(
             [sys.executable, '-m', 'pytest', str(path), '-q', '--no-header'],
             cwd=str(ROOT), capture_output=True, text=True,
+            env=_child_test_env(),
             # UTF-8 explicitly, and never raise on a byte we cannot decode.
             # `text=True` alone decodes with the OS default -- cp1252 on
             # Windows -- so the first test to print Arabic killed the reader
