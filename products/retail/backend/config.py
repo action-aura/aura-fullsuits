@@ -361,15 +361,63 @@ def _resolve_effective_sync_relay_base_url(env_value, persisted_value):
 
 
 _PERSISTED_SYNC_RELAY_BASE_URL = _discover_persisted_sync_relay_url()
-# Takes effect on the NEXT LAUNCH, and that is acceptable: config.py is
-# read once at import time and app.py decides at import whether to build
-# the sync service at all -- hot-starting sync mid-session (reacting to an
-# activation that just happened in this same running process) is a larger
-# change and is explicitly out of scope here. An operator who activates
-# while the app is already running must restart it for sync to come on.
+# BOOT-TIME VALUE ONLY. This is computed once, here, at import time, and a
+# long list of existing call sites depend on exactly that -- most notably
+# app.py's own `_SYNC_RELAY_URL_IS_USABLE` gate, which decides at IMPORT
+# whether to build the Windows sync-service pair at all. That used to mean
+# an operator who activated a licence while the app was already running had
+# to restart it before sync (and the LAN hub election, which only starts
+# after sync's own construction block) would ever come on -- a fresh till
+# has neither an env var nor a persisted URL yet, so both stayed frozen at
+# `''`/None for the rest of that process's life.
+#
+# retail-hardware-viewports closed that gap WITHOUT touching this constant:
+# `resolve_sync_relay_base_url_now()` immediately below recomputes the exact
+# same precedence/validation FRESH, at whatever moment it is actually
+# called, and app.py's `_start_sync_after_activation()` calls it right after
+# a successful activation (`_on_licence_activated()`) to build and start
+# sync in-process, then re-runs the site-relay hub decision too -- no
+# restart required any more. This constant is left exactly as it always
+# was for every reader that genuinely wants "the value as of boot".
 SYNC_RELAY_BASE_URL = _resolve_effective_sync_relay_base_url(_AURA_SYNC_RELAY_URL_ENV, _PERSISTED_SYNC_RELAY_BASE_URL)
 
 SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
+
+
+def resolve_sync_relay_base_url_now():
+    """Call-time counterpart to the `SYNC_RELAY_BASE_URL` constant above --
+    same precedence, same validation, computed FRESH every time this is
+    called rather than once at import.
+
+    Returns (url, problems), exactly matching the shape of
+    (SYNC_RELAY_BASE_URL, SYNC_RELAY_URL_PROBLEMS) that a fresh re-import of
+    this module would produce right now. `url` is '' when nothing usable is
+    configured (no operator env var, and either no persisted value or one
+    that already failed validation -- see `_resolve_effective_sync_relay_
+    base_url`'s own docstring for why an invalid persisted value is
+    discarded outright rather than ever reaching `problems` here: it was
+    never something an operator typed, so it is not "a problem" to report,
+    it is simply absent). `problems` is only ever non-empty when the
+    EFFECTIVE url came from an operator-set AURA_SYNC_RELAY_URL that itself
+    fails `validate_sync_relay_url` -- the one case this precedence rule
+    does not pre-filter, by design, because an operator's own explicit
+    setting always wins the precedence check and must be reported rather
+    than silently swapped for something else.
+
+    The ONE caller today is app.py's `_start_sync_after_activation()`,
+    reading this fresh at the moment a licence activation lands mid-session
+    -- see that function's docstring for the full hot-start story. Kept here
+    rather than inlined into app.py because it needs the same three private
+    helpers (`_AURA_SYNC_RELAY_URL_ENV`, `_discover_persisted_sync_relay_
+    url`, `_resolve_effective_sync_relay_base_url`) the module-level
+    constants above already use, and duplicating that precedence logic a
+    second time in app.py is exactly the kind of two-independently-written-
+    predicates drift CLAUDE.md warns against.
+    """
+    persisted = _discover_persisted_sync_relay_url()
+    url = _resolve_effective_sync_relay_base_url(_AURA_SYNC_RELAY_URL_ENV, persisted)
+    problems = validate_sync_relay_url(url)
+    return url, problems
 
 
 # ── LAN site relay / hub mode (R-LAN) ───────────────────────────────────────

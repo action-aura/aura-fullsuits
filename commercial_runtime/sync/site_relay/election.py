@@ -55,11 +55,29 @@ erase or roll back anything. Every event it already accepted while it was
 hub is already committed to its own `site_sync_events` log, and that log is
 independently forwarded upstream to Owner's cloud relay by the forwarder
 regardless of this device's current `Role` (the forwarder reads the site
-log, not the election state). So demotion is purely forward-looking: the
-demoted device just starts pointing its own `SyncService` at the new hub
-like any other client would, and the writes it already took are already
-safe and already in flight to the cloud. Nothing already accepted is lost,
-retried, or duplicated by a stand-down.
+log, not the election state).
+
+UPDATED BY THE HUB-SELF-SYNC WORK (retail-hardware-viewports, decision "S1"
+in that task's own plan) with the ONE thing this paragraph used to get
+wrong, made true here rather than left standing as a stale promise: a
+stand-down does NOT re-point the demoted device's own `SyncService` pair
+back at the cloud. `app.py::_enter_hub_self_sync`'s `RelaySelector` stays
+LOCAL forever once flipped -- see that function's own docstring for why:
+this device's own books may hold LAN rows (accepted from OTHER paired
+devices while it was hub) that its forwarder has not yet pushed upstream,
+and Owner's cloud pull deliberately excludes a device's own events (see
+`forwarder.py`'s "THE ECHO GUARD" and this task's plan item 0.4) -- so those
+rows would never come back down again once forwarded. Switching the
+demoted device's OWN sync back to the cloud would silently strand them.
+Instead, a stood-down device keeps reading and writing its own site log
+exactly as it did while it was hub, and its (never-stopped) forwarder is
+what carries both its own writes and the LAN rows it already collected up
+to Owner -- converging with the new hub through the cloud, not by
+re-pointing at the new hub directly. So demotion is still purely
+forward-looking in the sense that matters -- nothing already accepted is
+lost, retried, or duplicated by a stand-down -- but "just starts pointing
+its own SyncService at the new hub like any other client would" is
+precisely the outcome this update forecloses, on purpose.
 
 WHY THE COMPARISON MUST BE A TOTAL ORDER, NOT A COIN FLIP: both sides of a
 split-brain pair run this exact same function, independently, with no

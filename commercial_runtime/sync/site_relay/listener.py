@@ -299,8 +299,65 @@ def start_site_relay(*, get_conn, host, port, identity_dir,
 HOUSEKEEPING_INTERVAL_SECONDS = 3600.0
 
 
+def run_housekeeping_sweep(*, get_conn, nonce_ttl_seconds, consumer_floor_provider=None):
+    """One housekeeping sweep, extracted out of `start_housekeeping`'s own
+    `_loop` (retail-hardware-viewports, hub-self-sync wave) so a test -- and
+    `start_housekeeping` itself -- share exactly one implementation of "what
+    a sweep actually does" rather than the timer body and a test's own
+    reimplementation drifting apart.
+
+    NEVER RAISES: returns `None` on any failure (a locked database at the
+    moment a sale commits, a `consumer_floor_provider` that itself raises --
+    see below) and logs at WARNING, mirroring this function's own prior
+    inline behaviour inside `_loop`. Returns the `pruning.
+    prune_nonces_and_log` result dict on success.
+
+    `consumer_floor_provider`, when supplied, is called INSIDE the same
+    try/except this function already wraps its own DB work in -- a provider
+    that opens a SECOND connection (e.g. `registry.db`, for the registry
+    sync stream's own cursor -- see `app.py::_hub_own_consumer_floors`) and
+    raises (that database locked, or simply absent on an install that has
+    never built the registry stream) must cost this sweep NOTHING beyond
+    "prune nothing this hour and log once" -- exactly the same fail-safe
+    contract every other failure in this function already has. `None`
+    (the default) reproduces this function's entire pre-existing behaviour
+    byte for byte: no extra floors, exactly like before this parameter
+    existed."""
+    from . import pruning
+
+    conn = None
+    try:
+        conn = get_conn()
+        floors = list(consumer_floor_provider()) if consumer_floor_provider is not None else ()
+        result = pruning.prune_nonces_and_log(
+            conn, nonce_ttl_seconds=nonce_ttl_seconds, extra_floors=floors)
+        conn.commit()
+        _log.info(
+            "Site relay housekeeping: pruned %d nonce(s), %d event(s) (floor minimum %s).",
+            result["nonces_pruned"], result["events_pruned"],
+            min(floors) if floors else "n/a",
+        )
+        return result
+    except Exception:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        _log.warning("Site relay housekeeping sweep failed; will retry "
+                     "at the next interval.", exc_info=True)
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def start_housekeeping(*, get_conn, nonce_ttl_seconds,
-                       interval_seconds=HOUSEKEEPING_INTERVAL_SECONDS):
+                       interval_seconds=HOUSEKEEPING_INTERVAL_SECONDS,
+                       consumer_floor_provider=None):
     """Periodically forget what the hub no longer needs. Returns a stop Event.
 
     WITHOUT THIS, `pruning.py` IS DEAD CODE and both tables grow forever. That
@@ -309,19 +366,10 @@ def start_housekeeping(*, get_conn, nonce_ttl_seconds,
     and the first symptom is a shop wondering why its database file is
     gigabytes.
 
-    Every sweep is wrapped so an exception cannot kill the thread. Housekeeping
-    failing is not a reason to stop trying -- the usual cause is transient
-    (the write lock was held by a sale at that instant), and the correct
-    response is to try again next hour rather than to silently stop pruning
-    for the lifetime of the process. It is logged at WARNING so a sweep that
-    fails EVERY hour is still discoverable, rather than swallowed.
-
-    Counts are logged rather than a bare "housekeeping ran", because the
-    difference between "pruned 4,000 rows" and "pruned 0 rows, every hour,
-    since March" is the whole diagnostic value of the line.
+    `consumer_floor_provider`: see `run_housekeeping_sweep`'s own docstring
+    -- threaded straight through, unchanged, on every tick. `None` (the
+    default) is every existing caller of this function today.
     """
-    from . import pruning
-
     stop = threading.Event()
 
     def _loop():
@@ -330,28 +378,9 @@ def start_housekeeping(*, get_conn, nonce_ttl_seconds,
         # interval: nothing here is urgent, and a hub that has just started
         # has nothing to prune anyway.
         while not stop.wait(interval_seconds):
-            conn = None
-            try:
-                conn = get_conn()
-                result = pruning.prune_nonces_and_log(
-                    conn, nonce_ttl_seconds=nonce_ttl_seconds)
-                conn.commit()
-                _log.info("Site relay housekeeping: pruned %d nonce(s), %d event(s).",
-                          result["nonces_pruned"], result["events_pruned"])
-            except Exception:
-                if conn is not None:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                _log.warning("Site relay housekeeping sweep failed; will retry "
-                             "at the next interval.", exc_info=True)
-            finally:
-                if conn is not None:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+            run_housekeeping_sweep(
+                get_conn=get_conn, nonce_ttl_seconds=nonce_ttl_seconds,
+                consumer_floor_provider=consumer_floor_provider)
 
     threading.Thread(target=_loop, name="aura-site-relay-housekeeping",
                      daemon=True).start()

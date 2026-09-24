@@ -13,9 +13,11 @@ import logging
 import os
 import re
 import sys
+import threading
 from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Optional
 
 # Path resolution must not rely on Path(__file__) alone: in a PyInstaller
 # build this module is compiled into the bundled archive (not collected as a
@@ -44,7 +46,7 @@ from config import (
     OWNER_LICENSING_BASE_URL, OWNER_LICENSING_VERIFY_TLS, OWNER_LICENSING_TIMEOUT_SECONDS,
     LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
     SYNC_RELAY_BASE_URL, SYNC_RELAY_TIMEOUT_SECONDS, SYNC_RELAY_VERIFY_TLS,
-    SYNC_RELAY_URL_PROBLEMS,
+    SYNC_RELAY_URL_PROBLEMS, resolve_sync_relay_base_url_now,
     SITE_RELAY_ENABLE_OVERRIDE, SITE_RELAY_PORT, SITE_RELAY_BIND_HOST,
     site_relay_should_start,
 )
@@ -504,6 +506,22 @@ def _refuse_while_split_state():
     reason = _detect_split_state_reason()
     if reason is None:
         _clear_split_state_refusal()
+        # The deferred THIRD HALF of `_on_licence_activated` (see its
+        # docstring): an activation that landed in split state deliberately
+        # did NOT hot-start sync or the hub election, because the till was
+        # refusing to serve retail data. This is the moment that reason ends,
+        # and the refusal can only ever have been entered BY an activation,
+        # so this is still "right after activation" -- just later. Without
+        # this call (found by the adversarial verifier, 2026-09-24,
+        # retail_sync_hot_start_after_activation_test.py T13) the till went
+        # back to normal service with sync and the LAN hub silently off
+        # until the next restart -- exactly the restart-only gap
+        # `_start_sync_after_activation` exists to close. Safe here: it never
+        # raises, is a no-op once the pair is built (its own lock and
+        # `_sync_service is None` check), and the site relay has its own
+        # double-start guard; and this branch runs once per refusal, since
+        # the next request short-circuits on `reason is None` above.
+        _start_sync_after_activation()
         return None
 
     _split_state_refusal['reason'] = reason
@@ -546,12 +564,26 @@ def _on_licence_activated():
     safety net too, belt and suspenders -- but the split-state check itself
     only ever reads status dicts and a set of strings, so there is nothing
     left here that should raise in the first place.
+
+    THIRD HALF, retail-hardware-viewports: `_start_sync_after_activation()`
+    (defined below, alongside the sync-service construction it hot-starts),
+    called ONLY when the split-state check just above found nothing wrong.
+    A till that is refusing every request because retail.db could not
+    converge onto the Owner-issued company_id must not simultaneously start
+    pushing/pulling that same not-yet-trustworthy database in the
+    background -- the split-state refusal exists precisely so nothing reads
+    or writes retail data until convergence is confirmed, and a sync loop
+    is exactly such a reader/writer. DEFERRED, NOT DROPPED: the request that
+    later finds convergence and clears the refusal (`_refuse_while_split_
+    state`) makes this same call, so a split-state activation still ends with
+    sync and the hub election running -- without a restart.
     """
     reason = _detect_split_state_reason()
     if reason is not None:
         _enter_split_state_refusal(reason)
     else:
         _clear_split_state_refusal()
+        _start_sync_after_activation()
 
 
 app.register_blueprint(make_licensing_blueprint(
@@ -587,20 +619,102 @@ app.register_blueprint(make_licensing_blueprint(
 # knows from activation/check-in.
 _sync_service = None
 _registry_sync_service = None
-if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
+
+# Hub-self-sync wave (retail-hardware-viewports, 2026-09-24): the seam that
+# routes a hub's OWN two SyncService instances through its OWN site log
+# instead of Owner's cloud relay -- see `_enter_hub_self_sync`'s own
+# docstring for the full defect this closes and the measurement that found
+# it (hub site_sync_events=17, forwarded=0, cloud seq=0, a real phone's
+# sales never reaching `/sales/recent`).
+#
+#   * `_sync_relay_selector` -- the `commercial_runtime.sync.site_relay.
+#     local_client.RelaySelector` BOTH `_sync_service`/`_registry_sync_
+#     service` share as their `client_factory`, built once by `_build_
+#     windows_sync_services` alongside the pair itself. `None` on every
+#     till that has never had a cloud-or-local sync pair built at all (the
+#     pre-activation window) -- see `_enter_hub_self_sync`'s own "sync pair
+#     exists but was not built by this function" guard for the one case
+#     that would otherwise be a silent no-op.
+#   * `_site_forwarder_loop` -- the single `commercial_runtime.sync.
+#     site_relay.forwarder_loop.ForwarderLoop` this process ever
+#     constructs. Started once, by `_enter_hub_self_sync`, and NEVER
+#     stopped again for the lifetime of the process -- see that function's
+#     own docstring and `election.py`'s "WHY STANDING DOWN LOSES NOTHING"
+#     for why a stand-down must not stop it.
+#   * `_site_housekeeping_stop` -- the stop `threading.Event` `listener.
+#     start_housekeeping` returns, recorded here (rather than left to
+#     `start_site_relay`'s own internal, unreturned timer -- see
+#     `_bind_relay_now`'s own updated docstring) so re-election never starts
+#     a second housekeeping loop: `_enter_hub_self_sync` is the ONE place
+#     housekeeping is ever started now, with the hub's own consumer floors
+#     wired in from the very first sweep.
+_sync_relay_selector = None
+_site_forwarder_loop = None
+_site_housekeeping_stop = None
+
+# Matches SyncService's own default tick and `forwarder_loop.
+# FORWARD_INTERVAL_SECONDS` -- passed explicitly (never left to the
+# module-level default) so a test can shrink it via
+# `monkeypatch.setattr(_app_module, 'SITE_FORWARDER_INTERVAL_SECONDS', ...)`
+# the same way `retail_sync_hot_start_after_activation_test.py` already
+# does for other timers in this file, without reaching into forwarder_
+# loop.py's own module constant.
+SITE_FORWARDER_INTERVAL_SECONDS = 10.0
+
+
+def _build_windows_sync_services(relay_base_url):
+    """Constructs the Windows sync-service pair -- everything the `if
+    _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':` block
+    below used to build inline, before retail-hardware-viewports extracted
+    it into its own function.
+
+    WHY A FUNCTION, TAKING THE URL AS A PARAMETER (not reading the module-
+    level `SYNC_RELAY_BASE_URL` constant the way this code used to): so the
+    exact same construction logic can run a SECOND time, later in the same
+    process, with a FRESH url a just-completed activation just produced --
+    see `_start_sync_after_activation()` further below, which is the only
+    other caller. `SYNC_RELAY_BASE_URL` itself is frozen at import (config.py
+    reads it once); a fresh till has no value there yet no matter how many
+    times it is re-read, which is precisely the bug this parameter exists to
+    avoid reintroducing.
+
+    Returns (sync_service, registry_sync_service). The caller -- either the
+    import-time call just below, or `_start_sync_after_activation()` -- is
+    responsible for assigning them to the `_sync_service`/
+    `_registry_sync_service` module globals and calling
+    `register_active_service()`, exactly as the inline block this replaces
+    used to do directly, so BOTH call sites do that step identically rather
+    than this function guessing at it for either one.
+
+    `_build_sync_client` is deliberately kept reachable as a genuine module
+    attribute via `global` below (not merely a name closed over inside this
+    function): retail_sync_starts_when_configured_test.py reads
+    `_app_module._build_sync_client()` directly, and that must keep
+    resolving at module level after this extraction exactly as it did when
+    this code lived inline at import time. No other name this function
+    defines (`_sync_licensing_dir`, `_sync_state_repository`, `_sync_signer`,
+    `_sync_get_conn`, `_retail_sync_freshness_store`,
+    `_registry_sync_get_conn`) was found referenced as an `app.<name>`
+    attribute anywhere in products/, commercial_runtime/, scripts/ or any
+    test file (grepped before this extraction), so those stay purely local
+    to this function -- behaviourally identical, just no longer visible on
+    the module for anything to reach in.
+    """
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
     from commercial_runtime.sync.relay_client import SyncRelayClient
+    from commercial_runtime.sync.site_relay.local_client import LocalSiteRelayClient, RelaySelector
     from commercial_runtime.sync.sync_service import (
         REGISTRY_SYNC_ENTITY_TYPES,
         SyncFreshnessStore,
         SyncService,
         local_company_id_from_registry,
-        register_active_service,
     )
 
     _sync_licensing_dir = Path(DATABASE_DIR).parent / 'licensing'
     _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
     _sync_signer = _licensing_device_identity_factory(_sync_licensing_dir)
+
+    global _build_sync_client, _sync_relay_selector
 
     def _build_sync_client():
         # Rebuilt on every call (not cached at startup) for the same reason
@@ -611,7 +725,7 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
         record = _sync_state_repository.load()
         installation_id = record.owner_installation_id if record else None
         return SyncRelayClient(
-            SYNC_RELAY_BASE_URL,
+            relay_base_url,
             _sync_signer,
             installation_id,
             timeout_seconds=SYNC_RELAY_TIMEOUT_SECONDS,
@@ -621,6 +735,35 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     def _sync_get_conn():
         from database.schema import get_retail_conn
         return get_retail_conn()
+
+    def _build_local_site_client():
+        # Hub-self-sync (retail-hardware-viewports): the LOCAL half of
+        # `_sync_relay_selector` below, called fresh on every attempt
+        # exactly like `_build_sync_client` above -- this hub's own
+        # `owner_installation_id` can change across a licence re-issue
+        # (`rehearsal_reissue.py --keep-device`; see MEMORY.md), and a
+        # cached value here would keep stamping site-log rows under a
+        # stale origin id forever.
+        record = _sync_state_repository.load()
+        installation_id = record.owner_installation_id if record else None
+        return LocalSiteRelayClient(get_conn=_sync_get_conn, origin_device_id=installation_id)
+
+    # `RelaySelector` is the client_factory BOTH SyncService instances
+    # below share -- see local_client.py's own docstring for why this is
+    # the seam that flips a hub's own sync from Owner's cloud to its own
+    # site log. `cloud_factory=_build_sync_client if relay_base_url else
+    # None`: a LAN-only shop (this till's own DECISION D2/A5 path --
+    # `_enter_hub_self_sync` builds this pair with `relay_base_url=''`)
+    # must never try to build a `SyncRelayClient` against an empty base
+    # URL; the selector's own `NO_RELAY_CONFIGURED` error is what a caller
+    # sees instead if CLOUD mode is ever reached before `use_local()` has
+    # run, which `_enter_hub_self_sync` guarantees never happens (it flips
+    # the selector to LOCAL before registering/starting either service --
+    # see that function's own docstring).
+    _sync_relay_selector = RelaySelector(
+        cloud_factory=_build_sync_client if relay_base_url else None,
+        local_factory=_build_local_site_client,
+    )
 
     # local_company_id_from_registry (commercial_runtime/sync/sync_service.py)
     # reads THIS device's own company_id from the registry DB on every pull
@@ -681,12 +824,11 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # OWN schema version on its own release cadence, and stamping retail's
     # integer onto it would quarantine perfectly good user rows every time
     # retail alone bumped.
-    _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
+    _sync_service = SyncService(_sync_relay_selector, _sync_get_conn, local_company_id_from_registry,
                                 local_ensure_schema=_ensure_credit_schema,
                                 local_freshness_store=_retail_sync_freshness_store,
                                 local_schema_version_provider=lambda: RETAIL_SCHEMA_VERSION,
                                 stock_exception_recorder=record_or_refresh_stock_exception)
-    register_active_service(_sync_service)
 
     # Phase 5 wave B2, Decision 6 (docs/launch-readiness/
     # phase5-waveb2-user-sync.md): a SECOND SyncService instance, pulling
@@ -731,8 +873,23 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
         return _registry_get_conn()
 
     _registry_sync_service = SyncService(
-        _build_sync_client, _registry_sync_get_conn, local_company_id_from_registry,
+        _sync_relay_selector, _registry_sync_get_conn, local_company_id_from_registry,
         handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+
+    return _sync_service, _registry_sync_service
+
+
+if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
+    # register_active_service imported here, on its own, rather than inside
+    # _build_windows_sync_services above: that function's own imports cover
+    # only what ITS body needs, and register_active_service is called here,
+    # at the call site, not inside it -- see that function's docstring for
+    # why the two calls to it (this one, and _start_sync_after_activation's)
+    # both do this step themselves instead of it guessing at it for either.
+    from commercial_runtime.sync.sync_service import register_active_service
+
+    _sync_service, _registry_sync_service = _build_windows_sync_services(SYNC_RELAY_BASE_URL)
+    register_active_service(_sync_service)
 elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # Android's own wiring (multi-device-sync-foundation, Task 9): this
     # process never holds the Android device's private key
@@ -860,6 +1017,466 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         blueprint_name="registry_sync_internal",
         url_prefix="/api/registry-sync",
     ))
+
+
+# A GENUINE lock, not merely a defensive comment: `_start_sync_after_
+# activation` below is reachable from a real HTTP request thread
+# (`/api/licensing/activate`) and could in principle be re-entered by a
+# near-simultaneous second activation attempt (a retried request, a second
+# browser tab) racing the "if _sync_service is None" check against its own
+# assignment. Cheap insurance -- activation is not a hot path -- against
+# building two independent SyncService pairs on the same till, which would
+# double every push/pull tick and, worse, leave only the LAST one registered
+# via register_active_service() while the first kept ticking unseen.
+#
+# RLock, not Lock (hub-self-sync wave, retail-hardware-viewports): `_start_
+# sync_after_activation` holds this lock for its ENTIRE body (see step 10 in
+# its own docstring below), which now calls `_start_site_relay_if_enabled()`
+# -> (on the explicit-pin or LAN-only path) `_bind_relay_now()` ->
+# `_enter_hub_self_sync()`, which takes THIS SAME LOCK ITSELF (see that
+# function's own docstring for why: it must never race a second `_start_
+# sync_after_activation` call into building two selectors). A plain `Lock`
+# would deadlock the very thread that already holds it the instant that
+# call chain runs -- an `RLock` lets the same thread re-enter. Nothing here
+# ever waits on a DIFFERENT thread while holding this lock (no I/O that
+# blocks on another thread's own progress), so there is no cross-thread
+# deadlock hazard from widening it to reentrant -- only the same-thread
+# re-entry this call chain now requires.
+_start_sync_after_activation_lock = threading.RLock()
+
+
+def _hub_own_consumer_floors() -> list:
+    """This hub's OWN two sync streams' consumption positions into its own
+    site log (`local_client.consumer_floor`, retail.db AND registry.db),
+    for `listener.run_housekeeping_sweep`'s `consumer_floor_provider` --
+    see `pruning.py`'s module docstring, reader #3, for why housekeeping
+    must never prune a row this hub's own SyncService pair has not applied
+    yet.
+
+    May raise (a locked database, a missing table on a till that has never
+    built the registry stream) -- the housekeeping sweep's own contract
+    (`run_housekeeping_sweep`'s docstring) is to treat a raising provider as
+    "prune nothing this hour, log once", so this function is deliberately
+    NOT wrapped in its own try/except: doing so here would silently turn a
+    real failure into an empty list (floor 0 everywhere, i.e. "nothing
+    consumed yet"), which is the WRONG direction for a function whose
+    caller already has the correct fail-safe behaviour for an exception."""
+    from commercial_runtime.identity import registry_db
+    from commercial_runtime.sync.site_relay.local_client import consumer_floor
+    from database.schema import get_retail_conn
+
+    retail_conn = get_retail_conn()
+    try:
+        retail_floor = consumer_floor(retail_conn)
+    finally:
+        retail_conn.close()
+
+    registry_conn = registry_db.get_conn()
+    try:
+        registry_floor = consumer_floor(registry_conn)
+    finally:
+        registry_conn.close()
+
+    return [retail_floor, registry_floor]
+
+
+def _current_owner_installation_id() -> Optional[str]:
+    """A fresh read of this till's own `owner_installation_id`, or `None` on
+    any failure (unactivated, a locked/missing licensing.db, a corrupt
+    row) -- never raises. Mirrors `_start_site_relay_if_enabled`'s own
+    "reading the licence must never be able to stop this till from booting"
+    contract, applied to the one seam that decides whether hub-self-sync
+    can identify itself as this site log's origin at all."""
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+
+    try:
+        record = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db').load()
+    except Exception:
+        return None
+    return record.owner_installation_id if record else None
+
+
+_hub_self_sync_deferred_logged = False
+
+# Once-per-process latch for `_attempt_join_now`'s hub-self-sync refusal
+# line (see that closure, inside `_start_site_relay_if_enabled`). The
+# election coordinator calls `attempt_join` on EVERY CLIENT tick
+# (coordinator.py `tick()`, TICK_INTERVAL_SECONDS == the 5s beacon
+# interval), and a till that has ever been hub stays LOCAL for the rest of
+# its life (decision S1, plus the `init_app` boot resume) -- so without this
+# latch every stood-down till wrote the same INFO line every 5 seconds,
+# forever: ~17,000 lines a day into backend.log, and from there into the
+# diagnostics export's log tail, burying everything else. Found by the
+# adversarial verifier, 2026-09-24 (retail_site_relay_hub_self_sync_
+# election_test.py test (e): 3 CLIENT ticks wrote the line 3 times). The
+# decision itself never changes for this process, so saying it once is the
+# whole diagnostic value; repeating it adds none.
+_hub_join_refusal_logged = False
+
+
+def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
+    """THE FIX for the LAN hub island (this task's own plan, section 0 and
+    decision A): routes THIS hub's own two SyncService instances (retail +
+    registry) through its OWN site log instead of Owner's cloud relay, and
+    starts the forwarder bridge and the (now floor-aware) housekeeping
+    sweep -- all three exactly once per process.
+
+    THE MEASUREMENT THIS CLOSES, 2026-09-24, real hardware: a Windows till
+    that had auto-elected hub bound the LAN listener and a real Android
+    phone auto-joined it over wifi (`site_paired_devices=1`) and synced
+    WITH THE HUB (`site_sync_events=17`, `site_sync_nonces=37`) -- but
+    nothing crossed between the phone and the DESKTOP TILL'S OWN BOOKS in
+    either direction: the phone's 3 sales never reached the desktop's own
+    `/sales/recent` (empty), and a product created on the desktop never
+    reached the phone. `site_forward_cursor` stayed at (forwarded=0,
+    cloud_seq=0) throughout. Root cause: the hub's own `_sync_service`/
+    `_registry_sync_service` kept talking to Owner's cloud relay directly
+    (`_build_sync_client`), a completely separate sequence space from the
+    site log its paired devices actually write into and read from.
+
+    Called from THREE places, all of them idempotent no-ops after the
+    first genuine entry:
+      (a) `_bind_relay_now`, both the explicit-pin (`AURA_SITE_RELAY_
+          ENABLED=1`) and automatic-election `start_relay` paths -- the
+          moment this till actually becomes the hub.
+      (b) `init_app()`, for a till that has HOSTED a site log before (see
+          `_hub_self_sync_was_active_before`) -- so a restart resumes LOCAL
+          mode immediately, before the first tick, rather than reverting to
+          the cloud and stranding unforwarded LAN rows (decision A4(b)/A7:
+          this runs even under `AURA_SITE_RELAY_ENABLED=0`, because going
+          back to the cloud on a kill-switched restart would be the exact
+          loss decision S1 exists to prevent).
+      (c) `_start_sync_after_activation`, right after its own call to
+          `_start_site_relay_if_enabled()` -- covers the EXPLICIT-PIN case
+          where this till was already bound as hub BEFORE it activated
+          (`_bind_relay_now` ran with no installation id yet, so this
+          function's own guard below deferred), and activation is what
+          finally gives it one.
+
+    NEVER RAISES -- same contract as every neighbouring activation-adjacent
+    seam in this module (`_start_sync_after_activation`, `_start_site_relay_
+    if_enabled`): this must never be able to stop a till from booting or
+    from finishing an activation that genuinely succeeded at Owner.
+
+    `start_timers=False` (used by `init_app()`'s boot-resume call, item (b)
+    above): builds the pair and flips the selector but does not call
+    `.start()` on either SyncService -- `init_app()`'s own existing `if
+    _sync_service is not None: _sync_service.start()` lines (already
+    present, unconditional on how the pair was built) do that immediately
+    afterward, exactly once, whether the pair was built at import time, by
+    this function, or LAN-only just now."""
+    if LICENSING_PLATFORM == 'ANDROID':
+        return
+    try:
+        with _start_sync_after_activation_lock:
+            global _sync_service, _registry_sync_service, _sync_relay_selector
+            global _site_forwarder_loop, _site_housekeeping_stop
+            global _hub_self_sync_deferred_logged
+
+            installation_id = _current_owner_installation_id()
+            if not installation_id:
+                if not _hub_self_sync_deferred_logged:
+                    logging.getLogger(__name__).info(
+                        'Hub self-sync deferred: this till has no Owner installation id yet '
+                        '(not activated). It will switch on at activation.')
+                    _hub_self_sync_deferred_logged = True
+                return
+
+            if _sync_service is None:
+                relay_base_url, problems = resolve_sync_relay_base_url_now()
+                cloud = relay_base_url if (relay_base_url and not problems) else ''
+                _sync_service, _registry_sync_service = _build_windows_sync_services(cloud)
+                # BEFORE register/start: the very first push/pull attempt
+                # (a timer tick, or a route's own nudge()) must already see
+                # LOCAL mode -- flipping the selector after starting the
+                # timers would leave a narrow window where a tick could
+                # still reach the cloud with a fresh pair that was built
+                # specifically because this till is a hub.
+                _sync_relay_selector.use_local()
+                from commercial_runtime.sync.sync_service import register_active_service
+                register_active_service(_sync_service)
+                if start_timers:
+                    _sync_service.start()
+                    _registry_sync_service.start()
+            elif _sync_relay_selector is None:
+                # Should be unreachable in production: every path that
+                # builds `_sync_service` also builds `_sync_relay_selector`
+                # in the same call to `_build_windows_sync_services` (see
+                # that function's own `global _sync_relay_selector`). Loud
+                # rather than silent if it ever IS reached -- routing a sync
+                # pair through the site log requires the selector that pair
+                # was built with; there is no safe way to attach one after
+                # the fact.
+                logging.getLogger(__name__).error(
+                    'Hub self-sync: a sync pair exists but was not built by '
+                    '_build_windows_sync_services, so it has no RelaySelector '
+                    'to route through the site log. This till stays on whatever '
+                    'relay that pair was already using.')
+                return
+            else:
+                _sync_relay_selector.use_local()
+
+            if _site_forwarder_loop is None:
+                from commercial_runtime.sync.site_relay.forwarder_loop import ForwarderLoop
+
+                _site_forwarder_loop = ForwarderLoop(
+                    get_conn=get_retail_conn,
+                    cloud_client_factory=_forwarder_cloud_client,
+                    interval_seconds=SITE_FORWARDER_INTERVAL_SECONDS,
+                )
+                _site_forwarder_loop.start()
+
+            if _site_housekeeping_stop is None:
+                from commercial_runtime.sync.site_relay import listener as _site_relay_listener
+                from commercial_runtime.sync.site_relay import replay as _site_relay_replay
+
+                _site_housekeeping_stop = _site_relay_listener.start_housekeeping(
+                    get_conn=get_retail_conn,
+                    nonce_ttl_seconds=_site_relay_replay.DEFAULT_NONCE_TTL_SECONDS,
+                    consumer_floor_provider=_hub_own_consumer_floors,
+                )
+                logging.getLogger(__name__).info(
+                    'Hub self-sync ON: this till\'s own books now read and write its own '
+                    'site log; the forwarder bridges that log to Owner\'s cloud relay (or '
+                    'idles with no cloud). Measured 2026-09-24 before this fix: hub '
+                    'site_sync_events=17, forwarded=0, cloud seq=0, a real phone\'s sales '
+                    'never reaching this till\'s own /sales/recent.')
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Hub self-sync failed to start unexpectedly -- never fatal: the site relay '
+            'stays bound, and this till\'s own books stay on whatever relay they were '
+            'already using until the next attempt.')
+
+
+def _forwarder_cloud_client():
+    """The `cloud_client_factory` for `_site_forwarder_loop` -- called fresh
+    on EVERY tick (never cached), exactly like `_build_sync_client` above,
+    because an operator's `AURA_SYNC_RELAY_URL` or Owner's own persisted
+    `sync_relay_base_url` can both change across this process's lifetime
+    and the forwarder must pick either up without a restart.
+
+    Returns `None` (the forwarder's own "NO_CLOUD" state -- see
+    `forwarder_loop.py`'s own docstring) when no cloud URL is configured at
+    all -- the ordinary, permanent state for a LAN-only shop, never an
+    error. Raises `LocalSiteRelayError('CLOUD_RELAY_URL_INVALID')` when an
+    operator-set URL exists but fails validation -- `ForwarderLoop.tick()`
+    catches this and reports state=FAILED for this tick; it does not stop
+    the loop or crash the till."""
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    from commercial_runtime.sync.relay_client import SyncRelayClient
+    from commercial_runtime.sync.site_relay.local_client import LocalSiteRelayError
+
+    relay_base_url, problems = resolve_sync_relay_base_url_now()
+    if problems:
+        raise LocalSiteRelayError(
+            'CLOUD_RELAY_URL_INVALID',
+            'the configured sync relay URL failed validation; see the problems '
+            'resolve_sync_relay_base_url_now() reported.',
+        )
+    if not relay_base_url:
+        return None
+
+    _forwarder_licensing_dir = Path(DATABASE_DIR).parent / 'licensing'
+    _forwarder_state_repository = LicenseStateRepository(
+        Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+    _forwarder_signer = _licensing_device_identity_factory(_forwarder_licensing_dir)
+    record = _forwarder_state_repository.load()
+    installation_id = record.owner_installation_id if record else None
+    return SyncRelayClient(
+        relay_base_url,
+        _forwarder_signer,
+        installation_id,
+        timeout_seconds=SYNC_RELAY_TIMEOUT_SECONDS,
+        verify_tls=SYNC_RELAY_VERIFY_TLS,
+    )
+
+
+def _hub_self_sync_was_active_before() -> bool:
+    """True if THIS till has hosted a site log before this boot -- the
+    signal `init_app()` uses to resume LOCAL mode immediately (decision
+    A4(b)) rather than waiting for the election/explicit-pin path to bind
+    the relay again first. Never raises; any failure reading either signal
+    is treated as "no", the same fail-closed direction `_start_site_relay_
+    if_enabled` already uses for a licence read failure (worst case: one
+    extra restart before self-sync resumes, never a false resume on a till
+    that was never a hub)."""
+    try:
+        conn = get_retail_conn()
+        try:
+            from commercial_runtime.sync.site_relay.local_client import LOCAL_RELAY_URL
+
+            row = conn.execute("SELECT relay_url FROM sync_cursor WHERE id=1").fetchone()
+            if row is not None and row["relay_url"] == LOCAL_RELAY_URL:
+                return True
+            has_log = conn.execute("SELECT 1 FROM site_sync_events LIMIT 1").fetchone()
+            return has_log is not None
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Hub self-sync: could not determine whether this till has hosted a site '
+            'log before; treating this boot as "no" (fail closed).')
+        return False
+
+
+def _start_sync_after_activation():
+    """Hot-start seam (retail-hardware-viewports): start cloud sync (both
+    SyncService instances) and the LAN hub election IN THIS PROCESS, right
+    after a licence activates, instead of requiring a restart.
+
+    THE GAP THIS CLOSES, measured 2026-09-24 by running the product: on a
+    fresh desktop till with no AURA_SYNC_RELAY_URL env var, `_sync_service`/
+    `_registry_sync_service` above are built EXACTLY ONCE, at import time,
+    gated on `_SYNC_RELAY_URL_IS_USABLE` -- which reads config.py's
+    `SYNC_RELAY_BASE_URL` module constant, itself frozen the moment config.py
+    was imported. A fresh till has neither an operator-set env var nor a
+    value Owner has ever persisted yet, so that constant is '' for the rest
+    of THIS process's life no matter what happens afterwards -- activating a
+    licence writes a fresh `sync_relay_base_url` into licensing.db, but
+    nothing before this fix ever went back and looked. The till's admin
+    'create' user event then sat in the outbox forever, and a second device
+    joining the same shop never received the owner's account, because the
+    LAN hub election (`_start_site_relay_if_enabled` below) never ran either
+    -- it too runs exactly once, from `init_app()`, before activation.
+    config.py's `resolve_sync_relay_base_url_now()` is the other half of
+    this fix: it recomputes the identical precedence/validation FRESH, at
+    whatever moment it is called, instead of trusting the frozen constant.
+
+    HUB-SELF-SYNC SEAM (retail-hardware-viewports, added by a later wave):
+    right after this function's own call to `_start_site_relay_if_enabled()`,
+    if that call left `_site_relay_server` bound, this function also calls
+    `_enter_hub_self_sync()` -- the EXPLICIT-PIN case where this till was
+    bound as hub before it ever activated, so hub-self-sync's own guard
+    deferred for lack of an installation id. See `_enter_hub_self_sync`'s
+    own docstring for the full three-call-site picture.
+
+    CALLED FROM `_on_licence_activated()` -- the existing `on_activation_
+    success` seam `make_licensing_blueprint` already invokes on every
+    successful activation -- but ONLY when that function's own split-state
+    check found nothing wrong (see its docstring's "THIRD HALF" paragraph).
+    ALSO CALLED FROM `_refuse_while_split_state()`, on the one request that
+    finds a split-state refusal has converged and clears it: that is the
+    deferred form of the same "right after activation" moment.
+
+    NEVER RAISES. Same contract as every neighbouring activation-seam
+    function in this module (`_on_licence_activated`, `_detect_split_state_
+    reason`, both rebind halves they call): a licence activation that
+    genuinely succeeded at Owner must never be reported back to the customer
+    as a failure because starting a background sync timer hit some local
+    problem. Wrapped in a bare `except Exception` with `logging.exception`,
+    exactly like `_configure_file_logging` and `_start_site_relay_if_enabled`
+    already do for the same reason.
+
+    ANDROID never reaches the interesting branch below: Kotlin's own
+    SyncCoordinator drives Android's push/pull loop end to end (see the
+    ANDROID branch of the import-time construction above), and this Python
+    process never holds the Android device's signing key -- building a
+    Python-side SyncService here would be actively wrong on that platform,
+    not merely redundant, so this returns immediately rather than falling
+    through into logic that assumes Windows.
+
+    A NO-OP before `init_app()` has run. `init_app()` runs schema migrations
+    BEFORE starting sync (see its own call order and docstring), and this
+    seam exists only to cover an activation that lands LATER, mid-session,
+    in an already-initialised process -- an activation cannot land before
+    `init_app()` has even registered the licensing blueprint's routes, but a
+    defensive check costs nothing and keeps this function honest about the
+    one ordering invariant it depends on rather than assuming a caller
+    always gets it right.
+    """
+    try:
+        if LICENSING_PLATFORM == 'ANDROID':
+            return
+        if not _INIT_APP_HAS_RUN:
+            return
+
+        global _sync_service, _registry_sync_service
+
+        with _start_sync_after_activation_lock:
+            if _sync_service is None:
+                relay_base_url, problems = resolve_sync_relay_base_url_now()
+                if relay_base_url and not problems:
+                    from commercial_runtime.sync.sync_service import register_active_service
+
+                    _sync_service, _registry_sync_service = _build_windows_sync_services(relay_base_url)
+                    register_active_service(_sync_service)
+                    _sync_service.start()
+                    _registry_sync_service.start()
+                    logging.getLogger(__name__).info(
+                        'Multi-device sync started after activation, with no restart -- relay %s',
+                        relay_base_url,
+                    )
+                elif problems:
+                    # An operator-set AURA_SYNC_RELAY_URL that fails
+                    # validate_sync_relay_url() -- see resolve_sync_relay_
+                    # base_url_now()'s own docstring for why this is the ONLY
+                    # case that reaches here with `problems` non-empty (an
+                    # invalid PERSISTED value is discarded silently by the
+                    # precedence rule itself, long before this point, and is
+                    # therefore indistinguishable from "nothing configured"
+                    # below -- it was never something an operator typed, so
+                    # it is not reported as a problem either).
+                    for problem in problems:
+                        logging.getLogger(__name__).error(
+                            'Multi-device sync stays OFF after activation -- %s', problem)
+                else:
+                    # The ordinary case for the overwhelming majority of
+                    # shops: no operator env var, and Owner's activation
+                    # response either carried no sync_relay_base_url at all
+                    # (a deploy that never configured OWNER_SYNC_RELAY_
+                    # PUBLIC_URL) or carried one that already failed
+                    # validation and was discarded. Logged at INFO, not
+                    # silently: CLAUDE.md's engineering standard is explicit
+                    # that a silent early return is undiagnosable.
+                    logging.getLogger(__name__).info(
+                        'Multi-device sync stays OFF after activation -- no usable relay URL '
+                        '(neither AURA_SYNC_RELAY_URL nor a valid one from Owner).')
+
+            # Regardless of whether sync was just built above, was already
+            # built at import time (an operator had AURA_SYNC_RELAY_URL set
+            # from boot), or stays off entirely: the site relay re-reads the
+            # licence state itself and is already guarded against a second
+            # start (`_site_relay_server is not None or _site_relay_
+            # coordinator is not None`, at the top of `_start_site_relay_if_
+            # enabled`), so calling it again here is safe -- and is what
+            # actually runs the hub election for the FIRST time on a fresh
+            # till that has just activated, since `init_app()`'s own call to
+            # it ran before any licence existed.
+            #
+            # INSIDE THE LOCK, deliberately (adversarial verifier,
+            # 2026-09-24, T14). That guard is check-then-set with no lock of
+            # its own, which was fine while its only caller was `init_app()`,
+            # single-threaded before any request is served. This seam calls
+            # it from REQUEST threads -- two near-simultaneous activations, or
+            # the burst of concurrent fetches a page load fires the moment a
+            # split-state refusal clears -- and two callers that both pass
+            # the guard build TWO election coordinators on one till: the
+            # two-hub bug `_site_relay_coordinator`'s own comment says this
+            # feature exists to remove. Measured before the move: T14 built
+            # 2 coordinators. Holding this lock across it costs nothing that
+            # matters: this path runs only when an activation lands (or a
+            # split-state refusal clears), and after the first call the
+            # guard returns at once.
+            _start_site_relay_if_enabled()
+
+            # Hub-self-sync (retail-hardware-viewports): covers the
+            # EXPLICIT-PIN case where this till was bound as hub BEFORE it
+            # ever activated (`_bind_relay_now` ran with no installation id
+            # yet, so `_enter_hub_self_sync`'s own guard deferred). The
+            # AUTOMATIC path is already covered by `_bind_relay_now` itself,
+            # which now calls `_enter_hub_self_sync()` on every bind
+            # (including the idempotent early-return one) -- see that
+            # function's own updated docstring. Re-entrant-safe: this
+            # function already holds `_start_sync_after_activation_lock`
+            # (now an RLock -- see that lock's own comment for why), and
+            # `_enter_hub_self_sync` takes the SAME lock.
+            if _site_relay_server is not None:
+                _enter_hub_self_sync()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Starting sync after activation failed unexpectedly; sync stays '
+            'off until the next restart. Never fatal to the activation '
+            'itself.')
 
 
 def _converge_and_refuse_to_serve_if_stuck():
@@ -1400,6 +2017,14 @@ def _start_site_relay_if_enabled():
             """
             global _site_relay_server
             if _site_relay_server is not None:
+                # Hub-self-sync (retail-hardware-viewports): idempotent on
+                # every call, including this early-return one -- a caller
+                # (`_start_sync_after_activation`, step 10) may reach here
+                # AFTER the relay was already bound but BEFORE this till had
+                # an installation id, and self-sync's own guard (see
+                # `_enter_hub_self_sync`) is what actually notices the id
+                # has since arrived.
+                _enter_hub_self_sync()
                 return _site_relay_server
 
             handle = start_site_relay(
@@ -1413,6 +2038,14 @@ def _start_site_relay_if_enabled():
                 installation_id=_hub_installation_id,
                 device_public_key=_hub_device_public_key,
                 signer=_hub_signer,
+                # Hub-self-sync (retail-hardware-viewports): housekeeping is
+                # now started ONCE by `_enter_hub_self_sync`, with the hub's
+                # own consumer floors wired in from its very first sweep --
+                # letting `start_site_relay` start its OWN, floor-blind
+                # sweep here too would risk pruning a row this hub's own
+                # SyncService pair has not applied yet (see `pruning.py`'s
+                # module docstring, reader #3).
+                housekeeping=False,
             )
             _site_relay_server = handle
             # The pin is what a paired device must trust, so an operator has to
@@ -1426,6 +2059,7 @@ def _start_site_relay_if_enabled():
                 or f'https://<this machine>:{SITE_RELAY_PORT}',
                 handle.pin,
             )
+            _enter_hub_self_sync()
             return handle
 
         def _unbind_relay_now(handle):
@@ -1454,6 +2088,20 @@ def _start_site_relay_if_enabled():
             till took while it was hub is already in its own site log and is
             forwarded upstream regardless of the role it holds now.
 
+            DELIBERATELY DOES NOT TOUCH `_sync_relay_selector` OR `_site_
+            forwarder_loop` (hub-self-sync wave, decision "S1" in this
+            task's own plan). This till's own SyncService pair STAYS routed
+            through its own site log, and the forwarder KEEPS running,
+            forever, even after standing down -- see `election.py`'s own
+            "WHY STANDING DOWN LOSES NOTHING" paragraph (updated by that
+            same wave) for exactly why reverting to the cloud here would be
+            the loss path: this till may hold LAN rows from OTHER paired
+            devices that its forwarder has not pushed upstream yet, and
+            Owner's cloud pull excludes a device's own events, so those
+            rows would never come back down once forwarded. A stood-down
+            till converges with the new hub through its own forwarder and
+            Owner's cloud relay, not by re-pointing at the new hub directly.
+
             WHAT STANDING DOWN DOES *NOT* UNDO, written here rather than left
             to be discovered, because both only bite on a till that flaps
             between roles (a hub going in and out of wifi range) and neither is
@@ -1464,13 +2112,13 @@ def _start_site_relay_if_enabled():
                 re-elected. It shows up as "the QR I just made says invalid" --
                 minting another one is the whole fix, and codes are
                 single-use and short-lived by design anyway.
-              * THE HOURLY HOUSEKEEPING TIMER. `start_site_relay` starts one
-                and does not hand its stop Event back on the handle, so there
-                is nothing here to stop; a re-election starts a second. The
-                cost is duplicated pruning sweeps, not wrong data (the sweeps
-                are idempotent deletes), and fixing it properly means changing
-                listener.py's return shape -- deliberately not done from this
-                file, which owns the wiring and not that module.
+              * THE HOUSEKEEPING TIMER DOES NOT RESTART ON RE-ELECTION.
+                `_enter_hub_self_sync` is now the ONE place housekeeping is
+                ever started (`_site_housekeeping_stop` is a module global,
+                never cleared here) -- a re-election after a stand-down-then-
+                reclaim cycle does NOT start a second sweep the way it used
+                to before this wave (this bullet used to warn about exactly
+                that duplication; it no longer applies).
             The TLS identity is NOT in this list: it is created once and
             reloaded on every subsequent call, so a re-elected hub keeps the
             exact SPKI pin every already-paired device holds.
@@ -1485,10 +2133,10 @@ def _start_site_relay_if_enabled():
                 handle.server.server_close()
                 _site_relay_server = None
             logging.getLogger(__name__).info(
-                'Site relay (hub mode) is OFF: this till stood down because '
-                'another till on this LAN holds the hub role. It keeps selling '
-                'exactly as before, and now syncs THROUGH that hub instead of '
-                'hosting it.')
+                'Site relay (hub mode) is OFF: another till holds the hub role. This '
+                'till keeps selling and keeps syncing its own books through its own '
+                'site log; the forwarder bridges that log to Owner, so it converges '
+                'with the new hub through the cloud.')
 
         def _attempt_join_now():
             """The coordinator's `attempt_join` seam: one licence-proof
@@ -1505,7 +2153,36 @@ def _start_site_relay_if_enabled():
             store, fetched through `_hub_trust_store_provider` on each call
             (see its own comment -- trust_store.json can be rotated under a
             running process).
+
+            HUB-SELF-SYNC GUARD (retail-hardware-viewports): a till already
+            routed through its OWN site log (`_sync_relay_selector.
+            is_local()`) must never also join ANOTHER hub as a LAN client.
+            `discover_and_join`'s success path calls `autojoin.persist_join`,
+            which overwrites `licensing_state.sync_relay_base_url` with the
+            OTHER hub's LAN URL -- and that field is exactly what `_forwarder_
+            cloud_client` reads as this till's OWN cloud target. After the
+            overwrite the forwarder would try to reach a LAN host over HTTPS
+            with THIS till's normal TLS verification (never the other hub's
+            pinned transport) and fail forever, silently cutting this till's
+            forwarder off from Owner. `is_local()` is the correct test here,
+            not `_site_relay_server is not None`: a STOOD-DOWN till (decision
+            S1) is no longer bound but must still refuse to join, for the
+            identical reason.
             """
+            global _hub_join_refusal_logged
+            if _sync_relay_selector is not None and _sync_relay_selector.is_local():
+                # Logged ONCE per process, not per call -- see
+                # `_hub_join_refusal_logged`'s own comment: this runs on
+                # every 5s CLIENT tick for the rest of a stood-down till's
+                # life.
+                if not _hub_join_refusal_logged:
+                    logging.getLogger(__name__).info(
+                        'Not joining another hub as a LAN client: this till syncs through '
+                        'its own site log and converges via its forwarder. Joining would '
+                        'overwrite its cloud relay URL.')
+                    _hub_join_refusal_logged = True
+                return
+
             from datetime import datetime as _datetime, timezone as _timezone
 
             from commercial_runtime.sync.site_relay.autojoin import (
@@ -1663,12 +2340,22 @@ def init_app():
 
     `_registry_sync_service` (Phase 5 wave B2, Decision 6) is started here
     too, independently of `_sync_service` -- both are `None` together or
-    both non-`None` together on Windows (both are only ever built inside
-    the SAME `if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM !=
-    'ANDROID':` block above), but each is a genuinely separate
+    both non-`None` together on Windows (both are only ever built together,
+    by `_build_windows_sync_services()`: at import from the `if
+    _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':` block
+    above, or later by `_start_sync_after_activation()`, which starts them
+    itself because this function has already run by then), but each is a
+    genuinely separate
     `SyncService` with its OWN timer/thread/lock, so each needs its own
     `.start()` call -- `.start()` on one has no effect on the other's own
-    scheduling."""
+    scheduling.
+
+    HUB-SELF-SYNC BOOT RESUME (retail-hardware-viewports): between the
+    schema migrations and the `.start()` calls above, this function also
+    calls `_enter_hub_self_sync(start_timers=False)` when `_hub_self_sync_
+    was_active_before()` says this till has hosted a site log before --
+    see that function's own docstring for why a restart must resume LOCAL
+    mode immediately rather than reverting to the cloud first."""
     # First, before anything else touches a database or starts a thread --
     # see `_configure_file_logging`'s own docstring for why this is the one
     # seam guaranteed to run for both the real entry point and every test
@@ -1682,6 +2369,20 @@ def init_app():
     # this line reads company-scoped retail data, so a stuck install is
     # caught before the sync loop or any outbox worker touches it.
     _converge_and_refuse_to_serve_if_stuck()
+    # Hub-self-sync boot resume (retail-hardware-viewports, decision A4(b)):
+    # a till that has HOSTED a site log before (this restart, or any prior
+    # one) must resume LOCAL mode immediately, before the first tick --
+    # never fall back to the cloud first and only later flip, which would
+    # briefly (or, on a LAN-only shop, permanently) strand unforwarded LAN
+    # rows. `start_timers=False` here: the existing `.start()` calls just
+    # below run exactly once regardless of whether the pair was built at
+    # import time, LAN-only by this resume call, or later by `_start_sync_
+    # after_activation` -- see `_enter_hub_self_sync`'s own docstring.
+    # Runs BEFORE any request can be served (`_INIT_APP_HAS_RUN` is only set
+    # True at the end of this function), so `nudge()` can never race this
+    # flip -- see that function's own docstring.
+    if LICENSING_PLATFORM != 'ANDROID' and _hub_self_sync_was_active_before():
+        _enter_hub_self_sync(start_timers=False)
     if _sync_service is not None:
         _sync_service.start()
     if _registry_sync_service is not None:

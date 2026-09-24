@@ -20,6 +20,67 @@ UDP beacon of sec4, hub promotion, and site-log pruning against
 `site_device_cursors`. Read sec4/sec5 as specification, not as description,
 and re-verify sec0's anchors before building on them.
 
+**IMPLEMENTATION STATUS 2026-09-24 — the LAN hub island is closed IN CODE,
+and NOT YET RE-MEASURED ON HARDWARE.** What proves it today is unit and
+wiring tests (real schema, real `SyncService`, real `init_app()` boot paths,
+mutation-proved); the post-build acceptance run on the lab hub (phone sales
+reaching `/sales/recent`, a desktop product reaching the phone,
+`site_forward_cursor` moving) had not been done when this was written — do
+not read "closed" as "seen working on a till". The defect itself was measured
+on real hardware the same day (a Windows till auto-elected hub, a real
+Android phone auto-joined and synced WITH the hub — but nothing crossed
+between the phone and the desktop till's OWN books in either direction: the
+phone's sales never reached `/sales/recent`, a desktop-created product never
+reached the phone, `site_forward_cursor` stayed at forwarded=0/cloud_seq=0).
+Root cause: `forwarder.py` (below, complete and unit-tested since sec6 was
+written) was imported by NOTHING outside its own test file, and the hub's own
+`SyncService` pair kept talking to Owner's cloud relay directly instead of to
+its own site log. Both are now wired:
+
+- `commercial_runtime/sync/site_relay/forwarder_loop.py` (new) is the ONLY
+  caller of `forwarder.run_once` in production — a daemon-thread timer,
+  10-second tick, started once by `app.py::_enter_hub_self_sync` and NEVER
+  stopped again (see the next bullet for why).
+- `commercial_runtime/sync/site_relay/local_client.py` (new) is the seam: a
+  `LocalSiteRelayClient` (same `push`/`pull`/`.base_url` contract as
+  `SyncRelayClient`) that lets the hub's OWN two `SyncService` instances
+  (retail + registry) read and write the hub's own site log directly, and a
+  `RelaySelector` that is BOTH instances' `client_factory`, flipped from
+  CLOUD to LOCAL exactly once per process, in `app.py::_enter_hub_self_sync`
+  (called from `_bind_relay_now`, from `init_app()`'s own boot-resume check,
+  and from `_start_sync_after_activation` — see that function's own
+  docstring for the three-call-site picture).
+- **STAND-DOWN STAYS LOCAL, CONTRARY TO WHAT §5's `election.py` DOCSTRING
+  ONCE IMPLIED.** A stood-down hub does NOT re-point its own SyncService
+  pair back at the cloud — the selector, once flipped LOCAL, never flips
+  back, and the forwarder keeps running regardless of this device's current
+  Role. Reason: this device's own site log may hold LAN rows from OTHER
+  paired devices its forwarder has not pushed upstream yet, and §6.3 below
+  turns out to matter here too — the cloud's pull excludes a device's own
+  events, so those rows would never come back down once forwarded. A
+  stood-down till converges with the new hub through its own forwarder and
+  Owner's cloud relay, not by re-pointing at the new hub directly.
+- **§6.3's "full pull from cloud" bootstrap claim below is CORRECTED, not
+  merely re-verified.** It does NOT seed a hub's own pre-hub history: the
+  cloud excludes a device's own events from what it hands back (the same
+  fact decision S1 above rests on), so a hub's site log can never receive,
+  via that bootstrap, anything the hub itself pushed before it became hub —
+  including a fresh shop's very first admin-create event, or an existing
+  shop's whole pre-upgrade history. This is a real, named gap (a follow-up
+  belongs to whoever owns Owner's cloud relay — a signed "bootstrap pull
+  including own events" for a hub, or a hub-side snapshot re-emit), not
+  fixed by this wave. What DOES close most of the practical exposure: a new
+  Android device gates its own hub-join on finishing a normal cloud
+  catch-up first (`SyncCoordinator.readyToJoinHub`), so it collects the
+  shop's real history over the cloud before ever switching to the LAN path
+  where this gap would otherwise bite it.
+
+See `commercial_runtime/sync/site_relay/local_client.py`, `forwarder_loop.py`
+and `pruning.py`'s module docstrings (a third site-log reader — the hub's own
+two sync streams — is now floored against pruning alongside every paired
+device and the forwarder) for the full reasoning, and
+`products/retail/backend/app.py::_enter_hub_self_sync` for the wiring itself.
+
 **Owner's decision, verbatim:** *"the restaurant can work at both online and
 offline by being at the same local network as the other tablets or devices.
 and make it the same product but different versions. one for retails. one for

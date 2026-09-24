@@ -22,8 +22,18 @@ them" and the list is not obvious:
   2. The hub's own forwarder, which pushes locally-originated rows up to
      Owner's cloud relay. How far IT has got is
      `site_forward_cursor.forwarded_to_seq` (see `forwarder.py`).
+  3. THE HUB'S OWN TWO SYNC STREAMS (retail + registry), added by this
+     task's hub-self-sync work: once a hub reads its own site log through
+     `local_client.LocalSiteRelayClient` (decision A in this task's own
+     plan), each stream's own `sync_cursor.last_seq` is a THIRD consumption
+     position this module must never prune ahead of -- see
+     `local_client.consumer_floor` for how each stream's position is read,
+     and `extra_floors` below for how a caller supplies them. Missing this
+     reader is exactly the same class of bug as missing #1 or #2: a hub
+     whose own SyncService has not yet applied a row it accepted from a
+     paired device could have that row pruned before it ever reads it.
 
-Miss either and you delete rows the other still needed.
+Miss any of the three and you delete rows another one still needed.
 
 THE TRAP THIS MODULE EXISTS TO AVOID, named in the design doc itself
 (`docs/launch-readiness/lan-restaurant-design.md` §6, item 2, about the CLOUD
@@ -61,7 +71,7 @@ def _active_paired_installation_ids(conn: sqlite3.Connection) -> list:
     return [r["installation_id"] if isinstance(r, sqlite3.Row) else r[0] for r in rows]
 
 
-def safe_prune_watermark(conn: sqlite3.Connection) -> int:
+def safe_prune_watermark(conn: sqlite3.Connection, *, extra_floors=()) -> int:
     """The highest `seq` that every consumer has already taken.
 
     Returns 0 when nothing can safely be pruned, which is the correct answer
@@ -87,6 +97,17 @@ def safe_prune_watermark(conn: sqlite3.Connection) -> int:
         it -- deleting it would lose it from the shop's history permanently,
         because the site log is the only place it exists until the forwarder
         succeeds.
+      * `extra_floors`, when supplied, are ADDITIONAL consumption positions
+        (module docstring's reader #3 -- a hub's own sync streams) that cap
+        the result the identical way `forwarded_to_seq` already does: the
+        final watermark is never higher than the minimum of `extra_floors`
+        either. Keyword-only and defaulting to `()` so every EXISTING call
+        site (this module's own `prune_site_log` default, and every current
+        caller of this function) is byte-for-byte unchanged -- see this
+        module's own "prune LESS, not more" standing rule: a caller that has
+        not been taught about a new reader must never have its rows pruned
+        MORE aggressively just because this function grew a parameter it
+        does not pass.
     """
     forwarded_row = conn.execute(
         "SELECT forwarded_to_seq FROM site_forward_cursor WHERE id = 1"
@@ -99,34 +120,39 @@ def safe_prune_watermark(conn: sqlite3.Connection) -> int:
 
     installation_ids = _active_paired_installation_ids(conn)
     if not installation_ids:
-        return max(0, forwarded_to)
+        watermark = max(0, forwarded_to)
+    else:
+        placeholders = ",".join("?" for _ in installation_ids)
+        cursor_rows = conn.execute(
+            f"SELECT installation_id, last_seq FROM site_device_cursors "
+            f"WHERE installation_id IN ({placeholders})",
+            installation_ids,
+        ).fetchall()
+        by_id = {
+            (r["installation_id"] if isinstance(r, sqlite3.Row) else r[0]):
+            int(r["last_seq"] if isinstance(r, sqlite3.Row) else r[1])
+            for r in cursor_rows
+        }
 
-    placeholders = ",".join("?" for _ in installation_ids)
-    cursor_rows = conn.execute(
-        f"SELECT installation_id, last_seq FROM site_device_cursors "
-        f"WHERE installation_id IN ({placeholders})",
-        installation_ids,
-    ).fetchall()
-    by_id = {
-        (r["installation_id"] if isinstance(r, sqlite3.Row) else r[0]):
-        int(r["last_seq"] if isinstance(r, sqlite3.Row) else r[1])
-        for r in cursor_rows
-    }
+        slowest = None
+        for installation_id in installation_ids:
+            # .get(..., 0) is load-bearing, not defensive padding: a paired
+            # device with no cursor row is at 0, and that must pin the whole
+            # watermark to 0. Skipping such devices instead would prune away
+            # precisely the history a brand-new device has not collected yet.
+            position = by_id.get(installation_id, 0)
+            slowest = position if slowest is None else min(slowest, position)
 
-    slowest = None
-    for installation_id in installation_ids:
-        # .get(..., 0) is load-bearing, not defensive padding: a paired device
-        # with no cursor row is at 0, and that must pin the whole watermark to
-        # 0. Skipping such devices instead would prune away precisely the
-        # history a brand-new device has not collected yet.
-        position = by_id.get(installation_id, 0)
-        slowest = position if slowest is None else min(slowest, position)
+        watermark = max(0, min(slowest, forwarded_to))
 
-    return max(0, min(slowest, forwarded_to))
+    for floor in extra_floors:
+        watermark = min(watermark, max(0, int(floor)))
+
+    return max(0, watermark)
 
 
 def prune_site_log(conn: sqlite3.Connection, *, batch=DEFAULT_PRUNE_BATCH,
-                   watermark: Optional[int] = None) -> int:
+                   watermark: Optional[int] = None, extra_floors=()) -> int:
     """Delete site-log rows at or below the safe watermark. Returns the count.
 
     Does NOT commit -- the caller owns the transaction, matching `store.py`'s
@@ -144,7 +170,7 @@ def prune_site_log(conn: sqlite3.Connection, *, batch=DEFAULT_PRUNE_BATCH,
     which is exactly the failure `retail_site_relay_schema_test.py` pins.
     """
     if watermark is None:
-        watermark = safe_prune_watermark(conn)
+        watermark = safe_prune_watermark(conn, extra_floors=extra_floors)
     if watermark <= 0:
         return 0
 
@@ -158,12 +184,17 @@ def prune_site_log(conn: sqlite3.Connection, *, batch=DEFAULT_PRUNE_BATCH,
 
 
 def prune_nonces_and_log(conn: sqlite3.Connection, *, nonce_ttl_seconds,
-                         batch=DEFAULT_PRUNE_BATCH, now=None) -> dict:
+                         batch=DEFAULT_PRUNE_BATCH, now=None, extra_floors=()) -> dict:
     """One housekeeping sweep: expired replay nonces plus the settled log.
 
     Both stores grow with traffic and neither has a natural ceiling, so they
     are swept together by whatever periodic job the hub runs -- one lock
     acquisition rather than two.
+
+    `extra_floors`: see `safe_prune_watermark`'s own docstring -- passed
+    straight through to `prune_site_log`, keyword-only and defaulting to
+    `()` so every existing caller (this function's own pre-existing
+    signature) is unchanged.
 
     Returns what it actually deleted, so a caller can log real numbers instead
     of "housekeeping ran", which is the difference between noticing that
@@ -171,5 +202,5 @@ def prune_nonces_and_log(conn: sqlite3.Connection, *, nonce_ttl_seconds,
     from . import replay
 
     nonces = replay.prune_nonces(conn, nonce_ttl_seconds, now=now)
-    events = prune_site_log(conn, batch=batch)
+    events = prune_site_log(conn, batch=batch, extra_floors=extra_floors)
     return {"nonces_pruned": nonces, "events_pruned": events}

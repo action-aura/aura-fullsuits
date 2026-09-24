@@ -42,7 +42,22 @@ What is here:
       `site_forward_cursor` (both directions) as its private state. Rows
       pulled down are marked `origin_device_id = UPSTREAM_ORIGIN`, which is
       both how they reach the LAN devices and how the next upstream pass
-      knows never to send them back -- the echo guard.
+      knows never to send them back -- the echo guard. Pure logic, no timer
+      of its own -- `forwarder_loop.py` below is what actually calls it.
+    * `forwarder_loop.py` -- the daemon-thread timer that calls
+      `forwarder.run_once` on an interval (retail-hardware-viewports,
+      hub-self-sync wave: before this module existed, `forwarder.py` was
+      imported by nothing outside its own test file, so a hub's site log
+      never actually reached Owner's cloud relay). The ONLY caller of
+      `forwarder.run_once` in production.
+    * `local_client.py` -- the in-process client (same `push`/`pull`/
+      `.base_url` contract as `relay_client.SyncRelayClient`) that lets the
+      hub's OWN two `SyncService` instances (retail + registry) read and
+      write THIS hub's own site log directly, instead of Owner's cloud
+      relay -- see `app.py::_enter_hub_self_sync` for the wiring. Also holds
+      `RelaySelector` (the cloud/local switch every hub's sync client
+      factory goes through) and `consumer_floor` (the hub's own reader
+      position, fed into `pruning.py`'s `extra_floors`).
 
     * `pairing.py`    -- operator-issued, short-lived, single-use pairing
       codes, and the payload that becomes the QR a device scans. The codes
