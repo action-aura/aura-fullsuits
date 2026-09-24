@@ -61,6 +61,7 @@ import com.actionaura.retail.sync.HubPrefs
 import com.actionaura.retail.sync.PairingPayload
 import com.actionaura.retail.sync.SpkiPinMismatchException
 import com.actionaura.retail.sync.SpkiPinning
+import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.sync.parsePairingPayload
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
@@ -1952,6 +1953,12 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             OutlinedButton(
                 onClick = {
                     HubPrefs.clear(ctx)
+                    // Re-point the sync loop back to the cloud (or inert)
+                    // the instant this device unpairs -- see
+                    // SyncCoordinator.onHubPairingChanged's own doc comment
+                    // for why this must happen right after HubPrefs.clear(),
+                    // not on a future app restart.
+                    SyncCoordinator.onHubPairingChanged(ctx)
                     hubBaseUrl = HubPrefs.getBaseUrl(ctx)
                     hubPaired = false
                     scope.launch { snackbar.showSnackbar(tr("Disconnected")) }
@@ -1995,6 +2002,11 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                                         outcome.payload.hubDevicePublicKey,
                                         outcome.payload.hubInstallationId,
                                     )
+                                    // Re-point the sync loop to the newly
+                                    // paired hub right now, with no restart --
+                                    // see SyncCoordinator.onHubPairingChanged's
+                                    // own doc comment.
+                                    SyncCoordinator.onHubPairingChanged(ctx)
                                     hubBaseUrl = HubPrefs.getBaseUrl(ctx)
                                     hubPaired = true
                                     hubPairingText = ""

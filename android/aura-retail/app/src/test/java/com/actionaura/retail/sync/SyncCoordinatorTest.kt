@@ -343,7 +343,7 @@ class SyncCoordinatorTest {
  *  issue first. Single-threaded accept loop, one request per connection
  *  (`Connection: close`), which is all any caller here ever sends -- same
  *  shape as `SyncRelayClientTest`'s private `FakeSyncServer`. */
-private class RoutedFakeServer {
+internal class RoutedFakeServer {
     private val serverSocket = ServerSocket(0)
     val port: Int get() = serverSocket.localPort
 

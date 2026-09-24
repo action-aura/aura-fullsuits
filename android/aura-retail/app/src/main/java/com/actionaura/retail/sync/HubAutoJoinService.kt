@@ -77,14 +77,24 @@ object HubAutoJoinService {
     /**
      * THE PURE DECISION, extracted so it is testable with no `Context` at all
      * (see `HubAutoJoinServiceTest`). An attempt is made iff this device is
-     * activated AND is not already joined to a hub -- mirrors
-     * `autojoin.py::discover_and_join`'s own two upfront short-circuits
-     * (`NOT_ACTIVATED`, `ALREADY_JOINED`) collapsed into one boolean, since
-     * unlike the Python version both facts are known here BEFORE
-     * [HubDiscovery] is ever constructed, not read from inside it.
+     * activated AND is not already joined to a hub AND [readyToJoin] --
+     * mirrors `autojoin.py::discover_and_join`'s own two upfront
+     * short-circuits (`NOT_ACTIVATED`, `ALREADY_JOINED`) collapsed into one
+     * boolean, since unlike the Python version both facts are known here
+     * BEFORE [HubDiscovery] is ever constructed, not read from inside it.
+     *
+     * [readyToJoin] defaults to `true` so every pre-existing 2-argument call
+     * site (this function's original signature) is unaffected -- see
+     * `HubAutoJoinRebindContractTest`. Backed by
+     * [SyncCoordinator.readyToJoinHub] (see that function's own doc
+     * comment): a phone that joins a hub before it has caught up on its
+     * OWN pre-hub history from the cloud would never see that history
+     * again, because the cloud never hands a device back its own events
+     * (0.4/0.5 in this task's plan) -- so a fast re-point must not race a
+     * join ahead of a catch-up pull.
      */
-    internal fun shouldAttemptJoin(activated: Boolean, alreadyJoined: Boolean): Boolean =
-        activated && !alreadyJoined
+    internal fun shouldAttemptJoin(activated: Boolean, alreadyJoined: Boolean, readyToJoin: Boolean = true): Boolean =
+        activated && !alreadyJoined && readyToJoin
 
     /**
      * Starts the recurring tick. Safe to call more than once -- a repeat call
@@ -161,8 +171,22 @@ object HubAutoJoinService {
             // gate and the payload are now one read instead of two.
             val identityResponse = readLicenseIdentity(appContext)
             val activated = parseLicenseIdentity(identityResponse) != null
-            if (!shouldAttemptJoin(activated, alreadyJoined)) {
-                note("No activated licence on this device yet; no shop to join.")
+            // Read AFTER the activation check's own local call, not before --
+            // cheap either way (no network), but matches this function's
+            // existing "read what's needed, decide once" shape. See
+            // SyncCoordinator.readyToJoinHub's own doc comment for what this
+            // is actually gating.
+            val ready = SyncCoordinator.readyToJoinHub()
+            if (!shouldAttemptJoin(activated, alreadyJoined, ready)) {
+                note(
+                    if (!activated) {
+                        "No activated licence on this device yet; no shop to join."
+                    } else {
+                        "Waiting to finish catching up from the cloud before joining a shop " +
+                            "hub, so this device holds the till's full history first; joins " +
+                            "anyway after 10 minutes with no successful cloud sync."
+                    }
+                )
                 return
             }
 
@@ -294,7 +318,23 @@ object HubAutoJoinService {
             myDevicePublicKey = devicePublicKey,
             label = Build.MODEL,
             persistHub = { url, pin, hubKey, hubId ->
+                // HubPrefs.set() first, unconditionally, before the
+                // re-point call -- SharedPreferences.Editor.apply() writes
+                // to the in-memory cache synchronously (only the disk
+                // flush is async), so SyncCoordinator.onHubPairingChanged's
+                // own HubPrefs.getBaseUrl()/getSpkiPin() re-reads
+                // immediately after this line are guaranteed to see what
+                // was just written, not a stale prior value.
                 HubPrefs.set(appContext, url, pin, hubKey, hubId)
+                // THE FIX THIS TASK EXISTS FOR: without this call,
+                // SyncCoordinator keeps signing requests to whatever relay
+                // [start] resolved at app-boot time, forever, until the app
+                // is restarted -- measured on a real phone, 2026-09-24: 0
+                // site_sync_nonces before a restart, 37 after, despite
+                // HubPrefs already holding the hub's URL and pin the whole
+                // time. See SyncCoordinator.onHubPairingChanged's own doc
+                // comment for the full mechanism.
+                SyncCoordinator.onHubPairingChanged(appContext)
             },
         )
 
