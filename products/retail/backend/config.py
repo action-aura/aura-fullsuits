@@ -9,6 +9,7 @@ healthcare/education/manufacturing industries-demo verticals -- out of scope)
 and `DEFAULT_USERS` (only used by the legacy domain-based demo login, which
 is not ported -- see docs/migration/source-inventory.md #34, risk-register R12).
 """
+import json
 import logging
 import os
 import sys
@@ -30,7 +31,7 @@ SECRET_KEY = get_or_create_secret_key(_app_data)
 
 IS_DEMO_MODE = not os.path.exists(os.path.join(_app_data, 'config.json'))
 
-APP_VERSION = '1.0.0-rc.7'
+APP_VERSION = '1.0.0-rc.8'
 PRODUCT_CODE = 'AURA_RETAIL'
 
 from commercial_runtime.backup.service import SCHEMA_VERSION
@@ -43,11 +44,192 @@ IS_STANDALONE = bool(getattr(sys, 'frozen', False)) or os.environ.get('AURA_STAN
 # Phase 7 -- Licensing & Activation Service client configuration (Part H).
 # Empty by default: the app must fully function with no Owner configured at
 # all (commercial_runtime/licensing_contracts/routes.py's /status route
-# reports NOT_CONFIGURED rather than erroring). Never a hidden fallback URL --
-# an empty string here means "the licensing routes are inert," not "use some
-# default Owner instance." Changing this in a commercial build is meant to be
-# an authorized configuration step, not an ordinary end-user text field.
-OWNER_LICENSING_BASE_URL = os.environ.get('AURA_OWNER_LICENSING_URL', '')
+# reports NOT_CONFIGURED rather than erroring). Never a HAND-TYPED fallback
+# URL and never a value this code invents on its own -- an empty string here
+# still means "the licensing routes are inert," not "use some default Owner
+# instance."
+#
+# retail-hardware-viewports (2026-09-24): this paragraph used to end there,
+# and that was the whole story for AURA_OWNER_LICENSING_URL -- an operator's
+# env var, checked at every launch. It is NOT the whole story for an
+# INSTALLED build any more. A copy launched from the Start menu has no
+# environment variable and no screen to set one (docs/release/go-live-
+# runbook.md's own gap), so it could never activate -- Android already closed
+# the equivalent gap at BUILD TIME (android/aura-retail/app/build.gradle's
+# `ownerLicensingBaseUrl` -P property -> `BuildConfig.OWNER_LICENSING_BASE_URL`,
+# baked once per release by whoever runs that gradle build). The desktop
+# counterpart is `owner_endpoint.json`, baked the same way by
+# scripts/release/build_desktop_installer.ps1 and read back by
+# _resolve_owner_licensing_base_url() below.
+#
+# THE RULE, STATED TRUTHFULLY: a value baked in by the release build script is
+# an EXPLICIT, AUTHORIZED BUILD-TIME CONFIGURATION STEP, taken by whoever cuts
+# that release -- exactly like Android's BuildConfig field -- never a default
+# this code invents or falls back to on its own. AURA_OWNER_LICENSING_URL
+# still overrides it unconditionally: an operator's own explicit env var is a
+# stronger, later signal than whatever a release engineer baked in months
+# earlier, and must never be second-guessed by it. A dev/source run (no
+# frozen bundle, `AURA_BUNDLE_DIR` pointed at a checkout with no
+# `owner_endpoint.json` in it) finds no baked file at all, and the original
+# "empty means inert" behavior is completely unchanged for that case.
+OWNER_ENDPOINT_FILENAME = 'owner_endpoint.json'
+_OWNER_ENDPOINT_BAKED_PATH = os.path.join(BASE_DIR, OWNER_ENDPOINT_FILENAME)
+
+# A small, dedicated set of loopback hostnames for the baked-URL validator
+# below -- deliberately its OWN constant rather than a shared reference to
+# `_LOCAL_DEV_HOSTS` further down this file (which validate_sync_relay_url()
+# uses): that tuple is scoped to the sync-relay URL's own rule, and the two
+# rules are close but not identical (see _validate_baked_owner_licensing_url's
+# docstring). Keeping them as two separately-named constants with the same
+# literal values means a future change to one cannot silently also change
+# the other's behavior.
+_OWNER_ENDPOINT_LOOPBACK_HOSTS = ('127.0.0.1', 'localhost', '::1')
+
+
+def _validate_baked_owner_licensing_url(url):
+    """Returns '' when `url` (already stripped by the caller) is an
+    acceptable BAKED owner-licensing URL, or a human-readable problem string
+    naming the rejected value.
+
+    Deliberately a SEPARATE function from validate_sync_relay_url() further
+    down this file, not a call to it -- that function is close but not an
+    exact match for this rule: it also permits an explicit http:// LAN host
+    for a local development relay, and its own problem messages name
+    AURA_SYNC_RELAY_URL specifically. A BAKED value has no such dev-LAN
+    carve-out -- it ships inside a frozen commercial bundle a release
+    engineer explicitly produced, so http:// is accepted ONLY for a loopback
+    host (the same "reaching a local Owner instance for discovery/testing"
+    case AURA_SYNC_RELAY_URL's own http:// exception covers), and this
+    validator additionally rejects embedded userinfo, a query string, and a
+    URL fragment outright -- stricter than the sync-relay rule requires, and
+    safer for a value nobody types by hand and nobody can quickly correct in
+    the field once it is baked into an installer.
+
+    Verifier fix (2026-09-24): also rejects whitespace ANYWHERE in the value
+    and an invalid port. Both were accepted before: urlsplit() raises no
+    objection to a space in a host or path, and on Python 3.12+ it silently
+    DELETES tab/CR/LF before parsing, so the whitespace check has to look at
+    the raw string, never at the parsed parts. An out-of-range or
+    non-numeric port only raises lazily, when `.port` is read, so it is read
+    here on purpose. scripts/release/build_desktop_installer.ps1 applies the
+    same two rejections, so the build and the runtime agree.
+    """
+    from urllib.parse import urlsplit
+    if any(ch.isspace() for ch in url):
+        return f"owner_endpoint.json's owner_licensing_base_url {url!r} must not contain whitespace."
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        return f"owner_endpoint.json's owner_licensing_base_url is not a parsable URL ({exc})."
+
+    scheme = (parts.scheme or '').lower()
+    # `hostname` (not `netloc`) is already lowercased, port-stripped, and has
+    # any `user:pass@` prefix removed by urlsplit -- same reasoning
+    # validate_sync_relay_url() gives for using it below.
+    host = parts.hostname or ''
+
+    if scheme not in ('http', 'https'):
+        return (
+            f"owner_endpoint.json's owner_licensing_base_url {url!r} must use https:// "
+            f"(or http:// for a loopback host); got scheme {scheme or '(none)'!r}."
+        )
+    if not host:
+        return f"owner_endpoint.json's owner_licensing_base_url {url!r} has no host."
+    try:
+        parts.port
+    except ValueError as exc:
+        return f"owner_endpoint.json's owner_licensing_base_url {url!r} has an invalid port ({exc})."
+    if scheme == 'http' and host not in _OWNER_ENDPOINT_LOOPBACK_HOSTS:
+        return (
+            f"owner_endpoint.json's owner_licensing_base_url {url!r} uses cleartext http:// "
+            f"against non-loopback host {host!r}. A baked, release-controlled URL must use "
+            f"https:// unless it names a loopback host ({'/'.join(_OWNER_ENDPOINT_LOOPBACK_HOSTS)})."
+        )
+    if '@' in parts.netloc:
+        return f"owner_endpoint.json's owner_licensing_base_url {url!r} must not embed credentials."
+    if parts.query:
+        return f"owner_endpoint.json's owner_licensing_base_url {url!r} must not embed a query string."
+    if parts.fragment:
+        return f"owner_endpoint.json's owner_licensing_base_url {url!r} must not embed a URL fragment."
+    return ''
+
+
+def _resolve_owner_licensing_base_url(env_value, baked_path):
+    """Pure decision (no I/O beyond reading exactly the one file named by
+    `baked_path`, no other environment reads) -- same discipline as
+    site_relay_should_start() and resolve_licensing_trust_anchor_path()
+    elsewhere in this file. Returns (url, source, problems):
+
+      * `source` is 'env', 'baked', or '' (nothing usable found).
+      * `problems` is a list of human-readable strings, non-empty only when
+        something was BAKED but rejected -- never for a plain missing file
+        (see below) and never for `env_value` (see below).
+
+    PRECEDENCE. `env_value` (stripped), when non-empty, ALWAYS wins --
+    returned as-is, source 'env', problems always []. This is precedence,
+    not validity: nothing in this file has ever validated
+    AURA_OWNER_LICENSING_URL's shape, and this function does not start now --
+    that would be a second, independent behavior change riding on this one.
+    Mirrors _resolve_effective_sync_relay_base_url()'s own first rule
+    ("checked first and short-circuits regardless of whether the env value
+    itself is valid").
+
+    THE BAKED FILE. Read only when `env_value` is empty/whitespace-only.
+
+      * Missing entirely -> ('', '', []), SILENTLY. This is the ordinary
+        dev/source case -- nobody baked anything, so there is nothing to
+        warn about; a "problem" here would mean every unfrozen checkout logs
+        a spurious warning on every launch.
+      * Present but unreadable, not JSON, not a JSON object, missing the
+        `"owner_licensing_base_url"` key, or that key not a non-empty string
+        -> ('', '', [problem]). Unlike a missing FILE, a baked file that
+        EXISTS but is broken is a real build defect a release engineer
+        should hear about loudly (config.py's caller, app.py, logs every
+        entry in `problems` at WARNING).
+      * A well-formed string value is stripped and run through
+        _validate_baked_owner_licensing_url(); a rejection produces
+        ('', '', [problem]) exactly like the cases above, and an acceptance
+        produces (value, 'baked', []).
+    """
+    env_value = (env_value or '').strip()
+    if env_value:
+        return env_value, 'env', []
+
+    if not os.path.exists(baked_path):
+        return '', '', []
+
+    try:
+        with open(baked_path, 'r', encoding='utf-8') as _fh:
+            _raw = _fh.read()
+    except OSError as exc:
+        return '', '', [f"{baked_path} could not be read: {exc}."]
+
+    try:
+        _payload = json.loads(_raw)
+    except ValueError as exc:
+        return '', '', [f"{baked_path} is not valid JSON: {exc}."]
+
+    if not isinstance(_payload, dict):
+        return '', '', [f"{baked_path} does not contain a JSON object."]
+
+    _value = _payload.get('owner_licensing_base_url')
+    if not isinstance(_value, str) or not _value.strip():
+        return '', '', [
+            f"{baked_path} has no non-empty string 'owner_licensing_base_url' key."
+        ]
+    _value = _value.strip()
+
+    _problem = _validate_baked_owner_licensing_url(_value)
+    if _problem:
+        return '', '', [_problem]
+    return _value, 'baked', []
+
+
+OWNER_LICENSING_BASE_URL, OWNER_LICENSING_URL_SOURCE, OWNER_LICENSING_URL_PROBLEMS = (
+    _resolve_owner_licensing_base_url(
+        os.environ.get('AURA_OWNER_LICENSING_URL', ''), _OWNER_ENDPOINT_BAKED_PATH,
+    )
+)
 # Dev-only escape hatch for a local Owner instance without a certificate --
 # never set AURA_OWNER_LICENSING_INSECURE=1 in a commercial build. Phase 7V
 # Part G: this was previously honored unconditionally, meaning an env var set

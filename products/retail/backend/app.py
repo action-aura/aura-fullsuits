@@ -44,6 +44,7 @@ from flask_cors import CORS
 from config import (
     SECRET_KEY, DATABASE_DIR, APP_VERSION,
     OWNER_LICENSING_BASE_URL, OWNER_LICENSING_VERIFY_TLS, OWNER_LICENSING_TIMEOUT_SECONDS,
+    OWNER_LICENSING_URL_SOURCE, OWNER_LICENSING_URL_PROBLEMS,
     LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
     SYNC_RELAY_BASE_URL, SYNC_RELAY_TIMEOUT_SECONDS, SYNC_RELAY_VERIFY_TLS,
     SYNC_RELAY_URL_PROBLEMS, resolve_sync_relay_base_url_now,
@@ -65,6 +66,21 @@ if SYNC_RELAY_BASE_URL and SYNC_RELAY_URL_PROBLEMS:
     import logging as _logging
     for _problem in SYNC_RELAY_URL_PROBLEMS:
         _logging.getLogger(__name__).error("Multi-device sync DISABLED -- %s", _problem)
+
+# retail-hardware-viewports (2026-09-24): same "log every problem loudly,
+# never let it fail the boot" pattern as the sync-relay block immediately
+# above, for a baked owner_endpoint.json that config.py's
+# _resolve_owner_licensing_base_url() rejected (unreadable, malformed JSON,
+# missing key, or a URL that failed _validate_baked_owner_licensing_url).
+if OWNER_LICENSING_URL_PROBLEMS:
+    import logging as _logging
+    for _problem in OWNER_LICENSING_URL_PROBLEMS:
+        _logging.getLogger(__name__).warning("Owner licensing URL DISABLED -- %s", _problem)
+if OWNER_LICENSING_BASE_URL:
+    import logging as _logging
+    _logging.getLogger(__name__).info(
+        "Owner licensing URL: %s (source: %s)", OWNER_LICENSING_BASE_URL, OWNER_LICENSING_URL_SOURCE
+    )
 
 app = Flask(__name__, static_folder=str(PRODUCT_DIR / 'frontend'), static_url_path='/static')
 

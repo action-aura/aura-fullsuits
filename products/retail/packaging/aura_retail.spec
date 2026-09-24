@@ -86,6 +86,63 @@ _licensing_datas = []
 if os.path.exists(_trust_anchor):
     _licensing_datas.append((_trust_anchor, os.path.join('commercial_runtime', 'licensing_contracts')))
 
+# retail-hardware-viewports (2026-09-24) -- owner_endpoint.json, the
+# release-baked OWNER_LICENSING_BASE_URL (config.py's
+# _resolve_owner_licensing_base_url()). Same "PyInstaller's static
+# import-graph analysis cannot see a plain JSON data file, so it must be
+# listed here explicitly or a commercial build silently ships without it"
+# reasoning as trust_anchor.json immediately above -- an installed copy
+# launched from the Start menu has no AURA_OWNER_LICENSING_URL environment
+# variable and no screen to set one, so THIS is its only way to ever learn
+# where Owner is and be able to activate.
+#
+# Bundled to the ROOT of the frozen bundle ('.', i.e. BASE_DIR /
+# sys._MEIPASS at runtime) rather than into a subpackage the way
+# trust_anchor.json is: config.py resolves it as
+# `os.path.join(BASE_DIR, OWNER_ENDPOINT_FILENAME)`, a product-level build
+# artifact, not commercial_runtime package data.
+#
+# Written by scripts/release/build_desktop_installer.ps1 to
+# build/release/owner_endpoint.json immediately before this spec runs, and
+# ALWAYS deleted again by that script's `finally` block afterward -- so it is
+# gitignored and build-time-only, exactly like trust_anchor.json. A
+# dev/source build run without that script simply has no such file, and
+# config.py's own docstring is explicit that a missing baked file is the
+# ordinary case, not an error: it resolves to '' silently, same as today.
+_owner_endpoint = os.path.join(ROOT, 'build', 'release', 'owner_endpoint.json')
+if os.path.exists(_owner_endpoint):
+    _licensing_datas.append((_owner_endpoint, '.'))
+
+# Fail-CLOSED, but only for a RELEASE build (AURA_RELEASE_BUILD=1, set by
+# build_desktop_installer.ps1 around the PyInstaller invocation and always
+# cleared again in that script's `finally` block -- never left set for an
+# ordinary developer build).
+#
+# WHY THIS EXISTS: the published rc.7 installer shipped WITHOUT
+# trust_anchor.json. This spec has only ever included it "when present" (see
+# the comment above _trust_anchor), so a release cut without one still
+# produced a complete, exit-0 build -- and that build could never verify a
+# single Owner response, so it could never activate. Nothing here said so at
+# build time; it was only discoverable by trying to activate a real install
+# and watching it fail. A dev/source build (the variable unset) keeps
+# today's lenient behavior on purpose -- both files are still genuinely
+# optional there, and this spec must never require a release engineer's
+# trust anchor or baked URL just to `pyinstaller ... --noconfirm` locally.
+if os.environ.get('AURA_RELEASE_BUILD') == '1':
+    _release_problems = []
+    if not os.path.exists(_trust_anchor):
+        _release_problems.append(f"trust_anchor.json missing at {_trust_anchor}")
+    if not os.path.exists(_owner_endpoint):
+        _release_problems.append(f"owner_endpoint.json missing at {_owner_endpoint}")
+    if _release_problems:
+        raise SystemExit(
+            "AURA_RELEASE_BUILD=1 but this build is not release-ready: "
+            + "; ".join(_release_problems)
+            + ". A release build must never ship without a way to verify Owner's "
+              "signed responses or a baked Owner licensing URL -- fix the inputs "
+              "and re-run, or unset AURA_RELEASE_BUILD for a lenient dev/source build."
+        )
+
 # certifi's cacert.pem is a data file, not a module -- PyInstaller's
 # built-in hook-certifi.py (pyinstaller-hooks-contrib) is supposed to
 # collect it automatically, but wasn't firing in this build environment:
