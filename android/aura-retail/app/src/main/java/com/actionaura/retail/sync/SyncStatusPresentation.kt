@@ -1,5 +1,6 @@
 package com.actionaura.retail.sync
 
+import com.actionaura.retail.ui.i18n.tr
 import kotlin.math.roundToLong
 
 // Pure presentation logic for the sync status screen -- deliberately free of
@@ -86,14 +87,12 @@ fun mostRecentSuccessMillis(health: SyncHealth): Long? {
  * integer division -- integer division would truncate instead of round and
  * quietly disagree with the desktop at every boundary.
  *
- * On the translation compromise: the desktop's own `t('s ago')` /
- * `t('m ago')` etc. concatenate a bare number with a unit word, so a
- * translated unit can't be wrapped around the number the way `tr(...)`
- * wraps a whole sentence elsewhere in this app -- the desktop documents this
- * as an accepted compromise (English unit suffixes even in Arabic) rather
- * than inventing a template-substitution scheme for one string. This
- * function makes the same call: it returns the bare English string, and the
- * screen passes it through as-is instead of routing it through `tr(...)`.
+ * On translation: the desktop concatenates the bare number with a
+ * TRANSLATED unit (`diffSeconds + t('s ago')`, and locales/ar.json carries
+ * " ثانية مضت" etc.), so this does the same through [tr] with the same keys
+ * and the same Arabic. This paragraph used to claim the desktop kept English
+ * units in Arabic; it never did, and on that claim the phone printed
+ * "5s ago" under an Arabic "آخر مزامنة".
  */
 fun formatRelative(deltaMillis: Long): String {
     // Seconds are computed BEFORE the "just now" comparison, not after, and
@@ -111,15 +110,15 @@ fun formatRelative(deltaMillis: Long): String {
     // backwards), which lands on 0 and therefore on "just now" -- never a
     // negative age. Same guard, same place, as the desktop's Math.max(0, ...).
     val seconds = maxOf(0L, (deltaMillis / 1000.0).roundToLong())
-    if (seconds < 5) return "just now"
-    if (seconds < 60) return "${seconds}s ago"
+    if (seconds < 5) return tr("just now")
+    if (seconds < 60) return "$seconds" + tr("s ago")
 
     val minutes = (seconds / 60.0).roundToLong()
-    if (minutes < 60) return "${minutes}m ago"
+    if (minutes < 60) return "$minutes" + tr("m ago")
 
     val hours = (minutes / 60.0).roundToLong()
-    if (hours < 24) return "${hours}h ago"
+    if (hours < 24) return "$hours" + tr("h ago")
 
     val days = (hours / 24.0).roundToLong()
-    return "${days}d ago"
+    return "$days" + tr("d ago")
 }

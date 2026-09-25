@@ -123,11 +123,12 @@ private fun SyncHeadlineCard(tier: SyncTier, health: SyncHealth, now: Long) {
             // mostRecentSuccessMillis(health) cannot be null here -- CALM is
             // only reached when classifySync() has already confirmed a
             // success exists -- but the fallback is written defensively
-            // rather than force-unwrapped, and deliberately matches the same
-            // bare "just now" formatRelative() itself would return for a
-            // near-zero delta, so it never needs its own translation entry.
+            // rather than force-unwrapped, and deliberately matches what
+            // formatRelative() itself returns for a near-zero delta -- which,
+            // since 2026-09-26, is tr("just now") ("الآن" on an Arabic till),
+            // so the fallback goes through tr() too.
             val last = mostRecentSuccessMillis(health)
-            val whenText = last?.let { formatRelative(now - it) } ?: "just now"
+            val whenText = last?.let { formatRelative(now - it) } ?: tr("just now")
             title = tr("Sync is working")
             body = tr("Last synced") + " " + whenText
             titleColor = MaterialTheme.colorScheme.onSurface

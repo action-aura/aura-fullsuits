@@ -1,6 +1,9 @@
 package com.actionaura.retail.sync
 
+import androidx.compose.runtime.MutableState
 import com.actionaura.retail.ui.codeOnly
+import com.actionaura.retail.ui.i18n.AppLang
+import com.actionaura.retail.ui.i18n.AppLocale
 import com.google.common.truth.Truth.assertThat
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -199,6 +202,44 @@ class SyncStatusPresentationTest {
         // correction) must not print a negative age.
         assertThat(formatRelative(-1)).isEqualTo("just now")
         assertThat(formatRelative(-60_000)).isEqualTo("just now")
+    }
+
+    /**
+     * An Arabic till read "آخر مزامنة 5s ago": formatRelative returned bare
+     * English while the heading beside it went through tr(). Expected values
+     * are the desktop's locales/ar.json entries for the same keys, number
+     * first, exactly as app-shell.js concatenates them.
+     */
+    @Test
+    fun relative_time_is_arabic_on_an_arabic_till() {
+        withLang(AppLang.AR) {
+            assertThat(formatRelative(0)).isEqualTo("الآن")
+            assertThat(formatRelative(5_000)).isEqualTo("5 ثانية مضت")
+            assertThat(formatRelative(60_000)).isEqualTo("1 دقيقة مضت")
+            assertThat(formatRelative(3_600_000)).isEqualTo("1 ساعة مضت")
+            assertThat(formatRelative(86_400_000)).isEqualTo("1 يوم مضت")
+        }
+        // Allow-half: the same inputs are still the desktop's English once
+        // the language is back to English.
+        assertThat(formatRelative(5_000)).isEqualTo("5s ago")
+    }
+
+    /** Sets [AppLocale.lang] (private setter; set() needs a Context) through
+     *  its delegate for [block] only, restoring it so no other test in this
+     *  JVM inherits Arabic. */
+    private fun withLang(lang: AppLang, block: () -> Unit) {
+        val field = AppLocale::class.java.getDeclaredField("lang\$delegate")
+        field.isAccessible = true
+        val owner = if (java.lang.reflect.Modifier.isStatic(field.modifiers)) null else AppLocale
+        @Suppress("UNCHECKED_CAST")
+        val state = field.get(owner) as MutableState<AppLang>
+        val before = state.value
+        state.value = lang
+        try {
+            block()
+        } finally {
+            state.value = before
+        }
     }
 
     // ── Reachability: a screen that exists but is unreachable is the bug ───

@@ -878,6 +878,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Failing" to "فاشل",
     "Last success" to "آخر نجاح",
     "never" to "أبدًا",
+    "just now" to "الآن",
+    "s ago" to " ثانية مضت",
+    "m ago" to " دقيقة مضت",
+    "h ago" to " ساعة مضت",
+    "d ago" to " يوم مضت",
 
     // ── Trial Balance (retail-hardware-viewports, schema v38/v39 general
     //    ledger) -- ui/screens/TrialBalanceScreen.kt. Where a string also
