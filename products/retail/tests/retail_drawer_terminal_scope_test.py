@@ -333,10 +333,24 @@ def test_a_brand_new_shop_can_close_its_first_drawer_with_nothing_rung():
     here, a test's POSITION in the file) that has already reached the state
     a bug needs is a fixture that manufactures the bug away.
     """
-    assert retail_api._CREDIT_SCHEMA_READY is False, (
-        'some earlier test in this file already extended the payments schema (sold '
-        'something), so this test is no longer running against a genuinely fresh '
-        'database and cannot prove the fix. Move it back before the first sale.')
+    # init_app() now runs the lazy ensure at BOOT (app.py::_ensure_runtime_
+    # schema_for_sync, the fresh-join sync fix), so this test's position in
+    # the file can no longer guarantee a bare `payments` table -- the columns
+    # below already exist before any test runs. Manufacture the pre-ensure
+    # state explicitly instead: drop the two columns this bug is about and
+    # clear the process flag, so ONLY the drawer routes' own ensure call can
+    # bring them back. Still must run before the first sale (a later
+    # create_sale would re-add them before this test starts).
+    conn = get_retail_conn()
+    try:
+        for col in ('direction', 'related_type'):
+            conn.execute(f'ALTER TABLE payments DROP COLUMN {col}')
+        conn.commit()
+        bare = {r[1] for r in conn.execute('PRAGMA table_info(payments)').fetchall()}
+    finally:
+        conn.close()
+    assert not ({'direction', 'related_type'} & bare), sorted(bare)
+    retail_api._CREDIT_SCHEMA_READY = False
     admin, cid, pid = _new_shop()
     with at_terminal(TILL_DESK):
         sid = _open(admin, 50.0).get_json()['data']['id']

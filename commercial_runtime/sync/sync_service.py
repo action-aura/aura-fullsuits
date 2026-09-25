@@ -1103,10 +1103,24 @@ class SyncService:
         # column it would create, so calling it for a pure-catalogue batch
         # would be correct but pointless; scoped narrower than the
         # company_id fetch just above on purpose.
+        #
+        # ...AND retail_setting, of ANY event type. The `retail_settings`
+        # TABLE itself is created by the same lazy ensure, not by schema.py,
+        # and this list forgot it. Measured 2026-09-25 on a real till that
+        # joined a shop through Owner: the shop had set its currency, the
+        # first pulled page carried that retail_setting next to 6 products,
+        # `no such table: retail_settings` rolled the WHOLE page back, and the
+        # new device received no products at all -- until a settings screen
+        # happened to run a route that created the table. Delete counts too:
+        # a delete-only first page reaches `DELETE FROM retail_settings` on
+        # the same missing table. app.py's boot-time
+        # `_ensure_runtime_schema_for_sync` is the first line of defence; this
+        # is the one that still holds if that boot call ever failed.
         if self._local_ensure_schema is not None and (
             any(
-                ev.get("entity_type") in ("sale", "return", "payment")
-                and ev.get("event_type") in ("create", "update")
+                (ev.get("entity_type") in ("sale", "return", "payment")
+                 and ev.get("event_type") in ("create", "update"))
+                or ev.get("entity_type") == "retail_setting"
                 for ev in events
             ) or touches_pending_or_quarantine
         ):

@@ -678,6 +678,78 @@ _site_housekeeping_stop = None
 SITE_FORWARDER_INTERVAL_SECONDS = 10.0
 
 
+def _ensure_runtime_schema_for_sync():
+    """Boot-time seam (retail-hardware-viewports): runs retail_api.py's own
+    lazy `_ensure_credit_schema(conn)` migration BEFORE any SyncService or
+    hub self-sync is started, so a freshly-joined device's very first pull
+    batch never depends on a UI route having run first.
+
+    THE DEFECT THIS CLOSES, measured 2026-09-25 on a real fresh till that
+    joined an existing shop through Owner: every sync pull failed with
+    `sqlite3.OperationalError: no such table: retail_settings` at
+    commercial_runtime/sync/sync_service.py's `_apply_event`
+    (`entity_type == "retail_setting"` branch, ~line 1838), reached via
+    `apply_pull_result -> pull_once`. The shop had changed one setting (base
+    currency JOD), so the pulled batch carried one `retail_setting` event
+    next to 6 `product` events; the batch is applied inside a single
+    transaction, so that one missing-table error rolled back the WHOLE
+    batch, the cursor never advanced, and the new device received NO
+    products either (`sync_cursor.last_seq` stayed 0, "consecutive
+    failures=5"). `retail_settings` -- like `payment_methods` and
+    `doc_sequences` beside it -- is created only lazily, by
+    `api/retail_api.py::_ensure_credit_schema(conn)`, the first time an HTTP
+    route that calls it happens to run (see that function's own
+    docstring: "Idempotent migration. Extends the existing retail tables;
+    safe on live data."). Opening a settings screen on that same till
+    created the table, and the NEXT pull then applied the whole backlog
+    correctly -- so the till self-healed, but only because some UI screen
+    happened to hit that route before the sync timer's next tick. A
+    headless till, or a phone that never opens a settings screen before its
+    first background sync fires, stays wedged forever: the sync loop's
+    timer runs on its own schedule, completely independent of any route
+    ever being hit.
+
+    This is the SAME shape of bug `SyncService`'s own `local_ensure_schema`
+    constructor hook (commercial_runtime/sync/sync_service.py) was already
+    built to close for `sales.due_date` and most of `payments`' AR/AP
+    columns (Launch-readiness Phase 5) -- but that hook only fires from
+    INSIDE `apply_pull_result`, and only when the batch carries a
+    sale/return/payment create or update (see that method's own comment,
+    "scoped narrower than the company_id fetch just above on purpose").
+    `retail_setting` was never in that tuple, so a settings-plus-catalogue
+    batch -- exactly what a freshly-joined device receives first -- never
+    triggered it. Widening that tuple would only have closed THIS one gap;
+    the next lazily-created table would reopen the identical failure with a
+    different entity_type. This seam instead runs the same idempotent
+    ensure unconditionally, at boot and at both places sync/hub-self-sync
+    can start, so by the time a pull is even attempted the schema is simply
+    already there, regardless of what that first batch contains -- see
+    `_ensure_credit_schema`'s own docstring for why it is safe to call
+    unconditionally against a live database.
+
+    NEVER RAISES -- same contract as every neighbouring activation-adjacent
+    seam in this module (`_start_sync_after_activation`,
+    `_start_site_relay_if_enabled`, `_enter_hub_self_sync`): a schema hiccup
+    here must never stop a till from booting or from starting sync for
+    reasons that have nothing to do with sync itself.
+
+    Idempotent and cheap to call from all three sites that use it below:
+    `_ensure_credit_schema`'s own `_CREDIT_SCHEMA_READY` module flag makes
+    every call after the first a single in-process boolean check."""
+    try:
+        conn = get_retail_conn()
+        try:
+            _ensure_credit_schema(conn)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception(
+            'Runtime schema ensure (retail_settings/payment_methods/'
+            'doc_sequences/AR-AP columns) failed unexpectedly before sync '
+            'start -- never fatal, but a device in this state can still '
+            'hit "no such table" on its first pull until this succeeds.')
+
+
 def _build_windows_sync_services(relay_base_url):
     """Constructs the Windows sync-service pair -- everything the `if
     _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':` block
@@ -1184,6 +1256,14 @@ def _enter_hub_self_sync(*, start_timers: bool = True) -> None:
     if LICENSING_PLATFORM == 'ANDROID':
         return
     try:
+        # `_ensure_runtime_schema_for_sync()` (retail-hardware-viewports):
+        # before this function builds or starts either SyncService below --
+        # see that function's own docstring for the "no such table:
+        # retail_settings" defect this closes. Outside the lock: cheap and
+        # idempotent (the ensure functions already guard with module
+        # flags), and this hub may not even be the one building the pair
+        # this call.
+        _ensure_runtime_schema_for_sync()
         with _start_sync_after_activation_lock:
             global _sync_service, _registry_sync_service, _sync_relay_selector
             global _site_forwarder_loop, _site_housekeeping_stop
@@ -1407,6 +1487,13 @@ def _start_sync_after_activation():
             return
 
         global _sync_service, _registry_sync_service
+
+        # `_ensure_runtime_schema_for_sync()` (retail-hardware-viewports):
+        # before this function builds or starts anything below -- see that
+        # function's own docstring for the "no such table: retail_settings"
+        # defect this closes. Cheap/idempotent even on the common path where
+        # `_sync_service` already exists and this call changes nothing.
+        _ensure_runtime_schema_for_sync()
 
         with _start_sync_after_activation_lock:
             if _sync_service is None:
@@ -2397,6 +2484,16 @@ def init_app():
     # Runs BEFORE any request can be served (`_INIT_APP_HAS_RUN` is only set
     # True at the end of this function), so `nudge()` can never race this
     # flip -- see that function's own docstring.
+    #
+    # `_ensure_runtime_schema_for_sync()` (retail-hardware-viewports): runs
+    # BEFORE the hub-self-sync resume and BEFORE either SyncService's own
+    # `.start()` call just below -- see that function's own docstring for
+    # the "no such table: retail_settings" defect this closes. This also
+    # covers Android: Chaquopy's entry point (android/aura-retail/app/src/
+    # main/python/main.py `_run_server`) calls this SAME `init_app()` before
+    # waitress ever binds the port Kotlin's SyncCoordinator talks to, so no
+    # separate Android seam is needed here.
+    _ensure_runtime_schema_for_sync()
     if LICENSING_PLATFORM != 'ANDROID' and _hub_self_sync_was_active_before():
         _enter_hub_self_sync(start_timers=False)
     if _sync_service is not None:

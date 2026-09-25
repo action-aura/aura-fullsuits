@@ -199,3 +199,76 @@ def test_unrecognised_event_type_is_ignored_not_applied(get_conn):
 def test_retail_setting_is_in_the_retail_set_and_not_the_registry_set():
     assert "retail_setting" in RETAIL_SYNC_ENTITY_TYPES
     assert "retail_setting" not in REGISTRY_SYNC_ENTITY_TYPES
+
+
+# ── 7. a FRESH device has no retail_settings table yet ──────────────────────
+#
+# Every test above runs on `_SCHEMA`, which CREATES retail_settings -- the
+# fixture manufactured exactly the state that hid a real defect. On a real
+# device the table comes from retail_api.py's lazy `_ensure_credit_schema`,
+# not from schema.py, so a till that has just joined a shop and never opened
+# a settings screen has no such table. Measured 2026-09-25: the first pulled
+# page (the shop's currency + 6 products) died on `no such table:
+# retail_settings` and rolled back whole; the device got no products.
+# `apply_pull_result` must run the `local_ensure_schema` hook for any batch
+# carrying a retail_setting -- of ANY event type -- before applying it.
+
+_SCHEMA_WITHOUT_SETTINGS = _SCHEMA.split("CREATE TABLE sync_outbox", 1)[1]
+_SCHEMA_WITHOUT_SETTINGS = "CREATE TABLE sync_outbox" + _SCHEMA_WITHOUT_SETTINGS
+
+
+@pytest.fixture
+def fresh_get_conn(tmp_path):
+    path = tmp_path / "fresh.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_SCHEMA_WITHOUT_SETTINGS)
+    conn.commit()
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='retail_settings'"
+    ).fetchone() is None, "fixture must start WITHOUT retail_settings"
+    conn.close()
+
+    def _get_conn():
+        c = sqlite3.connect(str(path), timeout=30)
+        c.row_factory = sqlite3.Row
+        return c
+    return _get_conn
+
+
+def _apply_with_hook(get_conn, events, calls):
+    """Same REAL pull path as `_apply`, with a `local_ensure_schema` hook
+    that does what the real one does for this table (CREATE TABLE IF NOT
+    EXISTS, same DDL as retail_api.py's `_ensure_credit_schema`) and counts
+    its own calls, so a pass proves the hook RAN rather than the table
+    happening to exist."""
+    def ensure(conn):
+        calls.append(1)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS retail_settings ("
+            "company_id INTEGER, skey TEXT, svalue TEXT, PRIMARY KEY (company_id, skey))"
+        )
+    conn = get_conn()
+    service = SyncService(client_factory=lambda: None, get_conn=get_conn,
+                          local_company_id_provider=lambda: RECEIVER_COMPANY_ID,
+                          local_ensure_schema=ensure)
+    try:
+        service.apply_pull_result(conn, {"events": events, "cursor": 1})
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_fresh_device_applies_a_pulled_setting_through_the_ensure_hook(fresh_get_conn):
+    calls = []
+    _apply_with_hook(fresh_get_conn, [_event("base_currency", "JOD")], calls)
+    assert calls, "apply_pull_result never called local_ensure_schema for a retail_setting batch"
+    assert _setting(fresh_get_conn, RECEIVER_COMPANY_ID, "base_currency") == "JOD"
+
+
+def test_fresh_device_delete_only_setting_batch_does_not_crash(fresh_get_conn):
+    calls = []
+    _apply_with_hook(fresh_get_conn, [_event("business_day", None, event_type="delete")], calls)
+    assert calls, (
+        "a delete-only retail_setting page must also run the hook: its "
+        "DELETE hits the same missing table")
+    assert _all_settings(fresh_get_conn) == []

@@ -233,10 +233,11 @@ def install_b(tmp_path):
     # its SyncService (app.py passes `_ensure_credit_schema` on both the
     # Windows and the Android branch; SyncService then calls it lazily, from
     # inside apply_pull_result, on any batch touching sale/return/payment).
-    # app.py does NOT call it eagerly at boot -- an earlier attempt at that
-    # regressed an existing test's `_CREDIT_SCHEMA_READY is False`
-    # anti-vacuity assumption -- so this fixture reproduces the hook's
-    # EFFECT rather than mirroring a boot sequence that does not exist.
+    # Since 2026-09-25 app.py ALSO calls it eagerly at boot
+    # (`_ensure_runtime_schema_for_sync`, the fresh-join sync fix;
+    # retail_drawer_terminal_scope_test.py now drops the columns itself to
+    # keep its anti-vacuity check). This harness never boots app.py, so it
+    # still reproduces the hook's EFFECT directly.
     # Without it this harness hits the exact bug the hook closes:
     # `sqlite3.OperationalError: table sales has no column named due_date`,
     # from a "device" that (like install_b always has, by this harness's own
