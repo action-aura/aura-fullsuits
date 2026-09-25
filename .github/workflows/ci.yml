@@ -475,8 +475,17 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      # packages pinned to platform-tools: the action's default list still
+      # asks sdkmanager for the long-removed 'tools' package, which failed
+      # demo-release.yml's first run ("Failed to find package 'tools'",
+      # sdkmanager exit 1, run 36135901738, 2026-09-25) before Gradle ran.
+      # This step used the same defaults, so it would die the same way. The
+      # runner's preinstalled SDK already has the platforms; Gradle fetches
+      # anything else it needs.
       - name: Android SDK setup
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # `chmod +x` first, and it is not defensive boilerplate: this repository
       # is developed on Windows, and `git ls-files -s android/aura-retail/gradlew`
