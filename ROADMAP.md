@@ -6030,3 +6030,42 @@ again. Closed by adding a derived `has_modifiers` flag — an `EXISTS`
 subquery riding the SAME query as the tile list, not a per-product round
 trip — to `list_products` (retail_api.py:1684), `lookup_product` (:1821) and
 `list_product_variants` (:2400). One tap now, cold or warm.
+
+
+## 2026-09-26 — retail schema v41 CLAIMED: one set of books across devices (GL journal sync)
+
+Claimed BEFORE any builder starts (single-writer resource). Checked first:
+every local branch and every origin branch -- the highest RETAIL_SCHEMA_VERSION
+anywhere is 40 (this branch); no ROADMAP entry mentions v41. v35 stays the
+reserved drill-through hole and cannot be used anyway: every install is already
+at v40, so a target of 35 would never run.
+
+WHAT IT IS. `gl_journals` gains `uid` and `source_uid` (partial unique index on
+uid, a pending-uid index, a (company, source_type, source_uid) index) and the
+append-only trigger is re-created to allow exactly one NULL->value write of
+each. Journals then travel between devices as a new append-only `gl_journal`
+sync entity: only the device that rang the document posts it; every receiver
+inserts the same journal with account lines matched by CODE, under its own
+company_id, `ON CONFLICT(uid) DO NOTHING`. A boot backfill gives every
+pre-v41 journal a deterministic uuid5 and sends it once, which heals books
+that already diverged (measured 2026-09-24 on two real tills: P&L 0.000 on the
+desktop vs 5.000 on the device that rang the sale).
+
+WHAT IT IS NOT. No loyalty, promotions, modifiers, transfers, purchase orders
+or AR/AP subledger sync (later waves claim their own versions); no gl_accounts
+sync; no automatic reversal of duplicates.
+
+W1-0, A LATENT MONEY BUG FIXED IN THE SAME WAVE. `_migrate_add_general_ledger`
+re-posts the opening-balance journal on EVERY later schema upgrade (the chain
+re-runs every step and that step has no already-posted guard, although its
+docstring says "runs at most once"). So each v39/v40 upgrade of a shop with a
+non-zero AR/AP balance posted a second opening balance, and v41 would do it
+again. v41 guards it. Duplicates that already exist are sent like any journal
+(so every device holds the same, equally wrong, figures), reported as
+`suspected_duplicate_opening` in a WARNING, and left for the owner to reverse
+with one reversing journal -- the importer can legitimately change
+credit_balance, so a later opening balance may be partly real.
+
+ROLLOUT RULE. A v40 device skips unknown `gl_journal` events and advances its
+cursor past them, so hub/Owner pruning can delete them before it upgrades:
+upgrade every till on a licence together. The uid-set comparison detects gaps.
