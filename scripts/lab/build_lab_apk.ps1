@@ -35,14 +35,19 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -Er
     $global:PSNativeCommandUseErrorActionPreference = $false
 }
 
+# Write-Host, NOT Write-Output -- same defect and same fix as
+# scripts/release/build_desktop_installer.ps1's Write-Step (see its comment):
+# Write-Output put every log line on Main's pipeline, `exit <array>` exits 0,
+# so a FAILED run was a silent success to anything keyed on the exit code.
+# Nothing inside Main may write to the pipeline except its final `return <int>`.
 function Write-Step {
     param([string]$Message)
-    Write-Output ('[build_lab_apk] ' + $Message)
+    Write-Host ('[build_lab_apk] ' + $Message)
 }
 
 function Write-Fail {
     param([string]$Message)
-    Write-Output ('[build_lab_apk] FAILED: ' + $Message)
+    Write-Host ('[build_lab_apk] FAILED: ' + $Message)
 }
 
 function Main {
@@ -155,7 +160,7 @@ function Main {
     if ($GradleExitCode -ne 0) {
         Write-Step '---- last 60 lines of build.log ----'
         $TailLines = Get-Content -Path $BuildLog -Tail 60 -ErrorAction SilentlyContinue
-        foreach ($line in $TailLines) { Write-Output $line }
+        foreach ($line in $TailLines) { Write-Host $line }
         Write-Fail ('gradlew.bat assembleDebug exited with code ' + $GradleExitCode)
         return 20
     }
@@ -368,6 +373,18 @@ function Main {
     return 0
 }
 
-$__exitCode = Main
-Write-Output ('SCRIPT_DONE exit=' + $__exitCode)
+# Main's pipeline output must be exactly one [int] (see Write-Step's comment).
+# Anything else is echoed so it is not lost, and the run fails closed.
+$__mainOutput = @(Main)
+$__exitCode = 1
+if ($__mainOutput.Count -gt 0 -and $__mainOutput[-1] -is [int]) {
+    $__exitCode = $__mainOutput[-1]
+    if ($__mainOutput.Count -gt 1) {
+        foreach ($__stray in $__mainOutput[0..($__mainOutput.Count - 2)]) { Write-Host ('[build_lab_apk] (stray output) ' + $__stray) }
+    }
+} else {
+    foreach ($__stray in $__mainOutput) { Write-Host ('[build_lab_apk] (stray output) ' + $__stray) }
+    Write-Host '[build_lab_apk] FAILED: internal error -- Main did not return an integer exit code.'
+}
+Write-Host ('SCRIPT_DONE exit=' + $__exitCode)
 exit $__exitCode
