@@ -28,13 +28,16 @@ param(
     # conflict on 5443 (two headless tills on one box, unlike two real shop
     # machines, share one loopback network stack).
     [ValidateSet("auto", "0", "1")]
-    [string]$SiteRelay = "auto"
+    [string]$SiteRelay = "auto",
+    # Optional. Where this till activates. Defaults to the lab Owner on
+    # loopback; pass the public tunnel address (https://...) to prove the
+    # exact path a device at another location takes (2026-09-25).
+    [string]$OwnerLicensingUrl = "http://127.0.0.1:5551/api/licensing/v1"
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "lab_common.ps1")
 
-$OwnerLicensingUrl = "http://127.0.0.1:5551/api/licensing/v1"
 $logDir = Join-Path $LabRoot "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 

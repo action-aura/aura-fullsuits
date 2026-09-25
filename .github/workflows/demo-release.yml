@@ -1,0 +1,217 @@
+# Demo release build: the Windows installer and the Android APK, built on
+# GitHub's runners and attached to a DRAFT GitHub release.
+#
+# WHY THIS EXISTS (2026-09-25): the machine these builds used to come from
+# sits on a connection whose UPLOAD is too slow to ship a ~25 MB installer and
+# an ~80 MB APK anywhere. Building here means the only thing that leaves that
+# machine is a git push of source changes and a tag -- a few kilobytes -- and
+# whoever installs downloads the finished files from the release page.
+#
+# DRAFT, not published: this repository is PUBLIC, so a published release is
+# downloadable by anyone. A draft is visible only to people with write access
+# to the repository; publishing it is a separate, deliberate click.
+#
+# HOW TO RUN IT
+#   1. One-time repository variables (Settings > Secrets and variables >
+#      Actions > Variables, or `gh variable set`):
+#        AURA_TRUST_ANCHOR_JSON  the contents of
+#                                commercial_runtime/licensing_contracts/trust_anchor.json
+#                                (PUBLIC keys only -- it names which Owner signing
+#                                keys a till trusts; nothing in it is secret. It is
+#                                gitignored because it is a per-release build input,
+#                                not because it is confidential.)
+#        AURA_DEMO_OWNER_URL     the Owner base URL the builds activate against,
+#                                https only, no trailing slash
+#   2. Push a tag named demo-build-<anything> on the commit to build:
+#        git tag demo-build-2026-09-25a && git push origin demo-build-2026-09-25a
+#      Changing only the Owner URL needs no code change: update the variable
+#      and push a new tag.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#   - No credentials, licence keys or passwords are ever part of a build or of
+#     the release notes.
+#   - The APK is a DEBUG-signed build (applicationId com.actionaura.retail.debug)
+#     signed with the runner's throwaway debug key. A release-signed APK needs
+#     the production keystore as a repository secret, which is a separate,
+#     explicit decision. Consequence: a phone that already has a debug build
+#     signed with a different key must uninstall it first.
+#   - The debug build skips build.gradle's release-blocking checks, so the AI
+#     assistant (AURA_AI_BEARER_TOKEN) and WhatsApp stay unconfigured and say
+#     so on their own screens.
+
+name: demo-release
+
+on:
+  push:
+    tags: ['demo-build-*']
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      owner_url: ${{ steps.check.outputs.owner_url }}
+    steps:
+      # Fail in the first ten seconds, not after two long builds, when the
+      # one-time variables were never set or the URL could never activate
+      # (both the desktop's baked-URL rule and Android's network security
+      # config refuse cleartext to anything but the device itself).
+      - name: Check build inputs
+        id: check
+        env:
+          OWNER_URL: ${{ vars.AURA_DEMO_OWNER_URL }}
+          TRUST_ANCHOR_JSON: ${{ vars.AURA_TRUST_ANCHOR_JSON }}
+        run: |
+          set -euo pipefail
+          url="${OWNER_URL%/}"
+          case "$url" in
+            https://?*) ;;
+            *) echo "::error::AURA_DEMO_OWNER_URL must be an https:// URL (got '${OWNER_URL}')"; exit 1 ;;
+          esac
+          printf '%s' "$TRUST_ANCHOR_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); ids=[k["key_id"] for k in d["keys"]]; assert ids, "no keys"; print("trust anchor key ids:", ids)'
+          echo "owner_url=$url" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: config
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.14 and PyInstaller 6.22 are what the installer was built and
+      # run-verified with on the release machine; a different interpreter is a
+      # different frozen bundle.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Python dependencies
+        run: python -m pip install -r requirements/retail.txt pywebview==6.2.1 pyinstaller==6.22.0 pyinstaller-hooks-contrib==2026.6
+
+      - name: Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Trust anchor
+        shell: pwsh
+        env:
+          TRUST_ANCHOR_JSON: ${{ vars.AURA_TRUST_ANCHOR_JSON }}
+        run: |
+          [System.IO.File]::WriteAllText("$PWD/commercial_runtime/licensing_contracts/trust_anchor.json", $env:TRUST_ANCHOR_JSON, (New-Object System.Text.UTF8Encoding $false))
+
+      # The script refuses a dirty tree, fails closed without the trust anchor,
+      # bakes the Owner URL into the bundle and checks it landed exactly.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'desktop-out'
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          ./scripts/release/build_desktop_installer.ps1 `
+            -OwnerLicensingUrl '${{ needs.config.outputs.owner_url }}/api/licensing/v1' `
+            -OutDir $out -Python (Get-Command python).Source -Iscc $iscc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem $out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop
+          path: |
+            ${{ runner.temp }}/desktop-out/AuraRetail-Setup-*.exe
+            ${{ runner.temp }}/desktop-out/desktop-build-info.json
+          if-no-files-found: error
+
+  android:
+    needs: config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Trust anchor
+        env:
+          TRUST_ANCHOR_JSON: ${{ vars.AURA_TRUST_ANCHOR_JSON }}
+        run: printf '%s' "$TRUST_ANCHOR_JSON" > commercial_runtime/licensing_contracts/trust_anchor.json
+
+      # chmod first: the wrapper is committed as 100644 from Windows (see
+      # ci.yml's android-tests job for the measurement).
+      - name: Build APK
+        working-directory: android/aura-retail
+        env:
+          OWNER_URL: ${{ needs.config.outputs.owner_url }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon \
+            -PownerLicensingBaseUrl="$OWNER_URL/api/licensing/v1" \
+            -PownerSyncBaseUrl="$OWNER_URL"
+
+      # Same two checks scripts/lab/build_lab_apk.ps1 makes on the lab APK:
+      # the Owner URLs compiled into BuildConfig, and the trust anchor packed
+      # inside Chaquopy's app.imy. An APK missing either installs fine and can
+      # never activate.
+      - name: Verify APK contents
+        env:
+          OWNER_URL: ${{ needs.config.outputs.owner_url }}
+        run: |
+          set -euo pipefail
+          cd android/aura-retail/app
+          apk=$(ls build/outputs/apk/debug/*.apk | head -1)
+          bc=$(find build/generated/source/buildConfig/debug -name BuildConfig.java | head -1)
+          grep -F "OWNER_LICENSING_BASE_URL = \"$OWNER_URL/api/licensing/v1\"" "$bc"
+          grep -F "OWNER_SYNC_BASE_URL = \"$OWNER_URL\"" "$bc"
+          python3 - "$apk" <<'EOF'
+          import io, json, sys, zipfile
+          outer = zipfile.ZipFile(sys.argv[1])
+          inner = zipfile.ZipFile(io.BytesIO(outer.read("assets/chaquopy/app.imy")))
+          anchor = json.loads(inner.read("commercial_runtime/licensing_contracts/trust_anchor.json"))
+          print("trust anchor inside APK:", [k["key_id"] for k in anchor["keys"]])
+          EOF
+          version=$(grep -m1 -oP 'versionName\s+"\K[^"]+' build.gradle)
+          mkdir -p "$RUNNER_TEMP/android-out"
+          cp "$apk" "$RUNNER_TEMP/android-out/AuraRetail-$version-demo.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: ${{ runner.temp }}/android-out/*.apk
+          if-no-files-found: error
+
+  release:
+    needs: [config, desktop, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER_URL: ${{ needs.config.outputs.owner_url }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum AuraRetail-* > SHA256SUMS.txt
+          exe=$(ls AuraRetail-Setup-*.exe)
+          apk=$(ls AuraRetail-*-demo.apk)
+          {
+            echo "Demo build of Aura Retail for Windows and Android, from commit ${GITHUB_SHA::8}."
+            echo
+            echo "- **Windows:** \`$exe\`. Run it, choose to join the existing shop, activate with the licence key you were given, sign in."
+            echo "- **Android:** \`$apk\`. Allow installs from this source, install, activate with the same key, choose to join the existing shop, sign in."
+            echo "- Both activate against \`$OWNER_URL\`. After activation they keep working without it, and on the same Wi-Fi the phone finds the desktop and syncs through it automatically."
+            echo
+            echo "The APK is debug-signed. Checksums are in \`SHA256SUMS.txt\`."
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+            --title "Aura Retail demo build ($GITHUB_REF_NAME)" --notes-file notes.md \
+            "$exe" "$apk" SHA256SUMS.txt desktop-build-info.json
