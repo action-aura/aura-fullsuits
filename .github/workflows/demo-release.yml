@@ -132,7 +132,14 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      # packages pinned to platform-tools: the action's default list still
+      # asks sdkmanager for the long-removed 'tools' package, which failed
+      # the first run of this workflow ("Failed to find package 'tools'",
+      # sdkmanager exit 1, 2026-09-25). The runner's preinstalled SDK already
+      # has the platforms; Gradle fetches anything else it needs.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Trust anchor
         env:
