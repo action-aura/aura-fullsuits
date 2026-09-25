@@ -21,6 +21,7 @@ import java.net.URLDecoder
 import java.security.SecureRandom
 import java.util.Timer
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.spec.GCMParameterSpec
@@ -516,6 +517,88 @@ class SyncCoordinatorRebindTest {
         // Allow-half: the same hub over https wins, and carries its pin.
         assertThat(SyncCoordinator.resolveRelayTarget("", cloud, "https://192.168.1.164:5443", pin))
             .isEqualTo(RelayTarget("https://192.168.1.164:5443", pin))
+    }
+
+    // -- K9-K10: second adversarial pass on b0cf7ed5 -------------------------
+    //
+    // K9: onHubPairingChanged(Context) read HubPrefs BEFORE taking `lock` and
+    // applied under it. A manual Connect (hub A) racing an auto-join
+    // persistHub (hub B) could then apply in the reverse order of their
+    // reads: B's call reads B and applies B, then A's call -- which read A
+    // before B was written -- applies A. The loop ends on hub A while
+    // HubPrefs holds hub B. With the read inside the same locked unit as the
+    // apply, whichever call applies last also read last. The reader below
+    // persists B and starts the racing call mid-read: the exact interleaving.
+
+    @Test
+    fun `K9 -- the pairing read and the re-point it drives are one locked unit, so the loop ends on what was persisted last`() {
+        val dir = tempFolder.newFolder()
+        SyncCoordinator.start(dir, "", baseUrl())
+        val hubA = RelayTarget("https://127.0.0.1:${closedPort()}", wellFormedPin())
+        val hubB = RelayTarget("https://127.0.0.1:${closedPort()}", wellFormedPin())
+        val persisted = AtomicReference(hubA)
+        val readPersisted: () -> Pair<String?, String?> = { persisted.get().let { it.baseUrl to it.spkiPin } }
+        var racer: Thread? = null
+
+        SyncCoordinator.onHubPairingChanged(dir) {
+            val seen = readPersisted()
+            persisted.set(hubB)
+            val other = Thread { SyncCoordinator.onHubPairingChanged(dir, readPersisted) }
+            racer = other
+            other.start()
+            // Read outside the lock: the racing call finishes (applies B)
+            // right here. Read inside it: the racing call parks BLOCKED on
+            // `lock` until this one has applied A.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (other.isAlive && other.state != Thread.State.BLOCKED && System.currentTimeMillis() < deadline) {
+                Thread.sleep(1)
+            }
+            seen
+        }
+        checkNotNull(racer).join(5_000)
+
+        assertThat(SyncCoordinator.currentRelayTarget()).isEqualTo(hubB)
+    }
+
+    // K10: nudge() snapshots `target` once and pushes under ITS pin. Nothing
+    // drove nudge, so "nudge passes an empty pin" survived the package -- on
+    // hardware, every Save-triggered push failing the hub's TLS handshake
+    // while timer ticks succeed. Driven through nudgeAgainstCurrentTarget,
+    // the seam nudge()'s thread calls (as runOnce() calls
+    // runOnceAgainstCurrentTarget), against the same real TLS hub as K5.
+
+    @Test
+    fun `K10 -- nudge pushes to a pinned TLS hub under the target's own pin, and a wrong pin reaches nothing`() {
+        val hubCert = selfSignedHubCert()
+        val hub = TlsRoutedHub(serverSslContext(hubCert))
+        hub.start()
+        configureOneEventOutbox()
+        try {
+            SyncCoordinator.start(tempFolder.newFolder(), "", baseUrl())
+            val hubUrl = "https://127.0.0.1:${hub.port}"
+
+            // Deny-half: a well-formed pin of a different key reaches nothing.
+            SyncCoordinator.onHubPairingChanged(tempFolder.newFolder(), hubUrl, wellFormedPin())
+            SyncCoordinator.nudgeAgainstCurrentTarget(baseUrl(), "test-internal-secret", identity)
+            assertThat(hub.paths).isEmpty()
+
+            // Allow-half: the hub's real pin -- one push per stream, no pull.
+            val rightPin = SpkiPinning.pinOf(hubCert.certificate)
+            SyncCoordinator.onHubPairingChanged(tempFolder.newFolder(), hubUrl, rightPin)
+            SyncCoordinator.nudgeAgainstCurrentTarget(baseUrl(), "test-internal-secret", identity)
+            assertThat(hub.paths.count { it == "/api/sync/v1/push" }).isEqualTo(SyncStream.ALL.size)
+            assertThat(hub.paths.count { it == "/api/sync/v1/pull" }).isEqualTo(0)
+            assertThat(server.requests.count { it.path.startsWith("/api/sync/v1/") }).isEqualTo(0)
+        } finally {
+            hub.shutdown()
+        }
+
+        // The seam is only as good as the wiring: nudge()'s thread must
+        // delegate to it, never push on its own.
+        val code = codeOnly(source("src/main/java/com/actionaura/retail/sync/SyncCoordinator.kt"))
+        val nudgeBody = code.substringAfter("fun nudge()").substringBefore("internal fun nudgeAgainstCurrentTarget(")
+        assertThat(nudgeBody).contains("nudgeAgainstCurrentTarget(")
+        assertThat(nudgeBody).doesNotContain("pushOnce(")
     }
 
     private fun selfSignedHubCert(): HeldCertificate =

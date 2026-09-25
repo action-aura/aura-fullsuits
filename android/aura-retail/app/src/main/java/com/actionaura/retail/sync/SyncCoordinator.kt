@@ -526,12 +526,10 @@ object SyncCoordinator {
      * -- which this class's own doc names as an accepted latency, not a bug.
      */
     fun onHubPairingChanged(appContext: Context) {
-        val hub = HubPrefs.getBaseUrl(appContext).takeIf { HubPrefs.isConfigured(appContext) }
-        onHubPairingChanged(
-            File(appContext.applicationContext.filesDir, "data"),
-            hub,
-            hub?.let { HubPrefs.getSpkiPin(appContext) },
-        )
+        onHubPairingChanged(File(appContext.applicationContext.filesDir, "data")) {
+            val hub = HubPrefs.getBaseUrl(appContext).takeIf { HubPrefs.isConfigured(appContext) }
+            hub to hub?.let { HubPrefs.getSpkiPin(appContext) }
+        }
     }
 
     /** Context-free core of [onHubPairingChanged] -- see [start]'s own
@@ -539,8 +537,17 @@ object SyncCoordinator {
      *  (no Robolectric/Mockito here, so a plain-JVM test cannot construct a
      *  real `Context`). `internal`, not `private`, for that one reason. */
     internal fun onHubPairingChanged(identityDir: File, hubBaseUrl: String?, hubSpkiPinValue: String?) {
-        val newTarget = resolveRelayTarget(lastBuildConfigValue, lastPersistedRelayBaseUrl, hubBaseUrl, hubSpkiPinValue)
-        synchronized(lock) {
+        onHubPairingChanged(identityDir) { hubBaseUrl to hubSpkiPinValue }
+    }
+
+    /** [readHubPairing] runs INSIDE [lock], in one unit with the re-point it
+     *  decides. Read before the lock, a manual Connect (hub A) racing an
+     *  auto-join persist (hub B) could apply A after B, leaving the loop on
+     *  A while HubPrefs holds B. Pinned by `SyncCoordinatorRebindTest` K9. */
+    internal fun onHubPairingChanged(identityDir: File, readHubPairing: () -> Pair<String?, String?>) {
+        val repointed = synchronized(lock) {
+            val (hubBaseUrl, hubSpkiPinValue) = readHubPairing()
+            val newTarget = resolveRelayTarget(lastBuildConfigValue, lastPersistedRelayBaseUrl, hubBaseUrl, hubSpkiPinValue)
             if (!running) {
                 // Never activated in time for start() to have anything to
                 // run against (or start() genuinely had nothing) -- a hub
@@ -566,10 +573,11 @@ object SyncCoordinator {
             }
             target = newTarget
             markTargetChanged(newTarget)
+            newTarget
         }
         logError(
-            "Sync re-pointed to ${if (newTarget.spkiPin.isNotBlank()) "the paired hub" else "the cloud relay"} " +
-                "(pinned=${newTarget.spkiPin.isNotBlank()}) with no restart.",
+            "Sync re-pointed to ${if (repointed.spkiPin.isNotBlank()) "the paired hub" else "the cloud relay"} " +
+                "(pinned=${repointed.spkiPin.isNotBlank()}) with no restart.",
             null,
         )
     }
@@ -584,24 +592,32 @@ object SyncCoordinator {
     fun nudge() {
         if (!running) return
         thread(isDaemon = true, name = "sync-nudge") {
-            val localBaseUrl = ServerBootstrap.baseUrl()
-            val internalSecret = ServerBootstrap.internalSecret()
-            // ONE volatile read -- see [runOnceAgainstCurrentTarget]'s own
-            // comment on why url and pin must never be read separately.
-            val targetSnapshot = target
-            val identitySnapshot = currentIdentity()
-            val failure = eachStreamCatching("nudge push") { stream ->
-                pushOnce(stream, localBaseUrl, internalSecret, targetSnapshot.baseUrl, identitySnapshot, targetSnapshot.spkiPin)
-            }
-            if (failure == null) {
-                recordSuccess(isPush = true)
-            } else {
-                val (streamLabel, exc) = failure
-                val n = recordFailure(isPush = true, streamLabel = streamLabel, exc = exc)
-                logError("Sync nudge push to the Owner relay FAILED (stream=$streamLabel, " +
-                         "reason=${reasonOf(exc)}, consecutive push failures=$n); that stream's " +
-                         "outbox was left untouched and the next timer tick will retry.", exc)
-            }
+            nudgeAgainstCurrentTarget(
+                localBaseUrl = ServerBootstrap.baseUrl(),
+                internalSecret = ServerBootstrap.internalSecret(),
+                identity = currentIdentity(),
+            )
+        }
+    }
+
+    /** [nudge]'s body, parametrized exactly like [runOnceAgainstCurrentTarget]
+     *  so `SyncCoordinatorRebindTest` K10 can drive it synchronously against
+     *  a pinned TLS hub. `internal`, not `private`, for that one reason. */
+    internal fun nudgeAgainstCurrentTarget(localBaseUrl: String, internalSecret: String, identity: DeviceIdentity) {
+        // ONE volatile read -- see [runOnceAgainstCurrentTarget]'s own
+        // comment on why url and pin must never be read separately.
+        val targetSnapshot = target
+        val failure = eachStreamCatching("nudge push") { stream ->
+            pushOnce(stream, localBaseUrl, internalSecret, targetSnapshot.baseUrl, identity, targetSnapshot.spkiPin)
+        }
+        if (failure == null) {
+            recordSuccess(isPush = true)
+        } else {
+            val (streamLabel, exc) = failure
+            val n = recordFailure(isPush = true, streamLabel = streamLabel, exc = exc)
+            logError("Sync nudge push to the Owner relay FAILED (stream=$streamLabel, " +
+                     "reason=${reasonOf(exc)}, consecutive push failures=$n); that stream's " +
+                     "outbox was left untouched and the next timer tick will retry.", exc)
         }
     }
 
