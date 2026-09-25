@@ -36,18 +36,39 @@ that, on hosting that costs nothing.
 - Both paths use the same free Postgres (Neon) and the same verification
   steps. Pick a path, do not mix compute providers.
 - **The mechanical Oracle setup is one script now:**
-  `owner/deploy/oracle-free/bootstrap.sh` — paste it on a fresh VM, fill in
-  `.env.oracle` when it tells you to, re-run. Section 4.3.
+  `owner/deploy/oracle-free/bootstrap.sh` — `git clone` the deploy branch
+  onto a fresh VM, run the script from that checkout, fill in `.env.oracle`
+  when it tells you to, re-run. Section 4.3.
 - **Restoring an existing signing key onto a new deploy needs a script, not
   just a copy.** `flask licensing activate-signing-key` alone fails on a
   fresh database (`No such signing key`) — `scripts/deploy/
   restore_signing_key.py` closes that gap and refuses if the PEM doesn't
   match what your installers already trust. Section 4.4a — read it before
-  touching the signing key on any redeploy.
+  touching the signing key on any redeploy. **Updated 2026-09-24: it now
+  REFUSES (not just warns) when `trust_anchor.json` is missing or doesn't
+  list the key_id at all, not only on an outright mismatch** — see the
+  audit note in section 4.4a.
 - **A spare laptop is a legitimate alternative to both cloud paths**, given
   the task's own finding that Owner only needs to be reachable for about a
   minute per activation. See **Path C**, section 5b, for the honest
   trade-off and a concrete recommendation.
+- **Scheduled Owner operations (expiry scan, device-limit scan, report
+  snapshots, sync-event pruning) now run automatically on the Oracle Free
+  path** — `bootstrap.sh` installs and enables a systemd timer for this as
+  its last step. They previously ran on NEITHER free path. Section 4.7.
+- **Four gaps found in a 2026-09-24 audit of this runbook are addressed
+  below, one honestly still only partly** — G1 (signing-key restore failing
+  open) fixed and tested, G2 (no scheduler) fixed and tested, G3 (container
+  file permissions after `docker cp`) fixed in the code paths that are
+  checkable without Docker, but **the actual container behavior is
+  UNVERIFIED — Docker is not available in the environment this fix was
+  written in**, G4 (stale CDN copies of `bootstrap.sh`) fixed by running the
+  script from a `git clone` of the deploy branch, printing the commit it
+  runs from AND the commit it deploys, and refusing when they differ. See
+  sections 4.4a, 4.7, 4.4a's ownership note, and 4.3 respectively.
+  **None of this has run on a real Oracle VM yet**: `bootstrap.sh` (including
+  its new systemd-timer step) was exercised end to end only in a local
+  sandbox with `docker`, `sudo` and `systemctl` stubbed out.
 
 ---
 
@@ -176,7 +197,9 @@ process answering occasional activation/check-in traffic plus Caddy's health
 probes should sit above that on its own; if a shop goes quiet for a long
 stretch, add a one-line cron `curl` against `/healthz` every few minutes as
 cheap insurance (a systemd timer pattern already exists in this repo at
-`deploy/staging/systemd/` to copy from).
+`deploy/staging/systemd/` to copy from, or `owner/deploy/oracle-free/
+systemd/` for this path's own scheduled-ops timer -- section 4.7 -- which is
+a different job, but the same install mechanism).
 
 ## 4. Path A — Oracle Cloud Always Free + Neon (recommended, $0/month)
 
@@ -249,11 +272,55 @@ fixing whatever it flagged.
 
 ```bash
 ssh ubuntu@<vm-ip>
-curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/worktree-retail-hardware-viewports/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
-bash bootstrap.sh
+git clone --branch worktree-retail-hardware-viewports \
+  https://github.com/action-aura/aura-fullsuits.git ~/aura-fullsuits
+bash ~/aura-fullsuits/owner/deploy/oracle-free/bootstrap.sh
 ```
 
-> **That URL says a branch name, not `master`, and that is deliberate.**
+Clone straight into `~/aura-fullsuits` — the path the script deploys from
+(its `REPO_DIR` default) — so the script you run and the code it deploys
+are the same checkout. Every re-run below is that same second line.
+
+> **AUDIT 2026-09-24 gap G4 — fetch by `git clone`, not a bare `curl` of the
+> single file, and this is why.** A previous version of this section had you
+> `curl -fsSL https://raw.githubusercontent.com/.../bootstrap.sh -o
+> bootstrap.sh` directly. `raw.githubusercontent.com` is a CDN, and it was
+> observed — while writing this runbook — serving a STALE copy of that exact
+> file for several minutes after a push: the commit was already confirmed
+> present on the branch via the GitHub API while the raw URL still handed
+> back the previous version. The failure is silent and very convincing: you
+> fix something, `curl` it, run it, and watch the old bug happen again.
+> `git clone` does not go through that CDN cache the same way and does not
+> have this problem.
+>
+> `bootstrap.sh` prints two commits: `Running bootstrap.sh from commit …`
+> (where the script itself was read from) as its very first line, and
+> `Deploying commit …` (what `~/aura-fullsuits` is at after its fetch/pull)
+> in step 2. **If they differ it refuses and tells you to re-run** — that
+> happens once, harmlessly, whenever the pull brought in newer commits than
+> the copy of the script already running. (An earlier draft of this fix had
+> you clone a separate `bootstrap-checkout` directory and run the script
+> from there; re-running that older copy after a push deployed the newer
+> code under a banner naming the older commit, exit 0 — reproduced in a
+> sandbox, which is why the refusal exists and why the clone now goes
+> straight into `~/aura-fullsuits`.)
+>
+> If you prefer a single-file fetch anyway (e.g. scripting this from a tool
+> that cannot `git clone`), pin an exact commit SHA into the raw URL instead
+> of a branch name — `https://raw.githubusercontent.com/action-aura/
+> aura-fullsuits/<commit-sha>/owner/deploy/oracle-free/bootstrap.sh` — never
+> a branch name, which is a moving pointer the CDN can legitimately cache
+> stale against. Get the SHA with `git rev-parse HEAD` from a local checkout
+> of the branch, or `gh api repos/action-aura/aura-fullsuits/commits/
+> worktree-retail-hardware-viewports --jq .sha`. Know what that does and
+> does not pin: it pins the SCRIPT only. The script still clones/pulls the
+> branch head into `~/aura-fullsuits`, and a single file cannot know its own
+> commit, so it prints a WARNING instead of the first banner and cannot
+> refuse a mismatch — check the `Deploying commit …` line against the SHA
+> you pinned yourself.
+>
+> **That branch name is a branch name, not `master`, and that is
+> deliberate.**
 > None of the free-hosting deploy content is on `master` — verified by
 > HTTP, not assumed: `master`'s copies of `bootstrap.sh`,
 > `restore_signing_key.py`, `fly.toml` and this runbook all return **404**,
@@ -264,32 +331,30 @@ bash bootstrap.sh
 > download URL.
 >
 > `bootstrap.sh` carries a matching `REPO_BRANCH` default, because the
-> script *also* clones the repo onto the VM and a bare `git clone` takes the
-> remote's default branch — `master` — which would put a checkout on the
+> script *also* fetches/checks out that branch in `~/aura-fullsuits` (and
+> clones it there if the directory is missing), and a bare `git clone` takes
+> the remote's default branch — `master` — which would put a checkout on the
 > server with no `owner/deploy/oracle-free` directory in it at all. The
-> download URL and `REPO_BRANCH` must always name the same branch; when this
-> content does reach `master`, change both in one commit.
+> `--branch` in the clone command above and `REPO_BRANCH` must always name
+> the same branch; when this content does reach `master`, change both in one
+> commit.
 >
 > To deploy a different branch without editing anything:
-> `REPO_BRANCH=some-branch bash bootstrap.sh`
-
-> **If you just pushed a change to `bootstrap.sh`, wait a few minutes before
-> curling it onto the VM.** `raw.githubusercontent.com` is a CDN and serves a
-> cached copy for a short while after a push — observed directly while writing
-> this: the commit was confirmed present on the branch via the GitHub API
-> while the raw URL was still handing back the previous version of the file.
-> The failure is silent and very convincing: you fix something, download it,
-> run it, and watch the old bug happen again. If that occurs, check the first
-> few lines of the file you actually downloaded before assuming the fix did
-> not work.
+> `REPO_BRANCH=some-branch bash ~/aura-fullsuits/owner/deploy/oracle-free/bootstrap.sh`
+> — it switches the checkout, then (because the script now running came
+> from the old branch) refuses once and asks for the same command again.
+> That is why the clone above is a full clone, not `--depth 1`: a shallow
+> clone is single-branch, and switching branches in it fails at checkout.
 
 First run will stop and tell you to fill in `~/aura-fullsuits/owner/deploy/oracle-free/.env.oracle`
 (it creates it from `.env.example` if it doesn't exist yet) — open it, fill
 in every value per the comments in the file itself, then re-run
-`bash bootstrap.sh`. It will stop again if Docker was *just* installed (your
-shell's group membership needs a fresh login to pick up `docker` group
-access) — log out, back in, re-run once more. Three runs, at most, gets you
-to a healthy container.
+`bash ~/aura-fullsuits/owner/deploy/oracle-free/bootstrap.sh`. It will stop
+again if Docker was *just* installed (your shell's group membership needs a
+fresh login to pick up `docker` group access) — log out, back in, re-run
+once more. Three runs, at most, gets you to a healthy container (a fourth
+only if a push landed on the branch in between — see the commit-mismatch
+refusal above).
 
 **What it's actually doing, if you'd rather run it by hand (or the script
 fails and you need to see each step):**
@@ -302,9 +367,11 @@ newgrp docker
 
 # Get the code onto the VM. If the GitHub repo is private, use a fine-
 # grained personal access token in place of a password when prompted, or
-# set up a deploy key first.
-git clone https://github.com/action-aura/aura-fullsuits.git
+# set up a deploy key first. --branch is NOT optional: a bare clone takes
+# master, which has none of owner/deploy/oracle-free (see the note above).
+git clone --branch worktree-retail-hardware-viewports https://github.com/action-aura/aura-fullsuits.git
 cd aura-fullsuits
+git rev-parse HEAD   # note the commit you are deploying
 
 cp owner/deploy/oracle-free/.env.example owner/deploy/oracle-free/.env.oracle
 nano owner/deploy/oracle-free/.env.oracle   # fill in every value -- see the comments in the file itself
@@ -403,6 +470,26 @@ place), and it correctly REFUSED when given a PEM whose derived public key
 didn't match the key_id's entry in `trust_anchor.json`, exiting nonzero
 without writing anything.
 
+> **AUDIT 2026-09-24 gap G1, fixed and mutation-tested — it now REFUSES on
+> two more cases, not just a mismatch.** Before this fix, a MISSING
+> `trust_anchor.json` or one that simply didn't LIST this key_id both
+> printed a WARNING/NOTE and **proceeded anyway** — the only net against
+> registering the wrong key under a trusted key_id was a human reading a
+> warning line in scrollback. Both now REFUSE (nonzero exit, nothing
+> written) exactly like the mismatch case always did. The one override is
+> `--skip-trust-anchor-check`, already loud and already documented as
+> correct for exactly one case — a deliberate first-ever key with nothing
+> yet to conflict with — and wrong for every other one, including the
+> ordinary restore below. See
+> `owner/tests/test_restore_signing_key_trust_anchor.py` for the mutation
+> proof (both the deny-half and the allow-half are tested independently).
+> The 2026-09-26 verification pass found those tests only exercised the
+> cross-check FUNCTION: rewriting `main()` to print the refusal and carry
+> on — the same fail-open one layer up — left them all green. The file now
+> also runs the real `main()` against the test database and asserts exit
+> code 1, nothing registered and `activate_signing_key` never called on a
+> refusal, and a registered ACTIVE key on a match (mutation-proved).
+
 ```bash
 # 1. Get the existing private key PEM onto the VM, named exactly
 #    <key_id>.pem -- e.g. from wherever you backed it up per section 4.6 of
@@ -423,6 +510,26 @@ docker cp ~/owner-ed25519-20260903T160641Z-cdcaa65b.pem "$OWNER_CID":/app/owner/
 docker cp ~/trust_anchor.json "$OWNER_CID":/app/trust_anchor.reference.json
 rm ~/owner-ed25519-20260903T160641Z-cdcaa65b.pem   # don't leave the private key sitting outside the volume
 
+# 1b. AUDIT 2026-09-24 gap G3 -- set ownership explicitly. Without -a,
+#    `docker cp` creates files inside the container owned by ROOT (uid 0),
+#    keeping the source file's permission bits (Docker's own `docker cp`
+#    reference: "Files copied to a container are created with UID:GID of
+#    the root user"). The app runs as the non-root "aura" user
+#    (owner/Dockerfile.staging: `useradd --system --gid aura ... aura`,
+#    `USER aura`), so a 0600 PEM lands present-but-unreadable to the one
+#    process that needs it. `--user root` runs the chown/chmod as root
+#    inside the container; `aura:aura` is resolved BY NAME inside the image,
+#    so it stays right even if a rebuilt image assigns `aura` a different
+#    system uid. The trust anchor gets the same treatment: the restore
+#    script refuses if it cannot read it. This uses "$OWNER_CID" from step 1
+#    (plain `docker exec`), so it works from whatever directory you are in.
+docker exec --user root "$OWNER_CID" \
+  chown aura:aura /app/owner/var/signing-keys/owner-ed25519-20260903T160641Z-cdcaa65b.pem /app/trust_anchor.reference.json
+docker exec --user root "$OWNER_CID" \
+  chmod 600 /app/owner/var/signing-keys/owner-ed25519-20260903T160641Z-cdcaa65b.pem
+docker exec "$OWNER_CID" test -r /app/owner/var/signing-keys/owner-ed25519-20260903T160641Z-cdcaa65b.pem \
+  && echo "PEM readable by the app user" || echo "PEM NOT readable by the app user -- stop and fix before step 2"
+
 # 2. Register it and activate it. This is the script from above --
 #    docker-compose.yml already bind-mounts scripts/deploy/ for exactly
 #    this (trust_anchor.json is copied by hand above, not mounted, for the
@@ -436,12 +543,63 @@ docker compose -f owner/deploy/oracle-free/docker-compose.yml exec owner \
   flask --app app:create_app commercial preflight
 ```
 
+> **Gap G3 is UNVERIFIED on the actual container — say so plainly.** Step
+> 1b above was written and reasoned through against
+> `owner/Dockerfile.staging` and `docker-compose.yml`, but **Docker is not
+> available in the environment this fix was written in, so the chown step
+> has never actually been run against a real container.** What IS verified,
+> with a real Python test
+> (`owner/tests/test_signing_key_unreadable_pem.py`, mutation-proved
+> RED→GREEN): if step 1b is skipped, wrong, or simply doesn't fix the
+> permissions on your platform, `owner/app/licensing_service/signing.py::
+> load_private_key` no longer lets a raw `PermissionError` escape as an
+> unhandled traceback — every caller (this script, `flask commercial
+> preflight`, `flask licensing verify-signing-key-health`) now gets a clear
+> `SigningKeyError` naming the file and the likely cause instead. So a wrong
+> step 1b will be LOUD and readable, not a silent crash — but the step
+> itself still needs a real run on real Oracle infrastructure to confirm it
+> is sufficient (e.g. that `--user root` is accepted the way described, and
+> that `aura`'s in-container gid actually owns the target directory).
+>
+> Two more things, added by the 2026-09-26 verification pass:
+>
+> - **An earlier draft of step 1b could not have worked as pasted.** It used
+>   `docker compose -f owner/deploy/oracle-free/docker-compose.yml ...`, a
+>   path relative to the repo root, while the shell was still in `~` (the
+>   `cd aura-fullsuits` only happens in step 2), so both commands would have
+>   failed with "no such file" and the chown would never have run. It now
+>   uses `docker exec "$OWNER_CID"`, the same handle step 1 already set. It
+>   also used to claim `docker cp` keeps the source file's owner; per
+>   Docker's own reference it does not (root, unless `-a`) — same
+>   conclusion, correct reason.
+> - **The app does NOT refuse to boot on an unreadable key, and that is
+>   deliberate.** gunicorn still starts and `/health/live` stays healthy. The
+>   clear message surfaces instead wherever the key is actually read: `flask
+>   commercial preflight` (which `bootstrap.sh` runs right after startup, and
+>   step 3 above runs again), `restore_signing_key.py`, `flask licensing
+>   verify-signing-key-health`, `/health/ready` (503 on the signing check),
+>   and — as a `SigningKeyError` naming the file, not a bare
+>   `PermissionError` — on the first activation that needs a signature. A
+>   hard refusal inside `create_app()` was considered and rejected: every
+>   tool you would use to FIX the file (this restore script, `flask`
+>   commands via `docker compose exec`) goes through the same
+>   `create_app()`, so a boot-time refusal would lock you out of the cure.
+>   A pre-gunicorn check in the compose `command:` that ignores the CLI
+>   would avoid that, but cannot be tested without Docker and is left as an
+>   open decision, not built.
+
 If step 2 refuses with a public-key mismatch, **stop** — you have the wrong
 PEM file for this key_id. Do not pass `--skip-trust-anchor-check` to get
-past it; get the correct file instead. If step 2 instead prints a WARNING
-that no trust-anchor file was found at all, step 1's `docker cp` of
-`trust_anchor.json` didn't happen or landed at the wrong path -- fix that
-before trusting the result, don't just proceed.
+past it; get the correct file instead. If step 2 instead refuses because no
+trust-anchor file was found (or it doesn't list this key_id), step 1's
+`docker cp` of `trust_anchor.json` didn't happen or landed at the wrong path
+— fix that and re-run; do not pass `--skip-trust-anchor-check` to get past
+this either unless you are certain this is a genuinely first-ever deploy
+with nothing yet to conflict with. If it refuses because the trust-anchor
+file "exists but could not be read or parsed", step 1b's `chown` of
+`/app/trust_anchor.reference.json` did not happen (it lands root-owned) or
+you copied the wrong file — fix that and re-run (added 2026-09-26; before
+that this case was a raw Python traceback rather than a `REFUSING:` line).
 
 #### 4.4b — Generate a brand-new key (ONLY for a genuinely first-ever deploy)
 
@@ -504,6 +662,100 @@ rm owner-signing-keys.tgz
 
 This is safe to defer only while there is no real customer data. The moment
 one shop activates against this key, losing it stops being recoverable.
+
+### 4.7 Scheduled operations — expiry scan, device-limit scan, report snapshots, sync-event pruning
+
+**AUDIT 2026-09-24 gap G2, fixed.** These four real, already-idempotent
+`flask` CLI commands (`owner/app/cli.py`) previously ran on **neither** free
+hosting path — the only existing systemd timer for this bundle
+(`deploy/staging/systemd/`) is hardwired to the old staging deploy's paths
+(`/opt/aura-fullsuits`, `docker-compose.staging.yml`) and does not cover
+`sync prune-events` or `reports generate-scheduled` at all (both are newer
+than that bundle). Without this, expired subscriptions never transitioned,
+over-limit device slots were never flagged, no operational report snapshot
+was ever generated, and `owner_sync_events` grew forever.
+
+**`bootstrap.sh` now installs and enables this automatically, as its last
+step** — nothing manual to do here on a fresh Oracle Free deploy. What it
+installs:
+
+- `owner/deploy/oracle-free/run_scheduled_ops.sh` — a bash wrapper (not a
+  Python one, unlike the staging bundle — see the script's own header for
+  why) that runs, inside the already-running `owner` container via `docker
+  compose exec`: `commercial expiry-scan --apply`, `commercial reconcile
+  --apply`, `commercial device-limit-scan --apply`, `sync prune-events
+  --apply`, and `reports generate-scheduled --period-type
+  daily|weekly|monthly --currency $REPORT_CURRENCY` (all three period
+  types, every night: `generate_snapshot()` returns the existing snapshot
+  for an already-generated period, so weekly/monthly are a no-op except the
+  first night after their period completes — the first version of this
+  script ran only `daily`, so weekly and monthly summaries would never have
+  been generated). Logs one clear OK/FAILED line per job with its exit
+  code, always runs every job regardless of an earlier one's failure, and
+  exits nonzero overall if any job failed (for `OnFailure=`/alerting to key
+  off of, the same convention as the staging bundle). Output goes to the
+  journal: `journalctl -u aura-owner-scheduled-ops.service`.
+- **Not covered — a known regression from the staging bundle:** staging
+  also runs audit-chain verification (`app.audit.services.verify_chain`).
+  There is no `flask` command for it, so it is not in this script; adding
+  it needs a CLI command first. Open gap, not silently dropped.
+- `owner/deploy/oracle-free/systemd/aura-owner-scheduled-ops.{service,timer}`
+  — same daily 03:00 cadence as staging's own bundle. The `.service` file is
+  a template (`__COMPOSE_DIR__` placeholder); `bootstrap.sh` substitutes
+  your install's real, resolved path into it before installing to
+  `/etc/systemd/system/` and running `daemon-reload` + `enable --now` on the
+  `.timer` (never the `.service` directly — enabling the service instead
+  would run it once immediately and never again).
+- `REPORT_CURRENCY` in `.env.oracle` (default `JOD` in `.env.example`) feeds
+  the `--currency` flag `reports generate-scheduled` requires. Deliberately
+  **not** `OWNER_REPORT_CURRENCY` — same reasoning as `SITE_DOMAIN` above:
+  `OWNER_STRICT_CONFIG=true` rejects any unrecognized `OWNER_*`-prefixed
+  variable, and this one is read by the shell wrapper, never by
+  `app/config.py`.
+
+Concurrency: `sync prune-events` and `reports generate-scheduled` both
+refuse outright unless `OWNER_SCHEDULER_ROLE=owner` in the container's
+environment (`app/scheduling.py::require_scheduler_owner`) — already set in
+`.env.example`. The other three scans are idempotent by construction (dedup
+keys / unique constraints, per their own docstrings in `owner/app/cli.py`).
+No separate Postgres-advisory-lock layer was added on top the way the
+staging bundle has one: there is exactly one host on this path, not a
+fleet, and systemd's own `Type=oneshot` semantics already refuse to start a
+second instance of an already-active unit.
+
+**Tested**: `owner/tests/test_oracle_free_scheduled_ops_units.py` parses the
+real `run_scheduled_ops.sh` and the real `.service`/`.timer` files, derives
+the list of currently-registered `flask` CLI commands from the live Flask
+app (`app.cli.commands`, walked recursively — never a hand-typed list here),
+and asserts every command the script invokes is one of them. Mutation-proved
+by temporarily renaming a command in the script (`device-limit-scan` →
+`device-limt-scan`): the test caught it immediately, then passed again once
+reverted. The 2026-09-26 verification pass found that checking the command
+PATH alone let `--apply` → `--aply` and `--period-type daily` → `daly` pass
+every test, although either typo fails that job every night; the suite now
+also hands each invocation's full argument list to the real Click command's
+own parser, and checks every `--period-type` choice the CLI offers is
+scheduled (both mutation-proved). **What is not proven here:** the
+`systemctl` install itself. `bootstrap.sh` step 7 was run end to end in a
+local sandbox with `sudo`/`systemctl`/`docker` stubbed — the rendered unit
+names the real install path with no placeholder left, the timer is copied,
+and `daemon-reload` + `enable --now aura-owner-scheduled-ops.timer` are
+issued — but no real systemd has loaded these units yet. On the VM, confirm
+with `systemctl list-timers aura-owner-scheduled-ops.timer` and, once, a
+manual `sudo systemctl start aura-owner-scheduled-ops.service` followed by
+`journalctl -u aura-owner-scheduled-ops.service`.
+
+**Fly path**: nothing here is Fly-specific, but nothing wires it there
+either. `owner/deploy/fly/` has no equivalent script or timer today. The
+Fly path would need either (a) Fly's own [Machines scheduled
+runs](https://fly.io/docs/machines/flyctl/fly-machine-run/) or a small
+always-on "cron" machine running `run_scheduled_ops.sh`'s logic against
+`flyctl ssh console -C '...'` in place of `docker compose exec`, or (b) a
+GitHub Actions scheduled workflow that SSHes in and runs the same
+commands. Not built here — genuinely not trivial (Fly's own volume-backed
+signing key still needs the same reachability this script assumes) and out
+of scope for this pass; flagged here rather than silently left for the next
+session to rediscover.
 
 ## 5. Path B — Fly.io, ~$2.34/month (if you'd rather pay to skip sysadmin)
 

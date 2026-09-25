@@ -41,17 +41,30 @@ The PEM must already be at
 would put it -- see docs/ops/free-hosting-owner.md section 4.4).
 
 By default this also cross-checks the derived public key against
-`/app/trust_anchor.reference.json` and REFUSES to proceed if the key_id is
-listed there under a DIFFERENT public key. That file is NOT baked into the
-image or bind-mounted automatically (commercial_runtime/licensing_contracts/
-trust_anchor.json is gitignored -- permanently, not just "not yet
-committed" -- so it will not exist on a fresh `git clone`); copy it onto the
-container the same way as the PEM, e.g.
+`/app/trust_anchor.reference.json` and REFUSES to proceed unless that file
+exists AND lists this key_id AND agrees with the PEM's derived public key.
+That file is NOT baked into the image or bind-mounted automatically
+(commercial_runtime/licensing_contracts/trust_anchor.json is gitignored --
+permanently, not just "not yet committed" -- so it will not exist on a fresh
+`git clone`); copy it onto the container the same way as the PEM, e.g.
 `docker cp trust_anchor.json <container>:/app/trust_anchor.reference.json`,
 before running this script. Pass --trust-anchor to point at a different
-path, or --skip-trust-anchor-check to bypass the cross-check entirely (never
-do this for the key your installers already trust -- only
-for a deliberate first-ever key with nothing yet to conflict with).
+path, or --skip-trust-anchor-check to bypass the cross-check entirely.
+
+AUDIT 2026-09-24 gap G1: this REFUSES in all three cases now (missing file,
+key_id not listed, or listed under a different public key) -- it used to
+only refuse on the third and merely WARN-and-proceed on the first two, which
+meant a missing/incomplete trust_anchor.json (e.g. `docker cp` of it was
+forgotten or landed at the wrong path -- an easy mistake, section 4.4a of
+the runbook calls it out explicitly) silently registered whatever key_id was
+given with no cross-check at all, the exact case this script exists to
+prevent. --skip-trust-anchor-check is the only override, and it is loud and
+explicit for a reason: it is documented as correct for exactly ONE case --
+"a deliberate first-ever key with nothing yet to conflict with" -- and wrong
+for every other one, most of all the ordinary restore-an-existing-key case
+this script's own docstring above calls "the path almost everyone needs".
+Never pass it to get past a refusal you don't understand; get the correct
+PEM/trust_anchor.json instead.
 
 Idempotent: safe to re-run. If the DB row already exists with the same
 public key, it is left alone and simply (re-)activated. If it exists with a
@@ -77,6 +90,89 @@ sys.path.insert(0, "/app/owner")
 def _fail(message: str) -> "NoReturn":  # noqa: F821 -- typing.NoReturn optional import avoided for a 1-file script
     print(f"REFUSING: {message}", file=sys.stderr)
     sys.exit(1)
+
+
+class TrustAnchorRefused(Exception):
+    """Raised by cross_check_trust_anchor() when it refuses to proceed.
+    Never a bare sys.exit -- kept as a plain exception so it can be unit
+    tested directly (see owner/tests/test_restore_signing_key_trust_anchor.py)
+    without needing this script's own Flask/DB imports at all; main() is the
+    only place that turns it into a REFUSING:/exit(1)."""
+
+
+def cross_check_trust_anchor(trust_anchor_path: str, key_id: str, derived_public_key: str, skip_check: bool) -> str:
+    """Fails CLOSED in every case except an explicit skip_check=True:
+
+      - the trust-anchor file does not exist at all
+      - the file exists but this key_id isn't listed in it
+      - the file exists, lists this key_id, and disagrees with the PEM's
+        derived public key (this case always failed closed; unchanged)
+
+    Returns a human-readable status string on success (including the
+    skip_check=True case, which is a deliberate bypass, not a silent one).
+    AUDIT 2026-09-24 gap G1: the first two used to print a WARNING/NOTE and
+    proceed anyway -- the only net against restoring the wrong key under a
+    trusted key_id was a human reading a warning line. --skip-trust-anchor-check
+    is the one documented, loudly-named override, for exactly the case this
+    script's own docstring already named: a deliberate first-ever key with
+    nothing yet to conflict with.
+    """
+    if skip_check:
+        return (
+            "Trust-anchor cross-check SKIPPED (--skip-trust-anchor-check) -- only appropriate for a deliberate "
+            "first-ever key with nothing yet to conflict with. Never use this for a key your installers "
+            "already trust."
+        )
+
+    if not os.path.exists(trust_anchor_path):
+        raise TrustAnchorRefused(
+            f"trust-anchor file not found at {trust_anchor_path} -- refusing to proceed without a cross-check. "
+            "If this is meant to restore the key every existing installer already trusts, 'docker cp' the real "
+            "trust_anchor.json onto the container at that path first. If this is a genuinely first-ever deploy "
+            "with no existing installers to protect, pass --skip-trust-anchor-check explicitly."
+        )
+
+    # Adversarial verification 2026-09-26: an unreadable or unparseable
+    # anchor already failed CLOSED here (a traceback exits nonzero too), but
+    # as a raw PermissionError/JSONDecodeError/AttributeError rather than the
+    # clear REFUSING: line every other refusal gives. PermissionError is the
+    # realistic one: `docker cp` creates the file root-owned inside the
+    # container with the source file's mode, so a 0600 trust_anchor.json on
+    # the VM lands unreadable to the non-root `aura` user (runbook 4.4a, 1b).
+    try:
+        with open(trust_anchor_path, encoding="utf-8") as fh:
+            anchor = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise TrustAnchorRefused(
+            f"trust-anchor file at {trust_anchor_path} exists but could not be read or parsed ({exc}). If it was "
+            "copied in with 'docker cp', it is owned by root inside the container -- make it readable to the "
+            "container's 'aura' user (runbook section 4.4a, step 1b) and re-run. Refusing to proceed without a "
+            "cross-check."
+        ) from exc
+    keys = anchor.get("keys") if isinstance(anchor, dict) else None
+    if not isinstance(keys, list) or not all(isinstance(k, dict) for k in keys):
+        raise TrustAnchorRefused(
+            f"trust-anchor file at {trust_anchor_path} is malformed (expected an object with a 'keys' list of "
+            "entries, as scripts/generate_trust_anchor.py writes it) -- refusing to proceed without a cross-check."
+        )
+    anchor_entry = next((k for k in keys if k.get("key_id") == key_id), None)
+
+    if anchor_entry is None:
+        raise TrustAnchorRefused(
+            f"{key_id} is not listed in {trust_anchor_path} at all -- refusing to proceed without a cross-check "
+            "match (an unlisted key_id could mean the wrong PEM, the wrong trust_anchor.json, or a genuinely "
+            "new key -- this script cannot tell which). If this is a genuinely first-ever deploy with no "
+            "existing installers to protect, pass --skip-trust-anchor-check explicitly."
+        )
+
+    if anchor_entry.get("public_key") != derived_public_key:
+        raise TrustAnchorRefused(
+            f"The PEM loaded for {key_id} does NOT match the public key already trusted under this key_id in "
+            f"{trust_anchor_path}. Proceeding would register the wrong key material under a trusted id. Do "
+            "not use --skip-trust-anchor-check to get past this -- get the correct PEM instead."
+        )
+
+    return f"Trust-anchor cross-check OK: {key_id} matches the publicly trusted key."
 
 
 def main() -> None:
@@ -125,31 +221,12 @@ def main() -> None:
         )
         derived_public_key = base64.b64encode(public_bytes).decode("ascii")
 
-        if not args.skip_trust_anchor_check:
-            if os.path.exists(args.trust_anchor):
-                anchor = json.load(open(args.trust_anchor, encoding="utf-8"))
-                anchor_entry = next((k for k in anchor.get("keys", []) if k.get("key_id") == args.key_id), None)
-                if anchor_entry is not None and anchor_entry.get("public_key") != derived_public_key:
-                    _fail(
-                        f"The PEM at {key_directory}/{args.key_id}.pem does NOT match the public key already "
-                        f"trusted under this key_id in {args.trust_anchor}. Proceeding would register the wrong "
-                        "key material under a trusted id. Do not use --skip-trust-anchor-check to get past this "
-                        "-- get the correct PEM instead."
-                    )
-                elif anchor_entry is not None:
-                    print(f"Trust-anchor cross-check OK: {args.key_id} matches the publicly trusted key.")
-                else:
-                    print(
-                        f"NOTE: {args.key_id} is not listed in {args.trust_anchor} at all -- cross-check skipped "
-                        "(nothing to compare against)."
-                    )
-            else:
-                print(
-                    f"WARNING: trust-anchor file not found at {args.trust_anchor} -- proceeding WITHOUT a "
-                    "cross-check. If this is meant to restore the key every existing installer already trusts, "
-                    "stop and 'docker cp' trust_anchor.json onto the container at that path first instead of "
-                    "proceeding blind."
-                )
+        try:
+            status = cross_check_trust_anchor(args.trust_anchor, args.key_id, derived_public_key, args.skip_trust_anchor_check)
+        except TrustAnchorRefused as exc:
+            _fail(str(exc))
+        else:
+            print(status)
 
         existing = db_session.execute(select(SigningKey).where(SigningKey.key_id == args.key_id)).scalars().first()
         if existing is not None:

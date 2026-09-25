@@ -1,0 +1,23 @@
+# AUDIT 2026-09-24 gap G2 -- Oracle Free path scheduled Owner operations
+# (expiry scan, reconcile, device-limit scan, sync-event pruning, report
+# snapshots). Mirrors deploy/staging/systemd/aura-owner-scheduled-ops.service
+# in shape (Type=oneshot, driven by the matching .timer, not started
+# directly) but runs run_scheduled_ops.sh in THIS directory against the
+# already-running `owner` service via `docker compose exec`, rather than
+# `docker compose run` against a path baked into the staging image -- see
+# run_scheduled_ops.sh's own header for why.
+#
+# __COMPOSE_DIR__ is a template placeholder -- bootstrap.sh substitutes it
+# with the real, resolved $COMPOSE_DIR for THIS install before installing
+# this unit to /etc/systemd/system/, so it is always correct for wherever
+# $REPO_DIR actually put the checkout, never hand-edited on the VM.
+[Unit]
+Description=Aura Owner (Oracle Free path) scheduled commercial operations
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__COMPOSE_DIR__
+ExecStart=/usr/bin/env bash __COMPOSE_DIR__/run_scheduled_ops.sh
+TimeoutStartSec=600

@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # Aura Owner -- Oracle Cloud Always Free bootstrap.
 #
-# Paste this whole block into a fresh Oracle Ubuntu VM (SSH'd in as the
-# default user, e.g. `ssh ubuntu@<vm-ip>`), or download and run it:
+# On a fresh Oracle Ubuntu VM (SSH'd in as the default user, e.g.
+# `ssh ubuntu@<vm-ip>`), clone the deploy branch to the path this script
+# deploys from, and run it FROM THAT CHECKOUT:
 #
-#   curl -fsSL https://raw.githubusercontent.com/action-aura/aura-fullsuits/worktree-retail-hardware-viewports/owner/deploy/oracle-free/bootstrap.sh -o bootstrap.sh
-#   bash bootstrap.sh
+#   git clone --branch worktree-retail-hardware-viewports \
+#     https://github.com/action-aura/aura-fullsuits.git ~/aura-fullsuits
+#   bash ~/aura-fullsuits/owner/deploy/oracle-free/bootstrap.sh
 #
-# NOTE THE BRANCH IN THAT URL -- it is deliberately not `master`. None of the
+# Re-runs are the same second line. Do NOT `curl` this file from a
+# raw.githubusercontent.com BRANCH URL: that CDN was observed serving a stale
+# copy for minutes after a push (AUDIT 2026-09-24 gap G4, runbook section
+# 4.3). If a single-file fetch is unavoidable, put a COMMIT SHA in the URL,
+# never a branch name.
+#
+# NOTE THE BRANCH -- it is deliberately not `master`. None of the
 # free-hosting deploy content exists on master yet (verified by HTTP: master's
 # copies of this script, restore_signing_key.py, fly.toml and the runbook all
 # return 404, while the branch's return 200). master's last substantive commit
@@ -16,11 +24,12 @@
 # whole project's divergent history, and not something to do in order to fix a
 # download URL.
 #
-# When master does catch up, change REPO_BRANCH's default below and this URL
-# together, in one commit. They must agree: the URL decides which copy of this
-# script you download, REPO_BRANCH decides which copy of the repo it then
-# clones onto the VM, and a mismatch means running one version's script
-# against another version's compose file.
+# When master does catch up, change REPO_BRANCH's default below and the
+# clone command above together, in one commit. They must agree, and this
+# script now ENFORCES the part that matters: step 2 refuses to deploy a
+# checkout whose commit differs from the commit this script itself was
+# read from (a mismatch means running one version's script against another
+# version's compose file and systemd units).
 #
 # What it does, in order: installs Docker if missing, clones/updates the
 # repo, checks .env.oracle exists and every required value is filled in
@@ -54,6 +63,34 @@ COMPOSE="docker compose -f $COMPOSE_DIR/docker-compose.yml --env-file $ENV_FILE"
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$1" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# 0. AUDIT 2026-09-24 gap G4 -- announce which commit this script is
+#    actually running from. raw.githubusercontent.com is a CDN and was
+#    observed serving a STALE copy of this exact file for several minutes
+#    after a push while writing this runbook -- confirmed via the GitHub API
+#    (the commit was already present on the branch) while the raw URL still
+#    handed back the previous version. This banner only works when the
+#    script is running from inside a real git checkout, which is exactly
+#    why section 4.3 now recommends `git clone` + running the script from
+#    that checkout instead of a bare single-file `curl` -- see the
+#    WARNING branch below for what to do if you see it.
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_running_commit=""
+# `ls-files --error-unmatch` rather than just "is SCRIPT_DIR inside some work
+# tree": a curl'd copy dropped into an unrelated git repo (a dotfiles repo in
+# $HOME, say) would otherwise report THAT repo's HEAD as this script's commit.
+if git -C "$SCRIPT_DIR" ls-files --error-unmatch -- "$(basename "${BASH_SOURCE[0]}")" >/dev/null 2>&1; then
+  _running_commit="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
+  _running_branch="$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(detached HEAD)")"
+  bold "Running bootstrap.sh from commit $_running_commit (branch: $_running_branch)."
+  if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- "$(basename "${BASH_SOURCE[0]}")" 2>/dev/null; then
+    bold "WARNING: this copy of bootstrap.sh has local edits on top of that commit -- the commit above is not exactly what is running."
+  fi
+else
+  bold "WARNING: bootstrap.sh is NOT running from inside a git checkout -- its commit cannot be verified. This usually means it was fetched with a bare 'curl' of the single file, which is exactly the shape that hit the stale-CDN-copy problem above. Prefer: git clone --branch $REPO_BRANCH \"$REPO_URL\" \"$REPO_DIR\" && bash \"$COMPOSE_DIR/bootstrap.sh\" -- see docs/ops/free-hosting-owner.md section 4.3."
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Docker + the compose plugin.
@@ -93,6 +130,23 @@ fi
 # a confusing "no such file" about a compose file.
 [ -f "$COMPOSE_DIR/docker-compose.yml" ] \
   || fail "Cloned '$REPO_BRANCH' but $COMPOSE_DIR/docker-compose.yml is missing. That branch does not carry the free-hosting deploy content. Set REPO_BRANCH to one that does."
+
+# AUDIT 2026-09-24 gap G4, second half (adversarial verification 2026-09-26):
+# printing the commit THIS SCRIPT came from is not enough on its own -- the
+# code actually deployed is $REPO_DIR's checkout, which the fetch/pull above
+# may just have moved. Reproduced in a sandbox before this check existed: a
+# re-run of a stale copy (e.g. a second, older checkout) banner-announced
+# commit A, pulled $REPO_DIR forward to commit B, and deployed B with exit
+# 0 -- the stale-script-against-newer-compose-file mismatch the header warns
+# about, with a banner actively naming the wrong commit. So: name the
+# deployed commit, and refuse when the two differ. Running from inside
+# $REPO_DIR itself (the documented way) self-heals: the refusal fires once
+# after a pull brought in new commits, and the re-run it asks for matches.
+_deploy_commit="$(git -C "$REPO_DIR" rev-parse HEAD)"
+bold "Deploying commit $_deploy_commit from $REPO_DIR."
+if [ -n "$_running_commit" ] && [ "$_running_commit" != "$_deploy_commit" ]; then
+  fail "This bootstrap.sh was read from commit $_running_commit, but the checkout it is about to deploy ($REPO_DIR) is now at $_deploy_commit. Refusing to run one version's script against another version's compose file and systemd units. Re-run the copy inside that checkout: bash $COMPOSE_DIR/bootstrap.sh"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. .env.oracle must exist -- never auto-generate secrets silently. A
@@ -166,6 +220,32 @@ bold "owner service is healthy."
 # ---------------------------------------------------------------------------
 bold "Running 'flask commercial preflight'..."
 $COMPOSE exec -T owner flask --app app:create_app commercial preflight || true
+
+# ---------------------------------------------------------------------------
+# 7. AUDIT 2026-09-24 gap G2 -- install + enable the scheduled-ops timer.
+#    Expiry scan, reconcile, device-limit scan, sync-event pruning, and
+#    report snapshots ran on NEITHER free hosting path before this. The unit
+#    files are a template (__COMPOSE_DIR__ placeholder) because they must
+#    name this install's actual absolute path -- $COMPOSE_DIR here, which
+#    depends on $REPO_DIR, which an operator can override -- so they can
+#    never be installed byte-for-byte as committed to the repo the way a
+#    fixed-path unit (like deploy/staging's) can. Idempotent: re-running
+#    bootstrap.sh re-substitutes and re-installs the same two files, then
+#    `daemon-reload` + `enable --now` again, which systemd treats as a no-op
+#    if nothing changed.
+# ---------------------------------------------------------------------------
+bold "Installing the scheduled-ops systemd timer (docs/ops/free-hosting-owner.md section 4.7)..."
+SYSTEMD_SRC_DIR="$COMPOSE_DIR/systemd"
+if [ -d "$SYSTEMD_SRC_DIR" ] && command -v systemctl >/dev/null 2>&1; then
+  sed "s|__COMPOSE_DIR__|$COMPOSE_DIR|g" "$SYSTEMD_SRC_DIR/aura-owner-scheduled-ops.service" \
+    | sudo tee /etc/systemd/system/aura-owner-scheduled-ops.service >/dev/null
+  sudo cp "$SYSTEMD_SRC_DIR/aura-owner-scheduled-ops.timer" /etc/systemd/system/aura-owner-scheduled-ops.timer
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now aura-owner-scheduled-ops.timer
+  bold "Scheduled-ops timer installed and enabled. Next run: $(systemctl list-timers aura-owner-scheduled-ops.timer --no-legend 2>/dev/null | awk '{print $1, $2, $3}')"
+else
+  bold "WARNING: could not install the scheduled-ops timer ($SYSTEMD_SRC_DIR missing, or 'systemctl' not found on this host -- expected on a non-systemd VM). Expiry scan, device-limit scan, report snapshots, and sync-event pruning will NOT run automatically until this is set up by hand; see docs/ops/free-hosting-owner.md section 4.7."
+fi
 
 cat <<'BANNER'
 

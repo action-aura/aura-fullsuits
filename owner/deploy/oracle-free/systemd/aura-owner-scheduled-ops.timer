@@ -1,0 +1,15 @@
+# AUDIT 2026-09-24 gap G2. Same daily cadence as
+# deploy/staging/systemd/aura-owner-scheduled-ops.timer.
+# `systemctl enable --now aura-owner-scheduled-ops.timer` -- bootstrap.sh
+# does this for you; this file is also safe to install by hand if you ever
+# re-run just this step.
+[Unit]
+Description=Daily Aura Owner (Oracle Free path) scheduled commercial operations
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

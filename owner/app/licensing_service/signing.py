@@ -167,8 +167,30 @@ def load_private_key(key_directory: str, key_id: str) -> Ed25519PrivateKey:
     path = _safe_key_path(key_directory, key_id)
     if not os.path.exists(path):
         raise SigningKeyError(f"Private key file missing for {key_id}.")
-    with open(path, "rb") as fh:
-        pem = fh.read()
+    # AUDIT 2026-09-24 gap G3: this used to be a bare `open()` -- the file
+    # EXISTING but not being readable by this process (wrong uid/gid after a
+    # `docker cp` restore into a non-root container; see
+    # docs/ops/free-hosting-owner.md section 4.4a) raised a raw PermissionError
+    # straight out of this function. Every real caller
+    # (verify_signing_key_health, scripts/deploy/restore_signing_key.py's
+    # main(), commercial preflight via _check_signing_key_health) already
+    # catches SigningKeyError specifically and turns it into a clear
+    # FAILED/REFUSING message -- none of them caught a bare OSError, so this
+    # one gap turned into an unhandled traceback at exactly the moment an
+    # operator most needed a plain-English answer. Never silently retried or
+    # ignored -- still fails, just as the domain's own exception type, with
+    # the actual OS error preserved in the message rather than swallowed.
+    try:
+        with open(path, "rb") as fh:
+            pem = fh.read()
+    except OSError as exc:
+        raise SigningKeyError(
+            f"Private key file for {key_id} exists at {path} but could not be read "
+            f"({exc.strerror or exc}). This usually means the file's ownership/permissions don't match "
+            "the user this process runs as (see docs/ops/free-hosting-owner.md section 4.4a on setting "
+            "ownership after a docker cp/restore, and owner/Dockerfile.staging for the container's "
+            "non-root user)."
+        ) from exc
     return serialization.load_pem_private_key(pem, password=None)
 
 
