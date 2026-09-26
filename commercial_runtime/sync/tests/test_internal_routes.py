@@ -142,6 +142,27 @@ def _insert_outbox_row(get_conn, entity_id=None, event_type="create"):
     return entity_id, payload
 
 
+def _bulk_insert_outbox_rows(get_conn, n):
+    """`n` outbox rows in ONE transaction (F7 tests need hundreds of rows to
+    exercise the real page cap -- one-connection-per-row like
+    `_insert_outbox_row` above would be needlessly slow at that count),
+    returning their entity_ids IN INSERTION ORDER."""
+    conn = get_conn()
+    entity_ids = []
+    for _ in range(n):
+        entity_id = str(uuid.uuid4())
+        entity_ids.append(entity_id)
+        payload = {"id": entity_id, "company_id": 1, "name": "Widgets", "description": ""}
+        conn.execute(
+            "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), "category", entity_id, "create", json.dumps(payload),
+             "2026-08-06T00:00:00+00:00"),
+        )
+    conn.commit()
+    conn.close()
+    return entity_ids
+
+
 # ── auth ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("path,method", [
@@ -172,6 +193,68 @@ def test_outbox_returns_installation_id_and_pending_rows(client, get_conn):
     assert len(body["events"]) == 1
     assert body["events"][0]["entity_id"] == "cat-1"
     assert body["events"][0]["payload"]["name"] == "Widgets"
+
+
+def test_outbox_defaults_to_a_bounded_page(client, get_conn):
+    """F7 (BOOKS-WAVE1-PLAN.md decision F7; v2 finding 7): `/_internal/
+    outbox` must NOT return the whole outbox -- a call with no `limit`
+    query parameter at all returns at most `_OUTBOX_DEFAULT_PAGE_LIMIT`
+    (500) rows, oldest-first, even when the true backlog is larger.
+
+    MUTATION: reverting the route to call `sync_service.read_outbox(conn)`
+    with no `limit` at all turns this RED -- the response would carry all
+    600 rows."""
+    ids_in_order = _bulk_insert_outbox_rows(get_conn, 600)
+    resp = client.get("/api/sync/_internal/outbox", headers=_auth_headers())
+    assert resp.status_code == 200
+    events = resp.get_json()["events"]
+    assert len(events) == 500, f"expected the default page cap of 500, got {len(events)}"
+    assert [e["entity_id"] for e in events] == ids_in_order[:500], (
+        "the default page must be the OLDEST 500 rows, in insertion order"
+    )
+
+
+def test_outbox_limit_query_param_narrows_the_page(client, get_conn):
+    """An explicit `?limit=N` below the default/cap narrows the page to N."""
+    ids_in_order = _bulk_insert_outbox_rows(get_conn, 10)
+    resp = client.get("/api/sync/_internal/outbox?limit=3", headers=_auth_headers())
+    assert resp.status_code == 200
+    events = resp.get_json()["events"]
+    assert [e["entity_id"] for e in events] == ids_in_order[:3]
+
+
+def test_outbox_limit_query_param_is_capped_at_the_max(client, get_conn):
+    """`?limit=` above the cap is silently clamped to it, never rejected --
+    a caller asking for more than the cap just gets the cap."""
+    _bulk_insert_outbox_rows(get_conn, 600)
+    resp = client.get("/api/sync/_internal/outbox?limit=100000", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert len(resp.get_json()["events"]) == 500
+
+
+@pytest.mark.parametrize("garbage_limit", ["0", "-5", "not-a-number", ""])
+def test_outbox_unparseable_or_nonpositive_limit_falls_back_to_default(client, get_conn, garbage_limit):
+    _bulk_insert_outbox_rows(get_conn, 600)
+    resp = client.get(f"/api/sync/_internal/outbox?limit={garbage_limit}", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert len(resp.get_json()["events"]) == 500
+
+
+def test_outbox_pages_oldest_first_across_two_calls_after_acking(client, get_conn):
+    """The real Kotlin drain shape (BOOKS-WAVE1-PLAN.md F7's own
+    instruction to confirm this): read a page, ack exactly what was
+    received, read again -- the SECOND call's fresh page must be the NEXT
+    oldest rows, never a repeat and never a gap."""
+    ids_in_order = _bulk_insert_outbox_rows(get_conn, 12)
+    first = client.get("/api/sync/_internal/outbox?limit=5", headers=_auth_headers()).get_json()
+    assert [e["entity_id"] for e in first["events"]] == ids_in_order[:5]
+
+    ack_resp = client.post("/api/sync/_internal/outbox/ack", headers=_auth_headers(),
+                            json={"ids": [e["id"] for e in first["events"]]})
+    assert ack_resp.status_code == 200
+
+    second = client.get("/api/sync/_internal/outbox?limit=5", headers=_auth_headers()).get_json()
+    assert [e["entity_id"] for e in second["events"]] == ids_in_order[5:10]
 
 
 def test_outbox_ack_deletes_only_the_given_ids(client, get_conn):

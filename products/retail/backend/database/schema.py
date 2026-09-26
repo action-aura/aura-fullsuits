@@ -14,6 +14,7 @@ also owned schema for every other subsystem in that monolith -- see
 docs/migration/dependency-map.md §1. Only the retail-relevant slice plus the
 generic connection helpers it needs are kept here.
 """
+import logging
 import os
 import sqlite3
 import random
@@ -1069,7 +1070,42 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # reasoning and _migrate_add_branch_cost_basis's own docstring for the
 # column-by-column detail, including the sync apply-path gap it discloses
 # rather than silently leaves for a future session to rediscover.
-RETAIL_SCHEMA_VERSION = 40
+#
+# v41 (2026-09-26): one set of books across devices -- GL journal sync,
+# wave 1 (ledger parity). Claimed in writing in ROADMAP.md's 2026-09-26
+# "retail schema v41 CLAIMED: one set of books across devices (GL journal
+# sync)" entry before this constant was touched -- v35 is STILL the open
+# Aseel-parity reservation, untouched by this. Two additive columns on the
+# existing `gl_journals` table: `uid` (this journal's stable, cross-device
+# identity, write-once from NULL -- see _migrate_add_gl_journal_sync's own
+# docstring for exactly what "write-once" means at the trigger level) and
+# `source_uid` (the originating sale/return/reversed-journal's own uid,
+# never a local integer id, so a receiving device can resolve it against
+# its OWN local rows). A partial UNIQUE index on `uid`, two supporting
+# indexes, and an UNCONDITIONAL re-widening of `trg_gl_journals_no_update`
+# so a later chain replay of v38's own step -- which recreates a NARROWER
+# version of the identical trigger every single time this whole chain
+# replays, see that migration's own "DROP before CREATE" comment -- can
+# never silently drop the uid/source_uid write-once guard again (R7 in
+# the wave's plan).
+#
+# ALSO FIXES W1-0, a latent bug IN v38's own opening-balance backfill that
+# this bump would otherwise have triggered a FIFTH time -- see
+# `_migrate_add_general_ledger`'s own, corrected docstring immediately
+# below ("THE OPENING-BALANCE BACKFILL WAS NOT ACTUALLY IDEMPOTENT") for
+# the full story: every schema bump since v38 replayed that backfill
+# unconditionally and double-, triple- and quadruple-booked the same
+# opening balance on any shop that had a nonzero AR/AP balance the day it
+# first reached v38.
+#
+# See _migrate_add_gl_journal_sync's own docstring for the column-by-
+# column and trigger-re-widening detail, and this wave's own planning
+# document (BOOKS-WAVE1-PLAN.md) for the full cross-device sync design
+# this schema change exists to support -- the sync EMIT side
+# (core/retail/general_ledger.py) and APPLY side (commercial_runtime/
+# sync/sync_service.py) are each a separate builder's own files, not this
+# one's.
+RETAIL_SCHEMA_VERSION = 41
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2174,6 +2210,17 @@ def _migrate_retail_schema(conn):
     # RETAIL_SCHEMA_VERSION v40 comment above and _migrate_add_branch_cost_
     # basis's own docstring for the full reasoning.
     _migrate_add_branch_cost_basis(conn)
+    # v40 -> v41 (one set of books across devices, wave 1 -- ledger
+    # parity): appended LAST, same convention as every step above except
+    # v37 itself (which has its own, data-dependent reason to run early --
+    # see that block's comment). This step must ALSO stay AFTER
+    # `_migrate_add_general_ledger` specifically, not merely by the "new
+    # steps go last" convention: it ALTERs the `gl_journals` table that
+    # step creates, and its trigger re-widening only means anything once
+    # v38's own (narrower) trigger already exists to re-widen. See the
+    # RETAIL_SCHEMA_VERSION v41 comment above and
+    # _migrate_add_gl_journal_sync's own docstring for the full reasoning.
+    _migrate_add_gl_journal_sync(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -7630,6 +7677,52 @@ def _init_retail(conn):
     # function.
     _v16_rebind_orphaned_open_drawers(conn)
 
+    # Wave 1 (2026-09-26, ROADMAP.md's "retail schema v41 CLAIMED: one set
+    # of books across devices" entry): heal every pre-v41 journal's
+    # missing `uid` so it can finally travel to the other devices on this
+    # shop's licence -- see `general_ledger.backfill_legacy_journals`'s own
+    # docstring for the deterministic-uuid5 and idempotency reasoning.
+    # NOT version-gated, same reasoning as `_v16_rebind_orphaned_open_
+    # drawers` immediately above: it must be safe to retry on every boot
+    # (wrapped in try/log below) rather than tied to a version marker that
+    # only ever gives it one chance to succeed.
+    #
+    # hasattr-GUARDED, stated rather than silently relied on: at the time
+    # this call site was written, `general_ledger.backfill_legacy_
+    # journals` had not landed yet in this shared worktree -- this wave's
+    # builders work in parallel, on disjoint files (this wave's own plan,
+    # section 7), and that function is a separate builder's own work.
+    # Calling an attribute that does not exist yet would break EVERY boot,
+    # not just this feature, so the guard makes "not written yet" behave
+    # exactly like "failed this boot, retry next boot" until it lands --
+    # once `general_ledger.py` ships the function, `hasattr` is always
+    # true, so the guard becomes a permanent no-op rather than a bug that
+    # needs removing later.
+    try:
+        from core.retail import general_ledger as _gl_boot
+        if hasattr(_gl_boot, 'backfill_legacy_journals'):
+            _gl_boot.backfill_legacy_journals(conn)
+    except Exception:
+        # F10 (BOOKS-WAVE1-PLAN.md; v1 gap 10): this bare except is safe to
+        # swallow ONLY because NOTHING in `_init_retail` commits anything
+        # AFTER this call site, this boot (the dev-only `_seed_retail` below
+        # runs only on a database with no branches, which has no journals to
+        # backfill). `backfill_legacy_journals` runs on THIS SAME `conn`: it
+        # commits after each completed chunk, and every row inside a chunk
+        # is one savepoint holding that row's uid AND its outbox event. So
+        # after a failure here: completed chunks stay committed, whole; the
+        # failing row is already undone by its own savepoint; and the rest
+        # of the unfinished chunk is still an OPEN transaction, which
+        # `init_retail`'s `finally` rolls back -- retry next boot, nothing
+        # half-done kept. If a future edit ever adds a commit AFTER this
+        # call site, that commit would persist the unfinished chunk's
+        # earlier rows early (still whole uid+event pairs, so no journal is
+        # stranded) alongside this swallowed exception -- re-audit this
+        # comment (and this except) before adding one.
+        logging.getLogger(__name__).exception(
+            'gl_journal legacy-uid backfill failed this boot -- will retry next boot'
+        )
+
     # THE SEEDED ROWS ARE INVISIBLE TO EVERY ACCOUNT A HUMAN CAN LOG INTO.
     # Measured 2026-09-09 on a fresh source run (unfrozen, AURA_STANDALONE
     # unset): this seeds 12 products, 5 categories and 3 branches under
@@ -9407,6 +9500,139 @@ def _migrate_requantize_sale_tender_payments(conn):
             )
 
 
+def _v38_insert_opening_journal(conn, cid, branch_id, business_date, source_type,
+                                 source_id, currency, lines, reference=None,
+                                 memo=None, posted_by=None):
+    """The v38-SHAPE raw insert `_migrate_add_general_ledger`'s opening-
+    balance backfill uses INSTEAD OF calling the live `general_ledger.
+    post_journal` -- needed starting with Wave 1 (v41, ROADMAP.md's
+    2026-09-26 "retail schema v41 CLAIMED" entry), which teaches the LIVE
+    `post_journal` to mint and insert a mandatory `uid` on every journal it
+    posts (core/retail/general_ledger.py, a separate builder's own file).
+    At the exact moment this backfill runs -- mid-chain, from inside
+    `_migrate_add_general_ledger` -- `gl_journals` does NOT have a `uid`
+    column yet on a v37->v41 upgrade taken in one boot:
+    `_migrate_add_gl_journal_sync` (the migration that ADDs it) is
+    appended LAST in `_migrate_retail_schema`, strictly AFTER this one (see
+    its own call-site comment). Calling the live, uid-writing
+    `post_journal` here would therefore fail every such upgrade with "no
+    such column: uid" and abort the whole migration -- see `ensure_
+    schema_version`'s own docstring: a raised `migrate_fn` leaves
+    `user_version` un-advanced and retries next launch, forever, for every
+    shop that reaches this step with `RETAIL_SCHEMA_VERSION` already at
+    41. This function inserts exactly the 10 columns `_migrate_add_
+    general_ledger`'s own `CREATE TABLE gl_journals` declared (company_id,
+    branch_id, business_date, reference, memo, source_type, source_id,
+    currency, reversed_journal_id, posted_by) -- the v38 SHAPE -- and
+    nothing newer, so it is correct at every point in the chain regardless
+    of which later migrations have or have not run yet in this same pass.
+    The boot-time `general_ledger.backfill_legacy_journals` (see the
+    boot-step call in `_init_retail` below) gives this journal its `uid`
+    moments later, in the SAME boot, exactly like every other pre-v41
+    journal.
+
+    LINE VALIDATION IS INLINED HERE, NOT IMPORTED -- A DELIBERATE CHOICE,
+    STATED RATHER THAN LEFT IMPLICIT. This wave's plan calls for a shared
+    `general_ledger.validated_lines(lines, currency)` pure function
+    (Builder A's file) that this could otherwise reuse -- but that file is
+    being built in parallel, in the SAME shared worktree, under a merge
+    order that lands THIS file first (this wave's own plan, section 7:
+    "Merge order: B -> A"). At the time this function was written,
+    `general_ledger` had no such attribute at all. Depending on it --
+    even behind a `hasattr` guard that would make this migration's
+    behaviour silently different depending on WHETHER Builder A's change
+    happened to have landed yet -- would be wrong for a one-time
+    historical code path that must behave identically forever, regardless
+    of what `post_journal`'s internals look like on any later date. So the
+    balance check below is a deliberate, PERMANENT duplicate of `post_
+    journal`'s own invariant (same tolerance, same rules: no negative
+    side, no line with both a debit and a credit, zero-value lines
+    silently dropped) -- not a temporary stand-in for a future import.
+
+    Callers -- there is exactly one, `_migrate_add_general_ledger`'s
+    opening-balance backfill -- must pass lines that already balance by
+    construction (that backfill's own plug-to-equity Decimal arithmetic
+    already guarantees this); the check below exists as the same
+    defence-in-depth `post_journal` itself provides, not because this
+    caller is expected to ever trip it.
+    """
+    from commercial_runtime.currency import quantize_money, currency_quantum
+    from core.retail import general_ledger as _gl
+
+    _gl.ensure_default_chart(conn, cid)
+
+    total_debit = Decimal('0')
+    total_credit = Decimal('0')
+    clean_lines = []
+    for raw in lines:
+        code = raw['account_code']
+        debit = raw.get('debit') or 0
+        credit = raw.get('credit') or 0
+        d = debit if isinstance(debit, Decimal) else Decimal(str(debit))
+        c = credit if isinstance(credit, Decimal) else Decimal(str(credit))
+        if d < 0 or c < 0:
+            raise ValueError(
+                f"GL line for account {code!r} carries a negative debit or "
+                f"credit (debit={d} credit={c}) -- swap sides instead of "
+                f"negating a value"
+            )
+        if d and c:
+            raise ValueError(
+                f"GL line for account {code!r} carries both a debit and a "
+                f"credit (debit={d} credit={c}) -- split into two lines"
+            )
+        # F4 (BOOKS-WAVE1-PLAN.md; general_ledger.validated_lines's own
+        # docstring has the full reasoning, and F9's parity test pins the
+        # two copies against each other): quantize BEFORE checking for
+        # zero, so a sub-quantum line rounds down and is dropped, never
+        # kept as a zero-value line -- never the other way around.
+        d = quantize_money(d, currency)
+        c = quantize_money(c, currency)
+        if not d and not c:
+            continue
+        total_debit += d
+        total_credit += c
+        clean_lines.append((code, d, c, raw.get('memo')))
+
+    if not clean_lines:
+        raise _gl.GeneralLedgerImbalanceError(
+            f"refusing to post an empty v38-shape opening journal for "
+            f"company {cid!r} -- every line supplied was zero"
+        )
+
+    try:
+        eps = currency_quantum(currency) / 2
+    except Exception:
+        eps = Decimal('0.005')
+    diff = total_debit - total_credit
+    if abs(diff) > eps:
+        raise _gl.GeneralLedgerImbalanceError(
+            f"v38-shape opening journal for company {cid!r} does not "
+            f"balance: debits={total_debit} credits={total_credit} "
+            f"diff={diff} (tolerance is half of {currency}'s own minor "
+            f"unit, {eps})"
+        )
+
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO gl_journals "
+        "(company_id, branch_id, business_date, reference, memo, source_type, "
+        " source_id, currency, reversed_journal_id, posted_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (cid, branch_id, business_date, reference, memo, source_type, source_id,
+         currency, None, posted_by or 'System')
+    )
+    journal_id = cur.lastrowid
+    for code, d, c, line_memo in clean_lines:
+        account_id = _gl._account_id(conn, cid, code)
+        cur.execute(
+            "INSERT INTO gl_journal_lines (journal_id, account_id, debit, credit, memo) "
+            "VALUES (?,?,?,?,?)",
+            (journal_id, account_id, float(d), float(c), line_memo)
+        )
+    return journal_id
+
+
 def _migrate_add_general_ledger(conn):
     """One-time migration (schema v37 -> v38): the double-entry general
     ledger core (ROADMAP.md's 2026-09-20 "retail schema v38 CLAIMED: a real
@@ -9629,18 +9855,101 @@ def _migrate_add_general_ledger(conn):
     Idempotent: every CREATE TABLE / CREATE INDEX / CREATE TRIGGER above is
     IF NOT EXISTS, so a second call -- including replaying this whole
     chain against a database restored from a mid-upgrade backup -- is a
-    clean no-op for the schema half. The opening-balance backfill is
-    idempotent for a different, structural reason: it is guarded by
-    `RETAIL_SCHEMA_VERSION`/`ensure_schema_version` like every other step
-    in this chain, so it runs at most once per database, ever -- unlike
-    `_migrate_requantize_sale_tender_payments` above (which recomputes and
-    compares a VALUE so it is safe to re-run), a second run of THIS
-    backfill would double-book the opening balance, so it deliberately
-    does NOT try to be re-run-safe the way that migration is. If this ever
-    needs to run twice against the same data (a restored mid-upgrade
-    backup, matching every other migration's stated concern), the correct
-    fix is a reversing journal via `reverse_journal`, not a re-run.
+    clean no-op for the schema half.
+
+    THE OPENING-BALANCE BACKFILL WAS NOT ACTUALLY IDEMPOTENT, AND THIS WAS
+    A LIVE BUG (W1-0, ROADMAP.md's 2026-09-26 "retail schema v41 CLAIMED:
+    one set of books across devices" entry). This docstring used to claim
+    the backfill below "is guarded by `RETAIL_SCHEMA_VERSION`/
+    `ensure_schema_version` like every other step in this chain, so it
+    runs at most once per database, ever" -- that is false, and was false
+    from the day this migration shipped. `ensure_schema_version` gates the
+    WHOLE `_migrate_retail_schema` chain on `user_version < target_
+    version` (`commercial_runtime/security/migration_safety.py`), never on
+    whether any ONE step inside that chain has already run -- so EVERY
+    later version bump (v39, v40, and this file's own v41) replays this
+    entire function again, unconditionally, on every shop that was
+    already past v38. A shop with a nonzero AR/AP balance the day it first
+    reached v38 got one correct opening-balance journal then -- and a
+    SECOND, WRONG one at v39, a THIRD at v40, and would have gotten a
+    FOURTH here at v41, each one double-booking the same AR/AP/equity
+    balance again, because nothing below ever checked whether the first
+    one had already happened.
+    `retail_v41_gl_sync_migration_test.py::test_a_later_upgrade_does_not_
+    repost_the_opening_balance` reproduces exactly this by forcing a
+    second chain replay after a first one has already posted the
+    backfill, and was RED against this function's un-guarded code before
+    the fix below landed (quoted in this wave's build report): 2
+    `opening_balance` journals where there must be exactly 1.
+
+    THE FIX -- UPDATED BY F5 (BOOKS-WAVE1-PLAN.md decision F5; v2 finding
+    6), SEE THAT COMMENT BELOW FOR THE FULL REPLACEMENT REASONING -- reads
+    `PRAGMA user_version` at the very top of this function's body, BEFORE
+    the `CREATE TABLE IF NOT EXISTS` DDL runs: `entry_user_version >= 38`
+    means this device's schema chain already advanced PAST v38 on some
+    earlier, FULLY-SUCCESSFUL upgrade, so the backfill below returns
+    immediately, before even checking `credit_balance` -- nothing below
+    may ever run again after that, no matter how many more times this
+    whole chain gets replayed for later, unrelated version bumps. Below
+    that global check, EACH company is ALSO skipped individually once an
+    `opening_balance` journal already exists for it (the loop's own
+    comment has the full reasoning) -- this is the part that improves on
+    the ORIGINAL fix (mere `'gl_journals' in {...}` table existence,
+    captured the same way, before the DDL): that check answered "did the
+    DDL already run", which is TRUE the moment `CREATE TABLE IF NOT
+    EXISTS` above commits, regardless of whether the backfill loop
+    further down ever got to finish -- so a crash between that DDL commit
+    and this function's own commit (see the bottom of this function) left
+    the table existing, the old check reading True on the very next
+    retry, and the opening balance lost FOREVER. Checking real data (does
+    an opening-balance journal exist for THIS company) instead of an
+    incidental side effect (does the table exist at all) is what closes
+    that window.
+
+    EXISTING DUPLICATES ARE NOT AUTO-CORRECTED BY THIS FIX. An install
+    that already reached v39, v40 or v41 before this landed carries 2, 3
+    or 4 `opening_balance` journals where it should have exactly 1 -- this
+    stops the bleeding, it does not repair the wound.
+    `general_ledger.backfill_legacy_journals` (core/retail/general_
+    ledger.py) detects and reports these as `suspected_duplicate_opening`
+    when it runs at boot, so they are visible rather than silently synced
+    to every other device as though they were correct; per this wave's own
+    plan, there is no automatic reversal here -- `credit_balance` can be
+    set without ever posting to the ledger, so a later opening balance can
+    be partly legitimate, and only the shop's owner can decide whether to
+    `reverse_journal` the extras.
+
+    Unlike `_migrate_requantize_sale_tender_payments` above (which
+    recomputes and compares a VALUE, so it is safe to re-run), this
+    backfill posts a NEW journal row every time it is allowed to run at
+    all -- so this pair of guards is not a performance shortcut, it is the
+    only thing standing between "ran once per company" and "ran once per
+    version bump this database has ever crossed since v38". If this ever
+    needs to run again against the same data on purpose (a restored
+    mid-upgrade backup that somehow predates `gl_journals` entirely), the
+    correct path for anything it gets wrong is a reversing journal via
+    `reverse_journal`, never a second unguarded run.
     """
+    # F5 (BOOKS-WAVE1-PLAN.md decision F5; v2 finding 6) -- REPLACES the
+    # earlier `gl_already_existed` guard (mere TABLE existence, captured
+    # before the DDL below). That guard was a poor proxy for "the opening
+    # balance was actually posted and durably committed": `CREATE TABLE IF
+    # NOT EXISTS` below commits its OWN DDL regardless of whether the
+    # backfill loop further down ever runs to completion, so a crash
+    # between that DDL committing and this function's OWN commit (see the
+    # bottom of this function) left `gl_journals` existing on the very
+    # next retry, `gl_already_existed` reading True, and the shop's
+    # pre-v38 opening balance lost FOREVER -- exactly the residual window
+    # verifier 1's own gap #2 and verifier 2's own finding 6 both named
+    # (independently) as still open after the `conn.commit()` fix alone.
+    #
+    # Captured BEFORE the DDL below runs, same as the guard it replaces --
+    # PRAGMA user_version is untouched by this function's own DDL either
+    # way, but reading it here, rather than after, keeps the "as it stood
+    # on entry to this call" framing this function's docstring already
+    # established.
+    entry_user_version = conn.execute('PRAGMA user_version').fetchone()[0]
+
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS gl_accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9774,6 +10083,26 @@ def _migrate_add_general_ledger(conn):
     """)
 
     # ── Opening-balance backfill -- see docstring for the full reasoning ──
+    #
+    # W1-0: this whole function -- DDL included -- replays on EVERY later
+    # chain run, not just the first (see docstring's "THE OPENING-BALANCE
+    # BACKFILL WAS NOT ACTUALLY IDEMPOTENT"). F5's global half: if this
+    # device's schema chain already advanced PAST v38 on some EARLIER,
+    # FULLY-SUCCESSFUL upgrade (`ensure_schema_version` only advances
+    # `PRAGMA user_version` on full chain success -- migration_safety.py),
+    # every later chain replay (v41, and every version after it) must not
+    # check `credit_balance` or post anything again, no matter what that
+    # balance reads now -- every shop already on v39/v40 hits this on
+    # every future bump, exactly like `gl_already_existed` did, with no
+    # marker table needed. Below this point, `entry_user_version < 38`:
+    # either a genuine v37-or-earlier upgrade in progress, or a RETRY of
+    # one that was interrupted earlier -- see the per-company check
+    # inside the loop below for how a retry tells "already posted, skip"
+    # from "never got to it, do it now" WITHOUT relying on `gl_journals`
+    # merely existing.
+    if entry_user_version >= 38:
+        return
+
     existing = {
         r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -9789,6 +10118,10 @@ def _migrate_add_general_ledger(conn):
         # backfill.
         return
 
+    # Only for the ACCOUNT_* code constants below -- the actual INSERT
+    # goes through `_v38_insert_opening_journal` (this file), never the
+    # live `general_ledger.post_journal`. See that function's own
+    # docstring for why, and this function's corrected docstring above.
     from core.retail import general_ledger as _gl
     from core.retail import pricing as _tax_engine
 
@@ -9806,6 +10139,25 @@ def _migrate_add_general_ledger(conn):
 
     today = datetime.now().strftime('%Y-%m-%d')
     for cid in companies:
+        # F5's PER-COMPANY half: `entry_user_version < 38` here can mean
+        # either "genuinely never backfilled" OR "a previous attempt at
+        # THIS SAME v37-or-earlier upgrade already posted and committed
+        # this company's opening balance, then failed LATER in the chain
+        # before `PRAGMA user_version` ever advanced" (retail_v41_gl_
+        # sync_migration_test.py::test_an_interrupted_first_upgrade_
+        # still_posts_the_opening_balance_once's own scenario). Checking
+        # the ACTUAL data -- does an `opening_balance` journal already
+        # exist for THIS company -- rather than the table's mere
+        # existence, means a retry only ever redoes companies it never
+        # actually finished, and a retry where NOTHING was ever committed
+        # (the more dangerous residual window this fix exists to close)
+        # correctly redoes every company from scratch rather than reading
+        # a leftover, empty `gl_journals` table as "already handled".
+        if conn.execute(
+            "SELECT 1 FROM gl_journals WHERE company_id=? AND source_type='opening_balance'",
+            (cid,)
+        ).fetchone():
+            continue
         cust_total = conn.execute(
             "SELECT COALESCE(SUM(credit_balance),0) FROM customers WHERE company_id=?",
             (cid,)
@@ -9869,12 +10221,44 @@ def _migrate_add_general_ledger(conn):
                           'memo': 'Opening balance plug'})
 
         if lines:
-            _gl.post_journal(
+            # v38-SHAPE raw insert, NOT the live `general_ledger.
+            # post_journal` -- see `_v38_insert_opening_journal`'s own
+            # docstring for why: on a v37->v41 upgrade taken in one boot,
+            # `gl_journals` does not have a `uid` column yet at this exact
+            # point in the chain (`_migrate_add_gl_journal_sync` runs
+            # AFTER this function), and the live `post_journal` now writes
+            # one unconditionally.
+            _v38_insert_opening_journal(
                 conn, cid, None, today, 'opening_balance', None, currency, lines,
                 reference='OPENING-BALANCE',
                 memo='Seeded from pre-v38 AR/AP subledger at migration time',
                 posted_by='migration',
             )
+
+    # W1-0, THE ALLOW HALF (wave verifier, 2026-09-26): commit HERE, not
+    # whenever the chain next happens to. The DDL above was already
+    # committed by its own `executescript` the moment it ran; the journal
+    # just posted was NOT: v39 and v40 only use `conn.execute`, so nothing
+    # else commits it until v41's own `executescript`. If the upgrade fails
+    # anywhere in that window, `init_retail`'s `finally` rolls the journal
+    # back and keeps the tables. `retail_v41_gl_sync_migration_test.py::
+    # test_an_interrupted_first_upgrade_still_posts_the_opening_balance_once`
+    # is RED without this line (0 opening journals after the retry).
+    #
+    # F5 (BOOKS-WAVE1-PLAN.md decision F5; v2 finding 6) CLOSES what used to
+    # be a RESIDUAL gap here: a failure INSIDE the few inserts above, between
+    # the DDL's own commit and THIS commit, used to leave `gl_journals`
+    # existing but the opening balance uncommitted -- and the ORIGINAL guard
+    # (`gl_already_existed`, mere table existence) would then read True on
+    # the very next retry and post NOTHING, forever, exactly the regression
+    # the guard itself introduced. The guard above is now `entry_user_version
+    # >= 38` PLUS a per-company `opening_balance` existence check (see that
+    # check's own comment) instead: on a retry where nothing here ever
+    # committed, no company has an `opening_balance` journal yet, so every
+    # company is reprocessed from scratch, harmlessly -- there is no longer
+    # a window where the mere existence of `gl_journals` is mistaken for
+    # "already posted".
+    conn.commit()
 
 
 def _migrate_add_cost_basis(conn):
@@ -10179,3 +10563,162 @@ def _migrate_add_branch_cost_basis(conn):
             # there is no historical evidence of what a completed transfer
             # cost at send time, and nothing reads this column for one.
             conn.execute('ALTER TABLE stock_transfer_items ADD COLUMN unit_cost REAL DEFAULT 0')
+
+
+def _migrate_add_gl_journal_sync(conn):
+    """One-time migration (schema v40 -> v41): journal sync -- the GL joins
+    the set of things that travel between devices on one shop's licence.
+    Claimed in writing in ROADMAP.md's 2026-09-26 "retail schema v41
+    CLAIMED: one set of books across devices (GL journal sync)" entry --
+    v35 is STILL the open Aseel-parity reservation, untouched by this. See
+    this wave's own planning document (BOOKS-WAVE1-PLAN.md, section 5) for
+    the full cross-device design; this docstring covers only what THIS
+    function does to the schema.
+
+    Two additive, column-existence-checked columns on the existing
+    `gl_journals` table (same guard shape v36/v38/v39/v40 above all use):
+
+        gl_journals.uid         TEXT  -- this journal's stable, cross-
+                                          device identity. NULL on every
+                                          row this codebase has ever
+                                          written before this migration --
+                                          see "WRITE-ONCE, NOT APPEND-ONLY-
+                                          BY-VALUE" below for exactly what
+                                          that NULL is allowed to become.
+        gl_journals.source_uid  TEXT  -- the uid of the `sales`/`returns`
+                                          row this journal came from (or
+                                          the reversed journal's own `uid`,
+                                          for a reversal) -- never a local
+                                          integer id, so a receiving
+                                          device can resolve it against
+                                          its OWN local rows.
+
+    Plus a partial UNIQUE index on `uid` (`WHERE uid IS NOT NULL`, so the
+    many pre-existing NULL rows never collide with each other and cost
+    this index nothing until they are backfilled), a plain index on the
+    still-NULL rows (`idx_gl_journals_uid_pending` -- exactly what the
+    boot-time `general_ledger.backfill_legacy_journals` scans), and an
+    index on `(company_id, source_type, source_uid)` for the receive
+    side's `source_id` resolution.
+
+    WRITE-ONCE, NOT APPEND-ONLY-BY-VALUE. `gl_journals` is append-only by
+    TRIGGER (`_migrate_add_general_ledger`'s own docstring) -- no existing
+    row's accounting CONTENT may ever change. `uid`/`source_uid` are the
+    one exception, and only in one direction: NULL -> a real value is
+    ALLOWED (the boot backfill assigning a legacy row its uid), but once
+    set, neither column may change again, INCLUDING back to NULL. The
+    trigger's WHEN clause below encodes exactly that:
+    `(OLD.uid IS NOT NULL AND OLD.uid IS NOT NEW.uid)` is false whenever
+    `OLD.uid IS NULL` (any NEW value, including NULL itself, passes
+    through), and true the moment `OLD.uid` is already set and the UPDATE
+    tries to change it to anything else -- the identical shape for
+    `source_uid`. `retail_v41_gl_sync_migration_test.py::
+    test_uid_is_write_once` mutation-proves both directions.
+
+    THE TRIGGER IS UNCONDITIONALLY DROPPED AND RECREATED -- `CREATE
+    TRIGGER` with NO `IF NOT EXISTS` -- AND THAT IS THE WHOLE POINT (R7 in
+    the wave's plan). `_migrate_add_general_ledger` (v38's own step, ABOVE
+    this one in the chain) runs its OWN `DROP TRIGGER IF EXISTS trg_gl_
+    journals_no_update; CREATE TRIGGER IF NOT EXISTS trg_gl_journals_no_
+    update ...` UNCONDITIONALLY on EVERY replay of `_migrate_retail_
+    schema` -- not just the first time, every time `ensure_schema_version`
+    decides this database is behind ANY later version and replays the
+    WHOLE chain (see that migration's own "DROP before CREATE" comment).
+    Its CREATE statement is textually fixed at the ORIGINAL 11 v38
+    columns -- it knows nothing about `uid`/`source_uid`, because it was
+    written before either existed. So on every later chain replay (a
+    future v42, a v43 -- exactly the scenario `_migrate_add_general_
+    ledger`'s own W1-0 correction is written to survive), v38's step runs
+    FIRST in the same chain call and narrows the trigger back down to the
+    original 11 columns -- and if THIS function used `CREATE TRIGGER IF
+    NOT EXISTS`, it would see a trigger of that name ALREADY EXISTS (the
+    narrow one v38's step just created a moment earlier, in the SAME chain
+    call) and skip recreating it, silently leaving the NARROW trigger in
+    force -- which would let an UPDATE change `uid`/`source_uid` on a
+    journal that has already synced without raising anything. Appending
+    LAST in the chain (after v38's own step, by this file's own
+    convention) plus an UNCONDITIONAL `CREATE TRIGGER` here is what makes
+    this step's widening win EVERY time, regardless of how many later
+    versions ever replay this chain again.
+    `retail_v41_gl_sync_migration_test.py::test_trigger_is_rewidened_
+    after_a_second_chain_run` mutation-proves this by forcing exactly that
+    second replay and reading the live trigger SQL back out of
+    `sqlite_master`, not just checking it once after a fresh install.
+
+    `company_id` STAYS OUT of the WHEN clause, same reasoning `_migrate_
+    add_general_ledger` already gives for the original trigger:
+    `rebind_company_id()` legitimately issues `UPDATE gl_journals SET
+    company_id=?` over every row for an install activating a licence after
+    already accumulating GL history, and an unconditional trigger would
+    refuse that real, already-shipped path. Adding `uid`/`source_uid` to
+    the WHEN clause does not change this -- a bare rebind changes ONLY
+    `company_id`, so `OLD.uid IS NOT NEW.uid` is false for it (both sides
+    are literally the same stored value), and the new clauses stay silent
+    exactly like every pre-existing content column already does.
+
+    `gl_journal_lines` DOES NOT CHANGE -- its own trigger pair stays
+    exactly as `_migrate_add_general_ledger` left it. A line has no
+    identity of its own to sync; it travels as part of its journal's
+    payload (this wave's own §2.3 payload contract) and is looked up by
+    the RECEIVER's own `account_id` after resolving `account_code`, never
+    by any id or uid of its own.
+
+    GUARDED ON `gl_journals` EXISTING, the same shape every additive step
+    in this chain uses for a table another step creates: a minimal test
+    fixture that hand-builds its own schema and calls `_migrate_retail_
+    schema` directly may not carry it. Each column is ALSO individually
+    existence-checked via `PRAGMA table_info` before its own `ALTER
+    TABLE`, so a second call -- including one replayed against a database
+    restored from a mid-upgrade backup -- never re-ALTERs a column that is
+    already there; the indexes are `IF NOT EXISTS`; the trigger recreation
+    is idempotent BY VALUE (dropping and recreating the identical SQL
+    twice leaves the identical trigger in place) even though it is
+    deliberately NOT idempotent BY SYNTAX (`IF NOT EXISTS`) -- see "THE
+    TRIGGER IS UNCONDITIONALLY DROPPED" above for why that distinction is
+    exactly the point here.
+    """
+    existing_tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'gl_journals' not in existing_tables:
+        return
+
+    gl_journals_cols = {row[1] for row in conn.execute('PRAGMA table_info(gl_journals)').fetchall()}
+    if 'uid' not in gl_journals_cols:
+        conn.execute('ALTER TABLE gl_journals ADD COLUMN uid TEXT')
+    if 'source_uid' not in gl_journals_cols:
+        conn.execute('ALTER TABLE gl_journals ADD COLUMN source_uid TEXT')
+
+    conn.executescript("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_gl_journals_uid
+            ON gl_journals(uid) WHERE uid IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_gl_journals_uid_pending
+            ON gl_journals(id) WHERE uid IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_gl_journals_source_uid
+            ON gl_journals(company_id, source_type, source_uid);
+
+        -- UNCONDITIONAL drop + create, deliberately NOT `CREATE TRIGGER IF
+        -- NOT EXISTS` -- see this function's own docstring, "THE TRIGGER
+        -- IS UNCONDITIONALLY DROPPED AND RECREATED", for why v38's own
+        -- step (immediately above this one in the chain, itself
+        -- unconditional every replay) would otherwise win the narrower
+        -- trigger back on every later chain replay (R7 in the plan).
+        DROP TRIGGER IF EXISTS trg_gl_journals_no_update;
+        CREATE TRIGGER trg_gl_journals_no_update
+        BEFORE UPDATE ON gl_journals
+        WHEN OLD.id                  IS NOT NEW.id
+          OR OLD.branch_id           IS NOT NEW.branch_id
+          OR OLD.business_date       IS NOT NEW.business_date
+          OR OLD.reference           IS NOT NEW.reference
+          OR OLD.memo                IS NOT NEW.memo
+          OR OLD.source_type         IS NOT NEW.source_type
+          OR OLD.source_id           IS NOT NEW.source_id
+          OR OLD.currency            IS NOT NEW.currency
+          OR OLD.reversed_journal_id IS NOT NEW.reversed_journal_id
+          OR OLD.posted_by           IS NOT NEW.posted_by
+          OR OLD.posted_at           IS NOT NEW.posted_at
+          OR (OLD.uid        IS NOT NULL AND OLD.uid        IS NOT NEW.uid)
+          OR (OLD.source_uid IS NOT NULL AND OLD.source_uid IS NOT NEW.source_uid)
+        BEGIN
+            SELECT RAISE(ABORT, 'gl_journals is append-only: post a reversing journal, never UPDATE one');
+        END;
+    """)

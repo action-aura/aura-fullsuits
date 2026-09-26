@@ -88,9 +88,103 @@ drives `SyncService` methods directly rather than through a route):
   cash_session_open {"op": "cash_session_open", "branch_id":.., "terminal_id":..}
                     -> {"status_code":.., "body": {...}}
   cash_session_status {"op": "cash_session_status"} -> {"open": bool, "session": dict|None}
+
+GL SYNC OPS (Wave 1, BOOKS-WAVE1-PLAN.md section 6, Builder D) -- additive,
+never touching any op above. `retail_gl_two_device_sync_test.py` is the only
+caller. A cross-device fact this file's own vocabulary has no dedicated op
+for (a device's local sale id for a peer's synced sale uid; poking one
+device's own `products.avg_cost` to diverge it from another's) is reached by
+that test file connecting DIRECTLY to a device's own `retail.db` (or the
+shared `relay.db`) between `run_device()` calls instead of a new op here --
+the identical technique this suite already establishes (`retail_gl_
+integration_test.py`'s own `_set_customer_credit` helper; this harness's own
+`retail_stock_sync_test.py` hand-inserting a `relay_events` row directly) --
+rather than growing this vocabulary past what BOOKS-WAVE1-PLAN.md section 6
+actually names.
+
+  pnl              {"op": "pnl", "start_date":.., "end_date":.., "branch_id": optional}
+                    -> {"status_code":.., "body": {...}}  (GET .../reports/profit-and-loss)
+  trial_balance    {"op": "trial_balance"} -> {"status_code":.., "body": {...}}
+                    (GET .../reports/trial-balance -- `body["data"]["subledger"]`
+                    is embedded in the SAME dict, see report_trial_balance's
+                    own comment in retail_api.py)
+  gl_census        {"op": "gl_census", "company_id":..}
+                    -> {"count":.., "distinct_uids":.., "null_uids":..,
+                        "uid_hash":..}  (sha256 of the sorted, newline-joined
+                        non-null uid list -- a compact cross-device
+                        fingerprint the two devices' P&L/trial-balance
+                        convergence checks can compare directly)
+  create_customer  {"op": "create_customer", "name":.., "credit_mode": "unlimited",
+                     "credit_limit": 1000000}
+                    -> {"status_code":.., "customer_id":.., "body": {...}}
+                    (POST .../customers, then a raw UPDATE granting credit --
+                    identical values to retail_gl_integration_test.py's own
+                    `_set_customer_credit`, so a credit sale against this
+                    customer is never refused for a credit-limit reason this
+                    suite doesn't care about)
+  sell_credit      {"op": "sell_credit", "product_id":.., "quantity":.., "customer_id":..,
+                     "amount_paid": 0, "branch_id": optional}
+                    -> {"status_code":.., "body": {...}}
+                    (POST .../sales, payment_method='credit' -- the credit-
+                    sale AR posting path, `gl.post_sale`'s `ar_amount` leg)
+  return_sale      {"op": "return_sale", "sale_id":.., "items": [{"product_id":.., "quantity":..}]}
+                    -> {"status_code":.., "body": {...}}  (POST .../returns)
+  customer_payment {"op": "customer_payment", "customer_id":.., "amount":.., "method": "cash"}
+                    -> {"status_code":.., "body": {...}}
+                    (POST .../customers/<id>/payments -- `gl.post_customer_payment`)
+  reset_cursor     {"op": "reset_cursor"} -> {"ok": true}
+                    (raw `UPDATE sync_cursor SET last_seq=0` -- simulates a
+                    cursor reset/re-pull-everything without waiting for a
+                    real relay-url change to trigger `ensure_cursor_matches_
+                    relay` on its own)
+  switch_relay_url {"op": "switch_relay_url", "relay_url":..} -> {"ok": true}
+                    (raw `UPDATE sync_cursor SET last_seq=0, relay_url=?` --
+                    the SAME two-column reset `ensure_cursor_matches_relay`
+                    itself performs on a genuine relay change, BOOKS-WAVE1-
+                    PLAN.md section 7 checkpoint C5's "hub<->cloud switch".
+                    Applied directly here, not through the real detection
+                    path, because `_stock_sync_harness.FileRelay` -- a test
+                    double, not the real `SyncRelayClient` -- exposes no
+                    `base_url` for that path to key off; see `pull_once`'s
+                    own `getattr(client, "base_url", None)` comment for why
+                    that is the safe default for a client that cannot name
+                    its own relay, not a gap this wave needs to close)
+  gl_post_backdated {"op": "gl_post_backdated", "company_id":.., "branch_id": optional,
+                      "business_date":.., "source_type": "adjustment", "currency": "JOD",
+                      "lines": [{"account_code":.., "debit":.., "credit":.., "memo": optional}, ...],
+                      "reference": optional, "memo": optional, "posted_by": optional}
+                    -> {"journal_id":.., "uid":..}
+                    (a direct `general_ledger.post_journal` call -- there is
+                    no manual-journal HTTP route by design, BOOKS-WAVE1-
+                    PLAN.md section 8's "out of scope" list -- for a test
+                    that needs one backdated or hand-shaped journal without
+                    a real sale/return/payment behind it)
+  gl_reverse_last  {"op": "gl_reverse_last", "company_id":.., "memo": optional}
+                    -> {"reversed_journal_id": int|None, "new_journal_id": int|None}
+                    (this company's own highest-id `gl_journals` row, reversed
+                    via `general_ledger.reverse_journal` -- None/None when the
+                    company has posted nothing yet)
+  insert_legacy_journal_raw {"op": "insert_legacy_journal_raw", "company_id":..,
+                              "branch_id": optional, "business_date":..,
+                              "source_type": "sale", "currency": "JOD",
+                              "lines": [...], "reference": optional, "memo": optional,
+                              "posted_by": optional}
+                    -> {"journal_id":..}
+                    (a RAW `INSERT INTO gl_journals` using the v38 column set
+                    only -- `uid`/`source_uid` are never named, so both stay
+                    NULL exactly like a genuine pre-v41 row -- see BOOKS-
+                    WAVE1-PLAN.md section 6 trap #5: "Making 'legacy' journals
+                    with the new code" is itself a fixture trap, so this
+                    deliberately never calls `post_journal`, which would
+                    always mint a uid)
+  quarantine_rows  {"op": "quarantine_rows", "entity_type": optional}
+                    -> {"rows": [{"entity_id":.., "entity_type":.., "event_type":..,
+                                   "reason":.., "detail":..}, ...]}
+  outbox_count_by_type {"op": "outbox_count_by_type", "entity_type":..} -> {"count": int}
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -130,6 +224,7 @@ def main() -> None:
     from commercial_runtime.identity.registry_db import get_conn as registry_conn
     from commercial_runtime.security.passwords import hash_password
     from commercial_runtime.sync.sync_service import SyncService, local_company_id_from_registry
+    from core.retail import general_ledger as gl
     from core.retail import stock_reconciliation
     from database.schema import get_retail_conn, record_or_refresh_stock_exception
 
@@ -385,6 +480,189 @@ def main() -> None:
             finally:
                 conn.close()
             results.append({"open": row is not None, "session": dict(row) if row else None})
+
+        # ── Wave 1 (BOOKS-WAVE1-PLAN.md section 6, Builder D) -- GL sync ops,
+        #    additive only, see this module's own docstring "GL SYNC OPS" ──
+
+        elif op == "pnl":
+            params = {"start_date": action["start_date"], "end_date": action["end_date"]}
+            if action.get("branch_id") is not None:
+                params["branch_id"] = action["branch_id"]
+            r = client.get(f"{API}/reports/profit-and-loss", query_string=params)
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "trial_balance":
+            r = client.get(f"{API}/reports/trial-balance")
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "gl_census":
+            conn = get_retail_conn()
+            try:
+                rows = conn.execute(
+                    "SELECT uid FROM gl_journals WHERE company_id=?", (action["company_id"],)
+                ).fetchall()
+            finally:
+                conn.close()
+            uids = [r["uid"] for r in rows]
+            non_null_sorted = sorted(u for u in uids if u is not None)
+            digest = hashlib.sha256("\n".join(non_null_sorted).encode("utf-8")).hexdigest()
+            results.append({
+                "count": len(uids),
+                "distinct_uids": len(set(non_null_sorted)),
+                "null_uids": sum(1 for u in uids if u is None),
+                "uid_hash": digest,
+            })
+
+        elif op == "create_customer":
+            r = client.post(f"{API}/customers", json={"name": action.get("name", "Sync Test Customer")})
+            customer_id = None
+            if r.status_code == 200:
+                customer_id = r.get_json()["data"]["id"]
+                conn = get_retail_conn()
+                try:
+                    conn.execute(
+                        "UPDATE customers SET credit_mode=?, credit_limit=? WHERE id=?",
+                        (action.get("credit_mode", "unlimited"), action.get("credit_limit", 1000000),
+                         customer_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            results.append({"status_code": r.status_code, "customer_id": customer_id, "body": r.get_json()})
+
+        elif op == "sell_credit":
+            body = {
+                "items": [{"product_id": action["product_id"], "quantity": action["quantity"]}],
+                "payment_method": "credit",
+                "customer_id": action["customer_id"],
+                "amount_paid": action.get("amount_paid", 0),
+                "idempotency_key": str(uuid.uuid4()),
+            }
+            if action.get("branch_id") is not None:
+                body["branch_id"] = action["branch_id"]
+            r = client.post(f"{API}/sales", json=body)
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "return_sale":
+            r = client.post(f"{API}/returns", json={
+                "sale_id": action["sale_id"], "items": action["items"],
+            })
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "customer_payment":
+            r = client.post(f"{API}/customers/{action['customer_id']}/payments", json={
+                "amount": action["amount"], "method": action.get("method", "cash"),
+            })
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "reset_cursor":
+            conn = get_retail_conn()
+            try:
+                conn.execute("UPDATE sync_cursor SET last_seq=0 WHERE id=1")
+                conn.commit()
+            finally:
+                conn.close()
+            results.append({"ok": True})
+
+        elif op == "switch_relay_url":
+            conn = get_retail_conn()
+            try:
+                conn.execute(
+                    "UPDATE sync_cursor SET last_seq=0, relay_url=? WHERE id=1",
+                    (action["relay_url"],),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            results.append({"ok": True})
+
+        elif op == "gl_post_backdated":
+            conn = get_retail_conn()
+            try:
+                journal_id = gl.post_journal(
+                    conn, action["company_id"], action.get("branch_id"),
+                    action["business_date"], action.get("source_type", "adjustment"),
+                    None, action.get("currency", "JOD"), action["lines"],
+                    reference=action.get("reference"), memo=action.get("memo"),
+                    posted_by=action.get("posted_by", "Device Test"),
+                )
+                conn.commit()
+                row = conn.execute("SELECT uid FROM gl_journals WHERE id=?", (journal_id,)).fetchone()
+            finally:
+                conn.close()
+            results.append({"journal_id": journal_id, "uid": row["uid"] if row else None})
+
+        elif op == "gl_reverse_last":
+            conn = get_retail_conn()
+            try:
+                last = conn.execute(
+                    "SELECT id FROM gl_journals WHERE company_id=? ORDER BY id DESC LIMIT 1",
+                    (action["company_id"],),
+                ).fetchone()
+                reversed_id = last["id"] if last else None
+                new_id = None
+                if reversed_id is not None:
+                    new_id = gl.reverse_journal(conn, action["company_id"], reversed_id,
+                                                 memo=action.get("memo"))
+                    conn.commit()
+            finally:
+                conn.close()
+            results.append({"reversed_journal_id": reversed_id, "new_journal_id": new_id})
+
+        elif op == "insert_legacy_journal_raw":
+            conn = get_retail_conn()
+            try:
+                cid_ = action["company_id"]
+                currency = action.get("currency", "JOD")
+                gl.ensure_default_chart(conn, cid_)
+                clean_lines, _debit_total, _credit_total = gl.validated_lines(action["lines"], currency)
+                cur = conn.execute(
+                    "INSERT INTO gl_journals (company_id, branch_id, business_date, reference, memo, "
+                    "source_type, source_id, currency, reversed_journal_id, posted_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (cid_, action.get("branch_id"), action["business_date"], action.get("reference"),
+                     action.get("memo"), action.get("source_type", "sale"), None, currency, None,
+                     action.get("posted_by", "System")),
+                )
+                journal_id = cur.lastrowid
+                for code, debit, credit, line_memo in clean_lines:
+                    acc = conn.execute(
+                        "SELECT id FROM gl_accounts WHERE company_id=? AND code=?", (cid_, code)
+                    ).fetchone()
+                    conn.execute(
+                        "INSERT INTO gl_journal_lines (journal_id, account_id, debit, credit, memo) "
+                        "VALUES (?,?,?,?,?)",
+                        (journal_id, acc["id"], float(debit), float(credit), line_memo),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+            results.append({"journal_id": journal_id})
+
+        elif op == "quarantine_rows":
+            conn = get_retail_conn()
+            try:
+                sql = ("SELECT entity_id, entity_type, event_type, reason, detail "
+                       "FROM sync_apply_quarantine")
+                params = ()
+                if action.get("entity_type") is not None:
+                    sql += " WHERE entity_type=?"
+                    params = (action["entity_type"],)
+                rows = conn.execute(sql, params).fetchall()
+            finally:
+                conn.close()
+            results.append({"rows": [dict(r) for r in rows]})
+
+        elif op == "outbox_count_by_type":
+            conn = get_retail_conn()
+            try:
+                n = conn.execute(
+                    "SELECT COUNT(*) AS c FROM sync_outbox WHERE entity_type=?",
+                    (action["entity_type"],),
+                ).fetchone()["c"]
+            finally:
+                conn.close()
+            results.append({"count": n})
 
         else:
             raise ValueError(f"unknown device action op: {op!r}")

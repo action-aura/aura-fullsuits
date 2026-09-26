@@ -48,6 +48,42 @@ import hmac
 
 from flask import Blueprint, jsonify, request
 
+# F7 (BOOKS-WAVE1-PLAN.md decision F7; v2 finding 7): `/_internal/outbox`
+# used to hand Kotlin the ENTIRE `sync_outbox` table in one HTTP response,
+# unbounded -- a one-time historical backfill (this wave's own
+# `general_ledger.backfill_legacy_journals`, roughly 2 events per historical
+# sale) can put a shop's outbox at order 20k rows, meaning order 20MB in ONE
+# response, on a phone, every 10-second tick until it drains. Both the
+# default (when Kotlin's request carries no `limit` at all) and the hard cap
+# (a `limit` above this is silently clamped down, never rejected) are this
+# SAME number -- oldest-first paging (SyncService.read_outbox's own `ORDER
+# BY rowid`) means asking for more than this never loses anything, it only
+# ever changes how many TICKS a large backlog takes to fully drain.
+#
+# F7 KOTLIN FINDING (read android/aura-retail/.../sync/SyncCoordinator.kt's
+# `pushOnce` before changing this default -- BOOKS-WAVE1-PLAN.md's own
+# instruction): Kotlin's `pushOnce` reads this endpoint ONCE per tick, drains
+# whatever it received (chunked further, client-side, to Owner's own
+# `_MAX_PUSH_BATCH`), acks each chunk it genuinely pushed, and returns -- it
+# does NOT loop back to re-read this endpoint within one tick. A capped page
+# therefore drains a large backlog over SEVERAL ticks instead of entirely on
+# the first one: strictly slower, never lossy (nothing is ever deleted here;
+# `ack_outbox` only ever removes the ids Kotlin actually names, and the next
+# tick's fresh SELECT naturally returns whatever is left). Kotlin's own
+# comment on that call site states outright that "`SyncService.read_outbox`
+# has no LIMIT" and treats the events it reads as "the true complete
+# backlog" for `recordPending`, the health indicator `SyncStatusScreen`
+# reads -- THAT is the one real, if minor, side effect of this default:
+# while a backlog larger than this page size is still draining, the
+# reported pending count under-reports the true backlog size (it reads
+# this page's size, not the true total) until it catches up, tick by tick.
+# No Kotlin change is made here (this wave's own files do not include
+# android/**) -- reported as this wave's own F7 finding rather than left
+# undiscovered, per BOOKS-WAVE1-PLAN.md's explicit instruction to STOP and
+# report rather than "fix" Kotlin from this side.
+_OUTBOX_DEFAULT_PAGE_LIMIT = 500
+_OUTBOX_MAX_PAGE_LIMIT = 500
+
 
 def make_sync_internal_blueprint(
     *,
@@ -86,6 +122,23 @@ def make_sync_internal_blueprint(
         record = state_repository.load()
         return record.owner_installation_id if record else None
 
+    def _outbox_page_limit() -> int:
+        """F7: the effective page size for THIS request -- an absent or
+        unparseable/non-positive `limit` query parameter falls back to
+        `_OUTBOX_DEFAULT_PAGE_LIMIT`; anything supplied is clamped to
+        `_OUTBOX_MAX_PAGE_LIMIT`, never rejected (a caller asking for more
+        than the cap just gets the cap, not a 400)."""
+        raw = request.args.get("limit")
+        if raw is None:
+            return _OUTBOX_DEFAULT_PAGE_LIMIT
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return _OUTBOX_DEFAULT_PAGE_LIMIT
+        if value <= 0:
+            return _OUTBOX_DEFAULT_PAGE_LIMIT
+        return min(value, _OUTBOX_MAX_PAGE_LIMIT)
+
     @bp.route("/_internal/outbox", methods=["GET"])
     def internal_outbox():
         """Rows Kotlin is about to sign and push, plus the installation_id
@@ -94,14 +147,26 @@ def make_sync_internal_blueprint(
         fresh on every call so activation completing after process start is
         picked up on the very next tick with no restart required (same
         rationale as SyncService's own client_factory being rebuilt per
-        attempt)."""
+        attempt).
+
+        F7 (BOOKS-WAVE1-PLAN.md decision F7; v2 finding 7): returns a
+        BOUNDED, oldest-first PAGE of the outbox -- see this module's own
+        `_OUTBOX_DEFAULT_PAGE_LIMIT`/`_OUTBOX_MAX_PAGE_LIMIT` comment for
+        the full reasoning and the Kotlin-caller finding this change
+        surfaces. An optional `?limit=N` query parameter narrows the page
+        further (still capped at the same maximum); omitting it uses the
+        default. Nothing here changes `SyncService.read_outbox`'s own
+        default behaviour for any OTHER caller (`push_once()` on Windows,
+        every pre-existing test) -- only THIS route ever passes an
+        explicit `limit`."""
         if not _authorized():
             return _forbidden()
         installation_id = _installation_id()
+        limit = _outbox_page_limit()
         conn = get_conn()
         try:
             with sync_service._lock:
-                events = sync_service.read_outbox(conn)
+                events = sync_service.read_outbox(conn, limit=limit)
         finally:
             conn.close()
         return jsonify({"installation_id": installation_id, "events": events}), 200

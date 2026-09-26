@@ -694,6 +694,54 @@ def test_read_outbox_orders_by_insertion_sequence_not_wall_clock(get_conn):
     assert [e["entity_id"] for e in events] == [supplier_id, product_id, product2_id, reorder_id]
 
 
+def test_read_outbox_limit_none_reads_everything_unchanged(get_conn):
+    """F7 (BOOKS-WAVE1-PLAN.md decision F7; v2 finding 7): `limit=None` (the
+    default, and the ONLY way `push_once()` and every pre-existing test in
+    this suite ever calls `read_outbox`) must read the WHOLE outbox,
+    byte-for-byte today's behaviour -- this parameter's introduction must
+    change NOTHING for any caller that does not pass it explicitly."""
+    _bulk_insert_outbox(get_conn, 30)
+    conn = get_conn()
+    service = SyncService(lambda: None, get_conn)
+    events = service.read_outbox(conn)
+    conn.close()
+    assert len(events) == 30
+
+
+def test_read_outbox_limit_pages_oldest_first(get_conn):
+    """A positive `limit` returns at most that many rows, OLDEST FIRST --
+    the SAME `ORDER BY rowid` every other caller relies on -- so a caller
+    that re-reads on its own next tick (after acking what it got) drains
+    the true backlog across several calls without ever losing or
+    reordering anything.
+
+    MUTATION: dropping the `LIMIT ?` clause (ignoring `limit` entirely)
+    turns this RED -- both pages would return all 5 rows."""
+    conn = get_conn()
+    ids_in_order = []
+    for i in range(5):
+        entity_id = str(uuid.uuid4())
+        ids_in_order.append(entity_id)
+        conn.execute(
+            "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), "category", entity_id, "create",
+             json.dumps({"id": entity_id, "name": f"Page-{i}", "description": ""}),
+             "2026-08-06T00:00:00+00:00"),
+        )
+    conn.commit()
+
+    service = SyncService(lambda: None, get_conn)
+    first_page = service.read_outbox(conn, limit=3)
+    assert [e["entity_id"] for e in first_page] == ids_in_order[:3]
+
+    # ack_outbox + a fresh read (the real per-tick shape) drains the rest.
+    service.ack_outbox(conn, [e["id"] for e in first_page])
+    conn.commit()
+    second_page = service.read_outbox(conn, limit=3)
+    conn.close()
+    assert [e["entity_id"] for e in second_page] == ids_in_order[3:]
+
+
 # ── pull_once() ──────────────────────────────────────────────────────────
 
 def _pull_event(entity_id, event_type, payload):
@@ -2280,6 +2328,96 @@ def test_a_differently_configured_instance_applies_what_the_first_ignored(get_co
     assert len(_customers(get_conn)) == 1
 
 
+# ── F6 (BOOKS-WAVE1-PLAN.md decision F6; v2 finding 1b, plan risk R2a): an
+# unknown entity_type from a NEWER sender is quarantined, never skipped ─────
+
+def test_unknown_type_from_a_newer_sender_is_quarantined_not_skipped(get_conn):
+    """An entity_type this build's SyncService instance has never heard of
+    is normally harmless to skip (see test_pull_once_ignores_unknown_
+    entity_types above) -- UNLESS the payload itself names a sender
+    schema_version that is genuinely AHEAD of this device's own. Skipping
+    that silently is exactly how a v40 till permanently loses a v41
+    peer's brand-new `gl_journal` events once a relay/hub prunes them
+    (verifier 2's own repro1_v40_peer.py) -- this proves the SAME shape
+    one version up: a v41 till receiving an unknown v42 type must park
+    it, not skip past it, so it applies once this device upgrades.
+
+    MUTATION: removing this check (reverting to the plain, unconditional
+    skip for every unhandled entity_type) turns this RED -- the cursor
+    still advances, but nothing is ever quarantined."""
+    event = {
+        "id": str(uuid.uuid4()), "entity_type": "warehouse", "entity_id": "wh-1",
+        "event_type": "create",
+        "payload": {"id": "wh-1", "_sender_schema_version": 42},
+        "created_at": "2026-08-06T00:00:00+00:00",
+    }
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 5}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                           local_schema_version_provider=lambda: 41)
+
+    service.pull_once()  # must not raise
+
+    assert _cursor(get_conn) == 5, "the cursor must still advance -- this is a quarantine, not a wedge"
+    rows = _quarantine(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["entity_type"] == "warehouse"
+    assert rows[0]["reason"] == "schema_version_too_new"
+
+
+def test_unknown_type_from_an_older_or_equal_sender_still_just_skips(get_conn):
+    """The OTHER half of F6: an unknown type from a sender that is NOT
+    ahead (older, or the SAME version) keeps today's plain skip -- this
+    guard must never turn "future business as usual, sent by a peer at or
+    behind this device's own version" into a permanent park."""
+    for sender_version in (41, 40):
+        event = {
+            "id": str(uuid.uuid4()), "entity_type": "warehouse", "entity_id": f"wh-{sender_version}",
+            "event_type": "create",
+            "payload": {"id": f"wh-{sender_version}", "_sender_schema_version": sender_version},
+            "created_at": "2026-08-06T00:00:00+00:00",
+        }
+        client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+        service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                               local_schema_version_provider=lambda: 41)
+        service.pull_once()
+        assert _quarantine(get_conn) == [], (
+            f"an unknown type from a sender at schema_version={sender_version} "
+            f"(not ahead of this device's own 41) must not be quarantined"
+        )
+
+
+def test_unstamped_unknown_type_stays_unaffected_registry_stream(get_conn):
+    """Registry-stream events (`user`/`user_permission`) are UNSTAMPED by
+    design -- no registry SyncService construction site passes a
+    `local_schema_version_provider` (see `read_outbox`'s own docstring) --
+    so they carry no `_sender_schema_version` key at all. Proves such an
+    event, arriving here as "unknown" (THIS instance is a retail-stream
+    SyncService), falls straight through to the plain skip, unaffected by
+    F6, EVEN THOUGH this instance itself HAS a schema_version provider
+    configured (the realistic production shape once a product wires one
+    in: the guard is active, but an UNSTAMPED payload must still degrade
+    to today's skip, never `schema_version_unverifiable` -- that stricter,
+    fail-closed reason is the KNOWN-type gate's own posture; F6
+    deliberately does not extend it to unknown types)."""
+    event = {
+        "id": str(uuid.uuid4()), "entity_type": "user", "entity_id": "user-1",
+        "event_type": "create",
+        "payload": {"id": "user-1"},  # no _sender_schema_version key at all
+        "created_at": "2026-08-06T00:00:00+00:00",
+    }
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 3}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                           local_schema_version_provider=lambda: 41)
+
+    service.pull_once()  # must not raise
+
+    assert _cursor(get_conn) == 3
+    assert _quarantine(get_conn) == [], (
+        "an unstamped unknown-type event (the registry stream's own shape) "
+        "must never be quarantined by the unknown-type schema guard"
+    )
+
+
 # ── launch-readiness Phase 6 stage 6a-ii: reject-stale gate for the five
 # catalogue types (docs/launch-readiness/phase6-catalogue-correctness.md,
 # Task A/B/C) ────────────────────────────────────────────────────────────
@@ -2867,3 +3005,105 @@ def test_modern_stale_or_equal_row_version_is_still_denied_after_the_legacy_fix(
     conflicts = _sync_conflicts(get_conn)
     assert len(conflicts) == 2, "each explicit stale write must still record its own sync_conflicts entry"
     assert {c["incoming_row_version"] for c in conflicts} == {3, 5}
+
+
+# ── F6, the proofs the plan asked for (third wave verifier, 2026-09-26) ───
+
+def test_unknown_type_parked_for_a_newer_sender_applies_once_this_device_upgrades(get_conn):
+    """F6 as ordered: "a v41 till receiving an unknown v42 type is parked,
+    THEN APPLIED AFTER UPGRADE". The parked half alone proves nothing about
+    the money: the event has to come back out of quarantine and land once
+    the build knows the type. Modelled with `category` standing in for the
+    v42 type: a v41 instance that does not handle it parks it; the same
+    database, now served by a v42 instance that does, applies it on the
+    next pull tick with no operator action. RED under the F6 mutation
+    (nothing parked, so nothing to apply after the upgrade)."""
+    category_id = str(uuid.uuid4())
+    event = {
+        "id": str(uuid.uuid4()), "entity_type": "category", "entity_id": category_id,
+        "event_type": "create",
+        "payload": {"id": category_id, "name": "Arrived from v42", "description": "",
+                    "row_version": 1, "_sender_schema_version": 42},
+        "created_at": "2026-08-06T00:00:00+00:00",
+    }
+    v41 = SyncService(lambda: FakeRelayClient(pull_responses=[{"events": [event], "cursor": 5}]),
+                      get_conn, lambda: "receiving-company",
+                      handled_entity_types=RETAIL_SYNC_ENTITY_TYPES - {"category"},
+                      local_schema_version_provider=lambda: 41)
+    v41.pull_once()
+    assert _cursor(get_conn) == 5
+    assert [r["reason"] for r in _quarantine(get_conn)] == ["schema_version_too_new"]
+    assert _categories(get_conn) == []
+
+    v42 = SyncService(lambda: FakeRelayClient(pull_responses=[{"events": [], "cursor": 5}]),
+                      get_conn, lambda: "receiving-company",
+                      local_schema_version_provider=lambda: 42)
+    v42.pull_once()  # the retry every pull tick runs
+    assert [c["id"] for c in _categories(get_conn)] == [category_id], (
+        "a v42 event parked by a v41 build never applied after the upgrade"
+    )
+    assert _quarantine(get_conn) == []
+
+
+def test_a_registry_instance_skips_newer_stamped_retail_events_without_raising(get_conn):
+    """The registry-stream SyncService pulls the SAME relay stream as the
+    retail one (app.py), so every stamped retail event -- including one from
+    a peer already on a NEWER retail schema -- reaches it as an unknown
+    type. It has no `local_schema_version_provider` (registry.db has its own
+    version cadence; app.py says why), so F6 must leave it on the plain
+    skip. No test pinned this: dropping F6's `provider is not None` guard
+    left all 87 tests in this file green, while in production the registry
+    instance would call `None()` on the first newer retail event and raise
+    out of every pull tick -- users and permissions would stop syncing."""
+    from commercial_runtime.sync.sync_service import REGISTRY_SYNC_ENTITY_TYPES
+    event = {
+        "id": str(uuid.uuid4()), "entity_type": "gl_journal", "entity_id": "j-1",
+        "event_type": "create",
+        "payload": {"uid": "j-1", "_sender_schema_version": 99},
+        "created_at": "2026-08-06T00:00:00+00:00",
+    }
+    registry = SyncService(lambda: FakeRelayClient(pull_responses=[{"events": [event], "cursor": 4}]),
+                           get_conn, lambda: "receiving-company",
+                           handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+    registry.pull_once()  # must not raise
+    assert _cursor(get_conn) == 4
+    assert _quarantine(get_conn) == []
+
+
+def test_registry_outbox_events_leave_unstamped(get_conn):
+    """The other half of "registry events are unstamped -- prove it": the
+    F6 tests above feed hand-built unstamped payloads to a retail instance;
+    this pins that a provider-less instance (every registry construction in
+    app.py) really does send them unstamped, and that a provider-armed one
+    does stamp -- so the unstamped reading above is the production shape."""
+    _insert_outbox_row(get_conn)
+    conn = get_conn()
+    try:
+        unarmed = SyncService(lambda: None, get_conn).read_outbox(conn)
+        armed = SyncService(lambda: None, get_conn,
+                            local_schema_version_provider=lambda: 41).read_outbox(conn)
+    finally:
+        conn.close()
+    assert "_sender_schema_version" not in unarmed[0]["payload"]
+    assert armed[0]["payload"]["_sender_schema_version"] == 41
+
+
+def test_unknown_type_with_a_non_dict_payload_is_still_just_skipped(get_conn):
+    """Before F6 the unknown-type path returned without ever touching the
+    payload. F6 now reads `_sender_schema_version` out of it, so a malformed
+    event whose payload is not an object (a list, a string) made that read
+    raise `AttributeError` out of `_apply_event` -- and a raise there rolls
+    the whole pull page back and pins the cursor, every tick. An unknown
+    type with no readable stamp is the ordinary skip, whatever its payload
+    looks like. RED before the isinstance guard: AttributeError."""
+    events = [
+        {"id": str(uuid.uuid4()), "entity_type": "warehouse", "entity_id": f"wh-{i}",
+         "event_type": "create", "payload": bad, "created_at": "2026-08-06T00:00:00+00:00"}
+        for i, bad in enumerate((["x"], "not-an-object", 7))
+    ]
+    client = FakeRelayClient(pull_responses=[{"events": events, "cursor": 9}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                          local_schema_version_provider=lambda: 41)
+    service.pull_once()  # must not raise
+    assert _cursor(get_conn) == 9
+    assert _quarantine(get_conn) == []

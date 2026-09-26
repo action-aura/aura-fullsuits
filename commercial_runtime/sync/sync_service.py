@@ -340,6 +340,19 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Callable, Iterable, NamedTuple, Optional
 
+# `gl_journal`'s apply-side balance check (the `_apply_event` branch below,
+# BOOKS-WAVE1 W1 §2.5) needs the SAME quantum table `general_ledger.py`'s own
+# `_gl_epsilon`/`quantize_money` read -- imported from here, never from
+# `products/retail/backend/core/retail/general_ledger.py` itself, because
+# `commercial_runtime` must not depend on either product (see currency.py's
+# own module docstring: "commercial_runtime cannot import products/, nothing
+# in here may depend on either product"). The balance MATH is therefore
+# necessarily duplicated rather than shared -- same layering trade-off
+# `general_ledger.py`'s own `_gl_epsilon` already documents for its
+# `api.retail_api._money_epsilon` twin -- see `_validate_gl_journal_lines`'s
+# own docstring below for the parity this buys.
+from commercial_runtime.currency import DEFAULT_BASE_CURRENCY, currency_quantum
+
 logger = logging.getLogger(__name__)
 
 _BACKOFF_MULTIPLIER = 2.0
@@ -434,6 +447,25 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # payload, and every later event is an `update` carrying header fields
     # only.
     "quotation",
+    # BOOKS-WAVE1 W1 (schema v41) -- "gl_journal" is the ONLY entity type
+    # this wave adds. It carries one already-posted `gl_journals` header
+    # plus its balanced `gl_journal_lines` set, keyed by the ORIGINATING
+    # device's own `uid` -- see `_apply_event`'s branch below for the full
+    # apply-side contract (validate-before-write, `_resolve_branch_id`'s
+    # null-stays-null carve-out, account seeding by code parents-first,
+    # `ON CONFLICT(uid) ... DO NOTHING` gated the same HAZARD-1 way
+    # `inventory_movement` above is). UNLIKE every other entity type in
+    # this set, the RECEIVING device never derives or re-computes this
+    # fact from anything else it has pulled -- see the plan's Decision 1,
+    # "(a) Sync the journals", for why re-deriving from pulled sales/
+    # returns/purchase-orders was rejected. Append-only, like `cheque`/
+    # `cheque_event`/`inventory_movement` above: there is no `gl_journal`
+    # "update" or "delete" event, ever -- a mistake is corrected by posting
+    # a NEW reversing journal (`reversed_journal_uid`), never by rewriting
+    # this one, enforced at the database level by `gl_journals`'s own
+    # BEFORE UPDATE trigger (database/schema.py's
+    # `_migrate_add_gl_journal_sync`).
+    "gl_journal",
     # Aseel-parity wave A-PAR (schema v34) -- "doc_series" is the
     # DEFINITION only (id, doc_type, code, label, branch_uid,
     # allocator_terminal_uid, ...); the COUNTER it drives
@@ -875,7 +907,7 @@ class SyncService:
             finally:
                 conn.close()
 
-    def read_outbox(self, conn) -> list:
+    def read_outbox(self, conn, limit: Optional[int] = None) -> list:
         """Reads (never deletes) the current sync_outbox rows, in the same
         shape push() expects. Split out of push_once() (multi-device-sync-
         foundation, Task 9) so Android's local `/_internal` sync routes can
@@ -885,6 +917,36 @@ class SyncService:
         commercial_runtime/licensing_contracts/android_bridge_identity.py),
         so Kotlin makes the actual signed HTTP call and this method only
         hands it the rows to sign and send.
+
+        `limit` (F7, BOOKS-WAVE1-PLAN.md decision F7; v2 finding 7):
+        `None` (the default, and the ONLY way every existing caller in this
+        codebase -- `push_once()` above, and every pre-existing test in this
+        suite -- has ever called this method) reads the WHOLE outbox,
+        byte-for-byte today's behaviour; `push_once()` already chunks
+        what it gets to `_PUSH_CHUNK_SIZE` before ever calling `client.
+        push()`, so it has no reason to ask for a bounded page here, and
+        this default keeps it, and the Windows push loop it drives, wholly
+        unchanged by this parameter's introduction. A positive `limit`
+        returns at most that many rows, OLDEST FIRST (the SAME `ORDER BY
+        rowid` below -- see that ordering's own reasoning) -- this is what
+        `commercial_runtime/sync/internal_routes.py`'s `/_internal/outbox`
+        route now passes (capped and defaulted there, never here, so this
+        method itself stays a plain, unopinionated page primitive): that
+        endpoint used to hand Android's Kotlin the ENTIRE outbox in one
+        HTTP response regardless of size -- a one-time historical backfill
+        of order 20k events means order 20MB on a phone, in ONE response,
+        every tick until it drains. Paging there, not here, is deliberate:
+        it isolates the change to the ONE caller (an HTTP endpoint) that
+        actually needed a wire-size bound, without touching push_once()'s
+        own, already-correct chunking discipline.
+
+        A page smaller than the true backlog is always safe to hand a
+        caller that re-reads on its own next tick (rows are never deleted
+        here, only `ack_outbox` removes them, and only the ones a caller
+        names) -- see `internal_routes.py`'s own docstring for the ONE
+        thing this changes for its existing Kotlin caller: SEE THAT FILE'S
+        OWN F7 note before assuming a caller's size-of-the-page reading is
+        still "the true complete backlog".
 
         ORDER BY rowid -- sqlite's insertion sequence for this table -- and
         deliberately NOT created_at (AUDIT 2026-08-19): created_at is
@@ -928,7 +990,12 @@ class SyncService:
             self._parse_schema_version(self._local_schema_version_provider())
             if self._local_schema_version_provider is not None else None
         )
-        rows = conn.execute("SELECT * FROM sync_outbox ORDER BY rowid").fetchall()
+        query = "SELECT * FROM sync_outbox ORDER BY rowid"
+        params: tuple = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        rows = conn.execute(query, params).fetchall()
         events = []
         for r in rows:
             payload = json.loads(r["payload"])
@@ -1509,8 +1576,85 @@ class SyncService:
         # quarantined (a foreign-stream event is not poison -- it belongs to
         # the other stream), and the cursor still advances past it, because
         # this method returning True is what `apply_pull_result`'s caller
-        # reads as "fully handled, nothing left to retry".
+        # reads as "fully handled, nothing left to retry" -- UNLESS the
+        # payload itself proves this "unknown" type is actually a FUTURE
+        # entity type this build simply has not been taught yet (F6,
+        # BOOKS-WAVE1-PLAN.md decision F6; v2 finding 1b, plan risk R2a).
+        #
+        # THE HAZARD THIS CLOSES: a v41 device introduces `gl_journal`
+        # (this very wave); a v40 peer has never heard of that type, so
+        # this same gate used to `return True` unconditionally -- the
+        # cursor advanced PAST every `gl_journal` event, forever, with
+        # nothing quarantined and nothing to retry. Once Owner's or the
+        # LAN hub's own pruning (both scheduled, both outside this wave's
+        # files) drops anything at or below the lowest acknowledged
+        # cursor, that history is GONE -- verifier 2's own
+        # `repro1_v40_peer.py` reproduces exactly this: a v40 till loses a
+        # peer's entire backfilled ledger history and everything posted
+        # in the upgrade gap. The KNOWN five-entity-type Phase-5 guard
+        # below already refuses to apply a KNOWN type from a NEWER schema
+        # version than this device's own; this extends the identical
+        # refusal to a type this build cannot even dispatch on at all,
+        # rather than leaving unknown-type skew as the one gap that guard
+        # never covered.
+        #
+        # THE RULE: quarantine (never skip) an unhandled `entity_type`
+        # under the SAME `schema_version_too_new` reason the known-type
+        # gate below already uses -- `_retry_quarantined_events` already
+        # replays that reason on every later pull, so this device
+        # self-heals the moment it upgrades to a build that both
+        # recognises the type AND advances its own schema_version past
+        # the sender's -- IF AND ONLY IF the payload NAMES a sender
+        # schema_version that is genuinely newer than this device's own.
+        # An unknown type from an OLDER-OR-EQUAL sender, or one that never
+        # stamps `_sender_schema_version` at all, keeps TODAY'S plain
+        # skip -- this is deliberately NOT the same fail-closed posture
+        # the known-type gate takes on an unparseable/absent version (that
+        # gate's own `schema_version_unverifiable` reason): an unknown
+        # type is already the ordinary, harmless "this belongs to a
+        # stream/version this build never claimed to speak" case, and
+        # only the ONE proven-unsafe direction (sender confirmed ahead)
+        # should change that. The REGISTRY stream's own events
+        # (`user`/`user_permission`, arriving here as "unknown" whenever
+        # THIS instance is a retail-stream `SyncService`) are UNSTAMPED by
+        # design -- no registry `SyncService` construction site passes a
+        # `local_schema_version_provider` (see `read_outbox`'s own
+        # docstring: no provider configured means nothing is stamped at
+        # all) -- so they carry no `_sender_schema_version` key and fall
+        # straight through to the plain skip below, exactly as before
+        # this fix: `test_registry_stream_events_stay_unaffected_by_the_
+        # unknown_type_schema_guard` (commercial_runtime/sync/tests/
+        # test_sync_service.py) proves this directly.
         if entity_type not in self._handled_entity_types:
+            if self._local_schema_version_provider is not None:
+                # isinstance: before F6 this path never read the payload at
+                # all, so a non-object payload on an unknown type must stay
+                # the plain skip, never an AttributeError out of the page.
+                p_unknown = ev.get("payload")
+                raw_sender_version = (p_unknown.get("_sender_schema_version")
+                                      if isinstance(p_unknown, dict) else None)
+                if raw_sender_version is not None:
+                    receiver_version = self._parse_schema_version(
+                        self._local_schema_version_provider())
+                    sender_version = self._parse_schema_version(raw_sender_version)
+                    if (receiver_version is not None and sender_version is not None
+                            and sender_version > receiver_version):
+                        if schema_skew_sink is not None:
+                            schema_skew_sink.append((entity_type, "schema_version_too_new"))
+                        return self._quarantine_apply_event(
+                            conn, ev, reason="schema_version_too_new",
+                            detail=(
+                                f"entity_type={entity_type!r} is not one this "
+                                f"build's SyncService instance handles at all, "
+                                f"AND its sender's schema_version={sender_version} "
+                                f"is ahead of this device's local schema_version="
+                                f"{receiver_version} -- refusing to skip past it "
+                                "silently (that would lose it permanently once a "
+                                "relay/hub prunes it) until this device is "
+                                f"upgraded to schema_version>={sender_version} and "
+                                "can recognise this entity_type."
+                            ),
+                        )
             return True
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
@@ -3436,7 +3580,388 @@ class SyncService:
                         incoming_row_version=raw_row_version, payload=p,
                     )
                 return True
+        elif entity_type == "gl_journal":
+            # BOOKS-WAVE1 W1 (schema v41), plan §2.5. INLINE, no dedicated
+            # hook method -- see the RETAIL_SYNC_ENTITY_TYPES comment above
+            # for why: every existing `SyncService(...)` construction (all
+            # 39 test-harness call sites plus both of app.py's own) keeps
+            # applying this new entity type with zero wiring changes, the
+            # same posture wave B's `inventory_movement`/`branch` branches
+            # already established.
+            if event_type != "create":
+                # No `gl_journal` "update" or "delete" event is EVER
+                # emitted -- see the RETAIL_SYNC_ENTITY_TYPES comment
+                # above. Reaching here with one means either a future
+                # write-side bug or a malicious/corrupt relay payload;
+                # refusing it is the same safe default `sale`/
+                # `inventory_movement` already take for their own
+                # never-emitted event types.
+                return True
+            uid = p.get("uid")
+            if not uid:
+                # Plan §2.5 step 1: a uid-less journal can never be
+                # deduped (`ON CONFLICT(uid)` below has nothing to key
+                # on) and can never be NAMED later by a `source_uid` or
+                # `reversed_journal_uid` -- parking it, rather than
+                # inserting it uid-less, is the only safe choice.
+                return self._quarantine_apply_event(
+                    conn, ev, reason="gl_invalid",
+                    detail="gl_journal payload carries no uid -- cannot dedupe "
+                           "it or let a later reversal name it")
+            # F8 (BOOKS-WAVE1-PLAN.md; v1 gap 1): `business_date` and
+            # `source_type` are NOT NULL columns on `gl_journals`
+            # (database/schema.py's `_migrate_add_gl_journal_sync`) --
+            # inserting either as NULL raises `sqlite3.IntegrityError`
+            # straight out of the INSERT below, escaping `_apply_event`
+            # entirely and wedging the whole pull batch, instead of
+            # parking one malformed/hostile payload the same way a
+            # missing `uid` already does above.
+            if not p.get("business_date") or not p.get("source_type"):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="gl_invalid",
+                    detail=f"gl_journal uid={uid!r} payload missing "
+                           f"business_date and/or source_type -- both are "
+                           f"NOT NULL columns on gl_journals; inserting "
+                           f"either as NULL would raise sqlite3."
+                           f"IntegrityError out of _apply_event rather "
+                           f"than parking cleanly")
+            # F8, the rest of it (third wave verifier, 2026-09-26): every
+            # value this branch binds into SQL must be the TYPE the emitter
+            # sends -- `journal_sync_payload` reads TEXT columns, so each of
+            # these is a str or None, never a dict/list/bool/number. A dict
+            # or list used to raise `sqlite3.ProgrammingError` ("Error
+            # binding parameter") out of the INSERT below, and a non-list
+            # `accounts` a `TypeError` -- the same page-wedge the checks
+            # above close; a bool/number was written into the books as text
+            # ('1', '3.5'). Checked here, before ANY write (plan section 2.5
+            # step 2). `test_wrongly_typed_payload_values_are_parked_not_
+            # raised` (retail_gl_journal_apply_test.py) is RED without it.
+            bad_type = self._gl_journal_type_error(p)
+            if bad_type is not None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="gl_invalid",
+                    detail=f"gl_journal payload has a wrongly-typed value: {bad_type}")
+            currency = p.get("currency") or DEFAULT_BASE_CURRENCY
+            clean_lines, invalid_reason = self._validate_gl_journal_lines(
+                p.get("lines"), currency)
+            if invalid_reason is not None:
+                # Plan §2.5 step 2: validate BEFORE any write. See
+                # `_validate_gl_journal_lines`'s own docstring for exactly
+                # which shape and balance failures map to which of the
+                # two reason strings.
+                return self._quarantine_apply_event(
+                    conn, ev, reason=invalid_reason,
+                    detail=f"gl_journal uid={uid!r} failed line validation "
+                           f"(reason={invalid_reason!r})")
+            # `branch_uid` NULL must stay NULL (a company-wide journal) --
+            # deliberately NOT run through `_resolve_branch_id` in that
+            # case, whose tier-2 fallback would wrongly pin it to this
+            # device's own default branch (plan §2.2, "Branch" row). A
+            # non-null uid DOES go through the ordinary resolver, exactly
+            # like sale/return/inventory_movement above.
+            branch_uid = p.get("branch_uid")
+            resolved_branch_id = (
+                self._resolve_branch_id(conn, local_company_id, branch_uid,
+                                         fallback_sink=branch_fallback_sink)
+                if branch_uid else None
+            )
+            # Reversals: the payload names the reversed journal by UID,
+            # never by the sending device's own local integer id (which
+            # means nothing here) -- resolved via the same `_local_id_
+            # by_uid` helper `sale_item`/`user_permission` already use
+            # against their own parent tables, just pointed at
+            # `gl_journals` instead. Not found yet -> parked, retried the
+            # same way any other missing-parent case is (plan §2.2,
+            # "Reversals" row).
+            reversed_journal_uid = p.get("reversed_journal_uid")
+            reversed_journal_id = None
+            if reversed_journal_uid:
+                reversed_journal_id = self._local_id_by_uid(
+                    conn, "gl_journals", reversed_journal_uid)
+                if reversed_journal_id is None:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="missing_parent:gl_journal",
+                        detail=f"reversed_journal_uid={reversed_journal_uid!r} "
+                               f"not found locally yet (gl_journal uid={uid!r})")
+            # `source_id` -- plan §2.2 "source_id" row: the RECEIVER's own
+            # local id, never the sender's integer, and NULL rather than
+            # parked when it cannot be resolved (a journal is allowed to
+            # arrive before the sale/return it came from; only the
+            # cost-basis flag cares, and that is W1b, out of this wave's
+            # scope).
+            source_type = p.get("source_type")
+            source_uid = p.get("source_uid")
+            if source_type == "sale":
+                source_id = self._local_id_by_uid(conn, "sales", source_uid)
+            elif source_type == "return":
+                source_id = self._local_id_by_uid(conn, "returns", source_uid)
+            elif source_type == "reversal":
+                source_id = reversed_journal_id
+            else:
+                source_id = None
+            # Account lines travel by CODE, never by the sending device's
+            # own `account_id` (plan §2.2, "Account lines" row). Seed any
+            # code this device has never seen from the payload's own
+            # `accounts` metadata BEFORE resolving any line below --
+            # walked in the ORDER the payload lists them (Builder A's
+            # `journal_sync_payload` lists parents before children, the
+            # same convention `general_ledger.ensure_default_chart` itself
+            # uses for `DEFAULT_CHART`), so a child whose parent this
+            # device has never seeded resolves its `parent_id` correctly
+            # in this same pass rather than racing the per-line lookup
+            # below.
+            for meta in (p.get("accounts") or []):
+                if not isinstance(meta, dict):
+                    continue
+                code = meta.get("code")
+                if not code:
+                    continue
+                if conn.execute(
+                    "SELECT 1 FROM gl_accounts WHERE company_id=? AND code=?",
+                    (local_company_id, code),
+                ).fetchone():
+                    continue
+                parent_id = None
+                parent_code = meta.get("parent_code")
+                if parent_code:
+                    parent_row = conn.execute(
+                        "SELECT id FROM gl_accounts WHERE company_id=? AND code=?",
+                        (local_company_id, parent_code),
+                    ).fetchone()
+                    parent_id = parent_row["id"] if parent_row else None
+                conn.execute(
+                    "INSERT OR IGNORE INTO gl_accounts "
+                    "(company_id, code, name, account_type, normal_balance, parent_id) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (local_company_id, code, meta.get("name") or code,
+                     meta.get("account_type") or "asset",
+                     meta.get("normal_balance") or "debit", parent_id),
+                )
+            line_account_ids = {}
+            for code, _debit, _credit, _memo in clean_lines:
+                if code in line_account_ids:
+                    continue
+                row = conn.execute(
+                    "SELECT id FROM gl_accounts WHERE company_id=? AND code=?",
+                    (local_company_id, code),
+                ).fetchone()
+                if row is None:
+                    # Neither already on this device NOR described by
+                    # this payload's own `accounts` metadata -- there is
+                    # no safe account to file this line under. Park it
+                    # rather than guess or invent one.
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="gl_unknown_account",
+                        detail=f"account_code={code!r} not found locally and "
+                               f"not described by this payload's own accounts "
+                               f"metadata (gl_journal uid={uid!r})")
+                line_account_ids[code] = row["id"]
+            # `ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING` -- the
+            # same partial-index shape every other RETAIL_UID_TABLES
+            # immutable-fact branch above uses. `business_date`,
+            # `reference`, `memo`, `posted_by` and `posted_at` all travel
+            # VERBATIM from the payload and never fall back to SQLite's
+            # own column defaults (`posted_at`'s is `CURRENT_TIMESTAMP`):
+            # this is history arriving from ANOTHER device, not a fact
+            # happening on this one right now (plan §2.2, "Reports" row --
+            # `business_date` must match the source document's own date,
+            # never today's, or trial_balance/income_statement periods
+            # would disagree between the two devices).
+            cur = conn.execute(
+                "INSERT INTO gl_journals (company_id, branch_id, business_date, reference, "
+                "memo, source_type, source_id, currency, reversed_journal_id, posted_by, "
+                "posted_at, uid, source_uid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (local_company_id, resolved_branch_id, p.get("business_date"),
+                 p.get("reference"), p.get("memo"), source_type, source_id,
+                 currency, reversed_journal_id, p.get("posted_by") or "System",
+                 p.get("posted_at"), uid, source_uid),
+            )
+            # HAZARD-1, THE DECISIVE LINE -- identical shape to
+            # `inventory_movement` above: the lines are inserted IF AND
+            # ONLY IF the header row was ACTUALLY just inserted
+            # (`cur.rowcount == 1`). `rowcount == 0` means `DO NOTHING`
+            # fired -- a replayed batch, a re-pulled cursor range, or this
+            # device receiving its own echo of a journal it posted itself
+            # (FileRelay/hub-forward, plan §2.2 "No double post" row) --
+            # and inserting the lines anyway would double every debit and
+            # credit on this journal while `trial_balance`'s own SUM
+            # silently absorbed it as a second, identical-looking posting.
+            if cur.rowcount:
+                journal_id = cur.lastrowid
+                for code, debit, credit, line_memo in clean_lines:
+                    conn.execute(
+                        "INSERT INTO gl_journal_lines (journal_id, account_id, debit, credit, memo) "
+                        "VALUES (?,?,?,?,?)",
+                        (journal_id, line_account_ids[code], float(debit), float(credit), line_memo),
+                    )
         return True
+
+    _GL_JOURNAL_TEXT_FIELDS = (
+        "uid", "business_date", "reference", "memo", "source_type", "source_uid",
+        "branch_uid", "currency", "reversed_journal_uid", "posted_by", "posted_at",
+    )
+    _GL_ACCOUNT_TEXT_FIELDS = ("code", "name", "account_type", "normal_balance", "parent_code")
+
+    @classmethod
+    def _gl_journal_type_error(cls, p: dict) -> Optional[str]:
+        """Names the first payload value whose TYPE the `gl_journal` emitter
+        can never produce, or returns None when every value is well-typed.
+        Header scalars and every `accounts[]` field: str or None. Each line's
+        `account_code`: str; its `memo`: str or None (amounts are checked by
+        `_validate_gl_journal_lines`). `accounts`: a list or None; each entry
+        a dict (a non-dict entry keeps the older skip below). `bool` is
+        refused even though it is an `int` -- it is never a str either."""
+        def _text(v):
+            return v is None or isinstance(v, str)
+
+        for key in cls._GL_JOURNAL_TEXT_FIELDS:
+            if not _text(p.get(key)):
+                return f"{key}={type(p.get(key)).__name__}"
+        lines = p.get("lines")
+        if isinstance(lines, (list, tuple)):
+            for i, line in enumerate(lines):
+                if not isinstance(line, dict):
+                    continue  # _validate_gl_journal_lines parks this shape
+                if not isinstance(line.get("account_code"), str):
+                    return f"lines[{i}].account_code={type(line.get('account_code')).__name__}"
+                if not _text(line.get("memo")):
+                    return f"lines[{i}].memo={type(line.get('memo')).__name__}"
+        accounts = p.get("accounts")
+        if accounts is not None and not isinstance(accounts, (list, tuple)):
+            return f"accounts={type(accounts).__name__}"
+        for i, meta in enumerate(accounts or []):
+            if not isinstance(meta, dict):
+                continue
+            for key in cls._GL_ACCOUNT_TEXT_FIELDS:
+                if not _text(meta.get(key)):
+                    return f"accounts[{i}].{key}={type(meta.get(key)).__name__}"
+        return None
+
+    @staticmethod
+    def _validate_gl_journal_lines(raw_lines, currency: str):
+        """Validates one pulled `gl_journal` payload's `lines` array BEFORE
+        any write happens (plan §2.5 step 2) and returns `(clean_lines,
+        None)` on success -- `clean_lines` a list of `(account_code, debit
+        Decimal, credit Decimal, memo)` tuples, quantized to `currency`'s
+        own minor unit -- or `(None, reason)` on any failure, where
+        `reason` is exactly the `sync_apply_quarantine.reason` string the
+        `gl_journal` branch above should park this event under.
+
+        Mirrors `general_ledger.validated_lines` -- the pure function
+        Builder A's own half of this wave pulled OUT of `post_journal`
+        for EXACTLY this reason (see that function's own docstring, which
+        names this method and this file by name as its parity proof) --
+        RULE FOR RULE, WITHOUT importing it: `commercial_runtime` must
+        never depend on either product (see `commercial_runtime/
+        currency.py`'s own module docstring), and `validated_lines` lives
+        in `products/retail/backend/core/retail/general_ledger.py`. The
+        rules are therefore necessarily duplicated rather than shared --
+        the identical layering trade-off `general_ledger.py`'s own
+        `_gl_epsilon` already documents for its `api.retail_api.
+        _money_epsilon` twin. `test_balance_check_agrees_with_post_
+        journal_on_the_same_lines` (this file's own test) is what keeps
+        the two duplicates honest: both read `currency_quantum(currency)`
+        from the one shared table, and both bucket every input the
+        identical way -- see the two reasons below, each mapped onto the
+        exact exception `validated_lines` itself raises for the same
+        input.
+          * `"gl_invalid"` -- everywhere `validated_lines` raises
+            `ValueError`: a negative debit or credit (there is no such
+            thing in double-entry bookkeeping), or a line carrying BOTH a
+            nonzero debit and a nonzero credit (one leg, one side). Also
+            covers shapes `validated_lines` never has to consider because
+            its caller (`post_journal`) always hands it a Python list of
+            dicts it built itself -- a PULLED payload has no such
+            guarantee: `lines` missing/not a list, an entry that is not a
+            dict, missing its `account_code`, a `debit`/`credit` that
+            cannot be read as a number at all, a NaN/+-Infinity amount (F8,
+            BOOKS-WAVE1-PLAN.md; v1 gap 1 -- parses fine as a `Decimal` but
+            raises the moment it is compared or quantized), or an
+            "absurdly large" finite amount that overflows `Decimal`'s own
+            quantize precision. None of these are "this journal doesn't
+            balance"; they are "this payload cannot even be interpreted as
+            one", so a malformed/hostile relay payload is parked rather
+            than raising `KeyError`/`InvalidOperation` and wedging the
+            whole pull batch the way an unguarded `validated_lines` call
+            would.
+          * `"gl_unbalanced"` -- everywhere `validated_lines` raises
+            `GeneralLedgerImbalanceError`: nothing left after an all-zero
+            line is DROPPED (identical `if not d and not c: continue`,
+            never rejected -- see the loop below), whether because every
+            line supplied was zero or `lines` was empty to begin with; or
+            a debit/credit sum that disagrees by more than half
+            `currency`'s own minor unit.
+        """
+        if not isinstance(raw_lines, (list, tuple)):
+            return None, "gl_invalid"
+        quantum = currency_quantum(currency)
+        clean = []
+        total_debit = Decimal('0')
+        total_credit = Decimal('0')
+        for raw in raw_lines:
+            if not isinstance(raw, dict) or not raw.get("account_code"):
+                return None, "gl_invalid"
+            try:
+                d = Decimal(str(raw.get("debit") or 0))
+                c = Decimal(str(raw.get("credit") or 0))
+            except (ArithmeticError, ValueError, TypeError):
+                return None, "gl_invalid"
+            # F8 (BOOKS-WAVE1-PLAN.md; v1 gap 1) -- a NaN or +/-Infinity
+            # `Decimal` parses successfully above (`Decimal("nan")` and
+            # `Decimal("inf")` never raise) but then raises `decimal.
+            # InvalidOperation` the moment it is COMPARED (`d < 0` below) --
+            # OUTSIDE the `try` that only wrapped the parse, which used to
+            # escape this method and `_apply_event` entirely, wedging the
+            # whole pull batch rather than parking one bad payload. Checked
+            # explicitly, before any comparison, rather than folded into a
+            # wider `except InvalidOperation` around the comparisons --
+            # `d.is_finite()` never raises for any Decimal, including NaN
+            # and Infinity, so this can never itself become a second
+            # unguarded comparison.
+            if not d.is_finite() or not c.is_finite():
+                return None, "gl_invalid"
+            if d < 0 or c < 0 or (d and c):
+                # `validated_lines`' own `ValueError` cases (a negative
+                # side, or both sides nonzero) -- a MALFORMED line, not a
+                # balance failure, so `gl_invalid`, never `gl_unbalanced`.
+                return None, "gl_invalid"
+            try:
+                # F8 -- an "absurdly large" amount (e.g. 1E+9999) is
+                # FINITE (the `is_finite()` check above lets it through)
+                # but can still raise `decimal.InvalidOperation`/`Overflow`
+                # here, because `quantize` refuses a result that would
+                # need more significant digits than the default Decimal
+                # context's own precision allows. Caught here, not left to
+                # escape as gap #1 (v1) described.
+                d = d.quantize(quantum, rounding=ROUND_HALF_UP)
+                c = c.quantize(quantum, rounding=ROUND_HALF_UP)
+            except (ArithmeticError, ValueError, TypeError):
+                return None, "gl_invalid"
+            # F4 (BOOKS-WAVE1-PLAN.md decision F4; v2 finding 5): quantize
+            # BEFORE checking for zero -- IDENTICAL ordering to
+            # `general_ledger.validated_lines`'s own fix (see that
+            # function's docstring for the full "sub-fil-only journal"
+            # reasoning) -- a sub-quantum line is nonzero here but rounds
+            # to 0.000/0.000 and must be dropped, never kept as a
+            # zero-value line. Silently dropped, never rejected, so the
+            # two functions can never quietly disagree about which lines
+            # count towards the balance.
+            if not d and not c:
+                continue
+            total_debit += d
+            total_credit += c
+            clean.append((raw["account_code"], d, c, raw.get("memo")))
+        if not clean:
+            # `validated_lines`' own `GeneralLedgerImbalanceError`
+            # ("refusing to validate an empty journal -- every line
+            # supplied was zero") -- an empty `lines` list and an
+            # all-zero one collapse to the identical outcome here too.
+            return None, "gl_unbalanced"
+        eps = quantum / 2
+        if abs(total_debit - total_credit) > eps:
+            return None, "gl_unbalanced"
+        return clean, None
 
     @staticmethod
     def _local_id_by_uid(conn, table: str, uid: Optional[str]):
@@ -3446,10 +3971,12 @@ class SyncService:
         both when `uid` itself is falsy (a malformed/absent payload field)
         and when no local row carries it yet (the genuine orphan case this
         phase's third hazard is about) -- callers treat both identically.
-        `table` is always one of the two literal strings this module passes
-        ("sales", "returns"), never external input, so the f-string below
-        carries no injection risk despite not being parameterized -- SQLite
-        has no way to parameterize a table name at all."""
+        `table` is always one of a small set of literal strings this module
+        passes ("sales", "returns", and -- BOOKS-WAVE1 W1 -- "gl_journals",
+        for `gl_journal`'s own `reversed_journal_uid` lookup), never
+        external input, so the f-string below carries no injection risk
+        despite not being parameterized -- SQLite has no way to
+        parameterize a table name at all."""
         if not uid:
             return None
         row = conn.execute(f'SELECT id FROM "{table}" WHERE uid=?', (uid,)).fetchone()

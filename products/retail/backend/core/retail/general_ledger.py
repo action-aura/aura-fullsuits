@@ -78,10 +78,32 @@ docstring). This module has no such callers to stay compatible with -- it
 is new in v38 -- so carrying that same escape hatch here would only
 reintroduce the defect class an entire correction round already existed to
 close, for no compatibility benefit at all.
+
+WAVE 1 (2026-09-26, schema v41, ROADMAP.md's "retail schema v41 CLAIMED: one
+set of books across devices" entry, BOOKS-WAVE1-PLAN.md section 2.4): this
+module is now also the EMIT side of GL journal sync -- Builder A's own file
+under that wave's disjoint-file assignment (section 7). `post_journal` mints
+a stable `uid` and derives `source_uid` on every journal it posts, then
+queues one `gl_journal` sync-outbox event in the SAME transaction, so a
+rollback anywhere in the caller's route removes the journal and its outbox
+row together. `journal_sync_payload` is the ONE place that payload is ever
+built, and it always re-reads the just-persisted rows rather than trusting
+the caller's own inputs. `backfill_legacy_journals` gives every PRE-v41
+journal (which has no `uid` at all) a deterministic identity and queues it
+too -- see that function's own docstring for why "deterministic" matters
+here specifically (a restored backup must not mint a second, different
+identity for history it already sent once). None of this changes the
+balance invariant itself, or any existing caller's signature -- `post_sale`/
+`post_return`/`post_customer_payment`/`post_supplier_payment`/
+`post_purchase_order`/`post_cogs`/`reverse_journal` are all unchanged.
 """
 from __future__ import annotations
 
-from datetime import datetime
+import json
+import logging
+import sqlite3
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from commercial_runtime.currency import (
@@ -89,6 +111,28 @@ from commercial_runtime.currency import (
     currency_quantum,
     quantize_money,
 )
+
+#: Deterministic uuid5 NAMESPACE for `legacy_journal_uid` below -- a fixed,
+#: hardcoded namespace (never regenerated) so the SAME (namespace, name)
+#: pair always yields the SAME uuid5 on every machine, every run, forever.
+#: `uuid.uuid5(uuid.NAMESPACE_DNS, ...)` is itself deterministic (a pure
+#: hash of its two arguments), so computing it here at import time is
+#: exactly as fixed as a hardcoded literal would be, and is self-documenting
+#: about where it came from -- the same idea `cheques.py`'s own
+#: deterministic-uid backfill uses (see that module's docstring).
+_GL_LEGACY_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, 'gl-legacy.aura-fullsuits.internal')
+
+#: `source_type` -> the LOCAL table whose own `uid` column is this journal's
+#: `source_uid`, for every source type that names a real document row.
+#: `'reversal'` is handled separately (its `source_uid` is the REVERSED
+#: JOURNAL's own `uid`, not a row in either table below) -- see
+#: `_derive_source_uid`. Every other source type (`customer_payment`,
+#: `supplier_payment`, `po_payment`, `purchase_order`, `opening_balance`)
+#: has no cross-device row identity to point at yet (purchase orders are
+#: still INTEGER-id-only as of Wave 1 -- see BOOKS-WAVE1-PLAN.md section 3,
+#: W4a) and gets `source_uid = NULL`, which is exactly what BOOKS-WAVE1-
+#: PLAN.md section 2.2's "source_id" row states ("Otherwise NULL").
+_SOURCE_UID_TABLES = {'sale': 'sales', 'return': 'returns'}
 
 # ── Chart of accounts -- codes, referenced by both retail_api.py call sites
 #    and this module's own posting helpers, so a typo in either becomes an
@@ -219,16 +263,37 @@ def ensure_default_chart(conn, cid):
     posting/reporting function below, so nothing else needs to remember to
     call it first.
 
-    The `COUNT(*)` fast path makes the common case (chart already seeded)
-    one query instead of ten INSERT-OR-IGNORE round trips; `INSERT OR
-    IGNORE` on the actual seed makes a second, concurrent seed of the same
-    company harmless rather than a UNIQUE-constraint 500 -- see
-    `idx_gl_accounts_company_code` in the schema migration.
+    THE FAST PATH CHECKS EVERY `DEFAULT_CHART` CODE IS PRESENT, NOT MERELY
+    THAT THE TABLE IS NON-EMPTY (Wave 1, BOOKS-WAVE1-PLAN.md section 2.4).
+    A bare `COUNT(*) FROM gl_accounts WHERE company_id=?` used to short-
+    circuit the instant a company had ANY seeded account at all -- which a
+    receiving device can now have without having the FULL chart: the sync
+    apply side (`commercial_runtime/sync/sync_service.py`) seeds only the
+    specific accounts a pulled journal's lines actually reference
+    (`INSERT OR IGNORE`, parent first -- BOOKS-WAVE1-PLAN.md section 2.5
+    point 4), never the whole `DEFAULT_CHART`. A company that received a
+    sale journal referencing only `1000`/`4000` before ever ringing a
+    LOCAL return would have 2 accounts seeded, the old `already=2` fast
+    path would be truthy, and it would return WITHOUT ever seeding `4900
+    Sales Returns and Allowances` -- so the first local return would raise
+    `GeneralLedgerAccountError` and abort the whole return, not because
+    anything about the return was wrong, but because sync had partially
+    seeded this company's chart first. Comparing the actual CODE SET
+    against `DEFAULT_CHART` instead makes "partially seeded by sync, then
+    completed locally" the same idempotent no-op every other partial-seed
+    case already is -- `INSERT OR IGNORE` below still makes re-inserting
+    the already-present codes harmless, so this costs one extra query in
+    the common case (chart already complete) for a real correctness gap
+    closed in the uncommon one. `test_partially_seeded_chart_is_completed_
+    before_posting` (retail_gl_emit_test.py) mutation-proves this: M-A5
+    restores the old `COUNT(*)` fast path and turns it RED.
     """
-    already = conn.execute(
-        "SELECT COUNT(*) FROM gl_accounts WHERE company_id=?", (cid,)
-    ).fetchone()[0]
-    if already:
+    existing_codes = {
+        row[0] for row in conn.execute(
+            "SELECT code FROM gl_accounts WHERE company_id=?", (cid,)
+        ).fetchall()
+    }
+    if all(code in existing_codes for code, *_ in DEFAULT_CHART):
         return
     for code, name, account_type, normal_balance, parent_code in DEFAULT_CHART:
         parent_id = None
@@ -257,6 +322,849 @@ def _account_id(conn, cid, code):
             f"missing this account"
         )
     return row[0]
+
+
+def validated_lines(lines, currency):
+    """Pure validation + normalization of a candidate journal's `lines` --
+    pulled OUT of `post_journal` (Wave 1, BOOKS-WAVE1-PLAN.md section 2.4)
+    as its own function so a caller with NO source document to post at all
+    can still ask "would `post_journal` accept these lines" -- the sync
+    APPLY side (`commercial_runtime/sync/sync_service.py`, a separate
+    builder's own file) is exactly such a caller: BOOKS-WAVE1-PLAN.md
+    section 2.5 point 2 requires it to validate a PULLED journal's lines
+    BEFORE writing anything, using the identical rules `post_journal`
+    itself enforces, so the two can never quietly disagree about what
+    "balanced" means. `test_balance_check_agrees_with_post_journal_on_
+    the_same_lines` (the sync apply side's own test file) is the parity
+    proof this split exists to make possible.
+
+    Takes no `conn`, `cid`, `source_type` or `source_id` -- deliberately:
+    this function knows nothing about accounts existing, companies, or
+    which document a journal came from, only whether a candidate line list
+    is internally well-formed and balanced. Resolving each line's
+    `account_code` to a real `gl_accounts.id` stays `post_journal`'s own
+    job (via `_account_id`), same as before this split.
+
+    THE RULES (identical to `post_journal`'s pre-Wave-1 inline checks, same
+    semantics, same exceptions, same messages where a message did not need
+    a document to name):
+      - each line's 'debit'/'credit' must be non-negative;
+      - a line may carry a NONZERO debit OR a nonzero credit, never both;
+      - every amount is quantized to `currency`'s own minor unit via
+        `quantize_money` FIRST, and a line whose debit AND credit are BOTH
+        zero AFTER quantizing is then silently dropped (F4, BOOKS-WAVE1-
+        PLAN.md decision F4; v2 finding 5) -- NEVER the other way around.
+        A line carrying a genuinely sub-quantum amount on both sides (e.g.
+        JOD 0.0004, below the fil) is nonzero BEFORE rounding, so checking
+        "is this line zero" before `quantize_money` let it survive the
+        drop, get rounded to 0.000/0.000, and be APPENDED to `clean_lines`
+        as a zero-value line -- which made `post_journal` emit a wire
+        payload consisting ENTIRELY of such lines for a sub-fil-only
+        journal, and the sync APPLY side's own mirror of this same rule
+        (`commercial_runtime/sync/sync_service.py::_validate_gl_journal_
+        lines`) then parks it as `gl_unbalanced` forever, because ITS
+        pre-fix zero-check ran on the ALREADY-rounded wire values (0.0/0.0
+        exactly) and drops them, leaving nothing -- see that function's
+        own matching fix. Rounding first makes both sides agree: a
+        sub-quantum line is zero, whether it is checked before or after
+        being written to the wire;
+      - a `lines` iterable that has nothing left after dropping (now
+        post-rounding) zero lines raises `GeneralLedgerImbalanceError` -- a
+        journal that would post nothing at all;
+      - `sum(debit)` and `sum(credit)` must agree to within
+        `_gl_epsilon(currency)` -- HALF the currency's own minor unit,
+        never a hardcoded `0.005` (see the module docstring's MONEY
+        section) -- or `GeneralLedgerImbalanceError` is raised.
+
+    Returns `(clean_lines, total_debit, total_credit)`, where `clean_lines`
+    is a list of `(account_code, debit: Decimal, credit: Decimal, memo)`
+    tuples, quantized and with every (post-rounding) zero line already
+    dropped -- exactly the shape `post_journal`'s own INSERT loop iterates
+    over.
+    """
+    total_debit = Decimal('0')
+    total_credit = Decimal('0')
+    clean_lines = []
+    for raw in lines:
+        code = raw['account_code']
+        debit = raw.get('debit') or 0
+        credit = raw.get('credit') or 0
+        d = debit if isinstance(debit, Decimal) else Decimal(str(debit))
+        c = credit if isinstance(credit, Decimal) else Decimal(str(credit))
+        if d < 0 or c < 0:
+            raise ValueError(
+                f"GL line for account {code!r} carries a negative debit or "
+                f"credit (debit={d} credit={c}) -- swap sides instead of "
+                f"negating a value"
+            )
+        if d and c:
+            raise ValueError(
+                f"GL line for account {code!r} carries both a debit and a "
+                f"credit (debit={d} credit={c}) -- split into two lines"
+            )
+        # F4: quantize BEFORE checking for zero -- a sub-quantum amount
+        # (nonzero here) must round down to zero and be dropped, never be
+        # kept as a zero-value line. See this function's own docstring.
+        d = quantize_money(d, currency)
+        c = quantize_money(c, currency)
+        if not d and not c:
+            continue
+        total_debit += d
+        total_credit += c
+        clean_lines.append((code, d, c, raw.get('memo')))
+
+    if not clean_lines:
+        raise GeneralLedgerImbalanceError(
+            "refusing to validate an empty journal -- every line supplied was zero"
+        )
+
+    eps = _gl_epsilon(currency)
+    diff = total_debit - total_credit
+    if abs(diff) > eps:
+        raise GeneralLedgerImbalanceError(
+            f"lines do not balance: debits={total_debit} credits={total_credit} "
+            f"diff={diff} (tolerance is half of {currency}'s own minor unit, {eps})"
+        )
+
+    return clean_lines, total_debit, total_credit
+
+
+def _derive_source_uid(conn, cid, source_type, source_id, reversed_journal_id):
+    """This journal's `source_uid` -- BOOKS-WAVE1-PLAN.md section 2.2's
+    `source_id` row: for `sale`/`return`, the originating row's own `uid`
+    (looked up in `_SOURCE_UID_TABLES`, scoped `company_id=cid` like every
+    other lookup in this module); for `reversal`, the REVERSED journal's
+    own `uid` (looked up on `gl_journals` itself -- the reversed journal is
+    always posted BEFORE its reversal, so by the time `reverse_journal`
+    calls `post_journal`, it already has a real `uid`, whether it was
+    posted under Wave 1 code or assigned one by `backfill_legacy_journals`
+    below); otherwise `NULL` (`customer_payment`, `supplier_payment`,
+    `po_payment`, `purchase_order`, `opening_balance` -- none of these name
+    a row with a cross-device `uid` today).
+
+    Returns `None`, never raises, when the named row cannot be found (a
+    caller passing a `source_id` that does not exist is a pre-existing
+    possibility this function does not newly create -- `post_journal`
+    itself never required the source row to exist before Wave 1 either).
+    """
+    if source_type == 'reversal':
+        if reversed_journal_id is None:
+            return None
+        row = conn.execute(
+            "SELECT uid FROM gl_journals WHERE id=? AND company_id=?",
+            (reversed_journal_id, cid)
+        ).fetchone()
+        return row['uid'] if row else None
+
+    table = _SOURCE_UID_TABLES.get(source_type)
+    if not table or source_id is None:
+        return None
+    row = conn.execute(
+        f"SELECT uid FROM {table} WHERE id=? AND company_id=?",
+        (source_id, cid)
+    ).fetchone()
+    return row['uid'] if row else None
+
+
+def _account_metadata(conn, cid, codes):
+    """Account metadata for the sync payload's `accounts` list (BOOKS-
+    WAVE1-PLAN.md section 2.3) -- one dict per account CODE referenced by
+    `codes`, PLUS every ancestor account any of them depends on, ordered
+    PARENTS FIRST, so a receiving device with a missing account can
+    `INSERT OR IGNORE` them in the order given and never insert a child
+    before the parent row it points at (BOOKS-WAVE1-PLAN.md section 2.5
+    point 4: "parent first").
+
+    Parent-first falls out of the recursion itself, not a separate sort:
+    `_add` recurses into a code's own `parent_code` BEFORE appending that
+    code's own dict, so nothing is ever appended until everything it
+    depends on already has been. `seen` also doubles as de-duplication --
+    two lines referencing the same account code (or two lines whose
+    accounts share a parent) must not double that account's metadata in
+    the payload.
+    """
+    seen = set()
+    ordered = []
+
+    def _add(code):
+        if code in seen:
+            return
+        row = conn.execute(
+            "SELECT a.code, a.name, a.account_type, a.normal_balance, p.code AS parent_code "
+            "FROM gl_accounts a LEFT JOIN gl_accounts p "
+            "  ON p.id = a.parent_id AND p.company_id = a.company_id "
+            "WHERE a.company_id=? AND a.code=?",
+            (cid, code)
+        ).fetchone()
+        if not row:
+            return
+        if row['parent_code']:
+            _add(row['parent_code'])
+        seen.add(code)
+        ordered.append({
+            'code': row['code'], 'name': row['name'],
+            'account_type': row['account_type'],
+            'normal_balance': row['normal_balance'],
+            'parent_code': row['parent_code'],
+        })
+
+    for code in codes:
+        _add(code)
+    return ordered
+
+
+def journal_sync_payload(conn, journal_id):
+    """THE ONLY payload builder for a `gl_journal` sync-outbox event
+    (BOOKS-WAVE1-PLAN.md section 2.3's fixed contract). Re-reads the rows
+    `post_journal` (or `backfill_legacy_journals`) just persisted, from the
+    SAME connection, NEVER the caller's own in-memory inputs -- so the
+    payload can never diverge from what was actually committed to
+    `gl_journals`/`gl_journal_lines`, even if a caller's local variables
+    were somehow stale or re-derived differently.
+
+    Every key on the wire is either a column copied verbatim (`business_
+    date`, `reference`, `memo`, `source_type`, `currency`, `posted_by`,
+    `posted_at`, this journal's own `uid`, its `source_uid`) or a LOCAL
+    integer id translated to a `uid`/`code` (`branch_id` -> `branch_uid`,
+    `reversed_journal_id` -> `reversed_journal_uid`, each line's
+    `account_id` -> `account_code`) -- `company_id`, `branch_id`,
+    `source_id`, `reversed_journal_id` and every `account_id` are NEVER on
+    the wire (BOOKS-WAVE1-PLAN.md section 2.3, "These are never on the
+    wire"), because they are local-integer-id facts about THIS device that
+    mean nothing, or mean something DIFFERENT, on a peer.
+    """
+    header = conn.execute(
+        "SELECT j.id, j.company_id, j.branch_id, j.business_date, j.reference, "
+        "       j.memo, j.source_type, j.source_id, j.currency, "
+        "       j.reversed_journal_id, j.posted_by, j.posted_at, "
+        "       j.uid, j.source_uid, "
+        "       b.uid AS branch_uid, rj.uid AS reversed_journal_uid "
+        "FROM gl_journals j "
+        "LEFT JOIN branches b ON b.id = j.branch_id "
+        "LEFT JOIN gl_journals rj ON rj.id = j.reversed_journal_id "
+        "WHERE j.id=?",
+        (journal_id,)
+    ).fetchone()
+    if not header:
+        raise GeneralLedgerAccountError(
+            f"cannot build a sync payload for journal {journal_id}: no such "
+            f"gl_journals row"
+        )
+
+    lines = conn.execute(
+        "SELECT a.code AS account_code, l.debit, l.credit, l.memo "
+        "FROM gl_journal_lines l JOIN gl_accounts a ON a.id = l.account_id "
+        "WHERE l.journal_id=? ORDER BY l.id",
+        (journal_id,)
+    ).fetchall()
+
+    accounts = _account_metadata(conn, header['company_id'], [r['account_code'] for r in lines])
+
+    return {
+        'uid': header['uid'],
+        'business_date': header['business_date'],
+        'reference': header['reference'],
+        'memo': header['memo'],
+        'source_type': header['source_type'],
+        'source_uid': header['source_uid'],
+        'branch_uid': header['branch_uid'],
+        'currency': header['currency'],
+        'reversed_journal_uid': header['reversed_journal_uid'],
+        'posted_by': header['posted_by'],
+        'posted_at': header['posted_at'],
+        'lines': [
+            {
+                'account_code': r['account_code'],
+                'debit': float(r['debit']),
+                'credit': float(r['credit']),
+                'memo': r['memo'],
+            }
+            for r in lines
+        ],
+        'accounts': accounts,
+    }
+
+
+def _queue_gl_journal_sync_event(conn, journal_id):
+    """Queues one `gl_journal` / `create` sync-outbox event for a
+    just-persisted journal -- a raw `INSERT INTO sync_outbox`, the same
+    shape this codebase's other sync-queuing call sites all use (api/
+    retail_api.py, core/retail/reorder_hook.py), never imported from any
+    of them: core/ must not import api/ (this module already states that
+    layering rule for `_resolve_currency`/`_gl_epsilon` above), and this
+    module runs on the SAME connection a route handed it, with no `cur`
+    of its own to borrow -- so this is a deliberate, minimal duplicate of
+    that one INSERT statement, not a divergent implementation.
+
+    `entity_id` is the journal's own `uid` (BOOKS-WAVE1-PLAN.md section
+    2.3: "entity_id=uid"), never its local integer id -- a peer device,
+    or Owner's own relay, must be able to name this row without knowing
+    anything about THIS device's autoincrement sequence. Called on the
+    SAME connection/transaction as the journal's own INSERT -- see
+    `post_journal`'s and `backfill_legacy_journals`'s own docstrings for
+    what that buys (a rollback removes both together; a boot-time backfill
+    commits both per row).
+    """
+    payload = journal_sync_payload(conn, journal_id)
+    conn.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (
+            str(uuid.uuid4()), 'gl_journal', payload['uid'], 'create',
+            json.dumps(payload), datetime.now(timezone.utc).isoformat(),
+        )
+    )
+
+
+def _opening_balance_canonical_lines(currency, lines):
+    """An opening balance's lines as F2 identifies them: sorted (account
+    code, debit, credit), each amount a string quantized to `currency`'s own
+    minor unit -- NO memo (see `legacy_journal_uid`'s F2 notes). The ONE
+    definition both `legacy_journal_uid` and `_opening_balance_occurrence`
+    use, so "the same opening-balance fact" can never mean two different
+    things in the two places that ask."""
+    try:
+        quant = currency_quantum(currency or DEFAULT_BASE_CURRENCY)
+    except Exception:
+        quant = currency_quantum(DEFAULT_BASE_CURRENCY)
+
+    def _amt(value):
+        d = value if isinstance(value, Decimal) else Decimal(str(value or 0))
+        return str(d.quantize(quant, rounding=ROUND_HALF_UP))
+
+    return sorted(
+        (row['account_code'], _amt(row['debit']), _amt(row['credit']))
+        for row in lines
+    )
+
+
+def _opening_balance_occurrence(conn, row, lines):
+    """How many opening balances of `row`'s company, with a LOWER local id,
+    carry the identical (currency, lines) fact -- 0 for the first one.
+
+    Deterministic across copies of one database (same ids, same rows) and
+    across boots (ids never change; a row skipped this boot is counted the
+    same way next boot). A PULLED opening balance never shifts it: every
+    candidate here is local pre-v41 history, written before this device
+    could pull any `gl_journal`, and `gl_journals.id` is AUTOINCREMENT, so a
+    pulled row always has a higher id than every legacy row."""
+    target = (row['currency'], _opening_balance_canonical_lines(row['currency'], lines))
+    earlier = conn.execute(
+        "SELECT id, currency FROM gl_journals "
+        "WHERE company_id=? AND source_type='opening_balance' AND id<? ORDER BY id",
+        (row['company_id'], row['id'])
+    ).fetchall()
+    occurrence = 0
+    for prior in earlier:
+        prior_lines = conn.execute(
+            "SELECT a.code AS account_code, l.debit, l.credit "
+            "FROM gl_journal_lines l JOIN gl_accounts a ON a.id = l.account_id "
+            "WHERE l.journal_id=?",
+            (prior['id'],)
+        ).fetchall()
+        if (prior['currency'],
+                _opening_balance_canonical_lines(prior['currency'], prior_lines)) == target:
+            occurrence += 1
+    return occurrence
+
+
+def legacy_journal_uid(header, lines):
+    """Deterministic `uuid5` identity for a PRE-v41 `gl_journals` row that
+    has no `uid` yet (BOOKS-WAVE1-PLAN.md section 2.4). Deterministic, not
+    `uuid4`, for the same reason `cheques.py`'s own historical-uid backfill
+    already is (see that module's docstring): a pre-v41 BACKUP restored
+    onto a REPLACEMENT device must derive the exact same `uid` for the
+    exact same historical journal that the original machine already
+    assigned and sent -- a fresh random uid here would make the restored
+    device's own history look like a brand-new, never-before-seen batch of
+    journals to every peer that already received the original backfill,
+    duplicating every one of them. `test_backfill_uids_are_deterministic_
+    across_two_copies_of_one_db` (M-A6 uses `uuid4`) is this function's own
+    mutation proof.
+
+    `header` is a mapping exposing the LOCAL columns that make one
+    historical row unique enough to hash: `id` (this device's own local
+    row id -- INCLUDED deliberately: two genuinely different historical
+    journals on the SAME device, with identical business_date/reference/
+    lines, must still hash to different uids, and the local id is the one
+    fact already guaranteed unique per-device), `business_date`,
+    `reference`, `memo`, `source_type`, `source_uid` (already resolved by
+    the caller -- may be `None`), `currency`, `posted_by`, `posted_at`.
+    `company_id` and every local branch/source/reversed-journal INTEGER id
+    are DELIBERATELY EXCLUDED (BOOKS-WAVE1-PLAN.md section 2.4: "it
+    excludes company_id and local branch/source ids") -- those are facts
+    about THIS install, not about the journal, and including them would
+    make the SAME journal restored onto a device that rebinds its
+    `company_id` (a real, supported operation elsewhere in this codebase)
+    hash to a different uid than the original did.
+
+    `lines` is an iterable of the journal's persisted lines, each exposing
+    `account_code`, `debit`, `credit`, `memo` (a `sqlite3.Row` or a plain
+    mapping, either works). Sorted by `(account_code, debit, credit, memo)`
+    before hashing -- NEVER by insertion/`id` order, which is an SQLite
+    implementation detail, not a fact about the journal -- and each amount
+    is rendered as a STRING quantized to `currency`'s own minor unit, never
+    a bare float repr (not stable across Python/SQLite versions for the
+    same value).
+
+    F2 (BOOKS-WAVE1-PLAN.md decision F2; v2 finding 2) -- `source_type ==
+    'opening_balance'` HASHES DIFFERENTLY FROM EVERY OTHER JOURNAL: the
+    canonical form is ONLY `currency` plus the sorted `lines` above -- NO
+    local `id`, `business_date`, `reference`, `memo` or `posted_at`.
+    Rationale: a pre-v38 backup restored onto a REPLACEMENT device
+    re-generates its opening balance at RESTORE time -- a new `posted_at`,
+    often a new `business_date` too -- so the general-case formula above
+    (which deliberately INCLUDES those) mints a brand-new uid for the
+    IDENTICAL imported debt every time the same shop's pre-v38 backup is
+    restored anywhere. An opening balance is not "an event that happened
+    on this device on this date"; it is a statement of a pre-existing,
+    imported DEBT, and the same imported debt restored onto two different
+    devices -- or backed up and restored twice on the same one -- is ONE
+    fact, not two. Hashing only `currency` + `lines` makes two opening
+    balances with identical amounts collapse to the SAME uid regardless of
+    which device or which restore produced them, which is exactly what
+    `test_backfill_hashes_opening_balance_restores_to_one_fact`
+    (retail_gl_emit_test.py) proves against verifier 2's own repro4
+    scenario (a third device receiving both the original's and a restored
+    replacement's opening-balance events must hold the true AR ONCE, not
+    twice).
+
+    WHAT THIS CANNOT DISTINGUISH -- stated plainly, per BOOKS-WAVE1-PLAN.md
+    F2, so it is a decision, not a surprise found later: TWO GENUINELY
+    DIFFERENT DEVICES (or two genuinely different companies) whose opening
+    balances happen to be identical TO THE FIL -- same `currency`, same
+    account codes, same amounts -- collapse to the SAME uid and therefore
+    the SAME fact, even though they were two real, separate debts that
+    happened to coincide in value. This is deliberately accepted: it is
+    judged far less likely, and far less costly when it does happen, than
+    the routine "restore a backup onto a replacement device" case the
+    general-case formula would otherwise silently double every time.
+
+    CORRECTED 2026-09-26 (third wave verifier), two points, both inside F2's
+    own decision rather than against it:
+
+      * NO LINE MEMO. F2 names the canonical form as currency plus each
+        line's (account code, debit, credit). The first cut also hashed each
+        line's memo. Those memos are migration-code prose ('Opening balance:
+        pre-v38 customer AR history'), so any later rewording or translation
+        of that prose would give a replacement device's regenerated opening
+        balance a NEW uid, and every peer would book the same imported debt
+        twice. `test_opening_balance_uid_ignores_line_memos` is RED against
+        the memo-hashing cut.
+
+      * `opening_occurrence` -- how many EARLIER opening balances of the same
+        company on the same device carry this identical (currency, lines)
+        fact (`_opening_balance_occurrence`, computed by the caller). Without
+        it, W1-0 residue (the v38 opening balance posted AGAIN, to the fil,
+        on a later upgrade whose `credit_balance` had not moved) hashed to
+        the SAME uid as the original; F3 then skipped the second copy as a
+        "uid collision" -- left uid NULL, never sent, but still counted in
+        this device's own books. So the posting device booked the debt
+        twice and every peer once, forever, which is exactly the divergence
+        plan section 2.6 forbids ("send them anyway, so both devices hold
+        identical (equally wrong) books and a single reverse_journal corrects
+        every device"). The first copy is occurrence 0 -- the same value a
+        replacement device's single regenerated opening balance gets -- so
+        the restore case above still collapses to one fact.
+        `test_identical_w1_0_duplicate_opening_balances_each_reach_every_
+        device` is RED without it.
+    """
+    currency = header.get('currency') or DEFAULT_BASE_CURRENCY
+    try:
+        quant = currency_quantum(currency)
+    except Exception:
+        quant = currency_quantum(DEFAULT_BASE_CURRENCY)
+
+    def _amt(value):
+        d = value if isinstance(value, Decimal) else Decimal(str(value or 0))
+        return str(d.quantize(quant, rounding=ROUND_HALF_UP))
+
+    if header.get('source_type') == 'opening_balance':
+        canonical = json.dumps({
+            'source_type': 'opening_balance',
+            'currency': header.get('currency'),
+            'lines': _opening_balance_canonical_lines(header.get('currency'), lines),
+            'occurrence': int(header.get('opening_occurrence') or 0),
+        }, sort_keys=True, default=str)
+    else:
+        canonical_lines = sorted(
+            (
+                row['account_code'],
+                _amt(row['debit']),
+                _amt(row['credit']),
+                row['memo'] or '',
+            )
+            for row in lines
+        )
+        canonical = json.dumps({
+            'id': header['id'],
+            'business_date': header.get('business_date'),
+            'reference': header.get('reference'),
+            'memo': header.get('memo'),
+            'source_type': header.get('source_type'),
+            'source_uid': header.get('source_uid'),
+            'currency': header.get('currency'),
+            'posted_by': header.get('posted_by'),
+            'posted_at': header.get('posted_at'),
+            'lines': canonical_lines,
+        }, sort_keys=True, default=str)
+    return str(uuid.uuid5(_GL_LEGACY_NAMESPACE, canonical))
+
+
+def _suspected_duplicate_opening_balances(candidates):
+    """W1-0 residue detector (BOOKS-WAVE1-PLAN.md section 2.6), run over
+    `candidates` -- the legacy rows `backfill_legacy_journals` is assigning
+    uids to in THIS call, in ascending id order -- never over every journal
+    on the device.
+
+    CORRECTED 2026-09-26 (wave verifier): this used to scan EVERY
+    `opening_balance` row on the device, on every boot. That flagged a
+    peer's LEGITIMATE opening balance: section 2.6 syncs every device's own
+    v38 opening balance on purpose ("adding the history together is the
+    true shop-wide ledger"), so a two-till shop that carried credit on both
+    tills holds two opening balances per till once sync runs -- its own, and
+    its peer's at a higher local id. The WARNING then told the owner to
+    consider `reverse_journal()`-ing a real balance, on every boot.
+    W1-0 residue can only be LOCAL, PRE-v41 history (the W1-0 guard in
+    `_migrate_add_general_ledger` stops new ones), and that is exactly the
+    candidate set: a pulled
+    journal always arrives with a uid and is never a candidate. So residue
+    is reported once, on the boot that backfills it, from the device that
+    posted it. `retail_gl_emit_test.py::test_duplicate_detector_ignores_a_
+    peers_opening_balance_that_arrived_by_sync` is RED against the old scan.
+
+    Flags an `opening_balance` candidate, PER COMPANY, when EITHER:
+      - it is not that company's EARLIEST `opening_balance` journal (a
+        second, third or fourth one -- exactly what the pre-fix
+        `_migrate_add_general_ledger` bug in `database/schema.py`
+        produced on every later chain replay, before `gl_already_existed`
+        landed); OR
+      - some candidate that is NOT an opening balance has a LOWER id for
+        the same company (a real transaction was posted before this
+        "opening" balance ever was, which an honest first-ever seed could
+        never do).
+
+    Never raises. Returns a list of `{'id', 'company_id'}` dicts, logged
+    as a single WARNING by `backfill_legacy_journals` (never per-row --
+    a shop with a real W1-0 residue would otherwise flood its own log).
+    Existing duplicates are NOT reversed here or anywhere in this module
+    -- `credit_balance` can be set without ever posting to the ledger, so
+    a later opening balance can be partly legitimate, and only the shop's
+    owner can decide whether to `reverse_journal` the extras (BOOKS-WAVE1-
+    PLAN.md section 2.6, "No automatic reversal").
+    """
+    seen_opening = set()       # company_ids with an earlier opening candidate
+    seen_non_opening = set()   # company_ids with an earlier non-opening candidate
+    suspects = []
+    for row in sorted(candidates, key=lambda r: r['id']):
+        cid = row['company_id']
+        if row['source_type'] == 'opening_balance':
+            if cid in seen_opening or cid in seen_non_opening:
+                suspects.append({'id': row['id'], 'company_id': cid})
+            seen_opening.add(cid)
+        else:
+            seen_non_opening.add(cid)
+    return suspects
+
+
+def backfill_legacy_journals(conn, chunk=1000):
+    """Boot-time, NOT version-gated -- `database/schema.py::_init_retail`'s
+    own call site (hasattr-guarded, wired by Builder B -- see that call
+    site's own comment) runs this on EVERY boot, same as `_v16_rebind_
+    orphaned_open_drawers` immediately above it, because it must be safe
+    to retry indefinitely rather than tied to a version marker that only
+    ever gives it one chance to succeed (BOOKS-WAVE1-PLAN.md section 5,
+    "Boot step").
+
+    Every `gl_journals` row this codebase ever posted BEFORE Wave 1 (v41)
+    has no `uid` -- this is what finally gives each one a stable,
+    cross-device identity and sends it to every other device on this
+    shop's licence, which is what heals the divergence Wave 1 exists to
+    fix (BOOKS-WAVE1-PLAN.md section 2.6, "History (backfill)").
+
+    For each row `WHERE uid IS NULL`, in ascending `id` order (so an
+    earlier journal always gets its `uid` BEFORE a later journal that
+    reverses it needs to look that `uid` up -- see `_derive_source_uid`'s
+    own docstring on why a reversal's original is always processed
+    first):
+      1. `_derive_source_uid` resolves its `source_uid` FIRST -- the
+         IDENTICAL derivation `post_journal` itself uses, so a legacy
+         `sale`/`return` journal's `source_uid` points at that row's own
+         `uid` exactly like a Wave-1-native journal's would, and a legacy
+         `reversal` resolves against whatever `uid` its original was JUST
+         assigned, earlier in this same pass;
+      2. `legacy_journal_uid` mints its deterministic `uid` from a `header`
+         that carries THIS resolved `source_uid` (F1, BOOKS-WAVE1-PLAN.md
+         decision F1; v2 finding 4) -- NEVER the other way around. The
+         `header` this function builds from the candidate SELECT below has
+         no `source_uid` column of its own (a legacy row's `source_uid` is
+         NULL until this exact pass resolves it), so hashing before this
+         step would silently hash `None` for every row, forever -- and per
+         F1, the uid FORMULA itself can never change after ships, so this
+         ordering is fixed now, permanently;
+      3. both are written with one `UPDATE`, guarded by a SAVEPOINT (F3,
+         BOOKS-WAVE1-PLAN.md decision F3; v2 finding 3) -- see below;
+      4. `_queue_gl_journal_sync_event` queues its one `create` event, but
+         ONLY when the UPDATE actually landed (see F3 below: a uid
+         collision skips both the UPDATE and this queue call for that one
+         row) -- and inside the SAME savepoint, within an explicitly opened
+         transaction, so a row's uid and its event always commit together
+         (see the BEGIN comment in the loop: a bare SAVEPOINT with no
+         transaction around it is itself a transaction, and releasing it
+         commits).
+
+    F3 -- A UID COLLISION MUST SKIP ONE ROW, NEVER ABORT THE WHOLE
+    BACKFILL. `idx_gl_journals_uid` (database/schema.py) is a UNIQUE
+    partial index on `uid`, and `legacy_journal_uid` is DETERMINISTIC by
+    design (see that function's own docstring) -- which means the SAME uid
+    can legitimately already exist on ANOTHER local row: a "pulled twin" of
+    this exact historical journal, received from a peer that already ran
+    ITS OWN backfill and sent the (identical) legacy event over before this
+    device's own backfill got to it (verifier 2's own `repro6_poison_row.py`
+    -- a cloned install that synced before this device's backfill
+    succeeded). Before this fix, that UPDATE's `sqlite3.IntegrityError`
+    propagated straight out of this function's un-guarded loop, aborting
+    the ENTIRE backfill -- on EVERY later boot, forever, because the
+    candidate SELECT re-selects the exact same uid-NULL rows every time
+    and hits the exact same collision first. Every OTHER legacy journal on
+    the device, however unrelated, was silently never backfilled either.
+    Each row's UPDATE now runs inside its OWN `SAVEPOINT`: a collision
+    rolls back only that row's attempted write, is logged ONCE with BOTH
+    ids (the local row that could not be assigned, and the existing row
+    already holding that uid), and the loop CONTINUES -- the colliding
+    local row is left exactly as it was (`uid` still NULL, so a future
+    boot may retry it e.g. once the twin itself is reconciled) and is
+    NEVER queued to `_queue_gl_journal_sync_event` (there is nothing new to
+    tell peers; they already have this fact, under the existing row's own
+    uid). `test_backfill_skips_a_uid_collision_and_continues_past_it`
+    (retail_gl_emit_test.py, modelled on verifier 2's own repro6) is this
+    fix's own proof: after ONE boot, every OTHER legacy row still gets its
+    uid and its outbox event.
+
+    A COLLIDED ROW'S REVERSAL (third wave verifier, retry, 2026-09-26). F1
+    feeds a legacy reversal's `source_uid` -- the REVERSED journal's uid --
+    into its hash. A collided row keeps `uid` NULL, so on the device that
+    skipped it that lookup returns None, while every peer's copy of the same
+    reversal hashed with the twin's real uid. The two copies of ONE reversal
+    then hashed apart: this device's copy was no collision, got a fresh uid
+    and was SENT, with no `reversed_journal_uid` to tie it to anything, and
+    every peer booked the reversal a second time (a clone holding X and its
+    reversal R: a peer's cash moved by -X, where the truth is 0). So the uid
+    a collided row hashed to is remembered for the rest of this pass, and a
+    reversal of that row derives its `source_uid` from it -- the identical
+    value the peer derived -- which makes it recognisably the same fact:
+    it collides with its own pulled twin and is skipped too. Candidates run
+    in ascending id order and a reversal always has a higher id than what it
+    reverses, so the original is always met first; a collided row is
+    re-selected every boot, so the map is rebuilt identically each time.
+    `test_a_collided_journals_legacy_reversal_is_skipped_with_it_not_resent`
+    is RED without it. This does NOT touch the formula: it only corrects the
+    `source_uid` value fed into it for this one case.
+
+    WHAT F3 STILL LEAVES, stated so it is a known state rather than a
+    surprise: a skipped row stays in THIS device's books next to its pulled
+    twin, so this device books that fact twice until the owner reverses one
+    (verifier 2's repro6 said so). And a reversal of the skipped row posted
+    LATER, live, through `reverse_journal`, carries no `reversed_journal_uid`
+    (the row has none), so peers book it standalone -- correcting this
+    device while moving every peer. Both need an owner decision, not a sync
+    rule, and are logged here per row via the WARNING below.
+
+    Commits after every `chunk` rows (default 1000, BOOKS-WAVE1-PLAN.md
+    section 5's own R4 estimate: roughly 2 journals per historical sale,
+    so a 10k-sale shop backfills on the order of 20k rows) -- a crash
+    partway through leaves already-assigned rows assigned (picked up
+    correctly on the very next boot, never re-run) instead of holding one
+    enormous uncommitted transaction for the whole shop's history.
+
+    THE CANDIDATE ROW LIST IS FETCHED EXACTLY ONCE, UP FRONT, NEVER
+    RE-QUERIED INSIDE THE COMMIT LOOP -- a deliberate choice, not just a
+    style preference. An earlier shape of this function re-ran `WHERE uid
+    IS NULL ... LIMIT chunk` inside a `while True:` after every commit,
+    relying on the result set SHRINKING (each chunk's rows no longer match
+    once assigned) to terminate. That makes termination itself depend on
+    the WHERE clause being correct -- if it were ever weakened to select
+    rows regardless of `uid`, the loop would find the SAME rows again
+    after every commit and never terminate at all, turning a coverage bug
+    into a hang instead of a fast, observable failure. Snapshotting the
+    full candidate id list ONE time (`ORDER BY id`, so a reversal is still
+    always snapshotted after the original it points at) and then chunking
+    over that FIXED Python list instead bounds this function to at most
+    `len(candidates)` iterations no matter what any future edit does to
+    the SELECT that built it -- a broken filter now shows up as wrong
+    OUTPUT (rows re-emitted that already had a uid) rather than a hang.
+    `test_backfill_emits_each_legacy_journal_once_across_two_runs`
+    (M-A7 widens the candidate SELECT to ignore the NULL filter) is this
+    function's own mutation proof, and is fast specifically because of
+    this shape.
+
+    IDEMPOTENT BY CONSTRUCTION: the candidate SELECT is always `WHERE uid
+    IS NULL`, so a second CALL (the normal case -- every boot, not just
+    the first) snapshots an EMPTY list once every legacy row has been
+    assigned, and is a clean no-op. A PULLED journal (one this device
+    received from a peer) always arrives WITH a `uid` already (BOOKS-
+    WAVE1-PLAN.md section 2.3/2.5) and is therefore never a candidate
+    either, so this backfill only ever touches genuinely local, genuinely
+    pre-v41 history -- never a journal that already has its cross-device
+    identity, whichever device minted it.
+
+    RETURNS `{'assigned': int, 'emitted': int, 'uid_collisions': [...],
+    'suspected_duplicate_opening': [...]}`. `assigned` and `emitted` are
+    always equal today (one outbox event per newly-assigned uid, no skips
+    other than a collision, which counts toward NEITHER) -- kept as two
+    separate keys because a future reason to assign a uid WITHOUT emitting
+    it (a row this device already knows it will never need to sync) should
+    not have to invent a new return key later. `uid_collisions` is F3's own
+    result: one `{'id', 'existing_id', 'uid'}` dict per row this call
+    skipped because its deterministic uid already belonged to another
+    local row (see F3 above) -- empty on the overwhelmingly common boot
+    where nothing collides. `suspected_duplicate_opening` is
+    `_suspected_duplicate_opening_balances`'s own result, logged here as a
+    single WARNING (never raised: a shop with this residue must still boot
+    and sync normally) and returned so a caller can surface it without
+    re-deriving the same query.
+    """
+    logger = logging.getLogger(__name__)
+    assigned = 0
+    emitted = 0
+    uid_collisions = []
+    # Local id -> the uid a COLLIDED row hashed to (its pulled twin's uid).
+    # See "A COLLIDED ROW'S REVERSAL" in this function's docstring.
+    collided_uid_by_id = {}
+
+    candidates = conn.execute(
+        "SELECT id, company_id, branch_id, business_date, reference, memo, "
+        "       source_type, source_id, currency, reversed_journal_id, "
+        "       posted_by, posted_at "
+        "FROM gl_journals WHERE uid IS NULL ORDER BY id"
+    ).fetchall()
+
+    for start in range(0, len(candidates), chunk):
+        for row in candidates[start:start + chunk]:
+            lines = conn.execute(
+                "SELECT a.code AS account_code, l.debit, l.credit, l.memo "
+                "FROM gl_journal_lines l JOIN gl_accounts a ON a.id = l.account_id "
+                "WHERE l.journal_id=? ORDER BY l.id",
+                (row['id'],)
+            ).fetchall()
+            # F1 -- resolve `source_uid` FIRST and fold it into `header`
+            # BEFORE hashing: `legacy_journal_uid`'s canonical form includes
+            # `source_uid` (see that function's own docstring), and the raw
+            # candidate row above carries no such column -- see this
+            # function's own docstring, point 2, for why the order is
+            # fixed permanently, not just today's convenience.
+            source_uid = _derive_source_uid(
+                conn, row['company_id'], row['source_type'], row['source_id'],
+                row['reversed_journal_id'],
+            )
+            if (source_uid is None and row['source_type'] == 'reversal'
+                    and row['reversed_journal_id'] in collided_uid_by_id):
+                # The reversed journal collided with its pulled twin earlier
+                # in this pass, so its own uid is still NULL here -- but the
+                # fact it IS carries the twin's uid, and so does every peer's
+                # copy of this reversal. See "A COLLIDED ROW'S REVERSAL".
+                source_uid = collided_uid_by_id[row['reversed_journal_id']]
+            header = dict(row)
+            header['source_uid'] = source_uid
+            if row['source_type'] == 'opening_balance':
+                # See legacy_journal_uid's F2 notes: the Nth identical copy
+                # of one opening balance on this device (W1-0 residue) is
+                # its own fact, never a "collision" with the first.
+                header['opening_occurrence'] = _opening_balance_occurrence(conn, row, lines)
+            uid = legacy_journal_uid(header, lines)
+
+            # ONE ROW = ONE ATOMIC UNIT, ONE CHUNK = ONE TRANSACTION (third
+            # wave verifier, 2026-09-26). SQLite treats a SAVEPOINT with no
+            # transaction around it as the transaction itself, and RELEASE
+            # of that outermost savepoint is a COMMIT. The first cut of F3
+            # relied on that without meaning to, and queued the outbox event
+            # AFTER the RELEASE: the first row of every boot, and of every
+            # chunk after a commit, had its uid committed BEFORE its outbox
+            # row was inserted, so a failure or a killed process before the
+            # chunk commit kept the uid and lost the event -- and that
+            # journal, never `uid IS NULL` again, never reached any other
+            # device. Two parts close it: this explicit BEGIN keeps a whole
+            # chunk in one transaction (commit per chunk, plan R4, never a
+            # commit per row), and the event is queued INSIDE the row's
+            # savepoint, before RELEASE, so a row's uid and event can only
+            # ever be kept or undone together. `test_a_boot_backfill_that_
+            # fails_mid_chunk_never_strands_a_uid_without_its_event` and
+            # `test_a_caller_that_commits_after_a_backfill_failure_still_
+            # keeps_only_whole_pairs` (retail_gl_emit_test.py) pin both.
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+            # F3 -- one SAVEPOINT per row: a uid collision (a pulled twin
+            # of this exact journal already sitting on this device under
+            # the SAME deterministic uid) rolls back ONLY this row's
+            # attempted UPDATE, is logged once, and the loop continues --
+            # never lets one poisoned row abort every other legacy
+            # journal's backfill, this boot or any future one.
+            conn.execute("SAVEPOINT backfill_legacy_row")
+            try:
+                conn.execute(
+                    "UPDATE gl_journals SET uid=?, source_uid=? WHERE id=?",
+                    (uid, source_uid, row['id'])
+                )
+            except sqlite3.IntegrityError:
+                conn.execute("ROLLBACK TO SAVEPOINT backfill_legacy_row")
+                conn.execute("RELEASE SAVEPOINT backfill_legacy_row")
+                existing = conn.execute(
+                    "SELECT id FROM gl_journals WHERE uid=?", (uid,)
+                ).fetchone()
+                existing_id = existing['id'] if existing else None
+                logger.warning(
+                    "backfill_legacy_journals: uid collision -- local "
+                    "gl_journals row %s's deterministic uid (%s) already "
+                    "belongs to row %s (a pulled twin of this same "
+                    "journal, BOOKS-WAVE1-PLAN.md F3) -- row %s is "
+                    "skipped this boot (uid left NULL) and never emitted; "
+                    "every other legacy row still backfills normally.",
+                    row['id'], uid, existing_id, row['id'],
+                )
+                uid_collisions.append(
+                    {'id': row['id'], 'existing_id': existing_id, 'uid': uid}
+                )
+                collided_uid_by_id[row['id']] = uid
+                continue
+            try:
+                _queue_gl_journal_sync_event(conn, row['id'])
+            except BaseException:
+                # Undo THIS row's uid too, so what is left in the open
+                # transaction is only whole (uid, event) pairs -- whatever
+                # the caller then does with it (init_retail's `finally`
+                # rolls it back; a commit would persist only whole pairs).
+                # Guarded: some SQLite failures (disk full, I/O) end the
+                # transaction themselves, and a "no such savepoint" here must
+                # never replace the error the operator needs to read.
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT backfill_legacy_row")
+                    conn.execute("RELEASE SAVEPOINT backfill_legacy_row")
+                except sqlite3.Error:
+                    pass
+                raise
+            conn.execute("RELEASE SAVEPOINT backfill_legacy_row")
+            assigned += 1
+            emitted += 1
+        conn.commit()
+
+    suspected = _suspected_duplicate_opening_balances(candidates)
+    if suspected:
+        logger.warning(
+            "backfill_legacy_journals: %d suspected duplicate opening-balance "
+            "journal(s) detected (W1-0 residue, BOOKS-WAVE1-PLAN.md section "
+            "2.6) -- company/id pairs: %s. These were sent to every device on "
+            "this shop's licence as-is; only the owner can decide whether to "
+            "reverse_journal() the extras.",
+            len(suspected),
+            [(s['company_id'], s['id']) for s in suspected],
+        )
+
+    return {
+        'assigned': assigned,
+        'emitted': emitted,
+        'uid_collisions': uid_collisions,
+        'suspected_duplicate_opening': suspected,
+    }
 
 
 def post_journal(conn, cid, branch_id, business_date, source_type, source_id,
@@ -307,60 +1215,51 @@ def post_journal(conn, cid, branch_id, business_date, source_type, source_id,
     INSERT -- never added by a later UPDATE, because `gl_journals` is
     append-only (see the module docstring). `reverse_journal` below is the
     only caller that passes it.
+
+    WAVE 1 ADDITIONS (schema v41, BOOKS-WAVE1-PLAN.md section 2.4), all
+    inside this SAME transaction, all before this function returns: mints
+    this journal's own `uid` (`uuid.uuid4()`), derives its `source_uid`
+    (`_derive_source_uid` below -- the originating sale/return's own `uid`
+    for a `sale`/`return` posting, the REVERSED journal's own `uid` for a
+    `reversal`, `NULL` otherwise), stores both on the new row, and queues
+    exactly one `gl_journal` sync-outbox event via `_queue_gl_journal_
+    sync_event`. Because the outbox INSERT runs on the SAME connection and
+    transaction as the journal itself, a rollback anywhere in the caller's
+    route (the identical `except Exception: conn.rollback()` this
+    docstring already describes above) removes the journal, its lines, AND
+    its outbox row together -- `test_rolled_back_document_leaves_no_gl_
+    outbox_row` (retail_gl_emit_test.py) proves this. `test_post_sale_
+    queues_exactly_one_gl_journal_event_per_journal` (M-A1 removes the
+    queue call) and `test_journal_uid_is_persisted_on_the_origin_row`
+    (M-A4 stores NULL) are this addition's own mutation proofs.
     """
     ensure_default_chart(conn, cid)
 
-    total_debit = Decimal('0')
-    total_credit = Decimal('0')
-    clean_lines = []
-    for raw in lines:
-        code = raw['account_code']
-        debit = raw.get('debit') or 0
-        credit = raw.get('credit') or 0
-        d = debit if isinstance(debit, Decimal) else Decimal(str(debit))
-        c = credit if isinstance(credit, Decimal) else Decimal(str(credit))
-        if d < 0 or c < 0:
-            raise ValueError(
-                f"GL line for account {code!r} carries a negative debit or "
-                f"credit (debit={d} credit={c}) -- swap sides instead of "
-                f"negating a value"
-            )
-        if d and c:
-            raise ValueError(
-                f"GL line for account {code!r} carries both a debit and a "
-                f"credit (debit={d} credit={c}) -- split into two lines"
-            )
-        if not d and not c:
-            continue
-        d = quantize_money(d, currency)
-        c = quantize_money(c, currency)
-        total_debit += d
-        total_credit += c
-        clean_lines.append((code, d, c, raw.get('memo')))
-
-    if not clean_lines:
+    try:
+        clean_lines, total_debit, total_credit = validated_lines(lines, currency)
+    except GeneralLedgerImbalanceError as exc:
+        # Re-raised with THIS call's own document context prefixed on --
+        # `validated_lines` itself is a context-free pure function (Wave 1,
+        # BOOKS-WAVE1-PLAN.md section 2.4 -- it exists so a caller with NO
+        # source document at all, like the sync apply side's own balance
+        # check, can ask "would this balance" without inventing one), so it
+        # cannot name `source_type`/`source_id` in its own message the way
+        # this function's callers have always been able to rely on.
         raise GeneralLedgerImbalanceError(
-            f"refusing to post an empty journal for {source_type}:{source_id} "
-            f"-- every line supplied was zero"
-        )
+            f"journal for {source_type}:{source_id} -- {exc}"
+        ) from exc
 
-    eps = _gl_epsilon(currency)
-    diff = total_debit - total_credit
-    if abs(diff) > eps:
-        raise GeneralLedgerImbalanceError(
-            f"journal for {source_type}:{source_id} does not balance: "
-            f"debits={total_debit} credits={total_credit} diff={diff} "
-            f"(tolerance is half of {currency}'s own minor unit, {eps})"
-        )
+    uid = str(uuid.uuid4())
+    source_uid = _derive_source_uid(conn, cid, source_type, source_id, reversed_journal_id)
 
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO gl_journals "
         "(company_id, branch_id, business_date, reference, memo, source_type, "
-        " source_id, currency, reversed_journal_id, posted_by) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " source_id, currency, reversed_journal_id, posted_by, uid, source_uid) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, branch_id, business_date, reference, memo, source_type, source_id,
-         currency, reversed_journal_id, posted_by or 'System')
+         currency, reversed_journal_id, posted_by or 'System', uid, source_uid)
     )
     journal_id = cur.lastrowid
     for code, d, c, line_memo in clean_lines:
@@ -370,6 +1269,7 @@ def post_journal(conn, cid, branch_id, business_date, source_type, source_id,
             "VALUES (?,?,?,?,?)",
             (journal_id, account_id, float(d), float(c), line_memo)
         )
+    _queue_gl_journal_sync_event(conn, journal_id)
     return journal_id
 
 
