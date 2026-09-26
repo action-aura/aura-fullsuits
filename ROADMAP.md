@@ -6069,3 +6069,41 @@ credit_balance, so a later opening balance may be partly real.
 ROLLOUT RULE. A v40 device skips unknown `gl_journal` events and advances its
 cursor past them, so hub/Owner pruning can delete them before it upgrades:
 upgrade every till on a licence together. The uid-set comparison detects gaps.
+
+
+## 2026-09-26 — retail schema v41 CASHED IN: GL journals sync between devices
+
+Delivered in 3a97e2cf (claimed in 46786e4e). What it is, what was measured
+and what the four verification passes found is in that commit message; this
+entry is the known-residue list the claim promised.
+
+KNOWN RESIDUE (decisions, not oversights):
+1. ROLLOUT: a till still on v40 skips `gl_journal` events and advances its
+   cursor past them; if Owner or a LAN hub prunes them first, that till never
+   gets them. Upgrade every till on a licence together. From v41 on, an
+   unknown type from a NEWER sender is parked (`schema_version_too_new`), so
+   this cannot recur in later waves. A pruning retention floor for
+   `gl_journal` would close it for v40 peers too; Owner pruning is in
+   `owner/` (the other developer's area) -- not changed here.
+2. W1-0 DUPLICATES ALREADY IN THE FIELD: shops that went through the v39 or
+   v40 upgrade with a non-zero AR/AP balance may hold a second opening
+   balance. v41 sends them like any journal (every device then holds the
+   same figures) and logs `suspected_duplicate_opening`. They are NOT
+   reversed automatically -- the importer can legitimately change
+   credit_balance -- one `reverse_journal` corrects every device.
+3. CLONED INSTALLS: when a backfilled journal collides with a pulled copy of
+   itself, the local row is skipped (never re-sent) but stays in that one
+   device's books next to its twin. A receive-side "adopt the matching local
+   row" rule would remove it; that is a design change for a later wave.
+4. Two genuinely different opening balances identical to the fil are treated
+   as one fact (the price of deduplicating restored backups).
+5. Per-branch ledger reports can differ between devices until the
+   default-branch uid fix (each device self-heals its own "Main" branch with
+   a random uid); company totals match.
+6. The phone's pending count tops out at 500 per stream while a large
+   backfill drains (/_internal/outbox is now paged); it reads 0 only when the
+   outbox really is empty. Kotlin's "read_outbox has no LIMIT" comment is stale.
+
+NEXT WAVES each claim their own version: W2a loyalty ledger, W2b promotions,
+W3a modifier configuration, W3b stock transfers, W4a purchase orders, W4b
+AR/AP subledger (see the wave-1 plan).
