@@ -6131,3 +6131,32 @@ and after (pushed rows are deleted and the table has no AUTOINCREMENT), so it
 cannot see a resend -- that case is covered by
 test_boot_backfill_is_idempotent_across_two_boots, not by this run.
 Evidence: C:/Users/MSI/AuraLab/proof/v41/ (REPORT.json, per-checkpoint JSON).
+
+## 2026-09-27 — Retail UX programme registered; Phase 0 in flight (no schema claim)
+
+Why: the owner's 2026-09-26 hands-on test ("couldn't find Settings", "cashier
+looked like the owner", "customer screen is static", "no WhatsApp anywhere",
+"wouldn't buy it") was answered with a live audit and a phased plan, published
+as a private report (claude.ai artifact DcwKU52B5qgVa2W6MQgJan; evidence and
+the full plan JSON kept locally in the main checkout's git-excluded
+`.claude/artifacts/aura-review/`). Registered here by NAME, per this file's
+rule that new work waits for a real name before it is dispatched.
+
+Name: **Retail UX programme**. P0-P2 committed (about 20 weeks), P3-P7
+indicative and re-planned at the P2 exit. Numbering is its own (P0, P1a, P1b,
+P2...) and does NOT continue the launch-readiness Phase 1-7 series.
+
+**P0 "first five minutes" -- in flight on branch `feat/retail-ux-p0`**
+(off worktree-retail-hardware-viewports 8cf5ffc3): 21 verified defects, fixes
+only, no redesign. **No schema change and no RETAIL_SCHEMA_VERSION claim**:
+the default GST rate is a `retail_settings` key and the customer-display relay
+state is in memory. Two of the 21 are not cosmetic and are named so they are
+not lost if P0 stalls:
+- the till carries the previous sale's discount %, tender and customer into
+  the next sale (`_clearCart` resets only the cart);
+- the "allow to manage branch staff" toggle grants `retail.employees=full`,
+  so a branch-scoped manager passes shop-wide tax/branding/numbering, cheque
+  and PO-payment routes.
+Schema claims for P1b onward (registry v9, DEFAULT-BRANCH-UID, the P2 books
+version, CASH-SESSION-SYNC...) are NOT made by this entry; each will be
+reserved here by name before its dispatch.
