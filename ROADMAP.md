@@ -6107,3 +6107,27 @@ KNOWN RESIDUE (decisions, not oversights):
 NEXT WAVES each claim their own version: W2a loyalty ledger, W2b promotions,
 W3a modifier configuration, W3b stock transfers, W4a purchase orders, W4b
 AR/AP subledger (see the wave-1 plan).
+
+
+## 2026-09-26 — v41 measured on two real tills that had already diverged
+
+Lab tills A2 (:5022) and B2 (:5023) on one licence: before the upgrade A2 held
+0 gl_journals and B2 held 4 (P&L 0.000 vs 5.000, measured 2026-09-24). After
+booting both on v41 (3a97e2cf) the proof runner -- launched as its own
+process, results saved per phase -- passed every gate, 161 s:
+- C1 history healed: A2 received B2's 4 legacy journals; per-account trial
+  balance, every P&L line and the journal uid-set hash identical; debits =
+  credits on each till; nothing parked.
+- C2 sale on B2, 2 x 4.007 = 8.014: revenue +8.014 and cash +8.014 (not the
+  amount tendered), COGS +5.000 / inventory -5.000 from the sale_items.unit_cost
+  snapshot; reached A2 in 5 s with identical books.
+- C3 partial return on A2: 4900 +4.007, COGS -2.500, inventory +2.500, both.
+- C4 credit sale on A2 (AR +4.007 on both), payment 2.004 on B2 (AR -2.004,
+  cash +2.004 on both).
+- C6 restart: identical afterwards.
+Gaps in the proof itself: C5 (hub/cloud switch) skipped (site relay off in
+the lab); C6's "no re-send after restart" gate read an empty outbox before
+and after (pushed rows are deleted and the table has no AUTOINCREMENT), so it
+cannot see a resend -- that case is covered by
+test_boot_backfill_is_idempotent_across_two_boots, not by this run.
+Evidence: C:/Users/MSI/AuraLab/proof/v41/ (REPORT.json, per-checkpoint JSON).
