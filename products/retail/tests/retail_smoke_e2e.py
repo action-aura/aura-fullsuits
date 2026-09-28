@@ -54,6 +54,7 @@ import argparse
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,12 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 PRODUCT_DIR = TESTS_DIR.parent
 BACKEND_DIR = PRODUCT_DIR / "backend"
+# products/retail -> products -> repo root. Only used by scenario 14 to
+# import commercial_runtime.licensing_contracts.test_support -- a stdlib-only
+# module (json/sqlite3/pathlib, no `cryptography`), safe to import under this
+# script's own SYSTEM Python even though the backend itself always runs under
+# the venv (see the module docstring).
+REPO_ROOT = PRODUCT_DIR.parent.parent
 
 # Given verbatim in the task brief -- the project's own venv, which has
 # Flask/the backend's real dependencies installed (NOT the system Python
@@ -120,10 +127,18 @@ class Backend:
     no licence seeded) on a free port, torn down unconditionally via
     ``stop()``, which the caller MUST invoke from a ``finally`` block."""
 
-    def __init__(self) -> None:
+    def __init__(self, app_data_dir: Path | None = None) -> None:
         self.port = _find_free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
-        self.app_data_dir = Path(tempfile.mkdtemp(prefix="aura_retail_smoke_appdata_"))
+        # P0 #20 scenario 03b needs a SECOND backend process pointed at an
+        # existing, pre-populated AURA_APP_DATA copy (a simulated "joined
+        # computer" -- see that scenario's own comment) rather than a
+        # brand-new, unrelated install. Every other caller passes nothing
+        # and gets the original genuinely-fresh-tempdir behaviour unchanged.
+        self.app_data_dir = (
+            app_data_dir if app_data_dir is not None
+            else Path(tempfile.mkdtemp(prefix="aura_retail_smoke_appdata_"))
+        )
         self.log_path = self.app_data_dir / "backend_stdout.log"
         self.proc: subprocess.Popen | None = None
         self._log_file = None
@@ -511,30 +526,208 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     report.run("02 fresh-install first-run signup surface, and completing it", scenario_first_run_and_signup)
 
     # ------------------------------------------------------------------
-    # Scenario 3 -- claim this device as the admin device (real UI banner),
-    # which is what actually unlocks the Settings nav entry. Discovered by
-    # reading app-shell.js's own devices/me flow: a brand-new admin account
-    # does NOT automatically become the admin device -- GET /api/devices/me
-    # answers is_admin_device:false until this banner's action is taken.
+    # Scenario 3 -- P0 #20 changed what this scenario must prove. It used to
+    # assert the OLD flow: a brand-new admin account did NOT auto-claim the
+    # admin device, so Settings stayed hidden until the owner clicked a
+    # dismissible red banner ("Make this the admin device"). C4's #20 fix
+    # calls POST /api/devices/me/claim-admin automatically, from
+    # _autoClaimAdminOnSignup() (app-shell.js), the instant
+    # /api/onboarding/create-admin succeeds -- so by the time scenario 2
+    # above finished signup, THIS install's device had already claimed the
+    # flag. The old assertion here ("Settings nav entry was visible BEFORE
+    # claiming this device as admin") is now backwards on the signup
+    # computer: Settings is SUPPOSED to already be visible there, with zero
+    # clicks, and no banner is supposed to ever appear.
+    #
+    # Weakening this to "assert whatever currently happens" would defeat the
+    # whole point of the item, so this proves the NEW behaviour with the
+    # same rigor the old assertion had, in both directions: zero
+    # clicks/zero banner HERE, on the one computer where auto-claim is
+    # supposed to fire (this scenario), AND -- scenario 03b below -- that
+    # the manual banner path this replaces is not simply gone: it still
+    # works, completely unmodified, on a computer where the auto-claim
+    # never ran, which item #20's own text says is every OTHER computer in
+    # the shop ("The bar stays on joined computers until Phase 1a replaces
+    # the device gate with the person gate").
     # ------------------------------------------------------------------
-    def scenario_claim_admin_device():
-        assert page.locator('.sub-nav-item[data-section="admin-center"]').count() == 0, (
-            "Settings nav entry was visible BEFORE claiming this device as admin -- "
-            "expected it hidden until the claim banner's action is taken"
+    def scenario_signup_computer_auto_claims_admin():
+        # No click anywhere in this scenario -- that absence IS the
+        # assertion. If #20's auto-claim regressed (the fetch removed, or
+        # moved to fire after this point in the flow), the banner would be
+        # sitting here and Settings would still be hidden, and this scenario
+        # would fail exactly the way the OLD banner-based one used to pass.
+        assert page.locator("#aura-admin-device-claim").count() == 0, (
+            "the admin-device claim banner rendered on the SIGNUP computer -- "
+            "P0 #20's _autoClaimAdminOnSignup() should have claimed the admin "
+            "device automatically, right after create-admin, before this screen "
+            "was ever shown; a visible banner here means the auto-claim did not "
+            "fire (or fired and this render did not pick it up)"
         )
-        banner = page.locator("#aura-admin-device-claim")
-        banner.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-        assert "not yet your store" in banner.inner_text()
-        report.shot(page, shots, "04_claim_admin_device_banner")
-
-        page.get_by_role("button", name="Make this the admin device", exact=True).click()
-        banner.wait_for(state="detached", timeout=DEFAULT_WAIT_MS)
-
         settings_entry = page.locator('.sub-nav-item[data-section="admin-center"]')
         settings_entry.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-        assert settings_entry.count() == 1, "Settings nav entry did not appear after claiming admin device"
+        assert settings_entry.count() == 1, (
+            "Settings nav entry was NOT visible on the signup computer with zero "
+            "clicks -- P0 #20 says the computer that just created the company IS "
+            "the store's admin device from the moment signup succeeds"
+        )
+        # Not just the UI's own belief: read the very same GET /api/devices/me
+        # app-shell.js's init() reads, so a bug that left isAdminDevice=true
+        # client-side while the SERVER still says false (a stale process
+        # cache, a race between the claim POST and this check) cannot hide
+        # behind a nav item that rendered off client state alone.
+        dev = page.evaluate(
+            "() => fetch('/api/devices/me', {credentials:'include', cache:'no-store'}).then(r => r.json())"
+        )
+        assert dev.get("success") and dev.get("device", {}).get("is_admin_device") is True, (
+            f"GET /api/devices/me did not report is_admin_device:true for the "
+            f"signup computer -- got {dev!r}"
+        )
+        report.shot(page, shots, "04_signup_computer_no_banner_settings_visible")
 
-    report.run("03 claim admin device via the real banner (unlocks Settings)", scenario_claim_admin_device)
+    report.run(
+        "03 signup computer auto-claims the admin device (P0 #20) -- no click, no banner",
+        scenario_signup_computer_auto_claims_admin,
+    )
+
+    # ------------------------------------------------------------------
+    # Scenario 3b -- the OTHER half of #20: the manual banner claim path
+    # this item's auto-claim exists ALONGSIDE (not instead of) must still
+    # work on a computer where the auto-claim never ran. A joined computer
+    # never calls /api/onboarding/create-admin (only the ONE computer that
+    # types the company's name in does that), so
+    # _autoClaimAdminOnSignup() never fires there either -- the banner
+    # stays that computer's only route to Settings, exactly as it was
+    # before #20 existed.
+    #
+    # This whole suite is architected as ONE fresh, unlicensed install per
+    # run (module docstring), so a genuine second, licensed, joined till
+    # cannot be booted here -- licensing needs an activated key this
+    # install deliberately never has. Per the RESUME NOTE in contracts.md,
+    # this instead reproduces the exact DATABASE STATE a joined computer is
+    # always in (is_admin_device=0 for every device row of this company) by
+    # copying the real signed-up install's own AURA_APP_DATA into a
+    # throwaway directory and flipping that ONE column back to 0 directly in
+    # the COPY's registry.db -- never in the running scenario's own
+    # backend/database above, which stays completely untouched so every
+    # later scenario in this file still runs against the state #20 actually
+    # produces. A second, independent backend SUBPROCESS (a real port, a
+    # real fresh browser context with no cookies) is booted against that
+    # copy, so this still runs the real routes and the real UI end to end --
+    # the only thing stood in for is which physical computer the copy came
+    # from, never the server logic or the client code under test.
+    # ------------------------------------------------------------------
+    def scenario_joined_computer_banner_claim_still_works():
+        joined_dir = Path(tempfile.mkdtemp(prefix="aura_retail_smoke_joined_appdata_"))
+        second_backend: Backend | None = None
+        joined_context = None
+        try:
+            # WAL checkpoint BEFORE copying: registry_db.py opens registry.db
+            # with PRAGMA journal_mode=WAL, so a committed row can live only
+            # in the -wal sidecar file until something checkpoints it. A
+            # plain directory copy taken between commits would be safe by
+            # luck, not by construction -- this folds every committed write
+            # into the main .db file first, so the copy is safe regardless
+            # of timing.
+            registry_db_path = backend.app_data_dir / "database" / "registry.db"
+            ckpt_conn = sqlite3.connect(str(registry_db_path))
+            try:
+                ckpt_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                ckpt_conn.close()
+
+            shutil.copytree(backend.app_data_dir, joined_dir, dirs_exist_ok=True)
+
+            # THE flip -- same device identity file (device/local_device.json)
+            # as the original, deliberately: this proves the BANNER path, not
+            # device *identification*, so the fewer things differ from the
+            # real signed-up install, the more cleanly a failure here points
+            # at is_admin_device specifically. Every row, not a WHERE tied to
+            # today's single-device fixture -- a company with more than one
+            # device row must come back with a banner until ONE of them
+            # claims, not merely the first row in the table.
+            joined_db_path = joined_dir / "database" / "registry.db"
+            flip_conn = sqlite3.connect(str(joined_db_path))
+            try:
+                cur = flip_conn.execute("UPDATE devices SET is_admin_device = 0")
+                flip_conn.commit()
+                assert cur.rowcount >= 1, (
+                    "0 device rows existed in the copied registry.db to flip -- "
+                    "the copy step or the schema path is wrong, not the fix under test"
+                )
+            finally:
+                flip_conn.close()
+
+            second_backend = Backend(app_data_dir=joined_dir)
+            second_backend.start()
+
+            # page.context.browser (not a bare `browser` -- _run_all_scenarios
+            # is never handed that name; see scenario 14's identical fix for
+            # the same reasoning) -- the same running Chromium instance the
+            # suite already launched, asked for a genuinely separate context.
+            joined_context = page.context.browser.new_context(viewport=VIEWPORT, reduced_motion="reduce")
+            joined_page = joined_context.new_page()
+            report.attach(joined_page)
+
+            joined_page.goto(second_backend.base_url, wait_until="domcontentloaded")
+            _dismiss_intro_overlay_if_present(joined_page)
+
+            # An account already exists in this copy (onboarding genuinely
+            # completed, in scenario 02 above) -- this must be a returning
+            # LOGIN screen, never the first-run signup form: the relogin
+            # modal's own fields (#rl-email/#rl-pass), not #su-*.
+            joined_page.locator("#rl-email").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            joined_page.fill("#rl-email", "smoke-admin@example.test")
+            joined_page.fill("#rl-pass", "SmokeTest123!")
+            joined_page.click("#rl-btn")
+            joined_page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+
+            assert joined_page.locator('.sub-nav-item[data-section="admin-center"]').count() == 0, (
+                "Settings nav entry was visible on the JOINED computer before any "
+                "claim was made -- the flipped is_admin_device=0 row was not "
+                "honoured (or the auto-claim fired somewhere it must not)"
+            )
+            banner = joined_page.locator("#aura-admin-device-claim")
+            banner.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            assert "not yet your store" in banner.inner_text(), (
+                "the admin-device claim banner did not render its expected copy "
+                "on the joined computer"
+            )
+            report.shot(joined_page, shots, "04b_joined_computer_claim_banner")
+
+            joined_page.get_by_role("button", name="Make this the admin device", exact=True).click()
+            banner.wait_for(state="detached", timeout=DEFAULT_WAIT_MS)
+
+            settings_entry = joined_page.locator('.sub-nav-item[data-section="admin-center"]')
+            settings_entry.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            assert settings_entry.count() == 1, (
+                "Settings nav entry did not appear on the joined computer after "
+                "clicking the claim banner's own button"
+            )
+            report.shot(joined_page, shots, "04c_joined_computer_settings_after_claim")
+        finally:
+            if joined_context is not None:
+                joined_context.close()
+            if second_backend is not None:
+                second_backend.stop()
+            shutil.rmtree(joined_dir, ignore_errors=True)
+
+    report.run(
+        "03b claim-admin banner path still works on a JOINED computer (is_admin_device flipped to 0)",
+        scenario_joined_computer_banner_claim_still_works,
+        # This scenario's first navigation is a genuine "existing account,
+        # no session yet" page load -- the one path this whole file never
+        # exercised before it existed (every earlier scenario either IS the
+        # fresh first-run signup, or stays inside an already-authenticated
+        # tab). GET /api/auth/session's own docstring
+        # (onboarding_routes.py) is explicit that gating it with
+        # @mt_login_required means an anonymous call gets a plain 401,
+        # deliberately, in exchange for a disabled/revoked account no longer
+        # being told it is still logged in -- app-shell.js's init() already
+        # treats that exactly like `authenticated:false` (same file, same
+        # comment). Same "an intentional non-2xx is not a defect" shape
+        # scenario 07 already established for its own deliberate 403.
+        strict_console=False,
+    )
 
     # ------------------------------------------------------------------
     # Scenario 4 -- navigate every major screen through the real sidebar,
@@ -1069,6 +1262,504 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     report.run(
         "12 the rail still shows which screen you are on after a re-render",
         scenario_active_nav_visible_after_rerender,
+    )
+
+    # ------------------------------------------------------------------
+    # Scenario 13 -- #9: the customer-facing second screen actually becomes
+    # visible. AUDIT #9's root cause is CSS specificity
+    # ('.cd-screen[hidden]{display:none}' at (0,2,0) losing to the ID rules
+    # '#cd-idle/#cd-active/#cd-complete{display:flex}' at (1,0,0)) -- with
+    # the bug, ALL THREE screens render simultaneously, stacked inside
+    # body{overflow:hidden} (idle at y=0, cart at y=768, thank-you at
+    # y=1536). Proving this needs REAL rendered geometry, computed style and
+    # hit-testing in a REAL browser -- retail_customer_display_test.js's `vm`
+    # harness has no layout engine at all (see that file's own docstring) and
+    # cannot see this bug either way.
+    #
+    # NEVER is_visible() here (measured vacuous on this exact bug): with the
+    # defect present, the item name element still has a non-empty box and no
+    # display:none, which is ALL is_visible() checks -- it returns true
+    # whether the CSS fix is present or not, on every one of the three
+    # stacked screens. to_be_in_viewport() (geometry-relative to the
+    # scrollport) and elementFromPoint() (hit-testing) are what actually
+    # distinguish "on screen, at the top" from "exists somewhere off past
+    # y=768, unreachable" -- and getComputedStyle(#cd-idle).display is the
+    # one assertion that reads the CASCADE'S OWN VERDICT rather than an
+    # attribute, so it fails specifically when specificity, not merely the
+    # `hidden` attribute, is wrong.
+    #
+    # Deliberately NOT a real till session: ringing an actual sale needs an
+    # activated licence, and this whole suite is architected as ONE fresh,
+    # UNLICENSED install per run (module docstring, "WHAT THIS DOES NOT
+    # COVER") -- seeding a licence here would silently change what every
+    # OTHER scenario in this file is proving. The #9 defect is entirely
+    # inside customer-display.html/.js and independent of licensing, so the
+    # till's own already-proven message shape (see
+    # retail_customer_display_test.js's testCartMessageRendersExactPassthrough
+    # Strings and testPromotionsRowShowsOnlyWhenPresent) is delivered
+    # directly to the REAL CustomerDisplay._onMessage() -- the same entry
+    # point BOTH BroadcastChannel and the #11 relay poll ultimately call --
+    # in a REAL Chromium tab with the REAL stylesheet loaded. Only the
+    # TRANSPORT is stood in for; the rendering pipeline under test (markup,
+    # CSS cascade, JS state machine) is exactly what a real till would drive.
+    #
+    # Review fix (2026-09-27, #9 test, medium): a made-up total/sale_complete
+    # injected straight into _onMessage() -- exactly what this scenario still
+    # does, deliberately, for the reason above -- cannot prove the TILL-TO-
+    # DISPLAY path itself (that the number the popup shows is the number the
+    # till actually charged). That real, till-driven comparison (real product
+    # tile click, RetailSystem._fmt(_currentTotals.total), a real cash
+    # checkout, the server's own change) now lives in scenario 14 below,
+    # reusing the licensed till that scenario already boots for #11 rather
+    # than seeding a SECOND licensed install here and duplicating the
+    # licensing-side-effect problem this comment already explains. This
+    # scenario keeps proving the #9 CSS-specificity defect in isolation, on
+    # the suite's one shared UNLICENSED install, independent of anything
+    # licensing-gated.
+    # ------------------------------------------------------------------
+    def scenario_customer_display_shows_the_sale():
+        from playwright.sync_api import expect  # local: see main()'s own deferred-import reasoning: by the time this scenario runs, playwright is already confirmed importable
+        display_page = page.context.new_page()
+        report.attach(display_page)
+        display_page.goto(f"{base_url}/static/customer-display.html", wait_until="domcontentloaded")
+        display_page.wait_for_function("typeof window.CustomerDisplay === 'object'", timeout=DEFAULT_WAIT_MS)
+
+        total_str = "JD 7.750"
+        display_page.evaluate(
+            """(total) => window.CustomerDisplay._onMessage({
+                type: 'cart',
+                items: [{ name: 'Bug-proof Widget', quantity: 1, unitPrice: total, lineTotal: total }],
+                subtotal: total, discount: null, tax: 'JD 0.000', total: total,
+            })""",
+            total_str,
+        )
+
+        item_name = display_page.locator(".cd-item-name")
+        expect(item_name).to_be_in_viewport(timeout=4000)
+
+        hit = display_page.evaluate(
+            """() => {
+                const el = document.querySelector('.cd-item-name');
+                const r = el.getBoundingClientRect();
+                const hitEl = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                return !!(hitEl && (hitEl === el || el.contains(hitEl)));
+            }"""
+        )
+        assert hit, (
+            "elementFromPoint at the item name's own centre did not land on it (or a descendant) -- "
+            "either something else is painted on top, or the CSS bug has it off past the viewport again"
+        )
+
+        idle_display = display_page.evaluate("() => getComputedStyle(document.getElementById('cd-idle')).display")
+        assert idle_display == "none", (
+            f"#cd-idle's COMPUTED display must be 'none' once the cart is active -- was {idle_display!r}. "
+            "This is the actual regression signature: the `hidden` ATTRIBUTE can be correctly set while the "
+            "CASCADE still overrides it back to flex (AUDIT #9)."
+        )
+
+        # The till's own total string, unmodified: this file never re-formats
+        # money (see customer-display.js's own module comment) -- so the
+        # figure on screen must be byte-identical to what was sent.
+        assert display_page.locator("#cd-total-value").inner_text() == total_str, (
+            "the display's total must equal EXACTLY the string the till sent, never recomputed or reformatted"
+        )
+        report.shot(display_page, shots, "13_customer_display_cart_visible")
+
+        # Sale-complete: paid/change must ALSO be genuinely on screen, not
+        # merely present in the DOM -- same to_be_in_viewport discipline.
+        display_page.evaluate(
+            "() => window.CustomerDisplay._onMessage({ type: 'sale_complete', amountPaid: 'JD 10.000', change: 'JD 2.250' })"
+        )
+        expect(display_page.locator("#cd-complete-heading")).to_be_in_viewport(timeout=4000)
+        expect(display_page.locator("#cd-change-row")).to_be_in_viewport(timeout=4000)
+        assert display_page.locator("#cd-change-value").inner_text() == "JD 2.250"
+        report.shot(display_page, shots, "14_customer_display_sale_complete")
+
+        # The 8-second auto-revert -- a REAL wait on the REAL setTimeout
+        # customer-display.js armed (SALE_COMPLETE_DISPLAY_MS), not a mocked
+        # clock: this is the one place in this scenario where "run the real
+        # artefact" (ENGINEERING.md) means literally waiting for it, since a
+        # virtual clock would also fast-forward the #11 relay poll's own
+        # setInterval (every ~600ms) into ~13 real HTTP requests for no
+        # benefit to this assertion (that route is now real -- C2 landed it,
+        # see scenario 14 below -- so those extra polls would just be noise,
+        # not the "hits a stub" reasoning an earlier draft of this comment
+        # gave when the route did not exist yet).
+        display_page.wait_for_function(
+            "document.getElementById('cd-idle') && document.getElementById('cd-idle').hidden === false",
+            timeout=10_000,
+        )
+        idle_after = display_page.evaluate("() => getComputedStyle(document.getElementById('cd-idle')).display")
+        complete_after = display_page.evaluate("() => getComputedStyle(document.getElementById('cd-complete')).display")
+        assert idle_after != "none", "idle screen must be showing again once the 8s auto-revert timer fires"
+        assert complete_after == "none", "the thank-you screen must be hidden again once its own timer fires"
+
+        display_page.close()
+
+    report.run(
+        "13 customer display: the CSS fix makes the cart/thank-you screens actually visible (#9)",
+        scenario_customer_display_shows_the_sale,
+        # The #11 relay poll this page starts on load (_startPolling(),
+        # customer-display.js) is a genuine 204 against the REAL route now
+        # (C2 landed it -- scenario 14 below exercises it directly), but
+        # display_page.close() above tears the page down mid-poll-cycle, and
+        # whichever fetch happens to be in flight at that instant surfaces as
+        # a request FAILURE (net::ERR_ABORTED, not a console error -- see the
+        # full run's own "FAILED NETWORK REQUESTS" section, which is separate
+        # bookkeeping from console_errors and does not fail a scenario). Kept
+        # defensive rather than tightened back to the default: a page torn
+        # down mid-request is not evidence of a product bug either way, and
+        # scenario 07 already establishes the "an intentional non-2xx is not
+        # a defect" precedent this shares.
+        strict_console=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Scenario 14 -- #11/I-1's REAL route, not the state-machine stub
+    # scenario 13 drives directly, AND (review fix, 2026-09-27, #9 test,
+    # medium -- see scenario 13's own addendum comment above) the real
+    # till-vs-display comparison item #9's scenario never had. C2's actual
+    # POST/GET /api/sub/retail/customer-display/state exists (grepped in
+    # retail_api.py before writing this). This scenario proves what
+    # scenario 13 structurally cannot: that a message crosses a genuine
+    # PROCESS/COOKIE boundary through the backend -- the way the real
+    # desktop app's second native window would (a separate pywebview
+    # profile, no BroadcastChannel at all; see #11's own comment in
+    # customer-display.js) -- AND that the figures a real till charges are
+    # the exact figures either delivery path (same-context popup +
+    # BroadcastChannel, or the cross-context relay) renders, never a value
+    # this test file made up itself.
+    #
+    # A SEPARATE, THIRD Backend/AURA_APP_DATA (never the suite's main
+    # `backend`, and never the joined-computer copy scenario 03b makes) is
+    # booted and licensed here, deliberately: ringing a real sale needs an
+    # activated licence (module docstring, "WHAT THIS DOES NOT COVER"), and
+    # the relay POST is NOT one of RETAIL_RESTRICTED_ALLOWLIST's seven codes
+    # (retail_api.py), so on a NOT_CONFIGURED/unlicensed install it is
+    # refused with 403 -- the same gate scenario 07 already proves
+    # deliberately denies a mutation. Seeding a licence into the suite's own
+    # `backend` would silently change what every OTHER scenario in this
+    # file proves (scenario 13's own comment says so explicitly); a
+    # dedicated, disposable third install, signed up and THEN licensed in
+    # the exact order contracts.md's harness note requires (sign up first
+    # while unlicensed, THEN seed_active_license, THEN reload -- seeding
+    # before signup makes the app think it JOINED a shop and it hangs on
+    # "Connecting to your shop..."), keeps every other scenario's fixture
+    # untouched.
+    #
+    # Review fix (2026-09-27, #11 test, high + medium deny-half): this
+    # scenario used to POST a hand-built fetch body straight from the till's
+    # page context -- never touching the till's real cart, its ~150ms
+    # debounce, _customerDisplayCartPayload() or the checkout ordering, so a
+    # real bug in any of those (exactly the shape of the #11(b) CRITICAL fix
+    # landed the same wave in subsystem-retail.js's
+    # _postToCustomerDisplayRelay: 'sale_complete' silently overwritten by
+    # the very next _clearCart() echo inside the SAME debounce window) would
+    # have shipped green here. The hand-built payload also set `shop.name`
+    # to a literal `null`, so #12-display's own fallback was never exercised
+    # by this route either. And the deny half used to run BEFORE anything
+    # had been posted to the relay at all, so "0 .cd-item-name" held whether
+    # or not auth worked -- moved to run AFTER a real cart is already the
+    # relay's latest state, which is the only ordering that actually proves
+    # the guard. Every money/name figure asserted below now comes from a
+    # REAL click on a REAL product tile, a REAL cash checkout, and the
+    # till's OWN `RetailSystem._fmt()`/`_lastSaleData` -- never invented by
+    # this file, matching this suite's MONEY DISCIPLINE convention.
+    # ------------------------------------------------------------------
+    def scenario_customer_display_relay_crosses_a_real_context():
+        from playwright.sync_api import expect  # local: see scenario 13's own deferred-import reasoning
+        sys.path.insert(0, str(REPO_ROOT))
+        from commercial_runtime.licensing_contracts.test_support import seed_active_license
+
+        relay_backend = Backend()
+        till_context = None
+        try:
+            relay_backend.start()
+            # page.context.browser, not a bare `browser` name -- this nested
+            # function is never handed one; it reaches the same running
+            # Chromium instance main() launched through the page it already
+            # has, exactly like scenario 03b's identical fix.
+            till_context = page.context.browser.new_context(viewport=VIEWPORT, reduced_motion="reduce")
+            till_page = till_context.new_page()
+            report.attach(till_page)
+
+            # Sign up FIRST, unlicensed -- see this scenario's own comment
+            # above for why the order matters. "Relay Test Co" (the Company
+            # Name typed here) is also #12-display's own proof further down:
+            # the I-3 read-time fallback this crew's review fix wires into
+            # customer-display.js's _loadBranding must surface THIS exact
+            # string on a fresh install that has never touched
+            # Settings > Branding.
+            till_page.goto(relay_backend.base_url, wait_until="domcontentloaded")
+            _dismiss_intro_overlay_if_present(till_page)
+            till_page.locator("#su-name").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            till_page.fill("#su-name", "Relay Test Admin")
+            till_page.fill("#su-company", "Relay Test Co")
+            till_page.fill("#su-email", "relay-admin@example.test")
+            till_page.fill("#su-pass", "RelayTest123!")
+            till_page.fill("#su-pass2", "RelayTest123!")
+            till_page.click("#su-btn")
+            till_page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+
+            # THEN seed an active licence directly into THIS dedicated
+            # install's own licensing.db, and reload. flask_guard.py's own
+            # docstring: it re-reads licensing state on every request rather
+            # than caching it, so no backend restart is needed -- only a
+            # reload, so this TAB's own client-side gates (mostly resolved
+            # once at init()) re-derive against the now-licensed state too.
+            seed_active_license(str(relay_backend.app_data_dir), product_code="AURA_RETAIL", platform="WINDOWS")
+            till_page.reload(wait_until="domcontentloaded")
+            till_page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+
+            # The signup computer auto-claims the admin-device role (item
+            # #20, a different crew's fix), so this banner should not appear
+            # here at all -- cleared defensively if it somehow does, the same
+            # shape retail_p0_till_e2e.py's own onboarding already uses, so
+            # it can never intercept a click meant for something underneath.
+            try:
+                banner = till_page.locator("#aura-admin-device-claim")
+                banner.wait_for(state="visible", timeout=3000)
+                till_page.get_by_role("button", name="Make this the admin device", exact=True).click()
+                banner.wait_for(state="detached", timeout=8000)
+            except Exception:  # noqa: BLE001
+                pass
+
+            # ---- seed two real, sellable products through the real HTTP
+            # API, the till's own authenticated session (same cookies the
+            # page itself holds) -- category_id, never a 'category' name key
+            # (contracts.md: create_product ignores that; this is the exact
+            # mistake #0's own item describes) -------------------------------
+            def till_api(method, path, body=None):
+                return till_page.evaluate(
+                    """({method, path, body}) => fetch(path, {
+                        method, credentials: 'include',
+                        headers: body !== null ? {'Content-Type': 'application/json'} : {},
+                        body: body !== null ? JSON.stringify(body) : undefined,
+                    }).then(r => r.json())""",
+                    {"method": method, "path": path, "body": body},
+                )
+
+            cat_resp = till_api("POST", "/api/sub/retail/categories", {"name": "Relay Test Category"})
+            cat_id = ((cat_resp or {}).get("data") or {}).get("id")
+            assert cat_id, f"category was not created: {cat_resp}"
+
+            def create_product(name, sku, price):
+                resp = till_api("POST", "/api/sub/retail/products", {
+                    "name": name, "sku": sku, "sell_price": price, "cost_price": round(price / 2, 3),
+                    "category_id": cat_id, "unit": "pc",
+                })
+                pid = ((resp or {}).get("data") or {}).get("id")
+                assert pid, f"product {name!r} was not created: {resp}"
+                till_api("POST", f"/api/sub/retail/products/{pid}/stock-adjust",
+                         {"quantity": 100, "reason": "p0 relay/popup e2e seed"})
+                return pid
+
+            create_product("Popup-proof Widget", "P0-C6-POPUP", 3.3)
+            create_product("Relay-proof Widget", "P0-C6-RELAY", 5.75)
+            till_api("POST", "/api/sub/retail/cash-sessions/open", {"opening_float": 50})
+
+            till_page.locator('.sub-nav-item[data-section="pos"]').click()
+            till_page.wait_for_selector("#pos-product-grid", timeout=DEFAULT_WAIT_MS)
+            till_page.wait_for_timeout(500)
+
+            # =============================================================
+            # #9 test (review fix, medium): the SAME-CONTEXT popup path.
+            # window.open()'s NAMED target ('auraCustomerDisplay',
+            # _openCustomerDisplay's own comment) means this popup shares
+            # BroadcastChannel with the till tab -- a genuinely different
+            # proof from the cross-context relay below, since BroadcastChannel
+            # and the relay poll are two independent delivery mechanisms that
+            # can each break on their own. Real product tile, real cash
+            # checkout, every figure read back from the till itself -- never
+            # a made-up total/sale_complete like the old scenario 13 injected.
+            # =============================================================
+            with till_page.expect_popup() as popup_info:
+                till_page.click("#pos-display-btn")
+            popup_page = popup_info.value
+            report.attach(popup_page)
+            popup_page.wait_for_function("typeof window.CustomerDisplay === 'object'", timeout=DEFAULT_WAIT_MS)
+
+            till_page.click('.pos-card:has-text("Popup-proof Widget")')
+            till_page.wait_for_timeout(500)  # > the 150ms relay debounce; BroadcastChannel is faster still
+            popup_total_fmt = till_page.evaluate("() => RetailSystem._fmt(RetailSystem._currentTotals.total)")
+
+            popup_item = popup_page.locator(".cd-item-name")
+            expect(popup_item).to_be_in_viewport(timeout=4000)
+            popup_hit = popup_page.evaluate(
+                """() => {
+                    const el = document.querySelector('.cd-item-name');
+                    const r = el.getBoundingClientRect();
+                    const hitEl = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                    return !!(hitEl && (hitEl === el || el.contains(hitEl)));
+                }"""
+            )
+            assert popup_hit, (
+                "elementFromPoint at the popup's item name centre did not land on it (or a descendant) -- "
+                "either something else is painted on top, or the #9 CSS specificity bug has it off-viewport again"
+            )
+            popup_idle_display = popup_page.evaluate("() => getComputedStyle(document.getElementById('cd-idle')).display")
+            assert popup_idle_display == "none", (
+                f"#cd-idle's COMPUTED display must be 'none' once a real cart is active -- was {popup_idle_display!r}"
+            )
+            assert popup_page.locator("#cd-total-value").inner_text() == popup_total_fmt, (
+                f"the popup's total ({popup_page.locator('#cd-total-value').inner_text()!r}) must equal the "
+                f"till's own RetailSystem._fmt(_currentTotals.total) ({popup_total_fmt!r}) -- a made-up total "
+                "cannot prove the till-to-display path (#9 review finding)"
+            )
+            report.shot(popup_page, shots, "14a_customer_display_popup_cart_visible")
+
+            till_page.click('.pos-pay-btn[data-method="cash"]')
+            till_page.fill("#pos-tendered", "50")
+            till_page.click("#pos-checkout-btn")
+            till_page.wait_for_selector("#ret-receipt-dialog", timeout=DEFAULT_WAIT_MS)
+            popup_change_fmt = till_page.evaluate(
+                "() => (RetailSystem._lastSaleData.change > 0) ? RetailSystem._fmt(RetailSystem._lastSaleData.change) : null"
+            )
+            assert popup_change_fmt, f"expected positive change from a 50-tendered cash sale, till reported {popup_change_fmt!r}"
+
+            expect(popup_page.locator("#cd-complete-heading")).to_be_in_viewport(timeout=4000)
+            expect(popup_page.locator("#cd-change-row")).to_be_in_viewport(timeout=4000)
+            assert popup_page.locator("#cd-change-value").inner_text() == popup_change_fmt, (
+                f"the popup's change ({popup_page.locator('#cd-change-value').inner_text()!r}) must equal the "
+                f"server's own change the till reported ({popup_change_fmt!r})"
+            )
+            report.shot(popup_page, shots, "14b_customer_display_popup_sale_complete")
+
+            till_page.click('#ret-receipt-dialog button:has-text("New Sale")')
+            till_page.wait_for_selector("#ret-receipt-dialog", state="detached", timeout=5000)
+            popup_page.close()
+
+            # =============================================================
+            # #11 test (review fix, high + medium deny-half): the CROSS-
+            # CONTEXT relay path -- its own cookie jar, no BroadcastChannel
+            # bridge to the till's tab at all, exactly like a genuinely
+            # separate native pywebview window (#11's own comment in
+            # customer-display.js).
+            # =============================================================
+            till_page.click('.pos-card:has-text("Relay-proof Widget")')
+            till_page.wait_for_timeout(500)  # > the 150ms relay debounce -- a real 'cart' message is now the relay's latest state
+            relay_total_fmt = till_page.evaluate("() => RetailSystem._fmt(RetailSystem._currentTotals.total)")
+
+            # ---- deny half: run AFTER the cart above is already on the
+            # relay (review fix -- the old ordering ran this BEFORE anything
+            # had been posted, so "0 .cd-item-name" held whether or not auth
+            # worked). Over at least 2 poll cycles (600ms interval -- 1.5s
+            # covers the immediate tick plus two more), a cookie-less context
+            # must still get 401, render nothing, and stay idle. -----------
+            anon_context = page.context.browser.new_context(viewport=VIEWPORT)
+            try:
+                anon_page = anon_context.new_page()
+                report.attach(anon_page)
+                statuses = []
+                anon_page.on(
+                    "response",
+                    lambda r: statuses.append(r.status) if "/customer-display/state" in r.url else None,
+                )
+                anon_page.goto(f"{relay_backend.base_url}/static/customer-display.html", wait_until="domcontentloaded")
+                anon_page.wait_for_function("typeof window.CustomerDisplay === 'object'", timeout=DEFAULT_WAIT_MS)
+                anon_page.wait_for_timeout(1500)
+                assert 401 in statuses, (
+                    f"a cookie-less context never got a 401 from the relay's GET .../state route, even though a "
+                    f"REAL cart is already sitting on the relay -- observed statuses: {statuses!r}"
+                )
+                anon_item_count = anon_page.locator(".cd-item-name").count()
+                assert anon_item_count == 0, (
+                    f"the cookie-less display rendered cart content it was never authorized to see "
+                    f"(anon_item_name_count_after_cart_posted={anon_item_count})"
+                )
+                anon_idle_display = anon_page.evaluate(
+                    "() => getComputedStyle(document.getElementById('cd-idle')).display"
+                )
+                assert anon_idle_display != "none", (
+                    f"the cookie-less display must stay on its idle screen -- #cd-idle computed display was "
+                    f"{anon_idle_display!r}"
+                )
+            finally:
+                anon_context.close()
+
+            # ---- allow half: the till's own cookies cross into a genuinely
+            # separate context, and the relay renders the real cart within
+            # ~2s (the review finding's own wording; the poll interval is
+            # 600ms, so a 4000ms ceiling leaves several real polls of margin
+            # without pretending this is instant) ---------------------------
+            till_cookies = till_context.cookies()
+            display_context = page.context.browser.new_context(viewport=VIEWPORT)
+            try:
+                display_context.add_cookies(till_cookies)
+                display_page = display_context.new_page()
+                report.attach(display_page)
+                display_page.goto(f"{relay_backend.base_url}/static/customer-display.html", wait_until="domcontentloaded")
+                display_page.wait_for_function("typeof window.CustomerDisplay === 'object'", timeout=DEFAULT_WAIT_MS)
+
+                relay_item = display_page.locator(".cd-item-name")
+                expect(relay_item).to_be_in_viewport(timeout=4000)
+                assert relay_item.inner_text() == "Relay-proof Widget", (
+                    f"the relay-fed context rendered the wrong item: {relay_item.inner_text()!r}"
+                )
+                relay_hit = display_page.evaluate(
+                    """() => {
+                        const el = document.querySelector('.cd-item-name');
+                        const r = el.getBoundingClientRect();
+                        const hitEl = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                        return !!(hitEl && (hitEl === el || el.contains(hitEl)));
+                    }"""
+                )
+                assert relay_hit, "elementFromPoint at the relay context's item name centre did not land on it"
+                assert display_page.locator("#cd-total-value").inner_text() == relay_total_fmt, (
+                    f"the relay context's total ({display_page.locator('#cd-total-value').inner_text()!r}) must "
+                    f"equal the till's own RetailSystem._fmt(_currentTotals.total) ({relay_total_fmt!r})"
+                )
+                # #12-display: this fresh install's own signup Company Name
+                # (I-3's read-time fallback) must reach a context that never
+                # ran BroadcastChannel at all -- through either the relay's
+                # own shop payload or the branding fetch, both of which now
+                # carry the fallback (#12-display's own review fix in
+                # customer-display.js's _loadBranding).
+                expect(display_page.locator("#cd-shop-name")).to_have_text("Relay Test Co", timeout=4000)
+                report.shot(display_page, shots, "14c_customer_display_relay_cross_context")
+
+                till_page.click('.pos-pay-btn[data-method="cash"]')
+                till_page.fill("#pos-tendered", "50")
+                till_page.click("#pos-checkout-btn")
+                till_page.wait_for_selector("#ret-receipt-dialog", timeout=DEFAULT_WAIT_MS)
+                relay_change_fmt = till_page.evaluate(
+                    "() => (RetailSystem._lastSaleData.change > 0) ? RetailSystem._fmt(RetailSystem._lastSaleData.change) : null"
+                )
+                assert relay_change_fmt, f"expected positive change from a 50-tendered cash sale, till reported {relay_change_fmt!r}"
+
+                expect(display_page.locator("#cd-complete-heading")).to_be_in_viewport(timeout=4000)
+                expect(display_page.locator("#cd-change-row")).to_be_in_viewport(timeout=4000)
+                assert display_page.locator("#cd-change-value").inner_text() == relay_change_fmt, (
+                    f"the relay context's change ({display_page.locator('#cd-change-value').inner_text()!r}) must "
+                    f"equal the server's own change the till reported ({relay_change_fmt!r})"
+                )
+                report.shot(display_page, shots, "14d_customer_display_relay_sale_complete")
+
+                till_page.click('#ret-receipt-dialog button:has-text("New Sale")')
+                till_page.wait_for_selector("#ret-receipt-dialog", state="detached", timeout=5000)
+            finally:
+                display_context.close()
+        finally:
+            if till_context is not None:
+                till_context.close()
+            relay_backend.stop()
+            relay_backend.cleanup_app_data()
+
+    report.run(
+        "14 customer-display: real till-to-display proof over BOTH delivery paths -- same-context popup + "
+        "BroadcastChannel (#9) and cross-context relay (#11/I-1) -- cookie-less context 401s AFTER a real cart "
+        "is posted, till-cookie context renders live and matches the till's own total/change/shop-name (#12)",
+        scenario_customer_display_relay_crosses_a_real_context,
+        # The DENY half of this scenario deliberately drives a cookie-less
+        # context at two login-gated GETs (the branding fetch and the relay
+        # poll) specifically so they 401 -- that IS the assertion being
+        # proved, not a side effect of it. Same "an intentional non-2xx is
+        # not a defect" shape scenario 07 already established. A popup/page
+        # torn down mid-poll-cycle (popup_page.close() above) can also
+        # surface as a request FAILURE (net::ERR_ABORTED) rather than a
+        # console error -- scenario 13's own comment already established
+        # that this is not evidence of a product bug either way.
+        strict_console=False,
     )
 
 

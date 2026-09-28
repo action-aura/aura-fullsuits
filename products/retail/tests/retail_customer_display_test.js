@@ -16,10 +16,30 @@
  * (never a real `setTimeout` wait) so the 8-second auto-revert is proven
  * without the suite taking 8 seconds.
  *
+ * WHAT THIS HARNESS CANNOT SEE (AUDIT #9 -- read before trusting a green run
+ * here): the fake `makeFakeElement()`/`makeFakeDocument()` DOM below has NO
+ * layout engine and NO CSS cascade at all -- `hidden` is just a JS boolean
+ * property on a plain object, with no notion of specificity, `!important`,
+ * or which of two competing rules actually wins. Before 2026-09-27 this
+ * suite passed 12 of 12 checks while `.cd-screen[hidden]{display:none}` (no
+ * `!important`) lost to the ID rules `#cd-idle/#cd-active/#cd-complete
+ * {display:flex}` in every REAL browser, so all three screens rendered
+ * stacked and simultaneously "visible" -- the state machine this file
+ * exercises was entirely correct the whole time; the screen the state
+ * machine drove was invisible. A green run here proves the STATE MACHINE
+ * (which screen the code THINKS is showing); it can never prove or refute
+ * the CSS defect itself. That proof -- to_be_in_viewport, elementFromPoint,
+ * and #cd-idle's own COMPUTED style, none of which exist in a `vm` sandbox
+ * with no renderer -- lives in retail_smoke_e2e.py's real-Chromium scenario,
+ * and only there. `testCdScreenHiddenRuleUsesImportant` below is a cheap,
+ * static, non-browser backstop for the exact regression (checks the source
+ * text of the rule itself), not a substitute for that real-browser proof.
+ *
  * MUTATION-PROVEN, PER CLAUDE.md's engineering standard: every guard below
  * (BroadcastChannel absent/throws, empty-cart-during-thank-you ignored,
- * non-empty-cart-during-thank-you interrupts, the 8s timer actually firing)
- * is exercised via the state that TRIGGERS it, not merely inferred from the
+ * non-empty-cart-during-thank-you interrupts, the 8s timer actually firing,
+ * the #11 relay poll's seq dedupe, the #12 shop-name fallback latch) is
+ * exercised via the state that TRIGGERS it, not merely inferred from the
  * source existing.
  *
  * MONEY: this file also grep-proves that neither customer-display.js nor
@@ -80,6 +100,18 @@ function makeFakeElement() {
   return { hidden: undefined, textContent: '', innerHTML: '', src: '', title: '' };
 }
 
+// Records every attribute _applyShopMeta() (#11) sets on <html> (lang/dir/
+// data-theme) so a test can assert on them directly, without needing a real
+// DOM's own attribute storage.
+function makeFakeDocumentElement() {
+  const attrs = {};
+  return {
+    _attrs: attrs,
+    setAttribute(name, value) { attrs[name] = value; },
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
+  };
+}
+
 function makeFakeDocument() {
   const elements = {};
   ELEMENT_IDS.forEach((id) => { elements[id] = makeFakeElement(); });
@@ -87,6 +119,7 @@ function makeFakeDocument() {
     _elements: elements,
     readyState: 'complete',   // boot() runs synchronously, no DOMContentLoaded wait
     title: '',
+    documentElement: makeFakeDocumentElement(),
     getElementById(id) { return elements[id] || null; },
     addEventListener() {},   // readyState is never 'loading' here, so unused -- present so a call never throws
   };
@@ -126,11 +159,48 @@ function makeFakeBroadcastChannelClass(posted) {
   };
 }
 
+// A queue-free fake fetch: `handler(url)` decides the response per call, so
+// a single fake can serve BOTH the one-time branding GET and the repeated
+// #11 relay poll GET by inspecting the URL, the same way the real backend
+// would route them to two different handlers. Returns a real Promise (this
+// is plain Node/V8, not a fake) so `.then()` chains in the real source run
+// unmodified; tests await `Promise.resolve().then(...)` (a microtask flush)
+// to let them settle -- see AWAIT_MICROTASKS below.
+function makeFakeFetch(handler) {
+  const calls = [];
+  const fn = function (url) {
+    calls.push(url);
+    const r = handler(url, calls.length);
+    return Promise.resolve(r);
+  };
+  return { fn, calls };
+}
+
+function jsonResponse(status, body) {
+  return { ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) };
+}
+
+// Waits for every already-queued promise job to drain -- including ones
+// created INSIDE the vm sandbox (a separate V8 context, so counting a fixed
+// number of `await Promise.resolve()` hops on the HOST's own Promise is not
+// reliable: `fetch().then(r => r.json()).then(apply)` adopts a nested
+// thenable, which costs a variable number of microtask turns). `setImmediate`
+// runs in the event loop's check phase, strictly after the ENTIRE microtask
+// queue has drained across every realm in this isolate, so one call is
+// sufficient regardless of how deep a chain is. Still never a real timer
+// wait -- same "fake but deterministic" spirit as makeFakeTimers().
+function flushMicrotasks() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 // Builds a fresh vm context, runs the REAL customer-display.js in it, and
 // returns { sandbox, CustomerDisplay, timers, posted, channelInstance }.
 // `withChannel` toggles whether BroadcastChannel exists at all -- the one
-// thing customer-display.js is required to survive without.
-function loadCustomerDisplay({ withChannel }) {
+// thing customer-display.js is required to survive without. `fetchImpl`, if
+// given, becomes `global.fetch` inside the sandbox (see makeFakeFetch) --
+// left undefined by default, matching the ORIGINAL harness's deliberate
+// choice to leave fetch absent for tests that have nothing to do with it.
+function loadCustomerDisplay({ withChannel, fetchImpl }) {
   const document = makeFakeDocument();
   const timers = makeFakeTimers();
   const posted = [];
@@ -143,13 +213,18 @@ function loadCustomerDisplay({ withChannel }) {
     clearTimeout: timers.clearTimeout,
     setInterval: timers.setInterval,
     clearInterval: timers.clearInterval,
-    // fetch deliberately absent: _loadBranding()'s own guard
-    // (`typeof global.fetch !== 'function'`) covers that path, and the
-    // live-browser proof in the task report already exercises the real
-    // branding fetch end to end -- this harness stays synchronous on purpose.
+    // fetch deliberately absent unless a test supplies one: _loadBranding()'s
+    // and _startPolling()'s own guards (`typeof global.fetch !== 'function'`)
+    // cover that path, and the live-browser proof in the task report already
+    // exercises the real branding fetch end to end -- this harness stays
+    // synchronous on purpose for every test that has nothing to do with
+    // fetch at all.
   };
   if (withChannel) {
     sandbox.BroadcastChannel = makeFakeBroadcastChannelClass(posted);
+  }
+  if (fetchImpl) {
+    sandbox.fetch = fetchImpl;
   }
   vm.createContext(sandbox);
   vm.runInContext(CD_SOURCE, sandbox, { filename: 'customer-display.js' });
@@ -319,8 +394,22 @@ function testCustomerDisplayNeverReformatsMoney() {
 
 function testPayloadBuilderUsesTillsOwnFormatter() {
   const src = fs.readFileSync(RETAIL_JS, 'utf8');
-  const start = src.indexOf('_customerDisplayCartPayload()');
-  assert.ok(start !== -1, '_customerDisplayCartPayload() not found in subsystem-retail.js');
+  // Found-a-real-bug-in-this-test fix (2026-09-27): `indexOf('_customerDisplayCartPayload()')`
+  // alone matches the FIRST occurrence of that literal text, which is not
+  // guaranteed to be the method's own DEFINITION -- `_postToCustomerDisplayRelay`
+  // (the #11(b) relay-hold fix) now CALLS `this._customerDisplayCartPayload()`
+  // earlier in the file than the method is defined
+  // (`this._postDisplayRelayNow(this._customerDisplayCartPayload())`), so this
+  // search landed inside THAT caller's body instead and counted its zero
+  // `this._fmt(` calls -- a false failure with no real defect behind it, not a
+  // weakened assertion. The method DEFINITION is the unique
+  // `_customerDisplayCartPayload() {` (the literal call sites end in `);`, never
+  // in ` {`), so anchor on that instead of the bare call text. Mutation-proof:
+  // reverting this one line back to the bare `'_customerDisplayCartPayload()'`
+  // search reproduces the exact false RED this comment describes, on the
+  // CURRENT file, with no change to the payload builder itself.
+  const start = src.indexOf('_customerDisplayCartPayload() {');
+  assert.ok(start !== -1, '_customerDisplayCartPayload() definition not found in subsystem-retail.js');
   const body = src.slice(start, src.indexOf('\n  },', start));
   const fmtCalls = (body.match(/this\._fmt\(/g) || []).length;
   assert.ok(fmtCalls >= 4,
@@ -396,6 +485,290 @@ function testCustomerDisplayHtmlLinksTokensAndBothStylesheets() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #12-display (P0 review-fix, 2026-09-27) -- the static <title> shown before
+// ANY source has answered (a fresh Edge/browser popup, no session, or the
+// branding fetch still pending) must be neutral, never the vendor's own
+// "Aura Retail". _applyShopName (customer-display.js) already overwrites
+// this once a real shop name arrives; this pins what shows before that.
+// ─────────────────────────────────────────────────────────────────────────────
+function testCustomerDisplayHtmlTitleIsNeutral() {
+  const html = fs.readFileSync(CD_HTML, 'utf8');
+  const titleMatch = html.match(/<title>([^<]*)<\/title>/);
+  assert.ok(titleMatch, 'no <title> tag found in customer-display.html');
+  assert.strictEqual(titleMatch[1], 'Customer Display',
+    'customer-display.html\'s static <title> must be the neutral "Customer Display" -- what the title bar ' +
+    '(browser tab, or the Edge/Chrome --app fallback popup) shows before any shop name is known -- and must ' +
+    'never carry the vendor\'s own name.');
+  console.log('PASS: customer-display.html\'s static <title> is the neutral "Customer Display", no vendor name');
+}
+
+function testMutationProvedNeutralTitle() {
+  const html = fs.readFileSync(CD_HTML, 'utf8');
+  const anchor = '<title>Customer Display</title>';
+  const hits = html.split(anchor).length - 1;
+  assert.strictEqual(hits, 1,
+    `Mutation anchor occurs ${hits} time(s), expected exactly 1: ${JSON.stringify(anchor)} -- re-anchor this proof.`);
+  const mutated = html.replace(anchor, '<title>Aura Retail — Customer Display</title>');
+  const titleMatch = mutated.match(/<title>([^<]*)<\/title>/);
+  assert.ok(titleMatch);
+  let threw = null;
+  try {
+    assert.strictEqual(titleMatch[1], 'Customer Display');
+  } catch (e) {
+    threw = e;
+  }
+  assert.ok(threw,
+    'MUTATION SURVIVED -- reintroducing the vendor-name <title> ("Aura Retail — Customer Display") did not ' +
+    'fail the neutral-title check above, so it is not actually watching for the regression.');
+  // Re-prove against the real, unmutated file.
+  testCustomerDisplayHtmlTitleIsNeutral();
+  console.log(`PASS: reverting to the vendor-name <title> is caught  [caught: ${String(threw.message).slice(0, 90)}]`);
+  console.log('PASS: guard passes again against the restored, unmutated customer-display.html');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #9 -- static backstop for the CSS specificity trap. NOT a substitute for
+// the real-browser proof (see the module docstring): this only pins the
+// SOURCE TEXT of the rule, so it cannot see the cascade actually resolving,
+// but it is cheap, runs in every `node` invocation of this suite (no
+// Chromium needed), and catches the exact "someone 'cleaned up' the
+// !important" regression immediately.
+// ─────────────────────────────────────────────────────────────────────────────
+function testCdScreenHiddenRuleUsesImportant() {
+  const html = fs.readFileSync(CD_HTML, 'utf8');
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(styleMatch, 'no <style> block found in customer-display.html');
+  // Comments stripped FIRST: the comment directly above the real rule quotes
+  // the buggy selector verbatim ('.cd-screen[hidden]{display:none}', with no
+  // !important, as the thing to never revert to) -- a naive regex over the
+  // raw block matches that quoted text first and reports the fix as present
+  // when it is actually only being described. Same shape as
+  // stripJsCommentsForScan() below, for CSS block comments (CSS has no line
+  // comment syntax to also strip).
+  const style = styleMatch[1].replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  const ruleMatch = style.match(/\.cd-screen\[hidden\]\s*\{([^}]*)\}/);
+  assert.ok(ruleMatch, '.cd-screen[hidden] rule not found in the <style> block');
+  assert.ok(/display\s*:\s*none\s*!important/.test(ruleMatch[1]),
+    '.cd-screen[hidden] must be `display: none !important` -- without !important this rule (specificity ' +
+    '0,2,0) loses to the ID rules #cd-idle/#cd-active/#cd-complete{display:flex} (specificity 1,0,0) in ' +
+    'every real browser, and all three screens render stacked on top of each other (AUDIT #9)'
+  );
+  console.log('PASS: .cd-screen[hidden] still carries the !important that beats the ID display rules');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #12 -- the shop-name fallback. Never the vendor name "Aura Retail"; a
+// neutral bilingual placeholder until a real name arrives from EITHER
+// source (branding fetch or relay `shop` payload), and once a real name
+// has arrived, a later "no name" answer from the OTHER source must not
+// blank it back out.
+// ─────────────────────────────────────────────────────────────────────────────
+function testNeutralWelcomeShownBeforeAnySourceAnswers() {
+  // No fetch at all in this sandbox (matches "offline, or a build predating
+  // the branding route") -- init() must still paint the neutral fallback
+  // synchronously, never the empty string the markup ships with.
+  const { document } = loadCustomerDisplay({ withChannel: false });
+  assert.strictEqual(elText(document, 'cd-shop-name'), 'Welcome / أهلاً وسهلاً',
+    'with no shop name known from any source yet, cd-shop-name must show the neutral bilingual greeting');
+  assert.notStrictEqual(elText(document, 'cd-shop-name'), 'Aura Retail',
+    'the vendor\'s own name must never be the fallback (AUDIT #12)');
+  console.log('PASS: with no shop name known yet, the idle screen shows the neutral bilingual greeting, never the vendor name');
+}
+
+async function testRealShopNameFromBrandingLatchesOverLaterNull() {
+  // Review fix (2026-09-27, #12-display, medium): this fixture used to send
+  // {branding_business_name:'Sweets & Co'} -- a shape the REAL server NEVER
+  // sends. branding_settings_get (retail_api.py) always returns the RAW
+  // `branding_business_name` (empty on a fresh signup-only install) PLUS a
+  // separate, already-resolved `business_name` (the I-3 fallback: branding
+  // if set, else the signup Company Name) and `business_name_source`. The
+  // old fixture could not see the #12-display bug (customer-display.js
+  // reading `b.branding_business_name` alone) because it put the real name
+  // in the field the bug already read -- ENGINEERING.md failure shape 2, the
+  // fixture manufacturing the exact state that hides the defect. This is the
+  // shape a shop that only typed a Company Name at signup (branding never
+  // touched) actually gets back.
+  const fake = makeFakeFetch((url) => {
+    if (String(url).indexOf('/settings/branding/logo') !== -1) return jsonResponse(200, { data: {} });
+    if (String(url).indexOf('/settings/branding') !== -1) {
+      return jsonResponse(200, {
+        status: 'success',
+        data: { branding_business_name: '', business_name: 'Sweets & Co', business_name_source: 'signup', has_logo: false },
+      });
+    }
+    // The #11 relay poll fires too (init() starts both). This test is about
+    // the BRANDING fallback (#12-display), not the relay itself, so it just
+    // answers the poll with a plain 404 stub -- any non-2xx/204 answer here
+    // must not throw and must not touch the name branding already supplied.
+    // P0 review-fix (2026-09-27): the relay route is landed now (see the
+    // #11/I-1 block header below for what that changes and does not change).
+    return jsonResponse(404, {});
+  });
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();
+  // MUTATION-PROVEN (revert customer-display.js's `_loadBranding` back to
+  // `self._applyShopName(b.branding_business_name)` alone, with THIS real
+  // server shape in the fixture, and this assertion goes red -- the idle
+  // screen shows the neutral 'Welcome / أهلاً وسهلاً' placeholder instead,
+  // exactly the live bug the review finding measured):
+  assert.strictEqual(elText(document, 'cd-shop-name'), 'Sweets & Co',
+    'a signup-only shop (branding_business_name empty, business_name from the I-3 signup fallback) must show its own name, never the neutral placeholder');
+  assert.strictEqual(document.title, 'Sweets & Co — Customer Display',
+    'the document title must follow the resolved shop name');
+
+  // MUTATION-SHAPED PROOF, in code rather than by reverting a line: a LATER
+  // relay tick that has no name yet (shop.name === null, e.g. #11 landed but
+  // this particular company has never set one) must not blank the real name
+  // back out to the neutral placeholder -- that would be a visible
+  // regression on every poll tick after the one real name arrived.
+  CustomerDisplay._applyShopMeta({ name: null, lang: null, theme: null });
+  assert.strictEqual(elText(document, 'cd-shop-name'), 'Sweets & Co',
+    'a later "no name yet" answer from the relay must not overwrite a real name already shown');
+  console.log('PASS: a real shop name from branding is shown and title-cased, and survives a later null from the relay');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #11/I-1 -- the backend relay poll. P0 review-fix (2026-09-27): the route
+// IS landed (retail_api.py: customer_display_set_state / _get_state /
+// _status) -- this comment used to say C2 had not shipped it yet, and that
+// stopped being true. Every check below still runs against a STUBBED fetch
+// on purpose, the same as every other check in this file: this is a `node`
+// vm unit-test harness with no Flask process behind it (see the module
+// docstring's own "WHY A VM HARNESS" section), not an integration suite. The
+// stub is written to the SAME I-1 contract the real route now implements
+// (200 body / 204 / 401 / seq, dedupe-by-seq), never a reimplementation of
+// it. The REAL, non-stubbed round trip -- an actual till POST answered by an
+// actual display GET, through the booted app -- is proven separately in
+// retail_smoke_e2e.py's scenario 14; nothing here needs to change once that
+// suite runs either, since the two cover different halves of the same
+// contract (this file: the display's OWN handling of what it is told; that
+// scenario: that the till and the server actually tell it the truth).
+// ─────────────────────────────────────────────────────────────────────────────
+async function testPollingAppliesShopMetaOnceAndDedupesBySeq() {
+  const seenUrls = [];
+  const fake = makeFakeFetch((url) => {
+    seenUrls.push(String(url));
+    if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    // Every poll call in THIS test answers with the SAME seq (3) -- proving
+    // dedupe requires the display to see a repeat, not just a 204.
+    return jsonResponse(200, {
+      seq: 3,
+      message: { type: 'cart', items: [{ name: 'Mug', quantity: 1, unitPrice: 'JD 2.000', lineTotal: 'JD 2.000' }],
+        subtotal: 'JD 2.000', discount: null, tax: 'JD 0.000', total: 'JD 2.000' },
+      shop: { name: 'Relay Shop', lang: 'ar', theme: 'sand' },
+    });
+  });
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();   // settles the branding call + the very first poll tick init() already queued
+
+  assert.strictEqual(elText(document, 'cd-shop-name'), 'Relay Shop', 'the relay\'s shop.name must be applied');
+  assert.strictEqual(document.documentElement.getAttribute('data-theme'), 'sand', 'the relay\'s shop.theme must be applied to <html data-theme>');
+  assert.strictEqual(document.documentElement.getAttribute('lang'), 'ar', 'the relay\'s shop.lang must be applied to <html lang>');
+  assert.strictEqual(document.documentElement.getAttribute('dir'), 'rtl', '"ar" must set dir="rtl"');
+  assert.strictEqual(elText(document, 'cd-total-value'), 'JD 2.000', 'the relayed cart message must render through the same _onMessage() the channel uses');
+
+  const seqAfterFirstApply = CustomerDisplay._lastSeq;
+  assert.strictEqual(seqAfterFirstApply, 3, 'the display must remember the seq it just applied');
+
+  // The exact regression this proves: WITHOUT the `data.seq <= self._lastSeq`
+  // guard, calling _pollOnce() again against the SAME seq=3 response would
+  // re-render unconditionally every ~600ms even though nothing changed.
+  document.getElementById('cd-shop-name').textContent = 'TAMPERED';   // if the next tick re-applies, this proves it did
+  await CustomerDisplay._pollOnce();
+  await flushMicrotasks();
+  assert.strictEqual(document.getElementById('cd-shop-name').textContent, 'TAMPERED',
+    'a poll response repeating the SAME seq must be ignored entirely (dedupe by seq) -- it must not even re-run _applyShopMeta()');
+  assert.strictEqual(CustomerDisplay._lastSeq, 3, '_lastSeq must not move for a repeated/non-newer seq');
+  console.log(`PASS: the relay poll applies shop.name/lang/theme and dedupes a repeated seq (urls polled: ${seenUrls.length})`);
+}
+
+async function testPollingAdvancesOnANewerSeq() {
+  let call = 0;
+  const fake = makeFakeFetch((url) => {
+    if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    call++;
+    if (call === 1) {
+      return jsonResponse(200, { seq: 1, message: { type: 'cart', items: [], subtotal: 'JD 0.000', discount: null, tax: 'JD 0.000', total: 'JD 0.000' }, shop: null });
+    }
+    return jsonResponse(200, {
+      seq: 2,
+      message: { type: 'cart', items: [{ name: 'Pen', quantity: 3, unitPrice: 'JD 0.500', lineTotal: 'JD 1.500' }],
+        subtotal: 'JD 1.500', discount: null, tax: 'JD 0.000', total: 'JD 1.500' },
+      shop: null,
+    });
+  });
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();   // consumes the seq=1 tick init() already queued
+  assert.strictEqual(CustomerDisplay._lastSeq, 1);
+  await CustomerDisplay._pollOnce();
+  await flushMicrotasks();
+  assert.strictEqual(CustomerDisplay._lastSeq, 2, 'a genuinely newer seq must advance _lastSeq and apply');
+  assert.strictEqual(elText(document, 'cd-total-value'), 'JD 1.500', 'the newer message must actually render');
+  console.log('PASS: a newer seq is applied and advances _lastSeq');
+}
+
+async function testPollingSurvivesMissingRouteAndUnauthenticatedContext() {
+  // Two non-2xx/204 answers the poll must survive without throwing or
+  // treating either as a real message: 401 (a genuinely separate,
+  // cookie-less window/profile -- the deny half of I-1's own test list: "a
+  // context without cookies gets 401 and stays idle") and 404. P0
+  // review-fix (2026-09-27): 404 no longer means "the route is missing from
+  // THIS build" -- it is landed (see the #11/I-1 block header above) and the
+  // real route never itself answers 404 -- kept here as the defensive case
+  // for a display polling an OLDER backend build that predates the route (a
+  // display and its till are not guaranteed to be upgraded atomically) or
+  // any other unrecognised status the display must not choke on.
+  for (const status of [404, 401]) {
+    const fake = makeFakeFetch((url) => {
+      if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+      return jsonResponse(status, {});
+    });
+    const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+    await flushMicrotasks();
+    assert.strictEqual(elHidden(document, 'cd-idle'), false, `a ${status} from the relay must leave the idle screen showing, not throw`);
+    assert.strictEqual(CustomerDisplay._lastSeq, 0, `a ${status} must not be mistaken for a real seq`);
+  }
+  // A network-level rejection (route genuinely unreachable) must be equally survivable.
+  const throwingFetch = () => Promise.reject(new Error('ECONNREFUSED (simulated)'));
+  const { document: doc2 } = loadCustomerDisplay({ withChannel: false, fetchImpl: throwingFetch });
+  await flushMicrotasks();
+  assert.strictEqual(elHidden(doc2, 'cd-idle'), false, 'a rejected fetch (network error) must not throw or blank the screen');
+  console.log('PASS: a missing route (404), no session (401), and a network error all leave the display idle rather than throwing');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #8/I-2 -- promotions row and the struck-through original line price.
+// ─────────────────────────────────────────────────────────────────────────────
+function testPromotionsRowShowsOnlyWhenPresent() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: true });
+  CustomerDisplay._onMessage({
+    type: 'cart',
+    items: [{ name: 'Shampoo', quantity: 1, unitPrice: 'JD 4.500', lineTotal: 'JD 4.050', originalLineTotal: 'JD 4.500' }],
+    subtotal: 'JD 12.300', promotions: 'JD 0.450', discount: null, tax: 'JD 0.000', total: 'JD 11.850',
+  });
+  assert.strictEqual(elHidden(document, 'cd-promotions-row'), false, 'the Promotions row must show when msg.promotions is set');
+  assert.strictEqual(elText(document, 'cd-promotions-value'), '-JD 0.450',
+    'the promotions row is prefixed with a literal minus, same convention as the discount row');
+
+  const itemsHtml = document.getElementById('cd-items').innerHTML;
+  assert.ok(itemsHtml.includes('cd-item-original'), 'a line with originalLineTotal must render the struck-through original price');
+  assert.ok(itemsHtml.indexOf('JD 4.500') < itemsHtml.indexOf('JD 4.050'),
+    'the ORIGINAL (struck-through) price must appear before the post-promotion price on the line');
+
+  // The allow-half's mirror: no promotions field at all -> row stays hidden,
+  // exactly like the pre-existing discount row's own contract.
+  CustomerDisplay._onMessage({
+    type: 'cart',
+    items: [{ name: 'Plain Item', quantity: 1, unitPrice: 'JD 1.000', lineTotal: 'JD 1.000' }],
+    subtotal: 'JD 1.000', promotions: null, discount: null, tax: 'JD 0.000', total: 'JD 1.000',
+  });
+  assert.strictEqual(elHidden(document, 'cd-promotions-row'), true, 'the Promotions row must hide again when msg.promotions is null');
+  const itemsHtml2 = document.getElementById('cd-items').innerHTML;
+  assert.ok(!itemsHtml2.includes('cd-item-original'), 'a line with no originalLineTotal must not render a struck-through price');
+  console.log('PASS: the Promotions row and the struck-through original line price show only when the till actually sends them');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PER-TEST ISOLATION -- a flat sequence reports only the first failure and
 // hides the rest as "not run"; this runs every check regardless.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -412,22 +785,35 @@ const CHECKS = [
   ['the POS button lives inside the focus-guarded row', testPosButtonLivesInsideTheFocusGuardedRow],
   ['every new locale key exists in both catalogs', testEveryNewLocaleKeyExistsInBothCatalogs],
   ['customer-display.html wires tokens/RTL/theme correctly', testCustomerDisplayHtmlLinksTokensAndBothStylesheets],
+  ['#12-display customer-display.html <title> is neutral, no vendor name', testCustomerDisplayHtmlTitleIsNeutral],
+  ['#12-display neutral <title> is mutation-proved', testMutationProvedNeutralTitle],
+  ['#9 .cd-screen[hidden] rule still carries !important', testCdScreenHiddenRuleUsesImportant],
+  ['#12 neutral bilingual welcome shown before any source answers', testNeutralWelcomeShownBeforeAnySourceAnswers],
+  ['#12 a real branding name latches over a later null from the relay', testRealShopNameFromBrandingLatchesOverLaterNull],
+  ['#11 the relay poll applies shop meta once and dedupes by seq', testPollingAppliesShopMetaOnceAndDedupesBySeq],
+  ['#11 the relay poll advances on a genuinely newer seq', testPollingAdvancesOnANewerSeq],
+  ['#11 the relay poll survives a missing route, 401, and a network error', testPollingSurvivesMissingRouteAndUnauthenticatedContext],
+  ['#8 the Promotions row and struck-through original price show only when sent', testPromotionsRowShowsOnlyWhenPresent],
 ];
 
-let failures = 0;
-for (const [name, fn] of CHECKS) {
-  try {
-    fn();
-  } catch (e) {
-    failures++;
-    console.error(`FAIL: ${name}`);
-    console.error(e && e.message ? e.message : e);
+async function runAll() {
+  let failures = 0;
+  for (const [name, fn] of CHECKS) {
+    try {
+      await fn();   // sync tests return undefined, which `await` resolves through immediately
+    } catch (e) {
+      failures++;
+      console.error(`FAIL: ${name}`);
+      console.error(e && e.message ? e.message : e);
+    }
+  }
+
+  if (failures > 0) {
+    console.error(`\n${failures}/${CHECKS.length} check(s) failed.`);
+    process.exit(1);
+  } else {
+    console.log(`\nPASS: retail_customer_display_test.js — ${CHECKS.length} checks`);
   }
 }
 
-if (failures > 0) {
-  console.error(`\n${failures}/${CHECKS.length} check(s) failed.`);
-  process.exit(1);
-} else {
-  console.log(`\nPASS: retail_customer_display_test.js — ${CHECKS.length} checks`);
-}
+runAll();

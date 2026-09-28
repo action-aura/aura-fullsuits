@@ -3,7 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aura Retail — Customer Display</title>
+<!-- P0 review-fix (2026-09-27, #12-display) -- was "Aura Retail — Customer
+     Display", the VENDOR's own name in the title bar of a screen a shopper
+     reads as THIS shop's own signage, for as long as no shop name is known
+     yet (a fresh install, no session, or the branding fetch still pending).
+     _applyShopName() (customer-display.js) already overwrites this with
+     "<shop name> — Customer Display" the instant a real name arrives; this
+     is only what shows before that, and it must never be the vendor's own
+     brand. -->
+<title>Customer Display</title>
 <link rel="icon" type="image/svg+xml" href="brand/aura-app-icon.svg">
 <script>
   // Same boot-theme contract as index.html (read ONLY 'aura_theme_v2',
@@ -49,7 +57,22 @@
   #cd-root { min-block-size: 100vh; display: flex; flex-direction: column; }
 
   .cd-screen { min-block-size: 100vh; box-sizing: border-box; }
-  .cd-screen[hidden] { display: none; }
+  /* AUDIT #9 -- do not "clean up" this !important away again.
+     '.cd-screen[hidden]{display:none}' has specificity (0,2,0) (an
+     attribute selector plus a class) and LOSES to the ID rules below
+     (#cd-idle/#cd-active/#cd-complete{display:flex}, specificity (1,0,0)),
+     which win regardless of source order. With the plain (un-!important)
+     rule, every `hidden` screen still computes to `display:flex`: all three
+     sections render stacked inside body{overflow:hidden} -- idle at y=0,
+     the live cart at y=768, the thank-you screen at y=1536 -- so the DOM
+     always holds the right items and total and nobody can ever see them.
+     Proven both ways in a real browser (not inferred): injecting this
+     !important shows the cart/thank-you screens; removing it brings the
+     idle screen back regardless of which `hidden` attribute is set.
+     Appending a second rule at the SAME specificity changes nothing -- the
+     ID rules still win on specificity, not on source order -- so the fix
+     has to raise this rule's own weight, not add another one beside it. */
+  .cd-screen[hidden] { display: none !important; }
 
   /* ── Idle: shop identity + welcome line ──────────────────────────────────── */
   #cd-idle {
@@ -95,6 +118,16 @@
   .cd-item-total {
     font-size: var(--text-size-display); font-weight: var(--text-weight-bold);
     white-space: nowrap; flex-shrink: 0;
+  }
+  /* #8 -- the pre-promotion price, struck through, sits beside the
+     post-promotion one so the shopper can see the saving on the LINE it
+     actually applied to, not just as a lump sum below. Only rendered when
+     the till sends items[].originalLineTotal (null on an unpromoted line --
+     see customer-display.js's _renderCart). */
+  .cd-item-original {
+    text-decoration: line-through; font-weight: var(--text-weight-medium);
+    color: var(--text-dim); font-size: var(--text-size-subhead);
+    margin-inline-end: var(--space-tight);
   }
   #cd-summary {
     border-block-start: 1px solid var(--border-soft);
@@ -153,7 +186,13 @@
   <div id="cd-root">
     <section id="cd-idle" class="cd-screen" aria-live="polite">
       <img id="cd-logo" alt="" hidden>
-      <h1 id="cd-shop-name">Aura Retail</h1>
+      <!-- #12 -- NEVER hardcode the vendor's own name ("Aura Retail") here
+           as a fallback: it is filled in by customer-display.js on load
+           (branding, then the signup-name read-time fallback via I-3) or by
+           the relay payload's shop.name (I-1/#11); until either arrives it
+           shows a neutral bilingual greeting instead -- see
+           CustomerDisplay._applyShopName(). -->
+      <h1 id="cd-shop-name"></h1>
       <p id="cd-welcome">Welcome!</p>
     </section>
 
@@ -163,6 +202,15 @@
         <div class="cd-row" id="cd-subtotal-row">
           <span id="cd-subtotal-label" class="cd-row-label"></span>
           <span id="cd-subtotal-value" class="money"></span>
+        </div>
+        <!-- #8 -- the total promotion saving, ahead of any MANUAL discount
+             (I-2: msg.promotions is promotion savings only; msg.discount is
+             manual-only now that the two are no longer folded together).
+             Hidden whenever the till sends no promotions field (null),
+             same "own row, own visibility" shape as every row below it. -->
+        <div class="cd-row" id="cd-promotions-row" hidden>
+          <span id="cd-promotions-label" class="cd-row-label"></span>
+          <span id="cd-promotions-value" class="money"></span>
         </div>
         <div class="cd-row" id="cd-discount-row" hidden>
           <span id="cd-discount-label" class="cd-row-label"></span>
