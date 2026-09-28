@@ -6160,3 +6160,59 @@ not lost if P0 stalls:
 Schema claims for P1b onward (registry v9, DEFAULT-BRANCH-UID, the P2 books
 version, CASH-SESSION-SYNC...) are NOT made by this entry; each will be
 reserved here by name before its dispatch.
+
+## 2026-09-28 — Retail UX P0 cashed in (feat/retail-ux-p0), no schema change
+
+All 21 P0 items landed on `feat/retail-ux-p0` (not merged, not pushed),
+built by ten crews on disjoint files over three rounds, each round checked
+by adversarial verifiers on the real app and a serial runner that reverted
+every fix line to prove its test goes red (round 1: 62 proven, 2: 93, 3: 50;
+every vacuous/untested guard found was replaced by a real one in the next
+round). Commits are one per area (backend, i18n, shell, modals, display,
+desktop, till, harness) and each says why.
+
+Measured, not asserted:
+- Canonical suite `products/run_all_tests.py retail`: baseline 8cf5ffc3 296
+  files / 2 failing. Last full run on the P0 tree (2026-09-28 11:49): 303
+  files, 300 passed, 3 failed. Two were ours and are fixed since, each
+  rerun green on its own (retail_attribution_i18n_test.py: two new strings
+  catalogued; retail_branding_receipt_test.js: mutation anchor moved to the
+  new signup-name header line, plus an allow-half check). The third,
+  `retail_payment_requantize_migration_test.py` ("written against v40;
+  constant is 41"), fails identically on the baseline -- pre-existing.
+  `retail_owner_endpoint_baked_url_test.py` failed on the baseline worktree
+  only (it reads that worktree's trust anchor); it passes here. The full
+  suite was NOT rerun after those two fixes.
+- Real-browser suites (not collected by the canonical runner, system
+  Python): retail_smoke_e2e.py passed on the final tree. Last green runs of
+  the others: retail_p0_till_e2e.py 42/42 (round-3 verifier),
+  retail_p0_modals_e2e.py 49/49 (round-2 final fixer, after its verifier
+  had found 8 failures), retail_p0_shell_css_e2e.py 4/4 and
+  scripts/ui-sweep/retail_ui_sweep.py exit 0 with 216 screenshots (round-2
+  verifier). A final rerun of those four on this exact tree was stopped by
+  Claude Code for low memory and has NOT been redone -- rerun them before
+  merging.
+- Customer display: dead because `.cd-screen[hidden]` lost to the
+  `#cd-*{display:flex}` ID rules (the live cart rendered at y=768 under
+  overflow:hidden); plus the desktop app sends window.open to the system
+  browser. Proven fixed on a frozen exe built from this tree.
+- The two non-cosmetic P0 findings named above are fixed and tested both
+  ways (29 owner-only routes; next sale starts clean).
+
+Recorded gaps (decisions or next phases, not forgotten):
+- Session lifetime on the till: the launcher clears cookies at launch by
+  default (AURA_TILL_REMEMBER_LOGIN=1 opts in) because Flask's session is
+  31 days permanent; a bounded PERMANENT_SESSION_LIFETIME + idle lock is the
+  owner's decision (P3 PIN/lock).
+- JoFotara still does not transmit; every surface says so.
+- "Main computer" is known only on the signup computer until DEVICE-SYNC
+  (Track S); joined computers keep the claim bar until P1a's person gate.
+- The signup-name branding fallback is device-local (config.json) until the
+  name syncs; a joined device shows the neutral welcome.
+- Receipt per-line figure is the server's taxable line total; the till shows
+  gross less promotion (totals agree; exclusive-tax per-line presentation
+  differs). create_sale still accepts any payment_method string.
+- First-run "default GST rate" question moved to P1b's setup checklist: the
+  settings write needs the licence capability a fresh install lacks.
+- The printed-receipt/customer-screen hardware photo on the owner's own
+  second monitor and printer is still the owner's check.
