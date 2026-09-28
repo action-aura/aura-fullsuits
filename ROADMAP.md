@@ -6254,3 +6254,67 @@ P1a ("everyone in their place, and WhatsApp you can find") opened on
 `feat/retail-ux-p0` the same day. No schema change is planned; the shop's
 customer-facing WhatsApp number for the idle-screen QR is a
 `retail_settings` key, which needs no migration.
+
+## 2026-09-28 — audit: what the 22 skills installed today would have changed (read-only, nothing fixed here)
+
+Eight read-only crews applied each new skill to the parts of the project it
+could have touched. Kept here because several findings are real work items;
+the rest is recorded so nobody re-runs the same audit.
+
+Real findings (act on these):
+- **DESIGN.md was never given to the P0 or P1a crews.** The 563-line design
+  brief at the repo root was written 2026-09-07 for AI agents, yet neither
+  phase's crew contract pointed at it. Found by the stitch-design-taste audit.
+  Fixed for P1a fix rounds (contract updated, verifiers told to check against
+  it); every future crew contract must name it.
+- **The website promises "no subscription, ever"** in `website/js/content.js`
+  (EN lines 12, 96, 100, 247, 253, 258, 301; AR 310-515) and
+  `website/pricing.html:86`. The owner decided on 2026-09-28 that some features
+  will cost extra, so this must be reworded BEFORE any add-on is sold. Not
+  changed: the new wording depends on prices the owner has not set yet.
+- **Owner money columns are `Numeric(12, 2)`** (`owner/app/models/catalog.py`,
+  `cash_closing.py`, ...) while the Jordanian dinar has 3 decimals (fils). The
+  same class of bug as the retail epsilon fixed 2026-09-18. Checked on this
+  branch only; `owner/` here lags the Owner feature branches, so verify there
+  first. Prices are whole dinars today, so cash counts with fils are the exposure.
+- Owner FKs `customers.assigned_support_staff_id` and
+  `converted_from_lead_id` are unindexed (supabase-postgres-best-practices);
+  re-run the missing-FK-index query on the Owner branch.
+- web-design-guidelines on P1a: the identity-chip menu (role="menu") has no
+  arrow-key navigation (new today). Older, not from P1a: modal focus is not
+  trapped, some titled dialogs lack aria-labelledby, and some inline-styled
+  table inputs fall below the 44px touch target.
+- writing-guidelines: about ten P1a strings can be warmer or shorter (e.g.
+  "That does not look like a WhatsApp number", "not available on this
+  build"). Its suggestions that swap in "sync"/"device" were rejected: they
+  add jargon for a non-technical owner.
+- redesign-existing-projects: pure-black shadows on the warm sand theme;
+  chart cards stack border + shadow + fill; some empty states give no next step.
+
+Skills that fit, for later:
+- imagegen-frontend-mobile: the KMP app has no design images at all, only
+  code; draw its screens for owner review before more mobile UI work.
+- brandkit: a one-page brand board for pitching/onboarding. It does not
+  close any of the four brand-kit v2 gaps (those are generator/code debt).
+- deploy-to-vercel / vercel-cli-with-tokens: `website/` is static and its
+  README already lists Vercel as a host. Not a fit for Owner (long-running
+  Flask + Postgres). Publishing is the owner's call.
+- vercel-composition-patterns (idea only): `subsystem-retail.js` is now
+  ~18,300 lines; splitting it by screen is a later phase, not P1a.
+- vercel-react-view-transitions (idea only): `document.startViewTransition`
+  works without React; owner screens only, never where it could slow the till.
+
+Skills that do not fit (and would have hurt):
+- design-taste-frontend, high-end-visual-design, industrial-brutalist-ui,
+  gpt-taste: built for marketing pages (heavy motion, asymmetry, photography,
+  CRT/luxury looks); their own authors exclude dashboards. They contradict
+  "Operational Calm" for a money-handling till. gpt-taste could suit the
+  marketing site only.
+- vercel-react-best-practices, vercel-react-native-skills, vercel-optimize:
+  there is no React, React Native or Next.js anywhere in the repo.
+- minimalist-ui, full-output-enforcement: already matched by existing
+  design tokens/tests and ENGINEERING.md §8.
+
+Audit caveat: the React-patterns crew read the MAIN checkout's stale
+2,080-line `subsystem-retail.js` instead of this worktree's; its line numbers
+are wrong, and only its two transferable ideas above are kept.
