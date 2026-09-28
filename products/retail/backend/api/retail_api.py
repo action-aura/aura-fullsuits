@@ -15090,24 +15090,198 @@ def customers_receivables():
     conn.close()
     return jsonify({'status': 'success', 'total_receivable': _money(total, currency), 'data': [dict(r) for r in rows]})
 
-@retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
-@mt_login_required
-@mt_require_subsystem('retail')
-# Deliberately UNGATED, and deliberately asymmetric with supplier_statement
-# below, which does carry retail.reports. This is ONE named customer's
-# ledger, and a cashier taking a payment at the till has to be able to see
-# what that customer owes -- customer_payment() right below is a till
-# operation. suppliers_payables / supplier_statement are the other direction:
-# procurement, money the shop owes, nothing a till ever needs. The whole
-# debtor BOOK (customers_receivables above) stays on retail.reports for the
-# same reason -- one customer's balance is a till fact, the list of everyone
-# who owes the shop money is a report.
-def customer_statement(cust_id):
-    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
-    cust = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers WHERE id=? AND company_id=?",
-                        (cust_id, cid)).fetchone()
-    if not cust:
-        conn.close(); return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
+# ── FIFO ageing of ONE customer's debt (Phase 1a, crew D round 6) ─────────────
+#
+# WHY THIS EXISTS. The same debt showed two numbers. `/reports/aging` bucketed
+# a customer's WHOLE balance by the age of their single oldest sale that still
+# had `total - amount_paid > eps` -- but `sales.amount_paid` is IMMUTABLE and
+# a later account payment never touches it, so a 100-day charge that was paid
+# off 50 days ago still read "100 days" for the 10-day charge sitting on top of
+# it. And the till's Remind button ran its own client-side FIFO that dropped
+# prepayments: pay 20, then buy 30, and the customer owes 10 but the reminder
+# said 30. Two allocations, neither of them the ledger's.
+#
+# THE ONE ALLOCATION. It is computed from the SAME events `customer_statement`
+# lists (`_customer_statement_events`, one function, both callers), so the
+# ageing and the statement cannot drift apart the way the two screens did:
+#
+#   1. Events run oldest first. A charge (+) opens a remainder. A payment or a
+#      return settlement (-) is applied to the OLDEST open remainder first.
+#   2. A payment that finds no open charge is CARRIED FORWARD as credit and
+#      consumed by the next charge -- never dropped. Dropping it is exactly the
+#      "pay 20, buy 30, owe 30" bug.
+#   3. A `reversal` (a bounced cheque putting debt back on the books) is a +1
+#      row that is NOT a charge. It is treated as a NEW charge at its own date.
+#      That is a modelling choice, not a fact: the money it restores was
+#      really owed since the ORIGINAL charge it had settled, and FIFO cannot
+#      know which one that was. It errs toward "younger", i.e. it never
+#      overstates how long the shop has been waiting.
+#
+# THE INVARIANT, and what closes the last gap. sum(open remainders) minus the
+# carried-forward credit equals `customers.credit_balance` -- exactly, because
+# of the residual step below. `credit_balance` is written only by
+# `_adjust_credit` (five callers, enumerated in customer_statement's closing
+# NOTE), and all five have an event. What has NO event is a `credit_balance`
+# written some other way: a fixture's direct UPDATE, a data import, or a pre-v36
+# return backfilled by `_migrate_add_return_settlement_split`. There is no
+# customer opening-balance writer in this codebase (only the GL's
+# `opening_balance` journal). Rather than fudge that, the difference between the
+# stored balance and the events' net is applied as ONE undated pseudo-event at
+# the END of the timeline (a charge if positive, a payment if negative) and is
+# SURFACED as `unbooked_amount`. An undated remainder buckets as `current` --
+# the same age-0 answer the old report gave a debtor it could not date -- and
+# is excluded from `oldest_unpaid_*` / `overdue_amount`: the shop cannot claim
+# a debt is late when nothing says when it began.
+#
+# THE THRESHOLD. The aging report's "current" bucket is age <= 0 days, so the
+# "due" line is 0 days: a remainder is OVERDUE from its first full day
+# (age >= 1). It is a named constant so the report's bucket edge and the
+# `overdue_amount` cut cannot be changed apart.
+#
+# AGE IS IN THE SHOP'S BUSINESS DAYS. Both "today" and each event's date are
+# taken on the shop's clock (`metrics.business_day`/`business_now`: the
+# configured IANA zone, less the trading day's start hour), not UTC and not a
+# naive `datetime.now()`. A sale rung at 22:30Z in a UTC+3 shop belongs to the
+# NEXT calendar day; measured in UTC it is a day older than the shop thinks it
+# is. This is the one place either half of that is computed for ageing.
+# `payments` carry no UTC instant (only the device's wall-clock `created_at`),
+# so a payment is dated by that wall clock -- the best the ledger holds.
+#
+# This server formats no day strings ("3 days overdue"): the client owns the
+# wording, and with it the Arabic plural.
+_AGING_CURRENT_MAX_DAYS = 0
+_AGING_BUCKET_EDGES = ((_AGING_CURRENT_MAX_DAYS, 'current'), (30, '1_30'), (60, '31_60'), (90, '61_90'))
+_AGING_BUCKET_KEYS = ('current', '1_30', '31_60', '61_90', '90_plus')
+_FIFO_QUANT = Decimal('0.000001')
+
+
+def _aging_bucket(age_days):
+    for edge, key in _AGING_BUCKET_EDGES:
+        if age_days <= edge:
+            return key
+    return '90_plus'
+
+
+def _fifo_dec(value):
+    return Decimal(str(value or 0)).quantize(_FIFO_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _event_business_date(ev, boundary):
+    """The shop-business date one ledger event belongs to, or None if the row
+    carries no readable time at all (it is then aged as `current`, the answer
+    the old report gave anything it could not date). Same clock as
+    metrics._local_ts/_business_ts: a configured zone converts the true
+    instant `created_at_utc` and falls back to the device's own wall clock;
+    an unconfigured shop uses the wall clock."""
+    shift = timedelta(hours=boundary.day_start_hour)
+    raw = ev.get('created_at_utc')
+    if boundary.zone is not None and raw:
+        try:
+            inst = datetime.fromisoformat(str(raw).strip().replace('Z', '+00:00'))
+            if inst.tzinfo is None:
+                inst = inst.replace(tzinfo=timezone.utc)
+            return (inst.astimezone(boundary.zone).replace(tzinfo=None) - shift).date()
+        except (ValueError, TypeError):
+            pass
+    wall = str(ev.get('created_at') or raw or '').strip().replace('T', ' ')
+    for fmt, width in (('%Y-%m-%d %H:%M:%S', 19), ('%Y-%m-%d', 10)):
+        try:
+            return (datetime.strptime(wall[:width], fmt) - shift).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _shop_today(conn, cid):
+    """Today's date on the SHOP's business clock. Reads `datetime.now` through
+    this module's own import (so a test that freezes it governs the answer)
+    and passes an AWARE instant, so the conversion into the shop's zone never
+    depends on which zone the machine running the query happens to be in."""
+    return metrics.business_now(conn, cid, datetime.now(timezone.utc)).date()
+
+
+def _fifo_open_charges(events, credit_balance):
+    """Pure FIFO allocation. `events` are the statement's events, oldest first,
+    each with `amount`, `sign`, `ref` and a `date` (a business date or None).
+    Returns (open_remainders, carried_credit, unbooked): the still-unpaid part
+    of each charge oldest first, the credit a payment left over with no charge
+    to meet, and the signed difference between the stored `credit_balance` and
+    what the events add up to. Decimal throughout -- exact, so no epsilon is
+    needed inside the allocation itself."""
+    timeline = [(1 if int(e.get('sign', 1)) > 0 else -1, _fifo_dec(e['amount']), e.get('ref'), e.get('date'))
+                for e in events]
+    net = sum((s * a for s, a, _r, _d in timeline), Decimal('0'))
+    unbooked = _fifo_dec(credit_balance) - net
+    if unbooked != 0:
+        timeline.append((1 if unbooked > 0 else -1, abs(unbooked), None, None))
+    open_, credit = [], Decimal('0')
+    for sign, amt, ref, day in timeline:
+        if amt <= 0:
+            continue
+        if sign > 0:
+            used = min(credit, amt)
+            credit -= used
+            amt -= used
+            if amt > 0:
+                open_.append({'ref': ref, 'date': day, 'amount': amt})
+        else:
+            while amt > 0 and open_:
+                head = open_[0]
+                take = min(head['amount'], amt)
+                head['amount'] -= take
+                amt -= take
+                if head['amount'] <= 0:
+                    open_.pop(0)
+            credit += amt
+    return open_, credit, unbooked
+
+
+def _customer_aging(conn, cid, cust_id, credit_balance, eps, boundary):
+    """One customer's FIFO allocation, from the statement's own events."""
+    return _customer_aging_from_events(_customer_statement_events(conn, cid, cust_id, eps), credit_balance, boundary)
+
+
+def _customer_aging_from_events(events, credit_balance, boundary):
+    """Same allocation for a caller that already holds the statement's events
+    (customer_statement does), so it neither re-queries nor risks reading a
+    different set than the list it prints. Copies each event: the caller's
+    rows are not touched."""
+    dated = [dict(e, date=_event_business_date(e, boundary)) for e in events]
+    open_, credit, unbooked = _fifo_open_charges(dated, credit_balance)
+    return {'open': open_, 'carried_credit': credit, 'unbooked': unbooked}
+
+
+def _remainder_age(remainder, today):
+    return 0 if remainder['date'] is None else max((today - remainder['date']).days, 0)
+
+
+def _aging_fields(view, credit_balance, eps, today, currency):
+    """`oldest_unpaid_date` / `oldest_unpaid_amount` / `days_overdue` /
+    `overdue_amount` for one customer -- the four fields the till's Remind
+    button and the statement read. A customer in credit (balance not above
+    epsilon) has none: `oldest_unpaid_*` are None and the rest 0."""
+    fields = {'oldest_unpaid_date': None, 'oldest_unpaid_amount': None, 'days_overdue': 0, 'overdue_amount': 0.0}
+    if float(credit_balance or 0) <= eps:
+        return fields
+    dated = [r for r in view['open'] if r['date'] is not None]
+    oldest = next((r for r in dated if r['amount'] > Decimal(str(eps))), None)
+    if oldest is not None:
+        fields['oldest_unpaid_date'] = oldest['date'].isoformat()
+        fields['oldest_unpaid_amount'] = _money(oldest['amount'], currency)
+        fields['days_overdue'] = _remainder_age(oldest, today)
+    fields['overdue_amount'] = _money(
+        sum((r['amount'] for r in dated if _remainder_age(r, today) > _AGING_CURRENT_MAX_DAYS), Decimal('0')),
+        currency)
+    return fields
+
+
+def _customer_statement_events(conn, cid, cust_id, _eps):
+    """Every ledger event that moved one customer's `credit_balance`, oldest
+    first, each carrying its own `sign`. The ONE source both `customer_statement`
+    (the running-balance list) and the FIFO ageing below read, so the two cannot
+    disagree about what happened. Rows from `sales`/`returns` also carry
+    `created_at_utc` (the true instant) for the ageing's shop-date conversion;
+    the statement's response never exposes it."""
     # THE CHARGE IS THE AR THIS SALE ACTUALLY CREATED -- term for term the
     # figure create_sale credited: `balance_due = amount_due_after_points -
     # paid`, where `amount_due_after_points = total - points_redeemed_amount`
@@ -15136,9 +15310,8 @@ def customer_statement(cust_id):
     # `_money_epsilon(currency)` create_sale uses -- both were a hardcoded
     # 0.005 (half a CENT, in a currency whose minor unit is a fil) until the
     # epsilon sweep moved every such gate at once.
-    _eps = _money_epsilon(_company_currency(conn, cid))
     charges = conn.execute(
-        "SELECT sale_number AS ref, created_at, "
+        "SELECT sale_number AS ref, created_at, created_at_utc, "
         "(total - COALESCE(points_redeemed_amount,0) - amount_paid) AS amount, 'charge' AS kind, 1 AS sign "
         "FROM sales WHERE company_id=? AND customer_id=? "
         "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > ?",
@@ -15190,7 +15363,7 @@ def customer_statement(cust_id):
     # verified before choosing this shape over the alternative of billing the
     # whole sale and keeping the tender line.
     receipts = conn.execute(
-        "SELECT id, reference AS ref, created_at, amount, direction, "
+        "SELECT id, reference AS ref, created_at, NULL AS created_at_utc, amount, direction, "
         "CASE WHEN direction='in' THEN 'payment' ELSE 'reversal' END AS kind, "
         "CASE WHEN direction='in' THEN -1 ELSE 1 END AS sign "
         "FROM payments WHERE company_id=? AND party_type='customer' AND party_id=? "
@@ -15228,13 +15401,13 @@ def customer_statement(cust_id):
     # the only status create_return ever writes, and the same filter its own
     # prior-claims query applies.
     settlements = conn.execute(
-        "SELECT r.return_number AS ref, r.created_at AS created_at, "
+        "SELECT r.return_number AS ref, r.created_at AS created_at, r.created_at_utc AS created_at_utc, "
         "COALESCE(r.ar_forgiven_amount,0) AS amount, 'return_forgiven' AS kind, -1 AS sign "
         "FROM returns r JOIN sales s ON s.id = r.sale_id "
         "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
         "AND COALESCE(r.ar_forgiven_amount,0) > ? "
         "UNION ALL "
-        "SELECT r.return_number AS ref, r.created_at AS created_at, "
+        "SELECT r.return_number AS ref, r.created_at AS created_at, r.created_at_utc AS created_at_utc, "
         "COALESCE(r.store_credit_amount,0) AS amount, 'return_credit' AS kind, -1 AS sign "
         "FROM returns r JOIN sales s ON s.id = r.sale_id "
         "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
@@ -15242,6 +15415,32 @@ def customer_statement(cust_id):
         (cid, cid, cust_id, _eps, cid, cid, cust_id, _eps)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in receipts] + [dict(r) for r in settlements]
     events.sort(key=lambda e: e.get('created_at') or '')
+    return events
+
+
+@retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+# Deliberately UNGATED, and deliberately asymmetric with supplier_statement
+# below, which does carry retail.reports. This is ONE named customer's
+# ledger, and a cashier taking a payment at the till has to be able to see
+# what that customer owes -- customer_payment() right below is a till
+# operation. suppliers_payables / supplier_statement are the other direction:
+# procurement, money the shop owes, nothing a till ever needs. The whole
+# debtor BOOK (customers_receivables above) stays on retail.reports for the
+# same reason -- one customer's balance is a till fact, the list of everyone
+# who owes the shop money is a report.
+def customer_statement(cust_id):
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    cust = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers WHERE id=? AND company_id=?",
+                        (cust_id, cid)).fetchone()
+    if not cust:
+        conn.close(); return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
+    _eps = _money_epsilon(_company_currency(conn, cid))
+    # The three event queries, and every comment explaining why each one reads
+    # the way it does, live in `_customer_statement_events` above -- moved, not
+    # rewritten, so the FIFO ageing reads the SAME events as this statement.
+    events = _customer_statement_events(conn, cid, cust_id, _eps)
     # Read ONCE, applied to every figure this statement returns -- same rule
     # `_cash_session_report` and create_sale already follow: a running
     # balance quantized coarser than the per-event amounts it is built from
@@ -15274,7 +15473,6 @@ def customer_statement(cust_id):
         run = run + (amt if int(e.get('sign', 1)) > 0 else -amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
                     'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
-    conn.close()
     # NOTE, REWRITTEN once the three defects above were fixed. The previous
     # text said `balance` and the final `running_balance` "can ALREADY
     # disagree", named the return-settlement gap as the reason, and warned
@@ -15312,7 +15510,17 @@ def customer_statement(cust_id):
     #     them now read `_money_epsilon(currency)` -- half the shop's own
     #     minor unit -- rather than the 2dp-era `0.005` they carried when
     #     this NOTE was first written.
-    return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency)}})
+    # FIFO ageing of THIS customer's debt, from the same `events` the list above
+    # was built from (see `_customer_aging`). `oldest_unpaid_date/_amount`,
+    # `days_overdue` and `overdue_amount` are what the till's Remind button and
+    # the printed statement must agree with `/reports/aging` on -- one
+    # allocation, three readers. Additive: the wire shape Android's
+    # StatementEvent parses is untouched.
+    boundary = metrics.business_day(conn, cid)
+    aging = _aging_fields(_customer_aging_from_events(events, cust['credit_balance'], boundary),
+                          cust['credit_balance'], _eps, _shop_today(conn, cid), currency)
+    conn.close()
+    return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency), **aging}})
 
 @retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
 @mt_login_required
@@ -16235,11 +16443,48 @@ def daily_cash():
 @mt_require_subsystem('retail')
 @mt_require_capability(CAP_REPORTS)
 def aging_report():
-    """Simplified aging: buckets each party's balance by the age of its oldest unpaid
-    document. Structured so a richer FIFO allocation can replace it without API change."""
+    """Aging. RECEIVABLE is a per-customer FIFO allocation (see the block above
+    `_customer_statement_events`): payments and return settlements are applied
+    oldest charge first, a payment with nothing to pay is carried forward as
+    credit, and each OPEN REMAINDER lands in its own age bucket, aged in the
+    shop's business days. `data` is unchanged -- the pure bucket map -- and
+    the new per-customer detail is the sibling `customers` list. A customer
+    is overdue from age >= 1 day (`_AGING_CURRENT_MAX_DAYS` is the report's
+    own "current" edge).
+
+    PAYABLE is still the simplified rule -- the whole balance aged by the
+    oldest unpaid purchase order -- because no FIFO allocation was asked for
+    on the supplier side; the response shape is the same minus `customers`."""
     cid = _cid(); kind = request.args.get('type', 'receivable')
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     buckets = {'current': 0.0, '1_30': 0.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+    if kind != 'payable':
+        _eps = _money_epsilon(_company_currency(conn, cid))
+        currency = _company_currency(conn, cid)
+        boundary = metrics.business_day(conn, cid)
+        today = _shop_today(conn, cid)
+        debtors = conn.execute(
+            "SELECT id, name, phone, credit_balance FROM customers "
+            "WHERE company_id=? AND COALESCE(credit_balance,0)>? ORDER BY credit_balance DESC, name",
+            (cid, _eps)).fetchall()
+        totals = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
+        rows = []
+        for d in debtors:
+            view = _customer_aging(conn, cid, d['id'], d['credit_balance'], _eps, boundary)
+            mine = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
+            for r in view['open']:
+                mine[_aging_bucket(_remainder_age(r, today))] += r['amount']
+            for k in _AGING_BUCKET_KEYS:
+                totals[k] += mine[k]
+            rows.append({'id': d['id'], 'name': d['name'], 'phone': d['phone'],
+                         'balance': _money(d['credit_balance'], currency),
+                         'buckets': {k: _money(v, currency) for k, v in mine.items()},
+                         'unbooked_amount': _money(view['unbooked'], currency),
+                         **_aging_fields(view, d['credit_balance'], _eps, today, currency)})
+        conn.close()
+        return jsonify({'status': 'success', 'type': kind,
+                        'data': {k: _money(v, currency) for k, v in totals.items()},
+                        'customers': rows})
     today = datetime.now()
     # One epsilon for both halves of this report and for BOTH of its queries:
     # "does this party owe anything" and "which of their documents is still
@@ -16249,12 +16494,8 @@ def aging_report():
     # `_money_epsilon`, and a hardcoded 0.005 in a query string is how this
     # family drifted apart before the sweep.
     _eps = _money_epsilon(_company_currency(conn, cid))
-    if kind == 'payable':
-        parties = conn.execute("SELECT id, credit_balance FROM suppliers WHERE company_id=? AND COALESCE(credit_balance,0)>?", (cid, _eps)).fetchall()
-        oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>?"
-    else:
-        parties = conn.execute("SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>?", (cid, _eps)).fetchall()
-        oldest_sql = "SELECT MIN(created_at) FROM sales WHERE company_id=? AND customer_id=? AND (total-amount_paid)>?"
+    parties = conn.execute("SELECT id, credit_balance FROM suppliers WHERE company_id=? AND COALESCE(credit_balance,0)>?", (cid, _eps)).fetchall()
+    oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>?"
     for p in parties:
         oldest = conn.execute(oldest_sql, (cid, p['id'], _eps)).fetchone()[0]
         days = 0

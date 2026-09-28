@@ -308,6 +308,42 @@ def _rect(page, selector: str) -> dict:
     )
 
 
+#: contract.md rule 6b. "A person can see this" is NOT `is_visible()`, a
+#: non-zero `getBoundingClientRect()` or `wait_for(state="visible")`: all three
+#: pass for an element parked at left:-9999px or hidden behind another layer.
+#: What a person sees is (1) the whole box inside the viewport and (2) THIS
+#: element, not something painted over it, at the centre of that box.
+#: `scroll` uses scrollIntoView first -- for content a person reaches by
+#: scrolling (report cards below the fold); the test still fails if, even
+#: after scrolling, the box is not fully inside the viewport.
+_SEEN_JS = (
+    "([sel, nth, scroll]) => { const el = document.querySelectorAll(sel)[nth]; "
+    "if (!el) return {found: false}; "
+    "if (scroll) el.scrollIntoView({block: 'center', inline: 'center'}); "
+    "const r = el.getBoundingClientRect(); "
+    "const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight; "
+    "const cx = r.left + r.width / 2, cy = r.top + r.height / 2; "
+    "const inside = r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= vw && r.bottom <= vh; "
+    "const hit = inside ? document.elementFromPoint(cx, cy) : null; "
+    "return {found: true, inside: inside, cx: cx, cy: cy, "
+    "hits_it: !!hit && (hit === el || el.contains(hit)), "
+    "hit: hit ? (hit.tagName + '#' + hit.id + '.' + hit.className) : null, "
+    "rect: {left: r.left, top: r.top, right: r.right, bottom: r.bottom, vw: vw, vh: vh}}; }"
+)
+
+
+def _assert_seen(page, selector: str, what: str, nth: int = 0, scroll: bool = False) -> dict:
+    """Assert a person could SEE `selector`: whole box inside the viewport AND
+    elementFromPoint at its centre hits it (rule 6b). Returns the probe."""
+    probe = page.evaluate(_SEEN_JS, [selector, nth, scroll])
+    assert probe["found"], f"{what}: no element matches {selector!r} (index {nth})"
+    assert probe["inside"], f"{what}: box is not fully inside the viewport (or is zero-size): {probe['rect']}"
+    assert probe["hits_it"], (
+        f"{what}: something else is painted at its centre -- elementFromPoint is {probe['hit']!r}"
+    )
+    return probe
+
+
 def _run_all(results: Results, screenshots_dir: Path) -> None:
     from playwright.sync_api import sync_playwright
 
@@ -400,6 +436,9 @@ def _scenario_idle_screen_with_number_and_promotion(results: Results, browser, s
             r = _rect(display, "#cd-shop-name")
             assert r and r["width"] > 0 and r["height"] > 0, f"#cd-shop-name has zero size: {r}"
             assert "P1a QR Test Co" in r["text"], f"shop name not rendered, got {r['text']!r}"
+            # Rule 6b: the name being in the DOM with a size is not the name
+            # being on the customer's screen.
+            _assert_seen(display, "#cd-shop-name", "the shop name on the idle screen")
 
         results.run("D1a idle screen shows the shop's own name, non-zero size", check_shop_name_rendered)
 
@@ -423,6 +462,7 @@ def _scenario_idle_screen_with_number_and_promotion(results: Results, browser, s
                 f"promotion text must name its own category, never a bare shop-wide-reading claim: {r['text']!r}"
             )
             assert "15" in r["text"], f"promotion text missing the discount percentage: {r['text']!r}"
+            _assert_seen(display, "#cd-promo", "the promotion banner on the idle screen")
 
         results.run(
             "D1b idle screen shows a category-scoped promotion WITH its category name (F7 follow-up)",
@@ -435,6 +475,9 @@ def _scenario_idle_screen_with_number_and_promotion(results: Results, browser, s
             )
             src = display.locator("#cd-whatsapp-qr").get_attribute("src")
             assert src and src.startswith("data:image/svg+xml;base64,"), f"QR img has no data URI src: {src!r}"
+            # Rule 6b: a correct data URI on an img nobody can see is still
+            # no QR for the customer to scan.
+            _assert_seen(display, "#cd-whatsapp-qr", "the WhatsApp QR on the idle screen")
 
             sys.path.insert(0, str(REPO_ROOT))
             from commercial_runtime.einvoicing.qr import render_qr_svg_data_uri
@@ -619,6 +662,11 @@ def _scenario_standalone_page_rtl_in_arabic(results: Results, browser) -> None:
                 ".filter(c => c.getBoundingClientRect().height > 0).length"
             )
             assert card_count == 4, f"the 4 report cards must still render in Arabic (F3) -- found {card_count}"
+            # Rule 6b: "render" here means a person can see each one -- scroll
+            # to it like a person would, then whole box in viewport + hit test.
+            for i in range(4):
+                _assert_seen(wa_page, "#reports-content .report-card", f"Arabic report card #{i + 1}",
+                             nth=i, scroll=True)
 
             wa_page.close()
 
@@ -731,7 +779,7 @@ def _scenario_standalone_pages_are_really_scrollable(results: Results, browser, 
                 # browser's own default scroll-the-document behaviour for a
                 # body-focused page, exactly what a real shopkeeper pressing
                 # End with nothing selected gets.
-                wp.locator("body").click(position={"x": 5, "y": 5})
+                wp.mouse.click(5, 5)
                 wp.keyboard.press("End")
                 wp.wait_for_timeout(400)
                 y_after_end = wp.evaluate("window.scrollY")
@@ -746,6 +794,13 @@ def _scenario_standalone_pages_are_really_scrollable(results: Results, browser, 
                 assert last_card_rect["visible"] is True, (
                     f"the LAST card must be reachable by the End key ALONE, from the top: {last_card_rect}"
                 )
+                # Rule 6b: `top < innerHeight && bottom > 0` is satisfied by a
+                # card with one pixel showing. Reachable = the whole card is
+                # in the viewport and it is the thing at its own centre --
+                # measured where the End key alone left the page, with NO
+                # scrollIntoView helping.
+                last_idx = wp.evaluate("document.querySelectorAll('.card').length") - 1
+                _assert_seen(wp, ".card", "the last card after End alone", nth=last_idx, scroll=False)
                 wp.screenshot(path=str(shots / f"f2_{pg}_end_key_only.png"))
                 wp.close()
 
@@ -782,8 +837,15 @@ def _scenario_exactly_four_report_cards_en_and_ar(results: Results, browser) -> 
                     "[...document.querySelectorAll('#reports-content .report-card')]"
                     ".filter(c => c.getBoundingClientRect().height > 0).length"
                 )
-                wp.close()
-                assert count == 4, f"expected exactly 4 visible report cards in lang={lang!r}, found {count}"
+                try:
+                    assert count == 4, f"expected exactly 4 visible report cards in lang={lang!r}, found {count}"
+                    # Rule 6b: a non-zero height is not "visible". Each of the
+                    # four must be one a person can see after scrolling to it.
+                    for i in range(4):
+                        _assert_seen(wp, "#reports-content .report-card",
+                                     f"report card #{i + 1} (lang={lang})", nth=i, scroll=True)
+                finally:
+                    wp.close()
 
             results.run(f"F3 exactly 4 visible report cards render, lang={lang}", check)
     finally:
@@ -847,6 +909,10 @@ def _scenario_promotion_hides_itself_after_its_own_deadline(results: Results, br
         display.screenshot(path=str(shots / "item2_promo_visible_before_deadline.png"))
 
         def check():
+            # Rule 6b: "it hides itself" only means something if a person could
+            # SEE it first -- `!hidden` above would also hold for a banner
+            # parked off-screen.
+            _assert_seen(display, "#cd-promo", "the promotion before its deadline")
             # No interaction at all for the whole window -- exactly the
             # "quiet idle screen" the finding named. 30s real wait: 20s for
             # the promotion's own deadline, +10s slack for the 24h-clamped
