@@ -267,14 +267,34 @@ function assertNavEntryAndRouteOk(shellSrc, retailSrc) {
   );
 }
 
-function testNavEntryExistsAndPointsAtScreen() {
-  assertNavEntryAndRouteOk(SHELL_SRC, SRC);
-  // Sanity: the group config lists it too, so it actually renders in the
-  // sidebar (retail_nav_groups_test.js pins the full arrangement; this is
-  // just "did the id get lost between nav[] and navGroups[]").
-  assert.ok(/items:\s*\[[^\]]*'branches'[^\]]*\]/.test(SHELL_SRC),
-    "'branches' is in nav[] but not listed in any navGroups[] entry -- it would render nowhere in the sidebar.");
-  console.log(`PASS: '${SECTION_ID}' is routed, listed in a nav group, and gates on retail.employees`);
+// M6 (fix round 3): P1a item 1 moved 'branches' OUT of every navGroups[] list
+// on purpose -- it is reached through the sidebar footer's settings-gear
+// menu (app-shell.js, #sub-settings-menu), which is now its real path. So
+// "reachable from the shell" means: listed in a navGroups[] entry OR
+// offered as a row of the settings-menu block. What this can NO LONGER
+// catch: an id that is only in the gear menu is no longer required to ALSO
+// be in a sidebar group, so "it vanished from the sidebar list" is not
+// detectable here (that arrangement is pinned by retail_nav_groups_test.js).
+// It also cannot tell whether the gear row is GATED correctly -- only that
+// it exists. An id in NEITHER place is still caught.
+function isReachableFromShell(shellSrc, id) {
+  const inGroup = new RegExp("items:\\s*\\[[^\\]]*'" + id + "'[^\\]]*\\]").test(shellSrc);
+  const start = shellSrc.indexOf('id="sub-settings-menu"');
+  const end = start === -1 ? -1 : shellSrc.indexOf('</div>', start);
+  const menu = start === -1 ? '' : shellSrc.slice(start, end);
+  const inGearMenu = menu.indexOf("_navigate('" + id + "')") !== -1;
+  return { inGroup, inGearMenu };
+}
+
+function testNavEntryExistsAndPointsAtScreen(shellSrc = SHELL_SRC) {
+  assertNavEntryAndRouteOk(shellSrc, SRC);
+  // Sanity: the id is reachable from the shell -- in a sidebar group OR in
+  // the settings-gear menu (see isReachableFromShell for what that can no
+  // longer catch).
+  const reach = isReachableFromShell(shellSrc, 'branches');
+  assert.ok(reach.inGroup || reach.inGearMenu,
+    "'branches' is in nav[] but neither in any navGroups[] entry nor in the settings-gear menu -- it would render nowhere.");
+  console.log(`PASS: '${SECTION_ID}' is routed, reachable from the shell (group or gear menu), and gates on retail.employees`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,6 +485,16 @@ async function main() {
       '',
     ]]);
     return provesMutation('M1 nav entry removed', null, () => assertNavEntryAndRouteOk(brokenShell, SRC));
+  });
+
+  // M1b (fix round 3): drop the settings-gear row => the reachability check FAILS.
+  // With the id in no navGroups[] list either, nothing would render it.
+  await run('M1b: gear-menu row removed => testNavEntryExistsAndPointsAtScreen FAILS', async () => {
+    const brokenShell = mutate(SHELL_SRC, [[
+      "              ${hasBranches ? `<button type=\"button\" class=\"sub-identity-menu-item\" role=\"menuitem\" onclick=\"SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('branches')\">${t('Branches')}</button>` : ''}\n",
+      '',
+    ]]);
+    return provesMutation('M1b gear-menu row removed', brokenShell, (b) => testNavEntryExistsAndPointsAtScreen(b));
   });
 
   // M2: make create() not POST => test (2) FAILS.

@@ -268,14 +268,19 @@ async function testHeaderAIButtonMutationIsCaught() {
   // button and the same check still has to catch it. mutate() requires the
   // anchor to occur exactly once, which is why a stale one fails loudly here
   // instead of silently no-opping.
+  //
+  // Anchor re-stated AGAIN, P1a item 2: the identity chip now renders as a
+  // THIRD child of <header>, between .sub-header-right's closing </div> and
+  // </header> (see _renderShell's own header markup) -- so those two are no
+  // longer adjacent. Re-anchored to stop right after .sub-header-right's own
+  // closing </div>, which is still unique in the file and still sits
+  // immediately after the theme button either way.
   const mutated = mutate(SHELL_SRC, [[
     `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
-          </div>
-        </header>`,
+          </div>`,
     `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
             <button class="sub-header-btn" onclick="SubAI.open('${'${systemId}'}')" title="AI Assistant">🤖</button>
-          </div>
-        </header>`,
+          </div>`,
   ]]);
   const msg = await provesMutation(
     'the "exactly one AI button in the shell" check survived a mutant that re-adds the header AI button',

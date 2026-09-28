@@ -1666,5 +1666,10 @@
   "The current cart will be cleared. This cannot be undone.": "سيتم مسح السلة الحالية. لا يمكن التراجع عن هذا الإجراء.",
   "Only the shop owner can change this.": "يمكن لمالك المتجر فقط تغيير هذا.",
   "Not comparable for this date": "لا يمكن المقارنة لهذا التاريخ",
-  "A transaction dated after this filter affects the total, so it cannot be compared yet.": "توجد حركة بتاريخ لاحق لهذا التاريخ تؤثر على المجموع، لذلك لا يمكن المقارنة بعد."
+  "A transaction dated after this filter affects the total, so it cannot be compared yet.": "توجد حركة بتاريخ لاحق لهذا التاريخ تؤثر على المجموع، لذلك لا يمكن المقارنة بعد.",
+  "Settings menu": "قائمة الإعدادات",
+  "Licence & devices": "الترخيص والأجهزة",
+  "Make this the main computer": "اجعل هذا الجهاز هو الجهاز الرئيسي",
+  "Signed in": "تم تسجيل الدخول",
+  "Can't check": "تعذّر التحقق"
 }

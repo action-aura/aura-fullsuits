@@ -120,8 +120,6 @@ function loadShellForToast(shellSrc) {
     navigator: { userAgent: 'Mozilla/5.0 (test)' },
     location: { hash: '', href: 'http://localhost/' },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-    // _maybeOfferAdminDeviceClaim() reads a session-scoped dismissal flag
-    // before it renders anything (section 6).
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     document: {
       readyState: 'complete',
@@ -436,36 +434,58 @@ function testSyncBannerTiersArePositionedLogically() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 6 — the admin-device claim bar, the fourth site on the old HUD palette
+// 6 — the devices (sync) banner actually attaches to the document, and its
+//     most urgent tier resolves through state tokens, not a literal
 //
-// Not a sync tier, but the same defect in the same file: a fixed #1e1e2e bar
-// with #e8e8f0 text and a #f43f5e button, floating over whichever theme the
-// shop actually chose. Included here rather than in its own file because the
-// guard is identical and this is the only harness that runs app-shell.js's
-// real render functions.
+// MOVED, P1a item 1 ("Settings follows the person, not the device"): this
+// section used to be testAdminDeviceClaimBarCarriesNoColourLiteral, proving
+// the SAME two things (a real DOM append happened; the paint resolves
+// through a --state-* family, never a hex literal) about the now-deleted
+// admin-device claim bar (_maybeOfferAdminDeviceClaim/
+// _removeAdminDeviceClaimBar/_claimAdminDevice -- all deleted from
+// app-shell.js; Settings visibility no longer depends on a device claim at
+// all, see the 'admin-center' nav entry's own comment). WHAT THIS MOVE CAN
+// NO LONGER CATCH: a colour literal in a bar that no longer exists -- there
+// is no admin-device claim bar left to regress. The devices/sync banner
+// (_renderSyncBanner, the one other JS-built floating banner this file's
+// own intro promises coverage for) is where the assertion moves to, calling
+// the REAL top-level entry point (not a tier function directly, the way
+// section 5 above does) so the DOM-append half of the old check still has
+// something real to prove.
 // ═════════════════════════════════════════════════════════════════════════════
 
-function testAdminDeviceClaimBarCarriesNoColourLiteral() {
+/** Forces the 'alarm' tier (consecutive_failures >= SYNC_DEGRADED_THRESHOLD,
+ *  checked BEFORE the 'behind'/'behind-warning' tiers, which need
+ *  window.RetailSystem -- not loaded in this sandbox -- so 'alarm' is the
+ *  one non-calm tier reachable through the real _renderSyncBanner() entry
+ *  point here). _renderSyncAlarmState resolves through --state-warning-*
+ *  (SYNC_TIERS above pins this same fact for the direct-call path). */
+function alarmFixture() {
+  const iso = new Date(Date.now() - 3600 * 1000).toISOString();
+  return {
+    configured: true, running: true, healthy: false,
+    pending_count: 4, never_synced: false, seconds_since_last_success: 3600,
+    push: { last_success_at: iso, last_failure_at: iso, last_failure_reason: 'network', consecutive_failures: 5 },
+    pull: { last_success_at: iso, last_failure_at: null, last_failure_reason: null, consecutive_failures: 0 },
+  };
+}
+
+function testSyncBannerActuallyAttachesAndCarriesNoColourLiteral() {
   const { App, appended } = loadShellForToast(SHELL_SRC);
-  App.isAdminDevice = false;
-  App.canClaimAdminDevice = true;
   const before = appended.length;
-  App._maybeOfferAdminDeviceClaim();
+  App._renderSyncBanner(alarmFixture());
   assert.ok(appended.length > before,
-    '_maybeOfferAdminDeviceClaim() appended nothing with a claim genuinely available -- ' +
+    '_renderSyncBanner() appended nothing for a genuinely degraded sync state -- ' +
     'the fixture is asserting about nothing.');
-  const painted = appended.slice(before).map((el) => el.style.cssText || '').filter(Boolean);
-  assert.ok(painted.length >= 1,
-    '_maybeOfferAdminDeviceClaim() produced no inline style at all; the fixture cannot see what it renders.');
-  for (const css of painted) {
-    assert.ok(!HEX_LITERAL.test(css),
-      `The admin-device claim bar still contains a hex colour literal: ${css}`);
-  }
-  assert.ok(painted.some((css) => css.includes('var(--state-danger-surface)')),
-    'The admin-device claim bar should resolve its ground through the danger state family -- ' +
-    'it exists because the install is in a state that hides Settings and the Audit Log. ' +
-    `Got: ${JSON.stringify(painted)}`);
-  console.log('PASS: the admin-device claim bar paints from tokens, not from the old HUD literals');
+  const css = (App._syncBannerEl && App._syncBannerEl.style.cssText) || '';
+  assert.ok(css.length > 0,
+    '_renderSyncBanner() produced no inline style at all; the fixture cannot see what it renders.');
+  assert.ok(!HEX_LITERAL.test(css),
+    `The devices banner still contains a hex colour literal: ${css}`);
+  assert.ok(css.includes('var(--state-warning-surface)'),
+    'The devices banner\'s alarm tier should resolve its ground through the warning state family -- ' +
+    `it exists because sync is actively failing. Got: ${css}`);
+  console.log('PASS: the devices (sync) banner attaches to the document and paints from tokens, not from the old HUD literals');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -620,7 +640,7 @@ const RUN = [
   testSyncBannerTiersCarryNoColourLiteral,
   testEverySyncTierUsesItsOwnStateTokens,
   testSyncBannerTiersArePositionedLogically,
-  testAdminDeviceClaimBarCarriesNoColourLiteral,
+  testSyncBannerActuallyAttachesAndCarriesNoColourLiteral,
   testSyncBannerChecksAreMutationProved,
   testWizardStylesheetCarriesNoColourLiteral,
   testWizardStylesheetIsPositionedLogically,

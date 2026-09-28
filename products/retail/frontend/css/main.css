@@ -168,6 +168,30 @@
   --state-danger-border:   #f2c4bf;
   --state-info-border:     #bfd0f0;
 
+  /* ── CATEGORY HUE TOKENS (P1a item 6) ────────────────────────────────────
+     8 --cat-N-surface/-ink pairs, chosen deterministically by category id
+     (subsystem-retail.js: `((categoryId mod 8) + 1)`) for the till tile
+     monogram + 3px stripe. NOT the --state-* family above on purpose: these
+     are identity/decoration, and reusing success/warning/danger/info hues
+     here would make a plain "Beverages" tile read as a money warning.
+     Computed, not eyeballed -- 8 hues spread around the wheel (avoiding the
+     state hues), surface at ~84% lightness / ink at the lightness that
+     clears 4.5:1 against it (retail_design_contrast_test.js checks all 8
+     pairs x 5 themes), verified with the same relative-luminance formula
+     WCAG uses. Every surface also reads visibly distinct from
+     --surface-raised (the tile ground) -- lowest measured contrast 1.09:1
+     (cat-3, a pale yellow-green against near-white), which is a real,
+     visible hue difference even where the number looks modest against a
+     near-white ground. */
+  --cat-1-surface: #ecefb4; --cat-1-ink: #6b6c01;
+  --cat-2-surface: #d8f0b3; --cat-2-ink: #557100;
+  --cat-3-surface: #baeef2; --cat-3-ink: #17676d;
+  --cat-4-surface: #cbb9f0; --cat-4-ink: #3c0f6a;
+  --cat-5-surface: #d9baf2; --cat-5-ink: #4a1872;
+  --cat-6-surface: #eabaf2; --cat-6-ink: #681976;
+  --cat-7-surface: #f2bae9; --cat-7-ink: #761966;
+  --cat-8-surface: #f2bad8; --cat-8-ink: #76194b;
+
   /* ── ACCENT ───────────────────────────────────────────────────────────────
      ONE accent, used to mean "this is the action you take", not to decorate.
      If it appears somewhere that is not actionable, that is a bug.
@@ -581,6 +605,18 @@ html[data-theme="dark"] {
   --state-danger-border:   #66261f;
   --state-info-border:     #24406b;
 
+  /* ── CATEGORY HUE TOKENS (P1a item 6) -- see the light block's own comment
+     for the method. Dark family: surface at ~22% lightness, ink at the
+     lightness that clears 4.5:1 against it (min measured 6.81:1 here). */
+  --cat-1-surface: #4d4e16; --cat-1-ink: #e8eabc;
+  --cat-2-surface: #3c4f14; --cat-2-ink: #d8ebbb;
+  --cat-3-surface: #1f4e51; --cat-3-ink: #c0eaed;
+  --cat-4-surface: #311d4e; --cat-4-ink: #cebfec;
+  --cat-5-surface: #3a1f51; --cat-5-ink: #d9c0ed;
+  --cat-6-surface: #491f51; --cat-6-ink: #e6c0ed;
+  --cat-7-surface: #511f49; --cat-7-ink: #edc0e5;
+  --cat-8-surface: #511f3a; --cat-8-ink: #edc0d8;
+
   /* ── ACCENT — light fill, dark label (strategy flip documented above) ───
      RE-GROUNDED AGAIN 2026-09-19 (brand identity): the 2026-09-08 lapis/
      indigo above is superseded by the Retail product accent from the
@@ -721,6 +757,16 @@ html[data-theme="night"] {
   --state-warning-border: #544119;
   --state-danger-border: #63241e;
   --state-info-border: #233f6a;
+  /* ── CATEGORY HUE TOKENS (P1a item 6) -- see the light block's own comment
+     for the method (min measured contrast here: 7.80:1). */
+  --cat-1-surface: #464714; --cat-1-ink: #eaedc4;
+  --cat-2-surface: #374812; --cat-2-ink: #ddedc3;
+  --cat-3-surface: #1c474a; --cat-3-ink: #c8ecef;
+  --cat-4-surface: #2d1a47; --cat-4-ink: #d4c7ee;
+  --cat-5-surface: #351c4a; --cat-5-ink: #ddc8ef;
+  --cat-6-surface: #431c4a; --cat-6-ink: #e9c8ef;
+  --cat-7-surface: #4a1c42; --cat-7-ink: #efc8e9;
+  --cat-8-surface: #4a1c35; --cat-8-ink: #efc8dd;
   --accent-action: #e9cdaa;
   --accent-action-hover: #eed9be;
   --accent-action-active: #e2bc8e;
@@ -815,6 +861,16 @@ html[data-theme="dusk"] {
   --state-warning-border: #57431c;
   --state-danger-border: #672622;
   --state-info-border: #27406d;
+  /* ── CATEGORY HUE TOKENS (P1a item 6) -- see the light block's own comment
+     for the method (min measured contrast here: 6.15:1). */
+  --cat-1-surface: #555518; --cat-1-ink: #e9ebc0;
+  --cat-2-surface: #435615; --cat-2-ink: #daecbf;
+  --cat-3-surface: #225559; --cat-3-ink: #c4ebee;
+  --cat-4-surface: #361f55; --cat-4-ink: #d1c3ed;
+  --cat-5-surface: #402259; --cat-5-ink: #dbc4ee;
+  --cat-6-surface: #512259; --cat-6-ink: #e8c4ee;
+  --cat-7-surface: #592250; --cat-7-ink: #eec4e7;
+  --cat-8-surface: #59223f; --cat-8-ink: #eec4da;
   --accent-action: #f69279;
   --accent-action-hover: #f8a591;
   --accent-action-active: #f47758;
@@ -936,6 +992,18 @@ html[data-theme="sand"] {
   --state-warning-border: #e3c896;
   --state-danger-border: #efc0b8;
   --state-info-border: #bccbe8;
+  /* ── CATEGORY HUE TOKENS (P1a item 6) -- see the light block's own comment
+     for the method (min measured contrast here: 4.61:1, sand's own bar is
+     tighter than the other four because its surfaces start warmer/less
+     saturated -- still clears the 4.5:1 floor). */
+  --cat-1-surface: #e9ebad; --cat-1-ink: #686802;
+  --cat-2-surface: #d4ecab; --cat-2-ink: #526d00;
+  --cat-3-surface: #b3ebef; --cat-3-ink: #166369;
+  --cat-4-surface: #c6b1ed; --cat-4-ink: #3a0f66;
+  --cat-5-surface: #d4b3ef; --cat-5-ink: #4a1872;
+  --cat-6-surface: #e6b3ef; --cat-6-ink: #641872;
+  --cat-7-surface: #efb3e5; --cat-7-ink: #721863;
+  --cat-8-surface: #efb3d3; --cat-8-ink: #721848;
   --accent-action: #9a4f12;
   --accent-action-hover: #84420d;
   --accent-action-active: #6d3609;
@@ -2471,10 +2539,36 @@ html[data-theme="light"] {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.sub-nav { flex: 1; padding: 12px 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.sub-nav { flex: 1; padding: 12px 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
+  /* P1a item 4: a scroll-fade at the fold, so a sidebar with more
+     destinations than fit hints "there is more below" instead of ending in
+     a hard, ambiguous edge. Applied unconditionally (not only when actually
+     overflowing) -- the same lightweight trade-off .sub-nav-group-label's
+     own phone rule documents elsewhere in this file: detecting overflow
+     from JS to gate it would cost a layout read on every render for a fade
+     that costs nothing to see when the content already fills the box. Block
+     direction, not inline -- never a left/right concern for
+     retail_design_rtl_test.js's physical-property ratchet. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
+}
 .sub-nav-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: 9px;
+  /* P1a item 4: 38px items, down from 47px -- part of the owner's 768px
+     sidebar budget (see systems.retail.navGroups' own comment for the
+     arithmetic). min-block-size, not a fixed block-size: a longer
+     translated label must still be able to wrap without clipping.
+     H3 (fix round): this floor used to be silently beaten by the shared
+     TOUCH rule further down this file (`.sub-nav-item { min-height:
+     var(--touch-target-min) }`, 44px, unconditional) -- a PHYSICAL
+     min-height, later in source order than this logical min-block-size, so
+     it won on equal specificity and the Connected services header clipped
+     at 1366x768 with the largest group open. That rule is now gated to
+     `@media (pointer: coarse)` (see its own comment) -- a genuine
+     touchscreen still gets the real 44px floor, a desktop mouse gets this
+     38px. */
+  min-block-size: 38px;
+  padding: 8px 12px; border-radius: 9px;
   color: var(--text-tertiary); font-size: 13px; font-weight: 500;
   cursor: pointer; text-decoration: none;
   border-left: 3px solid transparent;
@@ -2492,15 +2586,30 @@ html[data-theme="light"] {
   background: rgba(var(--sub-accent-rgb),0.16);
   color: var(--text-primary); border-left-color: var(--sub-accent);
 }
-.sub-nav-icon { font-size: 16px; }
+/* M5 (fix round 3): rows measured 40px against the 38px the budget assumes.
+   Cause: the icon is an inline <svg> inside a flex-item <span> that inherits
+   the body's 1.5 line-height at 16px -- a 24px line box around a 17px glyph,
+   so 24 + 16 padding = 40. inline-flex + line-height:1 makes the span exactly
+   as tall as the glyph, and the 38px floor is the real height again. */
+.sub-nav-icon { font-size: 16px; display: inline-flex; align-items: center; line-height: 1; }
 .sub-nav-label { font-size: 13px; }
+/* P1a item 5: the Connected services status dot+word, pushed to the row's
+   trailing edge. margin-inline-start (not a physical margin), so it pins to
+   the END edge in both page directions. */
+.sub-nav-status { display: inline-flex; align-items: center; gap: 5px; margin-inline-start: auto; }
+.sub-nav-status-word { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 
 /* Sidebar section headers (launch-readiness 2026-08-29 declutter pass). Quiet
    on purpose -- small, muted, uppercase, clearly subordinate to the nav items
-   under it, not a second layer of chrome. Never carries a :hover/:focus rule:
-   it is inert text, not a control, so it is deliberately absent from
-   retail_design_focus_test.js's hoverable-control scan. margin-block/
-   padding-inline are logical, not left/right, per retail_design_rtl_test.js. */
+   under it, not a second layer of chrome. margin-block/padding-inline are
+   logical, not left/right, per retail_design_rtl_test.js.
+   P1a item 4: also the group TOGGLE now (a real <button>, not inert text --
+   see systems.retail.navGroups' own comment on why groups collapse). The
+   base rule below stays shared with the phone More sheet's own group
+   headers, which are still plain <div>s (that surface has no collapse
+   behaviour); the button-only reset and interaction styles are scoped to
+   `button.sub-nav-group-label` specifically so they never leak onto the
+   sheet's inert divs. */
 .sub-nav-group-label {
   margin-block: 14px 4px;
   padding-inline: 12px;
@@ -2511,6 +2620,62 @@ html[data-theme="light"] {
   color: var(--text-tertiary);
   user-select: none;
 }
+button.sub-nav-group-label {
+  display: flex; align-items: center; gap: 8px;
+  inline-size: 100%;
+  background: none; border: none; font: inherit; letter-spacing: 0.04em;
+  text-transform: uppercase; text-align: start; cursor: pointer;
+  border-radius: 8px;
+  transition: background 160ms, color 160ms;
+}
+button.sub-nav-group-label:hover { color: var(--text-secondary); background: var(--surface-sunken); }
+/* H4 (fix round): the group header is a REAL toggle button now (P1a item 4),
+   reachable and activatable by keyboard (Enter/Space, per
+   accordion_semantics' own real-browser proof) -- it needs the same
+   discoverable ring every other hoverable control in this file carries. */
+button.sub-nav-group-label:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; color: var(--text-secondary); background: var(--surface-sunken); }
+.sub-nav-group-label-text { flex: 0 0 auto; }
+.sub-nav-group-chevron { margin-inline-start: auto; font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+/* The group's own status summary (Connected services only) sits between the
+   label and the chevron, never pushed all the way to the end -- the chevron
+   is always the row's own trailing affordance.
+   LOW (fix round): "the Connected services chevron sits outside the 240px
+   sidebar edge" -- a flex item's default min-inline-size is `auto` (its
+   OWN content's intrinsic size), not 0, so a nowrap status word long enough
+   ('Needs attention') refused to shrink and pushed the chevron past the
+   header's own box instead of truncating. min-inline-size:0 lets this item
+   shrink below its content size (the standard flexbox fix for exactly this
+   overflow), and the word itself now ellipsizes instead of forcing it. */
+/* HIGH 3 (fix round 3): the rule above was `min-inline-size:0; overflow:
+   hidden` on the STATUS, and .sub-nav-group-label-text is `flex: 0 0 auto`,
+   so when the collapsed 'Connected services' header ran out of room it was
+   the STATUS that shrank -- to 0px wide, painting neither dot nor word. Measured
+   by the second verifier (probe3.py) with FAILED_PERMANENT stubbed: word
+   width 0 in EN and AR. The signal that says something is broken was the
+   first thing to disappear. Reversed: the status (dot + word) never shrinks
+   (flex-shrink:0, no overflow clipping) and the LABEL is the flexible part,
+   ellipsizing instead. */
+button.sub-nav-group-label .sub-nav-status { margin-inline-start: 0; margin-inline-end: 6px; flex-shrink: 0; }
+button.sub-nav-group-label .sub-nav-group-label-text { flex: 0 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The label grows to push status + chevron to the end edge when the
+   status is present; the chevron keeps its own margin-inline-start:auto
+   when there is no status. */
+button.sub-nav-group-label .sub-nav-group-label-text + .sub-nav-status { margin-inline-start: auto; }
+.sub-nav-group-items { display: flex; flex-direction: column; gap: 3px; }
+/* THE COLLAPSE BUG. `[hidden]` is how _renderShell/_toggleSidebarGroup hide
+   every group but the open one (a plain HTML boolean attribute, `el.hidden
+   = true`, no JS style write) -- but the rule directly above is an ordinary
+   AUTHOR rule with a class selector, and per the cascade, ANY normal-origin
+   author rule beats the user-agent stylesheet's own `[hidden] { display:
+   none }`, regardless of specificity (origin outranks specificity in the
+   cascade order). So `.sub-nav-group-items { display: flex; ... }` was
+   silently overriding `hidden` on EVERY collapsed group, and the sidebar
+   rendered all seven groups fully expanded, all the time -- measured in a
+   real 1366x768 browser (retail_p1a_shell_e2e.py): the fourth group header
+   ('Money') landed at y=788, already past the viewport, because nothing
+   above it was ever actually collapsed. This restores the native behaviour
+   for the one case this file's own class rule broke. */
+.sub-nav-group-items[hidden] { display: none; }
 
 /* PHONE: the sidebar collapses to an icon rail roughly 41px wide, and these
    captions were still being painted into it. Measured on the running app at
@@ -2572,6 +2737,240 @@ html[data-theme="light"] {
 .sub-exit-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
 .sub-exit-btn:active { transform: scale(0.97); }
 
+/* P1a item 4: the Till route's 64px icon rail. Labels, the group headers and
+   their chevrons all hide -- the icon alone is the whole affordance, same
+   idea as the ≤640px phone rail this mirrors in miniature (that one is a
+   fixed width too; this one is a data-driven CLASS, not a breakpoint, since
+   it depends on which ROUTE is active, not how wide the viewport is). Every
+   rule here is additive over `.sub-sidebar`'s own layout, not a breakpoint
+   override, so it composes with the phone rail without conflict (a phone
+   never shows this class' effects -- the sidebar itself is display:none
+   there). Logical `inline-size`, not `width`, per retail_design_rtl_test.js. */
+.sub-sidebar.sub-sidebar-rail { inline-size: 64px; }
+.sub-sidebar.sub-sidebar-rail .sub-brand-text,
+.sub-sidebar.sub-sidebar-rail .sub-nav-label,
+.sub-sidebar.sub-sidebar-rail .sub-nav-group-label-text,
+.sub-sidebar.sub-sidebar-rail .sub-nav-group-chevron,
+.sub-sidebar.sub-sidebar-rail .sub-nav-status,
+.sub-sidebar.sub-sidebar-rail .sub-ai-btn span:not(:first-child) {
+  display: none;
+}
+.sub-sidebar.sub-sidebar-rail .sub-nav-item,
+.sub-sidebar.sub-sidebar-rail button.sub-nav-group-label {
+  justify-content: center;
+}
+/* A closed group's items are already `hidden` by _toggleSidebarGroup's own
+   attribute; the rail forces every group OPEN (all icons visible, no
+   accordion) since there is no room for a group header's text to explain
+   what a collapsed icon-only group even is. */
+.sub-sidebar.sub-sidebar-rail .sub-nav-group-items { display: flex !important; }
+.sub-sidebar.sub-sidebar-rail .sub-nav-group-items[hidden] { display: flex !important; }
+
+/* P1a item 2: the identity chip -- initials, name, role pill, computer,
+   'Main computer' badge, all in the header's own end slot. */
+.sub-identity-chip { position: relative; margin-inline-start: 8px; }
+.sub-identity-chip-btn {
+  display: flex; align-items: center; gap: 10px;
+  /* LOW (fix round): was a 4-value physical shorthand (6px 12px 6px 6px) --
+     retail_design_rtl_test.js's physical-property ratchet. The tighter
+     6px sits on the START side (against the initials circle, the first
+     flex child), 12px on the END (before the chevron/meta text finishes),
+     which is what the original values actually meant and now mirrors
+     correctly under dir="rtl" instead of staying pinned to the left. */
+  /* Coordinator fix round #2: the chip grew the header from ~77px to ~90px
+     (retail_p0_till_e2e.py item #7 -- #pos-total overflowed .pos-summary at
+     1280x720 sand/EN, proved by forcing .sub-header back to 77px and
+     getting 45/45). block-size is now PINNED to the old .sub-header-btn's
+     own 36px (the header's height is `padding + max(children)`, so making
+     every header child the SAME height as before is what keeps the header
+     itself the same height), padding-block dropped to 0 so the pin is real
+     rather than fighting a minimum. */
+  padding-block: 0; padding-inline: 6px 12px;
+  block-size: 36px;
+  border-radius: 999px;
+  background: var(--surface-sunken); border: 1px solid var(--border-default);
+  cursor: pointer; transition: background 160ms;
+  max-inline-size: 260px;
+}
+.sub-identity-chip-btn:hover { background: var(--surface-hover); }
+.sub-identity-chip-btn:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: 2px; background: var(--surface-hover); }
+/* M6/M7 (fix round, DESIGN.md §2 points 1-2): "the accent means THIS IS THE
+   ACTION YOU TAKE, never decoration" and "blue is information ... each
+   meaning has one colour, no meaning shares a colour with another". The
+   initials circle used to fill with --sub-accent (an ACTION colour wearing
+   an identity hat) -- neutral now, the same ink-on-panel pairing the
+   role pill's own "owner" strong fill uses below, so the whole identity
+   cluster reads as one consistent, non-actionable register. */
+.sub-identity-initials {
+  display: flex; align-items: center; justify-content: center;
+  /* 24px, down from 28px -- part of the same header-height fix as the chip
+     button's own block-size pin above: this circle is the TALLER of the
+     chip's two children on a short display name, and 28px alone (plus any
+     padding) already exceeded the 36px the whole button is now pinned to. */
+  inline-size: 24px; block-size: 24px; border-radius: 50%;
+  background: var(--text-primary); color: var(--surface-panel);
+  font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+/* block-size:36px matches the chip button's own pin (its parent) exactly,
+   so the two-line stack is vertically centred inside the SAME 36px box the
+   initials circle sits in, rather than the stack's own (now tighter)
+   content height leaving a gap or, worse, still exceeding it. */
+.sub-identity-text { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; overflow: hidden; text-align: start; block-size: 36px; }
+.sub-identity-name {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  line-height: 15px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-inline-size: 100%;
+}
+.sub-identity-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-tertiary); line-height: 14px; }
+/* Role pills: NEUTRALS ONLY (M6/M7, fix round -- DESIGN.md §2 points 1-2,
+   which OVERRIDES the P1a plan's own earlier "Retail accent and neutrals"
+   wording where the two disagree, per the orchestrator's decision). Accent
+   means "this is the action you take" and must never decorate identity;
+   blue is the ONE colour that means "information" and must never mean
+   "this is the owner" either -- the old --state-info-* badge collided with
+   that exactly. Three neutral WEIGHTS carry the hierarchy instead: Owner =
+   a strong ink fill (the same --text-primary-on-surface-panel pairing the
+   initials circle uses), Manager = a neutral outline, Cashier = the
+   quietest, a plain muted wash. All three, the initials circle and the
+   'Main computer' badge are checked by retail_design_contrast_test.js's
+   own new assertion to resolve NO accent/success/warning/danger/info
+   colour in any of the 5 themes. */
+.sub-role-pill {
+  display: inline-flex; align-items: center;
+  /* padding-block 0 + line-height 14px (was 1px 8px / 1.6): the chip's own
+     meta row is now pinned to a 14px line-height (coordinator fix round
+     #2, the header-height regression) -- a taller pill box than that would
+     have re-widened the chip past the header's 36px pin from the other
+     side. Still >=11px text per the fix round's own size floor. */
+  padding: 0 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  line-height: 14px;
+}
+.sub-role-pill.is-owner { background: var(--text-primary); color: var(--surface-panel); }
+.sub-role-pill.is-manager { background: transparent; border: 1px solid var(--border-default); color: var(--text-primary); }
+.sub-role-pill.is-cashier { background: var(--surface-hover); color: var(--text-tertiary); }
+.sub-main-computer-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  /* Same 0-padding/14px-line-height fix as .sub-role-pill just above, same
+     reason -- this badge sits in the SAME chip meta row when isAdminDevice
+     is true, and both pill and badge can appear together. */
+  padding: 0 8px; border-radius: 999px;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  font-size: 11px; font-weight: 600; line-height: 14px;
+}
+.sub-main-computer-badge-icon { display: inline-flex; }
+.sub-main-computer-badge-icon svg { inline-size: 11px; block-size: 11px; }
+.sub-identity-menu {
+  position: absolute; inset-block-start: calc(100% + 8px); inset-inline-end: 0;
+  z-index: 400; min-inline-size: 200px;
+  background: var(--surface-raised); border: 1px solid var(--border-default);
+  border-radius: 12px; box-shadow: var(--elevation-panel);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+}
+/* THE SAME [hidden]-OVERRIDE BUG as .sub-nav-group-items above, in a second
+   component: this is a normal-origin author rule with a class selector, and
+   per the cascade ANY such rule beats the user-agent stylesheet's own
+   `[hidden] { display: none }` regardless of specificity. The menu starts
+   `hidden` in _renderShell's markup and is meant to open only on a real
+   click (_toggleIdentityMenu) -- without this, it rendered permanently
+   visible and intercepted clicks meant for the page underneath it (measured
+   directly: retail_smoke_e2e.py's own "+ Add Product" click failed because
+   the menu's "Language" row physically sat on top of the button). */
+.sub-identity-menu[hidden] { display: none; }
+/* CRITICAL 1 (fix round 3): THE SETTINGS GEAR MENU OPENED OFF-SCREEN.
+   It wore `.sub-identity-menu` (a HEADER dropdown: opens DOWNWARD from a
+   chip near the top, pinned to the chip's end edge) but lives in the
+   sidebar FOOTER, and its wrapper was not `position: relative` -- so the
+   `inset-block-start: calc(100% + 8px)` resolved against the nearest
+   positioned ancestor instead of the gear. Measured at 1366x768 by the second
+   verifier: the menu sat at y=776..993 (entirely below the 768px viewport),
+   and in Arabic at the opposite edge. Every path to Settings, Employees,
+   Branches, Backup & Export and License for an owner ran through it, and
+   Playwright's own click() succeeded on it anyway (it scrolls and does not
+   care that a person can't), which is how it shipped green.
+   Its own rule now: the wrapper is the positioning context, the menu opens
+   UPWARD (the gear sits at the very bottom of the screen, so up is the only
+   direction with room) and is anchored to the gear's INLINE-START edge, so
+   it mirrors in Arabic by construction. Both offsets are logical
+   properties, so retail_design_rtl_test.js's ratchet stays satisfied. The
+   inline-end/block-start offsets the shared rule set are reset explicitly
+   (`auto`), not merely overridden by omission. */
+.sub-settings-menu-wrap { position: relative; }
+.sub-identity-menu.sub-settings-menu {
+  inset-block-start: auto; inset-block-end: calc(100% + 8px);
+  inset-inline-start: 0; inset-inline-end: auto;
+}
+/* M8 (fix round 3): the gear is a real <button>, and `.sub-nav-item` alone
+   only styled the row's own box -- the browser's own button chrome (outset
+   border, rgb(240,240,240) fill, system font) showed through everywhere the
+   class did not say otherwise, so it looked like a leftover default control
+   between two designed ones. Reset to the same tokens the nav rows use. */
+button.sub-nav-item.sub-settings-gear {
+  inline-size: 100%; box-sizing: border-box;
+  background: transparent; border: 0; border-inline-start: 3px solid transparent;
+  font: inherit; font-size: 13px; font-weight: 500;
+  color: var(--text-tertiary); text-align: start;
+}
+button.sub-nav-item.sub-settings-gear:hover { background: var(--surface-sunken); color: var(--text-primary); }
+button.sub-nav-item.sub-settings-gear:focus-visible,
+button.sub-nav-item.sub-settings-gear[aria-expanded="true"] { background: var(--surface-sunken); color: var(--text-primary); }
+button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; }
+.sub-identity-menu-item {
+  display: flex; align-items: center; justify-content: space-between;
+  inline-size: 100%; padding: 9px 10px; border-radius: 8px;
+  background: none; border: none; font: inherit; text-align: start;
+  color: var(--text-primary); cursor: pointer;
+}
+.sub-identity-menu-item:hover { background: var(--surface-sunken); }
+.sub-identity-menu-item:disabled {
+  color: var(--text-tertiary); cursor: default;
+}
+.sub-identity-menu-item:disabled:hover { background: none; }
+.sub-identity-menu-item.is-danger { color: var(--state-danger-text); }
+.sub-identity-menu-item.is-danger:hover { background: var(--state-danger-surface); }
+/* H4 (fix round): retail_design_focus_test.js derives its requirement from
+   the stylesheet's OWN :hover selectors -- every one of the four menu-item
+   :hover rules above needs the identical selector restated with
+   :focus-visible, or a keyboard/scanner operator (M2's whole point: Escape,
+   ArrowUp/Down, Tab move focus through this exact menu) gets no visible
+   ring while tabbing through it. `:disabled:focus-visible` is included for
+   the same reason the test's own derivation includes `:disabled:hover`: a
+   disabled row can never actually receive focus, so this rule is inert by
+   construction, not a real focus state -- kept only so the mechanical
+   hover/focus-visible pairing this test enforces stays honest about which
+   base selectors exist, rather than the test carrying a silent exemption
+   for one specific selector. */
+.sub-identity-menu-item:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; background: var(--surface-sunken); }
+.sub-identity-menu-item:disabled:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; }
+.sub-identity-menu-item.is-danger:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; background: var(--state-danger-surface); }
+
+/* P1a item 6: the shared status vocabulary -- always a dot plus a WORD,
+   never colour alone (design_system). Used by Connected services here, and
+   available to any future surface (the Customer screen button, sync) that
+   needs the same honest four-state language. Fill colour reads through
+   each theme's own --state-*-text token, which is calibrated for contrast
+   against that theme's surfaces rather than a flat literal. */
+.status-dot {
+  display: inline-block; flex-shrink: 0;
+  inline-size: 8px; block-size: 8px; border-radius: 50%;
+}
+.status-dot.is-off { background: var(--text-tertiary); }
+.status-dot.is-ok { background: var(--state-success-text); }
+.status-dot.is-attention { background: var(--state-warning-text); }
+.status-dot.is-failing { background: var(--state-danger-text); }
+/* M8 (fix round): a 5th state -- "not yet checked" or "could not check"
+   (non-200, network failure, before the first poll resolves) is NEITHER a
+   clean 'off' NOR any of the other three; a neutral dot (the same tone as
+   'off', since both are non-alarming) paired with its own distinct word
+   ("Can't check") is what keeps the promise that colour never carries this
+   distinction alone. */
+.status-dot.is-unknown { background: var(--text-tertiary); }
+/* LOW (fix round 3): before the FIRST poll answers, nothing has failed to be
+   checked yet -- "Can't check" claimed a failure that had not happened. A
+   hollow neutral ring + the word "Checking..." says "asking", not "broken". */
+.status-dot.is-checking { background: transparent; border: 1.5px solid var(--text-tertiary); box-sizing: border-box; }
+
 /* Subsystem Main Area */
 .sub-main { 
   display: flex; 
@@ -2594,12 +2993,21 @@ html[data-theme="light"] {
 .sub-header {
   height: auto;
   padding: 20px 28px;
-  display: flex; justify-content: space-between; align-items: center;
+  /* P1a item 2: `justify-content: space-between` only ever worked for
+     exactly two children (title, controls). The identity chip is a THIRD
+     child (a sibling of .sub-header-right, not nested inside it -- see
+     _renderShell's own header markup), and space-between across three
+     flex items would space them EVENLY, stranding the language/theme
+     buttons in the dead centre of the header instead of beside the chip.
+     .sub-header-left growing to fill the remaining space (below) produces
+     the identical two-child layout when there are only two children, and
+     generalises correctly to three. */
+  display: flex; align-items: center;
   border-bottom: 1px solid var(--border-hairline);
   background: var(--surface-raised); backdrop-filter: blur(10px);
   flex-shrink: 0;
 }
-.sub-header-left { display: flex; align-items: baseline; gap: 14px; }
+.sub-header-left { display: flex; align-items: baseline; gap: 14px; flex: 1 1 auto; min-inline-size: 0; }
 /* This IS the header's title now -- the old separate .sub-header-title <h2>
    is gone (app-shell.js's header comment explains why the element/id could
    not move: _navigate() and several repo scripts/docs wait on
@@ -3705,14 +4113,13 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
       var(--tabbar-block-size) + var(--safe-area-bottom) + var(--space-snug, 12px));
   }
 
-  /* A sheet is modal. A banner floating over it is only in the way.
-     !important is required, not decoration: the claim bar's whole paint is an
-     INLINE cssText in app-shell.js (_showAdminClaimBar), including
-     display:flex, and an inline declaration beats any non-!important
-     stylesheet rule. Without it this rule read as correct, matched the
-     element, and hid nothing -- measured on the dark-mode 390px screenshots
-     (2026-09), where the banner sat squarely over the open More sheet. */
-  body.sub-more-sheet-open #aura-admin-device-claim { display: none !important; }
+  /* P1a item 1: the admin-device claim bar this rule used to stand down
+     (#aura-admin-device-claim, app-shell.js's old _maybeOfferAdminDeviceClaim)
+     is deleted outright -- Settings no longer depends on the device claim at
+     all, so the bar had nothing left to fix. Removed rather than left as a
+     dead selector: retail_design_tokens_test.js and friends scan this file
+     for exactly this kind of orphaned rule, and a selector that can never
+     match again is not documentation, it is noise. */
 
   .sub-tabbar {
     display: flex;
@@ -4279,9 +4686,51 @@ html[data-theme] .cl-tab:not(.active):focus-visible {
   justify-content: center;
   gap: var(--space-snug);
 }
-/* Nav rows and list items are full-width targets, so only height applies. */
-.nav-item, .sub-nav-item, .subnav-item, .notif-item, .comm-tab, .crm-tab, .intel-tab {
+/* Nav rows and list items are full-width targets, so only height applies.
+   `.sub-nav-item` carved OUT of this list (H3, fix round): it was
+   unconditionally winning over the P1a sidebar's own 38px density
+   (css/main.css's .sub-nav-item rule, min-block-size, LOGICAL) with a
+   PHYSICAL min-height at equal specificity, later in source order -- the
+   Connected services header clipped below the fold at 1366x768 with the
+   largest group open. Every other selector here is untouched: those
+   surfaces were never part of P1a and a 44px floor is still correct for
+   them regardless of pointer type. */
+.nav-item, .subnav-item, .notif-item, .comm-tab, .crm-tab, .intel-tab {
   min-height: var(--touch-target-min);
+}
+/* `.sub-nav-item`'s own floor is now CONDITIONAL: 38px for a desktop mouse
+   (the density the owner's 768px sidebar budget assumes), the real 44px
+   touch floor only under a genuine coarse pointer (a touchscreen till).
+   Logical min-block-size, not min-height, per retail_design_rtl_test.js's
+   physical-property ratchet. */
+@media (pointer: coarse) {
+  .sub-nav-item { min-block-size: var(--touch-target-min); }
+  /* M5 (fix round 3): 44px rows made the sidebar taller than 768px with the
+     Sell or Stock group open, so the Connected services header (the last
+     one) was clipped -- measured at 1366x768 with a coarse pointer. Two
+     changes, both touch-only, neither shrinking a target below 44px:
+     (1) the footer's gear + AI button share ONE row instead of stacking
+     (~54px back), with the gear icon-only (it keeps its aria-label/title)
+     and FIRST in the row so the upward menu still anchors to the gear's
+     inline-start edge; (2) group headers lose their generous top margin. */
+  .sub-sidebar-bottom { flex-direction: row; align-items: stretch; padding-block: 8px; gap: 6px; }
+  .sub-sidebar-bottom .sub-ai-btn { flex: 1 1 auto; min-inline-size: 0; }
+  .sub-sidebar-bottom .sub-settings-menu-wrap { order: -1; flex: 0 0 auto; }
+  .sub-sidebar-bottom .sub-settings-gear { inline-size: auto; min-block-size: 100%; padding-inline: 12px; }
+  .sub-sidebar-bottom .sub-settings-gear .sub-nav-label { display: none; }
+}
+/* Separate query, not inside the one above: a phone is ALSO a coarse pointer,
+   and at <=640px .sub-nav-group-label is a 1px visually-hidden caption whose
+   own margin is -1px -- this rule, later in the file at the same
+   specificity, would silently un-hide it. */
+@media (pointer: coarse) and (min-width: 641px) {
+  .sub-nav-group-label { margin-block: 6px 2px; }
+  /* Measured (retail_p1a_shell_e2e.py, coarse 1366x768): the headers were 21px
+     tall -- a thumb-hostile target. The rail's spare room with the worst group
+     open is 102px; 7 headers x 44px would need 161px more, x 32px needs 77px.
+     So 32px: a real improvement that still fits. It is NOT the 44px floor the
+     rows carry -- a known, budget-driven gap, stated rather than hidden. */
+  button.sub-nav-group-label { min-block-size: 32px; }
 }
 
 /* ── TOUCH, SECOND AXIS ───────────────────────────────────────────────────────
@@ -4311,7 +4760,14 @@ html[data-theme] .cl-tab:not(.active):focus-visible {
    one extra point (0,2,1) needed to win without an !important, which would
    remove the screens' ability to override anything at all. */
 button.pos-cat-btn, button.pos-pay-btn, button.pos-clear-btn, button.pos-hold-btn,
-input.pos-mini-input, select.pos-cust-select {
+input.pos-mini-input, select.pos-cust-select,
+/* .ret-rowbtn (fix round, retail_design_focus_test.js): the receivables/
+   payables row link (a customer/supplier NAME, "Ann Q"/"Acme Trading") had
+   zero declared floor on either axis -- unlike the nav rows above, this is
+   not reliably full-width (a short name collapses toward its own text
+   width), so it needs both axes, same as the POS controls on this line, not
+   the block-axis-only pattern the full-width nav rows use. */
+button.ret-rowbtn {
   min-inline-size: var(--touch-target-min);
   min-block-size: var(--touch-target-min);
 }

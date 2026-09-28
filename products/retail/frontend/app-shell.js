@@ -818,7 +818,16 @@ const SubsystemApp = {
         { id: 'dashboard',  label: 'Dashboard',        icon: '🏠' },
         { id: 'pos',        label: 'Point of Sale',     icon: '🛒' },
         { id: 'products',   label: 'Products',          icon: '📦' },
-        { id: 'categories', label: 'Categories',        icon: '🏷️' },
+        // P1a item 3 ("the till shows only what the person can do"):
+        // Categories/Suppliers/Purchase Orders move to retail.stock.adjust,
+        // matching every one of their own writes -- the SAME reasoning
+        // 'transfers' below already states, applied to three siblings that
+        // had shipped with NO gate at all until now. Products deliberately
+        // keeps NO capability gate here: it stays reachable for everyone
+        // (subsystem-retail.js renders it read-only, "Stock lookup", for
+        // anyone without stock.adjust -- crew T's half of this item), so the
+        // phone tab-bar slot that points at 'products' keeps working.
+        { id: 'categories', label: 'Categories',        icon: '🏷️', capability: 'retail.stock.adjust' },
         { id: 'customers',  label: 'Customers',         icon: '👥' },
         // Aseel-parity wave A-PAR (schema v33): quotations and sales orders
         // as real documents -- `held_sales` is a JSON cart snapshot with no
@@ -844,8 +853,10 @@ const SubsystemApp = {
         // just the invitation not to walk into a screen every button on which
         // will 403.
         { id: 'promotions', label: 'Promotions',        icon: '🎁', capability: 'retail.discount' },
-        { id: 'suppliers',  label: 'Suppliers',         icon: '🏭' },
-        { id: 'purchases',  label: 'Purchase Orders',   icon: '📋' },
+        // Same P1a item 3 gate as 'categories' above -- suppliers/purchase
+        // orders are stock-adjust writes end to end, and had no gate at all.
+        { id: 'suppliers',  label: 'Suppliers',         icon: '🏭', capability: 'retail.stock.adjust' },
+        { id: 'purchases',  label: 'Purchase Orders',   icon: '📋', capability: 'retail.stock.adjust' },
         // Retail schema v28 added inter-branch stock transfers (pending ->
         // in_transit -> received, plus cancel-while-pending). `capability:
         // 'retail.stock.adjust'` matches CAP_STOCK_ADJUST -- the SAME
@@ -916,7 +927,32 @@ const SubsystemApp = {
         // 403. list_branches (GET) carries no capability of its own -- read
         // access is not the gate here, creating a new one is.
         { id: 'branches',     label: 'Branches',        icon: '🏦', capability: 'retail.employees' },
-        { id: 'admin-center', label: 'Settings',        icon: '⚙️', adminOnly: true },
+        // P1a item 1 ("Settings follows the person, not the device"): this
+        // used to be `adminOnly: true` -- the DEVICE axis (this.isAdminDevice)
+        // -- which is exactly the bug this item fixes: an owner on a second,
+        // un-claimed computer lost Settings entirely, and the only way back
+        // was the red "make this the admin device" bar (now deleted, see
+        // _maybeOfferAdminDeviceClaim's old comment). `capability:
+        // 'retail.employees'` follows the PERSON instead: ROLE_ADMIN holds it
+        // by default (every capability, user_accounts.py's ROLE_CAPABILITIES),
+        // a delegated branch manager holds it only once granted through the
+        // branch-staff-management delegation toggle (employees.js, the exact
+        // grant _require_company_admin()'s own docstring names), and a
+        // cashier never holds it. That is "owner: every section; delegated
+        // manager: Settings + Branches (both gated on this same capability);
+        // cashier: none". NOTE (fix round 3): a delegated manager does NOT get
+        // the Employees screen or Backup & Export -- both are `ownerOnly`
+        // (their routes read the USER axis, session role == admin, and would
+        // 403 every click), so the gear menu shows them only to the owner.
+        // The capability is the ONE axis that already
+        // means "this person may manage staff for their scope" -- the gear
+        // itself is not the enforcement (subsystem-retail.js's
+        // _renderAdminCenter gates each section on its own route's real
+        // authority, T's half of this item), only the invitation not to open
+        // a screen that has nothing to show. Not gated on `ownerOnly` alone:
+        // that would hide the gear from every delegated manager, the exact
+        // person this item exists to let in.
+        { id: 'admin-center', label: 'Settings',        icon: '⚙️', capability: 'retail.employees' },
         // ci-hardening-w0.3 continuation: THE DOORWAY, a second one on this
         // branch. GET/POST /api/notifications/{status,settings,outbox,
         // outbox/run-once} (commercial_runtime/notifications/routes.py) have
@@ -936,6 +972,26 @@ const SubsystemApp = {
         // standing at the admin terminal (whose every mutating click would
         // 403) while hiding it from the owner working from a second device.
         { id: 'email-notifications', label: 'Email Notifications', icon: '📧', ownerOnly: true },
+        // P1a item 5 ("Connected services group"): three destinations that
+        // existed only as standalone pages linked from a button inside
+        // Admin Center (subsystem-retail.js's _renderAdminCenter) -- never a
+        // sidebar entry, and therefore never one click away, the same
+        // "served but never linked" bug class the ci-hardening-w0.3 doorway
+        // comments above this one already fixed for whatsapp.html itself
+        // (retail_whatsapp_nav_discoverability_test.py). `externalPage`
+        // (read by navItemHTML below) is a THIRD way a nav item can behave
+        // on click, alongside the ordinary in-SPA `_navigate(id)`: these
+        // three are real standalone documents (whatsapp.html/einvoicing.html/
+        // site-relay.html), not `RetailSystem.render()` cases, so clicking
+        // them must browser-navigate, not call `_navigate`. `ownerOnly`
+        // matches every mutating route on all three pages (WhatsApp/
+        // JoFotara credentials, pairing codes) -- the same axis Email
+        // Notifications directly above already uses for the identical
+        // reason. site-relay's label is "Shop network" (not "Site Relay"),
+        // the shopkeeper word the owner's copy glossary asks for.
+        { id: 'whatsapp',    label: 'WhatsApp',          icon: '💬', ownerOnly: true, externalPage: 'whatsapp.html' },
+        { id: 'einvoicing',  label: 'E-Invoicing',       icon: '🧾', ownerOnly: true, externalPage: 'einvoicing.html' },
+        { id: 'site-relay',  label: 'Shop network',      icon: '📡', ownerOnly: true, externalPage: 'site-relay.html' },
         // ci-hardening-w0.3 continuation: THE DOORWAY, a third one on this
         // branch, and the one that matters most: licensing.js promises a
         // customer whose licence is RESTRICTED/SUSPENDED/EXPIRED/REVOKED --
@@ -1134,22 +1190,71 @@ const SubsystemApp = {
       // customer mid-sale, not while managing inventory; Purchase Orders
       // sits under Stock because it is how stock arrives.
       //
-      // Every id below must name exactly one entry in `nav` above (other
-      // than 'dashboard'), and every non-dashboard `nav` entry must appear in
-      // exactly one group -- retail_nav_groups_test.js's
-      // testAllFifteenDestinationsReachableForOwner and
-      // testGroupsRenderInSpecifiedOrderWithMembers pin both directions, so a
-      // future nav entry that forgets a group fails loudly instead of
-      // silently vanishing from the sidebar.
+      // P1a ("a collapsible sidebar that fits 1366x768") REGROUPED these
+      // eight buckets from the four above (Sell/Stock/Insight/Admin), on the
+      // owner's own height budget: brand 64 + Home 40, 7 group headers x 36,
+      // the largest OPEN group's items x 38, footer 96 -- fits 768px only
+      // with groups that collapse to one open at a time (see _renderShell's
+      // sidebar-open-group state) and a shorter Admin no longer occupying a
+      // whole header of its own:
+      //
+      //   - 'admin-center' (the gear) moved OUT of every group entirely --
+      //     it is the sidebar FOOTER now, next to the AI button, exactly
+      //     like 'dashboard' render before every group rather than inside
+      //     one (see _renderShell's groupsHTML/footer split below).
+      //   - 'employees', 'branches' and 'backup-export' are UNGROUPED BY
+      //     DESIGN this phase, not deleted and not re-homed: P1a builds the
+      //     gear itself (the nav entry above, and T's lock-panel first line
+      //     in _renderAdminCenter) but not yet the settings-HUB sub-nav that
+      //     would give them a click path again. They become "gear ->
+      //     section" in Phase 1b (docs/ROADMAP.md), same as the old fixture
+      //     comment already named for this exact trio. What this loses on
+      //     purpose, stated rather than left to be discovered: they are NOT
+      //     one click from the sidebar in this phase, for anyone, including
+      //     the owner -- retail_nav_groups_test.js's own UNGROUPED_BY_DESIGN
+      //     comment repeats this.
+      //   - 'promotions' moved OUT of Sell into the new Grow group
+      //     (marketing/pipeline tools, not the till itself). 'quotations'
+      //     stays in Sell -- see the navGroups array's own comment on why
+      //     it could not join 'promotions' in Grow.
+      //   - the old Insight group (11 members, the single largest header)
+      //     split into Money (what is owed/collected day to day: cheques,
+      //     receivables, payables), Books (the GL-derived statements:
+      //     trial-balance, profit-and-loss, balance-sheet, cash-flow) and
+      //     Reports (operational reads: reports, stock-accuracy, exceptions,
+      //     audit-log) -- three headers instead of one, none anywhere near
+      //     the old 11-item worst case.
+      //   - 'connected' is new (P1a item 5): whatsapp/einvoicing/
+      //     email-notifications (moved here from the old Admin group)/
+      //     site-relay, each carrying a status dot the group header
+      //     summarises to its worst member -- see _renderShell's
+      //     connectedGroupHTML.
+      //
+      // Every id below must name exactly one entry in `nav` above, except
+      // 'dashboard' and the four UNGROUPED-BY-DESIGN ids named above --
+      // retail_nav_groups_test.js's testEveryNavEntryIsInAGroup pins that
+      // exact exemption list, and testGroupsRenderInSpecifiedOrderWithMembers
+      // pins order/membership, so a future nav entry that forgets a group
+      // fails loudly instead of silently vanishing from the sidebar.
       //
       // A group whose every item is filtered out by _isNavItemVisible must
       // render NO header at all -- see _renderShell's groupsHTML below. An
       // empty section header is worse than the flat list this replaces.
       navGroups: [
-        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations', 'promotions'] },
+        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'quotations'] },
+        // Grow holds ONLY 'promotions' (capability: 'retail.discount', which
+        // a cashier does not hold by default) -- 'quotations' stays in Sell
+        // above rather than joining it here, because quotations carries
+        // `capability: 'retail.sell'`, which every cashier DOES hold by
+        // default, and moving it here would have made this group render
+        // for a cashier -- exactly the case the exit criteria says must
+        // stay empty ("a cashier sees no ... Grow ... Connected services").
+        { label: 'Grow',    items: ['promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases', 'transfers'] },
-        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log', 'cheques', 'receivables', 'payables', 'trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow'] },
-        { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
+        { label: 'Money',   items: ['receivables', 'payables', 'cheques'] },
+        { label: 'Books',   items: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow'] },
+        { label: 'Reports', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+        { label: 'Connected services', key: 'connected', items: ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'] },
       ],
     },
   },
@@ -1307,15 +1412,31 @@ const SubsystemApp = {
           // hidden inside the backend's authorization check, so removing
           // that (it was granting admin to whichever device asked first --
           // see retail_api.py's _is_admin_device) would have left this flag
-          // permanently false and the Settings/Audit Log nav entries
-          // permanently hidden on every install. The server now tells us
-          // whether a claim is available (admin role + nobody has claimed
-          // yet); _maybeOfferAdminDeviceClaim() below turns that into the
-          // one visible action that gets a fresh install its admin device.
+          // permanently false and the Audit Log nav entry permanently
+          // hidden on every install. The server now tells us whether a
+          // claim is available (admin role + nobody has claimed yet);
+          // _autoClaimAdminOnSignup() (called from the signup flow, below in
+          // this file) is what actually resolves it today -- P0 #20 traded
+          // the old dismissible red bar this comment used to point at for a
+          // silent claim fired the instant the owner's account is created,
+          // so nobody has to click anything to get there. Settings itself no
+          // longer depends on this flag at all (P1a item 1, "Settings
+          // follows the person, not the device") -- see the 'admin-center'
+          // nav entry's own comment for why it now reads a capability
+          // instead.
           this.canClaimAdminDevice = !!(dev && dev.success && dev.can_claim_admin === true);
+          // P1a item 2 (identity chip): "computer name, if known" -- reusing
+          // this SAME response rather than a second fetch. device_label is
+          // an operator-set name (device_registry.py); platform ('WINDOWS'/
+          // 'ANDROID') is the fallback when nobody has named this till yet.
+          // null when neither is known, so the chip can omit the segment
+          // instead of rendering the word "null".
+          this.deviceLabel = (dev && dev.success && dev.device
+            && (dev.device.device_label || dev.device.platform)) || null;
         } catch (e) {
           this.isAdminDevice = false;
           this.canClaimAdminDevice = false;
+          this.deviceLabel = null;
         }
 
         // ── Device activation gate ───────────────────────────────────────
@@ -1353,8 +1474,81 @@ const SubsystemApp = {
 
     // Single-product build: there is only ever one system, so skip the
     // multi-subsystem chooser entirely and launch straight into it.
-    this.launch('retail', 'dashboard');
-    this._maybeOfferAdminDeviceClaim();
+    //
+    // P1a item 2 ("the cashier lands on the till"): home follows
+    // CAPABILITIES, not role -- see _isSellOnlyCapabilities()'s own comment
+    // for why. A person whose grants are sell-only (the cashier default)
+    // starts on the till itself, with no refusal sentence in between; every
+    // other case -- admin, manager, or capabilities not yet known -- starts
+    // on today's dashboard. exit() (the sidebar brand-logo click) now applies
+    // the SAME rule (fix round 3, HIGH 2): it used to always send a cashier
+    // to 'dashboard', one click from the refusal sentence the dashboard shows
+    // them. "Home" is the till for a sell-only person, on every path.
+    this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');
+
+    // P1a item 5: polled at shell start and on window 'focus' ONLY, never
+    // per navigation -- see _pollConnectedServicesStatus's own comment.
+    //
+    // M1 (fix round), two bugs measured directly by the verifier:
+    //   1. `window.addEventListener('focus', ...)` ran here, inside init(),
+    //      and init() runs again on every re-login (the relogin modal calls
+    //      it in the SAME document, never a page reload) -- so the listener
+    //      STACKED, one per login, and a single focus after 3 relogins fired
+    //      16 requests (4 endpoints x 4 stacked listeners) instead of 4.
+    //      _ensureConnectedServicesFocusListener() below installs it ONCE,
+    //      ever, guarded by a flag -- the exact pattern
+    //      _ensureDropdownGlobalListeners() above already uses for the same
+    //      reason.
+    //   2. A cashier/manager can never SEE the Connected services group
+    //      (every item in it is `ownerOnly`), so polling for them was four
+    //      wasted requests on every boot and every focus, for a group that
+    //      will never render. `_connectedPollActive` gates both the initial
+    //      call and every future focus-triggered one on `this.role ===
+    //      'admin'` -- the same population that can see the group at all.
+    this._connectedPollActive = this.role === 'admin';
+    if (this._connectedPollActive) this._pollConnectedServicesStatus();
+    this._ensureConnectedServicesFocusListener();
+  },
+
+  // Installed exactly once for the page's lifetime -- see the call site
+  // above for why re-adding it on every init()/re-login was the bug.
+  _ensureConnectedServicesFocusListener() {
+    if (this._connectedFocusListenerInstalled) return;
+    this._connectedFocusListenerInstalled = true;
+    if (typeof window === 'undefined' || !window.addEventListener) return;
+    window.addEventListener('focus', () => {
+      // Re-checked on every focus, not just at install time: a person who
+      // logs out and back in as a different role between focus events must
+      // not inherit the previous role's polling state, and logout() below
+      // flips this flag false immediately so a focus while signed out (the
+      // relogin modal is up) fires nothing.
+      if (this._connectedPollActive) this._pollConnectedServicesStatus();
+    });
+  },
+
+  // See launch() call site above. Unknown capabilities (this.capabilities
+  // not yet an array -- see hasCapability()'s own fail-open documentation)
+  // answer false here, i.e. FAIL OPEN to the dashboard, which is what keeps
+  // retail_reports_capability_gate_test.js's
+  // testReportsNavVisibleWhenCapabilitiesUnknown green: a cashier whose
+  // grants failed to load must never be routed somewhere DIFFERENT from
+  // what they would see if the load had succeeded -- the till is the
+  // narrower, not the safer, default here (a manager mis-routed to the till
+  // merely sees one extra click to Dashboard; a manager mis-routed there
+  // because loading failed is the ordinary case this whole method exists to
+  // get right, so it must default to the SAME screen an admin/manager gets).
+  _isSellOnlyCapabilities() {
+    if (!Array.isArray(this.capabilities)) return false;
+    // The five grants no cashier default (ROLE_CASHIER in
+    // commercial_runtime/identity/user_accounts.py: sell, refund,
+    // cash.close only) ever carries. Any ONE of them present means this
+    // person can do something beyond selling, so their home is the
+    // dashboard, not the till -- matches every other capability-gated nav
+    // entry's own "hiding the entry is not the enforcement" reasoning: this
+    // routing choice is a convenience, never a security boundary, and every
+    // screen it skips past still gates itself.
+    const BEYOND_SELLING = ['retail.discount', 'retail.stock.adjust', 'retail.reports', 'retail.employees', 'retail.cash.approve'];
+    return !BEYOND_SELLING.some((cap) => this.capabilities.includes(cap));
   },
 
   // See the comment on the call site above. Reads the same
@@ -1393,142 +1587,33 @@ const SubsystemApp = {
     return (b.business_name || b.branding_business_name || '').trim() || null;
   },
 
-  // ── Admin-device claim prompt ───────────────────────────────────────────────
-  // Shown only when the server says a claim is genuinely available: an admin
-  // is logged in AND no device has claimed the role yet for this company.
-  // Deliberately NOT shown to a non-admin, and never shown once some device
-  // holds the flag -- a button that can only ever return 409 is worse than
-  // no button. The server re-derives every one of those conditions on the
-  // POST (and the `idx_devices_one_admin` partial unique index has the final
-  // say), so this prompt is convenience, never the enforcement.
-  //
-  // Persistent element on document.body, not inside #subsystem-shell, for
-  // the same reason as the sync banner below: _renderShell() replaces that
-  // element's entire innerHTML on every launch().
-  // Removing the bar and releasing the space it reserved are ONE action. They
-  // were four separate call sites (dismiss, two failure paths, success), which
-  // is three chances to remember only the first half and leave a dead strip
-  // across the bottom of the till.
+  // ── Admin-device claim (P1a item 1 deleted the bar this comment described;
+  //     see the trailing note below the deleted block for the full reason)
   _removeAdminDeviceClaimBar() {
+    // P1a item 1: dead by construction now -- nothing appends an element
+    // with this id any more (the bar and its trigger,
+    // _maybeOfferAdminDeviceClaim/_claimAdminDevice, are deleted). Left as a
+    // no-op rather than removed outright: _reflowBottomOverlays still calls
+    // it defensively from its own dismissal paths elsewhere in this file,
+    // and getElementById on a nonexistent id is a correct, cheap no-op, not
+    // a bug to route around.
     document.getElementById('aura-admin-device-claim')?.remove();
     this._reflowBottomOverlays();
   },
 
-  _maybeOfferAdminDeviceClaim() {
-    this._removeAdminDeviceClaimBar();
-    if (this.isAdminDevice || !this.canClaimAdminDevice) return;
-    if (sessionStorage.getItem('admin_device_claim_dismissed') === 'true') return;
-
-    const bar = document.createElement('div');
-    bar.id = 'aura-admin-device-claim';
-    // The fourth site that was still on the pre-token HUD palette (#1e1e2e
-    // ground, #e8e8f0 text, a hardcoded rose border and a #f43f5e button)
-    // after the sync pill and the toast were converted. Danger triad: this
-    // bar exists because the install is in a state that hides Settings and
-    // the Audit Log until it is resolved. `left:50%` stays physical on
-    // purpose -- it is a CENTERING offset paired with translateX(-50%), the
-    // same direction-neutral pair retail_design_rtl_test.js's own budget
-    // excludes, not a leading-edge pin.
-    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:var(--overlay-inset-block-end,24px);z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:var(--state-danger-surface);border:1px solid var(--state-danger-border);box-shadow:0 10px 30px rgba(0,0,0,.45);color:var(--state-danger-text);font-size:13px;line-height:1.5;';
-    // textContent (not innerHTML) for the message, and every button built as
-    // a real element: nothing here interpolates a server-supplied string
-    // into markup.
-    const msg = document.createElement('span');
-    // flex BASIS, not a bare flex:1. At 390px the two buttons take their
-    // intrinsic width first and left the message about 60px, which wrapped
-    // it to ONE WORD PER LINE and grew this banner to roughly half the
-    // phone screen, burying the till underneath it. With a 220px basis and
-    // flex-wrap on the container, the buttons drop to their own row instead
-    // and the sentence reads normally.
-    msg.style.cssText = 'flex:1 1 220px;min-inline-size:0;';
-    msg.textContent = 'This device is not yet your store\'s admin device. Settings and the Audit Log stay hidden until one device is chosen.';
-    const claim = document.createElement('button');
-    claim.className = 'btn btn-primary';
-    // The one action on this bar, so it takes the accent -- "this is the
-    // action you take" (DESIGN.md §2.1) -- rather than a second red that
-    // would compete with the bar's own danger ground. --text-on-accent is
-    // the only text token allowed on an accent fill.
-    claim.style.cssText = 'white-space:nowrap;padding:8px 16px;border-radius:9px;border:none;background:var(--accent-action);color:var(--text-on-accent);font-size:13px;font-weight:600;cursor:pointer;';
-    claim.textContent = 'Make this the admin device';
-    const later = document.createElement('button');
-    later.style.cssText = 'background:none;border:none;color:var(--text-tertiary);font-size:13px;cursor:pointer;padding:8px;';
-    later.textContent = 'Not now';
-
-    claim.addEventListener('click', () => this._claimAdminDevice(claim));
-    later.addEventListener('click', () => {
-      // Session-scoped, not localStorage: "not now" should mean this
-      // sitting, not "never ask again on this machine" -- an install left
-      // permanently without an admin device is the failure state this whole
-      // prompt exists to get out of.
-      sessionStorage.setItem('admin_device_claim_dismissed', 'true');
-      bar.remove();
-      SubsystemApp._reflowBottomOverlays();
-    });
-
-    bar.append(msg, claim, later);
-    document.body.appendChild(bar);
-    // Measured AFTER it is in the document: this bar wraps to two rows on a
-    // narrow till, so its height is not a constant and must not be guessed.
-    this._reflowBottomOverlays();
-    if (window.AuraI18n) AuraI18n.apply();   // translate before first paint settles
-  },
-
-  async _claimAdminDevice(button) {
-    button.disabled = true;
-    const original = button.textContent;
-    button.textContent = t('Working…');
-    let body = null, ok = false;
-    try {
-      const res = await fetch('/api/devices/me/claim-admin', {
-        method: 'POST', credentials: 'include', cache: 'no-store',
-      });
-      body = await res.json().catch(() => null);
-      ok = res.ok;
-    } catch (e) {
-      // Network failure -- leave the prompt in place so it can be retried.
-    }
-    if (!ok) {
-      button.disabled = false;
-      button.textContent = original;
-      // ADMIN_DEVICE_ALREADY_CLAIMED means another device won in the
-      // meantime; say which one, since the whole point of the server
-      // naming the holder is that the user knows where to go.
-      const holder = body && body.admin_device && (body.admin_device.device_label || body.admin_device.platform);
-      // AuraI18n.t() explicitly here, not the DOM sweep: the sweep only
-      // translates a text node whose FULL trimmed text matches a dictionary
-      // key (see i18n.js), so a sentence with a device name concatenated
-      // onto it would silently stay English in Arabic. Translating the fixed
-      // half and appending the (untranslatable) device name is the only
-      // shape that actually localizes.
-      const t = (s) => (window.AuraI18n ? AuraI18n.t(s) : s);
-      this.showToast(
-        holder ? t('Another device is already the admin device:') + ' ' + holder
-               : t('Could not make this the admin device.'),
-        'error'
-      );
-      if (body && body.code === 'ADMIN_DEVICE_ALREADY_CLAIMED') {
-        this.canClaimAdminDevice = false;
-        this._removeAdminDeviceClaimBar();
-      }
-      return;
-    }
-    this.isAdminDevice = true;
-    this.canClaimAdminDevice = false;
-    this._removeAdminDeviceClaimBar();
-    this.showToast(t('This device is now your store\'s admin device.'), 'success');
-    // Re-render so the adminOnly nav entries (Settings, Audit Log) appear
-    // immediately -- _renderShell()'s nav filter reads this.isAdminDevice,
-    // so without this the user would have to restart the app to see the
-    // thing they just enabled.
-    this.launch(this.active || 'retail', this.currentSection || 'dashboard');
-  },
+  // What used to live here: _maybeOfferAdminDeviceClaim() (built the
+  // dismissible red bar), _claimAdminDevice(button) (its click handler,
+  // POST /api/devices/me/claim-admin). Deleted whole -- Settings no longer
+  // depends on `this.isAdminDevice` (see the 'admin-center' nav entry's own
+  // comment), so the bar's entire reason to exist is gone, and its handler
+  // had no other caller. _autoClaimAdminOnSignup() below calls the SAME
+  // POST route directly and is UNCHANGED: it is how a fresh install's admin
+  // device still gets claimed, silently, the instant the owner's account is
+  // created -- this deletion removes only the manual, dismissible fallback
+  // path, not device-admin claiming itself.
 
   // P0 #20 -- the computer that just typed the company's name into the
-  // signup form IS the store's main computer, and asking its own owner to
-  // then click a dismissible red bar to confirm that (see
-  // _maybeOfferAdminDeviceClaim/_claimAdminDevice above) produced a
-  // permanent dead end: "Not now" removed Settings with no way back, on the
-  // very install where Settings matters most. Trust-on-first-claim, fired
+  // signup form IS the store's main computer. Trust-on-first-claim, fired
   // the instant create-admin succeeds, before this device's owner has seen a
   // single real screen.
   //
@@ -1656,8 +1741,14 @@ const SubsystemApp = {
 
   exit() {
     // Single-product build: "exit" (clicking the logo) just returns to the
-    // retail dashboard — there is no other subsystem to choose between.
-    this.launch('retail', 'dashboard');
+    // retail home -- there is no other subsystem to choose between.
+    // HIGH 2 (fix round 3): "home" is the till for a sell-only person, the
+    // dashboard for everyone else. The dashboard is hidden from a cashier's
+    // nav (_isNavItemVisible), but this one-click logo route used to land
+    // them on it anyway and show the refusal sentence. Unknown capabilities
+    // fail open (_isSellOnlyCapabilities returns false), so a load failure
+    // never mis-routes a manager to the till.
+    this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');
   },
 
   // Device license activation/status page (licensing.html + licensing.js,
@@ -1736,6 +1827,13 @@ const SubsystemApp = {
     // intercepts any /api/ 401 and pops the relogin modal, so a sync-health
     // poll racing this logout would trigger a spurious relogin modal.
     this._stopSyncHealthPoll();
+    // M1 (fix round): same reasoning for Connected services -- a focus
+    // event while signed out used to still fire all four status requests
+    // (measured: 4 requests, all 401) and each one is a real, if harmless,
+    // wasted round trip through the auth guard. The focus listener itself
+    // stays installed (see _ensureConnectedServicesFocusListener's own
+    // comment on why it is never re-added), only this flag flips.
+    this._connectedPollActive = false;
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } catch(e) {}
@@ -3072,9 +3170,15 @@ const SubsystemApp = {
               <span class="sub-tab-label">${t(label)}</span>
             </a>
           `;
+    // HIGH 2 (fix round 3): a sell-only person's Home slot IS the till --
+    // the Home tab pointed at the dashboard, one tap from the refusal
+    // sentence. For them the bar is Stock, Till (raised, centred), Customers,
+    // More; the Home slot is dropped rather than duplicating Till. Owner and
+    // manager (and unknown capabilities, which fail open) keep Home unchanged.
+    const sellOnly = this._isSellOnlyCapabilities();
     const tabBarHTML = `
       <nav class="sub-tabbar" id="sub-tabbar" aria-label="${t('Quick navigation')}">
-        ${tabHTML('dashboard', '🏠', 'Home')}
+        ${sellOnly ? '' : tabHTML('dashboard', '🏠', 'Home')}
         ${tabHTML('products', '📦', 'Stock')}
         ${tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
         ${tabHTML('customers', '👥', 'Customers')}
@@ -3108,19 +3212,108 @@ const SubsystemApp = {
     // section in place, and a screen-reader user told "link" reasonably
     // expects a page load. Enter AND Space are both bound below, which is the
     // button contract -- a real link would take Enter only.
-    const navItemHTML = (item) => `
+    //
+    // `trailing` (P1a item 5) is extra markup appended inside the item, used
+    // ONLY by the Connected services group's per-item status dot -- every
+    // other caller omits it and gets exactly the old markup.
+    //
+    // externalPage (P1a item 5): whatsapp/einvoicing/site-relay are real
+    // standalone documents, not `RetailSystem.render()` cases, so their click
+    // action browser-navigates instead of calling `_navigate`. data-section
+    // is kept either way so retail_nav_groups_test.js's token scan and
+    // keyboard activation (_wireNavKeyboardActivation, which fires .click())
+    // both still work unchanged.
+    // M3 (fix round): on the Till route's 64px icon rail, .sub-nav-label is
+    // visually hidden (main.css's .sub-sidebar-rail rule) and the icon
+    // alone (an inline SVG/emoji with no alt text) carries the whole
+    // accessible name -- which is to say none. title (a mouse/touch
+    // tooltip) and aria-label (the accessible name, screen readers) are set
+    // unconditionally, not only in rail mode: harmless duplication of the
+    // visible label off the rail, the only fix that matters on it.
+    const navItemHTML = (item, trailing) => {
+      const action = item.externalPage
+        ? `location.href='/static/${item.externalPage}'`
+        : `SubsystemApp._navigate('${item.id}')`;
+      const label = this._esc(t(item.label));
+      return `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
                tabindex="0" role="button"
-               onclick="SubsystemApp._navigate('${item.id}')">
+               title="${label}" aria-label="${label}"
+               onclick="${action}">
               <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
               <span class="sub-nav-label">${t(item.label)}</span>
+              ${trailing || ''}
             </a>
           `;
+    };
     const byId = new Map(sys.nav.map((item) => [item.id, item]));
     const dashboardItem = byId.get('dashboard');
-    const dashboardHTML = (dashboardItem && this._isNavItemVisible(dashboardItem)) ? navItemHTML(dashboardItem) : '';
+    // Coordinator fix round #2: a sell-only cashier could still click
+    // 'Dashboard' (no capability gate of its own -- it is everyone's home
+    // screen by default) and land on the real refusal sentence
+    // ("Sales totals and reports are limited to managers…") crew T's
+    // _renderCashierLanding renders there -- exactly the dead-end item 2's
+    // whole home-routing story exists to avoid; the till is supposed to be
+    // this person's only home, with nothing else to accidentally wander
+    // into. `!this._isSellOnlyCapabilities()` reuses the SAME predicate
+    // init()'s own home-routing already reads (see that method's comment),
+    // so this can never disagree with where a sell-only person actually
+    // lands: unknown/null capabilities fail OPEN there (routes to
+    // dashboard) and therefore fail OPEN here too (dashboard entry stays
+    // visible) -- one rule, not a second copy that could drift.
+    const dashboardHTML = (dashboardItem && this._isNavItemVisible(dashboardItem) && !this._isSellOnlyCapabilities())
+      ? navItemHTML(dashboardItem) : '';
+
+    // ── Connected services status dots (P1a item 5) ─────────────────────────
+    // Always a dot plus a WORD (design_system: "never colour alone"). States
+    // come from this._connectedStatus, populated by _pollConnectedServices*
+    // (polled at shell start and on window focus only -- see that method's
+    // own comment for why never per-navigation). Defaults to 'unknown' for
+    // anything not yet polled -- never a fabricated 'ok' AND never a
+    // fabricated 'off' (M8, fix round): "not yet checked" and "checked and
+    // genuinely disabled" are different facts, and collapsing them into
+    // 'off' told the owner a channel was switched off when the truth was
+    // this till simply had not heard back yet (a non-200, a network
+    // failure, or the first paint before the first poll resolves).
+    // 'checking' (LOW, fix round 3): the neutral state BEFORE the first poll
+    // has answered -- "asking", not "failed to ask". Same rank as 'unknown'.
+    const CONNECTED_STATUS_RANK = { ok: 0, off: 1, checking: 2, unknown: 2, attention: 3, failing: 4 };
+    const CONNECTED_STATUS_WORD = { off: t('Off'), ok: t('Connected'), attention: t('Needs attention'), failing: t('Failing'), unknown: t('Can\'t check'), checking: t('Checking…') };
+    const CONNECTED_STATUS_CLASS = { off: 'is-off', ok: 'is-ok', attention: 'is-attention', failing: 'is-failing', unknown: 'is-unknown', checking: 'is-checking' };
+    const connectedStateOf = (id) => (this._connectedStatus && this._connectedStatus[id]) || (this._connectedPolled ? 'unknown' : 'checking');
+    // Wrapped in one .sub-nav-status span (not two bare siblings) so
+    // main.css can push it to the trailing edge with one
+    // margin-inline-start:auto rule inside the existing flex row, instead
+    // of matching two loose spans.
+    const statusDotHTML = (state) => {
+      const s = CONNECTED_STATUS_RANK.hasOwnProperty(state) ? state : 'unknown';
+      return `<span class="sub-nav-status"><span class="status-dot ${CONNECTED_STATUS_CLASS[s]}" aria-hidden="true"></span><span class="sub-nav-status-word">${CONNECTED_STATUS_WORD[s]}</span></span>`;
+    };
+
+    // ── Collapsible groups, one open at a time (P1a item 4) ─────────────────
+    // The OPEN group is: whichever group holds the current section (so
+    // navigating INTO a group opens it, even from a cold shell render);
+    // failing that, this user's remembered choice (localStorage, wrapped in
+    // try/catch -- see _loadSidebarGroupPreference); failing that, the
+    // first group. _navigate() (below in this file) keeps this in step on
+    // every in-shell navigation without a full _renderShell re-render, via
+    // the SAME _toggleSidebarGroup this header button calls on a manual
+    // click -- one code path for "the active route opened this group" and
+    // "the person clicked this group", so they can never disagree about
+    // what "open" means.
+    const groupKeyOf = (g) => g.key || g.label;
+    let activeGroupKey = null;
+    for (const g of (sys.navGroups || [])) {
+      if (g.items.includes(activeSection)) { activeGroupKey = groupKeyOf(g); break; }
+    }
+    const firstGroupKey = (sys.navGroups && sys.navGroups[0]) ? groupKeyOf(sys.navGroups[0]) : null;
+    const openGroupKey = activeGroupKey || this._loadSidebarGroupPreference() || firstGroupKey;
+    this._openSidebarGroup = openGroupKey;
+
     const groupsHTML = (sys.navGroups || []).map((group) => {
+      const gKey = groupKeyOf(group);
+      const isConnected = gKey === 'connected';
       const visibleItems = group.items
         .map((id) => byId.get(id))
         .filter((item) => item && this._isNavItemVisible(item));
@@ -3129,10 +3322,114 @@ const SubsystemApp = {
       // retail_nav_groups_test.js -- rendering the header unconditionally
       // here is exactly the bug that test exists to catch.
       if (!visibleItems.length) return '';
+
+      const isOpen = gKey === openGroupKey;
+      // The group header shows the WORST member state (design_system /
+      // item 5: "the group header shows the worst state"), never the
+      // average or the first -- a shop wants to know the one thing that
+      // needs attention, not a summary that could hide it.
+      //
+      // M8 fix-round BUG, found here directly: this used to seed the
+      // reduce at 'off' (rank 1) rather than 'ok' (rank 0) -- since the
+      // reduce only ever PROMOTES to a HIGHER rank, seeding above the
+      // lowest possible rank meant a group whose every real member was
+      // genuinely 'ok' could never fall back down to 'ok': the comparison
+      // `0 > 1` is false for every item, so `worst` stayed 'off' for the
+      // whole reduce and the header would have read "Off" even when every
+      // channel underneath it said "Connected". The connected group is
+      // never rendered empty (the empty-group rule above already returns
+      // '' before this line runs), so 'ok' -- the true floor of
+      // CONNECTED_STATUS_RANK -- is always overwritten by a real member's
+      // state the instant one is worse, exactly as intended.
+      const worstConnectedState = visibleItems.reduce((worst, item) => {
+        const state = connectedStateOf(item.id);
+        return CONNECTED_STATUS_RANK[state] > CONNECTED_STATUS_RANK[worst] ? state : worst;
+      }, 'ok');
+      const headerTrailing = isConnected ? statusDotHTML(worstConnectedState) : '';
+      const itemsHTML = visibleItems
+        .map((item) => navItemHTML(item, isConnected ? statusDotHTML(connectedStateOf(item.id)) : ''))
+        .join('');
       return `
-          <div class="sub-nav-group-label">${t(group.label)}</div>
-          ${visibleItems.map(navItemHTML).join('')}`;
+          <div class="sub-nav-group">
+            <button type="button" class="sub-nav-group-label" data-group-toggle="${gKey}"
+               aria-expanded="${isOpen}" onclick="SubsystemApp._toggleSidebarGroup('${this._esc(gKey)}')">
+              <span class="sub-nav-group-label-text">${t(group.label)}</span>
+              ${headerTrailing}
+              <span class="sub-nav-group-chevron" aria-hidden="true">${this._chevronGlyph(isOpen)}</span>
+            </button>
+            <div class="sub-nav-group-items" data-group-items="${gKey}"${isOpen ? '' : ' hidden'}>
+              ${itemsHTML}
+            </div>
+          </div>`;
     }).join('');
+
+    // ── Footer: Settings gear + AI button only (P1a item 4) ─────────────────
+    // Licence and Log Out moved to the identity chip's menu (item 2) --
+    // freeing the ~110px the old three-button footer used, part of the
+    // owner's 768px height budget (see systems.retail.navGroups' own
+    // comment). The gear reuses the SAME 'admin-center' nav-item definition
+    // (and therefore the SAME capability gate) the Settings row in the phone
+    // More sheet does -- one rule, never re-derived.
+    const adminCenterItem = byId.get('admin-center');
+    const hasAdminCenter = !!(adminCenterItem && this._isNavItemVisible(adminCenterItem));
+    // H1 fix-round ("Employees, Branches, Backup & export and Licence have
+    // no click path"): the footer gear is now a small MENU, the same
+    // pattern as the identity chip's own menu, listing every one of the
+    // five settings-shaped screens -- each gated EXACTLY like its own nav
+    // entry (reusing `_isNavItemVisible` on the real nav item, never a
+    // second copy of the rule), so this menu and the (now-empty)
+    // navGroups arrangement can never disagree about who sees what.
+    // 'employees'/'branches'/'backup-export' are still UNGROUPED in
+    // navGroups (no sidebar-list membership -- see that array's own
+    // comment for why), but they are NOT unreachable any more: the gear
+    // menu is their real path, in exactly 2 clicks (gear, then the row).
+    const employeesItem = byId.get('employees');
+    const branchesItem = byId.get('branches');
+    const backupExportItem = byId.get('backup-export');
+    const hasEmployees = !!(employeesItem && this._isNavItemVisible(employeesItem));
+    const hasBranches = !!(branchesItem && this._isNavItemVisible(branchesItem));
+    const hasBackupExport = !!(backupExportItem && this._isNavItemVisible(backupExportItem));
+    const hasSettingsGear = hasAdminCenter || hasEmployees || hasBranches || hasBackupExport;
+    // M10: with no admin device claimed yet, there was no way back to the
+    // claim action at all (the old red bar this replaced is deleted --
+    // see item 1's own comment). Offered here, inside the same population
+    // that can already see the gear (never to a cashier), rather than a
+    // second unconditional banner.
+    const canClaimHere = hasSettingsGear && this.canClaimAdminDevice;
+
+    // ── Identity chip (P1a item 2) ───────────────────────────────────────────
+    const displayName = this._identityDisplayName();
+    const chipHTML = `
+      <div class="sub-identity-chip">
+        <button type="button" class="sub-identity-chip-btn" id="sub-identity-chip-btn"
+           aria-haspopup="true" aria-expanded="false"
+           onclick="SubsystemApp._toggleIdentityMenu()">
+          <span class="sub-identity-initials" aria-hidden="true">${this._esc(this._identityInitials(displayName))}</span>
+          <span class="sub-identity-text">
+            <span class="sub-identity-name">${this._bdi(displayName, 'ltr')}</span>
+            <span class="sub-identity-meta">
+              ${this._identityRolePillHTML()}
+              ${this.deviceLabel ? this._bdi(this.deviceLabel, 'ltr') : ''}
+              ${this.isAdminDevice ? `<span class="sub-main-computer-badge"><span class="sub-main-computer-badge-icon" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('laptop', 11) : ''}</span>${t('Main computer')}</span>` : ''}
+            </span>
+          </span>
+        </button>
+        <div class="sub-identity-menu" id="sub-identity-menu" role="menu" aria-label="${t('Account menu')}" hidden>
+          <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();AuraI18n.toggle()">${t('Language')}</button>
+          <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();ThemeEngine.openPicker()">${t('Appearance')}</button>
+          ${this.role === 'admin' ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.openLicensing()">${t('Plan & devices')}</button>` : ''}
+          <button type="button" class="sub-identity-menu-item is-danger" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.logout()">${t('Log Out')}</button>
+        </div>
+      </div>
+    `;
+
+    // P1a item 4: the sidebar collapses to a 64px icon rail on the Till
+    // route specifically (not every route) -- the till is the one screen a
+    // cashier lives on all shift, and the full labels are the least useful
+    // there. _navigate() (below) keeps this class in step on an in-shell
+    // navigation without a full re-render, the same way it now keeps the
+    // open group in step.
+    const isTillRoute = activeSection === 'pos';
 
     shell.innerHTML = `
       <!-- FIRST in the DOM on purpose: a skip link is only useful if it is the
@@ -3156,7 +3453,7 @@ const SubsystemApp = {
          onclick="return SubsystemApp._skipToContent(event)">${t('Skip to main content')}</a>
 
       <!-- Subsystem Sidebar -->
-      <aside class="sub-sidebar" id="sub-sidebar">
+      <aside class="sub-sidebar${isTillRoute ? ' sub-sidebar-rail' : ''}" id="sub-sidebar">
         <div class="sub-sidebar-brand aura-logo" title="${t('Return to Home')}">
           <!-- The Aura mark itself, not a boxed sys.icon emoji -- the owner's
                "shouldn't the logo be where it says aura retail" complaint,
@@ -3208,12 +3505,25 @@ const SubsystemApp = {
             ${window.SubAI && window.SubAI._configured === true ? '<span class="ai-pulse" id="sub-ai-pulse-dot"></span>' : ''}
           </button>
           ` : ''}
-          <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="${t('Device license activation and status')}">
-            <span>${window.AuraIcons ? AuraIcons.render('key-round', 18) : '🔑'}</span> <span>${t('License')}</span>
-          </button>
-          <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:var(--state-danger-surface);border-color:var(--state-danger-border);color:var(--state-danger-text);margin-top:4px;">
-            <span>${window.AuraIcons ? AuraIcons.render('log-out', 18) : '⏻'}</span> <span>${t('Log Out')}</span>
-          </button>
+          ${hasSettingsGear ? `
+          <div class="sub-settings-menu-wrap">
+            <button type="button" class="sub-nav-item sub-settings-gear" id="sub-settings-gear-btn"
+               aria-haspopup="true" aria-expanded="false"
+               title="${t('Settings menu')}" aria-label="${t('Settings menu')}"
+               onclick="SubsystemApp._toggleSettingsMenu()">
+              <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render('settings', 17) : '⚙️'}</span>
+              <span class="sub-nav-label">${t('Settings')}</span>
+            </button>
+            <div class="sub-identity-menu sub-settings-menu" id="sub-settings-menu" role="menu" aria-label="${t('Settings menu')}" hidden>
+              ${hasAdminCenter ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-section="admin-center" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('admin-center')">${t('Settings')}</button>` : ''}
+              ${hasEmployees ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('employees')">${t('Employees')}</button>` : ''}
+              ${hasBranches ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('branches')">${t('Branches')}</button>` : ''}
+              ${hasBackupExport ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._navigate('backup-export')">${t('Backup & Export')}</button>` : ''}
+              <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp.openLicensing()">${t('License & devices')}</button>
+              ${canClaimHere ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeSettingsMenu();SubsystemApp._claimAdminDeviceFromMenu()">${t('Make this the main computer')}</button>` : ''}
+            </div>
+          </div>
+          ` : ''}
         </div>
       </aside>
 
@@ -3246,6 +3556,7 @@ const SubsystemApp = {
                  index.html's boot comment for that postmortem. -->
             <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${t('Change UI theme')}">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
           </div>
+          ${chipHTML}
         </header>
 
         <!-- tabindex="-1" is what makes the skip link above actually move
@@ -3266,6 +3577,388 @@ const SubsystemApp = {
     // operate -- which is arguably worse than being skipped, because it looks
     // like it should work.
     this._wireNavKeyboardActivation(shell);
+  },
+
+  // ── Identity chip helpers (P1a item 2) ──────────────────────────────────
+  // Email LOCAL-PART only, until Phase 1b's real display names ship (see
+  // this item's own plan text) -- never the raw email, which would leak the
+  // domain onto a screen customers can glance at over a cashier's shoulder.
+  // Falls back to the raw email (no '@' -- should not happen for a real
+  // account) and finally to a neutral placeholder, never an empty chip.
+  _identityDisplayName() {
+    const email = (this.currentUser && this.currentUser.email) || '';
+    const at = email.indexOf('@');
+    return (at > 0 ? email.slice(0, at) : email) || t('Signed in');
+  },
+
+  // Two letters, uppercased. An email local-part usually has no spaces to
+  // take initials FROM (unlike a real name), so this takes the first two
+  // letters/digits instead -- 'sara.k' -> 'SA', 'sara' -> 'SA'. Falls back to
+  // the raw first two characters (punctuation included) rather than '?' so a
+  // local-part that is ALL punctuation still shows something distinct.
+  _identityInitials(name) {
+    const cleaned = String(name || '').trim();
+    if (!cleaned) return '?';
+    const letters = cleaned.replace(/[^\p{L}\p{N}]/gu, '');
+    return (letters.slice(0, 2) || cleaned.slice(0, 2)).toUpperCase();
+  },
+
+  // Retail accent and neutrals ONLY (design_system: "Role pills ... in the
+  // Retail accent and neutrals only ... so that green, red, amber and blue
+  // keep their money meanings") -- deliberately NOT employees.js's own
+  // _roleBadge/RetailSystem._badge, which paints role with the SAME
+  // purple/blue/yellow palette this file's money states use elsewhere, the
+  // exact collision this rule exists to prevent for IDENTITY specifically.
+  // Only the three roles this codebase actually grants
+  // (commercial_runtime/identity/user_accounts.py ROLES) get a distinct
+  // treatment; normalize_role() itself fails closed to 'cashier' for
+  // anything else, so there is no fourth case to invent one for.
+  _identityRolePillHTML() {
+    const role = this.role;
+    const cls = role === 'admin' ? 'is-owner' : role === 'manager' ? 'is-manager' : 'is-cashier';
+    const label = role === 'admin' ? t('Owner') : role === 'manager' ? t('Manager') : t('Cashier');
+    return `<span class="sub-role-pill ${cls}">${label}</span>`;
+  },
+
+  // ── Generic dropdown-menu controller (fix round M2) ─────────────────────
+  // Both the identity chip's menu and the settings-gear menu (H1) are the
+  // SAME pattern -- a toggle button plus an absolutely-positioned panel --
+  // so they now share ONE implementation instead of two copies that could
+  // drift (the exact way the original identity-menu-only version could not
+  // have been reused for the gear menu without copy-pasting it).
+  //
+  // WHY THIS REPLACED THE OLD `{once:true}` OUTSIDE-CLICK LISTENER: that
+  // listener consumed itself on the very FIRST document click after
+  // opening, whether or not that click was actually outside the menu (e.g.
+  // a click on the menu's own padding, or on a disabled row that happens to
+  // still dispatch a bubbling click). Once consumed, no listener remained
+  // to catch the NEXT, genuinely outside click, so the menu could get stuck
+  // open. This version installs ONE persistent, never-removed document
+  // listener (guarded so it installs exactly once ever) that re-checks
+  // containment on every click, so an inside click is correctly ignored
+  // and a later outside click still closes it.
+  _dropdownState: null, // { btnId, menuId } | null
+
+  _openDropdown(btnId, menuId) {
+    const menu = document.getElementById(menuId);
+    const btn = document.getElementById(btnId);
+    if (!menu || !btn) return;
+    // LOW (fix round 3): only ONE dropdown open at a time. _dropdownState is a
+    // single slot, so opening B while A was open OVERWROTE it -- A stayed
+    // visibly open with nothing left tracking it (Escape and outside-click
+    // only ever closed B; the verifier measured both menus open at once).
+    // Close whichever is open first, by its OWN ids, before claiming the slot.
+    const open = this._dropdownState;
+    if (open && open.menuId !== menuId) this._closeDropdown(open.btnId, open.menuId);
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    this._dropdownState = { btnId, menuId };
+    this._ensureDropdownGlobalListeners();
+  },
+
+  _closeDropdown(btnId, menuId) {
+    const menu = document.getElementById(menuId);
+    const btn = document.getElementById(btnId);
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (this._dropdownState && this._dropdownState.menuId === menuId) this._dropdownState = null;
+  },
+
+  _toggleDropdown(btnId, menuId) {
+    const menu = document.getElementById(menuId);
+    if (!menu) return;
+    if (menu.hidden) this._openDropdown(btnId, menuId);
+    else this._closeDropdown(btnId, menuId);
+  },
+
+  // Installed ONCE for the lifetime of the page (guarded by the flag, same
+  // shape as _ensureConnectedServicesFocusListener below) -- not per-open,
+  // which is exactly the bug the old {once:true} shape had.
+  _ensureDropdownGlobalListeners() {
+    if (this._dropdownListenersInstalled) return;
+    this._dropdownListenersInstalled = true;
+    document.addEventListener('click', (e) => {
+      const state = SubsystemApp._dropdownState;
+      if (!state) return;
+      const btn = document.getElementById(state.btnId);
+      const menu = document.getElementById(state.menuId);
+      const wrap = (btn && typeof btn.closest === 'function' && btn.closest('.sub-identity-chip, .sub-settings-menu-wrap'))
+        || (menu && menu.parentElement);
+      if (wrap && e.target && typeof wrap.contains === 'function' && wrap.contains(e.target)) return;
+      SubsystemApp._closeDropdown(state.btnId, state.menuId);
+    });
+    // Escape / ArrowUp / ArrowDown / Tab-out -- capture phase so this sees
+    // the key before any per-row handler could stop propagation.
+    document.addEventListener('keydown', (e) => SubsystemApp._onDropdownKeydown(e), true);
+  },
+
+  _onDropdownKeydown(e) {
+    const state = this._dropdownState;
+    if (!state) return;
+    const menu = document.getElementById(state.menuId);
+    if (!menu) return;
+    const items = Array.prototype.filter.call(
+      menu.querySelectorAll('.sub-identity-menu-item'),
+      (el) => !el.disabled
+    );
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      this._closeDropdown(state.btnId, state.menuId);
+      const btn = document.getElementById(state.btnId);
+      if (btn) btn.focus();
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!items.length) return;
+      e.preventDefault();
+      const idx = items.indexOf(document.activeElement);
+      const next = e.key === 'ArrowDown'
+        ? items[(idx + 1 + items.length) % items.length]
+        : items[(idx - 1 + items.length) % items.length];
+      next.focus();
+      return;
+    }
+    if (e.key === 'Tab') {
+      // Tabbing PAST the last enabled item (forward) or BEFORE the first
+      // (backward, Shift+Tab) leaves the menu's own focus trap -- close it
+      // so a hidden-but-still-open panel never sits behind unrelated page
+      // focus. A Tab that lands ON one of the menu's own items (including
+      // arriving via the very first Tab from the toggle button) is left
+      // alone.
+      const idx = items.indexOf(document.activeElement);
+      const leavingForward = !e.shiftKey && idx === items.length - 1;
+      const leavingBackward = e.shiftKey && idx === 0;
+      if (leavingForward || leavingBackward) {
+        this._closeDropdown(state.btnId, state.menuId);
+      }
+    }
+  },
+
+  _toggleIdentityMenu() { this._toggleDropdown('sub-identity-chip-btn', 'sub-identity-menu'); },
+  _closeIdentityMenu() { this._closeDropdown('sub-identity-chip-btn', 'sub-identity-menu'); },
+
+  // H1: the footer gear's own menu -- same controller, different ids.
+  _toggleSettingsMenu() { this._toggleDropdown('sub-settings-gear-btn', 'sub-settings-menu'); },
+  _closeSettingsMenu() { this._closeDropdown('sub-settings-gear-btn', 'sub-settings-menu'); },
+
+  // M10: "with no main computer claimed, there is no claim path" -- the
+  // gear menu's own entry (shown only when canClaimAdminDevice is true,
+  // i.e. never to a cashier, since the gear itself is hidden from them).
+  // Calls the SAME real POST /api/devices/me/claim-admin route
+  // _autoClaimAdminOnSignup already uses; unlike that silent, unattended
+  // call, this one answers a real click and must say what happened.
+  async _claimAdminDeviceFromMenu() {
+    let ok = false, body = null;
+    try {
+      const res = await fetch('/api/devices/me/claim-admin', {
+        method: 'POST', credentials: 'include', cache: 'no-store',
+      });
+      ok = res.ok;
+      body = await res.json().catch(() => null);
+    } catch (e) {
+      // Network failure -- fall through to the failure toast below.
+    }
+    if (!ok) {
+      const holder = body && body.admin_device && (body.admin_device.device_label || body.admin_device.platform);
+      this.showToast(
+        holder ? t('Another device is already the admin device:') + ' ' + holder
+               : t('Could not make this the admin device.'),
+        'error'
+      );
+      return;
+    }
+    this.isAdminDevice = true;
+    this.canClaimAdminDevice = false;
+    this.showToast(t('This device is now your store\'s admin device.'), 'success');
+    // Re-render so the Audit Log entry, the 'Main computer' badge and the
+    // gear menu's own claim row (now gone -- canClaimAdminDevice is false)
+    // all reflect the new state immediately.
+    this.launch(this.active || 'retail', this.currentSection || 'dashboard');
+  },
+
+  // ── Collapsible sidebar groups (P1a item 4) ─────────────────────────────
+  // Per-USER, not per-device: two people sharing a till should not inherit
+  // each other's open group. Wrapped in try/catch throughout -- a sidebar
+  // preference must never be able to break boot the way ThemeEngine's own
+  // persistence never is.
+  _sidebarGroupStorageKey() {
+    const uid = (this.currentUser && this.currentUser.id) || 'anon';
+    return 'aura_sidebar_open_group_' + uid;
+  },
+
+  _loadSidebarGroupPreference() {
+    try { return localStorage.getItem(this._sidebarGroupStorageKey()); } catch (e) { return null; }
+  },
+
+  _saveSidebarGroupPreference(key) {
+    try { localStorage.setItem(this._sidebarGroupStorageKey(), key); } catch (e) { /* private mode */ }
+  },
+
+  // LOW (fix round 3): the collapsed-group chevron pointed RIGHT in Arabic,
+  // i.e. away from the mirrored start edge the content opens toward.
+  // Collapsed points toward the row's own inline-start direction of
+  // travel: right in LTR, left in RTL. Open is always down.
+  _chevronGlyph(isOpen) {
+    if (isOpen) return '\u25BE';
+    const de = (typeof document !== 'undefined' && document.documentElement) || null;
+    const rtl = !!((de && de.getAttribute && de.getAttribute('dir') === 'rtl')
+      || (typeof window !== 'undefined' && window.AuraI18n && window.AuraI18n.current === 'ar'));
+    return rtl ? '\u25C2' : '\u25B8';
+  },
+
+  // The ONE place that changes which group is open, called both by a
+  // person clicking a group header AND by _navigate() keeping the open
+  // group in step with the active route -- one code path, so a manual
+  // click and an automatic route change can never disagree about what
+  // "open" means. Toggles DOM classes directly rather than a full
+  // _renderShell() re-render, so opening a group does not reset scroll
+  // position or repaint the whole sidebar for a one-element change.
+  _toggleSidebarGroup(key) {
+    this._openSidebarGroup = key;
+    this._saveSidebarGroupPreference(key);
+    const nav = document.getElementById('sub-nav');
+    if (!nav || typeof nav.querySelectorAll !== 'function') return;
+    nav.querySelectorAll('[data-group-items]').forEach((el) => {
+      el.hidden = el.dataset.groupItems !== key;
+    });
+    nav.querySelectorAll('[data-group-toggle]').forEach((el) => {
+      const isOpen = el.dataset.groupToggle === key;
+      el.setAttribute('aria-expanded', String(isOpen));
+      const chevron = el.querySelector ? el.querySelector('.sub-nav-group-chevron') : null;
+      if (chevron) chevron.textContent = this._chevronGlyph(isOpen);
+    });
+  },
+
+  // ── Connected services status polling (P1a item 5) ──────────────────────
+  // "polled at shell start and on window focus only, never per navigation"
+  // -- called once from init() (below) and bound to the window 'focus'
+  // event; _navigate() and _renderShell() never call this, so switching
+  // sections never fires a new round of status requests.
+  //
+  // Every source is an EXISTING endpoint (contract requirement): email and
+  // WhatsApp share the notifications blueprint's shape ({enabled,
+  // *_configured, counts_by_state}); e-invoicing's /status additionally
+  // reports a killswitch; site-relay's hub /status reports {enabled,
+  // devices[]} and is a clean {success:true, enabled:false} on a non-hub
+  // install (never a 404), by that route's own design.
+  //
+  // M8 (fix round): a non-200 response, a thrown fetch (network hiccup) and
+  // "never polled yet" are all the SAME honest fact -- "this till cannot
+  // currently tell you" -- and are reported as 'unknown' ("Can't check"),
+  // never as a fabricated 'off'. The old shape wrote 'off' on any failure,
+  // which told the owner a channel was switched off when the truth was
+  // simply that this request had not succeeded -- a different, and worse,
+  // wrong answer than "we don't know". One channel failing must still never
+  // blank the other three, which this preserves (each job sets only its
+  // own id).
+  async _pollConnectedServicesStatus() {
+    if (!this._connectedStatus) this._connectedStatus = {};
+
+    // Classification lives in _classifyConnectedStatus (pure, directly tested).
+    const jobs = [
+      ['whatsapp', '/api/notifications/whatsapp/status'],
+      ['email-notifications', '/api/notifications/status'],
+      ['einvoicing', '/api/einvoicing/status'],
+      ['site-relay', '/api/site-relay/status'],
+    ];
+
+    await Promise.all(jobs.map(async ([id, url]) => {
+      try {
+        const resp = await fetch(url, { credentials: 'include', cache: 'no-store' });
+        if (!resp.ok) { this._connectedStatus[id] = 'unknown'; return; }
+        const body = await resp.json();
+        const data = (body && body.data) || body || {};
+        this._connectedStatus[id] = this._classifyConnectedStatus(id, data);
+      } catch (e) {
+        // Network hiccup: 'unknown' ("Can't check"), not a guess at 'off'.
+        this._connectedStatus[id] = 'unknown';
+      }
+    }));
+
+    // First answer is in (good or bad): from here an unreadable channel is a
+    // real 'unknown' ("Can't check"), no longer the neutral "Checking...".
+    this._connectedPolled = true;
+    this._repaintConnectedServiceDots();
+  },
+
+  // Pure classifier for one status payload (no `this`, no DOM, no fetch), split
+  // out of _pollConnectedServicesStatus so every branch can be exercised
+  // directly (retail_connected_status_test.js) -- it used to be a closure
+  // inside the poll, which is why the verifier's mutation that dropped
+  // FAILED_PERMANENT from the failed count survived every existing test.
+  _classifyConnectedStatus(id, d) {
+    d = d || {};
+    // Key names measured directly off the real routes (a real fresh-install
+    // GET against each one -- never guessed): email/WhatsApp outbox rows use
+    // 'FAILED_PERMANENT' (commercial_runtime/notifications/outbox.py /
+    // whatsapp_outbox.py), never a bare 'FAILED'; einvoicing's outbox adds
+    // 'SUBMITTING_UNKNOWN' as a THIRD in-flight state alongside 'QUEUED' and
+    // 'SUBMITTING' -- commercial_runtime/einvoicing/outbox.py. Reading
+    // 'FAILED' alone would have permanently under-reported: every real
+    // failure sits in 'FAILED_PERMANENT', so 'failing' could never fire.
+    // Failed/queued rows are checked BEFORE the enabled/configured
+    // short-circuit: a channel that is off or never configured but still
+    // carries real FAILED_PERMANENT or queued rows must read as Failing/
+    // Needs attention, not a clean 'off'.
+    const fromCounts = (enabled, configured, counts) => {
+      const c = counts || {};
+      const failed = (c.FAILED_PERMANENT || 0) + (c.FAILED || 0) + (c.failed || 0);
+      const queued = (c.QUEUED || 0) + (c.queued || 0) + (c.SUBMITTING || 0)
+        + (c.SUBMITTING_UNKNOWN || 0) + (c.AWAITING_CLEARANCE || 0);
+      if (failed > 0) return 'failing';
+      if (queued > 0) return 'attention';
+      if (!enabled || !configured) return 'off';
+      return 'ok';
+    };
+    if (id === 'whatsapp') return fromCounts(d.enabled, d.whatsapp_configured, d.counts_by_state);
+    if (id === 'email-notifications') return fromCounts(d.enabled, d.smtp_configured, d.counts_by_state);
+    if (id === 'einvoicing') {
+      if (d.killswitch && d.killswitch.disabled) return 'failing';
+      return fromCounts(d.enabled, d.provider_configured, d.counts_by_state);
+    }
+    if (id === 'site-relay') {
+      if (!d.enabled) return 'off';
+      const active = (d.devices || []).filter((dev) => !dev.revoked).length;
+      return active > 0 ? 'ok' : 'attention';
+    }
+    return 'unknown';
+  },
+
+  // Patches the already-rendered sidebar in place rather than calling
+  // _renderShell() again -- that method rebuilds #sub-content back to its
+  // "Loading..." placeholder (see its own top-of-function comment), which
+  // would blank whatever screen the person is actually looking at every
+  // time a background poll resolves. A status dot changing colour must
+  // never interrupt what someone is doing.
+  _repaintConnectedServiceDots() {
+    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+    // Kept in step with _renderShell's own CONNECTED_STATUS_* maps by hand
+    // (this file has no module system to share a constant across two
+    // render paths -- see _esc's own comment for the same reason elsewhere
+    // in this file). M8 (fix round): 'unknown' added, default changed from
+    // 'off' to 'unknown', and the worst-of reduce reseeded at 'ok' (rank 0)
+    // -- see the header-render call site's own comment for why seeding
+    // above the lowest rank silently prevented a genuinely all-'ok' group
+    // from ever reporting 'ok'.
+    const rank = { ok: 0, off: 1, checking: 2, unknown: 2, attention: 3, failing: 4 };
+    const word = { off: t('Off'), ok: t('Connected'), attention: t('Needs attention'), failing: t('Failing'), unknown: t('Can\'t check'), checking: t('Checking…') };
+    const cls = { off: 'is-off', ok: 'is-ok', attention: 'is-attention', failing: 'is-failing', unknown: 'is-unknown', checking: 'is-checking' };
+    const paintDot = (dotEl, wordEl, state) => {
+      const s = rank.hasOwnProperty(state) ? state : 'unknown';
+      if (dotEl) dotEl.className = 'status-dot ' + cls[s];
+      if (wordEl) wordEl.textContent = word[s];
+    };
+    const CONNECTED_IDS = ['whatsapp', 'einvoicing', 'email-notifications', 'site-relay'];
+    let worst = 'ok';
+    for (const id of CONNECTED_IDS) {
+      const state = (this._connectedStatus && this._connectedStatus[id]) || (this._connectedPolled ? 'unknown' : 'checking');
+      if (rank[state] > rank[worst]) worst = state;
+      const row = document.querySelector(`.sub-nav-item[data-section="${id}"]`);
+      if (!row) continue;
+      paintDot(row.querySelector('.status-dot'), row.querySelector('.sub-nav-status-word'), state);
+    }
+    const header = document.querySelector('[data-group-toggle="connected"]');
+    if (header) paintDot(header.querySelector('.status-dot'), header.querySelector('.sub-nav-status-word'), worst);
   },
 
   // Delegated, and attached to the shell rather than to each item, because
@@ -3325,6 +4018,27 @@ const SubsystemApp = {
     document.querySelectorAll('.sub-nav-item').forEach(el => {
       el.classList.toggle('active', el.dataset.section === sectionId);
     });
+
+    // P1a item 4: the sidebar collapses to a 64px icon rail on the Till
+    // route specifically -- kept in step here (not only in _renderShell's
+    // initial render) so navigating TO or AWAY FROM the till via an
+    // in-shell nav click collapses/restores the rail without a full
+    // launch()/_renderShell() round trip.
+    const sidebarEl = document.getElementById('sub-sidebar');
+    if (sidebarEl && sidebarEl.classList) {
+      sidebarEl.classList.toggle('sub-sidebar-rail', sectionId === 'pos');
+    }
+
+    // P1a item 4: opening a destination inside a COLLAPSED group must open
+    // that group -- otherwise a click reachable only via keyboard/deep-link
+    // (not the header toggle) would leave its own destination hidden under
+    // a closed accordion. Reuses _toggleSidebarGroup, the one place that
+    // changes which group is open (see that method's own comment).
+    const activeSys = this.systems[this.active];
+    if (activeSys && Array.isArray(activeSys.navGroups)) {
+      const grp = activeSys.navGroups.find((g) => g.items.includes(sectionId));
+      if (grp) this._toggleSidebarGroup(grp.key || grp.label);
+    }
 
     // ...and bring it into view. The rail is `overflow-y: auto` and holds more
     // destinations than fit: measured 2026-09-12, 1017px of items in a 442px
@@ -3490,9 +4204,10 @@ const SubsystemApp = {
   // flat `nav` array, not a second nav data model.
   //
   // Built on document.body, not inside #subsystem-shell, for the same
-  // persistence reason _maybeOfferAdminDeviceClaim's bar is: _renderShell
-  // replaces the shell's innerHTML wholesale on every launch()/language
-  // toggle, which would otherwise destroy an open sheet out from under a tap.
+  // persistence reason the sync banner is (see _renderSyncBanner's own
+  // comment): _renderShell replaces the shell's innerHTML wholesale on
+  // every launch()/language toggle, which would otherwise destroy an open
+  // sheet out from under a tap.
   _openMoreSheet() {
     this._closeMoreSheet();
     const sys = this.systems[this.active];
@@ -3511,10 +4226,18 @@ const SubsystemApp = {
     // only: a Bluetooth keyboard or a switch device could open the sheet and
     // then not move within it. Found by scanning for the sidebar's shape
     // everywhere else after a real browser found it there.
+    // H2 fix-round: this used to call `_navigate(item.id)` unconditionally,
+    // so whatsapp/einvoicing/site-relay (P1a item 5's `externalPage` nav
+    // entries -- real standalone documents, not `RetailSystem.render()`
+    // cases) fell through to `_navigate`'s default case and rendered
+    // "Coming soon." on a phone, even though the SAME entries already
+    // browser-navigate correctly from the desktop sidebar (_renderShell's
+    // own navItemHTML already branches on `item.externalPage`). Mirrors
+    // that exact branch here so the two surfaces cannot disagree again.
     const rowHTML = (item) => `
             <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
                tabindex="0" role="button"
-               onclick="SubsystemApp._navigate('${item.id}')">
+               onclick="${item.externalPage ? `location.href='/static/${item.externalPage}'` : `SubsystemApp._navigate('${item.id}')`}">
               <span class="sub-more-row-icon">${icon(item.icon)}</span>
               <span>${t(item.label)}</span>
             </a>
@@ -3549,7 +4272,49 @@ const SubsystemApp = {
     // overlay, License/Log Out navigate away, and Language rebuilds the
     // whole shell (AuraI18n.setLang -> SubsystemApp.launch), so closing
     // first keeps the sheet from being left open behind any of them.
+    //
+    // P1a item 1: Settings ('admin-center') is now GATED OUT of every
+    // navGroups bucket (it renders as the desktop sidebar's own footer gear
+    // instead -- see _renderShell), so without a row of its own here a
+    // phone user would lose it from the More sheet entirely, silently --
+    // the exact "served but never linked" bug class this file's own
+    // ci-hardening-w0.3 nav-entry comments describe. Reuses the SAME
+    // 'admin-center' nav-item definition (and therefore the SAME
+    // capability gate) rather than re-deriving the rule a second time, so
+    // this row and the desktop gear can never disagree about who sees it.
+    const adminCenterItem = byId.get('admin-center');
+    const hasSettings = !!(adminCenterItem && this._isNavItemVisible(adminCenterItem));
+    // H1 fix-round: Employees/Branches/Backup & Export had NO path at all on
+    // phone (same "served but never linked" gap the Settings row's own
+    // comment above already fixed once for this sheet) -- gated exactly
+    // like their own nav entries, same as the desktop gear menu below.
+    const employeesItem = byId.get('employees');
+    const branchesItem = byId.get('branches');
+    const backupExportItem = byId.get('backup-export');
+    const hasEmployees = !!(employeesItem && this._isNavItemVisible(employeesItem));
+    const hasBranches = !!(branchesItem && this._isNavItemVisible(branchesItem));
+    const hasBackupExport = !!(backupExportItem && this._isNavItemVisible(backupExportItem));
     const footerRows = [
+      hasSettings ? `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp._navigate('admin-center')">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('settings', 20) : '⚙️'}</span>
+              <span>${t('Settings')}</span>
+            </button>` : '',
+      hasEmployees ? `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp._navigate('employees')">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('user', 20) : '👤'}</span>
+              <span>${t('Employees')}</span>
+            </button>` : '',
+      hasBranches ? `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp._navigate('branches')">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('landmark', 20) : '🏦'}</span>
+              <span>${t('Branches')}</span>
+            </button>` : '',
+      hasBackupExport ? `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp._navigate('backup-export')">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('save', 20) : '💾'}</span>
+              <span>${t('Backup & Export')}</span>
+            </button>` : '',
       hasAI ? `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('sparkles', 20) : '🤖'}</span>
@@ -3566,11 +4331,15 @@ const SubsystemApp = {
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('palette', 20) : '🎨'}</span>
               <span>${t('Theme')}</span>
             </button>`,
-      `
+      // LOW (fix round 3): License is gated exactly like the desktop gear
+      // (which a cashier never sees) -- same population, same rule: only
+      // someone who can see Settings/Employees/Branches/Backup gets it. One
+      // spelling, "License", matching the gear's "License & devices".
+      (hasSettings || hasEmployees || hasBranches || hasBackupExport) ? `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.openLicensing()">
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('key-round', 20) : '🔑'}</span>
-              <span>${t('License')}</span>
-            </button>`,
+              <span>${t('License & devices')}</span>
+            </button>` : '',
       `
             <button class="sub-more-row danger" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.logout()">
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('log-out', 20) : '⏻'}</span>
@@ -3578,9 +4347,9 @@ const SubsystemApp = {
             </button>`,
     ].join('');
 
-    // Lets CSS stand the admin-device claim banner down while this sheet is
-    // up. A sheet is a modal surface; a banner floating over it is purely in
-    // the way, which the 390px screenshots showed plainly.
+    // Lets CSS stand overlays down while this sheet is up. A sheet is a
+    // modal surface; a banner floating over it is purely in the way, which
+    // the 390px screenshots showed plainly.
     document.body.classList.add('sub-more-sheet-open');
 
     const scrim = document.createElement('div');
@@ -3815,11 +4584,15 @@ const SubsystemApp = {
 
   // The same mechanism as _reflowTopBanners, pointed at the BOTTOM edge.
   //
-  // The admin-device claim bar is bottom-centred, up to 92vw wide and bound to
-  // document.body so it survives every navigation. On the POS screen that puts
-  // it squarely over the payment-method grid -- measured: it covers the
-  // Transfer tender -- and right beside the Charge button. An overlay covering
-  // the pay button at a till costs a sale, so this is not a cosmetic overlap.
+  // Historically this reserved space for TWO bottom-centred elements: the
+  // sync banner's calm pill and the admin-device claim bar (P1a item 1
+  // deleted the bar outright -- see _removeAdminDeviceClaimBar's own
+  // comment). Left generalised over an `ids` array rather than hardcoded to
+  // the one survivor: a bottom-anchored element bound to document.body
+  // (so it survives every navigation) and floating over the POS payment
+  // grid or the Charge button costs a sale, which is why this exists at all
+  // -- any future bottom overlay belongs in the same list, not a new
+  // one-off reflow.
   //
   // Publishing the height as a token lets the till's own layout move out of the
   // way, exactly as .page does for the licence banner, instead of each new
@@ -3832,7 +4605,7 @@ const SubsystemApp = {
   // bug. Toasts stack among themselves instead (see showToast).
   _reflowBottomOverlays() {
     try {
-      const ids = ['aura-admin-device-claim', 'aura-sync-banner'];
+      const ids = ['aura-sync-banner'];
       // Breathing room between a floating bar and whatever parks above it.
       const GAP_PX = 12;
       // Only something anchored to the BOTTOM half displaces the till; the same

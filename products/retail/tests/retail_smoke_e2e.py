@@ -370,6 +370,95 @@ def _dismiss_intro_overlay_if_present(page) -> None:
         pass  # never played, or already gone -- both fine
 
 
+def _human_click(page, target, *, label: str = "", scroll_list: bool = False,
+                 timeout: int = DEFAULT_WAIT_MS) -> None:
+    """Click the way a person's mouse does, or fail saying why it could not.
+
+    Playwright's own `.click()` and `.is_visible()` scroll an element into view
+    and then click it, and succeed on elements that sit off-screen or under
+    another element -- measured on the gear menu, which opened BELOW the
+    viewport (box y=762..1041 in a 768px window) while every suite that
+    clicked it stayed green. A person cannot click what is off the screen or
+    covered, so this asserts, in order:
+      1. the element's box is inside the viewport (0.5px sub-pixel slack),
+      2. `elementFromPoint` at the box centre IS the element (not covered, not
+         clipped by an ancestor's overflow),
+      3. and only then sends a real mouse click at that centre.
+    `scroll_list=True` scrolls the element inside its OWN scroll container
+    first (what a person does with a wheel over a long list); it never
+    scrolls the page or rescues an element that is outside the viewport.
+    """
+    loc = (page.locator(target) if isinstance(target, str) else target).first
+    name = label or (target if isinstance(target, str) else "element")
+    loc.wait_for(state="visible", timeout=timeout)
+    if scroll_list:
+        loc.evaluate("el => el.scrollIntoView({ block: 'nearest', inline: 'nearest' })")
+        page.wait_for_timeout(60)
+    box = loc.bounding_box()
+    assert box, f"[{name}] has no box -- it is not rendered"
+    vw, vh = page.evaluate("() => [window.innerWidth, window.innerHeight]")
+    inside = (
+        box["width"] > 0 and box["height"] > 0
+        and box["x"] >= -0.5 and box["y"] >= -0.5
+        and box["x"] + box["width"] <= vw + 0.5 and box["y"] + box["height"] <= vh + 0.5
+    )
+    assert inside, (
+        f"[{name}] its box x={box['x']:.1f}..{box['x'] + box['width']:.1f} "
+        f"y={box['y']:.1f}..{box['y'] + box['height']:.1f} is not fully inside the "
+        f"{vw}x{vh} viewport -- a person cannot click it"
+    )
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    hit = loc.evaluate(
+        "(el, pt) => { const h = document.elementFromPoint(pt[0], pt[1]);"
+        " return h ? (h === el || el.contains(h) ? null : h.tagName + '#' + h.id + '.' + String(h.className)) : 'nothing'; }",
+        [cx, cy],
+    )
+    assert hit is None, (
+        f"[{name}] is inside the viewport but elementFromPoint at its own centre "
+        f"({cx:.0f},{cy:.0f}) is {hit!r}, not the element -- it is covered or clipped"
+    )
+    page.mouse.click(cx, cy)
+
+
+def _click_nav_item(page, section_id: str, *, timeout: int = DEFAULT_WAIT_MS) -> None:
+    """Click a sidebar nav item by its `data-section`, opening its P1a
+    collapsible GROUP first if that group is not the one currently open.
+
+    P1a item 4 ("a collapsible sidebar that fits 1366x768") made the sidebar
+    a real accordion: only the OPEN group's `.sub-nav-group-items` is in the
+    layout at all (every other group's items carry the `hidden` attribute,
+    `display:none`) -- see app-shell.js's `_toggleSidebarGroup`. Before this
+    item, every nav item was always visible and a bare `.click()` worked
+    regardless of what was last navigated; after it, a collapsed group's
+    items are genuinely not clickable (or even visible) until that group's
+    own header is clicked, exactly the way a real person at the till would
+    have to. 'dashboard' and 'admin-center' are UNGROUPED BY DESIGN (see
+    retail_nav_groups_test.js's own UNGROUPED_BY_DESIGN set) and are always
+    directly visible, so this is a no-op for them -- the visibility check
+    below simply finds nothing to open.
+    """
+    item = page.locator(f'.sub-nav-item[data-section="{section_id}"]')
+    item.wait_for(state="attached", timeout=timeout)
+    if not item.is_visible():
+        # EXACT class-token match, not `contains(@class,'sub-nav-group')` --
+        # that substring also matches `.sub-nav-group-items` (the item's own
+        # immediate parent, closer in the ancestor axis than the real
+        # `.sub-nav-group` wrapper), which has no <button> child at all and
+        # silently matched zero elements.
+        group = item.locator(
+            "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' sub-nav-group ')][1]"
+            "/button[contains(@class,'sub-nav-group-label')]"
+        )
+        assert group.count() == 1, (
+            f"'{section_id}' is not visible and has no enclosing .sub-nav-group header to open -- "
+            f"it may be one of the P1a-ungrouped screens (employees/branches/backup-export), which "
+            f"have no sidebar path at all this phase (see retail_nav_groups_test.js)"
+        )
+        _human_click(page, group, label=f"group header for '{section_id}'", scroll_list=True, timeout=timeout)
+        item.wait_for(state="visible", timeout=timeout)
+    _human_click(page, item, label=f"nav item '{section_id}'", scroll_list=True, timeout=timeout)
+
+
 def main() -> int:
     # Playwright error messages and page content can carry Arabic text (this
     # suite deliberately switches the app to Arabic/RTL) and other non-ASCII
@@ -526,80 +615,87 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     report.run("02 fresh-install first-run signup surface, and completing it", scenario_first_run_and_signup)
 
     # ------------------------------------------------------------------
-    # Scenario 3 -- P0 #20 changed what this scenario must prove. It used to
-    # assert the OLD flow: a brand-new admin account did NOT auto-claim the
-    # admin device, so Settings stayed hidden until the owner clicked a
-    # dismissible red banner ("Make this the admin device"). C4's #20 fix
-    # calls POST /api/devices/me/claim-admin automatically, from
-    # _autoClaimAdminOnSignup() (app-shell.js), the instant
-    # /api/onboarding/create-admin succeeds -- so by the time scenario 2
-    # above finished signup, THIS install's device had already claimed the
-    # flag. The old assertion here ("Settings nav entry was visible BEFORE
-    # claiming this device as admin") is now backwards on the signup
-    # computer: Settings is SUPPOSED to already be visible there, with zero
-    # clicks, and no banner is supposed to ever appear.
+    # Scenario 3 -- INVERTED for P1a item 1 ("Settings follows the person,
+    # not the device"). It used to prove the P0 #20 auto-claim story: this
+    # signup computer's device gets is_admin_device=true with zero clicks,
+    # and that DEVICE flag is what unlocked Settings (the OLD `adminOnly`
+    # gate on the 'admin-center' nav entry). The device-claim half of that
+    # story (_autoClaimAdminOnSignup, POST /api/devices/me/claim-admin) is
+    # UNCHANGED and still proved below -- it still matters for the Audit Log
+    # entry and T's device-bound Admin Center sections. What is inverted is
+    # the SETTINGS half: the 'admin-center' nav entry now reads a capability
+    # (retail.employees, which every owner/admin holds by default -- see
+    # that entry's own comment in app-shell.js) instead of the device flag,
+    # so Settings is visible to this owner REGARDLESS of the device claim.
     #
-    # Weakening this to "assert whatever currently happens" would defeat the
-    # whole point of the item, so this proves the NEW behaviour with the
-    # same rigor the old assertion had, in both directions: zero
-    # clicks/zero banner HERE, on the one computer where auto-claim is
-    # supposed to fire (this scenario), AND -- scenario 03b below -- that
-    # the manual banner path this replaces is not simply gone: it still
-    # works, completely unmodified, on a computer where the auto-claim
-    # never ran, which item #20's own text says is every OTHER computer in
-    # the shop ("The bar stays on joined computers until Phase 1a replaces
-    # the device gate with the person gate").
+    # What this can no longer catch, stated rather than left to be
+    # discovered: "the banner stopped unlocking Settings" -- there is no
+    # banner left to fail to unlock anything (_maybeOfferAdminDeviceClaim
+    # and its red bar are deleted from app-shell.js). The
+    # `#aura-admin-device-claim` locator this scenario used to assert
+    # count()==0 on can never match again regardless of whether ANYTHING
+    # about admin-device claiming works, which is exactly why that
+    # assertion is gone rather than kept as decoration.
     # ------------------------------------------------------------------
     def scenario_signup_computer_auto_claims_admin():
-        # No click anywhere in this scenario -- that absence IS the
-        # assertion. If #20's auto-claim regressed (the fetch removed, or
-        # moved to fire after this point in the flow), the banner would be
-        # sitting here and Settings would still be hidden, and this scenario
-        # would fail exactly the way the OLD banner-based one used to pass.
-        assert page.locator("#aura-admin-device-claim").count() == 0, (
-            "the admin-device claim banner rendered on the SIGNUP computer -- "
-            "P0 #20's _autoClaimAdminOnSignup() should have claimed the admin "
-            "device automatically, right after create-admin, before this screen "
-            "was ever shown; a visible banner here means the auto-claim did not "
-            "fire (or fired and this render did not pick it up)"
-        )
-        settings_entry = page.locator('.sub-nav-item[data-section="admin-center"]')
+        # H1 (fix round): Settings moved from a direct sidebar nav ITEM to
+        # the footer gear's own menu (Settings/Employees/Branches/Backup &
+        # Export/License & devices, <=2 clicks) -- '.sub-nav-item[data-
+        # section="admin-center"]' stopped existing in the DOM entirely when
+        # that landed, which is why this scenario started timing out rather
+        # than failing its own assertion. P1a item 1's actual claim (Settings
+        # follows the PERSON, independent of the device claim) is unchanged
+        # by H1 and still proved here -- only WHERE the entry lives moved,
+        # from zero clicks to one (open the gear) plus a second (the row).
+        gear_btn = page.locator("#sub-settings-gear-btn")
+        gear_btn.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+        _human_click(page, gear_btn, label="Settings gear button")
+        settings_entry = page.locator('#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]')
         settings_entry.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         assert settings_entry.count() == 1, (
-            "Settings nav entry was NOT visible on the signup computer with zero "
-            "clicks -- P0 #20 says the computer that just created the company IS "
-            "the store's admin device from the moment signup succeeds"
+            "Settings was NOT reachable through the gear menu on the signup computer "
+            "-- P1a item 1 says an owner sees Settings because they hold "
+            "retail.employees by default, independent of any device claim"
         )
-        # Not just the UI's own belief: read the very same GET /api/devices/me
-        # app-shell.js's init() reads, so a bug that left isAdminDevice=true
-        # client-side while the SERVER still says false (a stale process
-        # cache, a race between the claim POST and this check) cannot hide
-        # behind a nav item that rendered off client state alone.
+        # The device claim itself is separate, real functionality
+        # (_autoClaimAdminOnSignup, unchanged by P1a) that the Audit Log nav
+        # entry and T's device-bound Admin Center sections still read --
+        # still worth proving it did not regress, via the same real
+        # GET /api/devices/me app-shell.js's init() reads.
         dev = page.evaluate(
             "() => fetch('/api/devices/me', {credentials:'include', cache:'no-store'}).then(r => r.json())"
         )
         assert dev.get("success") and dev.get("device", {}).get("is_admin_device") is True, (
             f"GET /api/devices/me did not report is_admin_device:true for the "
-            f"signup computer -- got {dev!r}"
+            f"signup computer -- got {dev!r}. This device-claim flag is separate "
+            f"from Settings visibility now, but it still gates the Audit Log entry "
+            f"and device-bound Admin Center sections, so it must still resolve true here."
         )
-        report.shot(page, shots, "04_signup_computer_no_banner_settings_visible")
+        report.shot(page, shots, "04_signup_computer_settings_visible")
 
     report.run(
-        "03 signup computer auto-claims the admin device (P0 #20) -- no click, no banner",
+        "03 owner sees Settings via capability, independent of the device claim (P1a item 1)",
         scenario_signup_computer_auto_claims_admin,
     )
 
     # ------------------------------------------------------------------
-    # Scenario 3b -- the OTHER half of #20: the manual banner claim path
-    # this item's auto-claim exists ALONGSIDE (not instead of) must still
-    # work on a computer where the auto-claim never ran. A joined computer
-    # never calls /api/onboarding/create-admin (only the ONE computer that
-    # types the company's name in does that), so
-    # _autoClaimAdminOnSignup() never fires there either -- the banner
-    # stays that computer's only route to Settings, exactly as it was
-    # before #20 existed.
+    # Scenario 3b -- INVERTED for P1a item 1, same story as scenario 3
+    # above. It used to prove the OLD banner-claim UI worked end to end on a
+    # joined computer (is_admin_device=0): Settings hidden, a red banner
+    # with "Make this the admin device", clicking it, Settings appearing.
+    # That whole UI is deleted (_maybeOfferAdminDeviceClaim and its bar),
+    # and asserting its absence would be vacuous (see scenario 3's own
+    # comment) -- so this proves the actual NEW invariant on the exact same
+    # joined-computer DATABASE STATE the old scenario built: Settings is
+    # visible to the owner even with is_admin_device=0, because the gate is
+    # now retail.employees (a per-user capability every owner holds), not
+    # this.isAdminDevice. What this can no longer catch: the claim button
+    # regressing, or the banner's copy changing -- there is no button or
+    # banner left to regress.
     #
-    # This whole suite is architected as ONE fresh, unlicensed install per
+    # The joined-computer REPRODUCTION technique itself is kept unchanged
+    # and is still real, valuable infrastructure independent of the banner:
+    # this whole suite is architected as ONE fresh, unlicensed install per
     # run (module docstring), so a genuine second, licensed, joined till
     # cannot be booted here -- licensing needs an activated key this
     # install deliberately never has. Per the RESUME NOTE in contracts.md,
@@ -609,14 +705,14 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # throwaway directory and flipping that ONE column back to 0 directly in
     # the COPY's registry.db -- never in the running scenario's own
     # backend/database above, which stays completely untouched so every
-    # later scenario in this file still runs against the state #20 actually
+    # later scenario in this file still runs against the state P1a actually
     # produces. A second, independent backend SUBPROCESS (a real port, a
     # real fresh browser context with no cookies) is booted against that
     # copy, so this still runs the real routes and the real UI end to end --
     # the only thing stood in for is which physical computer the copy came
     # from, never the server logic or the client code under test.
     # ------------------------------------------------------------------
-    def scenario_joined_computer_banner_claim_still_works():
+    def scenario_joined_computer_settings_visible_without_device_claim():
         joined_dir = Path(tempfile.mkdtemp(prefix="aura_retail_smoke_joined_appdata_"))
         second_backend: Backend | None = None
         joined_context = None
@@ -681,29 +777,37 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             joined_page.click("#rl-btn")
             joined_page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
 
-            assert joined_page.locator('.sub-nav-item[data-section="admin-center"]').count() == 0, (
-                "Settings nav entry was visible on the JOINED computer before any "
-                "claim was made -- the flipped is_admin_device=0 row was not "
-                "honoured (or the auto-claim fired somewhere it must not)"
-            )
-            banner = joined_page.locator("#aura-admin-device-claim")
-            banner.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
-            assert "not yet your store" in banner.inner_text(), (
-                "the admin-device claim banner did not render its expected copy "
-                "on the joined computer"
-            )
-            report.shot(joined_page, shots, "04b_joined_computer_claim_banner")
-
-            joined_page.get_by_role("button", name="Make this the admin device", exact=True).click()
-            banner.wait_for(state="detached", timeout=DEFAULT_WAIT_MS)
-
-            settings_entry = joined_page.locator('.sub-nav-item[data-section="admin-center"]')
+            # THE INVERSION: the old assertion here was count()==0 (Settings
+            # hidden until the banner's button was clicked). P1a item 1 makes
+            # this the opposite -- Settings must be REACHABLE to the owner
+            # on this exact is_admin_device=0 database state, because the
+            # gate is now retail.employees (a per-user capability this owner
+            # holds by role default), never this.isAdminDevice.
+            # H1 (fix round): same locator move as scenario 03 above --
+            # Settings now lives in the footer gear's menu, not a direct
+            # sidebar item, so reaching it is one extra click (open the
+            # gear), not the "zero clicks" the pre-H1 version of this
+            # scenario proved. What is unchanged, and still the whole point
+            # of this scenario: it is reachable AT ALL on a joined computer
+            # with no device claim, which the OLD device-flag gate would
+            # have made impossible regardless of how many clicks it took.
+            gear_btn = joined_page.locator("#sub-settings-gear-btn")
+            gear_btn.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+            _human_click(joined_page, gear_btn, label="Settings gear button (joined computer)")
+            settings_entry = joined_page.locator('#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]')
             settings_entry.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
             assert settings_entry.count() == 1, (
-                "Settings nav entry did not appear on the joined computer after "
-                "clicking the claim banner's own button"
+                "Settings was NOT reachable through the gear menu on the JOINED "
+                "computer (is_admin_device=0) -- P1a item 1 says Settings follows "
+                "the PERSON (retail.employees, which this owner holds), not the "
+                "device claim."
             )
-            report.shot(joined_page, shots, "04c_joined_computer_settings_after_claim")
+            assert joined_page.locator("#aura-admin-device-claim").count() == 0, (
+                "the deleted admin-device claim bar rendered anyway -- "
+                "_maybeOfferAdminDeviceClaim was supposed to be removed whole, "
+                "not merely stopped from doing anything"
+            )
+            report.shot(joined_page, shots, "04b_joined_computer_settings_visible_no_device_claim")
         finally:
             if joined_context is not None:
                 joined_context.close()
@@ -712,8 +816,8 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             shutil.rmtree(joined_dir, ignore_errors=True)
 
     report.run(
-        "03b claim-admin banner path still works on a JOINED computer (is_admin_device flipped to 0)",
-        scenario_joined_computer_banner_claim_still_works,
+        "03b Settings stays visible on a JOINED computer with no device claim (P1a item 1, inverted)",
+        scenario_joined_computer_settings_visible_without_device_claim,
         # This scenario's first navigation is a genuine "existing account,
         # no session yet" page load -- the one path this whole file never
         # exercised before it existed (every earlier scenario either IS the
@@ -744,9 +848,26 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
 
     def scenario_navigate_every_screen():
         for section_id, must_exist_selector, title_text in SCREENS:
-            nav_item = page.locator(f'.sub-nav-item[data-section="{section_id}"]')
-            assert nav_item.count() == 1, f"nav item for '{section_id}' not found in the sidebar"
-            nav_item.click()
+            if section_id == "admin-center":
+                # H1 (fix round): Settings is no longer a sidebar nav ITEM --
+                # it moved into the footer gear's own menu (<=2 clicks), so
+                # '.sub-nav-item[data-section="admin-center"]' no longer
+                # exists in the DOM at all. Same destination, different
+                # route; the rest of this iteration (must_exist_selector,
+                # title_text, screenshot) is identical to every other screen.
+                gear_btn = page.locator("#sub-settings-gear-btn")
+                assert gear_btn.count() == 1, "the footer gear button is not in the sidebar"
+                _human_click(page, gear_btn, label="Settings gear button")
+                settings_row = page.locator('#sub-settings-menu .sub-identity-menu-item[data-section="admin-center"]')
+                assert settings_row.count() == 1, "Settings row not found in the gear menu"
+                _human_click(page, settings_row, label="Settings row in the gear menu")
+            else:
+                nav_item = page.locator(f'.sub-nav-item[data-section="{section_id}"]')
+                assert nav_item.count() == 1, f"nav item for '{section_id}' not found in the sidebar"
+                # P1a item 4: opens the item's own collapsible group first if
+                # it is not the one currently open -- see _click_nav_item's
+                # own comment.
+                _click_nav_item(page, section_id)
             page.locator(must_exist_selector).first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
             assert page.locator(must_exist_selector).count() >= 1, (
                 f"'{section_id}' screen did not render its expected element {must_exist_selector!r}"
@@ -810,7 +931,8 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             "(app-shell.js) for the sidebar to render it; this used to be a real bug, "
             "so if this regresses, the fix has been reverted"
         )
-        transfers_nav.click()
+        # P1a item 4: opens Stock (transfers' own group) first if not already open.
+        _click_nav_item(page, "transfers")
         page.locator("#transfer-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         transfers_title = page.locator("#sub-header-section").first.inner_text()
         assert transfers_title == "Stock Transfers", (
@@ -832,7 +954,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # table) on a fresh install that has zero products and zero customers.
     # ------------------------------------------------------------------
     def scenario_empty_states():
-        page.locator('.sub-nav-item[data-section="products"]').click()
+        _click_nav_item(page, "products")
         page.locator("#prod-table tbody").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         page.wait_for_function(
             "document.querySelector('#prod-table tbody') && "
@@ -860,7 +982,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             "nothing here and not told how to change that"
         )
 
-        page.locator('.sub-nav-item[data-section="customers"]').click()
+        _click_nav_item(page, "customers")
         page.locator("#cust-table tbody").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         page.wait_for_function(
             "document.querySelector('#cust-table tbody') && "
@@ -890,7 +1012,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # happens is pinned as an assertion, not assumed from reading the code.
     # ------------------------------------------------------------------
     def scenario_readonly_honesty():
-        page.locator('.sub-nav-item[data-section="products"]').click()
+        _click_nav_item(page, "products")
         page.locator("#prod-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         page.click('button[onclick="RetailSystem._openAddProduct()"]')
         page.locator("#pm-name").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
@@ -971,7 +1093,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         # mouse click would be evaluated -- must succeed now that nothing
         # covers the header buttons, pinning the fix as an observed
         # behaviour rather than an assumption from the geometry alone.
-        theme_btn.click(timeout=4000)
+        _human_click(page, theme_btn, label="theme button", timeout=4000)
         page.locator("#theme-picker-panel").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
         print("       >>> CONFIRMED: a real (unforced) click on the theme button opens the picker -- no longer intercepted by #aura-license-banner")
         report.shot(page, shots, "07_license_banner_clear_of_header")
@@ -1007,7 +1129,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # unlicensed one -- unrelated to the license-banner fix above.
     # ------------------------------------------------------------------
     def scenario_theme_switch_preserves_current_screen():
-        page.locator('.sub-nav-item[data-section="products"]').click()
+        _click_nav_item(page, "products")
         page.locator("#prod-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
 
         page.click('button[onclick="ThemeEngine.openPicker()"]')
@@ -1100,7 +1222,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # network, or a future change reopens the timing window.
     # ------------------------------------------------------------------
     def scenario_dashboard_stale_render_race():
-        page.locator('.sub-nav-item[data-section="dashboard"]').click()
+        _click_nav_item(page, "dashboard")
         # The generic per-section error boundary (app-shell.js's `_navigate`
         # catch block) renders a "Failed to load" heading on the crash path;
         # a clean load shows the ordinary `.rdash-answer-value` KPI figure.
@@ -1147,7 +1269,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # scenario's own job is RTL, not a second collision with that one.
     # ------------------------------------------------------------------
     def scenario_rtl_toggle():
-        page.locator('.sub-nav-item[data-section="customers"]').click()
+        _click_nav_item(page, "customers")
         page.locator("#cust-table").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
 
         assert page.evaluate("document.documentElement.getAttribute('dir')") == "ltr"
@@ -1167,100 +1289,127 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # ------------------------------------------------------------------
     # Scenario 12 -- the rail still says WHERE YOU ARE after a re-render.
     #
-    # The nav rail holds more destinations than fit: measured 2026-09-12,
-    # 1017px of items in a 442px rail at 1366x768, `overflow-y: auto`. Nothing
-    # ever scrolled it to the active item, so a shell re-render left the marker
-    # for "you are here" below the fold on exactly the destinations far enough
-    # down the list to need it -- Reports at y787-831, Stock Transfers at
-    # y702-746. A 1440x900 laptop clipped the same ones, because the rail's
-    # content height does not change with the window.
+    # RESTORED (fix round 3). Round 1 re-anchored this scenario to an INVERTED
+    # assertion ("the rail does NOT overflow") on the argument that P1a's
+    # collapsible groups removed the overflow precondition at 1366x768. That
+    # argument is true at 1366x768 and it left the behaviour unguarded: a
+    # shorter window (a laptop with a large browser toolbar, a 125% zoom, a
+    # tablet in landscape) makes ONE open group overflow the rail again, and
+    # then "the rail scrolls the active item into view" is the only thing
+    # standing between a person and a marker below the fold. The scenario
+    # deleted the very check that covers that, and stayed green.
     #
-    # NOT tested through a sidebar click: Playwright scrolls an element into
-    # view before clicking it, so a click-driven navigation scrolls the rail as
-    # a side effect and the active item is visible afterwards no matter what.
-    # Scenario 04 clicks every destination and passed throughout the whole
-    # period this was broken. The rail is put back to the top explicitly below
-    # to reproduce the state a fresh render leaves it in.
+    # So it is a real overflow again, on purpose: the window is made short
+    # (1366x420), the group with the most items is opened, and the rail is
+    # scrolled to the top. Two PRECONDITIONS are asserted before anything is
+    # trusted -- the rail really overflows, and the destination's item really
+    # starts out of the rail's view. Without them, a pass proves nothing.
     #
-    # A theme switch is the real trigger: it re-navigates to the current
-    # section with the rail freshly laid out. (An earlier version of this
-    # scenario used a reload instead, on the strength of comments in
-    # app-shell.js and subsystem-retail.js claiming AuraRouter replays the
-    # section from the URL hash. Retail never loads a router -- window.AuraRouter
-    # is undefined and the hash stays empty -- so that path does not exist. The
-    # anti-vacuity assertion below is what caught it.)
+    # The trigger is a theme switch: it re-navigates to the current section
+    # with the rail freshly laid out. After it, the active item must be
+    # inside the rail's own box AND hit-testable at its centre. The rail's
+    # scrollTop must have moved -- that is the behaviour under test, not a
+    # side effect of clicking (Playwright scrolls an element into view before
+    # a click, so a click-driven navigation would pass whether the shell
+    # scrolls the rail or not; scenario 04 clicks every destination and
+    # stayed green for the whole period this was broken).
+    #
+    # Mutation-proven in the fix-round-3 report: removing the shell's
+    # scroll-to-active call turns the "rail did not scroll to it" assertion RED.
     # ------------------------------------------------------------------
     def scenario_active_nav_visible_after_rerender():
-        page.locator('.sub-nav-item[data-section="reports"]').click()
-        page.wait_for_timeout(1200)
+        original_viewport = page.viewport_size
+        page.set_viewport_size({"width": 1366, "height": 420})
+        try:
+            page.wait_for_timeout(400)
+            assert page.locator(".sub-nav").count() == 1, "no single .sub-nav rail to measure"
 
-        rail_sel = ".sub-nav"
-        assert page.locator(rail_sel).count() == 1, f"no single {rail_sel} rail to measure"
+            # The destination: the LAST item of the biggest group (the one
+            # furthest down an open group), skipping Connected services whose
+            # entries open their own pages instead of a section.
+            target = page.evaluate(
+                """() => {
+                  let best = null;
+                  for (const g of document.querySelectorAll('.sub-nav-group-items')) {
+                    if (g.dataset.groupItems === 'connected') continue;
+                    const items = [...g.querySelectorAll('.sub-nav-item')];
+                    if (!best || items.length > best.items.length) best = { key: g.dataset.groupItems, items };
+                  }
+                  if (!best) return null;
+                  return { key: best.key, section: best.items[best.items.length - 1].dataset.section };
+                }"""
+            )
+            assert target, "no sidebar group with items to open"
+            sel = f'.sub-nav-item[data-section="{target["section"]}"]'
 
-        # Anti-vacuity: this scenario only means something if the rail actually
-        # overflows. On a hypothetical short nav list every assertion below
-        # would pass trivially and prove nothing.
-        overflow = page.evaluate(
-            "() => { const r = document.querySelector('.sub-nav');"
-            " return { scrollH: r.scrollHeight, clientH: r.clientHeight }; }"
-        )
-        assert overflow["scrollH"] > overflow["clientH"] + 1, (
-            f"the nav rail does not overflow ({overflow}), so it cannot clip the active "
-            "item and this scenario is checking nothing -- re-anchor it or delete it"
-        )
+            page.evaluate("(k) => SubsystemApp._toggleSidebarGroup(k)", target["key"])
+            page.wait_for_timeout(200)
+            page.evaluate("(id) => SubsystemApp._navigate(id)", target["section"])
+            page.wait_for_timeout(1200)
 
-        # Reproduce a fresh render: the rail starts at the top, not wherever the
-        # click that got us here happened to leave it.
-        page.evaluate("() => { document.querySelector('.sub-nav').scrollTop = 0; }")
-        page.wait_for_timeout(250)
-
-        # A real user action that re-navigates the shell.
-        page.evaluate("() => ThemeEngine.apply('dark')")
-        page.wait_for_timeout(1600)
-
-        state = page.evaluate(
-            """() => {
-              const active = document.querySelector('.sub-nav-item.active');
-              if (!active) return { found: false };
-              const r = active.getBoundingClientRect();
-              const cx = Math.round(r.left + r.width / 2);
-              const cy = Math.round(r.top + r.height / 2);
-              const onScreen = cy >= 0 && cy <= window.innerHeight;
-              const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
+            measure = """(sel) => {
+              const nav = document.querySelector('.sub-nav');
+              const rail = nav.getBoundingClientRect();
+              const el = document.querySelector(sel);
+              if (!el) return { found: false };
+              const r = el.getBoundingClientRect();
+              const cx = Math.round(r.left + r.width / 2), cy = Math.round(r.top + r.height / 2);
+              const hit = (cy >= rail.top && cy <= rail.bottom) ? document.elementFromPoint(cx, cy) : null;
               return {
-                found: true,
-                label: (active.textContent || '').trim(),
-                section: active.dataset.section,
-                top: Math.round(r.top),
-                bottom: Math.round(r.bottom),
-                vh: window.innerHeight,
-                // Hit-tested, not merely on-screen: a marker behind an overlay
-                // is no more use to a cashier than one below the fold.
-                visible: !!(hit && (hit === active || active.contains(hit))),
+                found: true, active: el.classList.contains('active'),
+                railTop: rail.top, railBottom: rail.bottom, top: r.top, bottom: r.bottom,
+                scrollTop: nav.scrollTop, overflow: nav.scrollHeight - nav.clientHeight,
+                visible: !!(hit && (hit === el || el.contains(hit))),
               };
             }"""
-        )
-        assert state["found"], (
-            "after a theme switch on Reports, NO nav item is marked active -- the rail "
-            "cannot say which screen the till is showing"
-        )
-        assert state["section"] == "reports", (
-            f"the re-render left section {state['section']!r} active, expected 'reports' "
-            "(scenario 09 covers the screen itself being preserved)"
-        )
-        assert state["visible"], (
-            "the active nav item ({label!r}) is marked but NOT VISIBLE: it sits at "
-            "y{top}-{bottom} in a {vh}px window, so the rail is showing 'you are here' "
-            "somewhere the user cannot see it. The rail holds more destinations than "
-            "fit and nothing scrolled it to the active one.".format(**state)
-        )
-        report.shot(page, shots, "12_active_nav_visible_after_rerender")
 
-        page.evaluate("() => ThemeEngine.apply('light')")
-        page.wait_for_timeout(900)
+            # Put the rail back at the top: the state a fresh render leaves it in.
+            page.evaluate("() => { document.querySelector('.sub-nav').scrollTop = 0; }")
+            page.wait_for_timeout(250)
+            before = page.evaluate(measure, sel)
+            assert before["found"], f"the destination {target['section']!r} is not in the rail"
+            assert before["overflow"] > 0, (
+                f"PRECONDITION: the rail does not overflow at 1366x420 ({before}) -- this scenario "
+                "would prove nothing. If the groups shrank enough to fit even here, shorten the window."
+            )
+            assert before["bottom"] > before["railBottom"] + 1, (
+                f"PRECONDITION: {target['section']!r} must START below the rail's visible area "
+                f"(item bottom {before['bottom']:.0f}, rail bottom {before['railBottom']:.0f}) or a "
+                "pass proves nothing about scrolling it into view"
+            )
+
+            # A real user action that re-navigates the shell.
+            page.evaluate("() => ThemeEngine.apply('dark')")
+            page.wait_for_timeout(1600)
+
+            after = page.evaluate(measure, sel)
+            assert after["found"] and after["active"], (
+                f"after a theme switch on {target['section']!r}, that item is not the marked-active one "
+                "(scenario 09 covers the screen itself being preserved)"
+            )
+            assert after["top"] >= after["railTop"] - 1 and after["bottom"] <= after["railBottom"] + 1, (
+                f"after the re-render the active item (y {after['top']:.0f}..{after['bottom']:.0f}) is "
+                f"outside the rail (y {after['railTop']:.0f}..{after['railBottom']:.0f}) -- the rail did "
+                "not scroll to it, so it says 'you are here' somewhere the user cannot see"
+            )
+            assert after["scrollTop"] > before["scrollTop"], (
+                f"the rail's scrollTop did not move ({before['scrollTop']} -> {after['scrollTop']}); "
+                "nothing scrolled it to the active item"
+            )
+            assert after["visible"], (
+                "the active item is inside the rail's box but elementFromPoint at its centre is "
+                "something else -- it is covered"
+            )
+            report.shot(page, shots, "12_active_nav_visible_after_rerender")
+
+            page.evaluate("() => ThemeEngine.apply('light')")
+            page.wait_for_timeout(900)
+        finally:
+            page.set_viewport_size(original_viewport)
+            page.wait_for_timeout(300)
 
     report.run(
-        "12 the rail still shows which screen you are on after a re-render",
+        "12 the rail scrolls to the active item after a re-render (short window, real overflow)",
         scenario_active_nav_visible_after_rerender,
     )
 
@@ -1511,18 +1660,10 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             till_page.reload(wait_until="domcontentloaded")
             till_page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
 
-            # The signup computer auto-claims the admin-device role (item
-            # #20, a different crew's fix), so this banner should not appear
-            # here at all -- cleared defensively if it somehow does, the same
-            # shape retail_p0_till_e2e.py's own onboarding already uses, so
-            # it can never intercept a click meant for something underneath.
-            try:
-                banner = till_page.locator("#aura-admin-device-claim")
-                banner.wait_for(state="visible", timeout=3000)
-                till_page.get_by_role("button", name="Make this the admin device", exact=True).click()
-                banner.wait_for(state="detached", timeout=8000)
-            except Exception:  # noqa: BLE001
-                pass
+            # P1a item 1 deleted the admin-device claim bar outright
+            # (_maybeOfferAdminDeviceClaim and its red banner) -- this used
+            # to defensively clear it here in case it intercepted a later
+            # click; there is nothing left to clear.
 
             # ---- seed two real, sellable products through the real HTTP
             # API, the till's own authenticated session (same cookies the
@@ -1558,7 +1699,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             create_product("Relay-proof Widget", "P0-C6-RELAY", 5.75)
             till_api("POST", "/api/sub/retail/cash-sessions/open", {"opening_float": 50})
 
-            till_page.locator('.sub-nav-item[data-section="pos"]').click()
+            _click_nav_item(till_page, "pos")
             till_page.wait_for_selector("#pos-product-grid", timeout=DEFAULT_WAIT_MS)
             till_page.wait_for_timeout(500)
 

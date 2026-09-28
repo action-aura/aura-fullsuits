@@ -530,6 +530,35 @@ window.AuraIcons = (function () {
     ],
     heavy: [0]
   },
+  // M4 (fix round): 💬 (WhatsApp, the Connected services nav entry) had no
+  // EMOJI entry at all, so it fell through to render()'s raw-glyph fallback
+  // -- rendered as a placeholder '?', measured directly (mut_all.log's own
+  // console warning: 'no icon mapped for "📡"' -- the sibling gap this same
+  // fix closes below). A single-path speech-bubble, the same Lucide
+  // 'message-circle' geometry every chat surface in this icon family uses;
+  // one element, so "heavy" is the whole outline (matches 'mail'\'s own
+  // one-heavy-element shape for a similarly simple glyph).
+  'message-circle': {
+    el: [
+      "<path d=\"M7.9 20A9 9 0 1 0 4 16.1L2 22Z\" />"
+    ],
+    heavy: [0]
+  },
+  // 📡 (Shop network / site-relay): the SAME gap, same fix. 'wifi' reads as
+  // "connected" at a glance without borrowing the ring/beacon geometry the
+  // brand mark itself reserves (DESIGN.md §3) -- the dot is the signal
+  // source, the three arcs are the heavy element (the part that actually
+  // says "network"), matching 'lock'\'s own precedent of making the
+  // semantically load-bearing piece the heavy one.
+  'wifi': {
+    el: [
+      "<path d=\"M12 20h.01\" />",
+      "<path d=\"M2 8.82a15 15 0 0 1 20 0\" />",
+      "<path d=\"M5 12.859a10 10 0 0 1 14 0\" />",
+      "<path d=\"M8.5 16.429a5 5 0 0 1 7 0\" />"
+    ],
+    heavy: [1, 2, 3]
+  },
   'key-round': {  // shaft heavy; element 1's fill=currentColor already shipped in the original Lucide data, left as-is
     el: [
       "<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z\" />",
@@ -919,6 +948,11 @@ window.AuraIcons = (function () {
     "⚠️": "triangle-alert",
     "💾": "save",
     "📧": "mail",
+    // M4 (fix round): the two P1a Connected services glyphs that were
+    // rendering the '?' placeholder -- see the 'message-circle'/'wifi'
+    // icon defs above for the geometry and why each name was chosen.
+    "💬": "message-circle",
+    "📡": "wifi",
     "☰": "menu",
     // 2026-09-08 -- the glyphs still being drawn raw in a rendered surface.
     // 🔒 is the one that surprises: 'lock' has been in ICONS since the first

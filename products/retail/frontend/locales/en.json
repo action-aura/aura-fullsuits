@@ -1666,5 +1666,10 @@
   "The current cart will be cleared. This cannot be undone.": "The current cart will be cleared. This cannot be undone.",
   "Only the shop owner can change this.": "Only the shop owner can change this.",
   "Not comparable for this date": "Not comparable for this date",
-  "A transaction dated after this filter affects the total, so it cannot be compared yet.": "A transaction dated after this filter affects the total, so it cannot be compared yet."
+  "A transaction dated after this filter affects the total, so it cannot be compared yet.": "A transaction dated after this filter affects the total, so it cannot be compared yet.",
+  "Settings menu": "Settings menu",
+  "Licence & devices": "Licence & devices",
+  "Make this the main computer": "Make this the main computer",
+  "Signed in": "Signed in",
+  "Can't check": "Can't check"
 }

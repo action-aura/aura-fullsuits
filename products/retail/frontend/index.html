@@ -101,6 +101,14 @@
   <script src="/static/i18n.js"></script>
   <script src="/static/import-wizard.js"></script>
   <script src="/static/lib/chart.umd.min.js"></script>
+  <!-- P1a item 6: share.js (AuraShare.whatsapp helper, item 5) and
+       chart-theme.js (tokenised Chart.js defaults, item 9) -- both crew T
+       builds, after Chart.js (chart-theme.js applies to Chart.defaults) and
+       before subsystem-retail.js (which calls both). Added here by crew S
+       per the P1a contract ("Nobody else edits index.html: crew S adds
+       these two script tags even though crew T creates the files"). -->
+  <script src="/static/share.js"></script>
+  <script src="/static/chart-theme.js"></script>
   <script src="/static/subsystem-retail.js"></script>
   <script src="/static/sub-ai.js"></script>
   <script src="/static/cash-drawer.js"></script>

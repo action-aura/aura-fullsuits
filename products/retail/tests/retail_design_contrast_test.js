@@ -599,6 +599,193 @@ function testTextOnAccentReachesAA(tokens, groups, label = 'light') {
   console.log(`PASS: ${label} --text-on-accent reaches AA on all ${groups.accentFills.length} accent fills`);
 }
 
+// P1a item 6: the 8 category hue token pairs (till tile monogram + 3px
+// stripe, subsystem-retail.js "((categoryId mod 8) + 1)"), read straight
+// from the token MAP rather than through `groups` -- they are identity/
+// decoration tokens, not part of the surfaces/text/money/accentFills
+// taxonomy groupTokens() already curates, and folding them into an
+// existing group would blur what that group means for every OTHER check
+// that reads it. Checks both halves the interface promises: ink clears AA
+// on its OWN surface, and that surface is visibly distinct from
+// --surface-raised (the tile ground) -- not to a WCAG floor (a same-hue
+// pastel-vs-near-white pairing can legitimately sit under 1.2:1 while still
+// reading as two different colours), but never IDENTICAL, which would mean
+// the token pair silently fell back to values indistinguishable from the
+// tile itself.
+const CATEGORY_IDS = [1, 2, 3, 4, 5, 6, 7, 8];
+
+function testCategoryTokensReachAA(map, label = 'light') {
+  const raised = map.get('--surface-raised');
+  assert.ok(raised && parseHex(raised), `--surface-raised missing or not hex in the ${label} theme ("${raised}")`);
+
+  const failures = [];
+  const indistinct = [];
+  let worst = { ratio: Infinity, label: '' };
+  for (const n of CATEGORY_IDS) {
+    const surfaceTok = `--cat-${n}-surface`;
+    const inkTok = `--cat-${n}-ink`;
+    const surface = map.get(surfaceTok);
+    const ink = map.get(inkTok);
+    assert.ok(surface && parseHex(surface), `${surfaceTok} missing or not hex in the ${label} theme ("${surface}")`);
+    assert.ok(ink && parseHex(ink), `${inkTok} missing or not hex in the ${label} theme ("${ink}")`);
+
+    const ratio = contrastRatio(ink, surface);
+    if (ratio < worst.ratio) worst = { ratio, label: `cat-${n} ink on cat-${n} surface` };
+    if (ratio < AA) failures.push(`${inkTok} (${ink}) on ${surfaceTok} (${surface}) = ${ratio.toFixed(2)}:1`);
+
+    if (surface.toLowerCase() === raised.toLowerCase()) {
+      indistinct.push(`${surfaceTok} (${surface}) is IDENTICAL to --surface-raised (${raised}) -- a tile in this category would show no stripe/monogram ground at all.`);
+    }
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} ${label}-theme category ink/surface pairing(s) fall below WCAG AA (${AA}:1):\n  ${failures.join('\n  ')}\n\n` +
+    'The category monogram is the only thing on an otherwise photo-less tile -- an unreadable ' +
+    'letter defeats the whole point of item 6.'
+  );
+  assert.deepStrictEqual(
+    indistinct, [],
+    `${indistinct.length} ${label}-theme category surface(s) are identical to the tile ground:\n  ${indistinct.join('\n  ')}`
+  );
+  console.log(`PASS: all 8 ${label} category token pairs clear AA (${AA}:1) and stay visibly distinct from --surface-raised — tightest is ${worst.label} at ${worst.ratio.toFixed(2)}:1`);
+}
+
+// M5 (fix round): DESIGN.md's "no meaning shares a colour with another" reads
+// on category tiles too -- a category tinted close enough to a STATUS hue
+// (danger/warning/success/info) would make a plain category tile look like
+// it is reporting a state nobody set. >=25deg of hue separation from every
+// state hue, in every theme, is the floor the coordinator set; kept as a
+// SEPARATE check from testCategoryTokensReachAA on purpose, because AA
+// contrast and hue-collision are different failure modes with different
+// fixes (contrast = adjust L, collision = adjust H) and folding them together
+// would hide which one broke.
+const STATE_HUE_TOKENS = ['--state-success-border', '--state-warning-border', '--state-danger-border', '--state-info-border'];
+const MIN_CATEGORY_STATE_HUE_DEGREES = 25;
+
+// Hue in OKLCH, not HSL. HSL hue is a geometric artefact of the RGB cube:
+// two colours 25 HSL-degrees apart can look identical (greens/yellows) or
+// far apart (blues), so "25deg from every state hue" measured in HSL did not
+// mean "looks like a different colour". OKLCH hue is perceptually even, which
+// is what the DESIGN.md rule ("no meaning shares a colour") is actually about.
+// Conversion: sRGB -> linear -> OKLab (Bjorn Ottosson's matrices) -> atan2(b,a).
+const OKLCH_ACHROMATIC_CHROMA = 0.01; // below this the hue is noise, not a colour
+function oklchOf(hex) {
+  const rgb = parseHex(hex);
+  if (!rgb) return null;
+  const [r, g, b] = rgb.map(channelLuminance); // sRGB EOTF, shared with WCAG maths above
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+  const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+  const B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+  const C = Math.hypot(A, B);
+  let h = (Math.atan2(B, A) * 180) / Math.PI;
+  if (h < 0) h += 360;
+  return { L, C, h };
+}
+
+function hueOf(hex) {
+  const lch = oklchOf(hex);
+  if (!lch || lch.C < OKLCH_ACHROMATIC_CHROMA) return null; // achromatic -- no hue to collide with anything
+  return lch.h;
+}
+
+function hueDistance(a, b) {
+  const d = Math.abs(a - b);
+  return d > 180 ? 360 - d : d;
+}
+
+function testCategoryHuesClearStateHues(map, label = 'light') {
+  const stateHues = STATE_HUE_TOKENS.map((tok) => {
+    const hex = map.get(tok);
+    assert.ok(hex && parseHex(hex), `${tok} missing or not hex in the ${label} theme ("${hex}")`);
+    return { tok, hue: hueOf(hex) };
+  });
+
+  const failures = [];
+  let worst = { degrees: Infinity, label: '' };
+  for (const n of CATEGORY_IDS) {
+    // BOTH halves of the pair: the tile shows the ink (monogram letter) on the
+    // surface, so an ink tinted green on a non-green surface still reads as
+    // "success" -- checking the surface alone let that through.
+    for (const part of ['surface', 'ink']) {
+      const tok = `--cat-${n}-${part}`;
+      const hex = map.get(tok);
+      assert.ok(hex && parseHex(hex), `${tok} missing or not hex in the ${label} theme ("${hex}")`);
+      const hue = hueOf(hex);
+      if (hue === null) continue; // achromatic swatch cannot collide with a status hue
+      for (const state of stateHues) {
+        const dist = hueDistance(hue, state.hue);
+        if (dist < worst.degrees) worst = { degrees: dist, label: `${tok} vs ${state.tok}` };
+        if (dist < MIN_CATEGORY_STATE_HUE_DEGREES) {
+          failures.push(`${tok} (${hex}, OKLCH hue ${hue.toFixed(1)}deg) is only ${dist.toFixed(1)}deg from ${state.tok} (hue ${state.hue.toFixed(1)}deg) -- needs >=${MIN_CATEGORY_STATE_HUE_DEGREES}deg`);
+        }
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} ${label}-theme category hue(s) sit within ${MIN_CATEGORY_STATE_HUE_DEGREES}deg of a status colour ` +
+    `(a category tile would read as reporting a state nobody set):\n  ${failures.join('\n  ')}`
+  );
+  console.log(`PASS: all 8 ${label} category hues stay >=${MIN_CATEGORY_STATE_HUE_DEGREES}deg from every state hue — closest is ${worst.label} at ${worst.degrees.toFixed(1)}deg`);
+}
+
+/* M6/M7 (fix round, DESIGN.md §2 points 1-2, which the orchestrator decided
+   OVERRIDES the P1a plan's own earlier "Retail accent and neutrals" wording
+   for identity): the role pill, the initials circle and the 'Main computer'
+   badge must resolve through NO accent or state token in ANY of the 5
+   themes -- accent means "this is the action you take" and must never
+   decorate identity, and blue (--state-info-*) is the ONE colour that means
+   "information", which "this is the owner" is not.
+
+   Narrow and self-contained ON PURPOSE, not routed through the shared
+   render.harness() cascade engine every other TIER in this file uses: these
+   five selectors have no descendant combinators, no :is()/:where(), and no
+   theme-conditional override elsewhere in the stylesheet to resolve --
+   every declaration is a single `var(--token)` reference, so reading the
+   RULE TEXT and checking which token names it cites is exactly as strong a
+   proof as resolving the cascade would be, for this specific question. */
+const IDENTITY_NEUTRALITY_SELECTORS = [
+  '.sub-role-pill.is-owner',
+  '.sub-role-pill.is-manager',
+  '.sub-role-pill.is-cashier',
+  '.sub-identity-initials',
+  '.sub-main-computer-badge',
+];
+const FORBIDDEN_IDENTITY_TOKENS = /--sub-accent\b|--accent-action\b|--state-success|--state-warning|--state-danger|--state-info/;
+
+function identityRuleBodies(cssText) {
+  const out = {};
+  for (const sel of IDENTITY_NEUTRALITY_SELECTORS) {
+    const escaped = sel.replace(/[.]/g, '\\.');
+    const re = new RegExp(escaped.replace(/\\\./g, '\\.') + '\\s*\\{([^}]*)\\}');
+    const m = re.exec(cssText);
+    out[sel] = m ? m[1] : null;
+  }
+  return out;
+}
+
+function testIdentityElementsCarryNoAccentOrStateColour(cssText, label = 'light') {
+  const bodies = identityRuleBodies(cssText);
+  const failures = [];
+  for (const sel of IDENTITY_NEUTRALITY_SELECTORS) {
+    const body = bodies[sel];
+    if (body === null) { failures.push(`${sel}: rule not found at all`); continue; }
+    const hit = FORBIDDEN_IDENTITY_TOKENS.exec(body);
+    if (hit) failures.push(`${sel}: cites ${hit[0]} -- ${JSON.stringify(body.trim())}`);
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} identity element(s) resolve through an accent/state token (${label} theme -- ` +
+    `this check is theme-INDEPENDENT by construction, since it reads the CSS rule text rather than a ` +
+    `resolved colour, but is run once per theme label to keep it in the same per-theme checklist):\n  ` +
+    failures.join('\n  ')
+  );
+  console.log(`PASS: the role pill, initials circle and 'Main computer' badge cite no accent/state token (${label})`);
+}
+
 /* THE DARK PALETTE MUST ACTUALLY BE DARK. Without this, the one edit that
    silences a failing dark pairing without design work -- pasting the light
    values into the dark block -- goes green on every check above: light text
@@ -1795,8 +1982,18 @@ async function main() {
       ['money reaches AAA', () => testMoneyReachesAAA(groups)],
       ['--text-on-accent reaches AA on the accent fills', () => testTextOnAccentReachesAA(tokens, groups)],
       ['.money--negative is not colour alone', testMoneyNegativeIsNotColourAlone],
+      ['all 8 category token pairs reach AA', () => testCategoryTokensReachAA(tokens)],
+      ['all 8 category hues clear every state hue by >=25deg', () => testCategoryHuesClearStateHues(tokens)],
     );
   }
+
+  // M6/M7: identity elements (role pill, initials circle, main-computer badge)
+  // must carry no accent/state colour. Theme-independent by construction (see
+  // the function's own doc comment for why), so it runs once here rather than
+  // once per BLOCK_THEMES iteration below.
+  checks.push(
+    ['identity elements carry no accent/state colour', () => testIdentityElementsCarryNoAccentOrStateColour(fs.readFileSync(CSS_FILE, 'utf8'))],
+  );
 
   // TIER 1, EVERY NON-LIGHT THEME. Each is token values only
   // (html[data-theme="<name>"] in main.css) applied to the identical rule set,
@@ -1828,6 +2025,8 @@ async function main() {
         [`every ${upper} text-on-surface pairing reaches AA`, () => testEveryTextOnSurfaceReachesAA(themeGroups, themeName)],
         [`${upper} money reaches AAA`, () => testMoneyReachesAAA(themeGroups, themeName)],
         [`${upper} --text-on-accent reaches AA on the ${themeName} accent fills`, () => testTextOnAccentReachesAA(merged, themeGroups, themeName)],
+        [`all 8 ${upper} category token pairs reach AA`, () => testCategoryTokensReachAA(merged, themeName)],
+        [`all 8 ${upper} category hues clear every state hue by >=25deg`, () => testCategoryHuesClearStateHues(merged, themeName)],
       );
       if (themeName === 'sand') {
         checks.push(

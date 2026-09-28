@@ -197,17 +197,35 @@ function testPhoneBreakpointHidesRailAndRevealsTabBar() {
 /* ── check 4 ── the rail is hidden, never removed ────────────────────────── */
 function testSidebarMarkupStillRendersUnconditionally() {
   const src = fs.readFileSync(APP_SHELL_FILE, 'utf8');
-  const tag = '<aside class="sub-sidebar" id="sub-sidebar">';
-  const idx = src.indexOf(tag);
-  assert.ok(idx >= 0,
-    '_renderShell no longer emits the sidebar\'s opening tag: the rail would ' +
+  // ANCHOR UPDATED, P1a item 4 ("a collapsible sidebar that fits 1366x768"):
+  // the opening tag's class attribute now carries a conditional
+  // `sub-sidebar-rail` suffix ("${isTillRoute ? ' sub-sidebar-rail' : ''}")
+  // for the Till route's 64px icon rail -- a real, intentional ternary, but
+  // one that only ever changes the CLASS, never whether the element renders
+  // at all. Matching on the id attribute alone (robust to that class
+  // ternary) and taking the lookback from BEFORE the `<aside` that owns it
+  // -- not from just before `id="sub-sidebar"`, which would now trip over
+  // the class ternary's own "?" and fail for the wrong reason -- keeps this
+  // check asking its original question: is the ELEMENT ITSELF ever
+  // conditionally omitted.
+  const idIdx = src.indexOf('id="sub-sidebar"');
+  assert.ok(idIdx >= 0,
+    '_renderShell no longer emits the sidebar\'s id="sub-sidebar" attribute: the rail would ' +
     'be gone from the DOM outright rather than merely hidden by CSS, so a ' +
     'later fix that only touches the stylesheet could never bring it back');
+  const tagStart = src.lastIndexOf('<aside', idIdx);
+  assert.ok(tagStart >= 0 && idIdx - tagStart < 200,
+    'id="sub-sidebar" is not inside a nearby <aside ...> opening tag -- the sidebar element ' +
+    'itself may have changed shape entirely.');
+  assert.ok(/class="sub-sidebar/.test(src.slice(tagStart, idIdx)),
+    'the <aside> that owns id="sub-sidebar" no longer carries the sub-sidebar class -- CSS ' +
+    'targeting .sub-sidebar (including the Till-route rail rules) would no longer match it.');
 
-  // A ternary or && guard placed just ahead of the tag would make it render
-  // only sometimes; a "?" in the few characters immediately before it is
-  // the one cheap, reliable tell for that from source text alone.
-  const lookback = src.slice(Math.max(0, idx - 80), idx);
+  // A ternary or && guard placed just ahead of the OPENING TAG ITSELF would
+  // make the whole element render only sometimes; a "?" in the few
+  // characters immediately before `<aside` is the one cheap, reliable tell
+  // for that from source text alone.
+  const lookback = src.slice(Math.max(0, tagStart - 80), tagStart);
   assert.ok(!lookback.includes('?'),
     'the sidebar\'s opening tag now sits behind a conditional: an operator ' +
     'whose role or state makes that condition false gets no rail at all, and ' +
