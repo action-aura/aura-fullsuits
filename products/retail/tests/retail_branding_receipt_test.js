@@ -80,6 +80,19 @@ const CONFIGURED_BRANDING_OK = {
   },
 };
 
+/* Retail UX P0 item #12: a fresh install whose owner never visited the
+   Branding screen. branding_business_name stays '' (it is only ever what the
+   owner typed there) and the branding GET route's read-time fallback carries
+   the Company Name typed at signup in `business_name`. Before #12 the printed
+   receipt ignored that field, so every receipt on such an install was headed
+   with the vendor's product name instead of the shop's own. */
+const SIGNUP_NAME_ONLY_BRANDING_OK = {
+  status: 'success',
+  data: Object.assign({}, UNCONFIGURED_BRANDING_OK.data, {
+    business_name: 'Sweets & Co', business_name_source: 'signup',
+  }),
+};
+
 /* Breaks out of a double-quoted HTML attribute AND carries a classic
    script-injection vector, matching this file's existing MALICIOUS_NAME
    fixtures elsewhere (retail_pos_name_xss_test.js and siblings). */
@@ -254,6 +267,15 @@ async function testTheReceiptFallsBackSensiblyWhenNothingIsConfigured(src) {
     'an empty tax number must not print an empty "Tax #:" line.');
 }
 
+async function testTheSignupNameHeadsTheReceiptWhenBrandingIsEmpty(src) {
+  const html = await printReceipt({ source: src, branding: SIGNUP_NAME_ONLY_BRANDING_OK });
+  // _esc turns '&' into '&amp;', so look for the escaped form of the name.
+  assert.ok(html.indexOf('Sweets &amp; Co') !== -1,
+    `with branding empty, the signup Company Name must head the printed receipt; got:\n${html}`);
+  assert.ok(html.indexOf('Aura Retail') === -1,
+    `the vendor fallback "Aura Retail" printed although the shop's signup name was known:\n${html}`);
+}
+
 async function testAMaliciousBusinessNameIsEscaped(src) {
   const html = await printReceipt({ source: src, branding: MALICIOUS_BRANDING_OK });
   assert.ok(html.indexOf(MALICIOUS_NAME) === -1,
@@ -267,11 +289,20 @@ async function testAMaliciousBusinessNameIsEscaped(src) {
 async function testEveryGuardIsProvenByBreakingIt() {
   const proved = [];
 
+  // Re-anchored for Retail UX P0 item #12: the header line gained the
+  // `b.business_name` signup fallback on purpose. The mutation still removes
+  // exactly the escaping, so this guard catches what it caught before.
   proved.push(await provesMutation(
     '1. the business name is rendered without escaping',
-    [["rows.push(`<div class=\"rcpt-center rcpt-bold\">${this._esc(b.branding_business_name || 'Aura Retail')}</div>`);",
-      "rows.push(`<div class=\"rcpt-center rcpt-bold\">${b.branding_business_name || 'Aura Retail'}</div>`); // MUTATED: unescaped"]],
+    [["rows.push(`<div class=\"rcpt-center rcpt-bold\">${this._esc(b.branding_business_name || b.business_name || 'Aura Retail')}</div>`);",
+      "rows.push(`<div class=\"rcpt-center rcpt-bold\">${b.branding_business_name || b.business_name || 'Aura Retail'}</div>`); // MUTATED: unescaped"]],
     testAMaliciousBusinessNameIsEscaped));
+
+  proved.push(await provesMutation(
+    '3. the signup-name fallback is dropped (item #12)',
+    [["${this._esc(b.branding_business_name || b.business_name || 'Aura Retail')}",
+      "${this._esc(b.branding_business_name || 'Aura Retail')}"]],
+    testTheSignupNameHeadsTheReceiptWhenBrandingIsEmpty));
 
   proved.push(await provesMutation(
     '2a. ALLOW HALF — the branding block renders nothing at all (test: configured branding shows)',
@@ -293,7 +324,7 @@ async function testEveryGuardIsProvenByBreakingIt() {
 // RUNNER — every check runs, every failure is collected
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EXPECTED_CHECKS = 4;
+const EXPECTED_CHECKS = 5;
 
 async function main() {
   const checks = [
@@ -301,6 +332,8 @@ async function main() {
       () => testTheReceiptRendersConfiguredBranding()],
     ['with nothing configured, the receipt still renders and falls back to the product name',
       () => testTheReceiptFallsBackSensiblyWhenNothingIsConfigured()],
+    ['with branding empty, the signup Company Name heads the receipt (not the vendor name)',
+      () => testTheSignupNameHeadsTheReceiptWhenBrandingIsEmpty()],
     ['a malicious business name is escaped, not executed',
       () => testAMaliciousBusinessNameIsEscaped()],
     ['every guard is proven by breaking it', testEveryGuardIsProvenByBreakingIt],

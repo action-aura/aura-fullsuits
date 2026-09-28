@@ -1018,14 +1018,36 @@ async function testReportsPageWiresTheEmployeePanel() {
 // live equivalent: it renders `audit_log.user_id` -- a raw UUID -- in a
 // monospace cell, inside a table that flips to RTL in Arabic. Same isolate,
 // same reason.
+// Round 2, T5(a): the contract this case proves changed ON PURPOSE (item
+// #17/T5's own fix, subsystem-retail.js's audit-log tbody render). The user
+// id used to sit un-isolated in the <td>'s own `title` attribute, with
+// "Unknown user" as PLAIN, un-isolated cell text -- the isolation problem
+// this case originally named ("an ASCII uuid ... in a table that renders
+// right-to-left") was real, but isolating the UUID ITSELF was never the
+// right fix: a uuid is direction-neutral ASCII and does not reorder under
+// RTL. The ACTOR NAME does -- it "can be Latin or Arabic" (this shop's own
+// staff, not a generated id), inside the SAME RTL table -- so the fix wraps
+// the whole actor cell (the resolved name, or the "Unknown user" fallback)
+// in one `_bdi(name, uid, 'auto')` call: the NAME is now the isolated
+// content, dir="auto" so either script picks its own direction correctly,
+// and the uid rides along in that same element's `title` for anyone who
+// still needs to correlate it -- reachable, just no longer the isolated
+// text itself, which is what this case can no longer assert (a uuid does
+// not need isolating, and asserting it did is what made the guard fail on
+// the very state that PREVENTS the bug it exists to catch: a real bdi
+// wrapper on the direction-sensitive content).
 async function testAuditLogUserIdIsBidiIsolated() {
   const tbody = makeElementStub();
+  const ARABIC_ACTOR = 'سارة أحمد';
   const env = loadRetail({
     responses: {
       '/audit-log': {
         status: 'success',
-        data: [{ id: 1, user_id: ACTOR_UUID, action: 'VOID_PAYMENT', entity: 'PAYMENT', entity_id: 7, details: '', timestamp: '2026-08-19T14:30:00' }],
-        meta: { total: 1, page: 1, limit: 50, actions: [], entities: [] },
+        data: [
+          { id: 1, user_id: ACTOR_UUID, actor_name: null, action: 'VOID_PAYMENT', entity: 'PAYMENT', entity_id: 7, details: '', timestamp: '2026-08-19T14:30:00' },
+          { id: 2, user_id: 'b1e2c3d4-1111-2222-3333-444455556666', actor_name: ARABIC_ACTOR, action: 'CUSTOMER_CREATED', entity: 'CUSTOMER', entity_id: 9, details: '', timestamp: '2026-08-19T15:00:00' },
+        ],
+        meta: { total: 2, page: 1, limit: 50, actions: [], entities: [] },
       },
     },
     elements: { '#aud-table tbody': tbody },
@@ -1033,12 +1055,27 @@ async function testAuditLogUserIdIsBidiIsolated() {
   env.RetailSystem._auditLog = { page: 1, limit: 50, date_from: '', date_to: '', action: '', entity: '', totalPages: 1 };
   await env.RetailSystem._loadAuditLog();
 
-  assert.ok(tbody.innerHTML.includes(ACTOR_UUID), 'Sanity: the audit row must render its user id. Got: ' + tbody.innerHTML);
+  assert.ok(tbody.innerHTML.includes(ACTOR_UUID), 'Sanity: an unresolved row must still carry its user id (reachable via title). Got: ' + tbody.innerHTML);
+
+  // Unresolved actor (null actor_name): the "Unknown user" fallback is
+  // itself the bidi-isolated content, and the uid is reachable via title on
+  // that SAME <bdi> -- not floating, unisolated, on the <td>.
   assert.ok(
-    /<bdi[^>]*>[^<]*3a7d4e10/.test(tbody.innerHTML),
-    'The Audit Log user id must be bidi-isolated: it is an ASCII uuid in a ' +
-    'monospace cell inside a table that renders right-to-left in Arabic. Got: ' +
-    tbody.innerHTML
+    /<bdi dir="auto" title="3a7d4e10-5c22-4f9b-8e61-0d4c9a1b2e33">Unknown user<\/bdi>/.test(tbody.innerHTML),
+    'The Audit Log actor cell must be a bidi-isolated <bdi dir="auto"> wrapping the resolved name (or the ' +
+    '"Unknown user" fallback), with the uid reachable via that SAME element\'s title -- not an isolated uuid ' +
+    'with plain, unisolated fallback text next to it. Got: ' + tbody.innerHTML
+  );
+
+  // Resolved Arabic actor name: THIS is the case isolation actually
+  // protects -- an Arabic-script name inside a table that renders RTL in
+  // Arabic must not have its own internal ordering flipped by the
+  // surrounding paragraph direction. dir="auto" (not the timestamp
+  // column's "ltr") is what lets the name pick its own script's direction.
+  assert.ok(
+    tbody.innerHTML.includes(`<bdi dir="auto" title="b1e2c3d4-1111-2222-3333-444455556666">${ARABIC_ACTOR}</bdi>`),
+    'A resolved Arabic actor name must be wrapped in its own <bdi dir="auto">, not left as plain cell text ' +
+    'where the table\'s own RTL direction could reorder it. Got: ' + tbody.innerHTML
   );
 }
 

@@ -328,8 +328,25 @@ async function main() {
     assert.strictEqual(ctx.RetailSystem._currentTotals.loyaltyValue, 20, 'sanity: a 40-point redemption at $0.50/point must be worth $20 before checkout');
 
     await ctx.RetailSystem._checkout();
-    assert.strictEqual(ctx.posts.length, 1, 'checkout must POST exactly once');
-    const payload = ctx.posts[0].body;
+    // Round 2, T5(c): filtered to the SALES route, not ctx.posts.length raw.
+    // Phase 0's customer-display relay (item #11, interface I-1) now POSTs
+    // the till's cart/sale-complete state through the SAME fetch stub on
+    // every cart/discount/loyalty change AND at checkout -- a real,
+    // separate, debounced channel this file's own mountPOS never had to
+    // account for when this assertion was written. The raw count went from
+    // 1 to 10 the moment that relay started firing in this harness, but
+    // "checkout must POST exactly once" was never a claim about EVERY POST
+    // this screen makes -- it is specifically about /sales, the ONE route
+    // that can actually double-charge a customer if it fires twice. What
+    // this narrower count can no longer see: a regression that makes
+    // checkout ALSO POST twice to some OTHER route (the relay, for
+    // instance) -- that is a real, separate concern (item #11's own tests
+    // own it), not this assertion's job.
+    const salesPosts = ctx.posts.filter(p => /\/api\/sub\/retail\/sales$/.test(p.url));
+    assert.strictEqual(salesPosts.length, 1,
+      `checkout must POST exactly once to /sales (saw ${salesPosts.length} of ${ctx.posts.length} total POSTs: ` +
+      `${JSON.stringify(ctx.posts.map(p => p.url))})`);
+    const payload = salesPosts[0].body;
     assert.strictEqual(payload.points_redeemed, 40, 'the checkout payload must carry the EXACT field name create_sale (retail_api.py) reads: `points_redeemed`, an integer point count');
     assert.strictEqual(payload.total, 100, 'the invoice total sent to the server must be the full sale total, unaffected by the redemption (create_sale never adjusts it either)');
     assert.strictEqual(payload.amount_paid, 80, 'amount_paid must be computed against what is still due AFTER the $20 redemption (100-20=80), not the $100 invoice total -- sending the full total here would make the server report a phantom $20 "change due" (THE CASH TRAP)');

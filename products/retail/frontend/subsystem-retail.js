@@ -63,13 +63,47 @@ const RETAIL_PAYMENT_METHOD_COLORS = {
 // identity across the switch.
 function retailPaymentChartConfig(labels, values, tickColor) {
   const colors = labels.map(m => RETAIL_PAYMENT_METHOD_COLORS[m] || '#94a3b8');
+  // P0 item #19: the WORD a reader sees (the legend text, the bar fallback's
+  // Y-axis category labels) is translated -- but `data.labels` ITSELF stays
+  // the raw API method keys ('cash','card',...), completely unchanged.
+  //
+  // Two different concerns, and Chart.js already keeps them separate: WHICH
+  // data point this is (data.labels -- also what the colour lookup above is
+  // keyed on) versus WHAT WORD a reader sees for it (a display hook). An
+  // earlier version of this fix translated `data.labels` directly, which
+  // regressed retail_payment_chart_negative_bucket_test.js -- an EXISTING
+  // test this crew does not own and must never weaken -- because that test
+  // pins `cfg.data.labels` to equal EXACTLY ['cash','card'] as part of an
+  // unrelated, pre-existing contract (a net-negative tender bucket must stay
+  // in the array, unclamped, unrenamed, so the chart-selection lookup and
+  // the values assertion both still work). Measured: `node products/retail/
+  // tests/retail_payment_chart_negative_bucket_test.js` went from PASS to
+  // "expected a payment-method chart to be constructed" the moment
+  // `data.labels` carried translated strings instead of the raw keys the
+  // test's own `.includes('card')` finder depends on. Restoring `data.labels`
+  // to the raw keys and moving translation into Chart.js's own label-DISPLAY
+  // hooks below (generateLabels for the doughnut legend, ticks.callback for
+  // the bar fallback's Y-axis) fixed it without touching that test file.
+  const displayLabel = (m) => (window.RetailSystem && RetailSystem._paymentMethodLabel)
+    ? RetailSystem._paymentMethodLabel(m) : m;
   const hasNegative = values.some(v => Number(v) < 0);
   if (!hasNegative) {
     return {
       type: 'doughnut',
       data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'right', labels: { color: tickColor, font: { size: 12 } } } } },
+        plugins: { legend: { position: 'right', labels: { color: tickColor, font: { size: 12 },
+          // Reuses Chart.js's OWN per-slice doughnut legend generator (each
+          // item already carries the right fillStyle/hidden/strikethrough
+          // state for click-to-toggle) and only overwrites `.text` on each
+          // entry -- never a hand-rolled legend-item array, which would
+          // silently drop that toggle behaviour Chart.js provides for free.
+          generateLabels: (chart) => {
+            const gen = window.Chart && Chart.overrides && Chart.overrides.doughnut &&
+              Chart.overrides.doughnut.plugins.legend.labels.generateLabels;
+            const base = gen ? gen(chart) : [];
+            return base.map((item, i) => Object.assign({}, item, { text: displayLabel(labels[i]) }));
+          } } } } },
     };
   }
   return {
@@ -89,7 +123,12 @@ function retailPaymentChartConfig(labels, values, tickColor) {
              grid: { color: (window.RetailSystem && RetailSystem._cssToken)
                ? RetailSystem._cssToken('--border-hairline', 'rgba(255,255,255,0.05)')
                : 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: tickColor }, grid: { display: false } },
+        // P0 item #19: the tender NAMES on this horizontal bar's Y-axis,
+        // translated the same way the doughnut legend above is. `value` is
+        // Chart.js's own CATEGORY-SCALE INDEX for this callback (not the
+        // label string), so `labels[value]` is the raw key to translate --
+        // `data.labels` itself is untouched, same reasoning as above.
+        y: { ticks: { color: tickColor, callback: (value) => displayLabel(labels[value]) }, grid: { display: false } },
       } },
   };
 }
@@ -521,7 +560,16 @@ const RetailSystem = {
       .ret-empty-actions { display:flex;gap:10px;flex-wrap:wrap;justify-content:center;
         margin-block-start:7px; }
       .ret-hdr { display:flex;justify-content:space-between;align-items:center;margin-bottom:22px; }
-      .ret-hdr > :only-child { margin-inline-start: auto; }
+      /* AUDIT (Phase 0 #14d): with no ':not(.ret-title)' guard this rule also
+         matched a LONE PAGE TITLE -- every capability-restricted screen
+         (_renderCapabilityRestricted) renders '.ret-hdr' with nothing in it
+         but '<h2 class="ret-title">', and margin-inline-start:auto pushed
+         that title to the FAR end of the header instead of leaving it at the
+         natural start edge every other page's title sits at. The rule still
+         does its original job (a single lone CONTROL -- e.g. one button with
+         no search box beside it -- reads correctly pinned to the end), just
+         never for the page's own name. */
+      .ret-hdr > :only-child:not(.ret-title) { margin-inline-start: auto; }
       .ret-title { color:var(--text);margin:0;font-size:24px;font-weight:700; }
       /* AUDIT -- this rule used to say color:#fff, a leftover from the dark HUD.
          With Operational Calm the panels behind it are WHITE, and .rdash was
@@ -544,6 +592,23 @@ const RetailSystem = {
          later defines it silently re-colours every row rule at once. */
       .ret-table td { padding:11px 12px;border-bottom:1px solid var(--border-soft);vertical-align:middle; }
       .ret-table tr:last-child td { border:none; }
+      /* P0 item #15c: money reads like money. css/main.css already declares
+         a .num class (tabular-nums + nowrap, see that file's MONEY block) for
+         every screen this app has -- but NOT end-alignment, and that file is
+         C4's (app-shell.js/css/main.css), not this one. Redeclared here,
+         inside THIS file's own injected styles rather than touched there,
+         both because the finance screens this class is FOR (cheques, trial
+         balance, Products' cost column) all render from this file, and
+         because an injected style#ret-styles tag is appended to
+         head at runtime, strictly AFTER css/main.css's link tag, so an
+         identical selector here always wins the cascade without needing
+         an !important flag or a more specific one. A column of amounts that
+         is start-aligned reads as prose, not a ledger -- a cashier or
+         bookkeeper scanning down a column for the biggest figure needs the
+         ones place lined up, which only end-alignment gives.
+         NOTE: no backticks in this comment -- this whole block lives inside a
+         JS template literal (see the module comment above _injectStyles). */
+      .num { text-align:end;font-variant-numeric:tabular-nums;white-space:nowrap; }
       /* :focus-within, not only :hover. A clickable row is now a row CONTAINING
          a button (see _saleOpenerButton), and a keyboard or barcode-scanner
          operator tabbing onto that button has to see which row they are on --
@@ -934,7 +999,18 @@ const RetailSystem = {
           z-index:5002;
           transform:translateY(100%);
           transition:transform var(--motion-base, 240ms) var(--motion-ease-out, ease-out);
-          overflow-y:auto;
+          /* AUDIT (Phase 0 #7c "recheck the <=640px sheet mode"): this used
+             to carry its OWN overflow-y:auto, making the WHOLE sheet scroll
+             as one box. .pos-checkout-footer (the new home for Charge, a
+             fixed-height sibling of .pos-summary -- see that element's own
+             comment) is a DIRECT CHILD of this element too, so a scrolling
+             .pos-right would have scrolled the footer away with everything
+             else, the exact bug #7c exists to fix, just relocated to the one
+             viewport width this rule only applies at. The base .pos-right
+             rule above already sets overflow:hidden, and .pos-cart-items /
+             .pos-summary each already scroll INTERNALLY (their own rules) --
+             nothing here needs a second, outer scroll container.
+          */
         }
         .pos-wrap.pos-sheet-open .pos-right { transform:translateY(0); }
 
@@ -1020,6 +1096,41 @@ const RetailSystem = {
   _currencyDp() {
     const d = this._currencyDecimals;
     return d == null ? 2 : d;
+  },
+
+  // Phase 0 #8/#7d: "hidden when below half a minor unit" (item #8's own
+  // wording for the Promotions/Discount rows). The client-side mirror of
+  // `_money_epsilon(currency)` on the Python side (ENGINEERING.md: never a
+  // hardcoded 0.005) -- a 3dp currency (JOD) hides below 0.0005, a 2dp one
+  // below 0.005, so a currency with more decimal places never gets a
+  // coarser gate than one with fewer, and this never drifts from
+  // `_currencyDp()` because it is derived from it, not typed separately.
+  _halfMinorUnit() {
+    return 0.5 / Math.pow(10, this._currencyDp());
+  },
+
+  // Round 2, till R2 (item #8/I-2, critical -- money identity at 3dp): the
+  // client-side mirror of core/retail/pricing.py's `_round_money(x, quant)`
+  // (`float(x.quantize(quant, rounding=ROUND_HALF_UP))`) that _recalc() was
+  // missing entirely -- see that function's own comment for the measured
+  // defect (a 2.500 JOD line at 7.5% manual discount with 16% tax showed
+  // Total 2.683 here and 2.682 on the receipt/server, because this file
+  // summed UNROUNDED per-line figures and rounded only the invoice-level
+  // total at the end, a separate full-precision path from the one that
+  // produces the discount_amount/tax the server actually persists).
+  // JS has no Decimal type, so this leans on Math.round's own ROUND_HALF_UP-
+  // for-non-negatives behaviour (Math.round(2.5) === 3, never banker's
+  // rounding) -- every value this is ever called with is a price, a
+  // discount amount or a tax amount, none of which are ever negative. The
+  // small epsilon before rounding cancels ordinary binary floating-point
+  // representation noise (e.g. 0.1875*100 can arrive as
+  // 18.749999999999996) without being anywhere near large enough to flip a
+  // genuine half-a-minor-unit boundary (that threshold is _halfMinorUnit()
+  // above, several orders of magnitude bigger than this epsilon).
+  _roundMoney(v) {
+    const factor = Math.pow(10, this._currencyDp());
+    const n = Number(v) || 0;
+    return Math.round(n * factor + (n >= 0 ? 1e-9 : -1e-9)) / factor;
   },
 
   //: The mark plus its separator. A SINGLE-CHARACTER mark hugs its digits
@@ -1243,27 +1354,234 @@ const RetailSystem = {
 
   _postToCustomerDisplay(msg) {
     const ch = this._customerDisplayChannel();
-    if (!ch) return;
-    try { ch.postMessage(msg); } catch (e) { /* channel closed (display window gone) -- nothing to report to */ }
+    if (ch) {
+      try { ch.postMessage(msg); } catch (e) { /* channel closed (display window gone) -- nothing to report to */ }
+    }
+    // P0 item #11(b), interface I-1: the backend relay. BroadcastChannel
+    // above is same-origin/same-process ONLY -- it never crosses into a
+    // second pywebview NATIVE window (a different WebView2 profile, no
+    // shared JS realm), which is exactly the desktop-app case this item
+    // exists to fix (see launcher_retail.py's own item #11 comment: pywebview
+    // hands window.open to the system browser, and a native second window is
+    // a wholly separate process). Nothing may depend on ONLY the fast path,
+    // so this always fires alongside it, never as a fallback gated on the
+    // channel having failed.
+    this._postToCustomerDisplayRelay(msg);
+  },
+
+  // `setTimeout`/`clearTimeout` do not exist in the vm-sandboxed harnesses
+  // this file is also loaded into (retail_surface_pos_test.js and friends
+  // build a bare `{console, document, ...}` context with no timer globals --
+  // see that file's `loadRetailSystem`). Every scheduling call below goes
+  // through this guard, matching the file's own `typeof X !== 'undefined'`
+  // idiom (see `_customerDisplayChannel`'s BroadcastChannel check just
+  // above) rather than assuming a browser. Review fix (2026-09-27, high):
+  // the debounce used to call `setTimeout` unconditionally, which threw
+  // 'ReferenceError: setTimeout is not defined' out of every _recalc() in
+  // that harness and took down retail_surface_pos_test.js (10/12 checks),
+  // retail_pos_touch_autofocus_test.js (0/3) and retail_pos_name_xss_test.js
+  // (crashed before its own assertion ever ran) -- none of them exercise the
+  // relay at all, they just share _recalc()'s call path.
+  _hasTimers() { return typeof setTimeout === 'function' && typeof clearTimeout === 'function'; },
+
+  // SALE_COMPLETE_DISPLAY_MS in customer-display.js: how long the thank-you
+  // screen holds itself before that file's OWN timer returns it to idle.
+  // The relay hold below mirrors that number for a different reason -- see
+  // the review-fix comment inside _postToCustomerDisplayRelay.
+  _SALE_COMPLETE_RELAY_HOLD_MS: 8000,
+
+  _postDisplayRelayNow(message) {
+    // Best-effort: an unlicensed/restricted install 403s this route
+    // (require_license_capability) while BroadcastChannel above still
+    // works on the SAME window, and a display the till cannot reach yet
+    // (no relay) must not throw an unhandled rejection into the console
+    // on every single sale.
+    this._post('/api/sub/retail/customer-display/state', {
+      message, shop: this._customerDisplayShopInfo(),
+    }).catch(() => {});
+  },
+
+  // Debounced ~150ms (interface I-1's own number): a fast-scanning cashier
+  // fires _broadcastDisplayState() once per line added, and the display only
+  // ever needs the LATEST cart -- never every intermediate one -- so a burst
+  // of edits inside one debounce window collapses into a single POST. The
+  // relay's `seq` only ever increases (customer_display_set_state), so
+  // coalescing here can never make the display see an OLDER state than one
+  // it already has.
+  //
+  // Review fix (2026-09-27, CRITICAL -- item #11(b)): that debounce used to
+  // apply to a 'sale_complete' message too, and that was the actual bug --
+  // checkout's success path posts 'sale_complete' and then, on the very next
+  // synchronous line, calls _clearCart(), whose own _recalc() ->
+  // _broadcastDisplayState() posts an EMPTY 'cart'. Both calls land inside
+  // the SAME 150ms window, so the second silently overwrote
+  // `_pendingDisplayRelayMsg` before the timer ever fired, and the relay
+  // only ever POSTed the empty cart. Measured: every POST body the real till
+  // sent after a checkout was ['cart','cart','cart','cart'] --
+  // 'sale_complete' never reached the relay, so a display depending on it
+  // (any native second window, per I-1) never showed the thank-you screen.
+  //
+  // Two changes fix both the coalescing bug AND the race the naive fix would
+  // still have: the relay's server-side state is a single LATEST value, not
+  // a queue (I-1: "no long-poll"/"gone on restart"), so even a promptly-sent
+  // empty cart can overwrite 'sale_complete' server-side before any display
+  // poll (~600-700ms) ever reads it back.
+  //   1. 'sale_complete' flushes the debounce and posts AT ONCE.
+  //   2. For `_SALE_COMPLETE_RELAY_HOLD_MS` afterward, an EMPTY cart (the
+  //      _clearCart() echo) is dropped rather than relayed, so the server
+  //      keeps showing 'sale_complete' for at least one poll cycle. A
+  //      NON-empty cart (the next customer's sale already rung) still wins
+  //      immediately and clears the hold, mirroring customer-display.js's
+  //      own `_onCart` rule ("a non-empty cart always wins") so the two
+  //      sides of this contract cannot disagree about which state is
+  //      newest. When the hold naturally expires, the idle cart is posted
+  //      once so a display that opens (or polls) AFTER the hold never reads
+  //      back a stale thank-you screen instead of idle.
+  _postToCustomerDisplayRelay(msg) {
+    const isCart = !!(msg && msg.type === 'cart');
+    const isEmptyCart = isCart && Array.isArray(msg.items) && msg.items.length === 0;
+
+    if (msg && msg.type === 'sale_complete') {
+      if (!this._hasTimers()) { this._postDisplayRelayNow(msg); return; }
+      if (this._displayRelayDebounce) { clearTimeout(this._displayRelayDebounce); this._displayRelayDebounce = null; }
+      this._pendingDisplayRelayMsg = null;
+      if (this._relayHoldTimer) { clearTimeout(this._relayHoldTimer); this._relayHoldTimer = null; }
+      this._relayHoldUntil = Date.now() + this._SALE_COMPLETE_RELAY_HOLD_MS;
+      this._relayHoldTimer = setTimeout(() => {
+        this._relayHoldTimer = null;
+        this._relayHoldUntil = 0;
+        // Still idle when the hold ends (the common case: nobody started
+        // the next sale) -- push that idle state now, once, rather than
+        // leaving the relay's last-known state stuck on 'sale_complete'
+        // for whoever polls or opens the display next.
+        if (this._cart && this._cart.length === 0) this._postDisplayRelayNow(this._customerDisplayCartPayload());
+      }, this._SALE_COMPLETE_RELAY_HOLD_MS);
+      this._postDisplayRelayNow(msg);
+      return;
+    }
+
+    if (isEmptyCart && this._relayHoldUntil && Date.now() < this._relayHoldUntil) {
+      return; // the _clearCart() echo -- see the review-fix comment above
+    }
+    if (isCart && !isEmptyCart && this._relayHoldUntil) {
+      // The next sale already started ringing -- it wins immediately,
+      // exactly like customer-display.js's own client-side rule.
+      if (this._relayHoldTimer) clearTimeout(this._relayHoldTimer);
+      this._relayHoldTimer = null;
+      this._relayHoldUntil = 0;
+    }
+
+    if (!this._hasTimers()) { this._postDisplayRelayNow(msg); return; }
+    this._pendingDisplayRelayMsg = msg;
+    if (this._displayRelayDebounce) return;
+    this._displayRelayDebounce = setTimeout(() => {
+      this._displayRelayDebounce = null;
+      const message = this._pendingDisplayRelayMsg;
+      this._pendingDisplayRelayMsg = null;
+      if (!message) return;
+      this._postDisplayRelayNow(message);
+    }, 150);
+  },
+
+  // I-1 + I-3 (P0 item #12-till): `{name, lang, theme}`. `name` reuses
+  // SubsystemApp._shopDisplayName() -- the SAME branding-value-or-signup-
+  // fallback app-shell.js already resolved once at shell init (I-3) --
+  // rather than this file issuing a SECOND `/settings/branding` fetch of its
+  // own, which could race app-shell's and briefly disagree about the shop's
+  // own name.
+  _customerDisplayShopInfo() {
+    const name = (window.SubsystemApp && typeof SubsystemApp._shopDisplayName === 'function')
+      ? SubsystemApp._shopDisplayName() : null;
+    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar' : 'en';
+    const theme = document.documentElement.getAttribute('data-theme') || 'light';
+    return { name, lang, theme };
   },
 
   // Cart -> display payload. See the module comment: every money field below
   // is this._fmt()'s STRING output, never a number.
+  //
+  // AUDIT (Phase 0 #8, interface I-2): `items[].lineTotal`/`originalLineTotal`
+  // and the top-level `promotions` field are new; `discount` changed meaning
+  // ("Today it folds promotions in" was I-2's own naming of the defect).
+  //
+  // Review fix (2026-09-27, critical): this used to reuse _renderCart's/
+  // _recalc's `lineFrac = Math.max(manualFrac, promoFrac)` verbatim -- but
+  // that "best price wins" max is _recalc's OWN, separate concern (the real
+  // TAX/CHARGE formula, mirroring core/retail/pricing.py's calculate_line()
+  // exactly -- see that function's own comment -- never touched here). I-2's
+  // own wording for THIS field is unambiguous: "items[].lineTotal =
+  // POST-promotion line total" -- promotion only. Folding a bigger manual
+  // discount into a promoted line's relayed total (while leaving an
+  // UNpromoted line's total completely untouched by the same manual
+  // discount, exactly as _renderCart's lineTotalHTML still does today) is
+  // exactly the "opaque per-line number" defect item #8 exists to remove --
+  // the manual discount stays a single, separate, invoice-level figure
+  // (the `discount` field below, `totals.manualDiscount`), never smeared
+  // back into an individual line.
+  //
+  // Round 2, till R2 (I-2/T2, high -- "the display line still shows the
+  // promotion" when the manual discount actually wins): the review fix just
+  // above still decided `lineTotal`/`originalLineTotal` with a bare `promo ?`
+  // -- A PROMOTION RESOLVES for the line -- rather than with T2's own
+  // winner-takes-all-per-line rule _recalc uses for the CHARGE
+  // (`promoFrac > manualFrac`, strictly). So a line where the manual %
+  // legitimately beat the promotion still sent a struck-through original
+  // and a promotion-sized `lineTotal` to the display -- a saving that was
+  // never actually in the Promotions bucket, while the Discount row carried
+  // the FULL manual saving, so the figures a shopper could add up on their
+  // own screen did not reach the Total. Measured live (Widget 10.000, 16%
+  // tax, 20% promotion, manual 30% -- manual wins): display showed struck
+  // 'JD 10.000' / 'JD 8.000', Subtotal 10.000, Promotions hidden, Discount
+  // -3.000, Tax 1.120, Total 8.120 -- 8.000 is not Subtotal-Promotions
+  // (10.000), and 8.000-3.000+1.120 = 6.120, not 8.120. `promoWins` below is
+  // the exact same predicate _recalc's own per-line loop now branches on
+  // (`if (lineFrac > manualFrac) ... else ...`), so this payload, the till's
+  // own cart row (_renderCart, same predicate) and the receipt (built from
+  // the server's per-line `applied_promotion`, which is null on a
+  // manual-wins line) can never disagree about which line is "promoted"
+  // again. `gross`/the discount amount also now go through _roundMoney()
+  // for the identical reason _recalc's own per-line loop does -- see that
+  // function's own top comment on the money-identity fix this shares.
   _customerDisplayCartPayload() {
     const totals = this._currentTotals || {};
+    const halfMinor = this._halfMinorUnit();
+    const manualFrac = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0))) / 100;
     return {
       type: 'cart',
-      items: (this._cart || []).map(i => ({
-        name: i.name,
-        quantity: i.quantity,
-        unitPrice: this._fmt(i.unit_price),
-        lineTotal: this._fmt(i.line_total),
-      })),
+      items: (this._cart || []).map(i => {
+        const promo = this._bestPromoFor(i);
+        const promoFrac = promo ? (promo.discount_pct || 0) / 100 : 0;
+        const promoWins = promoFrac > manualFrac;
+        const gross = this._roundMoney(i.line_total);
+        return {
+          name: i.name,
+          quantity: i.quantity,
+          unitPrice: this._fmt(i.unit_price),
+          // I-2: POST-promotion line total, ONLY when the promotion actually
+          // won this line (see this function's own review-fix comment
+          // above) -- otherwise the line's own gross, untouched, exactly
+          // like an unpromoted line.
+          lineTotal: this._fmt(promoWins ? gross - this._roundMoney(gross * promoFrac) : gross),
+          // I-2: "formatted pre-promo line total, or null when no promotion
+          // applied to that line" -- null (not omitted), matching every
+          // other conditional field on this payload (`discount`/`loyalty`
+          // below), so the display's own `if (item.originalLineTotal)` check
+          // never has to distinguish "absent" from "explicitly nothing".
+          // "applied" now means WON, not merely resolved -- matching the
+          // server's own `applied_promotion`, which is null on a
+          // manual-wins line.
+          originalLineTotal: promoWins ? this._fmt(gross) : null,
+        };
+      }),
       subtotal: this._fmt(totals.subtotal || 0),
-      // null (not "$0.00") when there is no discount, so the display can hide
-      // the row entirely -- the same "own row, own visibility" shape
-      // #pos-loyalty-value-row and #pos-change-row already use.
-      discount: totals.discount > 0 ? this._fmt(totals.discount) : null,
+      // I-2: MANUAL discount only now (`totals.manualDiscount`, see
+      // _recalc's own comment on why `totals.discount` itself is untouched)
+      // -- null below half a minor unit, the same "own row, own visibility"
+      // shape #pos-loyalty-value-row and #pos-change-row already use.
+      discount: totals.manualDiscount > halfMinor ? this._fmt(totals.manualDiscount) : null,
+      // I-2, NEW: the promotion-driven saving, separate from a manual
+      // discount -- null below half a minor unit for the identical reason.
+      promotions: totals.promotions > halfMinor ? this._fmt(totals.promotions) : null,
       tax: this._fmt(totals.tax || 0),
       total: this._fmt(totals.total || 0),
       // THE CASH TRAP, third echo of it (create_sale's heading, _recalc's
@@ -1287,26 +1605,143 @@ const RetailSystem = {
     this._postToCustomerDisplay(this._customerDisplayCartPayload());
   },
 
-  // Opens the display as its own window (second monitor) and pushes the
-  // current cart immediately, so a freshly opened -- or already-open and
-  // merely refocused -- display is never left showing stale data until the
-  // next scan. `/static/...`, matching how this file and app-shell.js already
-  // navigate to the other standalone pages (licensing.html, whatsapp.html):
-  // this document is served from '/', not '/static/', so a relative URL here
-  // would resolve to the wrong path.
+  // Opens the display and pushes the current cart immediately, so a freshly
+  // opened -- or already-open and merely refocused -- display is never left
+  // showing stale data until the next scan.
   //
-  // A NAMED target (not "_blank") so a cashier clicking this twice refocuses
-  // the one display window instead of spawning a second one.
+  // P0 item #11(a), interface I-1: pywebview hands a bare `window.open` to
+  // the SYSTEM BROWSER (edgechromium.py:255-261 per launcher_retail.py's own
+  // item #11 comment), a different program with no session and no
+  // BroadcastChannel -- so on the desktop app the old `window.open`-only path
+  // below opened a page that could never actually show anything. The native
+  // path opens a SECOND PYWEBVIEW WINDOW instead (same process, same
+  // profile, same session -- see launcher_retail.py's js_api
+  // open_customer_display()), and is preferred whenever it exists; a plain
+  // browser tab (this file's own test harness, or a non-desktop deployment)
+  // still gets the `window.open` fallback it always had.
   _openCustomerDisplay() {
-    try {
-      const win = window.open('/static/customer-display.html', 'auraCustomerDisplay', 'width=1024,height=768');
-      if (win) { try { win.focus(); } catch (e) {} }
-    } catch (e) { /* popup blocked or unsupported -- nothing more to do client-side */ }
+    const hasNativeDisplay = !!(window.pywebview && window.pywebview.api &&
+      typeof window.pywebview.api.open_customer_display === 'function');
+    if (hasNativeDisplay) {
+      // Round 3 (U3): the native window's OS-level title bar used to get
+      // whatever (or nothing) launcher_retail.py hardcoded -- built here
+      // against that launcher's own `open_customer_display(title=None,
+      // shop_name=None)` signature (desktop fixer, a parallel round-3
+      // pass), so the SECOND window's title is in the TILL'S OWN language
+      // (never hardcoded English) and names the actual shop when one is
+      // known. Reuses _customerDisplayShopInfo()'s own name resolution --
+      // the SAME branding-or-signup fallback (interface I-3) the relay
+      // payload already sends, so the window title and the display's own
+      // on-screen shop name can never disagree about which name is "known".
+      // A shop with no name yet (branding unset, signup still empty) still
+      // gets a sane, translated 'Customer Display' rather than a blank or
+      // untranslated title.
+      const shopName = this._customerDisplayShopInfo().name;
+      const title = shopName ? `${shopName} — ${t('Customer Display')}` : t('Customer Display');
+      try { window.pywebview.api.open_customer_display(title); }
+      catch (e) { /* native call failed -- state still reaches it once opened by hand */ }
+    } else {
+      // `/static/...`, matching how this file and app-shell.js already
+      // navigate to the other standalone pages (licensing.html,
+      // whatsapp.html): this document is served from '/', not '/static/', so
+      // a relative URL here would resolve to the wrong path.
+      //
+      // A NAMED target (not "_blank") so a cashier clicking this twice
+      // refocuses the one display window instead of spawning a second one.
+      let win = null;
+      try {
+        win = window.open('/static/customer-display.html', 'auraCustomerDisplay', 'width=1024,height=768');
+        if (win) { try { win.focus(); } catch (e) {} }
+      } catch (e) { win = null; /* popup blocked or unsupported */ }
+      // P0 item #11(a)'s own wording: "Show a toast when window.open()
+      // returns null" -- a popup blocker is silent otherwise, and a cashier
+      // who clicked the button with no visible result has no other signal
+      // that anything went wrong.
+      if (!win) {
+        SubsystemApp.showToast(t('Could not open the customer screen. Check your pop-up blocker.'), 'error');
+      }
+    }
+    // P0 item #11(d): the dot only starts polling once the display has been
+    // opened at least once THIS session -- an unopened display has nothing
+    // to poll for, and polling before then would just report "never seen"
+    // on a 3s loop for no reason.
+    this._displayOpened = true;
+    // Review fix (2026-09-27, medium -- item #11(d)): the timestamp the
+    // "never connected at all" toast below measures itself against -- see
+    // _setCustomerDisplayDot's own comment for why this is a SEPARATE case
+    // from the green->amber transition toast.
+    this._displayOpenedAtMs = Date.now();
+    this._displayNeverConnectedToastShown = false;
+    this._startCustomerDisplayStatusPoll();
     this._broadcastDisplayState();
     // This button lives in .pos-cat-row, which already swallows its own
     // mousedown (see _keepScanFocus below) -- this is belt-and-braces for
     // whatever focus window.open() itself may have touched.
     this._refocusScan(true);
+  },
+
+  // P0 item #11(d), interface I-1: "Till polls /status every 3 s only after
+  // the display was opened" -- guarded by the timer handle itself so a
+  // second click on the button (refocusing an already-open display) never
+  // starts a SECOND overlapping poll loop.
+  _startCustomerDisplayStatusPoll() {
+    if (this._displayStatusPollTimer) return;
+    this._pollCustomerDisplayStatus();
+    this._displayStatusPollTimer = setInterval(() => this._pollCustomerDisplayStatus(), 3000);
+  },
+
+  async _pollCustomerDisplayStatus() {
+    try {
+      const resp = await this._get('/api/sub/retail/customer-display/status');
+      this._setCustomerDisplayDot(resp && resp.display_last_seen_ms_ago);
+    } catch (e) { /* leave the dot at its last known state -- a transient
+                      network hiccup polling OUR OWN status is not itself
+                      evidence the display went away */ }
+  },
+
+  // grey (no class, the button's resting state, CSS in _injectStyles): the
+  // display has never been opened this session -- see _openCustomerDisplay's
+  // own `_displayOpened` guard, which is the only thing that starts polling
+  // at all. amber: opened, but `display_last_seen_ms_ago` is null (never
+  // polled `.../state`) or over 5000ms. green: polled within the last 5000ms.
+  // Thresholds match interface I-1's own state machine verbatim.
+  _setCustomerDisplayDot(msAgo) {
+    const dot = document.getElementById('pos-display-dot');
+    if (!dot) return;
+    const isGreen = msAgo != null && msAgo <= 5000;
+    dot.classList.toggle('pos-display-dot-green', isGreen);
+    dot.classList.toggle('pos-display-dot-amber', !isGreen);
+    // A toast fires only on the TRANSITION into silence (green -> amber),
+    // never on every 3s tick while it stays amber -- a cashier who leaves the
+    // display closed all shift must get this once, not every three seconds
+    // forever. `_displayWasGreen` starts `undefined` (neither true nor
+    // false), so the very first poll -- amber because nothing has opened the
+    // display's own page yet -- is correctly NOT a transition and stays
+    // silent; only a poll that goes from a confirmed green back to amber
+    // toasts.
+    if (!isGreen && this._displayWasGreen === true) {
+      SubsystemApp.showToast(t('The customer screen has not responded in a while.'), 'info');
+    }
+    // Review fix (2026-09-27, medium -- item #11(d)): the transition check
+    // just above only ever fires for a display that connected at least ONCE
+    // and then went quiet. I-1's own wording is wider than that -- "toast
+    // after 5 s of silence" -- and a display that was opened but has NEVER
+    // polled `.../state` at all (a failed native window, or the system-
+    // browser/no-session 401 case item #11 exists for) never has a
+    // green->amber transition to trigger on: msAgo stays null forever, and
+    // `_displayWasGreen` never becomes `true`, so the cashier got no signal
+    // whatsoever. Gated on elapsed time since open (not on the first poll,
+    // which always fires immediately per _startCustomerDisplayStatusPoll's
+    // own comment and would otherwise toast the instant the button is
+    // clicked, before the display could possibly have connected yet) and
+    // fired ONCE per open, the same "once, not every three seconds forever"
+    // rule the transition toast above already follows.
+    if (msAgo == null && !this._displayNeverConnectedToastShown &&
+        this._displayOpenedAtMs && (Date.now() - this._displayOpenedAtMs) >= 5000) {
+      this._displayNeverConnectedToastShown = true;
+      SubsystemApp.showToast(t('The customer screen has not responded in a while.'), 'info');
+    }
+    this._displayWasGreen = isGreen;
   },
 
   // Today's date, in the language the operator is actually using.
@@ -1323,21 +1758,46 @@ const RetailSystem = {
   // the previous behaviour exactly.
   _localeDate(d) {
     const when = d || new Date();
-    // 'ar-u-nu-latn', not plain 'ar'. CLDR's Arabic locales default to the
-    // `arab` numbering system, so plain 'ar' renders the date as
-    // "الثلاثاء، ٢٢ سبتمبر ٢٠٢٦" -- Eastern Arabic-Indic digits. Jordan writes
-    // numbers in WESTERN digits in commerce; a shopkeeper here reads 2026, not
-    // ٢٠٢٦. The -u-nu-latn extension keeps the Arabic weekday and month names,
-    // which are correct and wanted, and forces only the digits back to Latin:
-    // "الثلاثاء، 22 سبتمبر 2026".
-    //
-    // It also keeps this heading consistent with every number beside it --
-    // money never went through Intl at all (_fmt builds its digits by hand),
-    // so before this the same screen showed two different numeral systems.
-    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar-u-nu-latn' : 'en-US';
+    // 'ar-JO-u-nu-latn' (P0 item #19), not plain 'ar-u-nu-latn'. CLDR's
+    // GENERIC Arabic locale ('ar') uses the pan-Arabic/MSA transliterated
+    // month names (سبتمبر, "September" phonetically) -- correct for e.g.
+    // Cairo, but not what a Jordanian reader expects. The 'ar-JO' REGION
+    // subtag selects CLDR's Levantine month-name variant instead (أيلول for
+    // September), the ones Jordan, Syria, Lebanon and Iraq actually print.
+    // -u-nu-latn is unchanged from before -- see the comment this replaces:
+    // Jordan writes commerce numbers in WESTERN digits, so the numbering
+    // system still has to be forced back to Latin regardless of which
+    // Arabic region variant supplies the month/weekday names.
+    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar-JO-u-nu-latn' : 'en-US';
     const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     try { return when.toLocaleDateString(lang, opts); }
     catch (e) { return when.toLocaleDateString('en-US', opts); }
+  },
+
+  // Today (or any Date), as the SHOP'S OWN calendar day in 'YYYY-MM-DD' --
+  // never `d.toISOString().slice(0,10)`, which is the UTC date. Jordan is
+  // UTC+3: between local midnight and 03:00, `toISOString()` is still
+  // reporting YESTERDAY. Review fix (2026-09-27, item #15d): the trial
+  // balance's `#tb-as-of` default used that UTC slice, so a shop opening a
+  // little before local midnight -- or checking the books early the next
+  // morning -- silently got yesterday's date as-of, and every sale rung
+  // since local midnight fell outside "As of yesterday". The server's own
+  // `business_date` (general_ledger._today = datetime.now(), LOCAL, never
+  // UTC) never agreed with this control's default, so the two could disagree
+  // about which day a fresh sale belonged to. `toLocaleDateString('en-CA')`
+  // is the one built-in format that is both LOCAL (unlike toISOString) and
+  // already 'YYYY-MM-DD' (unlike 'en-US', which is 'M/D/YYYY') -- no manual
+  // padStart/getMonth() arithmetic to get wrong.
+  //
+  // The identical UTC-slice pattern still exists at four other `toISO`
+  // helpers in this file (Profit & Loss, Party Ledger, Balance Sheet, Cash
+  // Flow) -- P0 item #15d's own text names this exact spot as the one this
+  // crew's items cover and records the rest as a follow-up rather than
+  // silently fixing every call site this pass never actually re-tested.
+  _localISODate(d) {
+    const when = d || new Date();
+    try { return when.toLocaleDateString('en-CA'); }
+    catch (e) { return when.toISOString().slice(0, 10); }
   },
 
   // ── Scan focus retention ───────────────────────────────────────────────────
@@ -1787,6 +2247,85 @@ const RetailSystem = {
     return `<bdi dir="${dir || 'ltr'}"${title}>${shown}</bdi>`;
   },
 
+  // ── Short document numbers on screen (Phase 0 #16) ──────────────────────
+  // The legacy format is SALE-000016-<company8>-<device8> -- both suffixes
+  // exist ONLY to keep numbers unique across synced tills (AUDIT-032B, see
+  // _device_doc_discriminator's docstring in retail_api.py): the company
+  // fragment is identical on every document this shop will ever print, and
+  // the device fragment only matters at all once two tills mint the same
+  // short number. To a cashier reading a receipt, or a customer copying a
+  // number down, both are noise on top of the six digits that actually
+  // identify the sale. Per-till series numbers (schema v34,
+  // doc_series.allocate -- '<code>-<n>', no fragments at all) have nothing
+  // to strip and pass through UNTOUCHED; anything matching neither shape (a
+  // hand-typed test fixture, an empty/undefined value, a future format this
+  // helper has never seen) is returned exactly as given rather than guessed
+  // at -- see retail_p0_docno_test.js's malformed-input cases.
+  //
+  // Exactly 4 hyphen-separated parts, with the LAST TWO being 8 lowercase-hex
+  // characters, is what tells the legacy shape apart from a series number --
+  // never a bare "starts with SALE-" check, since a shop can name a series
+  // book 'SALE' too (doc_series.py's own free-text `code` column).
+  _docNo(n) {
+    const full = n == null ? '' : String(n);
+    // Capture group 2 is the COMPANY fragment (str(cid)[:8], identical on
+    // every document this shop prints -- dropped entirely), group 3 is the
+    // DEVICE fragment (_device_doc_discriminator(), the one that can
+    // actually differ between two tills' otherwise-identical short numbers)
+    // -- the device TAG below is built from group 3, never group 2.
+    const m = /^([A-Za-z]+-\d+)-([0-9a-f]{8})-([0-9a-f]{8})$/.exec(full);
+    if (!m) return { main: full, deviceTag: null, full };
+    // 4 characters, not the full 8 -- enough to tell two tills apart at a
+    // glance without printing a second uuid fragment next to the one a
+    // human is actually meant to read.
+    return { main: m[1], deviceTag: m[3].slice(0, 4), full };
+  },
+
+  // Renders _docNo()'s result the same way at every use site: the short
+  // number (bidi-isolated, full string in the title -- reuses _bdi above),
+  // plus a small muted device tag when the input was a legacy number. The
+  // tag is a SEPARATE element from the bdi's own text on purpose --
+  // retail_p0_docno_test.js and this item's own Playwright check both read
+  // the prominent number's OWN text and expect it to match
+  // /^SALE-\d{6}$/ exactly, which a device tag concatenated into the same
+  // text node would break.
+  _docNoHtml(n) {
+    const { main, deviceTag, full } = this._docNo(n);
+    const tag = deviceTag
+      ? `<span style="color:var(--text-faint);font-size:10px;margin-inline-start:3px" aria-hidden="true">${this._esc(deviceTag)}</span>`
+      : '';
+    return this._bdi(main, full) + tag;
+  },
+
+  // Review fix (2026-09-27, medium -- item #16 regression, in audit
+  // details): #16 shortened every LIST column that shows a legacy document
+  // number (sales, returns, POs -- all via _docNoHtml above), but PO_CREATED/
+  // PO_RECEIVED/RETURN_PROCESSED write the FULL legacy number straight into
+  // `audit_log.details` as free text (retail_api.py:3623/4084/9150), and the
+  // Details cell rendered that text unchanged -- the same long
+  // 'PO-000001-150937bd-7206d25b' string #16 exists to hide everywhere else.
+  // Free text can carry more than one such token (or none), so this scans
+  // for every occurrence of the legacy 4-part shape and replaces each with
+  // its own _docNo().main, keeping the full string in a `title` for anyone
+  // who still needs to look it up -- surrounding text is escaped exactly
+  // once, never re-escaped, so the token/plain-text pieces cannot get
+  // double-encoded against each other.
+  _shortenDocNumbersInText(text) {
+    const s = String(text || '');
+    const LEGACY_DOC_NUMBER = /[A-Za-z]+-\d+-[0-9a-f]{8}-[0-9a-f]{8}/g;
+    let out = '';
+    let lastIndex = 0;
+    let m;
+    while ((m = LEGACY_DOC_NUMBER.exec(s)) !== null) {
+      out += this._esc(s.slice(lastIndex, m.index));
+      const full = m[0];
+      out += `<bdi title="${this._esc(full)}">${this._esc(this._docNo(full).main)}</bdi>`;
+      lastIndex = m.index + full.length;
+    }
+    out += this._esc(s.slice(lastIndex));
+    return out;
+  },
+
   // ── The keyboard path into a clickable table row ───────────────────────────
   //
   // Three tables in this file list sales and open one on click: the dashboard's
@@ -1827,10 +2366,14 @@ const RetailSystem = {
   _saleOpenerButton(saleId, saleNumber) {
     const id = Number(saleId);
     const num = saleNumber == null ? '' : String(saleNumber);
+    // AUDIT (Phase 0 #16): the VISIBLE text is the short _docNoHtml() form
+    // (the full legacy number is still in its own title attribute -- see
+    // that helper); the accessible name keeps the FULL number, since an AT
+    // user asking "which sale" loses nothing by hearing the whole string.
     return `<button type="button" class="ret-rowbtn"` +
       ` onclick="event.stopPropagation();RetailSystem._viewSale(${Number.isFinite(id) ? id : 0})"` +
       ` aria-label="${this._esc(t('View invoice'))} ${this._esc(num)}"` +
-      `>${this._bdi(num)}</button>`;
+      `>${this._docNoHtml(num)}</button>`;
   },
 
   // The same control, for the Customers list -- which had the identical defect
@@ -2527,7 +3070,11 @@ const RetailSystem = {
           <td style="font-family:monospace;color:var(--sub-accent)">${this._saleOpenerButton(s.id, s.sale_number)}</td>
           <td>${this._esc(s.customer_name || t('Walk-in'))}</td>
           <td style="color:var(--text-dim)">${s.item_count||0} <span>${t('items')}</span></td>
-          <td>${this._badge(this._esc(s.payment_method||'cash'), s.payment_method==='cash'?'green':'blue')}</td>
+          <!-- P0 item #19: was the raw API key ('cash'/'card'/...) --
+               untranslated on the Arabic dashboard. _paymentMethodLabel()
+               translates it the same way the chart legend beside this table
+               now does (retailPaymentChartConfig, top of this file). -->
+          <td>${this._badge(this._paymentMethodLabel(s.payment_method), s.payment_method==='cash'?'green':'blue')}</td>
           <td class="col-money" style="font-weight:700">${this._money(s.total)}</td>
           <!-- AUDIT: the recent-sales query (retail_api.py) has no date filter,
                just ORDER BY created_at DESC LIMIT 8, so on a day with fewer than
@@ -2720,12 +3267,57 @@ const RetailSystem = {
            same bar covering the Reports revenue chart. This element inherits it
            for free by being 100% of that container. */
         .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;
-          block-size:100%; }
+          block-size:100%;
+          /* Phase 0 #7(b): ONE number, read by both .pos-cart-row's own
+             min-block-size and .pos-cart-items' three-row floor below, so
+             the floor can never silently drift away from what a single row
+             actually needs. Local to this component (not main.css's :root)
+             on purpose -- nothing outside the POS screen has a reason to
+             read it.
+             80px, not 60px: 60px was sized off the row's OWN min-block-size
+             declaration and never checked against a REAL rendered row, which
+             always carries a second .pos-item-meta line (unit price x qty,
+             _renderCart's own unconditional second line) under the name AND
+             a 44px touch-target qty-stepper/remove-button column -- a live
+             Playwright measurement of retail_p0_till_e2e.py's own item #7
+             scenario (1366x768, EN, sand) came back with every row at
+             ~77.9px, not 60, so the three-row floor below (calc(3 * this +
+             8px) = 188px on the old number) reserved space for barely 2.4
+             real rows -- exactly the "only 2 of 4 cart rows are fully
+             inside the cart box" failure that check exists to catch. 80px
+             clears the measured 77.9px with headroom instead of chasing the
+             exact fractional value. */
+          --pos-cart-row-min: 80px; }
         @media(max-width:1100px){ .pos-wrap { grid-template-columns:minmax(0,1fr);block-size:auto; } }
         .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-right { background:var(--surface);border:1px solid var(--border-mid);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
         .pos-pane-hdr { padding-block:12px;padding-inline:16px;border-block-end:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-shrink:0;flex-wrap:wrap; }
-        .pos-pane-title { margin:0;color:var(--text);font-size:15px;font-weight:700;letter-spacing:-0.01em; }
+        /* min-inline-size:0 + overflow/ellipsis (round 3, item #7,
+           1280x720/800 regression, medium): a flex item's default
+           min-inline-size is 'auto' (its own min-content, i.e. the full
+           text here, since an <h3> does not wrap by default) -- so with
+           NO width constraint of its own, this title could only ever
+           WRAP the whole row onto a second line once it plus its two
+           siblings (the select+Hold group, the Void slot) ran out of
+           room, never shrink itself first. Measured live: the pane-hdr
+           padding/gap fix above (its own comment) closed the wrap this
+           row had with a FIXED-length title, but "Current Sale · N
+           items" grows with the cart's own line count (_renderPOS's pane
+           title, see that call site), so a 4-line cart fixture at
+           1280x720 still wrapped Void onto its own line (127.5px header
+           against 81.5px at 1366x768, same fixture) -- content-length
+           variance a fixed padding/gap budget can never fully absorb.
+           Letting the title truncate with an ellipsis instead means the
+           row's total width no longer depends on the item count at all. */
+        .pos-pane-title { margin:0;color:var(--text);font-size:15px;font-weight:700;letter-spacing:-0.01em;
+          min-inline-size:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+        /* Round 2, till R2: Void Sale's own single-child wrapper -- see its
+           own markup comment in _renderPOS for why it cannot share a parent
+           with the select+Hold group (retail_surface_pos_test.js's
+           destructive/frequent-adjacency ratchet). No layout of its own
+           beyond participating in .pos-pane-hdr's flex row like any other
+           top-level child. */
+        .pos-pane-void-slot { display:flex;align-items:center; }
 
         /* ── Scan bar: the primary input, sized like it ───────────────────── */
         .pos-scanbar { display:flex;align-items:center;gap:14px;padding-block:14px;padding-inline:16px;border-block-end:1px solid var(--border-soft);flex-shrink:0; }
@@ -2809,6 +3401,19 @@ const RetailSystem = {
           border-block-end:1px solid var(--border-soft);flex-shrink:0; }
         .pos-cat-bar { display:flex;gap:8px;padding-block:10px;overflow-x:auto;flex:1;min-inline-size:0; }
         .pos-held-btn { flex-shrink:0; }
+        .pos-display-btn { flex-shrink:0; }
+        /* P0 item #11(d): grey (no modifier class -- the resting state, a
+           border-only ring so it reads as "off" without needing its own
+           colour token) until the display is opened; amber/green afterward,
+           driven by _setCustomerDisplayDot() off the till's own 3s poll of
+           GET .../customer-display/status. Colour is never the only signal
+           on this file's own money rules elsewhere, but a connectivity dot
+           has no text equivalent to pair it with short of the tooltip this
+           button already carries (title=), which screen readers still get. */
+        .pos-display-dot { display:inline-block;inline-size:8px;block-size:8px;
+          border-radius:50%;border:1.5px solid var(--text-dim);background:transparent; }
+        .pos-display-dot-amber { border-color:var(--state-warning-text);background:var(--state-warning-text); }
+        .pos-display-dot-green { border-color:var(--state-success-text);background:var(--state-success-text); }
         /* flex-shrink:0 is load-bearing. These pills are flex items in
            .pos-cat-bar, so they default to flex-shrink:1 and get squeezed
            BELOW their own content width -- white-space:nowrap then clips
@@ -2836,7 +3441,18 @@ const RetailSystem = {
         .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
 
         /* ── Product grid ────────────────────────────────────────────────── */
+        /* AUDIT (Phase 0 #7a): with no grid-auto-rows declared (the browser
+           default, "auto"), rows inside this scrolling flex child stayed
+           pinned at .pos-card's own 118px minimum instead of growing to fit
+           a 2-line name -- measured 17 of 17 clipped names at 1440x900, an
+           isolated repro losing 13px off a 34px name box. grid-auto-rows:
+           max-content is the fix; minmax(118px, max-content) reproduces the
+           SAME bug (a 'minmax()' track still resorts to its own min-content
+           floor in exactly this "auto-sized track inside a scroll container"
+           case), so do not "restore" the 118px floor here even though
+           .pos-card's own min-block-size still uses it for a SHORT name. */
         .pos-product-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;
+          grid-auto-rows:max-content;
           padding-block:16px;padding-inline:16px;overflow-y:auto;flex:1;align-content:start; }
         /* The tile is a <button> (see _renderPOSGrid). The first line is the
            button reset that makes it look exactly like the <div> it replaced:
@@ -2913,7 +3529,11 @@ const RetailSystem = {
            which would be a lie on a tile that cannot be sold. */
         .pos-card-outofstock:hover, .pos-card-outofstock:focus-visible, .pos-card-outofstock:active {
           transform:none;border-color:var(--border-default);background:var(--surface-active); }
-        .pos-card-icon { font-size:26px;line-height:1; }
+        /* .pos-card-icon (Phase 0 #7a): REMOVED, along with the span it
+           styled -- see _renderPOSGrid's own comment. Not just unused: every
+           real category name on a real install is Arabic or shop-typed and
+           never matches the old English-keyed map, so every real tile showed
+           the SAME 'package' placeholder box. Monogram tiles are Phase 1a. */
         .pos-card-name { color:var(--text);font-size:13px;font-weight:600;line-height:1.3;
           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
         .pos-card-price { color:var(--text);font-weight:700;font-size:15px; }
@@ -2929,17 +3549,61 @@ const RetailSystem = {
         .pos-card-stock.is-stale { color:var(--text-tertiary, var(--text-dim));font-style:italic;font-weight:400; }
 
         /* ── Cart lines ──────────────────────────────────────────────────── */
-        .pos-cart-items { flex:1;overflow-y:auto;padding-block:4px;padding-inline:14px;min-block-size:0; }
+        /* AUDIT (Phase 0 #7b): measured 0 of 4 cart rows fully visible at
+           1366x768 and 1440x900 -- this pane only ever got the block-size
+           .pos-summary happened to leave it (min-block-size:0 alone, no
+           floor of its own), so on a short screen the cart could be
+           squeezed to a sliver while the summary below it stayed full size.
+           'calc(3 * ...)' is a FLOOR, not a fixed height: flexbox still
+           grows this past three rows when there is room, and shrinks
+           .pos-summary first (that rule's own overflow-y:auto is exactly
+           what makes it safe to shrink -- see its comment) before this ever
+           gives up its third row. +8px covers this element's own
+           padding-block (4px top + 4px bottom). */
+        .pos-cart-items { flex:1;overflow-y:auto;padding-block:4px;padding-inline:14px;
+          min-block-size: calc(3 * var(--pos-cart-row-min) + 8px); }
         .pos-cart-row { display:flex;align-items:center;gap:10px;padding-block:10px;padding-inline:2px;
-          border-block-end:1px solid var(--border-soft); }
+          border-block-end:1px solid var(--border-soft);
+          /* Same floor the three-row calc above multiplies -- keeps ONE row
+             from collapsing under its own content on a short pane, which is
+             what the three-row floor is actually counting. */
+          min-block-size: var(--pos-cart-row-min); }
         .pos-cart-row:last-child { border-block-end:none; }
         /* Only the row just touched animates (see _renderCart) -- re-animating
            the whole list on every qty change reads as flicker at till speed. */
         .pos-row-new { animation:posRowIn .24s cubic-bezier(.22,1,.36,1) both; }
         @keyframes posRowIn { from{opacity:0;transform:translateY(-5px)} to{opacity:1;transform:none} }
-        .pos-line-main { flex:1;min-inline-size:0; }
-        .pos-item-name { color:var(--text);font-size:14px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis; }
-        .pos-item-meta { color:var(--text-dim);font-size:12px;margin-block-start:2px; }
+        /* min-inline-size 0 -> 60px (review fix, 2026-09-27, high -- item
+           #7(b)/#8 regression): a promoted line's .pos-line-total shows TWO
+           money figures side by side (struck original + new total, see that
+           rule's own review-fix comment), which is wider than one -- with no
+           floor here, .pos-line-freq's flex-shrink:0 (its own money/qty
+           controls never shrink) forced this element down to as little as
+           5px, clipping the product NAME to an unreadable sliver ('Widget'
+           rendered as a single backslash-like fragment, measured at
+           1366x768 with a promoted Widget line). 60px is the item's own
+           suggested floor -- enough for a short name's first few characters
+           plus the ellipsis this rule's sibling .pos-item-name already
+           applies, never zero. */
+        .pos-line-main { flex:1;min-inline-size:60px; }
+        /* AUDIT (Phase 0 #7b): text-overflow:ellipsis does nothing without
+           white-space:nowrap -- the browser ignores it on text that is still
+           free to wrap, so a long name wrapped onto a second line instead of
+           being clipped with a visible '…'. Missing nowrap was itself only
+           HALF the #7b bug: the other half (this row having no space to grow
+           into at all) is .pos-cart-items'/.pos-cart-row's own three-row
+           floor just above. */
+        .pos-item-name { color:var(--text);font-size:14px;font-weight:600;line-height:1.35;overflow:hidden;white-space:nowrap;text-overflow:ellipsis; }
+        /* Round 2, till R2 (item #7(b) regression): a PROMOTED line's meta
+           text is "struck original + new price × qty" -- visibly longer than
+           the plain "price × qty" case -- and with no nowrap here it wrapped
+           onto a second line the moment it did not fit, growing the row past
+           .pos-cart-row's own floor. Same nowrap+ellipsis recipe
+           .pos-item-name already uses just above, for the identical reason:
+           this is a supporting figure, not the number the cashier is meant
+           to add up (that is .pos-line-total, its own fixed-width column). */
+        .pos-item-meta { color:var(--text-dim);font-size:12px;margin-block-start:2px;
+          overflow:hidden;white-space:nowrap;text-overflow:ellipsis; }
         /* Promotions wave 1 (ROADMAP.md "retail schema v23"). Only rendered
            when _bestPromoFor resolves a promotion for the line (see
            _renderCart) -- with none, .pos-item-meta is untouched from before
@@ -2949,7 +3613,29 @@ const RetailSystem = {
            for the customer, unambiguously good news, matching how a "you
            saved" figure reads anywhere else money is shown positive. */
         .pos-price-orig { text-decoration:line-through;color:var(--text-tertiary, var(--text-dim));margin-inline-end:4px; }
-        .pos-promo-tag { display:flex;align-items:center;gap:4px;color:var(--state-success-text);font-size:11px;font-weight:600;margin-block-start:2px; }
+        /* Scoped override (review fix, 2026-09-27, item #7(b)/#8 regression):
+           .pos-price-orig is shared with the meta-row's INLINE "original new
+           × qty" text just above, where the inline-end margin still applies
+           -- but .pos-line-total now stacks its own copy in a COLUMN (see
+           that rule's own review-fix comment), where a trailing inline
+           margin only pushes the struck figure off-centre against the
+           right-aligned total under it. Smaller/lighter too, matching the
+           meta row's own "de-emphasised" convention for the same figure. */
+        .pos-line-total .pos-price-orig { margin-inline-end:0;font-size:12px;font-weight:500; }
+        /* Round 2, till R2 (item #7(b) regression): a long promotion NAME
+           ("Weekend Clearance — 20% off all Home & Kitchen") wrapped this tag
+           over up to three lines with no floor of its own, which -- stacked
+           on top of the meta-line fix above -- was the other half of a
+           promoted row growing to 113-147px and pushing all but 2 of 4 cart
+           rows out of the floor's 3-row budget. overflow:hidden alone does
+           nothing on a flex CONTAINER whose children are free to size to
+           their own content; min-inline-size:0 on the text span below is
+           what actually lets it shrink and ellipsis rather than push the
+           tag wide. title="promo.name" (see _renderCart) already gives the
+           full name on hover/focus, so nothing here is silently dropped. */
+        .pos-promo-tag { display:flex;align-items:center;gap:4px;color:var(--state-success-text);font-size:11px;font-weight:600;margin-block-start:2px;
+          overflow:hidden; }
+        .pos-promo-tag span:last-child { overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-inline-size:0; }
         /* Restaurant modifiers, wave 2 (the till side -- schema v26's config
            API shipped without this; see retail_route_reachability_test.py's
            former 'modifier-groups' INTENTIONALLY_UNREACHABLE entry). Only
@@ -2977,6 +3663,46 @@ const RetailSystem = {
           .pos-line-main { flex:1 1 100%; }
           .pos-line-freq { flex:1 1 auto;justify-content:space-between; }
         }
+        /* Round 3 (item #7, 1280x720/1280x800 regression, medium): at
+           narrow panes .pos-cart-row's own non-shrinking children (the qty
+           stepper, the money column, the separator, the remove button)
+           left .pos-line-main less than its own 60px floor to work with,
+           so the ROW overflowed its container instead of .pos-line-main
+           shrinking to it -- measured live at 1280x720: row scrollWidth
+           383px vs clientWidth 351px, .pos-line-danger's own right edge
+           1277.2px past the cart's own 1259px right edge (probe2
+           row_overflow_1280x720). The touch stepper
+           (var(--touch-target-min, 44px)) is deliberately NOT touched here
+           -- it is this codebase's own accessibility FLOOR (main.css's
+           "TOUCH, SECOND AXIS" rule), never a layout budget to spend.
+           Everything reclaimed below is pure decoration/whitespace
+           instead: the standalone separator column (.pos-line-sep,
+           replaced by .pos-line-danger's own pre-existing
+           border-inline-start, which already draws the identical visual
+           division), .pos-line-danger's own padding, and
+           .pos-line-total's floor (84px -> 62px, still wide enough for a
+           3dp money figure like "JD 10.000" at this row's own 15px --
+           70px was tried first and measured live, R3-7bwidth's own
+           mutation-proof loop, at exactly 6px of remaining overflow on a
+           REAL promoted line (a struck original + a smaller new total,
+           .pos-line-total's own review-fix comment) at 1280x720; 62px
+           alone measured NO CHANGE -- the MIN floor was never the
+           binding constraint on a promoted line, its own CONTENT
+           (the struck original stacked over the discounted total,
+           .pos-line-total's flex-direction:column) already renders
+           wider than either floor, so the two gaps this row's own flex
+           layout still charges (.pos-cart-row's own row gap, between
+           .pos-line-main/.pos-line-freq/.pos-line-danger once
+           .pos-line-sep is hidden; .pos-line-freq's own gap, between the
+           qty stepper and the money column) are what actually closes it
+           -- pure whitespace, unlike the min-inline-size floor. */
+        @media (max-width: 1300px) {
+          .pos-line-sep { display:none; }
+          .pos-line-danger { padding-inline-start:6px; }
+          .pos-line-total { min-inline-size:62px; }
+          .pos-cart-row { gap:4px; }
+          .pos-line-freq { gap:4px; }
+        }
         .pos-qty-wrap { display:flex;align-items:center;background:var(--input-bg);border:1px solid var(--border-mid);border-radius:10px;overflow:hidden; }
         .pos-qty-btn { min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);background:transparent;border:none;color:var(--text);
           cursor:pointer;font-size:18px;font-weight:700;line-height:1;font-family:inherit;transition:background .12s ease; }
@@ -2992,7 +3718,22 @@ const RetailSystem = {
         .pos-qty-btn:hover,
         .pos-qty-btn:focus-visible { background:var(--surface-hover); }
         .pos-qty-val { min-inline-size:34px;text-align:center;color:var(--text);font-size:15px;font-weight:700; }
-        .pos-line-total { min-inline-size:84px;text-align:end;color:var(--text);font-size:15px;font-weight:700; }
+        /* display:flex;flex-direction:column (review fix, 2026-09-27, high --
+           item #7(b)/#8 regression): a promoted line used to put the struck
+           original and the new total SIDE BY SIDE, inline, inside this one
+           element -- roughly twice the width of a plain figure, and this
+           element has no flex-shrink of its own (it lives inside
+           .pos-line-freq, which is flex-shrink:0 by design -- the qty
+           stepper and money must never shrink). That extra width came
+           straight out of .pos-line-main next to it (see that rule's own
+           review-fix comment). Stacking the two figures instead -- original
+           ABOVE the new total, a column, not a row -- keeps this element's
+           OWN width at roughly one figure's worth regardless of whether a
+           promotion is active, so a promoted line no longer needs to steal
+           space from the product name to show its own two numbers. Harmless
+           on a non-promoted line, which only ever has one child. */
+        .pos-line-total { min-inline-size:84px;text-align:end;color:var(--text);font-size:15px;font-weight:700;
+          display:flex;flex-direction:column;align-items:flex-end;line-height:1.25; }
         /* Physical separation between the frequent controls above and the
            destructive one below. This spacer is the reason the remove button
            is not a DOM sibling of the "+" button -- see rule 5 in the block
@@ -3018,10 +3759,13 @@ const RetailSystem = {
         .pos-empty-icon { font-size:32px;color:var(--text-tertiary); }
         .pos-empty-hint { color:var(--text-faint);font-size:13px; }
 
-        /* Void lives here -- its own bar, below the list, deliberately far
-           from Hold (pane header) and from Charge (foot of the summary). */
-        .pos-cart-tools { display:flex;justify-content:flex-end;padding-block:8px 10px;padding-inline:14px;
-          border-block-start:1px solid var(--border-soft);flex-shrink:0; }
+        /* Round 2, till R2: Void used to live in its OWN bar below the cart
+           list (.pos-cart-tools, now removed), deliberately far from Hold
+           and Charge. It now sits in .pos-pane-hdr, next to Hold -- see that
+           element's own comment in _renderPOS for the height budget this
+           reclaims and the _voidSale() confirm-gate that replaces the
+           physical distance as this control's safety mechanism. The button
+           itself is otherwise unchanged. */
         .pos-clear-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:16px;border-radius:10px;border:1px solid var(--border-soft);
           background:transparent;color:var(--text-dim);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
           transition:background .12s ease, color .12s ease, border-color .12s ease; }
@@ -3049,15 +3793,18 @@ const RetailSystem = {
            happens to fit. */
         .pos-summary { padding-block:14px 16px;padding-inline:16px;background:var(--surface-card);
           border-block-start:1px solid var(--border-mid);flex-shrink:1;min-block-size:0;
-          /* Tail padding the height of the sticky Charge button below. Sticky
-             does NOT reserve space for itself, so without this the last row of
-             tender buttons sits behind Charge permanently -- scrolling to the
-             end of the panel just parks it there. Measured 2026-09-12 at
-             1366x768: the Cash/Card/Mobile row sat behind the pinned button and
-             the Transfer/Credit/Voucher row was clipped away entirely. Derived
-             from the same touch-target token the button sizes itself from, so
-             the two cannot drift apart. */
-          padding-block-end:calc(var(--touch-target-comfortable, 52px) + 20px);
+          /* AUDIT (Phase 0 #7c): this used to carry an extra 'padding-block-
+             end:calc(var(--touch-target-comfortable, 52px) + 20px)' -- tail
+             padding sized to the STICKY Charge button that used to live at
+             the end of this element (sticky reserves no space of its own, so
+             the last tender row needed room reserved by hand or it sat
+             behind the button permanently; measured 2026-09-12 at 1366x768).
+             Charge is now '.pos-checkout-footer', a SIBLING of this element
+             instead of a child of it (see that element's own comment) --
+             .pos-right's flex layout reserves its footer's real height for
+             it automatically, the way flexbox always does for a normal flow
+             sibling, so hand-sized tail padding here would now just be dead
+             space under the last tender row. */
           overflow-y:auto; }
         .pos-sum-row { display:flex;justify-content:space-between;align-items:center;gap:12px;
           margin-block-end:8px;color:var(--text-dim);font-size:14px; }
@@ -3068,26 +3815,111 @@ const RetailSystem = {
         .pos-mini-input:focus { border-color:var(--focus-ring-color, var(--sub-accent));box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.18); }
         /* THE number. Largest element on the screen by a wide margin, and the
            only place on the POS that gets this weight of type. */
+        /* AUDIT (round 3, items #7(c)/#8 regression): a 'position:sticky;
+           inset-block-end:0' version of this rule was tried first and
+           REVERTED -- it fixed the Arabic/1280 total-visibility defect but
+           broke a case that was previously fine: at 1366x768/en/sand
+           (measured live, item7_layout_matrix's own heavy fixture),
+           pinning this row to the scrollport's bottom edge made it paint
+           OVER #pos-tax's own centre point the instant the pane needed
+           ANY internal scroll at all, because sticky reserves its visual
+           space at the bottom unconditionally rather than only once
+           everything ABOVE it has already been scrolled past. Root-caused
+           and fixed at the actual source instead -- see .pos-pay-label's
+           own comment just below for why the footer was growing in
+           Arabic in the first place, and the width-based media query
+           further down for the narrower-viewport half of this same item. */
         .pos-total-band { display:flex;align-items:baseline;justify-content:space-between;gap:14px;
           padding-block:14px 16px;margin-block:10px;border-block:1px solid var(--border-mid); }
         .pos-grand-label { font-size:13px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim); }
         .pos-grand-value { font-size:clamp(var(--text-size-total, 40px),4.2vw,56px);line-height:1;font-weight:800;
           letter-spacing:-0.022em;color:var(--text); }
-        .pos-change-row { color:var(--text-money-positive, var(--text));font-weight:700; }
+        /* display:inline-flex stated explicitly (round 2, till R2): this
+           element used to be a block-level .pos-sum-row div, its own full
+           row -- now it is a <span> nested inline on the SAME row as Cash
+           Tendered (see that row's own comment for why), and _calcChange()/
+           _syncTenderUI() toggle it with style.display set to '' or 'none'.
+           Without a CSS-declared default here, an empty style.display would
+           revert to a bare <span>'s native 'inline', which does not lay its
+           label+value
+           children out with the gap/baseline alignment this rule wants --
+           it must be the STYLESHEET's job to say what "shown" means, not
+           the toggle's, exactly like every other conditional row on this
+           screen (#pos-promo-row/#pos-discamt-row/#pos-loyalty-value-row
+           all rely on their own base .pos-sum-row's declared 'flex' the
+           same way). */
+        .pos-change-row { display:inline-flex;gap:6px;align-items:baseline;color:var(--text-money-positive, var(--text));font-weight:700; }
         .pos-change-row .pos-sum-val { color:inherit; }
+        /* AUDIT (Phase 0 #7d): Change Due is the figure the cashier hands
+           back and says out loud -- it carried no size of its own (14px,
+           inherited off .pos-sum-row like a plain label) despite being the
+           money-in token. A clamp gives it real weight at any width without
+           the fixed-px overflow risk .pos-grand-value's own clamp already
+           avoids for the total above it.
+           Targeted at the #pos-change ID rather than widening the
+           .pos-change-row .pos-sum-val rule above: retail_surface_pos_test.js's
+           "total is the largest money element" check resolves a descendant
+           selector's reach by its OWN rightmost compound only (that test's
+           documented "Approximation #1" -- it cannot see that .pos-sum-val
+           also needs a .pos-change-row ANCESTOR), so widening THAT selector
+           to include a font-size would have read as "every .pos-sum-val
+           money span on the till, including Subtotal/Tax/Promotions, can
+           render up to the same size" -- a false failure against a real
+           total that is still unambiguously the largest amount on screen. An
+           id selector's rightmost (and only) compound is the id itself, so
+           the same approximation resolves it correctly.
+           DEVIATION FROM THE ITEM TEXT'S OWN "clamp(24px, 2.4vw, 32px)": the
+           item's literal 32px ceiling ties the pre-existing @media
+           (max-height:820px) short-till rule, which already floors
+           .pos-grand-value (the TOTAL) at exactly 32px -- a genuine, real
+           conflict between two independently-specified numbers, not a test
+           artefact, since retail_surface_pos_test.js unions every declared
+           size across every breakpoint (a short till and a wide desktop are
+           different physical devices; the invariant must hold on EITHER).
+           var(--text-size-display, 30px) is the design system's own existing
+           token for "large but deliberately not the total" (customer-
+           display.html's own big-but-not-grand-total text already uses it),
+           so this reuses that ceiling instead of inventing a second magic
+           number that happens to clear it -- 30px still reads as real
+           weight next to the row's old 14px, and 30 < 32 keeps the total's
+           primacy true on every screen this app ships to, not just the ones
+           a screenshot happened to check. */
+        #pos-change { font-size:clamp(24px, 2.4vw, var(--text-size-display, 30px)); }
 
         /* ── Tender + charge ─────────────────────────────────────────────── */
-        .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-block-end:12px; }
+        /* ROUND 2, T1 (item #7(c) REGRESSION): repeat(3,1fr) kept -- a
+           repeat(6,1fr) single-row variant was built and measured live
+           (it also passes T1's own e2e scenario), but reverted: it buys
+           nothing repeat(3,1fr) does not already get here once
+           touch-target-min replaces touch-target-comfortable below, and it
+           breaks retail_payment_grid_test.js's own testGridIsThreeColumns
+           (a file this crew does not own -- see this pass's own
+           out_of_scope_requests). gap:6px/margin-block-end:8px, not
+           8px/12px, and the row itself now floors at touch-target-min
+           (44px) rather than touch-target-comfortable (48px, see
+           button.pos-pay-btn below) -- together these are what free enough
+           block-size for .pos-summary and the 3-row cart floor to coexist
+           with a non-scrolling footer at 1366x768; see .pos-checkout-footer's
+           own comment for the other piece of this same fix. */
+        .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-block-end:8px; }
         /* button.pos-pay-btn (element-qualified), not bare .pos-pay-btn: this
            mirrors css/main.css's own "TOUCH, SECOND AXIS" rule (that file's
            comment on button.pos-cat-btn/button.pos-pay-btn/... explains why
            the element qualifier is required to win a specificity tie at all)
-           and lets min-inline-size:48px stated explicitly HERE, rather than
+           and lets min-inline-size stated explicitly HERE, rather than
            relying on the shared 44px cross-screen floor, guarantee this one
-           control's hit target regardless of label length or locale. */
-        button.pos-pay-btn { min-inline-size:48px;min-block-size:var(--touch-target-comfortable, 48px);padding-block:6px;padding-inline:4px;border-radius:10px;font-size:13px;font-weight:600;
+           control's hit target regardless of label length or locale.
+           min-block-size touch-target-comfortable(48)->touch-target-min(44)
+           (round 2, T1): the tender grid moved into the non-scrolling
+           footer (see that element's own comment) alongside Charge, Cash
+           Tendered and Change Due -- every px this row's own height gives
+           back is a px .pos-summary gets to keep. 44px is still the
+           codebase's own accessibility FLOOR (var(--touch-target-min)),
+           never below it -- see main.css's "TOUCH, SECOND AXIS" rule this
+           file already mirrors. */
+        button.pos-pay-btn { min-inline-size:48px;min-block-size:var(--touch-target-min, 44px);padding-block:3px;padding-inline:4px;border-radius:10px;font-size:12px;font-weight:600;
           cursor:pointer;border:1px solid var(--border-mid);background:var(--surface-soft);color:var(--text-dim);
-          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:inherit;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font-family:inherit;
           transition:background .15s ease, color .15s ease, border-color .15s ease; }
         .pos-pay-btn:hover, .pos-pay-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
         /* Element-qualified for the same reason the base rule is (see the
@@ -3103,7 +3935,25 @@ const RetailSystem = {
            rest, --text-on-accent when active) automatically, so no colour is
            restated here. */
         .pos-pay-icon { display:inline-flex;line-height:1; }
-        .pos-pay-label { line-height:1.15; }
+        /* white-space:nowrap + ellipsis (round 3, items #7(c)/#8 AND #7
+           1280x720/800 regression, medium): this label had no wrap
+           protection at all, and Arabic's tender names (e.g. 'تحويل
+           بنكي' for Transfer, 'بطاقة ائتمان' for Card) run longer than
+           their English originals -- measured live: wrapping onto a
+           second line here grew .pos-checkout-footer from 164.3px (EN)
+           to 176.9px (AR) at the SAME viewport, which squeezed
+           .pos-summary enough to push #pos-total, Tax and the
+           Promotions/Discount rows out of view (item #7(c)/#8's own
+           finding, at 1366x768 AR and, purely from being narrower, at
+           1280x720/800 in EITHER language). Ellipsis, not a smaller
+           font: the F-key badge right below is this screen's only
+           teaching surface for the tender shortcuts, and shrinking type
+           further to fit a full translation risks the opposite defect
+           (item #14) this file has already fixed once. max-inline-size:
+           100% is required for text-overflow to have a bounded box to
+           clip against inside a flex column that otherwise sizes to its
+           own content. */
+        .pos-pay-label { line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-inline-size:100%; }
         /* F1-F6 accelerator badge (see _renderPayButtons/_onPOSShortcut). A
            SELF-CONTAINED chip -- its own opaque surface under its own text
            token, the same construction .ret-badge uses -- so it reads
@@ -3127,10 +3977,23 @@ const RetailSystem = {
         }
         /* Charge is money coming IN, so it carries the money-in token rather
            than a decorative gradient -- colour that means something. */
-        /* Sticky to the bottom of the scrolling summary: the totals may scroll
-           away above it, Charge never does. Its background is solid, so nothing
-           shows through as rows pass beneath. */
-        .pos-checkout-btn { position:sticky;inset-block-end:0;
+        /* AUDIT (Phase 0 #7c): '.pos-checkout-footer' -- Charge's OWN
+           non-scrolling footer, a sibling of .pos-summary, not a child of
+           it. 'position:sticky;inset-block-end:0' used to be declared on
+           the BUTTON itself, INSIDE .pos-summary -- sticky only ever sticks
+           within its own nearest scrolling ancestor, and .pos-summary is
+           exactly that (see its own "SHRINKABLE AND SCROLLABLE" comment), so
+           Charge painted over whatever tender row happened to be scrolled
+           underneath it -- measured with the Transfer/Credit/Voucher row
+           covered, with or without a licence banner, at 1366x768. flex-
+           shrink:0 is the actual fix: .pos-right's own flex column (see that
+           rule) never shrinks this footer, so Charge always gets its full
+           height and is never the thing sacrificed when the pane is short --
+           .pos-summary's own overflow-y:auto is what absorbs that squeeze
+           instead. */
+        .pos-checkout-footer { flex-shrink:0;padding-block:14px 16px;padding-inline:16px;
+          background:var(--surface-card);border-block-start:1px solid var(--border-mid); }
+        .pos-checkout-btn {
           inline-size:100%;min-block-size:var(--touch-target-comfortable, 52px);padding-block:14px;padding-inline:18px;
           background:var(--text-money-positive, var(--sub-accent));border:1px solid transparent;border-radius:12px;
           color:var(--text-on-accent, var(--text-inverse));font-weight:800;font-size:18px;cursor:pointer;
@@ -3139,7 +4002,7 @@ const RetailSystem = {
         .pos-checkout-btn:hover, .pos-checkout-btn:focus-visible { opacity:.92; }
         .pos-checkout-btn:active { transform:scale(0.99); }
 
-        /* ── SHORT TILLS (<= 820px tall) ──────────────────────────────────
+        /* ── SHORT TILLS (<= 920px tall) ──────────────────────────────────
            1366x768 is the most common cheap POS panel, and with a licence
            banner up the sale panel has 334px of visible height for 554px of
            content -- so the second tender row needed a scroll to reach.
@@ -3149,9 +4012,44 @@ const RetailSystem = {
            the shortcut strip at the top of this screen teaches Enter/N/X//Del/
            Esc but never F1-F6, so these badges are the only place a cashier
            learns the tender shortcuts. Height-based, not width-based: this is a
-           vertical-room problem, and a 1366x768 till is a wide screen. */
-        @media (max-height: 820px) {
-          .pos-total-band { padding-block:8px 10px;margin-block:6px; }
+           vertical-room problem, and a 1366x768 till is a wide screen.
+           Round 2, till R2: 820px -> 920px. The T1 review found the SAME
+           squeeze (summary down to 27-139px, #pos-total unreachable) at
+           1440x900 -- an 900px-tall viewport that the old 820px ceiling
+           never covered at all, so that size got none of this block's
+           compaction. 920px was chosen to clear 900px with a small margin
+           rather than land exactly on the measured number, the same
+           reasoning #pos-grand-value's own 32px-vs-28px floor comment below
+           already gives for not shaving a breakpoint down to the exact
+           pixel a screenshot happened to show. */
+        @media (max-height: 920px) {
+          /* Round 2, till R2: padding-block 8px 10px -> 4px 6px, margin-block
+             6px -> 4px. Measured (P0_DEBUG_GEOM against the real app, 4-line
+             cart with a promoted line, 5% manual discount, a customer and
+             Change Due showing, 1366x768): with the OLD short-till numbers
+             throughout this block, .pos-summary rendered 88.5px of a needed
+             213px (scrollHeight) -- #pos-total sat at y=586-622 while the
+             summary's own visible window closed at y=526, so it painted
+             underneath the checkout footer instead and elementFromPoint
+             missed it entirely. Every reduction in this block was measured
+             the same way, iteratively, until the summary's rendered height
+             reached its own scrollHeight (no more internal scroll needed) at
+             1366x768 with this exact fixture -- see item7_layout_matrix's
+             own "(e)" step in retail_p0_till_e2e.py for the live proof. */
+          /* Round 3 (item #7, Arabic translated-label pane-header wrap,
+             medium): padding-block 4px/6px -> 2px/4px, margin-block 4px ->
+             2px. .pos-pane-hdr's own fix (above) closes the WIDTH-driven
+             wrap this block was originally tuned against, but Arabic's
+             translated title/button labels (not just the select+Void
+             layout) can still push that row onto two lines on their own
+             -- measured live at 1366x768/ar/heavy after the pane-hdr fix:
+             paneHdr grew to 103px (81.5px in EN, same fixture), and
+             #pos-total's own rect (566-602) still ran 14px past
+             .pos-summary's own visible bottom (588). This reclaims a few
+             more px from pure padding/margin, the same "shrink decoration,
+             never touch a touch target" rule every other reduction in
+             this block already follows. */
+          .pos-total-band { padding-block:2px 4px;margin-block:2px; }
           /* 32px floor, not 28: retail_surface_pos_test.js pins the grand total as
              the LARGEST money element on the screen and holds it above a 30px
              ceiling, and a 28px floor broke that invariant at narrow widths. The
@@ -3159,10 +4057,167 @@ const RetailSystem = {
              so the floor moved, not the test. At 1366px this still resolves to the
              36px cap either way. */
           .pos-grand-value { font-size:clamp(32px, 3vw, 36px); }
-          .pos-summary { padding-block:10px 12px; }
-          .pos-pay-btns { gap:6px;margin-block-end:8px; }
-          button.pos-pay-btn { padding-block:4px;font-size:12px; }
-          .pos-pay-kbd { font-size:9px; }
+          /* Round 2, T1: tightened alongside .pos-cart-items'/pos-summary's
+             own short-till floors below -- every px reclaimed here is a px
+             that does not have to come out of the 3-row cart floor or
+             #pos-total-band's own visibility.
+             Round 2, till R2: padding-block 8px 10px -> 6px 8px (see this
+             block's own top comment on how these numbers were measured). */
+          /* Round 3: 6px/8px -> 4px/4px, same measured trade as
+             .pos-total-band's own round-3 reduction above. 4px/4px ->
+             2px/2px, same pass, after the pane-hdr fix above still left
+             #pos-total 2px past .pos-summary's own visible bottom at
+             1280x720 (544 vs 542, live-measured) -- the very last few px
+             this block has left to give before every remaining row is
+             at a bare 0 or already at its own touch-target floor. */
+          .pos-summary { padding-block:2px 2px; }
+          /* Round 2, till R2: 6px -> 4px, the same measured trade as
+             .pos-total-band above -- this rule alone touches 4-5 rows in
+             the heavy fixture (Subtotal+Discount%, Promotions, Discount,
+             Tax), so every px here is worth 4-5px of summary height.
+             Round 3: 4px -> 2px, same reasoning, same measured case as
+             .pos-total-band's own round-3 comment above. */
+          .pos-sum-row { margin-block-end:2px; }
+          button.pos-pay-btn { font-size:11px; }
+          /* Hidden, not just shrunk, at short-till heights: every remaining
+             px here goes to .pos-summary/#pos-total instead. The badges
+             stay at every OTHER height -- see the base .pos-pay-kbd rule's
+             own comment on why they exist at all ("the only place a
+             cashier learns the tender shortcuts"). */
+          .pos-pay-kbd { display:none; }
+          /* Round 2, till R2: margin-block-end 6px -> 4px, gap 6px -> 4px
+             (gap has no OTHER declaration at this breakpoint before this
+             pass). Neither touches button.pos-pay-btn's own 44px touch
+             floor above -- only the space BETWEEN the two rows of buttons
+             shrinks.
+             grid-template-columns: repeat(3,1fr) -> repeat(6,1fr), SHORT
+             TILLS ONLY. A single-row 6-column tender grid was tried once
+             already (round 2, T1's own comment, now below) and reverted --
+             but that attempt was solving a DIFFERENT, narrower problem
+             (only "are the 6 tenders individually reachable", already true
+             either way once every control here floors at 44px) and never
+             needed the ~48px this collapses the grid from 2 rows to 1 (row
+             height 44px + gap, freed for .pos-summary/#pos-total below).
+             This pass's own problem is broader -- #pos-total, Tax and the
+             Promotions/Discount rows ALSO have to fit, unscrolled, in the
+             SAME budget -- and needs that 48px. Scoped to THIS media query
+             only, so the base (non-short-till) rule a few hundred lines up
+             still declares repeat(3,1fr) unconditionally -- retail_
+             payment_grid_test.js's own testGridIsThreeColumns greps that
+             base declaration by a .pos-pay-btns regex, not a
+             computed style, so it is unaffected by what a LATER,
+             higher-specificity-by-source-order media rule overrides it
+             with at runtime (confirmed by actually running that suite
+             after this change, not just by reading its regex). Width is
+             not the constraint here either: .pos-right floors at
+             minmax(360px, 0.95fr), and 6 columns at a 4px gap still clear
+             button.pos-pay-btn's own 48px min-inline-size floor with room
+             to spare at 1366px. */
+          .pos-pay-btns { margin-block-end:4px;gap:4px;grid-template-columns:repeat(6,1fr); }
+          .pos-checkout-footer { padding-block:2px 4px; }
+          .pos-checkout-btn { min-block-size:var(--touch-target-min, 44px);padding-block:6px; }
+          /* Round 2, T1/R2: the right-pane header (customer select, Hold and
+             now Void -- see .pos-pane-hdr's own comment in _renderPOS) is a
+             fixed, un-shrinkable sibling of the 3-row cart floor and the
+             tender-grid footer -- every px trimmed here is a px that does
+             not have to come out of either of those, or out of Subtotal/
+             Discount %/Tax/Total below. All three controls stay at the
+             touch-target-min floor; only the surrounding padding shrinks. */
+          /* gap 12px -> 6px, round 2 till R2: this row's own base rule
+             wraps to a second line once the title + customer-select + Hold
+             + Void group no longer fit side by side (see .pos-pane-hdr's
+             own comment in _renderPOS on why Void moved here) -- at
+             short-till heights that second line's own row-gap is pure
+             overhead, the same reasoning every other gap/margin trim in
+             this block gives.
+             Round 3 (item #7, 1280x720/1280x800 regression, medium):
+             padding-inline 16px (the base rule's own value, never touched
+             by round 2) -> 4px, gap 6px -> 2px, added here. At 1280px
+             width .pos-right renders ~380.8px wide, and this row's three
+             children (title, the select+Hold group, the Void slot)
+             measured 363.2px of combined content width (probe_panehdr.py,
+             live) -- round 2's own gap:6px reduction alone still left a
+             28.4px shortfall against the 346.8px inner width padding:16px
+             leaves, which is exactly what tipped Void onto a second line
+             at THIS width even though round 2 never saw it (round 2 only
+             ever measured 1366x768/1440x900). That second line alone cost
+             50px of .pos-right's fixed vertical budget (measured 85.5px
+             at 1366x768 against 135.5px at 1280x720, same fixture) --
+             every one of those 50px comes straight out of .pos-summary,
+             which is what actually hid #pos-total/Tax/the Promotions/
+             Discount rows at this width (item #7(c)/#8's own finding).
+             padding-inline:4px + gap:2px reclaims 12px+8px=20px, closing
+             the 28.4px shortfall with a live-measured 3.6px to spare
+             (378.8 - 2*4 = 370.8px available vs 363.2 + 2*2 = 367.2px
+             needed) -- the row fits on one line again at 1280px, still at
+             short-till heights only, so a 1280-wide but TALL till (not in
+             this file's own matrix or the item's evidence) is unaffected.
+             CORRECTION, same pass, before this ever shipped: the 363.2px
+             "children" figure above was measured against a FRESH company
+             with no customers yet, where #pos-customer (a native <select>,
+             no explicit width, only .pos-cust-select's own
+             max-inline-size:190px CEILING) rendered well under that
+             ceiling because its only option was 'Walk-in'. A live company
+             with real customers (probe_panehdr2.py, item7's own actual
+             fixture: 4 products, a real customer picked) measured the
+             select+Hold group at 280.2px, not 183.2px -- a <select> with
+             no explicit width sizes to its WIDEST <option> up to its own
+             max-width, and 'Test Customer X (+962...)' is far wider than
+             'Walk-in'. Padding/gap trims alone cannot close a gap that
+             size without emptying every other control below its own
+             touch-target floor, so .pos-cust-select's own ceiling is
+             reduced next (that rule's own comment) -- THIS row may still
+             wrap at extreme widths with many/long customer names, and
+             that residual case is accepted (see this file's own
+             SHORT_TILLS top comment: density is taken from decoration,
+             not from what a control can say), rather than chased further,
+             now that the two BIGGEST, cheapest levers (this row's own
+             padding/gap, and the select's ceiling) are both pulled. */
+          .pos-pane-hdr { padding-block:6px;padding-inline:4px;gap:2px; }
+          /* Round 3 (item #7, same pass as the correction just above):
+             .pos-cust-select's base rule caps at 190px, sized for a
+             DESKTOP-width till picking a real, phone-numbered customer --
+             at short-till heights this is the single largest control in
+             the row and the one most responsible for the residual
+             wrap this correction describes. 190px -> 96px: still wide
+             enough to read a short name (the browser truncates the
+             SELECTED option's own text with its native ellipsis once it
+             overflows -- this file does not control that rendering, only
+             the box it happens in), and it is a LIST the cashier opens to
+             pick from, not a field they read a full name off continuously
+             the way the cart or the receipt is. */
+          .pos-cust-select { inline-size:56px;max-inline-size:56px;min-inline-size:0; }
+          /* Hold's/Void's own labels never need the same 16px breathing
+             room a normal-height till affords them -- 8px still clears
+             their own 44px touch floor untouched (padding is inline, not
+             block). .pos-clear-btn is Void's own button class (see
+             .pos-pane-void-slot's markup comment) -- shared with the
+             cart pane's Clear control, harmless there since that control
+             is not in a width-constrained row. */
+          .pos-hold-btn, .pos-clear-btn { padding-inline:8px; }
+          /* Round 2, till R2: 80px -> 74px, SHORT TILLS ONLY -- the base
+             (non-media) 80px above stays untouched at normal heights, where
+             it clears a MEASURED 77.9px real row (see that rule's own
+             comment). This is a genuine FLOOR, not a fixed height (this
+             var's own base-rule comment already establishes that): a row's
+             actual rendered height is still MAX(this floor, its own
+             content), so a row's own on-screen size never drops below what
+             it actually needs. What this floor controls is how much of
+             .pos-right's SHRINKING budget flexbox reserves for the cart
+             before it starts taking space from .pos-summary instead --
+             P0_DEBUG_GEOM measurement against the real app (4-line cart,
+             one PROMOTED line, 1366x768) found a lower floor (56px) let
+             flex shrink the cart to only 176px total, which fits 2 of 4
+             real rows (~67-78px each) rather than the 3 this item
+             requires -- the floor has to clear roughly 3 real rows'
+             worth, not undercut it. 74px (3*74+8=230px) is the value that
+             actually clears 3/4 rows AND leaves #pos-total/Tax/Promotions/
+             Discount reachable in the SAME run, at BOTH 1366x768 and
+             1440x900, EN and AR (item7_layout_matrix's own "(e)" step) --
+             combined with the tender-grid collapse and the other
+             padding/margin/gap trims throughout this media query, all of
+             which this floor's own headroom depends on. */
+          .pos-wrap { --pos-cart-row-min: 74px; }
         }
         .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
 
@@ -3270,9 +4325,16 @@ const RetailSystem = {
                  (not its own toolbar) specifically so it inherits
                  .pos-cat-row's existing onmousedown="_keepScanFocus(event)" --
                  the same guard that already keeps the Held button above from
-                 blurring #pos-search, reused rather than re-implemented. -->
+                 blurring #pos-search, reused rather than re-implemented.
+                 P0 item #11(d), interface I-1: renamed 'Customer screen' (was
+                 'Customer Display'), with a dot -- grey until first opened,
+                 then amber/green off _setCustomerDisplayDot()'s poll of
+                 GET .../customer-display/status every 3s. The dot span carries
+                 no text of its own (colour + a title update is the signal, see
+                 _setCustomerDisplayDot), so it stays silent to a screen reader;
+                 the button's own accessible name is the label text beside it. -->
             <button class="ret-btn ret-btn-ghost ret-btn-sm pos-display-btn" id="pos-display-btn" onclick="RetailSystem._openCustomerDisplay()"
-              title="${this._esc(t('Open the customer-facing display'))}"><span aria-hidden="true">${this._icon('laptop', 16, '🖥️')}</span> <span>${t('Customer Display')}</span></button>
+              title="${this._esc(t('Open the customer-facing display'))}"><span aria-hidden="true">${this._icon('laptop', 16, '🖥️')}</span> <span class="pos-display-dot" id="pos-display-dot" aria-hidden="true"></span> <span>${t('Customer screen')}</span></button>
           </div>
           <div class="pos-product-grid" id="pos-product-grid" onmousedown="RetailSystem._keepScanFocus(event)">
             <div style="grid-column:1/-1;text-align:center;padding:50px;color:var(--text-dim)">${t('Loading…')}</div>
@@ -3280,34 +4342,97 @@ const RetailSystem = {
         </div>
         <div class="pos-right">
           <div class="pos-pane-hdr">
-            <h3 class="pos-pane-title">${t('Current Sale')}</h3>
-            <div style="display:flex;gap:8px;align-items:center">
+            <!-- Phase 0 #7b: '${t('Current Sale')}' plain-static text, kept
+                 as the initial render only -- _recalc() (the single place
+                 every other total on this screen already updates from)
+                 rewrites this to 'Current Sale · N items' the moment the
+                 cart is non-empty. The phone peek bar (#pos-peek-count)
+                 already shows the same count, but it is display:none while
+                 this pane is the one actually visible (sheet closed vs.
+                 open, see .pos-wrap.pos-sheet-open in _injectStyles), so the
+                 two are never on screen together. -->
+            <h3 class="pos-pane-title" id="pos-pane-title">${this._esc(t('Current Sale'))}</h3>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <select id="pos-customer" class="pos-cust-select" onchange="RetailSystem._onCustomerChange()">
                 <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
               <button class="pos-hold-btn" onclick="RetailSystem._holdSale()"
                 title="${this._esc(t('Park this sale and start a new one'))}"><span aria-hidden="true">${this._icon('pause', 16, '⏸')}</span> <span>${t('Hold')}</span></button>
             </div>
+            <!-- Round 2, till R2 (items #7(c)/#8 layout re-budget): Void
+                 Sale used to have its OWN bar below the cart, deliberately
+                 far from Hold and Charge -- see the review that removed it
+                 for the full measured trade. Moving it HERE (into
+                 .pos-pane-hdr, the SAME row) reclaims that whole bar's
+                 height (~54-62px) for .pos-summary/#pos-total below, which
+                 the review found squeezed to an 18-44px strip with
+                 #pos-total, Tax, Promotions and Discount all unreachable
+                 without scrolling.
+                 ITS OWN WRAPPER, deliberately NOT inside the select+Hold
+                 group div above: retail_surface_pos_test.js's
+                 testDestructiveControlsAreNotAdjacentToFrequentOnes (a
+                 pre-existing, unowned-by-this-crew safety ratchet) refuses
+                 ANY destructive control (_clearCart/_removeLine/_voidSale)
+                 that is an immediate sibling of, OR SHARES A DOM CONTAINER
+                 WITH, a high-frequency one (_holdSale included) -- putting
+                 this button directly beside Hold inside that div failed it
+                 immediately ("Void Sale is an immediate sibling of Hold").
+                 A dedicated single-child wrapper gives this button its own
+                 container the way that test requires, while still sitting
+                 in the SAME horizontal row for the height budget above.
+                 onclick now goes through _voidSale() (a _confirm() gate),
+                 not bare _clearCart() too -- a same-row wrapper narrows the
+                 physical gap from Hold that used to be this control's
+                 entire protection, so an affirmative confirm dialog
+                 replaces it, the same pattern every other destructive
+                 action on this file already uses; that gate is a STRONGER
+                 protection against a genuine mis-tap than mere physical
+                 distance ever was, since a mis-tap on this button now
+                 stops at a dialog instead of silently emptying the sale. -->
+            <div class="pos-pane-void-slot">
+              <button class="pos-clear-btn" onclick="RetailSystem._voidSale()"
+                title="${this._esc(t('Void the whole sale'))}">${t('Void Sale')}</button>
+            </div>
           </div>
           <div class="pos-cart-items" id="pos-cart" onmousedown="RetailSystem._keepScanFocus(event)">
             <div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">${this._icon('shopping-cart', 32, '🛒')}</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>
           </div>
-          <!-- Void: a destructive control, given its own bar so it is neither
-               a sibling nor a neighbour of Hold (above) or Charge (below). -->
-          <div class="pos-cart-tools">
-            <button class="pos-clear-btn" onclick="RetailSystem._clearCart()"
-              title="${this._esc(t('Void the whole sale'))}">${t('Void Sale')}</button>
-          </div>
           <div class="pos-summary">
-            <div class="pos-sum-row"><span>${t('Subtotal')}</span><span class="pos-sum-val money" id="pos-sub">${this._esc(this._moneyDigits(0))}</span></div>
+            <!-- Round 2, till R2: Discount % folded onto the Subtotal row
+                 (was its own full pos-sum-row, floored by the 44px input) --
+                 the other half of the same height re-budget as Void Sale's
+                 move above. Reclaims one whole row's worth of block-size
+                 (~50px) with no loss of function: the input keeps its own
+                 id/aria-label/oninput untouched. -->
             <div class="pos-sum-row">
-              <span>${t('Discount')}</span>
-              <span style="display:flex;gap:6px;align-items:center">
-                <input type="number" id="pos-disc" value="0" min="0" max="100" step="0.5"
-                  class="pos-mini-input" style="inline-size:76px;padding-inline:10px;font-size:14px"
-                  aria-label="${this._esc(t('Discount'))}"
-                  oninput="RetailSystem._recalc()" /> %
+              <span>${t('Subtotal')}</span>
+              <span style="display:flex;gap:10px;align-items:center">
+                <span class="pos-sum-val money" id="pos-sub">${this._esc(this._moneyDigits(0))}</span>
+                <span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-dim)">
+                  <input type="number" id="pos-disc" value="0" min="0" max="100" step="0.5"
+                    class="pos-mini-input" style="inline-size:64px;padding-inline:8px;font-size:13px"
+                    aria-label="${this._esc(t('Discount'))}"
+                    oninput="RetailSystem._renderCart()" /> %
+                </span>
               </span>
+            </div>
+            <!-- Phase 0 #8 (interface I-2): _recalc used to fold a
+                 promotion's saving straight into the single combined
+                 "Discount" figure above and never display it at all -- the
+                 screen showed Subtotal/Discount 0%/Tax/Total with 0.450
+                 unexplained the moment ANY promotion resolved on the cart
+                 (the '%' input above stays 0 because a promotion is not
+                 something the cashier typed). Both rows are own-row/
+                 own-visibility, the same shape #pos-change-row/
+                 #pos-loyalty-value-row already use, hidden below HALF A
+                 MINOR UNIT (_halfMinorUnit(), never a bare > 0) so a
+                 fractional-fils rounding artefact can never flicker one
+                 open with nothing real to explain. -->
+            <div class="pos-sum-row" id="pos-promo-row" style="display:none">
+              <span>${t('Promotions')}</span><span class="pos-sum-val money" id="pos-promo-value">${this._esc(this._moneyDigits(0))}</span>
+            </div>
+            <div class="pos-sum-row" id="pos-discamt-row" style="display:none">
+              <span>${t('Discount')}</span><span class="pos-sum-val money" id="pos-discamt-value">${this._esc(this._moneyDigits(0))}</span>
             </div>
             <div class="pos-sum-row"><span>${t('Tax')}</span><span class="pos-sum-val money" id="pos-tax">${this._esc(this._moneyDigits(0))}</span></div>
             <div class="pos-total-band">
@@ -3354,17 +4479,66 @@ const RetailSystem = {
               <span>${t('Points Redeemed')}</span>
               <span class="pos-sum-val money" id="pos-loyalty-value">${this._esc(this._moneyDigits(0))}</span>
             </div>
-            <div class="pos-sum-row">
-              <span>${t('Cash Tendered')}</span>
-              <input type="number" id="pos-tendered" placeholder="${(0).toFixed(this._currencyDp())}" min="0" step="${(1 / Math.pow(10, this._currencyDp())).toFixed(this._currencyDp())}"
-                class="pos-mini-input" style="inline-size:112px;padding-inline:12px;font-size:15px"
-                aria-label="${this._esc(t('Cash Tendered'))}"
-                oninput="RetailSystem._calcChange()" />
-            </div>
-            <div class="pos-sum-row pos-change-row" id="pos-change-row" style="display:none">
-              <span>${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
-            </div>
+          </div>
+          <!-- ROUND 2, T1 (item #7(c) REGRESSION): the tender grid, Cash
+               Tendered and Change Due moved OUT of .pos-summary (which
+               SCROLLS -- see that rule's own "SHRINKABLE AND SCROLLABLE"
+               comment) and into THIS non-scrolling footer, alongside
+               Charge, which was the one thing already guaranteed reachable.
+               Round 1 built and measured this exact move already (see the
+               "REVIEW FIX ATTEMPTED THEN REVERTED" history this comment
+               replaces) and reverted it because, un-aided, it starved
+               .pos-summary down to ~22px and pushed #pos-total off-screen
+               instead -- trading one Phase 0 regression for a worse one.
+               A SECOND change, measured live (see the T1 e2e scenario in
+               retail_p0_till_e2e.py), is what actually closes the gap
+               without reproducing that trade: every control this footer now
+               holds floors at var(--touch-target-min, 44px), not
+               touch-target-comfortable (48-52px) -- see .pos-pay-btns'/
+               button.pos-pay-btn's/.pos-checkout-btn's own comments. A
+               repeat(6,1fr) single-row tender grid was ALSO tried (it also
+               passes this same e2e scenario) and reverted on purpose: it
+               bought nothing repeat(3,1fr) does not already get here once
+               the touch targets shrank, and it broke retail_payment_grid_
+               test.js's own testGridIsThreeColumns -- a file this crew does
+               not own (see this pass's own out_of_scope_requests).
+               Measured at 1366x768 with a 4-line cart (the T1 fixture): this
+               leaves .pos-summary (Subtotal/Discount %/Tax/Total) able to
+               show its own content, or scroll internally to it in the tight
+               case, WITHOUT ever pushing the tender grid, Cash Tendered or
+               Charge below the fold -- the three things this item actually
+               measures.
+               AUDIT (Phase 0 #7d): #pos-tendered-row's value is READ (by
+               _calcChange/_checkout) only when the tender is cash --
+               create_sale's own 'amount_paid' for every other method is
+               'amountDue' (see _checkout's own comment), never whatever
+               happened to be typed here. id="pos-tendered-row" (the
+               WRAPPER, not the input) is what _syncTenderUI(method)
+               hides/shows -- unchanged by this move, just relocated.
+               Round 2, till R2 (items #7(c)/#8(d) REGRESSION, continued):
+               T1's own measurement only checked the tenders were reachable,
+               never that #pos-total/Tax/Promotions/Discount ABOVE this
+               footer stayed reachable too -- they did not (0/4 elementFromPoint
+               hits at 1366x768 and 1440x900, summary squeezed to 18-105px).
+               Change Due folded onto the SAME row as Cash Tendered below
+               (was its own full pos-sum-row) is the other half of the fix
+               applied throughout .pos-summary/.pos-pane-hdr above: every
+               row this footer/summary saves is a row #pos-total does not
+               have to fight the tender grid for. -->
+          <div class="pos-checkout-footer">
             <div class="pos-pay-btns" id="pos-pay-btns">${this._renderPayButtons()}</div>
+            <div class="pos-sum-row" id="pos-tendered-row">
+              <span>${t('Cash Tendered')}</span>
+              <span style="display:flex;gap:10px;align-items:baseline">
+                <input type="number" id="pos-tendered" placeholder="${(0).toFixed(this._currencyDp())}" min="0" step="${(1 / Math.pow(10, this._currencyDp())).toFixed(this._currencyDp())}"
+                  class="pos-mini-input" style="inline-size:100px;padding-inline:10px;font-size:14px"
+                  aria-label="${this._esc(t('Cash Tendered'))}"
+                  oninput="RetailSystem._calcChange()" />
+                <span class="pos-change-row" id="pos-change-row" style="display:none">
+                  <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em">${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
+                </span>
+              </span>
+            </div>
             <button class="pos-checkout-btn" id="pos-checkout-btn" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
           </div>
         </div>
@@ -3783,20 +4957,21 @@ const RetailSystem = {
   _renderPOSGrid() {
     const grid = document.getElementById('pos-product-grid');
     if (!grid) return;
-    // AuraIcons names, not emoji glyphs. This map used to hold ten emoji and
-    // emit them RAW at the tile below, of which only 🛒 and 📦 were in
-    // icons.js's EMOJI map -- so eight of the ten tiles on the busiest screen
-    // in the product drew a SYSTEM emoji whose appearance is the OS font's and
-    // which cannot follow the theme. Nothing caught it:
-    // retail_surface_i18n_test.js's emoji check flags only an emoji SHARING a
-    // node with translatable words, and this one sits alone in an aria-hidden
-    // span, so it is exempt by construction. The eight missing icons were
-    // added to icons.js at the same time (geometry fetched from
-    // lucide-static, never hand-drawn -- see that file's rule); naming them
-    // here rather than routing emoji through render() matters, because since
-    // 2026-09-08 an unresolved value renders circle-help and console.warns.
-    const _ICONS = { Electronics:'laptop', Clothing:'shirt', 'Food & Beverages':'sandwich', Beverages:'cup-soda',
-      Groceries:'shopping-cart', Accessories:'gem', Footwear:'footprints', Sports:'dumbbell', Beauty:'flower', Default:'package' };
+    // AUDIT (Phase 0 #7a): the icon map that used to live here (AuraIcons
+    // names, previously ten raw emoji before that) was keyed on 9 English
+    // category names -- 'Electronics', 'Clothing', ... -- so it could only
+    // ever match a shop that typed its categories in English AND spelled
+    // them exactly one of those nine ways. Every real category name is
+    // either Arabic or whatever the shop actually typed, so in practice
+    // EVERY tile fell through to the same 'Default' -> 'package' icon: not a
+    // missing icon per category, a single placeholder box shown on the
+    // busiest screen in the product regardless of what was being sold.
+    // Removed rather than "fixed" with a bigger map, because there is no
+    // finite list of category names to key on -- a real per-product/
+    // per-category glyph is Phase 1a's monogram-tile work, not a bigger
+    // lookup table here. See .pos-card-icon's own removal note in
+    // _injectStyles for the CSS half of this.
+    //
     // Text search moved server-side (_filterPOS/_runPOSSearch below) --
     // this._products IS the current result set already. Category is the
     // one filter the backend does not offer, so it still happens here,
@@ -3840,7 +5015,6 @@ const RetailSystem = {
       : '';
     grid.innerHTML = notice + visible.map(p => {
       const outOfStock = p.total_stock <= 0;
-      const icon = _ICONS[p.category_name] || _ICONS.Default;
       // Phase 7 stage 7b: stale is checked for in-stock tiles only. The
       // out-of-stock branch (text, class, aria-disabled, click handler) is
       // untouched by this stage on purpose -- see the "Correction to
@@ -3910,7 +5084,6 @@ const RetailSystem = {
       return `<button type="button" class="pos-card${(outOfStock && !variantCount)?' pos-card-outofstock':''}"
           ${(outOfStock && !variantCount) ? 'aria-disabled="true"' : ''}
           onclick="${clickAction}">
-        <span class="pos-card-icon" aria-hidden="true">${this._icon(icon, 26, '📦')}</span>
         <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
@@ -4365,12 +5538,82 @@ const RetailSystem = {
     this._renderCart();
   },
 
+  // AUDIT (Phase 0 #1, the most serious money bug on the list): _clearCart
+  // used to empty ONLY `this._cart` -- the discount %, Cash Tendered, the
+  // change row, a loyalty redemption, the selected customer and the tender
+  // method all survived a completed sale untouched. checkout() sends the
+  // discount PCT on every line (see its own `discPct` comment below), so a
+  // 10% discount given to one customer silently applied to the next sale
+  // too; a Credit tender with a customer selected carried the SAME customer
+  // into the next walk-in's sale, because nothing ever cleared #pos-customer.
+  // The post-sale screenshot that found this showed "Cash Tendered 50" and a
+  // green Change Due row sitting over an already-empty cart.
+  //
+  // Order matters: the discount/tendered/loyalty inputs are reset BEFORE
+  // _onCustomerChange() runs, so its own _recalc() call (see that function)
+  // computes against the already-zeroed controls, not the ones the finished
+  // sale left behind.
+  _resetSaleControls() {
+    const discInput = document.getElementById('pos-disc');
+    if (discInput) discInput.value = 0;
+    const tenderedInput = document.getElementById('pos-tendered');
+    if (tenderedInput) tenderedInput.value = '';
+    const changeRow = document.getElementById('pos-change-row');
+    if (changeRow) changeRow.style.display = 'none';
+    const redeemInput = document.getElementById('pos-loyalty-redeem');
+    if (redeemInput) redeemInput.value = '0';
+    // Walk-in is value="" (see the #pos-customer template) -- setting it
+    // back BEFORE calling _onCustomerChange() below is what makes that call
+    // take its own "no customer selected" branch, which is what actually
+    // hides the loyalty section and zeroes `this._loyaltyBalance`.
+    const customerSelect = document.getElementById('pos-customer');
+    if (customerSelect) customerSelect.value = '';
+    // Same toggle _exactCashCharge() already uses to force the tender back
+    // to cash -- not _setPayment('cash', btn), which requires a clicked
+    // button element this call site never has.
+    this._paymentMethod = 'cash';
+    document.querySelectorAll('.pos-pay-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset && b.dataset.method === 'cash');
+    });
+    // _onCustomerChange() hides the loyalty section, zeroes the cached
+    // balance and calls _recalc()/_refocusScan() itself on the "no
+    // customer" branch it always takes here (see the comment above) -- the
+    // item's own wording is "clears the customer through
+    // _onCustomerChange()", not a hand-rolled equivalent of it.
+    this._onCustomerChange();
+    this._recalc();
+  },
+
+  // Round 2, till R2 (items #7(c)/#8 layout re-budget): the Void Sale
+  // BUTTON's own onclick, wrapping _clearCart() below in a _confirm() gate.
+  // Void moved from its own bar (deliberately far from Hold/Charge) into
+  // .pos-pane-hdr, right next to Hold, to reclaim that bar's height for the
+  // summary/total (see the markup's own comment for the measurement this
+  // closes) -- which means the physical distance that used to be this
+  // control's ENTIRE protection against an accidental tap is gone. This
+  // restores an equivalent safety margin the same way every other
+  // destructive control on this file already gets one (delete a supplier
+  // contact, cancel a PO, retire a branch, ...): a named _confirm() dialog,
+  // not a native confirm(). Skipped on an already-empty cart -- there is
+  // nothing to lose by voiding it, and a confirm dialog over an empty sale
+  // would just be a second tap for no reason.
+  async _voidSale() {
+    if (this._cart.length && !(await this._confirm({
+      title: t('Void this sale?'),
+      message: t('The current cart will be cleared. This cannot be undone.'),
+      confirmLabel: t('Void Sale'),
+      danger: true,
+    }))) return;
+    this._clearCart();
+  },
+
   // Void, and also the reset step of a completed sale (_checkout calls this on
   // success). Forced refocus, not the guarded kind: whatever the cashier was
   // typing belonged to the sale that just ended or was just voided, so the
   // caret genuinely does belong back at the scan field for the next customer.
   _clearCart() {
     this._cart = [];
+    this._resetSaleControls();
     this._renderCart();
     this._refocusScan(true);
   },
@@ -4627,22 +5870,33 @@ const RetailSystem = {
     const manualFrac = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0))) / 100;
     container.innerHTML = this._cart.map((item, i) => {
       const promo = this._bestPromoFor(item);
-      // A promotion tag/price is shown whenever a promotion RESOLVES for this
-      // line, even on the sale where the manual discount happens to already
-      // beat it -- the cashier still gets told why a promo is in play, per
-      // Task 1(e). BEST PRICE WINS decides the CHARGE (see _recalc); this only
-      // decides what price is shown for that promoted line.
       const promoFrac = promo ? (promo.discount_pct || 0) / 100 : 0;
-      const lineFrac = Math.max(manualFrac, promoFrac);
-      const metaHTML = promo
-        ? `<span class="pos-price-orig">${this._money(item.unit_price)}</span> ${this._money(item.unit_price * (1 - lineFrac))} × ${item.quantity}`
+      // Round 2, till R2 (I-2/T2, high -- see _customerDisplayCartPayload's
+      // own review-fix comment for the full measured defect): this used to
+      // be a bare `promo ?` -- a promotion tag/price was shown whenever a
+      // promotion RESOLVED for the line, even on the sale where the manual
+      // discount already beat it (a deliberate decision at the time, "the
+      // cashier still gets told why a promo is in play", Task 1(e)). That
+      // decision is superseded here: the server's own `applied_promotion` is
+      // null on a manual-wins line, and this cart row was showing a struck
+      // price and a total that were NEITHER the manual-discount total NOR a
+      // real promotion total, drifting further out of sync every keystroke
+      // in #pos-disc because that input's own oninput only ever called
+      // _recalc(), never a re-render of these rows (now fixed below, at
+      // #pos-disc's own markup). `promoWins` is the exact predicate _recalc's
+      // per-line loop and _customerDisplayCartPayload both use, so the till,
+      // the customer display and the receipt can no longer show three
+      // different stories about the same line.
+      const promoWins = promoFrac > manualFrac;
+      const metaHTML = promoWins
+        ? `<span class="pos-price-orig">${this._money(item.unit_price)}</span> ${this._money(item.unit_price * (1 - promoFrac))} × ${item.quantity}`
         : `${this._money(item.unit_price)} × ${item.quantity}`;
       // Icon and name are DELIBERATELY separate text nodes (see
       // retail_surface_i18n_test.js's "no translatable string shares a node
       // with an emoji" rule) -- promo.name is shop-authored data, like a
       // product or category name elsewhere in this file, so it is escaped,
       // never passed through t().
-      const promoTagHTML = promo
+      const promoTagHTML = promoWins
         ? `<div class="pos-promo-tag" title="${this._esc(promo.name)}"><span aria-hidden="true">${this._icon('tag', 14, '🏷️')}</span><span>${this._esc(t('Promo'))}: ${this._esc(promo.name)}</span></div>`
         : '';
       // Restaurant modifiers, wave 2: only rendered when this line actually
@@ -4658,6 +5912,25 @@ const RetailSystem = {
             return this._esc(m.name) + deltaLabel;
           }).join(', ')}</div>`
         : '';
+      // AUDIT (Phase 0 #8): this used to be a bare ${this._money(item.
+      // line_total)} -- ALWAYS the pre-promotion figure, even on a promoted
+      // line, so the probe that found this showed 'JD 4.050 × 1' in the meta
+      // row directly above a line total still reading 'JD 4.500'. Mirrors
+      // metaHTML's OWN `promoWins` branching exactly rather than inventing a
+      // second rule: when the manual % wins (or no promotion resolves at
+      // all), metaHTML's own 'plain' branch already shows the RAW unit price
+      // untouched by any manual invoice-level %, so the line total stays
+      // untouched too -- a manual discount is explained by the new
+      // Discount($) row in the summary below, not per line (matching how it
+      // was already only ever explained there).
+      // Round 2, till R2 (money identity at 3dp): `gross`/the struck-out
+      // total now go through _roundMoney() -- see _recalc's own top comment
+      // for why summing full-precision figures here disagreed with the
+      // server by a fil.
+      const gross = this._roundMoney(item.line_total);
+      const lineTotalHTML = promoWins
+        ? `<span class="pos-price-orig">${this._money(gross)}</span> ${this._money(gross - this._roundMoney(gross * promoFrac))}`
+        : this._money(item.line_total);
       return `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
         <div class="pos-line-main">
@@ -4672,7 +5945,7 @@ const RetailSystem = {
             <span class="pos-qty-val">${item.quantity}</span>
             <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},1)" title="${incLabel}" aria-label="${incLabel}">+</button>
           </div>
-          <span class="pos-line-total">${this._money(item.line_total)}</span>
+          <span class="pos-line-total">${lineTotalHTML}</span>
         </div>
         <span class="pos-line-sep" aria-hidden="true"></span>
         <div class="pos-line-danger">
@@ -4752,19 +6025,42 @@ const RetailSystem = {
   // Promotions wave 1 (ROADMAP.md "retail schema v23"): the single uniform
   // discFrac above became a PER-LINE lineFrac = max(manualFrac, promoFrac) --
   // BEST PRICE WINS, never summed (a 60% promotion plus a 50% manual discount
-  // must charge 60%, not 110%). The aggregate discount below is written as
-  // "the manual invoice-level discount on everything, plus whatever a
-  // promotion adds ON TOP for lines where it beats the manual rate" rather
-  // than a flat per-line sum, specifically so that with ZERO promotions
-  // `promoExtra` never leaves its initial 0 and `discAmt` collapses to EXACTLY
-  // `subtotal * manualFrac` -- the original formula, bit for bit. Summing
-  // `line_total * frac` per line instead is algebraically equal but NOT
-  // numerically identical in IEEE754 (measured ~33% divergence at full
-  // precision against `subtotal * frac` across 300k realistic fixtures),
-  // which would silently change this screen's own numbers on every sale with
-  // no promotions configured -- exactly the regression
-  // retail_promotions_ui_test.js's no-promotions-equivalence case exists to
-  // catch. See that test for the mutation proof.
+  // must charge 60%, not 110%).
+  //
+  // Round 2, till R2 (item #8/I-2, critical -- money identity at 3dp):
+  // `discAmt` USED TO be written as "the manual invoice-level discount on
+  // everything, plus whatever a promotion adds ON TOP for lines where it
+  // beats the manual rate" (`subtotal * manualFrac + promoExtra`) rather than
+  // a per-line sum, specifically so that with ZERO promotions it stayed
+  // bit-identical to `subtotal * manualFrac`, the original formula --
+  // summing `line_total * frac` per line was measured to diverge from that
+  // by ordinary IEEE754 float-accumulation noise across many lines. That
+  // reasoning solved the WRONG problem: it protected float-for-float
+  // equality with itself, not agreement with the server, and the server was
+  // never computing `subtotal * manualFrac` in the first place --
+  // core/retail/pricing.py's calculate_line() rounds `gross`/`discount_
+  // amount`/`tax` to the currency's minor unit ONCE PER LINE, from full
+  // precision, and only then does exact arithmetic on those already-rounded
+  // pieces. This file was doing full-precision arithmetic throughout and
+  // rounding ONLY the final total for display -- a SEPARATE full-precision
+  // path from the one that produces the discount_amount/tax the server
+  // actually persists, so the two disagreed by a fil whenever a line's own
+  // rounding was not already exact. Measured: a 2.500 JOD line at 7.5%
+  // manual discount with 16% tax showed Total 2.683 on this screen and
+  // 2.682 on the receipt/server (2.500 - round(2.500*0.075) + round((2.500-
+  // 0.188)*0.16) = 2.500 - 0.188 + 0.370 = 2.682); two 1.250 JOD lines under
+  // a 15% manual discount showed Discount 0.375 here (the old uniform
+  // formula) against 0.376 on the receipt (round(1.250*0.15) summed twice).
+  // `_roundMoney()` (this file's own mirror of the server's
+  // `_round_money(x, quant)`) now rounds each line's own gross/discount/tax
+  // exactly once, below, and `discAmt`/`total` are exact sums of those
+  // already-rounded pieces -- by construction, no longer merely by
+  // coincidence, the same guarantee calculate_line's own docstring states.
+  // `subtotal * manualFrac` is no longer the reference point:
+  // retail_promotions_ui_test.js's no-promotions "bit-identity" case pinned
+  // the OLD (less correct) number and needs updating for the new one -- see
+  // this pass's own out_of_scope_requests, since that file is owned by a
+  // different crew.
   _recalc() {
     // AUDIT-fix: the #pos-disc input's min/max=0/100 is decorative HTML
     // only -- a typed value outside that range still reaches parseFloat
@@ -4776,18 +6072,49 @@ const RetailSystem = {
     const discPct = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0)));
     const manualFrac = discPct / 100;
     const beforeDiscount = this._taxMode === 'before_discount';
-    let subtotal = 0, promoExtra = 0, tax = 0;
+    let subtotal = 0, tax = 0;
+    // WINNER-TAKES-ALL PER LINE is the convention create_sale's own
+    // resolve_line_discount_pct uses server-side: a line's ENTIRE
+    // discount_amount goes to Promotions when a promotion strictly beats
+    // the manual % on THAT line, else the whole line's discount_amount goes
+    // to Discount (see _saleDiscountBreakdown's own comment, which reads
+    // this exact fact back off a COMPLETED sale's `applied_promotion`
+    // flag). Measured 2026-09-27: Widget 10 @ 20% promo + Gadget 5 (no
+    // promo), manual 10% gives Promotions=2.000/Discount=0.500, matching
+    // the completed sale's own receipt (_saleDiscountBreakdown) for that
+    // same sale.
+    let winnerPromotions = 0, winnerDiscount = 0;
     this._cart.forEach(i => {
-      subtotal += i.line_total;
       const promo = this._bestPromoFor(i);
       const promoFrac = promo ? (promo.discount_pct || 0) / 100 : 0;
       const lineFrac = Math.max(manualFrac, promoFrac);
-      if (lineFrac > manualFrac) promoExtra += i.line_total * (lineFrac - manualFrac);
-      const taxableBase = beforeDiscount ? i.line_total : (i.line_total * (1 - lineFrac));
-      tax += taxableBase * (i.tax_rate / 100);
+      // RECONCILIATION BY CONSTRUCTION (mirrors core/retail/pricing.py's
+      // calculate_line() EXACTLY -- see that function's own docstring, and
+      // this function's own top comment for the measured defect this
+      // closes): gross, this line's discount_amount and this line's tax are
+      // each rounded to the currency's minor unit EXACTLY ONCE, from full
+      // precision, via _roundMoney(). taxableBase is then EXACT arithmetic
+      // on those two already-rounded pieces, never independently re-rounded
+      // -- the same guarantee that makes gross - discount + tax equal the
+      // server's own per-line total every time, not just when two
+      // independent roundings happen to agree.
+      const gross = this._roundMoney(i.line_total);
+      const lineDiscAmt = this._roundMoney(gross * lineFrac);
+      const taxableBase = beforeDiscount ? gross : (gross - lineDiscAmt);
+      const lineTax = this._roundMoney(taxableBase * (i.tax_rate / 100));
+      subtotal += gross;
+      tax += lineTax;
+      if (lineFrac > manualFrac) winnerPromotions += lineDiscAmt; else winnerDiscount += lineDiscAmt;
     });
-    const discAmt = subtotal * manualFrac + promoExtra;
+    // discAmt/total are exact sums of the already-rounded per-line pieces
+    // above -- the SAME winnerPromotions/winnerDiscount the Promotions/
+    // Discount($) rows and the customer-display payload use below, not a
+    // separately-computed uniform-baseline figure, so all three can never
+    // disagree with each other or with the receipt (which reads these exact
+    // numbers back off the completed sale).
+    const discAmt = winnerDiscount + winnerPromotions;
     const total   = subtotal - discAmt + tax;
+    const manualDiscAmt = winnerDiscount;
 
     // ── Loyalty point redemption (launch-readiness wave 1, schema v27) ──────
     // A PREVIEW only -- create_sale (retail_api.py) re-derives the ledger
@@ -4810,7 +6137,18 @@ const RetailSystem = {
     // default amount_paid below are computed against instead.
     const amountDue = Math.max(0, total - loyaltyValue);
 
-    this._currentTotals = { subtotal, discount: discAmt, tax, total, loyaltyValue, amountDue };
+    // AUDIT (Phase 0 #8, I-2): `discount` below is LEFT AS THE COMBINED
+    // manual+promotion figure it has always been -- retail_promotions_ui_
+    // test.js asserts `_currentTotals.discount` as exactly that combined
+    // number in half a dozen cases ("promo 40% + manual 10% must charge
+    // 40%"), and `_checkout()`'s own payload (`discount_amount: this.
+    // _currentTotals.discount`) reads it too, so repurposing it would
+    // silently break both. `manualDiscount`/`promotions` are two NEW,
+    // ADDITIONAL fields -- the split I-2 actually asks for lives there, and
+    // in the new Promotions/Discount($) rows and _customerDisplayCartPayload
+    // below, none of which existed before this item.
+    this._currentTotals = { subtotal, discount: discAmt, tax, total, loyaltyValue, amountDue,
+      manualDiscount: manualDiscAmt, promotions: winnerPromotions };
     // All three spans already carry `.money` in the POS template, so the amount
     // IS the money element -- _setMoney fills it in and marks a negative on
     // that same element rather than leaving the cue to whatever wraps it.
@@ -4858,6 +6196,47 @@ const RetailSystem = {
     // own initial (pre-_recalc) markup already renders synchronously so
     // there is no flash of an enabled button before the first recalc.
     if (peekChargeEl) peekChargeEl.disabled = lineCount === 0;
+    // Phase 0 #7b: '${t('Current Sale')} · N items' -- the pane header
+    // static markup renders as a plain 'Current Sale' (see _renderPOS's own
+    // template), rewritten here on every recalc alongside every other
+    // cart-derived figure on this screen. No count at all on an empty cart
+    // (reads "Current Sale · 0 items" otherwise, which explains nothing a
+    // cashier does not already see from the empty-state hint below it).
+    const paneTitleEl = document.getElementById('pos-pane-title');
+    if (paneTitleEl) {
+      paneTitleEl.textContent = lineCount > 0
+        ? `${t('Current Sale')} · ${lineCount} ${lineCount === 1 ? t('item') : t('items')}`
+        : t('Current Sale');
+    }
+    // Phase 0 #7d: a defensive SECOND call site, alongside _setPayment's own
+    // -- _resumeHeldSale and _exactCashCharge both set `this._paymentMethod`
+    // directly (no clicked button element for _setPayment's signature to
+    // take) and both already call _recalc() or reach it via _onCustomerChange,
+    // so the tender row can never drift out of sync with whichever method
+    // actually won, no matter which of those paths set it.
+    this._syncTenderUI(this._paymentMethod);
+    // Phase 0 #8 (I-2): own row, own visibility for each of Promotions and
+    // Discount($) -- hidden below half a minor unit (never a bare > 0, see
+    // _halfMinorUnit's own comment) so a fractional-fils rounding artefact
+    // can never flicker one open with nothing real to explain. Plain
+    // textContent with a literal leading '-', matching the SAME convention
+    // the receipt's own Points Redeemed/Change due rows already use
+    // (_showReceipt below) -- _setMoney() would show these positive, which
+    // reads as money coming IN rather than a reduction.
+    const halfMinor = this._halfMinorUnit();
+    const promoRow = document.getElementById('pos-promo-row');
+    const promoEl  = document.getElementById('pos-promo-value');
+    // winnerPromotions/manualDiscAmt (== winnerDiscount) -- see this
+    // function's own top comment: these two rows show the SAME
+    // winner-takes-all-per-line split (now also the SAME rounded pieces)
+    // the relay payload and the receipt use, and that `discAmt`/`total`
+    // themselves are built from.
+    if (promoRow) promoRow.style.display = winnerPromotions > halfMinor ? '' : 'none';
+    if (promoEl)  promoEl.textContent = '-' + this._fmt(winnerPromotions);
+    const discAmtRow = document.getElementById('pos-discamt-row');
+    const discAmtEl  = document.getElementById('pos-discamt-value');
+    if (discAmtRow) discAmtRow.style.display = manualDiscAmt > halfMinor ? '' : 'none';
+    if (discAmtEl)  discAmtEl.textContent = '-' + this._fmt(manualDiscAmt);
     // "Show the redeemed value in the sale summary" -- own row, own
     // visibility, the same conditional-money-row shape #pos-change-row
     // already uses just below.
@@ -4989,6 +6368,35 @@ const RetailSystem = {
     { method: 'voucher',  icon: 'ticket',       emoji: '🎟', label: 'Voucher',       fkey: 'F6' },
   ],
 
+  // P0 item #19: raw payment-method keys ('cash', 'card', ...) rendered
+  // untranslated as chart legend labels and status-pill badges elsewhere in
+  // this file -- an Arabic dashboard showed the literal English word.
+  // Derived from POS_PAYMENT_METHODS above (the SAME label English already
+  // uses on the tender buttons -- 'method' -> 'label') rather than a second,
+  // separately-typed map that could drift from it, plus 'store_credit' (a
+  // return-settlement tender the POS buttons above never offer, but sale
+  // history/detail can still display).
+  _PAYMENT_METHOD_LABEL: null,   // built lazily by _paymentMethodLabel below
+  _paymentMethodLabel(key) {
+    if (!this._PAYMENT_METHOD_LABEL) {
+      const map = { store_credit: 'Store Credit' };
+      this.POS_PAYMENT_METHODS.forEach(m => { map[m.method] = m.label; });
+      this._PAYMENT_METHOD_LABEL = map;
+    }
+    const k = String(key || 'cash');
+    // Review fix (2026-09-27, high -- item #19 regression): the catalogued
+    // branch (`this._PAYMENT_METHOD_LABEL[k]`) is always one of this file's
+    // own translated strings, but the FALLBACK branch echoes `key` itself --
+    // and create_sale never validates payment_method, so a sale posted with
+    // a hostile string ('<img src=x onerror=...>') made it here unescaped,
+    // straight into `_badge()`, which does not escape its `text` argument
+    // either (see that helper's own definition). Every `_badge(this.
+    // _paymentMethodLabel(...))` call site (Sales History, the dashboard,
+    // customer history, sale detail) shared the one function, so escaping it
+    // once here closes all of them, the same shape as #5's this._esc() fix.
+    return this._esc(t(this._PAYMENT_METHOD_LABEL[k] || key));
+  },
+
   // Cash is the default tender (see _renderPOS's this._paymentMethod = 'cash'
   // reset) and shows it via the same '.pos-pay-btn.active' class every click
   // through _setPayment already toggles -- this render just seeds the state
@@ -4998,16 +6406,33 @@ const RetailSystem = {
     return this.POS_PAYMENT_METHODS.map(({ method, icon, emoji, label, fkey }) => `
       <button class="pos-pay-btn${method === 'cash' ? ' active' : ''}" data-method="${method}"
         onclick="RetailSystem._setPayment('${method}',this)">
-        <span class="pos-pay-icon" aria-hidden="true">${this._icon(icon, 18, emoji)}</span>
+        <span class="pos-pay-icon" aria-hidden="true">${this._icon(icon, 16, emoji)}</span>
         <span class="pos-pay-label">${t(label)}</span>
         <span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>
       </button>`).join('');
+  },
+
+  // AUDIT (Phase 0 #7d): shows/hides the WHOLE Cash Tendered row
+  // (#pos-tendered-row), not just clearing the input's value the way
+  // _setPayment already did for a non-cash method -- Card/CliQ/Transfer/
+  // Credit/Voucher used to leave the field visible and editable while
+  // create_sale() never reads it for anything but cash (_checkout's own
+  // `amount_paid` comment), a real measured cashier confusion, not a
+  // cosmetic one. One function, called from every path that can change
+  // `this._paymentMethod` (a click/F-key through _setPayment below, and
+  // _recalc() itself as a defensive second call -- see that function's own
+  // comment) so the row can never end up shown for the wrong method
+  // regardless of which path set it.
+  _syncTenderUI(method) {
+    const row = document.getElementById('pos-tendered-row');
+    if (row) row.style.display = method === 'cash' ? '' : 'none';
   },
 
   _setPayment(method, btn) {
     this._paymentMethod = method;
     document.querySelectorAll('.pos-pay-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+    this._syncTenderUI(method);
     const changeRow = document.getElementById('pos-change-row');
     if (method !== 'cash') {
       if (document.getElementById('pos-tendered')) document.getElementById('pos-tendered').value = '';
@@ -5372,6 +6797,26 @@ const RetailSystem = {
     if (this._section !== 'pos') return;               // this is the till, not every screen
     if (e.ctrlKey || e.metaKey || e.altKey) return;      // never shadow a browser/OS combo
 
+    // AUDIT (Phase 0 #3): measured in a real browser with the Held Sales
+    // dialog open and focused -- pressing Enter completed the sale BEHIND
+    // it, taking payment for a cart the cashier could not even see (sales
+    // went 0 -> 1, receipt opened underneath). The guard just below this
+    // one only ever checked for a TEXT field; focus on a dialog's own DIV
+    // (its `tabindex="-1"`, see _wireModalA11y) is not one. Every hand-
+    // rolled dialog already pushes itself onto `_modalKeyStack` when it
+    // opens (_wireModalA11y, and _confirm()'s own equivalent) purely so
+    // Escape answers only the front of the queue -- reusing that same stack
+    // here means "is a dialog open" is one length check, not a second piece
+    // of state that could drift from the first. `[role="dialog"]` on top of
+    // it is a second, near-free net for a dialog that somehow reaches focus
+    // without ever being pushed there -- a misfired shortcut here is a money
+    // bug, not a cosmetic one, so this does not lean on every dialog always
+    // wiring itself correctly forever.
+    if (this._modalKeyStack.length) return;
+    const activeForDialogCheck = document.activeElement;
+    if (activeForDialogCheck && typeof activeForDialogCheck.closest === 'function' &&
+        activeForDialogCheck.closest('[role="dialog"]')) return;
+
     if (this._scannerBusy()) { this._qtyKeyBuffer = ''; return; }
 
     const isDigit = e.key.length === 1 && e.key >= '0' && e.key <= '9';
@@ -5626,6 +7071,37 @@ const RetailSystem = {
     try {
       const data = await this._post('/api/sub/retail/sales', payload);
       if (data.status === 'success') {
+        // AUDIT (Phase 0 #6, I-9): create_sale's response lines carry only
+        // product_id today -- server-side `name`/`variant_label` land with
+        // this item's own backend half. Captured from THIS cart, BEFORE
+        // _clearCart() empties it, so the receipt has a real name to fall
+        // back to instead of the bare id -- see _showReceipt/_printReceipt's
+        // own fallback-chain comment for the full three-step order (server
+        // name, then this map, then t('Item'), never the id).
+        const cartNames = {};
+        this._cart.forEach(i => { cartNames[i.product_id] = i.name; });
+
+        // AUDIT (Phase 0 #6): a request retried with the SAME
+        // idempotency_key (e.g. the first response never reached this
+        // client after a dropped connection) gets create_sale's narrow
+        // replay shape back -- {id, sale_number} ONLY, by that route's own
+        // design ("a resubmission ... gets a confirmation, not a second
+        // full receipt payload"). Handing that straight to _showReceipt
+        // rendered zero lines and `this._fmt(undefined)` totals -- an empty
+        // receipt for a sale that really did go through. The sale already
+        // exists, so its detail is fetched (the same route Sales History's
+        // _viewSale already reads) and adapted into the receipt shape,
+        // rather than re-running the stock decrement / drawer kick /
+        // customer-display broadcast below for a sale that was never
+        // actually repeated.
+        if (!Array.isArray(data.data.lines)) {
+          this._clearCart();
+          this._toggleCartSheet(false);
+          const saleData = await this._replaySaleReceiptData(data.data.id, data.data.sale_number);
+          this._showReceipt(saleData, cartNames);
+          return;
+        }
+
         // BEFORE _clearCart(): that call's own _renderCart() -> _recalc()
         // will immediately broadcast an EMPTY 'cart' state, which
         // customer-display.js deliberately ignores while a 'sale_complete'
@@ -5686,7 +7162,7 @@ const RetailSystem = {
         // figure once this device falls behind on sync, so a client-side
         // decrement is never presented as more certain than it actually is.
         this._applyLocalStockDecrement(data.data && data.data.lines);
-        this._showReceipt(data.data);
+        this._showReceipt(data.data, cartNames);
         // Cash-drawer kick (retail-hardware-viewports) -- FIRE-AND-FORGET,
         // deliberately not awaited. Mirrors _einvoiceReceiptBlock's own
         // best-effort-only contract above: the sale this names is ALREADY
@@ -5735,6 +7211,39 @@ const RetailSystem = {
     }
   },
 
+  // AUDIT (Phase 0 #6): built for _checkout()'s idempotent-replay branch
+  // above -- adapts GET /sales/<id>'s {sale, items} shape into exactly what
+  // _showReceipt expects, the same adaptation _reprintSale already does for
+  // _printReceipt's shape (see that function's own comment). Kept separate
+  // from _reprintSale because that one prints from `this._lastViewedSale` (a
+  // detail modal already open) and this one fetches fresh by id with
+  // nothing else open yet. Best-effort: the sale itself already exists
+  // either way by the time this runs, so a failed GET must never look like
+  // the charge itself failed -- it falls back to an empty-but-honest
+  // receipt (sale_number only, zero lines) rather than throwing.
+  async _replaySaleReceiptData(saleId, fallbackSaleNumber) {
+    try {
+      const resp = (await this._get(`/api/sub/retail/sales/${saleId}`)).data || {};
+      const sale = resp.sale || {};
+      const items = resp.items || [];
+      return {
+        id: saleId,
+        sale_number: sale.sale_number || fallbackSaleNumber,
+        total: sale.total, subtotal: sale.subtotal,
+        discount_amount: sale.discount_amount, tax_amount: sale.tax_amount,
+        amount_paid: sale.amount_paid, change: sale.change_amount,
+        points_redeemed_amount: sale.points_redeemed_amount,
+        // `name` intentionally left as bare `product_name` (no id fallback
+        // here) -- _showReceipt's own fallback chain (server name -> cart
+        // names -> t('Item'), never the id) is what decides the id is never
+        // shown, not this adapter re-deciding it a second time.
+        lines: items.map(i => ({ product_id: i.product_id, name: i.product_name, quantity: i.quantity, line_total: i.line_total })),
+      };
+    } catch (e) {
+      return { id: saleId, sale_number: fallbackSaleNumber, lines: [] };
+    }
+  },
+
   // Wave 1B (Part P): every value below reads from `saleData` -- the
   // server's authoritative POST /api/sub/retail/sales response -- never
   // from `payload` (what the client submitted) or `this._cart` (the
@@ -5744,7 +7253,148 @@ const RetailSystem = {
   // class of bug as MOB-001 -- a client-side value standing in for the
   // authoritative one). `saleData.lines` (present on every real sale
   // response) is used for the line items instead of the client's cart.
-  _showReceipt(saleData) {
+  //
+  // AUDIT (Phase 0 #8, I-2 "till half"): splits a COMPLETED sale's combined
+  // discount_amount back into its promotion-driven and manual portions,
+  // reused by both _showReceipt (the on-screen modal) and _printReceipt (the
+  // print document) so the two can never disagree. Needs no backend change
+  // and no new field: create_sale's response already carries `applied_
+  // promotion`/`discount_amount` per line (see retail_api.py's own
+  // `resolved_lines.append` -- `applied_promotion` is present ONLY when a
+  // promotion actually WON that line's max(promo,manual) comparison,
+  // core/retail/promotions.py's resolve_line_discount_pct: "None whenever
+  // the MANUAL discount wins, INCLUDING an exact tie"). So a line WITH
+  // applied_promotion had its entire per-line discount_amount come from the
+  // promotion, and a line WITHOUT it had its entire discount_amount come
+  // from the manual %; summing each bucket reconstructs the exact same split
+  // _recalc()'s own `manualDiscount`/`promotions` fields compute live, from
+  // data the response already returns.
+  _saleDiscountBreakdown(saleData) {
+    let promotions = 0, discount = 0;
+    (saleData.lines || []).forEach(l => {
+      const amt = l.discount_amount || 0;
+      if (l.applied_promotion) promotions += amt; else discount += amt;
+    });
+    return { promotions, discount };
+  },
+
+  // Round 3 fix, till (item #8/I-2 regression, high): the receipt modal
+  // (_showReceipt), the printed slip (_printReceipt) and the sale-detail
+  // table (_showSaleDetail) all used to print a LINE's own `line_total` --
+  // core/retail/pricing.py's calculate_line() TAXABLE amount, whose meaning
+  // flips with tax_calculation_mode (before_discount: the pre-discount
+  // gross; after_discount: gross-minus-discount). None of those three
+  // surfaces is the number the till or the customer display show for that
+  // same line (_renderCart's own gross/gross-minus-discount rule, above,
+  // and _customerDisplayCartPayload's identical one) -- so under
+  // after_discount mode a manually-discounted line printed NET of its own
+  // discount, and the Discount row further down then subtracted the SAME
+  // amount again from a gross Subtotal (printed lines never summed to the
+  // printed Subtotal); under before_discount mode a promoted line printed
+  // at full price while the till and the display both showed the
+  // discounted figure. Measured live (probe2 receipt_lines_after_discount/
+  // receipt_lines_before_discount, round-3 verifier): after_discount mode
+  // summed printed lines to 12.500 against a printed Subtotal of 15.000;
+  // before_discount mode printed a promoted Widget at 10.000 while the till
+  // showed 8.000.
+  //
+  // gross = round(unit_price*quantity) -- the same single-rounding formula
+  // calculate_line() uses for `gross` (see that function's own
+  // "RECONCILIATION BY CONSTRUCTION" comment).
+  //
+  // THE DISCOUNT HALF IS NOT "any discount_pct > 0", on purpose:
+  // _renderCart's own rule (see that function's `promoWins` branch and its
+  // review-fix comment: "a manual discount is explained by the new
+  // Discount($) row in the summary below, not per line") reduces a line's
+  // displayed total ONLY when a PROMOTION won it -- a manual % never
+  // touches a line's own figure, on the till, ever. Verified live against
+  // this exact identity (probe2): till showed Widget (20% promo) struck to
+  // 8.000 and Gadget (10% MANUAL, no promo) UNCHANGED at plain 5.000; the
+  // fix must sum receipt lines to Subtotal minus PROMOTIONS ONLY (13.000 =
+  // 15.000 - 2.000), never minus the manual Discount too -- summing to
+  // 12.500 (subtracting both) was the bug, not a smaller version of the
+  // fix. So this reads `applied_promotion`/`discount_amount` DIRECTLY
+  // (never re-derived from discount_pct, which cannot by itself say
+  // whether a % came from a promotion or a manual entry) whenever they are
+  // present -- POST /sales's own `lines` (the immediate checkout response
+  // _showReceipt/_printReceipt normally run on) always carries both,
+  // `applied_promotion` explicitly `null` when the manual discount won or
+  // no promotion matched (never merely absent -- see retail_api.py's
+  // `resolved_lines.append`).
+  //
+  // FLAGGED GAP (out_of_scope_requests): GET /sales/<id>'s own `items`
+  // (read by the sale-detail table, and the source _reprintSale adapts
+  // into a `lines` array for a REPRINTED receipt) carry NO
+  // applied_promotion column at all -- sale_items has none; the link lives
+  // in the separate sale_item_promotions table, which that read never
+  // joins -- so `line.applied_promotion` on those rows is `undefined`,
+  // never `null`, and this function can tell the two apart
+  // (`line.applied_promotion === undefined`) to fall back to the best
+  // available approximation: reduce the line whenever discount_pct > 0,
+  // whichever type of discount actually produced it. This is KNOWN TO BE
+  // WRONG for the specific case of a MANUALLY-discounted (non-promoted)
+  // line on the sale-detail table or a REPRINTED receipt -- it will show
+  // struck-through there when a freshly-printed receipt for the same sale
+  // correctly would not -- and can only be fixed by retail_api.py's
+  // get_sale exposing the same applied_promotion snapshot POST /sales
+  // already does; retail_api.py is not this crew's file (contracts.md).
+  // The sale-detail table's OWN Subtotal/Discount/Total footer never
+  // splits Promotions from Discount either (a single combined row), so
+  // this fallback stays at least internally consistent with the rest of
+  // THAT screen even though it is not identical to the receipt/print rule.
+  _receiptLineFigures(line) {
+    const unitPrice = Number(line.unit_price) || 0;
+    const qty = Number(line.quantity) || 0;
+    const gross = this._roundMoney(unitPrice * qty);
+    let discountAmount;
+    if (line.applied_promotion) {
+      // Authoritative: the server's own snapshot of what this line's
+      // winning discount actually was, never re-derived.
+      discountAmount = this._roundMoney(Number(line.discount_amount) || 0);
+    } else if (line.applied_promotion === undefined) {
+      // Field never provided (GET /sales/<id>'s `items`, and _reprintSale's
+      // adapted `lines`) -- best-available fallback, see this function's
+      // own "FLAGGED GAP" comment above.
+      const pct = Math.min(100, Math.max(0, Number(line.discount_pct) || 0));
+      discountAmount = this._roundMoney(gross * (pct / 100));
+    } else {
+      // applied_promotion is explicitly null/false (POST /sales's own
+      // shape): the manual discount won this line, or there is none --
+      // _renderCart never reduces a line's own total for a manual %.
+      discountAmount = 0;
+    }
+    return { gross, discountAmount };
+  },
+
+  // Plain-HTML amount for one receipt/print/sale-detail line, built from
+  // _receiptLineFigures above: the struck-through gross plus the
+  // gross-minus-discount figure when this line carries a discount above
+  // half a minor unit (same visibility floor _saleDiscountBreakdown's own
+  // callers already use), otherwise just the gross -- byte-identical to
+  // today's output for the overwhelming majority of lines, which have no
+  // discount at all. `text-decoration:line-through` only, no CSS custom
+  // property: this same HTML has to render correctly inside the print
+  // iframe's own bare document (_printReceipt writes a fresh `doc.write()`
+  // document with its own minimal <style>, none of this file's
+  // `_injectStyles()` rules or --tokens reach it), not only inside the
+  // main styled app. `class="rcpt-amt"` (added at each call site, not
+  // here) is a stable test hook, not a styled class -- no CSS rule targets
+  // it anywhere, including inside the bare print document.
+  _receiptLineAmountHTML(line) {
+    const { gross, discountAmount } = this._receiptLineFigures(line);
+    if (discountAmount > this._halfMinorUnit()) {
+      return `<span style="text-decoration:line-through;margin-inline-end:4px">${this._fmt(gross)}</span>${this._fmt(gross - discountAmount)}`;
+    }
+    return this._fmt(gross);
+  },
+
+  // `cartNames` (Phase 0 #6, I-9): a {product_id: name} map of the cart's OWN
+  // line names, captured by _checkout() BEFORE _clearCart() ran -- the
+  // second link in the fallback chain below. Optional (defaults to {}) so
+  // _testPrint() and any other caller that already hands _showReceipt a
+  // fully-named saleData (or has no cart to fall back to at all) needs no
+  // change.
+  _showReceipt(saleData, cartNames) {
     // Wave 1B security fix: stored on `this`, not interpolated into the
     // onclick attribute below -- embedding JSON.stringify(saleData) directly
     // into an inline HTML attribute is an injection risk if any field (e.g.
@@ -5752,6 +7402,15 @@ const RetailSystem = {
     // character. The button now references this stored value by name only;
     // no untrusted data is ever placed inside attribute text.
     this._lastSaleData = saleData;
+    // Stored alongside it so the Print button below (a bare onclick with no
+    // closure over this function's own `cartNames` parameter) can pass the
+    // SAME map through to _printReceipt -- reprinting from this modal must
+    // not lose the one source of a real name create_sale's response does
+    // not carry yet (see item #6's server half).
+    this._lastReceiptCartNames = cartNames || {};
+    // Phase 0 #8 (I-2): see _saleDiscountBreakdown's own comment.
+    const { promotions: receiptPromotionsAmt, discount: receiptDiscountAmt } = this._saleDiscountBreakdown(saleData);
+    const halfMinorUnit = this._halfMinorUnit();
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
@@ -5765,16 +7424,49 @@ const RetailSystem = {
              trimmed text is a catalog key, so a number welded to words is
              permanently English no matter what the catalog says. The number
              is also a neutral run with no strong direction of its own, so it
-             goes in <bdi dir="ltr"> or it reorders on an Arabic page. -->
-        <p style="color:var(--text-muted);margin:0 0 20px">${t('Receipt #')}<bdi dir="ltr">${this._esc(saleData.sale_number)}</bdi></p>
+             goes in <bdi dir="ltr"> or it reorders on an Arabic page.
+             _docNoHtml() (Phase 0 #16) is what actually builds that <bdi>
+             now -- see its own comment for why the legacy company/device
+             fragments are dropped from the PROMINENT number here. -->
+        <p style="color:var(--text-muted);margin:0 0 20px">${t('Receipt #')}${this._docNoHtml(saleData.sale_number)}</p>
         <div style="background:var(--surface-sunken);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
+          <!-- AUDIT (Phase 0 #6): fallback chain is server name -> this
+               cart's OWN captured name (cartNames, before _clearCart() ran)
+               -> t('Item') -- NEVER the raw id. 4 of 4 lines showed a UUID in
+               the probe that found this, because create_sale's response
+               never carried a name at all; cartNames alone already fixes
+               that regardless of when item #6's server half lands, since
+               this cart is the same one that was just submitted.
+               white-space:nowrap on the amount: the long UUID fallback used
+               to squeeze 'JD 4.050' onto two lines. -->
           ${(saleData.lines||[]).map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
-            <span style="color:var(--text-secondary)">${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
-            <span style="color:var(--text-money)">${this._fmt(i.line_total)}</span>
+            <span style="color:var(--text-secondary)">${this._esc(i.name || (cartNames && cartNames[i.product_id]) || t('Item'))} ×${i.quantity}</span>
+            <span class="rcpt-amt" style="color:var(--text-money);white-space:nowrap">${this._receiptLineAmountHTML(i)}</span>
           </div>`).join('')}
           <div style="border-top:1px dashed var(--border-default);margin:10px 0;padding-top:10px">
+            <!-- AUDIT (Phase 0 #8, I-2 "till half"): this modal used to skip
+                 straight from the line items to Total with no Subtotal/
+                 Discount/Tax breakdown at all -- unlike _printReceipt (below),
+                 which always showed them. 'promotionsAmt'/'discountAmt' split
+                 the sale's combined discount_amount via _saleDiscountBreakdown
+                 (see that helper's own comment); each row is hidden below half
+                 a minor unit, same as the till's own Promotions/Discount($)
+                 rows (_recalc). Identity that must hold at 3dp: Subtotal −
+                 Promotions − Discount + Tax = Total. -->
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-              <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700">${this._fmt(saleData.total)}</span>
+              <span style="color:var(--text-secondary)">${t('Subtotal')}</span><span style="color:var(--text-money);white-space:nowrap">${this._fmt(saleData.subtotal)}</span>
+            </div>
+            ${receiptPromotionsAmt > halfMinorUnit ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span style="color:var(--text-secondary)">${t('Promotions')}</span><span style="color:var(--text-money-positive);white-space:nowrap">-${this._fmt(receiptPromotionsAmt)}</span>
+            </div>` : ''}
+            ${receiptDiscountAmt > halfMinorUnit ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span style="color:var(--text-secondary)">${t('Discount')}</span><span style="color:var(--text-money-positive);white-space:nowrap">-${this._fmt(receiptDiscountAmt)}</span>
+            </div>` : ''}
+            ${saleData.tax_amount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span style="color:var(--text-secondary)">${t('Tax')}</span><span style="color:var(--text-money);white-space:nowrap">${this._fmt(saleData.tax_amount)}</span>
+            </div>` : ''}
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700;white-space:nowrap">${this._fmt(saleData.total)}</span>
             </div>
             <!-- Loyalty redemption wave 1 (schema v27). saleData's own
                  points_redeemed_amount field is ALWAYS present on a real
@@ -5784,12 +7476,19 @@ const RetailSystem = {
                  the server's own authoritative figure, never re-derived
                  client-side. This is the "sale summary" line that shows the
                  cashier the customer paid less cash, restated at the one
-                 screen a cashier reads after EVERY sale. -->
+                 screen a cashier reads after EVERY sale.
+                 AUDIT (Phase 0 #6): the item-line amounts (above) got their
+                 own white-space:nowrap when this item first landed, but these
+                 THREE summary rows -- Total, Points Redeemed, Change due --
+                 are also money amounts on the SAME "justify-content:space-
+                 between" shape and were missed the first pass; retail_p0_
+                 till_e2e.py's own nowrap check reads every such span in this
+                 dialog, not just the item lines, and caught it red. -->
             ${saleData.points_redeemed_amount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
-              <span style="color:var(--text-secondary)">${t('Points Redeemed')}</span><span style="color:var(--text-money-positive);font-weight:700">-${this._fmt(saleData.points_redeemed_amount)}</span>
+              <span style="color:var(--text-secondary)">${t('Points Redeemed')}</span><span style="color:var(--text-money-positive);font-weight:700;white-space:nowrap">-${this._fmt(saleData.points_redeemed_amount)}</span>
             </div>` : ''}
             ${saleData.change > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
-              <span style="color:var(--text-secondary)">${t('Change due')}</span><span style="color:var(--text-money-positive);font-weight:700">${this._fmt(saleData.change)}</span>
+              <span style="color:var(--text-secondary)">${t('Change due')}</span><span style="color:var(--text-money-positive);font-weight:700;white-space:nowrap">${this._fmt(saleData.change)}</span>
             </div>` : ''}
           </div>
         </div>
@@ -5898,7 +7597,23 @@ const RetailSystem = {
     if (logoDataUri) {
       rows.push(`<div class="rcpt-center"><img src="${this._esc(logoDataUri)}" style="max-width:100%;max-height:20mm;margin-bottom:4px" /></div>`);
     }
-    rows.push(`<div class="rcpt-center rcpt-bold">${this._esc(b.branding_business_name || 'Aura Retail')}</div>`);
+    // Round 2, till (item #12-till): this used to fall back straight to the
+    // literal 'Aura Retail' -- the VENDOR's own name -- the moment
+    // branding_business_name was empty. Under I-3, branding_business_name
+    // stays empty on a fresh install by design (it is a value the OWNER
+    // types on the Branding screen, never auto-filled), and the signup
+    // Company Name lives in the read-time fallback field `business_name`
+    // instead (retail_api.py's branding GET route). So every receipt printed
+    // before an owner ever visits Branding carried the wrong company's name
+    // on the customer's own paper -- measured live: business_name 'Sweets &
+    // Co' (business_name_source 'signup'), branding_business_name '', and
+    // the printed receipt's first line read 'Aura Retail' regardless.
+    // b.business_name is the SAME field _brandingReceiptBlock's caller
+    // already reads for the branding form itself, so this is the same
+    // three-step fallback chain the codebase already uses elsewhere for
+    // shop-typed-value -> signup-typed-value -> hardcoded default (see
+    // _showReceipt's own name fallback comment for the pattern).
+    rows.push(`<div class="rcpt-center rcpt-bold">${this._esc(b.branding_business_name || b.business_name || 'Aura Retail')}</div>`);
     if (b.branding_address) rows.push(`<div class="rcpt-center" style="font-size:11px">${this._esc(b.branding_address)}</div>`);
     if (b.branding_phone) rows.push(`<div class="rcpt-center" style="font-size:11px">${this._esc(b.branding_phone)}</div>`);
     if (b.branding_tax_number) rows.push(`<div class="rcpt-center" style="font-size:11px">Tax #: ${this._esc(b.branding_tax_number)}</div>`);
@@ -5969,13 +7684,32 @@ const RetailSystem = {
     return rows.join('\n      ');
   },
 
+  // Reads `this._lastReceiptCartNames` (Phase 0 #6, I-9), NOT a second
+  // parameter -- retail_receipt_localization_test.js string-anchors this
+  // function's own opening line to slice out its body for its own mutation
+  // proofs, so the signature stays exactly one argument. _showReceipt sets
+  // that field right before this is ever
+  // reachable from the receipt modal's Print button; _reprintSale (Sales
+  // History) already resolves each line's `name` from the real
+  // product_name before calling this, so it never touches the fallback
+  // below at all, whatever `this._lastReceiptCartNames` happens to hold.
   async _printReceipt(saleData) {
+    const cn = this._lastReceiptCartNames || {};
+    // Phase 0 #8 (I-2 "till half"): see _saleDiscountBreakdown's own
+    // comment. Splits the single combined discount_amount row this
+    // document used to print into Promotions/Discount, the same breakdown
+    // the on-screen receipt modal (_showReceipt) and the till's own summary
+    // (_recalc) now show.
+    const printDiscBreakdown = this._saleDiscountBreakdown(saleData);
+    const printHalfMinorUnit = this._halfMinorUnit();
     const cfg = this._printerCfg();
     const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
+    // AUDIT (Phase 0 #6): same fallback chain and nowrap fix as
+    // _showReceipt's own line-render -- see that function's comment.
     const lines = (saleData.lines || []).map(i => `
       <div class="rcpt-line">
-        <span>${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
-        <span>${this._fmt(i.line_total)}</span>
+        <span>${this._esc(i.name || cn[i.product_id] || t('Item'))} ×${i.quantity}</span>
+        <span class="rcpt-amt" style="white-space:nowrap">${this._receiptLineAmountHTML(i)}</span>
       </div>`).join('');
     const einvoiceBlock = await this._einvoiceReceiptBlock(saleData);
     const branding = await this._receiptBranding();
@@ -6037,7 +7771,8 @@ const RetailSystem = {
       ${lines}
       <div class="rcpt-hr"></div>
       <div class="rcpt-line"><span>${rt('Subtotal')}</span><span>${this._fmt(saleData.subtotal)}</span></div>
-      ${saleData.discount_amount > 0 ? `<div class="rcpt-line"><span>${rt('Discount')}</span><span>-${this._fmt(saleData.discount_amount)}</span></div>` : ''}
+      ${printDiscBreakdown.promotions > printHalfMinorUnit ? `<div class="rcpt-line"><span>${rt('Promotions')}</span><span>-${this._fmt(printDiscBreakdown.promotions)}</span></div>` : ''}
+      ${printDiscBreakdown.discount > printHalfMinorUnit ? `<div class="rcpt-line"><span>${rt('Discount')}</span><span>-${this._fmt(printDiscBreakdown.discount)}</span></div>` : ''}
       ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
       <div class="rcpt-line rcpt-bold"><span>${rt('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
       <div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>
@@ -6072,10 +7807,19 @@ const RetailSystem = {
           <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ ${t('Add Product')}</button>
         </div>
       </div>
+      <!-- P0 item #15e, interface I-6: a header KPI, not a table column --
+           this is ONE figure for the whole catalogue (metrics.inventory_value,
+           company-wide, no branch filter -- see product_stock_value's own
+           docstring), not a per-row amount, so it belongs beside the search
+           bar the way every other screen's KPI strip in this file sits above
+           its table, never inside it. -->
+      <div class="ret-kpi-grid" id="prod-stock-value-kpi" style="grid-template-columns:minmax(200px,280px);margin-bottom:16px">
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('Stock value at cost')}</div><div class="ret-kpi-value money num" id="prod-stock-value">—</div></div>
+      </div>
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="prod-table">
-            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>${t('Cost')}</th><th>${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th class="num">${t('Avg cost')}</th><th class="num">${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody><tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
@@ -6094,7 +7838,27 @@ const RetailSystem = {
       this._categories = cats.data  || [];
       this._suppliers  = sups.data  || [];
       this._renderProductTable(this._products);
+      // Best-effort, own try/catch: a company-scoped, capability-gated
+      // figure (retail.reports -- see product_stock_value's own decorators)
+      // that a restricted/expired licence state or a non-reports role must
+      // never take the whole Products screen down over -- same "the table
+      // still renders" posture this file's other KPI-strip loads all take.
+      this._loadProductStockValue();
     } catch(e) { console.error(e); }
+  },
+
+  // P0 item #15e, interface I-6: `{value, currency}`, no envelope -- see
+  // product_stock_value's own docstring for why (a one-figure header read,
+  // the same bare shape this file's other Phase 0 relay/status routes use).
+  async _loadProductStockValue() {
+    const el = document.getElementById('prod-stock-value');
+    if (!el) return;
+    try {
+      const resp = await this._get('/api/sub/retail/products/stock-value');
+      this._setMoney(el, (resp && resp.value) || 0);
+    } catch (e) {
+      el.textContent = '—';
+    }
   },
 
   _filterProducts() {
@@ -6178,7 +7942,23 @@ const RetailSystem = {
         <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(p.sku)}</td>
         <td style="font-weight:600">${this._esc(p.name)}${variantCountBadge}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}${variantOfLine}</td>
         <td style="color:var(--text-muted)">${p.category_name?this._esc(p.category_name):'—'}</td>
-        <td>${this._fmt(p.cost_price)}</td>
+        <!-- P0 item #15e, interface I-6: avg_cost (the branch/moving-
+             average cost the BOOKS actually use -- general_ledger.py's COGS
+             posting, metrics.inventory_value) -- NOT cost_price (the typed
+             list-price cost, which stays live in the title attribute above
+             and the Edit form's own Cost Price field, unchanged). Before this
+             fix a product received at 1.000 kept showing its originally
+             typed 2.900 here forever, disagreeing with the books on every
+             screen that reads the real cost.
+             Review fix (2026-09-27, high): create_product SEEDS avg_cost=0,
+             so a product never yet received through a PO (opening stock,
+             an import, a stock-adjust) showed a bare "0.000" here -- true of
+             the column, but disagreeing with the books, which already
+             COALESCE(NULLIF(avg_cost,0), cost_price) for exactly this case,
+             and with the PO picker's own prefill two lines below
+             (p.avg_cost || p.cost_price || 0). '|| p.cost_price' matches
+             that same fallback chain rather than inventing a third one. -->
+        <td class="num" title="${this._esc(t('Typed cost price'))}: ${this._fmt(p.cost_price)}">${this._fmt(p.avg_cost || p.cost_price)}</td>
         <!-- AUDIT -- these two cells carried style="color:#10b981" / "#ef4444"
              INLINE, which beats every stylesheet in the product: no token, no
              override and no :hover rule can reach an inline declaration, so
@@ -6197,7 +7977,7 @@ const RetailSystem = {
              level is a WARNING (reorder now), not a danger (stockout), and it
              keeps its ⚠ prefix so the severity is not colour-only. Above the
              threshold is unremarkable, so it is simply ordinary text. -->
-        <td style="font-weight:600;color:var(--text-money)">${this._fmt(p.sell_price)}</td>
+        <td class="num" style="font-weight:600;color:var(--text-money)">${this._fmt(p.sell_price)}</td>
         <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${p.unit||''}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
@@ -6223,11 +8003,29 @@ const RetailSystem = {
       .join('');
   },
 
-  _openAddProduct() {
+  // P0 item #13, interface I-4: prefilled with the shop's own default GST
+  // rate, so adding a product does not silently sell it at 0% tax the way
+  // this item's own bug report names ("a Jordanian shop that does not type
+  // 16 on every product sells at tax 0.000"). Async and fetched FRESH here
+  // -- not read off a POS-only cache like `this._taxMode` above, because
+  // Products (and therefore Add Product) is reachable with no till ever
+  // mounted this session at all. `create_product`'s own fallback is the
+  // model for the failure mode: default to 0 on any error, exactly what an
+  // unset `default_tax_rate` already means server-side.
+  async _openAddProduct() {
     const catOpts = this._categories.map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
     const supOpts = (this._suppliers||[]).map(s => `<option value="${this._esc(s.id)}">${this._esc(s.name)}</option>`).join('');
     const parentOpts = this._eligibleParentOpts(null, null);
-    this._showProductModal({}, catOpts, supOpts, parentOpts);
+    let defaultTaxRate = 0;
+    try {
+      const resp = await this._get('/api/sub/retail/settings/tax');
+      const raw = resp && resp.data && resp.data.default_tax_rate;
+      if (raw != null) defaultTaxRate = raw;
+    } catch (e) { /* stays 0 -- matches create_product's own no-default fallback */ }
+    // Existing products are untouched by this: `_openEditProduct` below
+    // passes the product's OWN stored `p.tax_rate` into this same modal, and
+    // never reaches this function at all.
+    this._showProductModal({ tax_rate: defaultTaxRate }, catOpts, supOpts, parentOpts);
   },
 
   _openEditProduct(pid) {
@@ -6241,6 +8039,17 @@ const RetailSystem = {
     this._showProductModal(p, catOpts, supOpts, parentOpts);
   },
 
+  // AUDIT (Phase 0 #5): p.name/p.sku/p.barcode used to land in these `value="..."`
+  // attributes RAW. Any name containing a double-quote (an inch mark, as in
+  // a real "55-inch TV" or this repo's own seeded "15-inch laptop") closed
+  // the attribute early -- the browser then reads whatever follows as a NEW
+  // attribute on the same <input>, so a crafted name like
+  // `Widget" onfocus="alert(1)` runs script the moment an owner opens Edit,
+  // and an innocent quoted name is simply truncated at the quote and Save
+  // persists the cut-down string. This is the exact "onclick attribute
+  // breakout" shape retail_products_table_name_xss_test.js already proved
+  // for the Stock/Delete buttons one screen over -- this form had the same
+  // defect in its own, separate call sites, never wired through this._esc().
   _showProductModal(p, catOpts, supOpts, parentOpts) {
     const isEdit = !!p.id;
     const overlay = document.createElement('div');
@@ -6250,13 +8059,13 @@ const RetailSystem = {
       <div class="ret-modal" id="ret-product-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-product-dialog-title">
         <h3 id="ret-product-dialog-title">${this._icon(isEdit ? 'square-pen' : 'plus', 18, isEdit ? '✏️' : '➕')} ${isEdit ? 'Edit Product' : 'Add Product'}</h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label for="pm-name">Product Name *</label><input id="pm-name" value="${p.name||''}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
-          <div class="ret-field"><label for="pm-sku">SKU *</label><input id="pm-sku" value="${p.sku||''}" placeholder="SKU-001" /></div>
+          <div class="ret-field"><label for="pm-name">Product Name *</label><input id="pm-name" value="${this._esc(p.name||'')}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
+          <div class="ret-field"><label for="pm-sku">SKU *</label><input id="pm-sku" value="${this._esc(p.sku||'')}" placeholder="SKU-001" /></div>
         </div>
         <div class="ret-field-row">
           <div class="ret-field"><label for="pm-barcode">Barcode</label>
             <div style="display:flex;gap:8px">
-              <input id="pm-barcode" value="${p.barcode||''}" data-i18n-ph="Type or scan…" placeholder="${t('Type or scan…')}" style="flex:1" />
+              <input id="pm-barcode" value="${this._esc(p.barcode||'')}" data-i18n-ph="Type or scan…" placeholder="${t('Type or scan…')}" style="flex:1" />
               <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">${this._icon('camera', 16, '📷')} Scan</button>
             </div>
           </div>
@@ -6265,7 +8074,7 @@ const RetailSystem = {
         <div class="ret-field-row3">
           <div class="ret-field"><label for="pm-cost">Cost Price</label><input type="number" id="pm-cost" value="${p.cost_price||0}" step="0.01" min="0" /></div>
           <div class="ret-field"><label for="pm-sell">Sell Price *</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
-          <div class="ret-field"><label for="pm-tax">Tax Rate %</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
+          <div class="ret-field"><label for="pm-tax">${t('Tax Rate %')}</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
         </div>
         <div class="ret-field-row3">
           <div class="ret-field"><label for="pm-sup">${t('Supplier')}</label><select id="pm-sup"><option value="">${t('None')}</option>${supOpts}</select></div>
@@ -6288,7 +8097,7 @@ const RetailSystem = {
             <select id="pm-parent"><option value="">${this._esc(t('None — a standalone product'))}</option>${parentOpts||''}</select>
           </div>
           <div class="ret-field"><label for="pm-variant-label">${this._esc(t('Variant label'))}</label>
-            <input id="pm-variant-label" value="${p.variant_label||''}" placeholder="${this._esc(t('e.g. Red / L'))}" />
+            <input id="pm-variant-label" value="${this._esc(p.variant_label||'')}" placeholder="${this._esc(t('e.g. Red / L'))}" />
           </div>
         </div>
         <div class="ret-modal-footer">
@@ -6783,7 +8592,7 @@ const RetailSystem = {
         <tbody>${hist.map(s=>`<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${this._esc(t('View invoice'))}">
           <td style="font-family:monospace;color:var(--sub-accent)">${this._saleOpenerButton(s.id, s.sale_number)}</td>
           <td>${s.items||0}</td>
-          <td>${this._badge(s.payment_method,'blue')}</td>
+          <td>${this._badge(this._paymentMethodLabel(s.payment_method),'blue')}</td>
           <td style="font-weight:700">${this._money(s.total)}</td>
           <!-- Same unisolated two-number run as the dashboard's Date column;
                see the long note there. -->
@@ -7416,10 +9225,29 @@ const RetailSystem = {
         return;
       }
       const statusColor = { pending:'yellow', received:'green', cancelled:'red', partial:'blue' };
+      // AUDIT (Phase 0 #16): see _docNoHtml()'s own comment.
       tbody.innerHTML = data.map(po => `<tr>
-        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(po.po_number||'')}</td>
-        <td style="font-weight:600">${po.supplier_name||'—'}</td>
-        <td>${this._badge(po.status, statusColor[po.status]||'blue')}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._docNoHtml(po.po_number||'')}</td>
+        <!-- Round 2, bonus XSS fix (found alongside T4): supplier_name is
+             admin-typed, the same category _esc()'s own docstring already
+             covers, and was the one field left unescaped on this row while
+             product_name right next to it already goes through _esc(). -->
+        <td style="font-weight:600">${this._esc(po.supplier_name||'—')}</td>
+        <!-- Round 2, T6 (#19 low): po.status was a raw, untranslated code
+             ('pending'/'received'/'cancelled'/'partial') on an otherwise
+             translated screen -- _humanizeSnakeCode()+t() is the SAME
+             catalogued-label shape _auditActionLabel/_auditEntityLabel
+             already use, reused rather than a third one-off map. -->
+        <!-- Round 2, till R2 (defence in depth, T6/#19 XSS finding): po.status
+             is a fixed server enum today, never free-typed, so this is not a
+             live injection path the way refund_method was -- but _badge()
+             does not escape its own argument (see that helper's own
+             definition), and this._esc() is a no-op on the four literal
+             words this ever holds. Wrapping it costs nothing and removes
+             the difference between "safe because the caller is careful" and
+             "safe by construction", the same reasoning the round-1 #19 fix
+             already applied to every payment-method badge on this file. -->
+        <td>${this._badge(this._esc(t(this._humanizeSnakeCode(po.status))), statusColor[po.status]||'blue')}</td>
         <td style="font-weight:600">${this._fmt(po.total)}</td>
         <td style="color:var(--text-muted)">${po.ordered_at||'—'}</td>
         <td style="color:var(--text-muted)">${po.received_at||'—'}</td>
@@ -7458,8 +9286,22 @@ const RetailSystem = {
     this._poItems = [];
     this._poSplitResult = null;
 
+    // AUDIT (Phase 0 #5): p.name/p.sku are a product's own text-node content
+    // here, unescaped -- a name carrying `<`/`&` broke out of the <option>'s
+    // text and could plant a bogus element inside this <select>; `_esc()`ing
+    // both matches the identical pattern this file already uses for every
+    // other product-name option list (e.g. _eligibleParentOpts just above).
+    // P0 item #15e, interface I-6: the picker prefills Unit Cost from
+    // `avg_cost` (the moving-average cost the books actually carry for this
+    // product) when the product has ever been received against, falling
+    // back to the typed `cost_price` only for a brand-new product whose
+    // `avg_cost` is still its seeded 0 -- same "0 is a real MISSING marker,
+    // not a real cost" reasoning create_purchase_order's own new_avg
+    // comment gives, never a raw `avg_cost || cost_price` in reverse. This
+    // is a PREFILL only; the field stays editable, so a receipt genuinely
+    // arriving at a different price still overrides it by hand.
     const prodOpts = products.map(p =>
-      `<option value="${p.id}" data-cost="${p.cost_price}">${p.name} (${p.sku}) — Stock: ${p.total_stock}</option>`).join('');
+      `<option value="${p.id}" data-cost="${p.avg_cost || p.cost_price || 0}">${this._esc(p.name)} (${this._esc(p.sku)}) — Stock: ${p.total_stock}</option>`).join('');
 
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -7534,7 +9376,7 @@ const RetailSystem = {
         const lineTotal = item.quantity * item.unit_cost;
         total += lineTotal;
         return `<tr>
-          <td>${item.product_name}</td>
+          <td>${this._esc(item.product_name)}</td>
           <td><input type="number" value="${item.quantity}" min="1" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
             oninput="RetailSystem._poItems[${i}].quantity=+this.value;RetailSystem._poItems[${i}].line_total=RetailSystem._poItems[${i}].quantity*RetailSystem._poItems[${i}].unit_cost;RetailSystem._renderPOItems()" /></td>
           <td>${this._fmt(item.unit_cost)}</td>
@@ -7728,26 +9570,38 @@ const RetailSystem = {
       overlay.innerHTML = `
         <div class="ret-modal ret-modal-wide" id="ret-po-view-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-po-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 id="ret-po-view-dialog-title" style="margin:0">PO: ${po.po_number}</h3>
+            <!-- AUDIT (Phase 0 #16): _docNoHtml() also escapes -- this
+                 interpolation used to skip _esc() entirely too. -->
+            <h3 id="ret-po-view-dialog-title" style="margin:0">PO: ${this._docNoHtml(po.po_number||'')}</h3>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Supplier</div><div style="color:var(--text-primary);font-weight:600">${po.supplier_name||'—'}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Status</div><div>${this._badge(po.status,'green')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Supplier')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(po.supplier_name||'—')}</div></div>
+            <!-- Round 2, till R2 (defence in depth, T6/#19 XSS finding): see
+                 the PO list row's own comment on this same pattern. -->
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(this._esc(t(this._humanizeSnakeCode(po.status))),'green')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:var(--text-money);font-weight:700">${this._fmt(po.total)}</div></div>
           </div>
           <table class="ret-table">
             <thead><tr><th>Product</th><th>SKU</th><th>Qty Ordered</th><th>Qty Received</th><th>Unit Cost</th><th>Total</th></tr></thead>
             <tbody>${items.map(i=>`<tr>
-              <td>${i.product_name||'—'}</td>
-              <td style="font-family:monospace;color:var(--text-muted)">${i.sku||'—'}</td>
+              <td>${this._esc(i.product_name||'—')}</td>
+              <td style="font-family:monospace;color:var(--text-muted)">${this._esc(i.sku||'—')}</td>
               <td>${i.quantity}</td>
               <td style="color:${i.received_qty>=i.quantity?'var(--state-success-text)':'var(--state-warning-text)'}">${i.received_qty||0}</td>
               <td>${this._fmt(i.unit_cost)}</td>
               <td style="font-weight:600">${this._fmt(i.total)}</td>
             </tr>`).join('')}</tbody>
           </table>
-          ${po.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${po.notes}</p>`:''}
+          <!-- Phase 0 T4 (XSS residue found alongside the security review's
+               named list): po.notes is admin-typed free text, the same
+               category _esc()'s own docstring already covers for every
+               other "locally-created record" field on this screen -- it
+               was the one Notes rendering path in the PO detail view left
+               interpolated raw, unlike sale.notes/quotation.notes two
+               screens over (both already this._esc()'d) and this same
+               view's own product_name/sku cells two lines above. -->
+          ${po.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${this._esc(po.notes)}</p>`:''}
         </div>`;
       document.body.appendChild(overlay);
       const _closePOView = this._wireModalA11y(overlay, 'ret-po-view-dialog');
@@ -9000,6 +10854,24 @@ const RetailSystem = {
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:16px" onclick="RetailSystem._saveBranding()">${t('Save')}</button>
       </div>
+      <!-- P0 item #13, interface I-4: a retail_settings key (synced, no
+           DDL -- same storage shape tax_calculation_mode already uses),
+           read by both Add Product's prefill above and by create_product/the
+           import on the server. Its own card, next to Branding, rather than
+           folded into it -- Branding is receipt/identity, this is a pricing
+           default, and _saveDefaultTaxRate posts to a different route
+           (POST /settings/tax) than _saveBranding does. Company-wide write --
+           interface I-10 -- so a delegated (non-owner) manager's Save 403s
+           here exactly the way it already does on Branding/Business Day. -->
+      <div class="sub-chart-card" id="default-tax-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Tax')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Applied to a new product only when you leave its own Tax Rate % blank at creation. Existing products are never changed by this.')}
+        </p>
+        <div class="ret-field" style="margin:0"><label for="tax-default-rate">${t('Default GST rate for new products')}</label>
+          <input type="number" id="tax-default-rate" step="0.1" min="0" max="100" /></div>
+        <button class="ret-btn ret-btn-primary" id="tax-default-rate-save-btn" style="margin-top:16px" onclick="RetailSystem._saveDefaultTaxRate()">${t('Save')}</button>
+      </div>
       <div class="sub-chart-card" id="device-branch-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('This Device\'s Branch')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -9111,7 +10983,15 @@ const RetailSystem = {
       <div class="sub-chart-card" id="einvoicing-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Jordan E-Invoicing (JoFotara)')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
-          ${t('Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.')}
+          <!-- Review fix (2026-09-27, high -- item #18): the old sentence
+               promised BOTH "on by default" and automatic submission of a
+               held queue "once connected" -- neither is true (a fresh
+               install's regime defaults to 'none', effectively off, and the
+               owner decision on the queued-sales day is that nothing sends
+               itself). State-neutral wording, reusing C4's own already-
+               translated key rather than typing a second one this file and
+               einvoicing.html would then have to keep in sync by hand. -->
+          ${t('Government e-invoicing status and settings for this installation. Recording and submission depend on the tax regime and connection status below.')}
         </p>
         <div id="einvoicing-status-line" style="margin:0 0 16px;padding:10px 12px;border-radius:8px;background:var(--surface-sunken);color:var(--text-secondary);font-size:12px"></div>
         <div class="ret-field" style="margin:0"><label for="einvoicing-regime">${t("The shop's tax regime")}</label>
@@ -9141,6 +11021,7 @@ const RetailSystem = {
       </div>`;
     await this._loadReorderRequests();
     await this._loadBrandingForm();
+    await this._loadDefaultTaxRateForm();
     await this._loadDeviceBranchForm();
     await this._loadBusinessDayForm();
     await this._loadDocSeriesCard();
@@ -9226,22 +11107,46 @@ const RetailSystem = {
         }
       }
 
-      const isJordan = regime === 'jordan';
+      // Review fix (2026-09-27, high -- item #18): this used to branch on
+      // `isJordan` (the RAW `tax_regime` setting), which is exactly the
+      // defect the finding named -- with regime='jordan' but the raw
+      // `enabled` toggle explicitly set to '0' (settings.py's own
+      // is_enabled() reads BOTH), this branch still showed "E-invoicing is
+      // on..." while /api/einvoicing/status's own `enabled` (the EFFECTIVE
+      // flag every other honest surface, including einvoicing.html's own
+      // Disabled pill, already reads) said false. `status.enabled` is the
+      // one flag that can never disagree with einvoicing.html, because both
+      // read the identical route.
       const line = document.getElementById('einvoicing-status-line');
       if (line) {
-        if (isJordan) {
+        if (!status.enabled) {
+          // Covers BOTH honest "off" states with the one neutral sentence:
+          // no regime chosen at all, and regime='jordan' with the toggle
+          // explicitly off -- is_enabled() treats them identically, so this
+          // notice must too, rather than inventing a distinction the
+          // backend itself does not make.
+          line.textContent = t('E-invoicing is off for this shop. Nothing is recorded or sent.');
+        } else if (!status.provider_configured) {
+          // The shipped default provider (commercial_runtime/einvoicing/
+          // providers/direct_istd.py) is UnconfiguredProvider -- this is the
+          // REAL state of every install today. Never "waiting" or
+          // "compliant" (item #18's own wording): nothing here is paused on
+          // its way to being sent, and no shop is compliant by turning this
+          // on.
+          line.textContent = t('Not being reported to JoFotara. Sending is not available in this version.');
+        } else {
+          // Enabled AND the provider is configured -- purely informational,
+          // no "is on"/"held" language needed because these are just facts
+          // (provider identity, queue depth), not a promise about filing.
           const providerKey = status.provider_in_use != null ? status.provider_in_use : status.provider;
           const providerLabels = { unconfigured: t('Not connected'), mock: t('Test mode — no live submissions') };
           const providerLabel = providerLabels[providerKey] || this._esc(providerKey || '');
           const held = Number((status.counts_by_state && status.counts_by_state.QUEUED) || 0);
           line.innerHTML =
-            `<p style="margin:0 0 8px">${t('E-invoicing is on. Every sale prepares an e-invoice, but it is held here — not filed with the tax authority — until this installation is connected to JoFotara and its credentials are entered.')}</p>` +
             `<div style="display:flex;gap:16px;flex-wrap:wrap">` +
             `<span>${t('Provider')}: ${providerLabel}</span>` +
             `<span>${t('Queued')}: ${held}</span>` +
             `</div>`;
-        } else {
-          line.textContent = t('Choose the regime this shop actually files under. With no regime selected, Aura files nothing with any tax authority at all — this is not a pause, and nothing is queued to be sent later.');
         }
       }
     } catch (e) { console.error(e); }
@@ -9350,6 +11255,54 @@ const RetailSystem = {
       console.error(e);
       SubsystemApp.showToast(t('Could not save branding.'), 'error');
     }
+  },
+
+  // ── Default GST rate for new products (Admin Center) ────────────────────
+  // P0 item #13, interface I-4. Reads the SAME `GET /settings/tax` route
+  // `_openAddProduct` above calls -- one source, two readers, never a second
+  // copy of "what does default_tax_rate mean" logic in this file.
+  async _loadDefaultTaxRateForm() {
+    try {
+      const resp = await this._get('/api/sub/retail/settings/tax');
+      const rate = resp && resp.data && resp.data.default_tax_rate;
+      const input = document.getElementById('tax-default-rate');
+      // `null`/unset renders as an EMPTY field, not a typed "0" -- 0 is a
+      // real, explicit rate an owner could genuinely choose (a shop that is
+      // tax-exempt), and this screen must not manufacture that choice out of
+      // "nothing has been set yet". Matches create_product's own three-way
+      // distinction (absent/null/empty vs an explicit 0) on the write side.
+      if (input) input.value = rate != null ? rate : '';
+    } catch (e) { console.error(e); }
+  },
+
+  async _saveDefaultTaxRate() {
+    const btn = document.getElementById('tax-default-rate-save-btn');
+    const input = document.getElementById('tax-default-rate');
+    const raw = input ? input.value.trim() : '';
+    // Blank clears the default (server stores '' -> None, see
+    // _DEFAULT_SETTINGS['default_tax_rate']'s own comment) rather than being
+    // refused -- an owner un-setting the default entirely is a legitimate
+    // choice, matching Business Day's identical "empty is a real state, not
+    // an error" posture for its own timezone field.
+    const payload = { default_tax_rate: raw === '' ? null : parseFloat(raw) };
+    if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    try {
+      const resp = await this._post('/api/sub/retail/settings/tax', payload);
+      if (!resp || resp.status !== 'success') {
+        // Same convention as _saveBranding/_saveBusinessDay's own error
+        // branch: the server's own message (400 out-of-range, or 403
+        // OWNER_ONLY from interface I-10's owner-only guard) is preferred
+        // over a generic one wherever the route sends one.
+        SubsystemApp.showToast((resp && resp.message) || t('Could not save the default tax rate.'), 'error');
+      } else {
+        SubsystemApp.showToast(t('Default tax rate saved.'), 'success');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not save the default tax rate.'), 'error');
+    }
+    this._restoreSaveButton(btn, t('Save'));
+    await this._loadDefaultTaxRateForm();
   },
 
   // ── This device's branch pin (Admin Center) ─────────────────────────────
@@ -10152,19 +12105,36 @@ const RetailSystem = {
             : t('The audit log fills as people use the till. Sales, refunds, price changes and sign-ins are recorded here with who did them.'),
         })}</td></tr>`;
       } else {
+        // P0 item #17, interface I-7: `r.actor_name` -- resolved server-side
+        // by _resolve_actor_identities (list_audit_log), null when it cannot
+        // be resolved (a deleted user, a device-stamped system write) and
+        // NEVER invented here. The raw `user_id` UUID moves to the title
+        // attribute rather than the cell's own text -- still one hover away
+        // for whoever needs to correlate it against a device/user record,
+        // but no longer the thing a shopkeeper reading the log has to parse.
+        //
+        // Round 2, T5(a): wrapped in _bdi(..., uid, 'auto') -- a name can be
+        // Latin OR Arabic script (this shop's own staff, not a generated
+        // id), inside a table that renders right-to-left on an Arabic
+        // install, the exact shape _bdi's own docstring names ("the value
+        // may be an opaque id today and an Arabic-script name tomorrow").
+        // 'auto', not the timestamp column's 'ltr' next to it: that default
+        // is correct ONLY for content with no direction of its own (a
+        // number, a uuid) -- a real name has its own script and 'ltr' would
+        // force a mirror-image bug on an Arabic name the same way un-isolated
+        // text forces one on a UUID. 'Unknown user' (the t() fallback) is
+        // just as much an unknown-direction string once translated, so it
+        // goes through the same call, not a bare, unisolated t().
         tbody.innerHTML = data.map(r => `<tr>
           <td style="color:var(--text-muted);white-space:nowrap">${this._bdi(this._auditTimestamp(r.timestamp))}</td>
-          <!-- Bidi-isolated for the same reason the sale detail's till id is.
-               inventory_movements has no viewer anywhere in this frontend
-               (its created_by is written on every stock movement and read
-               back nowhere), so this column is the nearest live "who did it"
-               surface the product has -- and it is a raw audit_log.user_id
-               UUID, in a monospace cell, in a table that flips to RTL in
-               Arabic. Left unisolated it reorders around its own hyphens. -->
-          <td style="font-family:monospace;font-size:12px">${r.user_id ? this._bdi(r.user_id) : this._esc('system')}</td>
-          <td>${this._badge(this._esc(r.action || ''), this._auditActionColor(r.action))}</td>
-          <td style="color:var(--text-muted)">${this._esc(r.entity || '—')}${r.entity_id != null ? ' #' + this._esc(r.entity_id) : ''}</td>
-          <td style="color:var(--text-muted);max-width:360px;white-space:normal">${this._esc(r.details || '')}</td>
+          <td>${this._bdi(r.actor_name || t('Unknown user'), r.user_id || null, 'auto')}</td>
+          <td>${this._badge(this._auditActionLabel(r.action), this._auditActionColor(r.action))}</td>
+          <!-- Entity id DROPPED entirely (item #17's own wording: "the
+               details already carry document numbers and names") -- it was
+               a raw UUID with no meaning to a reader, the exact pattern this
+               item exists to remove from the User column too. -->
+          <td style="color:var(--text-muted)">${this._esc(this._auditEntityLabel(r.entity))}</td>
+          <td style="color:var(--text-muted);max-width:360px;white-space:normal">${this._shortenDocNumbersInText(r.details)}</td>
         </tr>`).join('');
       }
 
@@ -10196,14 +12166,24 @@ const RetailSystem = {
     const actionSel = document.getElementById('aud-action');
     const entitySel = document.getElementById('aud-entity');
     if (actionSel && !actionSel.dataset.built) {
+      // P0 item #17: "use the same labels in the filters" -- the option's
+      // `value` stays the RAW action code (that is what _applyAuditFilters
+      // sends back to the server, and list_audit_log filters on the literal
+      // stored string), only the visible text goes through
+      // _auditActionLabel().
       actionSel.innerHTML = `<option value="">${t('All actions')}</option>` +
-        actions.map(a => `<option value="${this._esc(a)}">${this._esc(a)}</option>`).join('');
+        actions.map(a => `<option value="${this._esc(a)}">${this._esc(this._auditActionLabel(a))}</option>`).join('');
       actionSel.value = s.action;
       actionSel.dataset.built = '1';
     }
     if (entitySel && !entitySel.dataset.built) {
+      // Review fix (2026-09-27, medium -- item #17 regression): same "value
+      // stays the raw code, only the visible text is translated" split the
+      // action select just above already uses -- this one still rendered the
+      // raw snake_case entity code as its own label, Latin-only on an
+      // Arabic page.
       entitySel.innerHTML = `<option value="">${t('All entities')}</option>` +
-        entities.map(en => `<option value="${this._esc(en)}">${this._esc(en)}</option>`).join('');
+        entities.map(en => `<option value="${this._esc(en)}">${this._esc(this._auditEntityLabel(en))}</option>`).join('');
       entitySel.value = s.entity;
       entitySel.dataset.built = '1';
     }
@@ -10242,6 +12222,116 @@ const RetailSystem = {
     if (a.includes('UPDATE') || a.includes('ADJUST')) return 'blue';
     if (a.includes('PAYMENT')) return 'purple';
     return 'yellow';
+  },
+
+  // P0 item #17, interface I-7: "Show each action as a catalogued,
+  // translated label ('Customer created')". Every action `_audit()` writes
+  // in retail_api.py is enumerated here BY NAME (grepped from every
+  // `_audit(conn, 'ACTION', ...)` call site, 2026-09-27) so the common cases
+  // get a real, hand-written English sentence to translate rather than a
+  // mechanically split one.
+  _AUDIT_ACTION_LABEL: {
+    BRANCH_PIN_UNRESOLVED: 'Branch pin unresolved', BRANCH_RETIRED: 'Branch retired',
+    CASH_DRAWER_KICKED: 'Cash drawer kicked', CASH_MOVEMENT_RECORDED: 'Cash movement recorded',
+    CASH_SESSION_ENDED: 'Cash session ended', CASH_SESSION_OPENED: 'Cash session opened',
+    CASH_VARIANCE_APPROVED: 'Cash variance approved',
+    // Review fix (2026-09-27, medium -- item #17 regression): retail_api.py
+    // builds this action string AT RUNTIME as 'CHEQUE_' + event_type.upper()
+    // (_apply_cheque_event's own comment, and this file's fallback-humanize
+    // comment just below explained that as the REASON no catalog could ever
+    // be complete against it) -- true, but the fallback still only makes an
+    // ENGLISH sentence, and t() only translates a string that is actually in
+    // the catalogue. Every real event_type this route can be called with
+    // (retail_api.py:15299-15537 -- created/deposited/cleared/bounced/
+    // reinstated/endorsed/cancelled/written_off) is enumerated here, closing
+    // the Arabic gap for all eight; the fallback below still exists for
+    // whatever this list has not been updated for yet.
+    CHEQUE_CREATED: 'Cheque created', CHEQUE_RECORDED: 'Cheque recorded',
+    CHEQUE_DEPOSITED: 'Cheque deposited', CHEQUE_CLEARED: 'Cheque cleared',
+    CHEQUE_BOUNCED: 'Cheque bounced', CHEQUE_REINSTATED: 'Cheque reinstated',
+    CHEQUE_ENDORSED: 'Cheque endorsed', CHEQUE_CANCELLED: 'Cheque cancelled',
+    CHEQUE_WRITTEN_OFF: 'Cheque written off',
+    CUSTOMER_CREATED: 'Customer created', CUSTOMER_DELETED: 'Customer deleted',
+    CUSTOMER_PAYMENT: 'Customer payment recorded', CUSTOMER_UPDATED: 'Customer updated',
+    DEVICE_BRANCH_PINNED: 'Device branch pinned',
+    // Review fix (2026-09-27, medium): retail_api.py:13488 fires this SIBLING
+    // action of DEVICE_BRANCH_PINNED right above (`'DEVICE_BRANCH_PINNED' if
+    // uid else 'DEVICE_BRANCH_UNPINNED'`) -- only the pinned half was
+    // catalogued, so unpinning a device showed the humanized-English
+    // fallback on an Arabic page.
+    DEVICE_BRANCH_UNPINNED: 'Device branch unpinned',
+    DOC_SERIES_CLAIMED: 'Document series claimed', DOC_SERIES_CREATED: 'Document series created',
+    DOC_SERIES_RETIRED: 'Document series retired', DOC_SERIES_UPDATED: 'Document series updated',
+    HELD_SALE_DISCARDED: 'Held sale discarded', OFFLINE_SALES_OVERRIDE: 'Offline sales override',
+    PAYMENT_VOIDED: 'Payment voided',
+    PO_CREATED: 'Purchase order created', PO_PAYMENT: 'Purchase order payment recorded',
+    PO_RECEIVED: 'Purchase order received',
+    PRODUCT_CREATED: 'Product created', PRODUCT_DELETED: 'Product deleted', PRODUCT_UPDATED: 'Product updated',
+    QUOTATION_ACCEPTED: 'Quotation accepted', QUOTATION_CANCELLED: 'Quotation cancelled',
+    QUOTATION_CREATED: 'Quotation created', QUOTATION_DECLINED: 'Quotation declined',
+    QUOTATION_SENT: 'Quotation sent', QUOTATION_UPDATED: 'Quotation updated',
+    REORDER_REQUEST_ACCEPTED: 'Reorder request accepted', REORDER_REQUEST_DECLINED: 'Reorder request declined',
+    RETURN_PROCESSED: 'Return processed', SALE_HELD: 'Sale held', SALE_RESUMED: 'Sale resumed',
+    STOCK_ADJUSTED: 'Stock adjusted', STOCK_EXCEPTION_RESOLVED: 'Stock exception resolved',
+    STOCK_RECONCILED: 'Stock reconciled', STOCK_TRANSFER_CANCELLED: 'Stock transfer cancelled',
+    STOCK_TRANSFER_CREATED: 'Stock transfer created', STOCK_TRANSFER_RECEIVED: 'Stock transfer received',
+    STOCK_TRANSFER_SENT: 'Stock transfer sent',
+    SUPPLIER_CONTACT_CREATED: 'Supplier contact created', SUPPLIER_CONTACT_DELETED: 'Supplier contact deleted',
+    SUPPLIER_CONTACT_UPDATED: 'Supplier contact updated',
+    SUPPLIER_CREATED: 'Supplier created', SUPPLIER_DELETED: 'Supplier deleted',
+    SUPPLIER_PAYMENT: 'Supplier payment recorded', SUPPLIER_UPDATED: 'Supplier updated',
+  },
+  // Falls back to a HUMANIZED form of the raw code for anything not in the
+  // map above, rather than the raw SCREAMING_SNAKE code itself -- deliberate
+  // deviation from a hand-typed-only catalogue, for two reasons:
+  //   1. `CHEQUE_` + event_type.upper() (retail_api.py's cheque transition
+  //      handler) builds its action string AT RUNTIME from an open set of
+  //      event types (deposited/cleared/bounced/cancelled/written_off/
+  //      reinstated/endorsed/recorded) -- no fixed list here could ever be
+  //      complete against it.
+  //   2. A FUTURE `_audit()` call this catalogue has not been updated for
+  //      yet must still render as a sentence, not regress to the raw code --
+  //      the exact "no cell matches /^[A-Z_]{4,}$/" guarantee this item's
+  //      own test enforces.
+  // t() is still the last step either way: a catalogued English sentence
+  // translates normally, and a humanized fallback that happens to exactly
+  // match a real catalog key (case-sensitive) picks up its translation too;
+  // one that does not simply renders in English, same as any other
+  // uncatalogued t() call in this file.
+  // Shared by _auditActionLabel's fallback and _auditEntityLabel below:
+  // 'stock_transfer' -> 'Stock transfer'. Pulled out rather than duplicated
+  // so the two humanization rules can never quietly drift apart.
+  _humanizeSnakeCode(code) {
+    const words = String(code || '').toLowerCase().split('_').filter(Boolean);
+    if (!words.length) return '';
+    const joined = words.join(' ');
+    return joined.charAt(0).toUpperCase() + joined.slice(1);
+  },
+  _auditActionLabel(action) {
+    const a = String(action || '');
+    if (!a) return t('Unknown action');
+    const known = this._AUDIT_ACTION_LABEL[a];
+    if (known) return t(known);
+    const humanized = this._humanizeSnakeCode(a);
+    return humanized ? t(humanized) : t('Unknown action');
+  },
+
+  // Review fix (2026-09-27, medium -- item #17 regression): the Entity
+  // column rendered `r.entity` (retail_api.py's raw snake_case type --
+  // 'cash_session', 'held_sale', 'purchase_order', ...) directly, unescaped
+  // AND untranslated -- a raw English/code word on an otherwise-Arabic
+  // audit log, the identical "code leaked onto the page instead of a
+  // sentence" defect item #17 already fixed for the Action column. Same
+  // humanize-then-t() shape as _auditActionLabel's own fallback, deliberately
+  // with NO hand-typed map: this column has no SCREAMING_SNAKE ambiguity to
+  // resolve (`entity_type` is already one lowercase word or two joined by an
+  // underscore, never a runtime-built compound the way 'CHEQUE_'+event_type
+  // is), so one humanize step covers every entity type retail_api.py's
+  // _audit() calls use today and any new one added later, without a second
+  // catalogue to keep in sync.
+  _auditEntityLabel(entity) {
+    const humanized = this._humanizeSnakeCode(entity);
+    return humanized ? t(humanized) : '—';
   },
 
   // audit_log.timestamp is SQLite's raw CURRENT_TIMESTAMP default -- UTC,
@@ -10345,11 +12435,40 @@ const RetailSystem = {
       // The timestamp is the one that reorders outright (see the Date-column
       // note in _renderDashboard); the identifiers keep their neutral
       // characters (`-`) on the correct side of their digits.
+      // AUDIT (Phase 0 #16): both columns go through _docNoHtml() now, not
+      // the bare _bdi() -- see that helper's own comment for why the legacy
+      // company/device fragments are noise on this screen.
       tbody.innerHTML = data.map(r => `<tr>
-        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(r.return_number||'')}</td>
-        <td style="color:var(--text-muted)">${r.sale_number ? this._bdi(r.sale_number) : '—'}</td>
-        <td>${r.customer_name||'Walk-in'}</td>
-        <td>${this._badge(r.refund_method||'cash','blue')}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._docNoHtml(r.return_number||'')}</td>
+        <td style="color:var(--text-muted)">${r.sale_number ? this._docNoHtml(r.sale_number) : '—'}</td>
+        <!-- Round 2, till R2 (stored XSS): r.customer_name is whatever a
+             cashier-level capability typed when creating the customer (see
+             the T4 sweep's own hostile-name finding on Sales History) -- it
+             was interpolated bare here, so a name carrying markup ran script
+             in whoever opened Returns, including the owner. this._esc(...)
+             closes it; 'Walk-in' is a literal, not user data, so it does not
+             need escaping, but t() still localises it like every other
+             Walk-in label on this screen. -->
+        <td>${this._esc(r.customer_name) || t('Walk-in')}</td>
+        <!-- Round 2, till R2 (#19 low, T6's own regression): T6 rendered this
+             as this._badge(t(this._humanizeSnakeCode(r.refund_method||
+             'cash'))), unescaped, and _badge() does not escape its text
+             argument either (see that helper's own definition) -- so a
+             hostile payment_method on the ORIGINAL sale (create_sale never
+             validates it) survives into create_return's refund_method
+             (defaulted from the sale's own payment_method when none is
+             sent) and reaches this list as live markup. Measured: POST
+             /sales with payment_method '<img src=x onerror=...>' returned
+             200, POST /returns with no refund_method stored that string
+             verbatim, and opening this screen fired the injected handler.
+             this._paymentMethodLabel() is the SAME catalogued-and-escaped
+             helper the round-1 #19 fix already applied to every OTHER
+             payment-method badge on this file (Sales History, dashboard,
+             sale detail) -- reusing it here closes this one the same way,
+             and it also fixes 'Store credit' rendering untranslated in
+             Arabic, because the catalogue only has 'Store Credit' and
+             _humanizeSnakeCode's raw title-casing never went through it. -->
+        <td>${this._badge(this._paymentMethodLabel(r.refund_method||'cash'),'blue')}</td>
         <td>${this._money(-Math.abs(r.refund_amount))}</td>
         <td style="color:var(--text-muted)">${this._bdi((r.created_at||'').slice(0,16))}</td>
       </tr>`).join('');
@@ -10445,7 +12564,47 @@ const RetailSystem = {
       // neighbours -- a longer receipt number that contains this one, or a
       // customer whose name does -- and those come back newest-first. Taking
       // `recent[0]` would refund against the wrong sale.
-      const sale   = recent.find(s => s.sale_number.toLowerCase()===saleNum.toLowerCase());
+      //
+      // AUDIT (Phase 0 #16): a cashier reading the till's OWN short number
+      // off a receipt or Sales History (SALE-000016, via _docNoHtml
+      // everywhere it is now shown) typed exactly that, and this exact
+      // match against the FULL legacy string (SALE-000016-<company8>-
+      // <device8>) rejected it as "not found" -- an exact match against a
+      // string nobody ever sees is no longer exact enough once the display
+      // is shortened. Matching against _docNo(...).main too keeps this an
+      // EXACT comparison (never a second LIKE/substring pass, so the
+      // "neighbours" reasoning above still holds) -- a series number's own
+      // `.main` already equals its full string, so this changes nothing for
+      // shops on the newer per-till series.
+      const target = saleNum.toLowerCase();
+      // Review fix (2026-09-27, medium -- item #16 regression): a FULL match
+      // is still unique by construction (it carries the company+device
+      // fragments), so it is checked and returned on its own, first. A SHORT
+      // match is a different claim: `_docNo(...).main` is deliberately
+      // company-fragment-only, and its own comment says why the device tag
+      // stays -- "two tills can both mint SALE-000016". The naive `.find()`
+      // used to take `recent[0]` (newest-first) the instant more than one
+      // row matched the short form, silently opening WHICHEVER till's sale
+      // happened to sync in most recently for refund -- the exact mistake
+      // this function's SIBLING comment above already warns against
+      // ("Taking recent[0] would refund against the wrong sale") for the `q`
+      // LIKE-neighbour case, just not for this one. A short number with more
+      // than one candidate is refused with the device tags listed, rather
+      // than guessed.
+      const fullMatch = recent.find(s => (s.sale_number || '').toLowerCase() === target);
+      let sale = fullMatch || null;
+      if (!sale) {
+        const shortMatches = recent.filter(s => this._docNo(s.sale_number).main.toLowerCase() === target);
+        if (shortMatches.length > 1) {
+          const tags = shortMatches.map(s => this._docNo(s.sale_number).deviceTag || '????').join(', ');
+          SubsystemApp.showToast(
+            t('More than one till has a sale numbered {num}. Enter the full receipt number, or check the device tag ({tags}).')
+              .replace('{num}', saleNum).replace('{tags}', tags),
+            'error');
+          return;
+        }
+        sale = shortMatches[0] || null;
+      }
       if (!sale) { SubsystemApp.showToast(t('Sale not found'),'error'); return; }
       const full = (await this._get(`/api/sub/retail/sales/${sale.id}`)).data || {};
       this._returnSaleId = sale.id;
@@ -10535,7 +12694,7 @@ const RetailSystem = {
           <thead><tr><th><input type="checkbox" id="ret-check-all" onchange="document.querySelectorAll('.ret-item-cb').forEach(cb=>cb.checked=this.checked)" /></th><th>Product</th><th>Sold Qty</th><th>Return Qty</th><th>Unit Price</th></tr></thead>
           <tbody>${items.map((item,i)=>`<tr>
             <td><input type="checkbox" class="ret-item-cb" data-idx="${i}" data-pid="${item.product_id}" data-price="${item.unit_price}" data-max="${item.quantity}" /></td>
-            <td>${item.product_name}</td>
+            <td>${this._esc(item.product_name)}</td>
             <td>${item.quantity}</td>
             <td><input type="number" class="ret-item-qty" data-idx="${i}" value="${item.quantity}" min="1" max="${item.quantity}" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none" /></td>
             <td>${this._fmt(item.unit_price)}</td>
@@ -10832,11 +12991,23 @@ const RetailSystem = {
         <!-- Same unisolated two-number run as the dashboard's Date column;
              see the long note there. -->
         <td style="color:var(--text-muted)">${this._bdi((s.created_at||'').slice(0,16))}</td>
-        <td>${s.customer_name||t('Walk-in')}</td>
+        <!-- Round 2, till R2 (stored XSS): same hostile-customer-name path as
+             the Returns list fix above -- a customer name is created at a
+             cashier-level capability and was interpolated bare here, so the
+             till, the owner, or anyone else who opens Sales History runs
+             whatever markup that name carries. Measured: a customer named
+             '<img src=x onerror=...CUST...>' fired on open. this._esc(...)
+             closes it; t('Walk-in') is unchanged, it is not user data. -->
+        <td>${this._esc(s.customer_name) || t('Walk-in')}</td>
         <td style="color:var(--text-muted)">${s.item_count||0}</td>
-        <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
+        <td>${this._badge(this._paymentMethodLabel(s.payment_method), s.payment_method==='cash'?'green':'blue')}</td>
         <td style="font-weight:700">${this._money(s.total)}</td>
-        <td>${this._badge(s.status||'completed', statusColor[s.status]||'green')}</td>
+        <!-- Round 2, T6 (#19 low): Sales History status pill was a raw,
+             untranslated code -- same shape as sale-detail's own fix just
+             below and PO status above. -->
+        <!-- Round 2, till R2 (defence in depth, T6/#19 XSS finding): see the
+             PO list row's own comment on this same pattern. -->
+        <td>${this._badge(this._esc(t(this._humanizeSnakeCode(s.status||'completed'))), statusColor[s.status]||'green')}</td>
       </tr>`).join('');
     } catch(e) {
       // 401 (re-thrown by _fetch) or a transport failure. This used to be
@@ -10922,11 +13093,17 @@ const RetailSystem = {
              as one flat concatenated string -- which is exactly what
              testInvoiceHeadingDoesNotConcatenateWordAndNumber exists to forbid,
              and it caught it. Pointing at the heading reuses the correct string
-             instead of maintaining a second, worse copy of it. -->
+             instead of maintaining a second, worse copy of it.
+             AUDIT (Phase 0 #16): _docNoHtml() now builds that <bdi> -- see its
+             own comment for why the legacy company/device fragments are noise
+             on a screen a cashier actually reads. Still one <bdi> either way,
+             so testInvoiceHeadingDoesNotConcatenateWordAndNumber's own check
+             (t()'s word and the number must not land in the same text node)
+             holds exactly as before. -->
         <div class="ret-modal ret-modal-wide" id="ret-sale-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-sale-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
             <div>
-              <h3 id="ret-sale-dialog-title" style="margin:0">${t('Invoice')} ${this._bdi(sale.sale_number||'')}</h3>
+              <h3 id="ret-sale-dialog-title" style="margin:0">${t('Invoice')} ${this._docNoHtml(sale.sale_number||'')}</h3>
               <p style="color:var(--text-muted);margin:4px 0 0;font-size:13px">${this._bdi((sale.created_at||'').slice(0,16))}</p>
             </div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)">✕ Close</button>
@@ -10935,8 +13112,15 @@ const RetailSystem = {
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Customer')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Cashier')}</div><div style="color:var(--text-primary);font-weight:600">${this._attributionCell(this._saleIdentityRow(sale), sale.cashier)}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Till')}</div><div style="color:var(--text-primary);font-weight:600">${this._attribution(sale.terminal_id)}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Payment')}</div><div>${this._badge(sale.payment_method||'cash','blue')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(sale.status||'completed', statusColor[sale.status]||'green')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Payment')}</div><div>${this._badge(this._paymentMethodLabel(sale.payment_method),'blue')}</div></div>
+            <!-- Round 2, T6 (#19 low): sale-detail status pill was a raw,
+                 untranslated code ('completed'/'pending'/'cancelled'/
+                 'voided') -- _humanizeSnakeCode()+t(), the same catalogued-
+                 label shape _auditActionLabel/_auditEntityLabel already
+                 use for the identical "code leaked onto the page" pattern. -->
+            <!-- Round 2, till R2 (defence in depth, T6/#19 XSS finding): see
+                 the PO list row's own comment on this same pattern. -->
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(this._esc(t(this._humanizeSnakeCode(sale.status||'completed'))), statusColor[sale.status]||'green')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Total')}</div><div style="color:var(--text-money);font-weight:700">${this._fmt(sale.total)}</div></div>
           </div>
           ${(!sale.actor_user_uid && !sale.terminal_id)
@@ -10944,14 +13128,25 @@ const RetailSystem = {
             : ''}
           <table class="ret-table">
             <thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit Price</th><th>Discount</th><th>Tax</th><th>Line Total</th></tr></thead>
+            <!-- AUDIT (Phase 0 #5): i.product_name is admin-typed catalogue
+                 text, rendered here unescaped -- a name carrying a <b> tag or
+                 similar rendered as real markup in this dialog, the same
+                 stored-XSS shape already fixed on the Products table and the
+                 PO picker just above. -->
+            <!-- AUDIT (Phase 0 #8/I-2, round 3): "Line Total" used to be
+                 si.line_total -- calculate_line's TAXABLE amount, which does
+                 not match the till/display's own gross-minus-discount figure
+                 for a discounted line (see _receiptLineAmountHTML's own
+                 comment). Same helper the receipt modal and the printed
+                 slip now use, so all three surfaces agree. -->
             <tbody>${items.map(i=>`<tr>
-              <td>${i.product_name||('#'+i.product_id)}</td>
-              <td style="font-family:monospace;color:var(--text-muted)">${i.sku||'—'}</td>
+              <td>${this._esc(i.product_name||('#'+i.product_id))}</td>
+              <td style="font-family:monospace;color:var(--text-muted)">${this._esc(i.sku||'—')}</td>
               <td>${i.quantity}</td>
               <td>${this._fmt(i.unit_price)}</td>
               <td style="color:var(--text-muted)">${i.discount_pct?i.discount_pct+'%':'—'}</td>
               <td style="color:var(--text-muted)">${i.tax_rate?i.tax_rate+'%':'—'}</td>
-              <td style="font-weight:600">${this._fmt(i.line_total)}</td>
+              <td class="rcpt-amt" style="font-weight:600">${this._receiptLineAmountHTML(i)}</td>
             </tr>`).join('')}</tbody>
           </table>
           <div style="display:flex;justify-content:flex-end;margin-top:16px">
@@ -10965,7 +13160,7 @@ const RetailSystem = {
               ${sale.due_date?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Due date</span><span style="color:var(--state-warning-text)">${sale.due_date}</span></div>`:''}
             </div>
           </div>
-          ${sale.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${sale.notes}</p>`:''}
+          ${sale.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${this._esc(sale.notes)}</p>`:''}
           <div class="ret-modal-footer">
             <button class="ret-btn ret-btn-primary" onclick="RetailSystem._reprintSale()">${this._icon('printer', 16, '🖨️')} Reprint Receipt</button>
           </div>
@@ -11012,7 +13207,17 @@ const RetailSystem = {
       employee_name:   sale.employee_name,
       customer_id:     sale.customer_id,
       customer_name:   sale.customer_name,
-      lines: items.map(i => ({ name: i.product_name || ('#'+i.product_id), quantity: i.quantity, line_total: i.line_total })),
+      // unit_price/discount_pct carried through, not just name/quantity/
+      // line_total (round 3, item #8/I-2): _printReceipt's own lines now
+      // build each amount via _receiptLineAmountHTML(i), which reads
+      // exactly those two fields (see that helper's own comment) -- without
+      // them here a REPRINTED receipt would silently fall back to `0`/`0`
+      // for every line (Number(undefined)||0), showing every line's amount
+      // as the currency's zero string regardless of what was actually sold.
+      lines: items.map(i => ({
+        name: i.product_name || ('#'+i.product_id), quantity: i.quantity,
+        unit_price: i.unit_price, discount_pct: i.discount_pct, line_total: i.line_total,
+      })),
     };
     await this._printReceipt(saleData);
   },
@@ -13546,17 +15751,17 @@ const RetailSystem = {
         <button class="sub-btn-primary" onclick="RetailSystem._openRecordCheque()">+ ${t('Record Cheque')}</button>
       </div>
       <div class="ret-kpi-grid" id="cheque-totals" style="grid-template-columns:repeat(4,1fr)">
-        <div class="ret-kpi"><div class="ret-kpi-label">${t('On Hand')}</div><div class="ret-kpi-value" data-k="on_hand_total">—</div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">${t('At Bank')}</div><div class="ret-kpi-value" data-k="at_bank_total">—</div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">${t('Matured & Unbanked')}</div><div class="ret-kpi-value" data-k="matured_unbanked_total" style="color:var(--state-warning-text)">—</div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">${t('Bounced')}</div><div class="ret-kpi-value" data-k="bounced_total" style="color:var(--state-danger-text)">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('On Hand')}</div><div class="ret-kpi-value money num" data-k="on_hand_total">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('At Bank')}</div><div class="ret-kpi-value money num" data-k="at_bank_total">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('Matured & Unbanked')}</div><div class="ret-kpi-value money num" data-k="matured_unbanked_total" style="color:var(--state-warning-text)">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">${t('Bounced')}</div><div class="ret-kpi-value money num" data-k="bounced_total" style="color:var(--state-danger-text)">—</div></div>
       </div>
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="cheque-table">
             <thead><tr>
               <th>${t('Due Date')}</th><th>${t('Party')}</th><th>${t('Cheque Number')}</th>
-              <th>${t('Bank')}</th><th>${t('Drawer')}</th><th>${t('Amount')}</th>
+              <th>${t('Bank')}</th><th>${t('Drawer')}</th><th class="num">${t('Amount')}</th>
               <th>${t('Status')}</th><th>${t('Actions')}</th>
             </tr></thead>
             <tbody><tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
@@ -13604,10 +15809,22 @@ const RetailSystem = {
       const totals = resp.totals || {};
       const totalsRoot = document.getElementById('cheque-totals');
       if (totalsRoot) {
-        const currency = totals.currency || '';
+        // P0 item #15b: these tiles used to be `el.textContent =
+        // '${v} ${currency}'` -- a bare number pasted beside whatever
+        // `totals.currency` the response happened to carry, never through
+        // this file's own money formatter, so a company on a non-default
+        // currency or a response that omitted `currency` altogether printed
+        // a bare "0" with no mark at all ("0 JOD today" in this item's own
+        // bug report). `_setMoney` is the correct helper for a `[data-k]`
+        // element that already carries `.money` in its own template (see
+        // that helper's own docstring) -- it reads the SHOP's configured
+        // currency (this._currencySymbol), the same source _fmt/_money use
+        // everywhere else in this file, so this can never disagree with
+        // `totals.currency` on a single-currency install (this codebase has
+        // no multi-currency -- see CLAUDE.md).
         totalsRoot.querySelectorAll('[data-k]').forEach(el => {
           const v = totals[el.getAttribute('data-k')];
-          el.textContent = `${v != null ? v : 0} ${currency}`;
+          this._setMoney(el, v != null ? v : 0);
         });
       }
       const tbody = document.querySelector('#cheque-table tbody');
@@ -13641,7 +15858,7 @@ const RetailSystem = {
           <td style="font-family:monospace">${this._esc(row.cheque_number || '—')}</td>
           <td>${this._esc(row.bank_name || '—')}</td>
           <td>${this._esc(row.drawer_name || '—')}</td>
-          <td>${this._esc(row.amount)} ${this._esc(row.currency || '')}</td>
+          <td class="num">${this._money(row.amount)}</td>
           <td>${this._badge(label, color)}</td>
           <td>${actions}</td>
         </tr>`;
@@ -14298,19 +16515,38 @@ const RetailSystem = {
         message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
       });
     }
+    // P0 item #15d, interface I-5: defaults to TODAY -- same "always a real,
+    // readable date" reasoning _renderProfitAndLoss's own comment gives for
+    // its month-to-date default, immediately below in this file. Blank would
+    // technically still work (gl.trial_balance's own `as_of=None` no-filter
+    // path), but this screen's own "As of dd/mm/yyyy" line has nothing
+    // honest to print against a blank control, and this item's own test
+    // ("as_of=yesterday excludes today's sale") needs a concrete starting
+    // date to change AWAY from.
+    const today = new Date();
+    // Review fix (2026-09-27, medium -- item #15d): LOCAL date, not UTC --
+    // see _localISODate's own comment for the full reasoning and the
+    // as-of/business_date disagreement this caused in the 00:00-03:00
+    // window in Jordan.
+    const toISO = (d) => this._localISODate(d);
     c.innerHTML = `
       <div class="ret-hdr">
         <h2 class="ret-title"><span aria-hidden="true">${this._icon('scale', 18, '💼')}</span> <span>${t('Trial Balance')}</span></h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <input type="date" id="tb-as-of" class="ret-input" value="${toISO(today)}"
+            title="${this._esc(t('As of'))}" onchange="RetailSystem._loadTrialBalance()" />
+        </div>
       </div>
+      <div id="tb-as-of-line" style="color:var(--text-muted);font-size:13px;margin-bottom:14px"></div>
       <div class="sub-chart-card" style="margin-bottom:16px">
         <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
           <div>
-            <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Debit Amount')}</span><br/>
-            <span id="tb-total-debit" style="font-size:20px;font-weight:700;color:var(--text-money)">—</span>
+            <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Total debits')}</span><br/>
+            <span id="tb-total-debit" class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">—</span>
           </div>
           <div>
-            <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Credit Amount')}</span><br/>
-            <span id="tb-total-credit" style="font-size:20px;font-weight:700;color:var(--text-money)">—</span>
+            <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Total credits')}</span><br/>
+            <span id="tb-total-credit" class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">—</span>
           </div>
           <!-- Seeded empty, never a green/red guess before the real figure
                is in -- same "no placeholder value that could be misread as
@@ -14325,9 +16561,19 @@ const RetailSystem = {
           <table class="ret-table" id="tb-table">
             <thead><tr>
               <th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Type')}</th>
-              <th>${t('Debit Amount')}</th><th>${t('Credit Amount')}</th><th>${t('Balance')}</th>
+              <th class="num">${t('Total debits')}</th><th class="num">${t('Total credits')}</th>
+              <!-- P0 item #15d, interface I-5: Closing Dr / Closing Cr --
+                   sided by the balance SIGN (never a single unsided column,
+                   this item's own bug report names Inventory at -0.792 with
+                   no side shown), so an abnormal balance is visible as which
+                   column it landed in rather than as a bare negative number
+                   in a column meant to hold non-negative amounts. See
+                   general_ledger.py::trial_balance's own docstring for the
+                   sign rule. -->
+              <th class="num">${t('Closing Dr')}</th><th class="num">${t('Closing Cr')}</th>
+              <th class="num">${t('Balance')}</th>
             </tr></thead>
-            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+            <tbody><tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -14340,6 +16586,15 @@ const RetailSystem = {
 
   async _loadTrialBalance() {
     try {
+      // P0 item #15d, interface I-5: `?as_of=YYYY-MM-DD`, OPTIONAL on the
+      // route (an absent/blank value is `gl.trial_balance`'s own "no filter,
+      // all time" default) -- but this screen's own `#tb-as-of` control is
+      // always seeded with a real date (see _renderTrialBalance's own
+      // comment), so in practice this is sent on every load from this
+      // screen, never blank.
+      const asOfEl = document.getElementById('tb-as-of');
+      const asOf = asOfEl ? asOfEl.value : '';
+      const qs = asOf ? `?as_of=${encodeURIComponent(asOf)}` : '';
       // report_trial_balance returns the standard {success, data} envelope
       // every other route in this file does (see _loadPartyLedger's
       // `listResp.data` immediately above) -- NOT the bare {currency,
@@ -14349,7 +16604,7 @@ const RetailSystem = {
       // ledger, exactly the "stuck on the empty state, not the loading
       // one" failure this screen exists to avoid -- confirmed against the
       // real route in retail_api.py rather than assumed.
-      const resp = await this._get('/api/sub/retail/reports/trial-balance');
+      const resp = await this._get(`/api/sub/retail/reports/trial-balance${qs}`);
       const data = resp.data || {};
       const accounts = data.accounts || [];
 
@@ -14364,9 +16619,27 @@ const RetailSystem = {
       const creditEl = document.getElementById('tb-total-credit');
       const tbody = document.querySelector('#tb-table tbody');
       const subEl = document.getElementById('tb-subledger');
+      const asOfLineEl = document.getElementById('tb-as-of-line');
 
       if (debitEl) debitEl.textContent = this._fmt(data.total_debit || 0);
       if (creditEl) creditEl.textContent = this._fmt(data.total_credit || 0);
+
+      // "As of dd/mm/yyyy · All branches" (item #15d's own literal wording).
+      // Built from the server's OWN `as_of` echo (a 'YYYY-MM-DD' string, or
+      // null on an unfiltered read -- see gl.trial_balance's docstring),
+      // never from the input's raw value, so this line can never claim a
+      // date the response was not actually filtered to. Split-and-reorder
+      // rather than a Date/Intl round trip: 'YYYY-MM-DD' has no time
+      // component and no timezone, and parsing it through `new Date()` would
+      // reinterpret it in the browser's local zone for no reason -- the
+      // string IS the calendar date, unambiguously, already.
+      if (asOfLineEl) {
+        const parts = (data.as_of || '').split('-');
+        const dmy = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : (data.as_of || '—');
+        asOfLineEl.textContent = data.as_of
+          ? `${t('As of')} ${dmy} · ${t('All branches')}`
+          : `${t('All time')} · ${t('All branches')}`;
+      }
 
       // The one figure this whole screen exists to surface: an unbalanced
       // trial balance means the double-entry posting itself is broken, not
@@ -14381,7 +16654,7 @@ const RetailSystem = {
 
       if (!tbody) return;
       if (!accounts.length) {
-        tbody.innerHTML = `<tr><td colspan="6">${this._emptyState({
+        tbody.innerHTML = `<tr><td colspan="8">${this._emptyState({
           icon: 'scale',
           title: t('No accounts posted yet'),
           hint: t('Transactions will appear here once the general ledger starts recording them.'),
@@ -14398,9 +16671,11 @@ const RetailSystem = {
           <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>
           <td style="font-weight:600">${this._esc(a.name)}</td>
           <td>${this._glAccountTypeLabel(a.account_type)}</td>
-          <td>${this._fmt(a.debit)}</td>
-          <td>${this._fmt(a.credit)}</td>
-          <td style="font-weight:600;color:var(--text-money)">${this._fmt(a.balance)}</td>
+          <td class="num">${this._fmt(a.debit)}</td>
+          <td class="num">${this._fmt(a.credit)}</td>
+          <td class="num">${this._fmt(a.closing_debit)}</td>
+          <td class="num">${this._fmt(a.closing_credit)}</td>
+          <td class="num" style="font-weight:600;color:var(--text-money)">${this._fmt(a.balance)}</td>
         </tr>`).join('');
         // Totals footer -- the same two figures as the KPI strip above,
         // restated at the foot of the table itself (the conventional place
@@ -14409,10 +16684,16 @@ const RetailSystem = {
         // separate parts of the screen. Balance column left blank: the
         // is_balanced badge above already answers the one question a
         // debit-minus-credit figure here would be trying to restate.
+        // Closing Dr/Cr totals ARE shown -- unlike the turnover balance
+        // column, item #15d asks for them explicitly ("equal totals") and
+        // `data.closing_debit === data.closing_credit` is exactly the claim
+        // this row makes visible.
         const totalsRow = `<tr style="font-weight:700;background:var(--surface-active)">
           <td colspan="3">${t('Total')}</td>
-          <td>${this._fmt(data.total_debit)}</td>
-          <td>${this._fmt(data.total_credit)}</td>
+          <td class="num">${this._fmt(data.total_debit)}</td>
+          <td class="num">${this._fmt(data.total_credit)}</td>
+          <td class="num">${this._fmt(data.closing_debit)}</td>
+          <td class="num">${this._fmt(data.closing_credit)}</td>
           <td>—</td>
         </tr>`;
         tbody.innerHTML = rows + totalsRow;
@@ -14424,23 +16705,59 @@ const RetailSystem = {
       // unread the way a footnote under a long account list could be.
       const sl = data.subledger || {};
       if (subEl) {
-        subEl.innerHTML = `
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-            <div>
-              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Accounts Receivable')}</div>
-              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ar_gl)}</div>
-              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Customer Balances (Subledger)')}</div>
-              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ar_subledger)}</div>
-              <div style="margin-top:8px">${sl.ar_ties ? this._badge(t('Ties'), 'green') : this._badge(t('Does Not Tie'), 'red')}</div>
-            </div>
-            <div>
-              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Accounts Payable')}</div>
-              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ap_gl)}</div>
-              <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Supplier Balances (Subledger)')}</div>
-              <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ap_subledger)}</div>
-              <div style="margin-top:8px">${sl.ap_ties ? this._badge(t('Ties'), 'green') : this._badge(t('Does Not Tie'), 'red')}</div>
-            </div>
-          </div>`;
+        // P0 round 3 (item V5/#15d, client -- verifier finding): general_
+        // ledger.py's own subledger_tie() marks this comparison inapplicable
+        // (`applicable: false`, plus a `reason`) whenever a gl_journals row
+        // is dated after `as_of` -- but, for backward compatibility with
+        // callers that have never been updated to read that key,
+        // DELIBERATELY still returns ar_subledger/ap_subledger mirroring
+        // the GL side and ar_ties/ap_ties=true (see that function's own
+        // docstring). This screen used to read those two fields
+        // unconditionally, painting a green 'Ties' badge over a repeated,
+        // NOT-REALLY-COMPARED GL figure -- measured live (round-3 verifier,
+        // live_tb.py): one real credit sale left customers.credit_balance
+        // at 10.0, and with `#tb-as-of` set to a date before a later
+        // journal, the server returned {applicable:false, ar_gl:0.0,
+        // ar_subledger:0.0, ar_ties:true} -- a FABRICATED subledger figure
+        // (0.0, not the real 10.0) shown as if it had been verified. The
+        // screen's own default `as_of` is today, so this also fires for
+        // any journal dated after today (clock/timezone skew across synced
+        // devices, not only an intentionally past-dated filter -- see the
+        // same docstring's "P0 round 3 (item V5)" note).
+        //
+        // `applicable === false` is checked FIRST and replaces BOTH badges
+        // and BOTH subledger figures with one honest sentence -- this is
+        // the one place on this screen where NOT showing a number is the
+        // correct answer. The server's own `reason` is an internal,
+        // untranslated engineering string (see its own docstring wording)
+        // and is never shown to the shopkeeper directly; a second,
+        // catalogued sentence explains it in the till's own language
+        // instead.
+        if (sl.applicable === false) {
+          subEl.innerHTML = `
+            <div style="color:var(--text-muted)">
+              <div style="font-weight:600;color:var(--text)">${this._esc(t('Not comparable for this date'))}</div>
+              <div style="font-size:12px;margin-top:4px">${this._esc(t('A transaction dated after this filter affects the total, so it cannot be compared yet.'))}</div>
+            </div>`;
+        } else {
+          subEl.innerHTML = `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div>
+                <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Accounts Receivable')}</div>
+                <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ar_gl)}</div>
+                <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Customer Balances (Subledger)')}</div>
+                <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ar_subledger)}</div>
+                <div style="margin-top:8px">${sl.ar_ties ? this._badge(t('Ties'), 'green') : this._badge(t('Does Not Tie'), 'red')}</div>
+              </div>
+              <div>
+                <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Accounts Payable')}</div>
+                <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ap_gl)}</div>
+                <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Supplier Balances (Subledger)')}</div>
+                <div style="font-weight:600;color:var(--text-money)">${this._fmt(sl.ap_subledger)}</div>
+                <div style="margin-top:8px">${sl.ap_ties ? this._badge(t('Ties'), 'green') : this._badge(t('Does Not Tie'), 'red')}</div>
+              </div>
+            </div>`;
+        }
       }
     } catch (e) {
       // VISIBLE failure, matching _loadPartyLedger's identical fix above --
@@ -14457,7 +16774,7 @@ const RetailSystem = {
       // into a detached node.
       const tbody = document.querySelector('#tb-table tbody');
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--danger-text,var(--text-muted));padding:24px">
           ${t('Could not load this list. Check the connection and try again.')}</td></tr>`;
       }
       const subEl = document.getElementById('tb-subledger');
@@ -14468,6 +16785,8 @@ const RetailSystem = {
       if (debitEl) debitEl.textContent = '—';
       const creditEl = document.getElementById('tb-total-credit');
       if (creditEl) creditEl.textContent = '—';
+      const asOfLineEl = document.getElementById('tb-as-of-line');
+      if (asOfLineEl) asOfLineEl.textContent = '';
     }
   },
 
@@ -14999,11 +17318,11 @@ const RetailSystem = {
           <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
             <div>
               <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Total Assets')}</span><br/>
-              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(bc.assets_total)}</span>
+              <span class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(bc.assets_total)}</span>
             </div>
             <div>
               <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Total Liabilities and Equity')}</span><br/>
-              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(bc.liabilities_and_equity_total)}</span>
+              <span class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(bc.liabilities_and_equity_total)}</span>
             </div>
             <div>${balanceBadge}</div>
             ${differenceLine}
@@ -15022,14 +17341,14 @@ const RetailSystem = {
       const accountRows = (accounts) => accounts.map(a => `<tr>
         <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(a.code)}</td>
         <td style="font-weight:600">${this._esc(a.name)}</td>
-        <td style="white-space:nowrap">${this._fmt(a.amount)}</td>
+        <td class="num">${this._fmt(a.amount)}</td>
       </tr>`).join('');
       const accountTable = (accounts, emptyLabel) => {
         const rows = accountRows(accounts);
         return rows
           ? `<table class="ret-table"><thead><tr><th>${t('Code')}</th><th>${t('Account')}</th><th>${t('Amount')}</th></tr></thead>
               <tbody>${rows}
-                <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td>${this._fmt(accounts.reduce((s, a) => s + (+a.amount || 0), 0))}</td></tr>
+                <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td class="num">${this._fmt(accounts.reduce((s, a) => s + (+a.amount || 0), 0))}</td></tr>
               </tbody></table>`
           : `<div style="color:var(--text-muted);padding:8px 0">${emptyLabel}</div>`;
       };
@@ -15055,16 +17374,16 @@ const RetailSystem = {
         ${accountTable(equityAccounts, t('No equity accounts recorded as of this date.'))}
         <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;margin-top:10px">
           <span style="color:var(--text-muted)">${t('Retained Earnings')}</span>
-          <span>${this._fmt(retainedEarnings)}</span>
+          <span class="num">${this._fmt(retainedEarnings)}</span>
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin:-2px 0 8px;max-width:560px">${t('Accumulated profit since the ledger began. This product has no period-close step, so this figure is always current rather than a posted ledger entry.')}</div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;font-size:16px;font-weight:700;border-top:1px dashed var(--border-default);margin-top:4px">
           <span style="color:var(--text-primary)">${t('Total Equity')}</span>
-          <span>${this._money(equityTotal)}</span>
+          <span class="num">${this._money(equityTotal)}</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;margin-top:16px;border-top:2px solid var(--border-default);border-radius:8px;background:var(--surface-active);font-size:18px;font-weight:800">
           <span style="color:var(--text-primary)">${t('Total Liabilities and Equity')}</span>
-          <span>${this._money(data.total_liabilities_and_equity)}</span>
+          <span class="num">${this._money(data.total_liabilities_and_equity)}</span>
         </div>`;
     } catch (e) {
       // VISIBLE failure, matching _loadProfitAndLoss's identical fix
@@ -15244,15 +17563,15 @@ const RetailSystem = {
           <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center">
             <div>
               <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Opening Cash')}</span><br/>
-              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.opening_cash)}</span>
+              <span class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.opening_cash)}</span>
             </div>
             <div>
               <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Net Change in Cash')}</span><br/>
-              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.net_change_in_cash)}</span>
+              <span class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.net_change_in_cash)}</span>
             </div>
             <div>
               <span style="color:var(--text-muted);font-size:12px;text-transform:uppercase">${t('Closing Cash')}</span><br/>
-              <span style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.closing_cash)}</span>
+              <span class="num" style="font-size:20px;font-weight:700;color:var(--text-money)">${this._fmt(data.closing_cash)}</span>
             </div>
             <div>${reconciledBadge}</div>
             ${differenceLine}
@@ -15271,14 +17590,14 @@ const RetailSystem = {
       const lineRows = (lines) => lines.map(l => `<tr>
         <td style="font-weight:600">${this._esc(l.label)}</td>
         <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi((l.source_types || []).join(', '))}</td>
-        <td style="white-space:nowrap">${this._fmt(l.amount)}</td>
+        <td class="num">${this._fmt(l.amount)}</td>
       </tr>`).join('');
       const lineTable = (lines, total, emptyLabel) => {
         const rows = lineRows(lines);
         return rows
           ? `<table class="ret-table"><thead><tr><th>${t('Description')}</th><th>${t('Type')}</th><th>${t('Amount')}</th></tr></thead>
               <tbody>${rows}
-                <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td>${this._fmt(total)}</td></tr>
+                <tr style="font-weight:700;background:var(--surface-active)"><td colspan="2">${t('Total')}</td><td class="num">${this._fmt(total)}</td></tr>
               </tbody></table>`
           : `<div style="color:var(--text-muted);padding:8px 0">${emptyLabel}</div>`;
       };
@@ -15304,7 +17623,7 @@ const RetailSystem = {
         ${lineTable(cashOut.lines, cashOut.total, t('No cash went out during this period.'))}
         <div style="display:flex;justify-content:space-between;align-items:center;padding:16px;margin-top:16px;border-top:2px solid var(--border-default);border-radius:8px;background:var(--surface-active);font-size:20px;font-weight:800">
           <span style="color:var(--text-primary)">${t('Net Change in Cash')}</span>
-          <span>${this._money(data.net_change_in_cash, data.net_change_in_cash > 0 ? 'money--positive' : '')}</span>
+          <span class="num">${this._money(data.net_change_in_cash, data.net_change_in_cash > 0 ? 'money--positive' : '')}</span>
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:12px;max-width:560px">${t('This chart of accounts has no investing or financing accounts (no loans, no owner draws), so every cash movement shown here is from day-to-day operations.')}</div>`;
     } catch (e) {

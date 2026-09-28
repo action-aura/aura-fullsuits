@@ -364,20 +364,49 @@ async function testChoosingOffPostsNonJordanValue(src) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // (5)/(6) THE HONEST STATUS TEXT — appears on, absent off
+//
+// Round 2, T5(b): re-anchored to the CURRENT wording, changed on purpose by
+// a later #18 review-fix (_loadEinvoicingCard's own comment: "this used to
+// branch on `isJordan` ... with regime='jordan' but the raw `enabled`
+// toggle explicitly set to '0' ... this branch still showed 'E-invoicing is
+// on...' while /status's own `enabled` ... said false"). The client no
+// longer derives its own `isJordan` gate from the raw regime setting at
+// all -- it reads the SERVER's own effective `status.enabled` /
+// `status.provider_configured` flags directly, in a three-way branch:
+//   1. !status.enabled            -> "E-invoicing is off for this shop..."
+//   2. enabled, !provider_configured -> "Not being reported to JoFotara..."
+//      (item #18's own wording -- this is every real install today, since
+//      the shipped default provider is UnconfiguredProvider)
+//   3. enabled AND configured     -> Provider/Queued info line (unreachable
+//      in this codebase today, kept for when a real provider ships)
+// The OLD "it is held here — not filed with the tax authority" wording this
+// case used to check for does not exist ANYWHERE in the product any more --
+// checking for it would now pass VACUOUSLY (the text is absent everywhere,
+// on purpose, not because the guard caught anything), which is exactly the
+// failure shape this file's own mutation-proof exists to catch. What THIS
+// case can no longer prove: that a specific "held/not filed" SENTENCE
+// exists. What it still proves, and must: that the honesty gate reads the
+// EFFECTIVE server flags (never a client-derived regime guess), and that
+// the wording for "on but not connected" says exactly what item #18
+// specifies, never "waiting" or "compliant".
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function testHonestStatusTextAppearsWhenOn(src) {
   const ctx = await renderScreen({ source: src, settings: SETTINGS_JORDAN, status: STATUS_JORDAN });
   const html = ctx.statusLine().innerHTML || '';
-  assert.ok(html.indexOf('it is held here') !== -1 && html.indexOf('not filed with the tax authority') !== -1,
-    `The honest "prepared and held, not filed" status text did not appear with tax_regime='jordan'. ` +
-    `Status line HTML:\n${html}`);
-  // Sanity: the provider/queued line the brief asks for ("a number the
-  // owner can watch grow") is also present, so this is not passing because
-  // some unrelated HTML happens to contain those two substrings.
-  assert.ok(html.indexOf('Provider') !== -1 && html.indexOf('Queued') !== -1 && html.indexOf('7') !== -1,
-    `Sanity: the provider/queued-count line did not render. Status line HTML:\n${html}`);
-  console.log('PASS: the honest "held, not filed" status text (plus provider/queued count) appears when the regime is Jordan');
+  const text = ctx.statusLine().textContent || '';
+  const combined = html + text;
+  assert.ok(combined.indexOf('Not being reported to JoFotara') !== -1 &&
+    combined.indexOf('Sending is not available in this version') !== -1,
+    `The honest "not being reported" status text did not appear with enabled=true, provider_configured=false ` +
+    `(every real install today -- the shipped provider is UnconfiguredProvider). Status line:\n${combined}`);
+  // Item #18's own explicit anti-words: neither "waiting" (nothing is
+  // progressing toward delivery in this version) nor "compliant" (an
+  // unconnected install is not filing anything with ISTD) may appear.
+  assert.ok(!/waiting/i.test(combined) && !/compliant/i.test(combined),
+    `The status text must never say "waiting" or "compliant" (item #18's own wording). Status line:\n${combined}`);
+  console.log('PASS: the honest "not being reported to JoFotara" status text appears when enabled but not connected, ' +
+    'and never says "waiting" or "compliant"');
 }
 
 async function testHonestStatusTextAbsentWhenOff(src) {
@@ -385,15 +414,15 @@ async function testHonestStatusTextAbsentWhenOff(src) {
   const html = ctx.statusLine().innerHTML || '';
   const text = ctx.statusLine().textContent || '';
   const combined = html + text;
-  assert.ok(combined.indexOf('held here') === -1,
-    `The "held, not filed" status text appeared even though tax_regime='none' -- it must not claim ` +
-    `anything is being prepared/held when the shop has no e-invoicing regime at all. Status line: ${combined}`);
+  assert.ok(combined.indexOf('Not being reported to JoFotara') === -1,
+    `The "not being reported" status text appeared even though status.enabled=false -- it must not claim ` +
+    `anything is being sent/prepared when the shop has e-invoicing off entirely. Status line: ${combined}`);
   // Sanity: SOME status text renders in the off state -- a mutation that
   // renders nothing for everyone would otherwise satisfy "does not show the
   // wrong text" vacuously (ENGINEERING.md failure-shape #4/#5).
-  assert.ok(text.indexOf('nothing with any tax authority') !== -1,
+  assert.ok(text.indexOf('Nothing is recorded or sent') !== -1,
     `Sanity: the off-state status text did not render at all. Status line text: ${text}`);
-  console.log('PASS: the "held, not filed" status text does NOT appear when the regime is off (and the off-state text does)');
+  console.log('PASS: the "not being reported" status text does NOT appear when e-invoicing is off (and the off-state text does)');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -473,39 +502,46 @@ async function main() {
 
   // ── Mutation proofs ─────────────────────────────────────────────────────
 
-  // M1 (direction A): the "is this Jordan" guard always reads true =>
-  // the OFF-state test (5)/(6)'s absence-check FAILS, because the held/not-
-  // filed text would now wrongly appear for a shop with NO regime selected.
-  await run("M1: isJordan forced to always-true => testHonestStatusTextAbsentWhenOff FAILS", async () => {
+  // Round 2, T5(b): M1/M2/M3 re-anchored to the CURRENT three-way branch in
+  // _loadEinvoicingCard (see testHonestStatusTextAppearsWhenOn's own
+  // comment for why `isJordan` no longer exists to anchor on at all -- the
+  // client reads the server's own effective `status.enabled` directly now).
+
+  // M1 (direction A): the enabled-gate forced to ALWAYS read "enabled" =>
+  // the OFF-state test (6)'s absence-check FAILS, because a shop with
+  // enabled=false would now fall through to the "not connected" branch
+  // instead of the honest off text.
+  await run('M1: status.enabled gate forced to always-true => testHonestStatusTextAbsentWhenOff FAILS', async () => {
     const broken = mutate(SRC, [[
-      "      const isJordan = regime === 'jordan';",
-      "      const isJordan = true; // MUTATED: always treated as Jordan",
+      '        if (!status.enabled) {',
+      '        if (false) { // MUTATED: never treated as off, regardless of status.enabled',
     ]]);
-    return provesMutation('M1 isJordan forced true', () => testHonestStatusTextAbsentWhenOff(broken));
+    return provesMutation('M1 enabled-gate forced true', () => testHonestStatusTextAbsentWhenOff(broken));
   });
 
-  // M2 (direction B): the same guard always reads false => the ON-state
-  // test (5) FAILS, because the held/not-filed text would now never appear
-  // even though the shop's regime IS Jordan.
-  await run("M2: isJordan forced to always-false => testHonestStatusTextAppearsWhenOn FAILS", async () => {
+  // M2 (direction B): the same gate forced to ALWAYS read "off" => the
+  // ON-state test (5) FAILS, because the "not being reported" text would
+  // now never appear even though the shop IS enabled and unconnected.
+  await run('M2: status.enabled gate forced to always-false => testHonestStatusTextAppearsWhenOn FAILS', async () => {
     const broken = mutate(SRC, [[
-      "      const isJordan = regime === 'jordan';",
-      "      const isJordan = false; // MUTATED: never treated as Jordan",
+      '        if (!status.enabled) {',
+      '        if (true) { // MUTATED: always treated as off, regardless of status.enabled',
     ]]);
-    return provesMutation('M2 isJordan forced false', () => testHonestStatusTextAppearsWhenOn(broken));
+    return provesMutation('M2 enabled-gate forced false', () => testHonestStatusTextAppearsWhenOn(broken));
   });
 
-  // M3 (the one that matters most): keep the status block reachable but
-  // strip the HONEST wording, replacing it with something reassuring-
-  // sounding instead. A mutation like M2 that removes the block entirely is
-  // the easy case to catch; this is the dangerous one -- SOMETHING renders,
-  // so a shallow "did a status line appear" check would stay green while
-  // the actual claim being made to the shopkeeper silently flips from
-  // "held, not filed" to "on" (which reads as "compliant").
+  // M3 (the one that matters most): keep the "not connected" block
+  // reachable but strip the HONEST wording, replacing it with something
+  // reassuring-sounding instead. A mutation like M2 that removes the block
+  // entirely is the easy case to catch; this is the dangerous one --
+  // SOMETHING renders, so a shallow "did a status line appear" check would
+  // stay green while the actual claim being made to the shopkeeper silently
+  // flips from "not being reported" to "on" (which reads as "compliant" --
+  // item #18's own named failure shape).
   await run('M3: honest wording replaced with a bare "on" claim => testHonestStatusTextAppearsWhenOn FAILS', async () => {
     const broken = mutate(SRC, [[
-      "            `<p style=\"margin:0 0 8px\">${t('E-invoicing is on. Every sale prepares an e-invoice, but it is held here — not filed with the tax authority — until this installation is connected to JoFotara and its credentials are entered.')}</p>` +",
-      "            `<p style=\"margin:0 0 8px\">${t('E-invoicing is on.')}</p>` + // MUTATED: honest held/not-filed wording dropped",
+      "          line.textContent = t('Not being reported to JoFotara. Sending is not available in this version.');",
+      "          line.textContent = t('E-invoicing is on.'); // MUTATED: honest not-connected wording dropped",
     ]]);
     return provesMutation('M3 honest wording dropped', () => testHonestStatusTextAppearsWhenOn(broken));
   });

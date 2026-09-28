@@ -22,17 +22,28 @@
  *
  * With zero promotions configured, this feature must be invisible: the same
  * cart, on the same install, must produce EXACTLY (not approximately) the
- * totals the old single invoice-level-percentage math produced.
- * testNoPromotionsEquivalence asserts this against an INDEPENDENT
- * reimplementation of the pre-promotions formula, not against the new code's
- * own internals -- see that function's own comment for why the aggregate
- * discount is computed as "the manual rate on everything, plus whatever a
- * promotion adds on top", rather than a per-line sum, and why that is not
- * merely a style choice: summing `line_total * frac` per line is
- * ALGEBRAICALLY equal to `subtotal * frac` but not numerically identical in
- * IEEE754 (measured divergence on ~33% of realistic fixtures at full
- * precision), which would have made this exact test flaky-red on an
- * unrelated refactor.
+ * totals the SERVER actually persists. testNoPromotionsEquivalence asserts
+ * this against an INDEPENDENT reimplementation, not against the new code's
+ * own internals.
+ *
+ * ROUND 3 CORRECTION (superseding the paragraph this replaces): this used to
+ * say the reference formula summed `line_total * frac` at the INVOICE level
+ * ("the manual rate on everything... rather than a per-line sum")
+ * specifically to stay numerically IEEE754-identical to that old,
+ * never-rounded formula, because a per-line sum could differ from it by a
+ * fraction of a cent on ~33% of realistic fixtures. That was true, and it
+ * is no longer the right goal: `_recalc()` now rounds each line's
+ * discount/tax at the currency's minor unit BEFORE summing, matching what
+ * `core/retail/pricing.calculate_line()` actually persists server-side for
+ * every real sale (retail_p0_till_e2e.py's own item #8/I-2 money-identity
+ * check proves this against the REAL backend). Matching the server's real,
+ * rounded money is more important than matching a formula that was never
+ * rounded to money at all -- so `testNoPromotionsEquivalence` now compares
+ * against `perLineRoundedTotals()` (an independent mirror of
+ * `calculate_line()`'s own rounding, proven against the real Python module
+ * -- see that helper's own comment for the exact numbers), not against
+ * `oldFormulaTotals()`, which is kept, unused, as a record of the formula
+ * this superseded rather than deleted outright.
  *
  * Run: node products/retail/tests/retail_promotions_ui_test.js
  */
@@ -199,6 +210,41 @@ function oldFormulaTotals(cart, discPct, beforeDiscount) {
   return { subtotal, discount: discAmt, tax, total };
 }
 
+/** Round 3 (U2): mirrors core/retail/pricing.py's calculate_line() EXACTLY --
+ *  gross/discount_amount/tax rounded to the currency's minor unit (2dp for
+ *  the fixture below) ONE LINE AT A TIME, from full precision, then summed --
+ *  never oldFormulaTotals()'s single invoice-level rounding (in fact no
+ *  rounding at all, see that function's own body). This is the till's NEW
+ *  reference for testNoPromotionsEquivalence: _recalc() was changed to sum
+ *  per-line rounded discount/tax (matching what create_sale() actually
+ *  persists, server-side, via pricing.calculate_line() for every real
+ *  sale), and a multi-line cart with mixed tax rates is NOT numerically
+ *  identical between "round once at the end" and "round every line" --
+ *  algebraically equal, not IEEE754-equal, which is exactly this file's own
+ *  header comment's warning about the OLD design, now superseded by a
+ *  bigger one: matching what the server actually charges is more important
+ *  than matching a formula that was never rounded to money at all. */
+function perLineRoundedTotals(cart, discPct, beforeDiscount) {
+  const round2 = (x) => Math.round((x + Number.EPSILON) * 100) / 100;
+  const discFrac = discPct / 100;
+  let subtotal = 0, discAmt = 0, tax = 0;
+  cart.forEach((i) => {
+    const gross = round2(i.line_total);
+    const lineDisc = round2(gross * discFrac);
+    const lineTax = beforeDiscount
+      ? round2(gross * (i.tax_rate / 100))
+      : round2((gross - lineDisc) * (i.tax_rate / 100));
+    subtotal += gross;
+    discAmt += lineDisc;
+    tax += lineTax;
+  });
+  subtotal = round2(subtotal);
+  discAmt = round2(discAmt);
+  tax = round2(tax);
+  const total = round2(beforeDiscount ? (subtotal - discAmt + tax) : ((subtotal - discAmt) + tax));
+  return { subtotal, discount: discAmt, tax, total };
+}
+
 /** URL-routed fetch mock for POS mount, matching retail_pos_scale_test.js's
  *  own makeApi() shape. `promotionsHandler` lets a test override just the
  *  promotions/active response (resolve or reject) without re-stating the
@@ -332,15 +378,55 @@ function testNoPromotionsEquivalence() {
     RetailSystem._taxMode = beforeDiscount ? 'before_discount' : 'after_discount';
     RetailSystem._recalc();
 
-    const expected = oldFormulaTotals(RetailSystem._cart, discPct, beforeDiscount);
+    // Round 3 (U2): _recalc() now rounds each line's discount/tax at the
+    // currency's minor unit BEFORE summing, the same way the server's
+    // pricing.calculate_line() always has -- see perLineRoundedTotals()'s
+    // own comment for why oldFormulaTotals() (which rounds nothing at all)
+    // stopped being the right reference the moment this cart has more than
+    // one line at different tax rates. PROVEN against the real backend, not
+    // just this JS mirror: `python -c "... core.retail.pricing.
+    // calculate_line(...) ..."` against this EXACT fixture (18.5x2/16%,
+    // 4.25x3/16%, 9.99x1/5%, 12.5% discount) gave, per mode --
+    //   after_discount:  subtotal=59.74 discount=7.47 tax=7.41 total=59.68
+    //   before_discount: subtotal=59.74 discount=7.47 tax=8.46 total=60.73
+    // -- identical to perLineRoundedTotals()'s own output below, which is
+    // what this assertion now pins the till's preview against. The OLD,
+    // unrounded reference gave discount=7.4675 (oldFormulaTotals is kept,
+    // unused by this test now, as a record of what the pre-round-3 formula
+    // computed -- deleting it would erase that history for no gain).
+    //
+    // What this change can no longer catch: a REGRESSION back to the old,
+    // never-rounded invoice-level formula would now PASS this test if it
+    // happened to also change perLineRoundedTotals() to match (it can't,
+    // since that helper is this file's own, independent of the source under
+    // test) -- the real protection against that regression is the identity
+    // this file's OTHER tests already hold (Subtotal - Discount + Tax =
+    // Total to the money epsilon) plus retail_p0_till_e2e.py's own
+    // item #8/I-2 money-identity check against the REAL server.
+    const expected = perLineRoundedTotals(RetailSystem._cart, discPct, beforeDiscount);
     assert.strictEqual(RetailSystem._currentTotals.subtotal, expected.subtotal, `subtotal mismatch (beforeDiscount=${beforeDiscount})`);
     assert.strictEqual(
       RetailSystem._currentTotals.discount, expected.discount,
       `discount mismatch (beforeDiscount=${beforeDiscount}): got ${RetailSystem._currentTotals.discount}, ` +
-      `old formula gave ${expected.discount}. With zero promotions this must be EXACT, not merely close.`
+      `the server's own per-line-rounded formula gives ${expected.discount}. With zero promotions this ` +
+      `must be EXACT, not merely close.`
     );
     assert.strictEqual(RetailSystem._currentTotals.tax, expected.tax, `tax mismatch (beforeDiscount=${beforeDiscount})`);
-    assert.strictEqual(RetailSystem._currentTotals.total, expected.total, `total mismatch (beforeDiscount=${beforeDiscount})`);
+    // `total` alone uses assertClose, not strictEqual: subtotal/discount/tax
+    // are each ROUNDED ONCE (clean 2dp values, so exact equality is the
+    // right bar), but `total` is their plain JS-float sum/difference with no
+    // library to keep it Decimal -- measured here at 59.68000000000001 vs
+    // the mathematically-identical 59.68, the ordinary IEEE754 residue of
+    // `59.74 - 7.47 + 7.41` in binary floating point, not a rounding
+    // regression (pricing.py's own Decimal arithmetic on the server does not
+    // have this artifact; _recalc()'s plain-float total does, and always
+    // will without adopting a Decimal library here, which is out of this
+    // crew's scope). _fmt()/_money() round it again for DISPLAY, so this
+    // never reaches a screen; assertClose's 1e-9 tolerance is many orders of
+    // magnitude tighter than a real money bug (the currency's own half-minor
+    // -unit gate, MONEY_EPS elsewhere in this suite, is 0.0005) while still
+    // absorbing this exact, harmless float artifact.
+    assertClose(RetailSystem._currentTotals.total, expected.total, `total mismatch (beforeDiscount=${beforeDiscount}):`);
   }
 }
 
@@ -434,23 +520,38 @@ async function testCheckoutWireSendsManualDiscountNotPromoted() {
 // ─────────────────────────────────────────────────────────────────────────
 
 // ═══════════════════════════════════════════════════════════════════════════
-// (7) BEST PRICE WINS *IN THE RENDERED LINE*, not just in the totals.
+// (7) WHEN THE MANUAL DISCOUNT WINS, THE RENDERED LINE SHOWS ITS OWN GROSS,
+//     UNTOUCHED -- never a per-line price with the manual % baked in.
 //
-//     WHY THIS EXISTS AS A SEPARATE CASE FROM (2): there are TWO places that
-//     resolve a line's effective discount -- _renderCart (what the cashier and
-//     the customer SEE on the line) and _recalc (what the totals say). Case (2)
-//     drives _recalc only, and case (1) renders with NO manual discount, where
-//     max(0, promo) and 0 + promo are the same number. So a stacking bug in the
-//     RENDER path passed the entire suite: mutating _renderCart's
-//     `Math.max(manualFrac, promoFrac)` to `manualFrac + promoFrac` left every
-//     case green.
+//     ROUND 3 CORRECTION (rewritten, not merely re-tuned -- the old version's
+//     CLAIM, not just its expected number, was wrong by the time this ran):
+//     this used to assert the manual discount gets baked INTO the per-line
+//     price when it beats a promotion (manual 30% > promo 20% -> $100.00 ->
+//     $70.00 on the LINE). That was accurate for an EARLIER design. T2's
+//     winner-takes-all-per-line redesign (subsystem-retail.js's own
+//     `promoWins = promoFrac > manualFrac` in _renderCart, "AUDIT (Phase 0
+//     #8)" comment on the line total branch) deliberately supersedes it: a
+//     MANUAL discount is an INVOICE-LEVEL percentage (typed once, applies to
+//     the whole cart), never a per-product promotional price, so it is
+//     explained ONLY by the separate Discount($) row in the summary --
+//     never baked into an individual line's own displayed price, even when
+//     it is the larger of the two rates for that specific line. Baking it in
+//     ($70.00) would ALSO have been "the cashier reads one number, the
+//     drawer takes another" once accounting for the invoice-level Discount
+//     row too: the fixed subsystem-retail.js prints the line at $100.00 and
+//     the invoice Discount row separately explains the 30% off -- $50.00
+//     (additive) was always wrong and still is.
 //
-//     What that would have shipped: a $100 line with a 30% manual discount and a
-//     20% promotion displaying $50.00 on the line while the total charged $70.00.
-//     The cashier reads one number to the customer and the drawer takes another.
+//     What this rewrite can no longer catch: the OLD claim ("a promotion
+//     that loses still gets baked into the line at its own reduced rate")
+//     going red. That is not a regression any more -- it is the behaviour
+//     this item now REQUIRES to be false. The money-safety invariant this
+//     file still protects is retail_p0_till_e2e.py's own item
+//     #11/interface-I-2 "winner-takes-all, both directions" E2E, proven
+//     against the real running till, relay and receipt together.
 // ═══════════════════════════════════════════════════════════════════════════
 
-function testRenderedLinePriceAlsoTakesBestPriceNotSum() {
+function testManualWinsRendersLineGrossUntouched() {
   const { RetailSystem, els } = loadRetailSystem({ discPct: 30 });
   RetailSystem._cart = [widget()];
   RetailSystem._promotions = [{ id: 1, name: 'Weekend Sale', discount_pct: 20, product_id: 'p1', category_id: null }];
@@ -460,15 +561,31 @@ function testRenderedLinePriceAlsoTakesBestPriceNotSum() {
   const cartHTML = els['pos-cart'].innerHTML;
 
   assert.ok(
-    cartHTML.includes('$70.00'),
-    'The RENDERED line price must use the best single discount (manual 30% beats promo 20%, '
-    + 'so $100 -> $70.00). Got:\n' + cartHTML
+    cartHTML.includes('$100.00'),
+    'When the manual discount (30%) beats the promotion (20%), the RENDERED line price must stay '
+    + 'the line\'s own gross, UNTOUCHED ($100.00) -- the manual saving belongs only in the invoice-level '
+    + 'Discount row, never baked into a per-line price. Got:\n' + cartHTML
+  );
+  assert.ok(
+    !cartHTML.includes('$70.00'),
+    'The rendered line must NOT show $70.00 (100 * (1 - 0.30)) -- that would mean the manual % got '
+    + 'baked into this specific line\'s own price, which is no longer how a manual discount is '
+    + 'represented (it is invoice-level only). Got:\n' + cartHTML
   );
   assert.ok(
     !cartHTML.includes('$50.00'),
     'The rendered line must NEVER show the SUM of the manual and promotional discounts '
     + '(30% + 20% = 50% -> $50.00). That would display a price the till does not charge. Got:\n'
     + cartHTML
+  );
+  assert.ok(
+    !/pos-price-orig/.test(cartHTML),
+    'No struck-through original price should render on this line -- that markup is reserved for a '
+    + 'line where the PROMOTION wins, which is not this case (manual 30% > promo 20%). Got:\n' + cartHTML
+  );
+  assert.ok(
+    !/pos-promo-tag/.test(cartHTML),
+    'No "Promo" tag should render on this line -- the promotion did not win it. Got:\n' + cartHTML
   );
 }
 
@@ -568,10 +685,10 @@ const CASES = [
   ['a promoted line previews the discounted price and shows the promotion name', testPromotedLinePreviewsDiscountAndName],
   ['BEST PRICE WINS -- never summed', testBestPriceWinsNeverSums],
   ['a product-specific promotion beats a category promotion on the same product', testProductSpecificBeatsCategory],
-  ['NO-PROMOTIONS EQUIVALENCE: totals match the old invoice-level maths exactly', testNoPromotionsEquivalence],
+  ['NO-PROMOTIONS EQUIVALENCE: totals match the server\'s own per-line-rounded maths exactly', testNoPromotionsEquivalence],
   ['a failed promotions fetch leaves the till selling normally', testFailedPromotionsFetchDoesNotBlockSelling],
   ['THE WIRE IS UNCHANGED: _checkout sends the manual discount_pct, not the promoted one', testCheckoutWireSendsManualDiscountNotPromoted],
-  ['BEST PRICE WINS IN THE RENDERED LINE, not just the totals', testRenderedLinePriceAlsoTakesBestPriceNotSum],
+  ['MANUAL WINS renders the line at its own gross, untouched (never baked-in, never summed)', testManualWinsRendersLineGrossUntouched],
   ['PARENT TIER: a promotion on the parent previews and charges the discount on a variant line', testParentPromotionAppliesToVariantLinePreview],
   ['PARENT TIER: an exact-variant promotion beats a parent promotion in the preview', testExactVariantPromotionBeatsParentPromotionInPreview],
   ['PARENT TIER: a parent promotion beats a category promotion in the preview', testParentPromotionBeatsCategoryPromotionInPreview],

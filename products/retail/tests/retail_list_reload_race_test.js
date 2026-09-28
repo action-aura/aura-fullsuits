@@ -486,8 +486,21 @@ async function testAuditLogNormalPathRendersItsRows(src) {
   const tbody = ctx.getEl('aud-table-tbody');
   assert.ok(tbody.innerHTML.includes('NORMAL SINGLE-LOAD ROW'),
     `a normal, uncontested audit-log load did not write its row. Got: ${JSON.stringify(tbody.innerHTML)}`);
-  assert.ok(tbody.innerHTML.includes('NORMAL_ACTION'),
-    `a normal, uncontested audit-log load did not write its action badge. Got: ${JSON.stringify(tbody.innerHTML)}`);
+  // Round 2, T5(d): re-anchored to the HUMANIZED label, not the raw
+  // 'NORMAL_ACTION' code. Item #17 changed this on purpose --
+  // _auditActionLabel() now runs EVERY action (catalogued or not) through
+  // _humanizeSnakeCode()+t(), the exact "no badge matches /^[A-Z_]{4,}$/"
+  // contract that item's own REFS name -- so an unrecognised, uncatalogued
+  // code like the fixture's 'NORMAL_ACTION' renders as 'Normal action', not
+  // as the SCREAMING_SNAKE code this assertion used to look for. What this
+  // case can no longer catch: a regression that leaves the raw code
+  // literally on screen for a CATALOGUED action specifically -- that is
+  // retail_attribution_ui_test.js's own testEveryCapabilityDegradedScreen...
+  // -style /^[A-Z_]{4,}$/ sweep's job, run against the real catalogue, not
+  // this file's single synthetic fixture.
+  assert.ok(tbody.innerHTML.includes('Normal action'),
+    `a normal, uncontested audit-log load did not write its humanized action badge (expected 'Normal action' ` +
+    `for the uncatalogued action code 'NORMAL_ACTION'). Got: ${JSON.stringify(tbody.innerHTML)}`);
   const summary = ctx.getEl('aud-summary');
   assert.ok(summary.textContent.includes('1'),
     `a normal, uncontested audit-log load did not write its page summary. Got: ${JSON.stringify(summary.textContent)}`);
