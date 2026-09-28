@@ -7983,8 +7983,60 @@ def list_active_promotions():
     # while offline, so this device's own clock is the only one available.
     now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     rows = promo_engine.load_active_promotions(conn, cid, bid, now_local)
+    # F7 follow-up (P1a idle-screen fix round, coordinator instruction): the
+    # customer display needs to show WHAT a promotion applies to (its
+    # category or product name), not just its own headline, so a narrow
+    # promotion is never presented as if it covers the whole shop. Enriches
+    # the SAME rows load_active_promotions() already returned, rather than
+    # a new endpoint/call the frontend would have to make -- this route's
+    # existing caller (the till's own price-preview flow) keeps getting
+    # exactly the same rows plus two new, always-safe-to-ignore keys.
+    #
+    # Deliberately NOT added to core.retail.promotions.load_active_
+    # promotions() itself: that function is also called directly by
+    # create_sale() on the money path (this module's own docstring: "loaded
+    # ONCE PER SALE"), and it is not this crew's file (contracts.md's file
+    # ownership) -- widening its SELECT would mean touching shared,
+    # money-path code no crew D change should risk. A second, small,
+    # id-scoped lookup here achieves the same "one round trip, not two"
+    # goal (contracts.md: "rather than adding a new call" means the
+    # FRONTEND makes one call, not that the backend may only run one SQL
+    # statement) without touching that shared function at all.
+    cat_ids = {r['category_id'] for r in rows if r.get('category_id') is not None}
+    prod_ids = {r['product_id'] for r in rows if r.get('product_id') is not None}
+    cat_names = {}
+    if cat_ids:
+        qmarks = ','.join('?' * len(cat_ids))
+        for r in conn.execute(
+            f"SELECT id, name FROM categories WHERE company_id=? AND id IN ({qmarks})",
+            (cid, *cat_ids),
+        ):
+            cat_names[r['id']] = r['name']
+    prod_names = {}
+    if prod_ids:
+        qmarks = ','.join('?' * len(prod_ids))
+        for r in conn.execute(
+            f"SELECT id, name FROM products WHERE company_id=? AND id IN ({qmarks})",
+            (cid, *prod_ids),
+        ):
+            prod_names[r['id']] = r['name']
     conn.close()
-    return jsonify({'status': 'success', 'data': rows})
+    enriched = []
+    for r in rows:
+        r = dict(r)
+        # Both COMPANY-SCOPED lookups above (never a bare "SELECT ... WHERE
+        # id=?"), matching every other cross-table read in this file (AUDIT-
+        # 032C's rule: an unscoped read lets one company's row leak into
+        # another's response). A category/product that no longer exists (or
+        # belongs to a different company, which cannot happen for a row this
+        # company's own promotions table produced, but is checked anyway)
+        # resolves to None -- the caller (customer-display.js) is contracted
+        # to treat a missing name as "do not show this promotion", never as
+        # "show it anyway".
+        r['category_name'] = cat_names.get(r.get('category_id'))
+        r['product_name'] = prod_names.get(r.get('product_id'))
+        enriched.append(r)
+    return jsonify({'status': 'success', 'data': enriched})
 
 
 @retail_bp.route('/sales/recent', methods=['GET'])
@@ -11727,6 +11779,104 @@ def customer_display_status():
     return jsonify({'display_last_seen_ms_ago': _customer_display_last_seen_ms_ago(key)})
 
 
+# P1a "Send on WhatsApp" (crew T's share.js, cross-crew interface in
+# contracts.md: "Share audit (D builds, T calls)") -- one audit line per
+# share, naming who shared it. This is a READ from the audit trail's own
+# point of view (a receipt/statement/reminder already left the till over
+# wa.me; this route only records that it happened), so it carries no
+# @require_license_capability and no @mt_require_subsystem: a restricted or
+# expired licence must not stop a cashier from being ABLE to hand a customer
+# their own receipt, and this route never touches sale/customer data itself,
+# only the audit_log row. It still requires a session (@mt_login_required),
+# because "who shared it" is the entire point of the row -- _audit() below
+# reads the signed-in user off the session via _uid().
+#
+# retail_route_capability_matrix_test.py finding (fix round): that test's
+# "THE guard" is an intentionally blanket, no-exceptions rule -- EVERY
+# POST/PUT/PATCH/DELETE route in this file must carry an explicit
+# @mt_require_capability, full stop, so a new mutation can never inherit
+# blanket access by saying nothing. This route is POST-shaped (an audit
+# INSERT), so it is not exempt from that rule even though it behaves like a
+# read from the caller's point of view -- there is no "signed-in only, no
+# capability" category anywhere in that matrix today, and adding one here
+# would be exactly the kind of exemption that test's own docstring warns
+# against carving out. CAP_SELL, not a new or looser rule: every seeded role
+# in this product (cashier, manager, admin -- see user_accounts.
+# ROLE_CAPABILITIES, the only three that exist) already holds it by default,
+# so this decorator restricts nobody the feature is for in practice; it is
+# the SAME "pick the tier that cannot lock out the person this exists for"
+# reasoning printer_kick's own comment above already uses for an identical
+# shape (a till action every role that can operate the till must reach).
+_SHARE_LOG_CHANNELS = ('whatsapp',)
+_SHARE_LOG_KINDS = ('receipt', 'statement', 'reminder')
+_SHARE_LOG_REF_MAX_LEN = 64
+
+@retail_bp.route('/share-log', methods=['POST'])
+@mt_login_required
+@mt_require_capability(CAP_SELL)
+def share_log():
+    """Body: `{"channel": "whatsapp", "kind": "receipt"|"statement"|"reminder",
+    "ref": "<sale no. or customer id>"}` -> exactly ONE row in the existing
+    `audit_log` table (see `_audit()` above), company-scoped by `_audit()`'s
+    own `_cid()` call, never a new table.
+
+    T's share.js calls this with `fetch` AFTER opening wa.me, and per the
+    contract "a failed audit call must not block the share and must not
+    throw" -- that discipline lives on the CALLER's side (share.js swallows
+    a non-200/network failure), not here: this route still answers with an
+    ordinary 400/401 rather than pretending to succeed, so a genuine bug is
+    visible in the Network tab even though the till UI never blocks on it.
+
+    Validated strictly (channel/kind against a fixed allow-list, ref length
+    capped) BEFORE any audit write, so a malformed request writes zero rows
+    -- see retail_share_audit_test.py's mutation proof for exactly this
+    ordering.
+    """
+    data = request.get_json(silent=True) or {}
+    channel = data.get('channel')
+    kind = data.get('kind')
+    ref = data.get('ref')
+
+    if channel not in _SHARE_LOG_CHANNELS or kind not in _SHARE_LOG_KINDS:
+        return jsonify({'status': 'error', 'message': (
+            f"channel must be one of {_SHARE_LOG_CHANNELS} and kind must be "
+            f"one of {_SHARE_LOG_KINDS}."
+        )}), 400
+    if not isinstance(ref, str) or not ref or len(ref) > _SHARE_LOG_REF_MAX_LEN:
+        return jsonify({'status': 'error', 'message': (
+            f'ref is required and must be a string of at most {_SHARE_LOG_REF_MAX_LEN} characters.'
+        )}), 400
+
+    conn = get_retail_conn()
+    try:
+        # Fix round F6 (verifier finding): `ref` used to be passed as
+        # `entity_id`, which is a real `INTEGER` column (schema.py:
+        # `entity_id INTEGER`) -- SQLite's column-affinity rules silently
+        # coerce any TEXT value that LOOKS like an integer into one, so a
+        # zero-padded reference like '000124' was stored, and would read
+        # back, as the number 124, quietly losing the leading zeros a real
+        # sale/document number carries. Worse: subsystem-retail.js's own
+        # audit-log viewer (_renderAuditLog) DROPS entity_id from its
+        # rendered columns entirely (item #17: "the details already carry
+        # document numbers and names") -- it only ever displays `r.details`
+        # -- so a ref stored in entity_id was invisible to the owner
+        # regardless of the truncation bug. `details` is a TEXT column with
+        # no affinity coercion and is the column every other business-write
+        # `_audit()` call in this file already uses for a formatted,
+        # human-readable string carrying its own identifiers (e.g.
+        # STOCK_ADJUSTED's `f'qty={qty}, branch={bid}, reason=...'` above) --
+        # entity_id in those calls is always a real row id (e.g. a product's
+        # own integer primary key), never a caller-supplied opaque string,
+        # which `ref` is. `entity_id` is left None here for the same reason:
+        # this route's `ref` names a SALE NUMBER or CUSTOMER ID string, not
+        # a row this table itself owns.
+        _audit(conn, f'SHARE_{kind.upper()}', channel, None, f'{kind} {ref} shared via {channel}')
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'ok': True})
+
+
 def _render_report_email_body(data, currency):
     """Plain-text only, no templating engine (matches this whole feature's
     "no templating engine dependency" scope, same restraint
@@ -14506,6 +14656,90 @@ _BRANDING_TEXT_KEYS = (
     'branding_receipt_language', 'branding_receipt_show_cashier', 'branding_receipt_show_customer',
 )
 
+
+_ARABIC_INDIC_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩', '0123456789')
+
+
+def _normalize_jo_phone(raw):
+    """Fix round F1 (verifier finding): the branding POST used to silently
+    DROP `shop_whatsapp_number` entirely -- `_BRANDING_TEXT_KEYS` never
+    named it, so a real Settings write could never reach this table at all,
+    and the idle-screen QR (branding_settings_get's own
+    `_shop_whatsapp_qr_data_uri`) could never have anything to render for a
+    real shop. This is the SERVER-SIDE half of that fix.
+
+    Mirrors `products/retail/frontend/share.js`'s `normalizeJoPhone`
+    EXACTLY (same four accepted shapes, same Jordanian-mobile-prefix rule)
+    -- both sides of this product must agree on what a valid Jordanian
+    mobile number is, because share.js's own wa.me links and this table's
+    QR payload have to reach the SAME number for the SAME shop. Deliberately
+    duplicated rather than shared: this file has no JS-to-Python bridge, and
+    a one-line phone-shape rule is cheaper to keep in sync by comment
+    cross-reference (this docstring, and share.js's own) than to build one.
+
+    Accepts, after converting Arabic-Indic digits (٠-٩) to Western and
+    stripping every non-digit character (spaces, dashes, '+'):
+      - '00962' + 9-digit local number
+      - '962' + 9-digit local number (12 digits total)
+      - a leading '0' + 9-digit local number (10 digits total, the shape a
+        Jordanian shop owner types without thinking about it: 07XXXXXXXX)
+      - a bare 9-digit local number (7XXXXXXXX)
+    Then requires the 9-digit local number to start with '7' (Jordan's
+    mobile prefix -- landlines are not a WhatsApp number). Returns the E.164
+    string ('+9627XXXXXXXX') on success, None for anything else -- an empty/
+    unparseable value is the CALLER's job to treat as "clear the number",
+    never this function's."""
+    if raw is None:
+        return None
+    western = str(raw).translate(_ARABIC_INDIC_DIGITS)
+    digits = re.sub(r'\D', '', western)
+    if not digits:
+        return None
+    if digits.startswith('00962'):
+        local9 = digits[5:]
+    elif digits.startswith('962') and len(digits) == 12:
+        local9 = digits[3:]
+    elif digits[0] == '0' and len(digits) == 10:
+        local9 = digits[1:]
+    elif len(digits) == 9:
+        local9 = digits
+    else:
+        return None
+    if not re.match(r'^7\d{8}$', local9):
+        return None
+    return '+962' + local9
+
+
+def _shop_whatsapp_qr_data_uri(raw_number):
+    """P1a idle customer screen -- the 'Chat with us on WhatsApp' QR.
+
+    `raw_number` is `retail_settings['shop_whatsapp_number']`, which the
+    Settings screen (crew T) stores already normalised to E.164
+    (`+9627XXXXXXXX`) -- see contracts.md's "Shop WhatsApp contact number"
+    interface. This function does not re-normalise it (that is Settings'
+    job, done once at write time, not on every branding read); it only
+    strips everything that is not a digit, which is the ONE extra step
+    `wa.me` itself needs (no leading '+') and doubles as a cheap defensive
+    read for a value written by a build that predates normalisation or was
+    edited directly in the database. Empty/unset -> no QR, never a broken
+    or placeholder image -- the till the customer display sits next to may
+    not want to publish a number at all.
+
+    Rendered SERVER-SIDE with the existing
+    commercial_runtime/einvoicing/qr.py::render_qr_svg_data_uri -- the SAME
+    function commercial_runtime/sync/site_relay/admin_routes.py already
+    reuses for its own pairing QR -- so this is the third caller of one
+    encoder, never a second one. Imported lazily, matching that call site's
+    own reasoning (an optional feature must not cost every other route an
+    import it does not need).
+    """
+    digits = re.sub(r'\D', '', raw_number or '')
+    if not digits:
+        return None
+    from commercial_runtime.einvoicing.qr import render_qr_svg_data_uri
+    return render_qr_svg_data_uri(f'https://wa.me/{digits}')
+
+
 @retail_bp.route('/settings/branding', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -14552,6 +14786,20 @@ def branding_settings_get():
     data = {k: s[k] for k in _BRANDING_TEXT_KEYS}
     data['has_logo'] = has_logo
     data['einvoicing_seller'] = einvoicing_seller
+    # P1a customer display QR (contracts.md: "Idle-screen QR (D): ... Expose
+    # it the way the customer display already gets its data" -- this branding
+    # read is that path: customer-display.js's _loadBranding() already fetches
+    # this route once on load for the shop name/logo, so the QR rides the
+    # same one-time call instead of a new endpoint or a new poll loop.
+    data['whatsapp_qr_svg_data_uri'] = _shop_whatsapp_qr_data_uri(s.get('shop_whatsapp_number'))
+    # Fix round F1 (verifier finding): crew T's Settings field reads this
+    # exact key back to show what is currently saved -- it was missing
+    # entirely before (only the derived QR was returned, never the number
+    # itself), so the field always rendered blank even right after a
+    # successful save. `_settings()` already defaults an absent key to
+    # nothing via `.get(..., '')` -- never `None`, so a field bound to this
+    # value never renders the literal text "None".
+    data['shop_whatsapp_number'] = s.get('shop_whatsapp_number', '')
     # P0 item #12 (interface I-3): a READ-TIME fallback only -- never a
     # write, and `branding_business_name` above is left exactly as stored
     # (empty or not). Before this, the sidebar, the window title, the
@@ -14589,6 +14837,31 @@ def branding_settings_set():
     if admin_guard is not None:
         return admin_guard
     cid = _cid(); data = request.json or {}
+
+    # Fix round F1 (verifier finding): shop_whatsapp_number used to be
+    # silently dropped here -- it was never in _BRANDING_TEXT_KEYS (that
+    # list is permissive free text with no server-side validation, per its
+    # own comment; a phone number that drives a real wa.me link and a QR
+    # needs real validation, so it is handled separately, not folded into
+    # that loop). Validated and normalised BEFORE any write happens in this
+    # request -- an invalid number must 400 the WHOLE request rather than
+    # silently save every OTHER field while dropping this one, or save this
+    # one while a sibling field fails; same "validate first, write once"
+    # discipline as business_day_settings_set's own `writes` list above.
+    shop_whatsapp_provided = 'shop_whatsapp_number' in data
+    shop_whatsapp_value = None   # None means "clear" once provided=True; see the `writes` list below
+    if shop_whatsapp_provided:
+        raw_wa = data.get('shop_whatsapp_number')
+        raw_wa_stripped = '' if raw_wa is None else str(raw_wa).strip()
+        if raw_wa_stripped:
+            shop_whatsapp_value = _normalize_jo_phone(raw_wa_stripped)
+            if shop_whatsapp_value is None:
+                return jsonify({'status': 'error', 'message': (
+                    f'{raw_wa!r} is not a Jordanian mobile number. Expected 07XXXXXXXX, '
+                    f'7XXXXXXXX, 009627XXXXXXXX or +9627XXXXXXXX.'
+                )}), 400
+        # else: raw_wa_stripped is empty -> shop_whatsapp_value stays None -> cleared (DELETE), below.
+
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     for k in _BRANDING_TEXT_KEYS:
         if k in data:
@@ -14598,6 +14871,20 @@ def branding_settings_set():
             # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
             # docstring for the "$" vs "JOD" defect this closes.
             _queue_setting_sync_event(conn, k, str(data[k] or ''))
+    if shop_whatsapp_provided:
+        if shop_whatsapp_value is None:
+            conn.execute("DELETE FROM retail_settings WHERE company_id=? AND skey=?",
+                         (cid, 'shop_whatsapp_number'))
+        else:
+            conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                         "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+                         (cid, 'shop_whatsapp_number', shop_whatsapp_value))
+        # Same None-means-delete convention `_queue_setting_sync_event` already
+        # documents and business_day_settings_set already relies on -- this
+        # key is company-wide exactly like every other branding field
+        # (contracts.md: "Shop WhatsApp contact number ... (synced, no
+        # migration)"), so every other device in the shop must see it too.
+        _queue_setting_sync_event(conn, 'shop_whatsapp_number', shop_whatsapp_value)
     conn.commit(); s = _settings(conn, cid); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     try:
@@ -14609,7 +14896,12 @@ def branding_settings_set():
         # tax number), so who changed it is a real accountability question.
         log.exception('security audit write FAILED and was swallowed: %s',
                       'RETAIL_BRANDING_UPDATED')
-    return jsonify({'status': 'success', 'data': {k: s[k] for k in _BRANDING_TEXT_KEYS}})
+    response_data = {k: s[k] for k in _BRANDING_TEXT_KEYS}
+    # F1: the POST response must ECHO the saved number back (crew T's
+    # Settings screen shows it immediately after a save, not just after the
+    # next GET) -- see this route's own docstring/comment above.
+    response_data['shop_whatsapp_number'] = s.get('shop_whatsapp_number', '')
+    return jsonify({'status': 'success', 'data': response_data})
 
 # ── Settings (branding logo) ────────────────────────────────────────────────
 # Deliberately its own endpoint, never folded into branding_settings_get/set

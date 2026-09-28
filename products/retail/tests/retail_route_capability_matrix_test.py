@@ -174,6 +174,23 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # would mean the drawer never opens for the cashier it exists for. See
     # printer_kick's own docstring in retail_api.py for the full reasoning.
     'printer_kick': CAP_SELL,
+    # P1a "Send on WhatsApp" (retail-hardware-viewports) -- share_log is an
+    # audit INSERT, not a business mutation (no sale/customer data is
+    # touched; the wa.me share it records already happened client-side), so
+    # semantically it reads like the plain-login-only GET routes above
+    # (branding_settings_get, branding_logo_get) that carry NO
+    # @mt_require_capability at all. But this matrix's own rule (see
+    # test_every_mutating_route_carries_an_explicit_capability's docstring,
+    # "THE guard") is deliberately blanket: every POST/PUT/PATCH/DELETE
+    # route needs an explicit capability, with no "signed-in only" carve-out
+    # anywhere in this file -- adding one here would be the exact kind of
+    # exemption that guard exists to refuse. CAP_SELL, same reasoning as
+    # printer_kick immediately above: every seeded role (cashier, manager,
+    # admin -- the only three ROLE_CAPABILITIES defines) already holds it by
+    # default, so this restricts nobody the feature is for; it satisfies the
+    # structural rule without inventing a real restriction that was never
+    # part of the design.
+    'share_log': CAP_SELL,
 
     # ── Reversing money already taken: retail.refund ─────────────────────────
     'create_return': CAP_REFUND,

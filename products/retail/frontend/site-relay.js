@@ -19,6 +19,15 @@
 (function () {
   'use strict';
 
+  // Fix round F8a (verifier finding): this file's dynamic strings never
+  // went through t() -- the page loaded no i18n.js at all until the same
+  // fix round that added the theme boot (see site-relay.html's own
+  // history). Same fallback-to-identity shape whatsapp.js/einvoicing.js
+  // already use, so this file stays loadable standalone too.
+  var t = (typeof window !== 'undefined' && typeof window.t === 'function')
+    ? window.t
+    : function (s) { return s; };
+
   var els = {};
   var countdownTimer = null;
 
@@ -45,10 +54,10 @@
         // A non-JSON body here almost always means the session expired and
         // something returned a login page. Say that, rather than surfacing a
         // JSON parse error the shop owner can do nothing with.
-        throw new Error('Your session has expired. Please sign in again.');
+        throw new Error(t('Your session has expired. Please sign in again.'));
       }).then(function (body) {
         if (!resp.ok || body.success === false) {
-          throw new Error(body.error || 'That did not work. Please try again.');
+          throw new Error(body.error || t('That did not work. Please try again.'));
         }
         return body;
       });
@@ -94,7 +103,7 @@
     // the KEY, not the address -- so say something useful instead of blank.
     els.factAddresses.textContent = addresses.length
       ? addresses.join(', ')
-      : 'Could not detect — devices will still find this hub automatically.';
+      : t('Could not detect — devices will still find this hub automatically.');
     els.factPort.textContent = body.port;
     els.factPin.textContent = body.spki_pin || '—';
 
@@ -119,7 +128,7 @@
       var name = document.createElement('td');
       // textContent, never innerHTML: the label is operator-supplied text that
       // arrived from another device, so it is untrusted input on this screen.
-      name.textContent = device.label || 'Unnamed device';
+      name.textContent = device.label || t('Unnamed device');
       var id = document.createElement('div');
       id.className = 'mono';
       id.style.color = '#888';
@@ -134,7 +143,7 @@
       var status = document.createElement('td');
       var badge = document.createElement('span');
       badge.className = 'state-badge ' + (device.revoked ? 'state-restricted' : 'state-active');
-      badge.textContent = device.revoked ? 'Removed' : 'Connected';
+      badge.textContent = device.revoked ? t('Removed') : t('Connected');
       status.appendChild(badge);
       tr.appendChild(status);
 
@@ -142,7 +151,7 @@
       if (!device.revoked) {
         var btn = document.createElement('button');
         btn.className = 'danger small';
-        btn.textContent = 'Remove';
+        btn.textContent = t('Remove');
         btn.addEventListener('click', function () { revoke(device, btn); });
         action.appendChild(btn);
       }
@@ -153,18 +162,17 @@
   }
 
   function revoke(device, btn) {
-    var name = device.label || 'this device';
+    var name = device.label || t('this device');
     if (!window.confirm(
-        'Remove ' + name + ' from the shop?\n\n' +
-        'It will stop syncing with this hub immediately. It keeps the data it '
-        + 'already has and can carry on selling on its own.')) {
+        t('Remove') + ' ' + name + ' ' + t('from the shop?') + '\n\n' +
+        t('It will stop syncing with this hub immediately. It keeps the data it already has and can carry on selling on its own.'))) {
       return;
     }
     btn.disabled = true;
     api('/devices/' + encodeURIComponent(device.installation_id) + '/revoke',
         { method: 'POST' })
       .then(function () {
-        message(name + ' was removed.', 'info');
+        message(name + ' ' + t('was removed.'), 'info');
         return refresh();
       })
       .catch(function (err) {
@@ -185,7 +193,7 @@
         show(els.pairingOutput, false);
         show(els.btnPairDone, false);
         els.btnPair.disabled = false;
-        message('That code expired. Press "Connect a device" for a new one.', 'info');
+        message(t('That code expired. Press "Connect a device" for a new one.'), 'info');
         return;
       }
       var mins = Math.floor(remaining / 60);
@@ -215,7 +223,7 @@
         els.pairingText.value = body.qr_text;
         show(els.pairingOutput, true);
         show(els.btnPairDone, true);
-        els.btnPair.textContent = 'Get another code';
+        els.btnPair.textContent = t('Get another code');
         startCountdown(body.expires_in_seconds || 300);
       })
       .catch(function (err) {
@@ -229,7 +237,7 @@
     show(els.pairingOutput, false);
     show(els.btnPairDone, false);
     els.btnPair.disabled = false;
-    els.btnPair.textContent = 'Connect a device';
+    els.btnPair.textContent = t('Connect a device');
     // The new device only appears once it has actually paired, so refresh
     // rather than optimistically adding a row for a device that may never
     // have completed.

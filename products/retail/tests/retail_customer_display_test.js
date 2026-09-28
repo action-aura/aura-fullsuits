@@ -686,6 +686,20 @@ async function testPollingAdvancesOnANewerSeq() {
   let call = 0;
   const fake = makeFakeFetch((url) => {
     if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    // P1a (idle-screen promotion, customer-display.js's _loadPromotion) --
+    // init() now fires a THIRD one-time fetch alongside branding, to
+    // /promotions/active. Routed here, before the `call` counter below,
+    // for the same reason branding gets its own branch above: `call` is a
+    // counter over exactly the RELAY POLL's own successive ticks (seq=1
+    // then seq=2), and letting an unrelated one-time fetch increment it
+    // would shift every later tick's seq by one -- which is exactly what
+    // this test caught (RED) the first time _loadPromotion was added
+    // without this branch: _lastSeq was 2 after the first flush, not 1,
+    // because the promotion fetch silently ate the "call===1" branch meant
+    // for the relay's own first tick. This branch removes that coupling;
+    // it proves nothing about promotions itself (see
+    // testPromotionRowRendersActivePromotion for that).
+    if (String(url).indexOf('/promotions/active') !== -1) return jsonResponse(200, { status: 'success', data: [] });
     call++;
     if (call === 1) {
       return jsonResponse(200, { seq: 1, message: { type: 'cart', items: [], subtotal: 'JD 0.000', discount: null, tax: 'JD 0.000', total: 'JD 0.000' }, shop: null });
@@ -769,6 +783,199 @@ function testPromotionsRowShowsOnlyWhenPresent() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// P1a -- "the customer screen belongs to the shop" (idle-only: today's
+// promotion, the shop's own WhatsApp QR).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function testPromotionRowRendersActivePromotion() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false });
+  // No fetch in this sandbox -- calling _applyPromotion directly proves the
+  // RENDERING half precisely (the fetch-plumbing half is covered by the
+  // fetch-path tests below), same "direct method + fetch-path" split this
+  // file already uses for branding vs _applyShopName.
+  // (The fake DOM's makeFakeElement() starts every scraped id at `hidden:
+  // undefined`, not the markup's real `hidden` attribute -- it has no HTML
+  // parser -- so the pristine state is never asserted here, matching every
+  // other row test in this file, e.g. testPromotionsRowShowsOnlyWhenPresent.)
+  // F7 follow-up: a promotion is ALWAYS shown WITH its scope now (never a
+  // bare name) -- category_id + a resolved category_name is the shape
+  // retail_api.py's list_active_promotions actually sends.
+  CustomerDisplay._applyPromotion({ id: 1, name: 'Weekend Sale', discount_pct: 20, category_id: 42, category_name: 'Snacks' });
+  assert.strictEqual(elHidden(document, 'cd-promo'), false, 'a real promotion must reveal cd-promo');
+  assert.strictEqual(elText(document, 'cd-promo'), '20% off Snacks',
+    'the promotion row must show the percentage and the category/product it applies to, never a bare unscoped claim');
+
+  // The allow-half's mirror: no active promotion (null, or an empty list
+  // from _loadPromotion) hides the row again -- never an empty box.
+  CustomerDisplay._applyPromotion(null);
+  assert.strictEqual(elHidden(document, 'cd-promo'), true, 'no active promotion must hide cd-promo again, not leave stale text visible');
+  console.log('PASS: the promotion row shows the active promotion WITH its scope, and hides with none, both directions');
+}
+
+async function testPromotionFetchAppliesHighestDiscountEligibleRow() {
+  const fake = makeFakeFetch((url) => {
+    if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    if (String(url).indexOf('/promotions/active') !== -1) {
+      return jsonResponse(200, { status: 'success', data: [
+        { id: 9, name: 'Back to School', discount_pct: 10, category_id: 1, category_name: 'Stationery' },
+        { id: 10, name: 'Second Promo', discount_pct: 5, category_id: 2, category_name: 'Drinks' },
+      ] });
+    }
+    return jsonResponse(404, {});   // the #11 relay poll -- not this test's concern
+  });
+  const { document } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();
+  // Deterministic pick (coordinator instruction): the HIGHEST discount_pct
+  // wins when several are active -- Stationery (10%) over Drinks (5%) here,
+  // regardless of list order or id order.
+  assert.strictEqual(elText(document, 'cd-promo'), '10% off Stationery',
+    'GET /promotions/active must be reached on load and the highest-discount eligible row rendered');
+  console.log('PASS: the one-time /promotions/active fetch renders the highest-discount eligible row');
+}
+
+async function testPromotionPicksHighestDiscountTiebrokenByLowestId() {
+  const fake = makeFakeFetch((url) => {
+    if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    if (String(url).indexOf('/promotions/active') !== -1) {
+      // Same discount_pct, deliberately listed with the HIGHER id first --
+      // if the pick were "first in the list" rather than "lowest id",
+      // this would pick id 20 instead of id 11.
+      return jsonResponse(200, { status: 'success', data: [
+        { id: 20, name: 'Later Promo', discount_pct: 10, category_id: 2, category_name: 'Drinks' },
+        { id: 11, name: 'Earlier Promo', discount_pct: 10, category_id: 1, category_name: 'Snacks' },
+      ] });
+    }
+    return jsonResponse(404, {});
+  });
+  const { document } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();
+  assert.strictEqual(elText(document, 'cd-promo'), '10% off Snacks',
+    'a tie on discount_pct must be broken by the LOWEST id (the promotion created first), not list order');
+  console.log('PASS: a discount_pct tie is broken by the lowest id');
+}
+
+function testPromotionExcludedWhenScopeNameUnresolved() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false });
+  // F7 follow-up (coordinator instruction, verbatim): "A promotion whose
+  // name can't be resolved is not shown. Never claim it applies shop-wide."
+  // category_id is set, but retail_api.py's lookup found no matching
+  // category (deleted after the promotion was created, e.g.) -- no name
+  // to show, so nothing is shown, and this must NOT fall back to a bare
+  // "20% off" that would read as a shop-wide claim.
+  CustomerDisplay._applyPromotion({ id: 6, name: 'Orphaned Promo', discount_pct: 20, category_id: 99, category_name: null });
+  assert.strictEqual(elHidden(document, 'cd-promo'), true, 'an unresolved category name must hide the row, never fall back to a bare claim');
+
+  // The other unresolved shape: neither product_id nor category_id set at
+  // all. There is no "shop-wide" display mode any more -- every promotion
+  // this screen shows must name what it applies to -- so this is ALSO
+  // hidden, not treated as a shop-wide offer.
+  CustomerDisplay._applyPromotion({ id: 7, name: 'No Scope At All', discount_pct: 20, category_id: null, product_id: null });
+  assert.strictEqual(elHidden(document, 'cd-promo'), true, 'a promotion with no scope field at all must not be presented as shop-wide');
+  console.log('PASS: an unresolved or absent scope name hides the row -- never a shop-wide-reading fallback');
+}
+
+function testWhatsappQrRendersOnlyWhenConfigured() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false });
+  // (Pristine-state note: see testPromotionRowRendersActivePromotion above --
+  // the fake DOM cannot represent the markup's own `hidden` attribute.)
+  CustomerDisplay._applyWhatsappQr('data:image/svg+xml;base64,QUJD');
+  assert.strictEqual(elHidden(document, 'cd-whatsapp'), false, 'a real QR data URI must reveal cd-whatsapp');
+  assert.strictEqual(document.getElementById('cd-whatsapp-qr').src, 'data:image/svg+xml;base64,QUJD',
+    'the img must carry exactly the server-supplied data URI, never re-derived client-side');
+
+  // The allow-half's mirror: no number configured (null/'') -> no QR, no
+  // empty box left showing -- contract: "No number -> no QR and no empty box."
+  CustomerDisplay._applyWhatsappQr(null);
+  assert.strictEqual(elHidden(document, 'cd-whatsapp'), true, 'with no shop number, cd-whatsapp must hide again');
+  console.log('PASS: the WhatsApp QR shows only when the server supplies one, both directions');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fix round F7 (verifier finding): "Only show promotions that apply
+// shop-wide. A category- or product-limited one must not be presented as a
+// shop-wide offer" + "ignore a promotion whose ends_at has passed".
+// ─────────────────────────────────────────────────────────────────────────────
+
+function sortableDate(offsetDays) {
+  const d = new Date(Date.now() + offsetDays * 86400000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function testPromotionIncludedWhenScopeResolvedAndCurrent() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false });
+  // The category-scoped ALLOW case -- real shape, real name resolved,
+  // ends_at in the future.
+  CustomerDisplay._applyPromotion({
+    id: 3, name: 'Weekend Sale', discount_pct: 15, category_id: 1, category_name: 'Snacks', product_id: null,
+    ends_at: sortableDate(1),
+  });
+  assert.strictEqual(elHidden(document, 'cd-promo'), false, 'a category-scoped, resolved, not-yet-expired promotion must show');
+  assert.strictEqual(elText(document, 'cd-promo'), '15% off Snacks');
+
+  // The product-scoped ALLOW case -- same rule, the other branch of
+  // _promotionScopeName.
+  CustomerDisplay._applyPromotion({
+    id: 8, name: 'Widget Deal', discount_pct: 25, category_id: null, product_id: 7, product_name: 'Cola 500ml',
+    ends_at: null,
+  });
+  assert.strictEqual(elHidden(document, 'cd-promo'), false, 'a product-scoped, resolved promotion must show');
+  assert.strictEqual(elText(document, 'cd-promo'), '25% off Cola 500ml');
+  console.log('PASS: a category- or product-scoped promotion with a resolved name and not expired is shown, WITH its scope');
+}
+
+function testPromotionExcludedWhenExpired() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false });
+  CustomerDisplay._applyPromotion({
+    id: 4, name: 'Yesterday\'s Sale', discount_pct: 15, category_id: 1, category_name: 'Snacks', product_id: null,
+    ends_at: sortableDate(-1),
+  });
+  assert.strictEqual(elHidden(document, 'cd-promo'), true, 'a promotion whose ends_at has passed must not show, even with a resolved scope name');
+
+  // No ends_at at all ("never ends", same NULL-is-unbounded convention
+  // core/retail/promotions.py's own SQL uses) must still show.
+  CustomerDisplay._applyPromotion({ id: 5, name: 'Ongoing Sale', discount_pct: 5, category_id: 1, category_name: 'Snacks', product_id: null, ends_at: null });
+  assert.strictEqual(elHidden(document, 'cd-promo'), false, 'a promotion with no ends_at (never expires) must still show');
+  console.log('PASS: an expired promotion is excluded even with a resolved scope; one with no ends_at is not');
+}
+
+async function testIdleTransitionRefetchesPromotion() {
+  // F7's OTHER half: "re-fetch /promotions/active each time the display
+  // transitions back to idle (no new timer)". Drives THREE separate idle
+  // transitions (init, an emptied cart, and the sale-complete timer firing)
+  // and counts how many times /promotions/active was actually requested --
+  // proving this happens on each real transition, not merely once at load,
+  // and WITHOUT any fake timer ever being armed (mutation-shaped proof: a
+  // regression that only fires the fetch once at init would freeze this
+  // count at 1).
+  let promoCalls = 0;
+  const fake = makeFakeFetch((url) => {
+    if (String(url).indexOf('/promotions/active') !== -1) { promoCalls++; return jsonResponse(200, { status: 'success', data: [] }); }
+    if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    return jsonResponse(404, {});
+  });
+  const { CustomerDisplay, timers } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();
+  assert.strictEqual(promoCalls, 1, 'init() must fetch /promotions/active once');
+
+  // Transition 2: a non-empty cart, then an empty one (the emptied-cart path
+  // through _onCart -> _renderIdle).
+  CustomerDisplay._onCart({ type: 'cart', items: [{ name: 'X', quantity: 1, unitPrice: 'JD 1.000', lineTotal: 'JD 1.000' }] });
+  CustomerDisplay._onCart({ type: 'cart', items: [] });
+  await flushMicrotasks();
+  assert.strictEqual(promoCalls, 2, 'an emptied cart transitioning back to idle must re-fetch the promotion');
+
+  // Transition 3: a sale completes, then its own timer fires (no REAL
+  // setTimeout wait -- makeFakeTimers().fireAll() simulates it, same
+  // pattern every other timer test in this file already uses).
+  CustomerDisplay._onSaleComplete({ amountPaid: 'JD 1.000', change: null });
+  timers.fireAll();
+  await flushMicrotasks();
+  assert.strictEqual(promoCalls, 3, 'the sale-complete timer reverting to idle must re-fetch the promotion too');
+  console.log('PASS: the idle-screen promotion re-fetches on every idle transition (init, emptied cart, sale-complete timeout) -- no new timer');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PER-TEST ISOLATION -- a flat sequence reports only the first failure and
 // hides the rest as "not run"; this runs every check regardless.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -794,6 +1001,14 @@ const CHECKS = [
   ['#11 the relay poll advances on a genuinely newer seq', testPollingAdvancesOnANewerSeq],
   ['#11 the relay poll survives a missing route, 401, and a network error', testPollingSurvivesMissingRouteAndUnauthenticatedContext],
   ['#8 the Promotions row and struck-through original price show only when sent', testPromotionsRowShowsOnlyWhenPresent],
+  ['P1a the promotion row shows/hides with the active promotion, WITH its scope', testPromotionRowRendersActivePromotion],
+  ['P1a the one-time /promotions/active fetch renders the highest-discount eligible row', testPromotionFetchAppliesHighestDiscountEligibleRow],
+  ['P1a the WhatsApp QR shows only when the server supplies one', testWhatsappQrRendersOnlyWhenConfigured],
+  ['F7 follow-up: a discount_pct tie is broken by the lowest id', testPromotionPicksHighestDiscountTiebrokenByLowestId],
+  ['F7 follow-up: an unresolved or absent scope name hides the row', testPromotionExcludedWhenScopeNameUnresolved],
+  ['F7 a category- or product-scoped promotion with a resolved name is shown, WITH its scope', testPromotionIncludedWhenScopeResolvedAndCurrent],
+  ['F7 an expired promotion is excluded even with a resolved scope; no-ends_at is not', testPromotionExcludedWhenExpired],
+  ['F7 the promotion re-fetches on every idle transition, no new timer', testIdleTransitionRefetchesPromotion],
 ];
 
 async function runAll() {

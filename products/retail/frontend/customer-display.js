@@ -97,7 +97,7 @@
       // this screen ever shows is never the empty <h1> the markup now
       // ships with, and never the old hardcoded vendor name either.
       this._applyShopName(null);
-      this._renderIdle();
+      this._renderIdle();   // _renderIdle() itself calls _loadPromotion() -- see F7's comment there
       this._loadBranding();
       this._connectChannel();
       this._startPolling();
@@ -140,9 +140,153 @@
           // alone and testRealShopNameFromBrandingLatchesOverLaterNull (the
           // real server response shape) goes red.
           self._applyShopName(b.business_name || b.branding_business_name);
+          // P1a -- the WhatsApp QR rides this SAME one-time branding fetch
+          // (server-side rendered by _shop_whatsapp_qr_data_uri in
+          // retail_api.py -- see that function's own comment for why it is
+          // exposed here rather than a new endpoint or poll). Applied
+          // unconditionally: null/'' -> _applyWhatsappQr hides the row, so a
+          // shop with no number configured shows no QR and no empty box.
+          self._applyWhatsappQr(b.whatsapp_qr_svg_data_uri);
           if (b.has_logo) return self._loadLogo();
         })
         .catch(function () { /* generic fallback already on screen */ });
+    },
+
+    // ── Today's promotion (idle screen only) ─────────────────────────────────
+    // Fix round F7 (verifier finding: "the idle-screen promotion can go
+    // stale"): re-fetched every time the screen TRANSITIONS back to idle
+    // (see _renderIdle below), not on a fresh page load alone and NOT on a
+    // repeating timer (contract still holds: "no new polling loop" -- a
+    // sale completing or a cart clearing is a real event this file already
+    // reacts to, not a new poll). GET /promotions/active is the SAME
+    // till-facing read the POS itself calls before every sale (see
+    // subsystem-retail.js's _loadPOSData), reused rather than duplicated.
+    // "This till's promotions until W2b" (p1a-plan.json) -- a branch-aware,
+    // continuously-refreshed promotion feed is explicitly out of scope here.
+    _loadPromotion: function () {
+      if (typeof global.fetch !== 'function') return;
+      var self = this;
+      global.fetch('/api/sub/retail/promotions/active', { credentials: 'include', cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (resp) {
+          var rows = (resp && resp.status === 'success' && Array.isArray(resp.data)) ? resp.data : [];
+          // F7 follow-up (coordinator instruction, P1a fix round): showing
+          // NOTHING because every real promotion is scoped is honest but
+          // defeats the feature -- so this now shows the current promotion
+          // WITH its scope (the category or product it applies to) instead
+          // of hiding it. Only rows whose scope NAME actually resolved
+          // (retail_api.py's list_active_promotions now enriches each row
+          // with category_name/product_name) and whose ends_at has not
+          // passed are eligible -- see _promotionIsCurrent and
+          // _promotionScopeName below; a row with an unresolved scope name
+          // is never shown and never implied shop-wide.
+          //
+          // DETERMINISTIC PICK when several are active: highest
+          // discount_pct wins (the offer most worth a shopper's attention),
+          // ties broken by the LOWEST id (the promotion created first) --
+          // stated here because the coordinator asked which rule this uses.
+          var eligible = rows.filter(function (p) {
+            return self._promotionIsCurrent(p) && !!self._promotionScopeName(p);
+          });
+          eligible.sort(function (a, b) {
+            if (b.discount_pct !== a.discount_pct) return b.discount_pct - a.discount_pct;
+            return a.id - b.id;
+          });
+          self._applyPromotion(eligible.length ? eligible[0] : null);
+        })
+        .catch(function () { /* offline, or no promotions configured -- the row stays hidden */ });
+    },
+
+    // Fix round F7 -- re-checks `ends_at` client-side: /promotions/active
+    // already filters server-side by `now_local` (core/retail/
+    // promotions.py's own SQL, `ends_at>=?`), but this screen only
+    // re-fetches on an idle TRANSITION, not a repeating timer, so a
+    // promotion already on screen could in principle outlive its own
+    // ends_at while nothing re-triggers a check -- this re-validates the
+    // SAME row the moment it is (re-)applied. Scope (product/category) is
+    // resolved separately, in _promotionScopeName -- kept apart from this
+    // function because "is the row still live" and "can we name what it
+    // applies to" are independent questions the caller must both answer
+    // yes to before showing anything (see _loadPromotion's `eligible` filter).
+    _promotionIsCurrent: function (promo) {
+      if (!promo) return false;
+      if (promo.ends_at) {
+        // Same sortable 'YYYY-MM-DD HH:MM:SS' shape and the same plain
+        // string comparison core/retail/promotions.py's own SQL uses --
+        // never parsed into a Date, matching this file's "never invent a
+        // clock/format the server did not give it" discipline (see the
+        // module comment's MONEY section for the same rule applied to
+        // figures instead of timestamps).
+        if (String(promo.ends_at) < this._nowLocalSortable()) return false;
+      }
+      return true;
+    },
+
+    // Fix round F7 follow-up -- "show the current promotion WITH its
+    // scope... a promotion whose name can't be resolved is not shown.
+    // Never claim it applies shop-wide." `category_name`/`product_name` are
+    // added server-side by retail_api.py's list_active_promotions
+    // (company-scoped lookups keyed off this SAME row's product_id/
+    // category_id -- see that route's own comment for why it is not a
+    // second network call). core/retail/promotions.py's create_promotion
+    // enforces "exactly one of product_id/category_id", so exactly one of
+    // these two branches applies to any real row; returns null (never an
+    // empty string, which `!!` would still treat as falsy but is worth
+    // being explicit about) when neither name resolved -- a category or
+    // product that was deleted after the promotion was created, for
+    // instance -- and the caller's contract is to treat null as "do not
+    // show this promotion", never to fall back to a bare, unscoped claim.
+    _promotionScopeName: function (promo) {
+      if (!promo) return null;
+      if (promo.category_id != null) return promo.category_name || null;
+      if (promo.product_id != null) return promo.product_name || null;
+      return null;
+    },
+
+    _nowLocalSortable: function () {
+      var d = new Date();
+      var p = function (n) { return String(n).padStart(2, '0'); };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+        ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    },
+
+    _applyPromotion: function (promo) {
+      var el = byId('cd-promo');
+      if (!el) return;
+      var scopeName = this._promotionScopeName(promo);
+      if (!promo || !this._promotionIsCurrent(promo) || !scopeName) { el.hidden = true; return; }
+      // discount_pct is a plain DB value (core/retail/promotions.py), never
+      // a pre-formatted string the way till-broadcast money figures are --
+      // there is nothing to parse here, this route was never asked to
+      // compute a price. `scopeName` is shop-authored data (a category or
+      // product name the owner typed) exactly like `promo.name` used to be
+      // here, so it is never routed through t() either -- only the fixed
+      // English phrase around the two values is.
+      var pct = (promo.discount_pct == null) ? '' : String(promo.discount_pct);
+      // Coordinator's own example shape: t('{pct}% off {category}').
+      // Placeholder substitution, not a templating ENGINE (no loops, no
+      // conditionals, exactly two named slots) -- matches this file's "no
+      // templating engine dependency" convention while still letting the
+      // ARABIC translation reorder the two values, which naively
+      // translating the word "off" and concatenating could not do (Arabic
+      // puts the preposition before the object: "خصم 20% على Snacks", not
+      // "20% خصم Snacks").
+      el.textContent = t('{pct}% off {category}')
+        .split('{pct}').join(pct)
+        .split('{category}').join(scopeName);
+      el.hidden = false;
+    },
+
+    // ── Shop WhatsApp QR (idle screen only) ───────────────────────────────────
+    _applyWhatsappQr: function (dataUri) {
+      var wrap = byId('cd-whatsapp');
+      var img = byId('cd-whatsapp-qr');
+      if (!wrap || !img) return;
+      if (!dataUri) { wrap.hidden = true; img.src = ''; return; }
+      img.src = dataUri;
+      img.alt = t('Chat with us on WhatsApp');
+      setText('cd-whatsapp-label', t('Chat with us on WhatsApp'));
+      wrap.hidden = false;
     },
 
     // ── Shop identity (#12) ───────────────────────────────────────────────────
@@ -321,8 +465,13 @@
       });
     },
 
+    // Fix round F7: re-fetches the promotion on EVERY transition back to
+    // idle (init, an emptied cart, and the end of the sale-complete timer --
+    // every call site of _renderIdle() in this file), not just once at page
+    // load, and never on a new timer -- see _loadPromotion's own comment.
     _renderIdle: function () {
       setText('cd-welcome', t('Welcome!'));
+      this._loadPromotion();
       this._show('idle');
     },
 

@@ -90,6 +90,33 @@
     margin: 0; color: var(--text-dim); font-weight: var(--text-weight-medium);
     font-size: clamp(18px, 2.4vw, 28px);
   }
+  /* P1a "the customer screen belongs to the shop" -- today's promotion and
+     the shop's own WhatsApp QR, both idle-screen-only (hidden the instant a
+     cart starts, same _show()/[hidden] mechanism as #cd-idle itself). Sized
+     smaller than #cd-shop-name/#cd-welcome above them -- this is supporting
+     content, not the headline -- but still comfortably readable from a
+     metre or two away, matching this whole document's "second screen" brief. */
+  #cd-promo {
+    margin: 0; color: var(--text); font-weight: var(--text-weight-semibold);
+    font-size: clamp(16px, 2vw, 24px); max-inline-size: 60ch;
+  }
+  #cd-whatsapp {
+    display: flex; flex-direction: column; align-items: center; gap: var(--space-tight);
+  }
+  /* AUDIT #9's exact defect class, caught again here (real-browser proof,
+     retail_p1a_display_e2e.py scenario D2) before it shipped: the plain ID
+     rule above beats the UA stylesheet's own `[hidden]{display:none}` on
+     specificity, so a bare `#cd-whatsapp[hidden]` would otherwise still lay
+     out and occupy space. This selector's specificity (id+attribute) beats
+     the bare id rule above, so -- unlike AUDIT #9's case -- no !important is
+     needed here: both rules target the exact same element, and this one
+     alone is more specific. */
+  #cd-whatsapp[hidden] { display: none; }
+  #cd-whatsapp-qr {
+    inline-size: 128px; block-size: 128px; background: #fff; border-radius: var(--radius-card);
+    padding: var(--space-tight);
+  }
+  #cd-whatsapp-label { margin: 0; color: var(--text-dim); font-size: var(--text-size-subhead); }
 
   /* ── Active: live cart ────────────────────────────────────────────────────── */
   #cd-active { display: flex; flex-direction: column; }
@@ -194,6 +221,23 @@
            CustomerDisplay._applyShopName(). -->
       <h1 id="cd-shop-name"></h1>
       <p id="cd-welcome">Welcome!</p>
+      <!-- P1a -- today's active promotion (GET /promotions/active, the SAME
+           till-facing read the POS itself uses -- see customer-display.js's
+           _loadPromotion()). Hidden with no promotion active; never an empty
+           box (contract: "No number -> no QR and no empty box" applies to
+           this row too -- CustomerDisplay._applyPromotion only reveals it
+           once real text has arrived). -->
+      <p id="cd-promo" hidden></p>
+      <!-- P1a -- the shop's own WhatsApp contact QR, rendered SERVER-SIDE
+           (branding_settings_get -> _shop_whatsapp_qr_data_uri, retail_api.py)
+           and delivered over the SAME one-time branding fetch that already
+           supplies #cd-logo/#cd-shop-name -- see customer-display.js's
+           _loadBranding(). Hidden whenever the shop has not set a WhatsApp
+           number: no placeholder QR, no empty frame. -->
+      <div id="cd-whatsapp" hidden>
+        <img id="cd-whatsapp-qr" alt="">
+        <p id="cd-whatsapp-label"></p>
+      </div>
     </section>
 
     <section id="cd-active" class="cd-screen" hidden aria-live="polite">

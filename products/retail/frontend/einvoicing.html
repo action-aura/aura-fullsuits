@@ -1,106 +1,107 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aura Retail — Jordan E-Invoicing</title>
+<link rel="icon" type="image/svg+xml" href="brand/aura-app-icon.svg">
+<script>
+  // P1a -- same boot-theme contract as whatsapp.html/customer-display.html
+  // (read ONLY 'aura_theme_v2', validate through the allowlist, fall back to
+  // 'light'), copied rather than shared: retail_design_theme_safety_test.js
+  // pins index.html specifically, not this standalone page.
+  (function () {
+    try {
+      var saved = null;
+      try { saved = localStorage.getItem('aura_theme_v2'); } catch (e) {}
+      var names = ['light', 'sand', 'dark', 'night', 'dusk'];
+      document.documentElement.setAttribute('data-theme', names.indexOf(saved) !== -1 ? saved : 'light');
+    } catch (e) {}
+  })();
+</script>
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/rtl.css">
 <style>
-  :root { color-scheme: light dark; }
+  /* P1a: tokenised (css/main.css) instead of this page's old literal-colour
+     + prefers-color-scheme palette, so it now follows the shop's chosen
+     theme instead of the browser's OS-level dark-mode guess. */
   body {
-    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    font-family: var(--font-base, -apple-system, Segoe UI, Roboto, sans-serif);
     max-width: 720px; margin: 48px auto; padding: 0 20px;
-    color: #1a1a1a; background: #fafafa;
+    color: var(--text); background: var(--app-bg);
+    /* Fix round F2 -- see whatsapp.html's identical rule for the full
+       explanation: css/main.css's shell-scoped `body{overflow:hidden}`
+       otherwise leaves this one-long-page document unscrollable by real
+       mouse wheel or the End key. Page-scoped override, source-order win,
+       main.css itself untouched. */
+    overflow-y: auto;
   }
-  @media (prefers-color-scheme: dark) { body { color: #e8e8e8; background: #16181c; } }
   h1 { font-size: 1.4rem; margin-bottom: 4px; }
   h2 { font-size: 1.05rem; margin: 0 0 14px; }
-  .subtitle { color: #666; margin-bottom: 28px; font-size: 0.9rem; }
-  @media (prefers-color-scheme: dark) { .subtitle { color: #999; } }
+  .subtitle { color: var(--text-dim); margin-bottom: 28px; font-size: 0.9rem; }
   .card {
-    background: #fff; border: 1px solid #e0e0e0; border-radius: 10px;
+    background: var(--surface-card); border: 1px solid var(--border-soft); border-radius: var(--radius-card, 10px);
     padding: 24px; margin-bottom: 16px;
   }
-  @media (prefers-color-scheme: dark) { .card { background: #1e2127; border-color: #333; } }
   .state-badge {
     display: inline-block; padding: 4px 10px; border-radius: 20px;
     font-size: 0.8rem; font-weight: 600; margin-bottom: 12px;
   }
-  .state-active { background: #d4f4dd; color: #1a7a3d; }
-  .state-warning { background: #fff3cd; color: #8a6100; }
-  .state-restricted { background: #fde2e2; color: #a3231f; }
-  .state-neutral { background: #e5e7eb; color: #444; }
-  @media (prefers-color-scheme: dark) {
-    .state-active { background: #123a24; color: #6fd88f; }
-    .state-warning { background: #4a3a05; color: #ffd873; }
-    .state-restricted { background: #4a1616; color: #ff8f8a; }
-    .state-neutral { background: #2a2d33; color: #ccc; }
-  }
+  .state-active { background: var(--state-success-border); color: var(--state-success-text); }
+  .state-warning { background: var(--state-warning-border); color: var(--state-warning-text); }
+  .state-restricted { background: var(--state-danger-border); color: var(--state-danger-text); }
+  .state-neutral { background: var(--surface-hover); color: var(--text-dim); }
   label { display: block; font-size: 0.85rem; font-weight: 600; margin: 12px 0 6px; }
   input[type=text], input[type=password], select {
-    width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #ccc;
+    width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-soft);
     font-size: 0.95rem; box-sizing: border-box;
-  }
-  @media (prefers-color-scheme: dark) {
-    input[type=text], input[type=password], select { background: #14161a; border-color: #444; color: #eee; }
+    background: var(--input-bg); color: var(--text);
   }
   .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
   button {
-    background: #2563eb; color: #fff; border: none; border-radius: 6px;
+    background: var(--accent-action); color: var(--text-on-accent); border: none; border-radius: 6px;
     padding: 10px 18px; font-size: 0.9rem; font-weight: 600; cursor: pointer;
   }
-  button:hover { background: #1d4ed8; }
-  button:disabled { background: #93a3c0; cursor: not-allowed; }
+  button:hover { filter: brightness(0.92); }
+  button:disabled { background: var(--surface-hover); color: var(--text-faint); cursor: not-allowed; filter: none; }
   /* .secondary/.danger set their own background and so WIN over the plain
      :disabled rule above at equal specificity, which left "Submit queue now"
      looking perfectly clickable while it was genuinely disabled -- measured on
      the running till 2026-09-08. A control that ignores a click without
      looking like it will is how a shopkeeper decides the software is broken. */
   button.secondary:disabled, button.danger:disabled {
-    background: transparent; color: #93a3c0; border-color: #cbd5e1; cursor: not-allowed;
+    background: transparent; color: var(--text-faint); border-color: var(--border-soft); cursor: not-allowed;
   }
-  button.secondary { background: transparent; color: #2563eb; border: 1px solid #2563eb; }
-  button.danger { background: transparent; color: #c0231f; border: 1px solid #c0231f; }
+  button.secondary { background: transparent; color: var(--accent-action); border: 1px solid var(--accent-action); }
+  button.danger { background: transparent; color: var(--state-danger-text); border: 1px solid var(--state-danger-text); }
   button.small { padding: 4px 10px; font-size: 0.78rem; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
   .message { padding: 10px 12px; border-radius: 6px; font-size: 0.88rem; margin-bottom: 14px; }
-  .message-error { background: #fde2e2; color: #a3231f; }
-  .message-info { background: #e0edff; color: #1e429f; }
-  @media (prefers-color-scheme: dark) {
-    .message-error { background: #3a1616; color: #ff8f8a; }
-    .message-info { background: #16233a; color: #8fb4ff; }
-  }
+  .message-error { background: var(--state-danger-border); color: var(--state-danger-text); }
+  .message-info { background: var(--state-info-border); color: var(--state-info-text); }
   dl { margin: 0; }
-  dt { font-size: 0.78rem; color: #777; margin-top: 10px; }
+  dt { font-size: 0.78rem; color: var(--text-dim); margin-top: 10px; }
   dd { margin: 0; font-size: 0.92rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th, td { text-align: start; padding: 6px 8px; border-bottom: 1px solid #eee; }
-  @media (prefers-color-scheme: dark) { th, td { border-color: #2a2d33; } }
-  .hint { font-size: 0.78rem; color: #777; margin-top: 4px; }
-  @media (prefers-color-scheme: dark) { .hint { color: #999; } }
+  th, td { text-align: start; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
+  .hint { font-size: 0.78rem; color: var(--text-dim); margin-top: 4px; }
   .back-link {
     display: inline-block; margin-bottom: 18px; font-size: 0.85rem;
-    color: #2563eb; text-decoration: none;
+    color: var(--accent-action); text-decoration: none;
   }
   .back-link:hover { text-decoration: underline; }
-  @media (prefers-color-scheme: dark) { .back-link { color: #8fb4ff; } }
   /* Confirm dialog (replaces native confirm() -- see einvoicing.js's
-     confirmDialog for why: this page is standalone and has no design-token
-     stylesheet to draw from, so it uses the same literal-colour + dark-media-
-     query convention as every other rule above, not css/main.css tokens. */
+     confirmDialog). Tokenised the same as the rest of this page now. */
   .confirm-overlay {
     position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.5);
     display: flex; align-items: center; justify-content: center; padding-inline: 20px;
   }
-  @media (prefers-color-scheme: dark) { .confirm-overlay { background: rgba(0,0,0,0.7); } }
-  .confirm-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 24px; max-width: 420px; width: 100%; }
-  @media (prefers-color-scheme: dark) { .confirm-card { background: #1e2127; border-color: #333; } }
+  .confirm-card { background: var(--surface-card); border: 1px solid var(--border-soft); border-radius: 10px; padding: 24px; max-width: 420px; width: 100%; }
   .confirm-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
-  .confirm-message { margin: 0 0 18px; font-size: 0.9rem; color: #444; line-height: 1.5; }
-  @media (prefers-color-scheme: dark) { .confirm-message { color: #ccc; } }
-  /* i18n/RTL (2026-09-09): this page has no design-token stylesheet to draw
-     from (see the confirm-dialog comment above), so the back-arrow glyph is
-     mirrored here directly rather than via css/rtl.css's data-aura-dir
-     convention, which this standalone document does not load. i18n.js sets
+  .confirm-message { margin: 0 0 18px; font-size: 0.9rem; color: var(--text-dim); line-height: 1.5; }
+  /* i18n/RTL: main.css + css/rtl.css are now loaded above, so logical
+     properties already mirror in Arabic; the back-arrow glyph still needs an
+     explicit flip since it is a literal "&larr;" character. i18n.js sets
      dir="rtl" on <html> when Arabic is active -- see its apply(). */
   [dir="rtl"] .i18n-arrow { display: inline-block; transform: scaleX(-1); }
 </style>
@@ -124,24 +125,33 @@
 
   <div id="message-area"></div>
 
+  <!-- Fix round F3 -- see whatsapp.html's identical comment for the full
+       mechanism: i18n.js's apply() runs twice (once from this page's own
+       boot(), once from i18n.js's own independent DOMContentLoaded
+       self-boot), and a container that still carries data-i18n="Loading…"
+       as an ATTRIBUTE after JS has already replaced its CHILDREN gets
+       silently wiped back to "Loading…" by the second, racing apply()
+       call. Fixed the same way: the translated placeholder moves into its
+       own child span, so these containers carry no [data-i18n] of their
+       own. -->
   <div class="card">
     <h2 data-i18n="Status">Status</h2>
-    <div id="status-content" data-i18n="Loading…">Loading…</div>
+    <div id="status-content"><span data-i18n="Loading…">Loading…</span></div>
   </div>
 
   <div class="card">
     <h2 data-i18n="Settings">Settings</h2>
-    <div id="settings-content" data-i18n="Loading…">Loading…</div>
+    <div id="settings-content"><span data-i18n="Loading…">Loading…</span></div>
   </div>
 
   <div class="card">
     <h2 data-i18n="JoFotara account credentials">JoFotara account credentials</h2>
-    <div id="credentials-content" data-i18n="Loading…">Loading…</div>
+    <div id="credentials-content"><span data-i18n="Loading…">Loading…</span></div>
   </div>
 
   <div class="card">
     <h2 data-i18n="Submission queue">Submission queue</h2>
-    <div id="outbox-content" data-i18n="Loading…">Loading…</div>
+    <div id="outbox-content"><span data-i18n="Loading…">Loading…</span></div>
   </div>
 
   <script src="i18n.js"></script>

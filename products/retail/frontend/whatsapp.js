@@ -24,16 +24,23 @@
     : function (s) { return s; };
 
   const messageArea = document.getElementById('message-area');
+  const reportsContent = document.getElementById('reports-content');
   const statusContent = document.getElementById('status-content');
   const templatesContent = document.getElementById('templates-content');
   const recipientsContent = document.getElementById('recipients-content');
   const queueContent = document.getElementById('queue-content');
 
+  // `sendable: true` matches report_whatsapp()'s own allow-list exactly
+  // (retail_api.py: "report_type must be 'daily_sales_summary' or
+  // 'ar_overdue_alert'") -- shift_close_report/low_stock_alert are queued by
+  // their own triggers elsewhere (shift close, the low-stock check), not by
+  // a button on this page, so renderReportCards() below must not draw a
+  // button that would only ever come back 400.
   const REPORT_TYPES = [
-    { key: 'daily_sales_summary', label: 'Daily sales summary', nameKey: 'daily_sales_template_name', bodyKey: 'daily_sales_template_body', namePlaceholder: 'aura_daily_sales' },
-    { key: 'shift_close_report', label: 'Shift close report', nameKey: 'shift_close_template_name', bodyKey: 'shift_close_template_body', namePlaceholder: 'aura_shift_close' },
-    { key: 'low_stock_alert', label: 'Low stock alert', nameKey: 'low_stock_template_name', bodyKey: 'low_stock_template_body', namePlaceholder: 'aura_low_stock' },
-    { key: 'ar_overdue_alert', label: 'Receivables overdue alert', nameKey: 'ar_overdue_template_name', bodyKey: 'ar_overdue_template_body', namePlaceholder: 'aura_ar_overdue' },
+    { key: 'daily_sales_summary', label: 'Daily sales summary', nameKey: 'daily_sales_template_name', bodyKey: 'daily_sales_template_body', namePlaceholder: 'aura_daily_sales', sendable: true },
+    { key: 'shift_close_report', label: 'Shift close report', nameKey: 'shift_close_template_name', bodyKey: 'shift_close_template_body', namePlaceholder: 'aura_shift_close', sendable: false },
+    { key: 'low_stock_alert', label: 'Low stock alert', nameKey: 'low_stock_template_name', bodyKey: 'low_stock_template_body', namePlaceholder: 'aura_low_stock', sendable: false },
+    { key: 'ar_overdue_alert', label: 'Receivables overdue alert', nameKey: 'ar_overdue_template_name', bodyKey: 'ar_overdue_template_body', namePlaceholder: 'aura_ar_overdue', sendable: true },
   ];
 
   const OUTBOX_STATE_LABELS = {
@@ -178,9 +185,19 @@
 
     if (!data.whatsapp_configured) {
       statusContent.appendChild(stateBadge({ text: 'Transport not configured', cls: 'state-warning' }));
+      // Owner decision (contracts.md, 2026-09-28, overrides p1a-plan.json's
+      // own draft copy): there is ONE WhatsApp number -- Action Aura's own --
+      // for every automatic/service message; there are NO per-shop WhatsApp
+      // Business numbers. The OLD copy here named the two env vars this
+      // installation reads (AURA_WHATSAPP_PHONE_NUMBER_ID /
+      // AURA_WHATSAPP_ACCESS_TOKEN) directly to the shop owner, which is both
+      // meaningless to a shopkeeper and promises a "business number" that
+      // does not exist in this product's licensing model. Never reintroduce
+      // an env-var name or "your business number" here -- see
+      // retail_p1a_display_e2e.py's mutation proof for this exact sentence.
       statusContent.appendChild(el('p', {
         className: 'hint',
-        text: t('AURA_WHATSAPP_PHONE_NUMBER_ID / AURA_WHATSAPP_ACCESS_TOKEN are not set on this installation. Nothing can send until the installer sets them.'),
+        text: t("Automatic WhatsApp messages aren't switched on yet. Ask Action Aura to turn them on."),
       }));
     } else {
       statusContent.appendChild(data.enabled
@@ -547,16 +564,34 @@
     const runBtn = el('button', { className: 'secondary', text: t('Process queue now') });
     runBtn.addEventListener('click', () => onRunOnceClicked(runBtn));
     row.appendChild(runBtn);
-
-    const dailyBtn = el('button', { className: 'secondary', text: t('Send daily summary now') });
-    dailyBtn.addEventListener('click', () => onSendNowClicked(dailyBtn, 'daily_sales_summary'));
-    row.appendChild(dailyBtn);
-
-    const arBtn = el('button', { className: 'secondary', text: t('Send AR overdue alert now') });
-    arBtn.addEventListener('click', () => onSendNowClicked(arBtn, 'ar_overdue_alert'));
-    row.appendChild(arBtn);
-
+    // The per-report "send now" buttons used to live here too. P1a moved
+    // them onto their own report cards (see renderReportCards below) so the
+    // page opens on "what can I send", not on a raw processing queue --
+    // this row keeps only the one action ("process queue now") that is
+    // about the QUEUE itself, not about any one report.
     queueContent.appendChild(row);
+  }
+
+  // ─── report cards (P1a: "WhatsApp opens on its four report cards") ───
+
+  function renderReportCards() {
+    clearChildren(reportsContent);
+    REPORT_TYPES.forEach((rt) => {
+      const card = el('div', { className: 'report-card' });
+      card.appendChild(el('p', { className: 'report-card-title', text: t(rt.label) }));
+      if (rt.sendable) {
+        card.appendChild(el('p', { className: 'report-card-note', text: t('Send this report to its recipients right now.') }));
+        const btn = el('button', { className: 'small', id: 'wa-send-' + rt.key, text: t('Send') });
+        btn.addEventListener('click', () => onSendNowClicked(btn, rt.key));
+        card.appendChild(btn);
+      } else {
+        // shift_close_report/low_stock_alert have no on-demand send route
+        // (see REPORT_TYPES's own comment) -- a button here would only ever
+        // 400, so this card explains when it actually goes out instead.
+        card.appendChild(el('p', { className: 'report-card-note', text: t('Sent automatically when it happens, not on demand.') }));
+      }
+      reportsContent.appendChild(card);
+    });
   }
 
   /**
@@ -670,6 +705,7 @@
   // that has to be possible).
   (async function boot() {
     if (typeof window !== 'undefined' && window.AuraI18n) await window.AuraI18n.load();
+    renderReportCards();
     await refreshBranches();
     await Promise.all([refreshStatus(), refreshTemplates(), refreshRecipients(), refreshQueue()]);
   })();
