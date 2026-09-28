@@ -976,6 +976,114 @@ async function testIdleTransitionRefetchesPromotion() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Item 2 (verifier fix round): "expired promotion stays on a quiet idle
+// screen" -- a SINGLE deadline timer for the shown promotion's own
+// ends_at, armed on apply, cleared on every re-apply. Proven with the
+// SAME fake-timer harness every other timer test in this file already
+// uses (makeFakeTimers().fireAll() invokes whatever is pending regardless
+// of its requested delay -- there is no need to fake Date itself: this
+// promotion's ends_at is set a few real seconds in the future, same
+// "arm it, then fire it early" shape testSaleCompleteRevertsToIdleWhen
+// ItsOwnTimerFires already uses for the sale-complete timer).
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function testPromotionHidesAndRefetchesWhenItsOwnDeadlinePasses() {
+  let promoCallCount = 0;
+  // A few real seconds out -- comfortably in the future when this test
+  // runs, but the FAKE setTimeout below never actually waits that long;
+  // fireAll() invokes the callback immediately regardless of the delay it
+  // was scheduled with.
+  const nearFutureEndsAt = sortableDate(5 / 86400);
+  const fake = makeFakeFetch((url) => {
+    if (String(url).indexOf('/settings/branding') !== -1) return jsonResponse(200, { status: 'success', data: {} });
+    if (String(url).indexOf('/promotions/active') !== -1) {
+      promoCallCount++;
+      if (promoCallCount === 1) {
+        return jsonResponse(200, { status: 'success', data: [
+          { id: 1, name: 'Timed Sale', discount_pct: 10, category_id: 1, category_name: 'Snacks', ends_at: nearFutureEndsAt },
+        ] });
+      }
+      return jsonResponse(200, { status: 'success', data: [] });   // the re-fetch after the deadline -- nothing else active
+    }
+    return jsonResponse(404, {});
+  });
+  const { document, timers } = loadCustomerDisplay({ withChannel: false, fetchImpl: fake.fn });
+  await flushMicrotasks();
+  assert.strictEqual(elHidden(document, 'cd-promo'), false, 'the promotion must show before its own deadline');
+  assert.strictEqual(promoCallCount, 1);
+
+  // Fire the pending timer(s) -- NO sale, NO cart event, nothing else in
+  // this file triggers a re-render. This is the whole point of the fix:
+  // without a deadline timer of its own, nothing here would ever notice.
+  timers.fireAll();
+  await flushMicrotasks();
+  assert.strictEqual(elHidden(document, 'cd-promo'), true, 'an expired promotion must hide itself the instant its OWN deadline passes, with no sale');
+  assert.strictEqual(promoCallCount, 2, 'the deadline firing must also re-fetch, in case a different promotion is now active');
+  console.log('PASS: a promotion hides itself and re-fetches the instant its own ends_at passes, with no sale or cart event');
+}
+
+async function testPromotionExpiryTimerIsClearedOnReapply() {
+  // "Clear the timer on every re-apply" (verifier instruction, verbatim).
+  // Applies a promotion with a near-future ends_at, then IMMEDIATELY
+  // re-applies a DIFFERENT one with no ends_at at all -- if the FIRST
+  // timer were not cleared, firing it would wrongly hide the SECOND
+  // (still-current, never-expires) promotion.
+  const { document, CustomerDisplay, timers } = loadCustomerDisplay({ withChannel: false });
+  CustomerDisplay._applyPromotion({ id: 1, name: 'Expiring Soon', discount_pct: 10, category_id: 1, category_name: 'Snacks', ends_at: sortableDate(5 / 86400) });
+  assert.strictEqual(elHidden(document, 'cd-promo'), false);
+  CustomerDisplay._applyPromotion({ id: 2, name: 'Ongoing', discount_pct: 20, category_id: 2, category_name: 'Drinks', ends_at: null });
+  assert.strictEqual(elHidden(document, 'cd-promo'), false);
+  assert.strictEqual(elText(document, 'cd-promo'), '20% off Drinks');
+
+  timers.fireAll();   // the FIRST promotion's (cleared) timer, if it still existed, would fire here
+  assert.strictEqual(elHidden(document, 'cd-promo'), false, 'the stale first timer must not hide the SECOND, still-current promotion');
+  assert.strictEqual(elText(document, 'cd-promo'), '20% off Drinks', 'the second promotion must still be the one shown');
+  console.log('PASS: re-applying a promotion clears the previous one\'s deadline timer');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D2 re-verify: a REAL bug the Item 2 real-browser E2E scenario caught on a
+// real run (retail_p1a_display_e2e.py), that no VM test here had caught --
+// `_promotionIsCurrent` used to compare `ends_at` against `_nowLocalSortable()`
+// as a plain STRING at SECOND granularity (matching core/retail/
+// promotions.py's own inclusive `ends_at>=now_local` SQL), while the deadline
+// timer's `_msUntilSortableTimestamp` has always needed MILLISECOND
+// precision. The two disagreed for up to ~1 real second around every
+// deadline: the timer fires (correct, ms-precise) and hides the row, then
+// its own re-fetch lands within the SAME calendar second as `ends_at` (the
+// server's inclusive boundary still returns the row) -- and the OLD
+// second-granularity `_promotionIsCurrent` said "still current" (string
+// equality, not "<"), showing it again, while the ms-precise scheduler's
+// `deltaMs<=0` guard correctly refused to arm a new timer. Net effect: the
+// promotion got stuck on screen forever, with no timer left to ever hide it
+// short of an unrelated sale/cart event -- proven live on a real Chromium
+// tab, wall clock, a 20-second promotion still visible after a 30-second
+// wait. Fixed by making `_promotionIsCurrent` call the SAME
+// `_msUntilSortableTimestamp` the scheduler already used, so there is only
+// ONE definition of "current" in this file.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function testPromotionAtExactBoundarySecondIsNotCurrent() {
+  const { document, CustomerDisplay } = loadCustomerDisplay({ withChannel: false });
+  // sortableDate(0) truncates "now" down to the START of the CURRENT second
+  // (no milliseconds captured by the 'YYYY-MM-DD HH:MM:SS' shape) -- by the
+  // time this line's own Date.now() read happens, real wall-clock
+  // milliseconds have already elapsed within that same second, so this
+  // instant's TRUE ms-precise deadline is already in the past even though
+  // its second-truncated STRING is exactly equal to "now"'s own
+  // second-truncated string. This is deterministic (never flaky): the
+  // second read inside _promotionIsCurrent can only be equal to or later
+  // than this one, never earlier, so the computed delta is always <= 0.
+  CustomerDisplay._applyPromotion({
+    id: 9, name: 'Boundary Sale', discount_pct: 10, category_id: 1, category_name: 'Snacks', product_id: null,
+    ends_at: sortableDate(0),
+  });
+  assert.strictEqual(elHidden(document, 'cd-promo'), true,
+    'a promotion whose ends_at truncates to the CURRENT second (already ms-past its true deadline, just not second-past it) must be treated as expired -- the exact boundary the second-granularity comparison used to get wrong');
+  console.log('PASS: a promotion at the exact boundary second (ms-expired, second-equal) is correctly treated as not current');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PER-TEST ISOLATION -- a flat sequence reports only the first failure and
 // hides the rest as "not run"; this runs every check regardless.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1009,6 +1117,9 @@ const CHECKS = [
   ['F7 a category- or product-scoped promotion with a resolved name is shown, WITH its scope', testPromotionIncludedWhenScopeResolvedAndCurrent],
   ['F7 an expired promotion is excluded even with a resolved scope; no-ends_at is not', testPromotionExcludedWhenExpired],
   ['F7 the promotion re-fetches on every idle transition, no new timer', testIdleTransitionRefetchesPromotion],
+  ['Item 2: a promotion hides and re-fetches the instant its own deadline passes', testPromotionHidesAndRefetchesWhenItsOwnDeadlinePasses],
+  ['Item 2: re-applying a promotion clears the previous deadline timer', testPromotionExpiryTimerIsClearedOnReapply],
+  ['D2 re-verify: a promotion at the exact boundary second is not current (real bug, real fix)', testPromotionAtExactBoundarySecondIsNotCurrent],
 ];
 
 async function runAll() {

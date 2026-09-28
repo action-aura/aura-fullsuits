@@ -64,7 +64,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -329,6 +329,8 @@ def _run_all(results: Results, screenshots_dir: Path) -> None:
                  lambda: _scenario_standalone_pages_are_really_scrollable(results, browser, screenshots_dir)),
                 ("F3 exactly 4 report cards, EN and AR",
                  lambda: _scenario_exactly_four_report_cards_en_and_ar(results, browser)),
+                ("Item 2: a 20-second promotion hides itself with no sale",
+                 lambda: _scenario_promotion_hides_itself_after_its_own_deadline(results, browser, screenshots_dir)),
             ]
             # Each top-level scenario owns/tears down its OWN Backend, so one
             # scenario's setup failure (e.g. a slow sign-up under machine
@@ -686,8 +688,13 @@ def _scenario_standalone_pages_are_really_scrollable(results: Results, browser, 
         page.set_default_timeout(DEFAULT_WAIT_MS)
         _sign_up_and_license(page, backend, "P1a Scroll Test Co")
 
+        # Item 3(c) (verifier finding): the two input methods must be proven
+        # INDEPENDENTLY, each starting from scrollY=0 on a fresh page load --
+        # the original version did wheel-then-End, so the End assertion's
+        # baseline was already partway down the page and never actually
+        # proved End ALONE could reach the bottom from the top.
         for pg in ("whatsapp", "einvoicing"):
-            def check(pg=pg):
+            def check_wheel_only(pg=pg):
                 wp = context.new_page()
                 wp.set_default_timeout(DEFAULT_WAIT_MS)
                 wp.goto(f"{backend.base_url}/static/{pg}.html", wait_until="domcontentloaded")
@@ -698,6 +705,7 @@ def _scenario_standalone_pages_are_really_scrollable(results: Results, browser, 
                     f"{pg}.html is only {scroll_height}px tall at {VIEWPORT['height']}px viewport -- "
                     f"this scenario needs a page that genuinely overflows to prove scrolling at all"
                 )
+                assert wp.evaluate("window.scrollY") == 0, "must start at the top, unscrolled"
 
                 wp.mouse.move(VIEWPORT["width"] // 2, VIEWPORT["height"] // 2)
                 wp.mouse.wheel(0, 3000)
@@ -707,17 +715,28 @@ def _scenario_standalone_pages_are_really_scrollable(results: Results, browser, 
                     f"a real mouse wheel over {pg}.html scrolled nothing (scrollY stayed {y_after_wheel}) -- "
                     f"the body{{overflow:hidden}} bug is back"
                 )
+                wp.screenshot(path=str(shots / f"f2_{pg}_wheel_only.png"))
+                wp.close()
 
-                last_card_visible_after_end = wp.evaluate(
-                    "() => { const cs = [...document.querySelectorAll('.card')]; "
-                    "const c = cs[cs.length - 1]; if (!c) return null; "
-                    "const r = c.getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; }"
-                )
+            results.run(f"F2 a real mouse wheel alone scrolls {pg}.html (independent check)", check_wheel_only)
+
+            def check_end_key_only(pg=pg):
+                wp = context.new_page()
+                wp.set_default_timeout(DEFAULT_WAIT_MS)
+                wp.goto(f"{backend.base_url}/static/{pg}.html", wait_until="domcontentloaded")
+                wp.wait_for_timeout(1500)
+                assert wp.evaluate("window.scrollY") == 0, "must start at the top, unscrolled -- no wheel in this check at all"
+
+                # Focus the page (not a specific control) before End -- the
+                # browser's own default scroll-the-document behaviour for a
+                # body-focused page, exactly what a real shopkeeper pressing
+                # End with nothing selected gets.
+                wp.locator("body").click(position={"x": 5, "y": 5})
                 wp.keyboard.press("End")
                 wp.wait_for_timeout(400)
                 y_after_end = wp.evaluate("window.scrollY")
-                assert y_after_end >= y_after_wheel, (
-                    f"the End key did not scroll {pg}.html any further (was {y_after_wheel}, still {y_after_end})"
+                assert y_after_end > 0, (
+                    f"the End key ALONE (no wheel) scrolled nothing on {pg}.html (scrollY stayed {y_after_end})"
                 )
                 last_card_rect = wp.evaluate(
                     "() => { const cs = [...document.querySelectorAll('.card')]; "
@@ -725,13 +744,12 @@ def _scenario_standalone_pages_are_really_scrollable(results: Results, browser, 
                     "return {top: r.top, bottom: r.bottom, visible: r.top < innerHeight && r.bottom > 0}; }"
                 )
                 assert last_card_rect["visible"] is True, (
-                    f"the LAST card must be reachable after scrolling to the end -- {last_card_rect} "
-                    f"(was visible before End: {last_card_visible_after_end})"
+                    f"the LAST card must be reachable by the End key ALONE, from the top: {last_card_rect}"
                 )
-                wp.screenshot(path=str(shots / f"f2_{pg}_after_wheel_and_end.png"))
+                wp.screenshot(path=str(shots / f"f2_{pg}_end_key_only.png"))
                 wp.close()
 
-            results.run(f"F2 a real mouse wheel + End key can scroll {pg}.html to its last card", check)
+            results.run(f"F2 the End key alone reaches the last card on {pg}.html (independent check)", check_end_key_only)
     finally:
         backend.stop()
         backend.cleanup()
@@ -768,6 +786,82 @@ def _scenario_exactly_four_report_cards_en_and_ar(results: Results, browser) -> 
                 assert count == 4, f"expected exactly 4 visible report cards in lang={lang!r}, found {count}"
 
             results.run(f"F3 exactly 4 visible report cards render, lang={lang}", check)
+    finally:
+        backend.stop()
+        backend.cleanup()
+
+
+# ── Scenario 9 (Item 2): a 20-second promotion hides itself with no sale ───
+
+def _scenario_promotion_hides_itself_after_its_own_deadline(results: Results, browser, shots: Path) -> None:
+    """Item 2 (verifier fix round): a REAL wall-clock wait, not a mocked
+    timer -- customer-display.js's deadline timer must fire on its own,
+    with no sale, no cart event, nothing else in this scenario ever
+    touching the page after the initial load. 20 seconds (not 2-3) so the
+    real gap between "the timer was armed" and "it actually fired" cannot
+    be explained by test-harness slack (page load, the ~600ms poll, JS
+    event-loop jitter) -- if this passed at 2 seconds it would not
+    distinguish a real deadline timer from an accidental coincidence."""
+    backend = Backend()
+    try:
+        backend.start()
+        context = browser.new_context(viewport=VIEWPORT, reduced_motion="reduce")
+        page = context.new_page()
+        page.set_default_timeout(DEFAULT_WAIT_MS)
+        _sign_up_and_license(page, backend, "P1a Timed Promo Co")
+
+        cat_resp = _api(page, "POST", "/api/sub/retail/categories", {"name": "Twenty Second Category"})
+        cat_id = ((cat_resp or {}).get("data") or {}).get("id")
+        assert cat_id, f"category not created: {cat_resp}"
+        # SAME local wall-clock shape/clock the backend's own now_local uses
+        # (retail_api.py's list_active_promotions: `datetime.now().strftime(...)`)
+        # -- this test process and the backend run on the SAME machine, so
+        # one clock read here is exactly as authoritative as the server's own.
+        ends_at = (datetime.now() + timedelta(seconds=20)).strftime("%Y-%m-%d %H:%M:%S")
+        promo_resp = _api(page, "POST", "/api/sub/retail/promotions", {
+            "name": "Twenty Second Sale", "category_id": cat_id, "discount_pct": 30, "ends_at": ends_at,
+        })
+        assert (promo_resp or {}).get("status") == "success", f"promotion not created: {promo_resp}"
+
+        display = context.new_page()
+        display.set_default_timeout(DEFAULT_WAIT_MS)
+        # REAL bug this exact scenario caught: the promotion stayed visible
+        # forever after its deadline. The deadline timer DID fire (measured),
+        # but the refetch returned the same row (the backend keeps a promotion
+        # through its final second) and the old 'is it current' check compared
+        # ends_at at SECOND precision while the timer-arming code used
+        # MILLISECOND precision: the check said 'still current' and the arming
+        # code refused to set a new timer, so nothing could ever hide it.
+        # Fixed in customer-display.js (_promotionIsCurrent, one definition).
+        # An earlier theory here, Chromium background-tab throttling, was
+        # WRONG (a raw setTimeout on a second tab fires on time). The
+        # bring_to_front() below is kept only because a kiosk's display is the
+        # focused surface of its own monitor; it is not what fixed anything.
+        display.bring_to_front()
+        display.goto(f"{backend.base_url}/static/customer-display.html", wait_until="domcontentloaded")
+        display.wait_for_function(
+            "!document.getElementById('cd-promo').hidden && "
+            "document.getElementById('cd-promo').textContent.includes('Twenty Second Category')",
+            timeout=DEFAULT_WAIT_MS,
+        )
+        display.screenshot(path=str(shots / "item2_promo_visible_before_deadline.png"))
+
+        def check():
+            # No interaction at all for the whole window -- exactly the
+            # "quiet idle screen" the finding named. 30s real wait: 20s for
+            # the promotion's own deadline, +10s slack for the 24h-clamped
+            # setTimeout, the JS event loop and this browser's own timer
+            # coalescing to actually fire and for _loadPromotion()'s
+            # re-fetch to resolve.
+            display.wait_for_timeout(30_000)
+            hidden = display.evaluate("document.getElementById('cd-promo').hidden")
+            assert hidden is True, (
+                "a promotion must hide ITSELF once its own ends_at passes, with no sale and no cart event "
+                "-- the quiet-idle-screen bug this scenario exists to catch"
+            )
+            display.screenshot(path=str(shots / "item2_promo_hidden_after_deadline.png"))
+
+        results.run("Item 2: a 20-second promotion hides itself with no sale (real wall-clock wait)", check)
     finally:
         backend.stop()
         backend.cleanup()

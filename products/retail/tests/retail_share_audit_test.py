@@ -32,8 +32,10 @@ process per file.
 Run:
     C:/Users/MSI/Desktop/aura-fullsuits/.venv/Scripts/python.exe -m pytest products/retail/tests/retail_share_audit_test.py -q
 """
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -67,6 +69,7 @@ import database.schema as sch  # noqa: E402
 from commercial_runtime.identity import user_accounts  # noqa: E402
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
+from api import retail_api as _retail_api_module  # noqa: E402 -- D2 fix: the phone-normaliser parity test below
 
 API = '/api/sub/retail'
 
@@ -349,15 +352,26 @@ def test_owner_can_set_and_read_back_shop_whatsapp_number(shop, raw, expected):
 def test_invalid_shop_whatsapp_number_returns_400_and_does_not_save(shop, bad):
     """0621234567 is a Jordanian LANDLINE shape (06, not 07) -- a real,
     plausible typo, not just garbage, and it must still be refused: a
-    WhatsApp number is a MOBILE number by definition."""
+    WhatsApp number is a MOBILE number by definition.
+
+    Item 3(d) (verifier finding): a VALID number is saved FIRST, so `before`
+    is a real, non-empty value the invalid POST could plausibly clobber --
+    the original version compared against whatever a fresh, never-configured
+    shop already had (empty), which an invalid POST leaving the field STILL
+    empty would satisfy vacuously, without proving anything survived."""
     _company_id, owner, _owner_id = shop
+    seed = _post_branding(owner, shop_whatsapp_number='+962791234567')
+    assert seed.status_code == 200, seed.get_json()
     before = _get_branding(owner).get_json()['data'].get('shop_whatsapp_number')
+    assert before == '+962791234567', "test setup itself failed to seed a real number"
 
     r = _post_branding(owner, shop_whatsapp_number=bad)
     assert r.status_code == 400, r.get_json()
 
     after = _get_branding(owner).get_json()['data'].get('shop_whatsapp_number')
-    assert after == before, "an invalid number must not partially save"
+    assert after == before == '+962791234567', (
+        f"an invalid number must not overwrite (or clear) a previously-saved VALID one -- was {before!r}, now {after!r}"
+    )
 
 
 def test_empty_shop_whatsapp_number_clears_it(shop):
@@ -515,4 +529,131 @@ def test_promotions_active_name_lookup_is_company_scoped(shop):
     row = rows[promo_id]
     assert row['category_name'] is None, (
         f"a category_id belonging to ANOTHER company must never resolve a name -- leaked: {row}"
+    )
+
+
+def test_promotions_active_product_name_lookup_is_company_scoped(shop):
+    """Same proof as test_promotions_active_name_lookup_is_company_scoped
+    above, for the PRODUCT branch of the enrichment -- `products.id` is
+    ALSO a single global AUTOINCREMENT sequence (schema.py), so this needs
+    the same "repoint at another company's row, bypassing create_promotion's
+    own validation" construction to be exploitable at all; a plain
+    same-company read could never distinguish a scoped lookup from an
+    unscoped one, for the identical reason the category version's own
+    docstring explains."""
+    company_id, owner, _owner_id = shop
+    other_company_id = str(uuid.uuid4())
+    other_admin, _other_admin_id = _make_user('admin', other_company_id)
+    other_prod = other_admin.post(f'{API}/products', json={
+        'name': 'Other Co Product', 'sku': 'OTHER-SKU', 'sell_price': 1.0, 'cost_price': 0.5, 'initial_stock': 5,
+    })
+    assert other_prod.status_code == 200, other_prod.get_json()
+    other_prod_id = other_prod.get_json()['data']['id']
+
+    own_prod = owner.post(f'{API}/products', json={
+        'name': 'Own Product', 'sku': 'OWN-SKU', 'sell_price': 1.0, 'cost_price': 0.5, 'initial_stock': 5,
+    })
+    assert own_prod.status_code == 200, own_prod.get_json()
+    own_prod_id = own_prod.get_json()['data']['id']
+    own_promo = owner.post(f'{API}/promotions', json={'name': 'Own Product Promo', 'product_id': own_prod_id, 'discount_pct': 10})
+    assert own_promo.status_code == 200, own_promo.get_json()
+    promo_id = own_promo.get_json()['data']['id']
+
+    # Bypass create_promotion's own validation on purpose -- repoint this
+    # company's promotion at the OTHER company's product id.
+    conn = sch.get_retail_conn()
+    conn.execute("UPDATE promotions SET product_id=? WHERE id=? AND company_id=?", (other_prod_id, promo_id, company_id))
+    conn.commit()
+    conn.close()
+
+    active = owner.get(f'{API}/promotions/active')
+    assert active.status_code == 200
+    rows = {r['id']: r for r in active.get_json()['data']}
+    row = rows[promo_id]
+    assert row['product_name'] is None, (
+        f"a product_id belonging to ANOTHER company must never resolve a name -- leaked: {row}"
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# D2 fix (verifier finding): the server's phone normaliser diverged from
+# share.js's normalizeJoPhone on non-ASCII-digit-script input (Persian,
+# full-width, Devanagari), because Python's bare `\D` is Unicode-aware and
+# JS's `\D` (no `u` flag) is ASCII-only -- see _normalize_jo_phone's own
+# docstring for the full explanation. This runs the SAME input table both
+# implementations were compared against (the verifier's own 37, D2\
+# phone_diff.txt, plus 5 more of this crew's own) through BOTH the real
+# Python function and the real share.js function (via a `node` subprocess,
+# never a re-implementation of either side) and asserts identical results.
+# ═════════════════════════════════════════════════════════════════════════
+
+# Verbatim from D2\phone_inputs.json (the verifier's own table) -- not
+# retyped by hand, to rule out a transcription slip hiding a real diff.
+_PHONE_PARITY_VERIFIER_INPUTS = json.loads(
+    '["0791234567","791234567","00962791234567","962791234567","+962791234567",'
+    '"+962 79 123 4567","079-123-4567","(079) 1234567","٠٧٩١٢٣٤٥٦٧",'
+    '"+٩٦٢٧٩١٢٣٤٥٦٧",'
+    '"٧٩١٢٣٤٥٦٧","۰۷۹۱۲۳۴۵۶۷",'
+    '"7۹۱۲۳۴۵۶۷","07۹۱۲۳۴۵۶۷",'
+    '"7９１２３４５６７","009627９１２３４５６７",'
+    '"7१२३४५६७","７９１２３４５６７",'
+    '"０７９１２３４５６７","0612345678","61234567","+9620791234567",'
+    '"009620791234567","0096279123456789","00962791234567 ","","   ","abc","0791234567x","962 791 234 567",'
+    '"+1 555 123 4567","0791234567\\n","null","0 7 9 1 2 3 4 5 6 7","07912345678","791234567٠",'
+    '"٧٩١٢٣٤٥٦٧"]'
+)
+assert len(_PHONE_PARITY_VERIFIER_INPUTS) == 37, (
+    f"expected the verifier's own 37-input table, got {len(_PHONE_PARITY_VERIFIER_INPUTS)} -- "
+    f"a transcription slip would silently narrow this test's own coverage"
+)
+
+# This crew's own additions -- deliberately including at least one VALID
+# number spelled entirely in a non-Arabic-Indic Unicode digit script (the
+# exact shape the D2 finding says must now be REJECTED, not accepted), so
+# this table does not just repeat the verifier's own cases.
+_PHONE_PARITY_OWN_INPUTS = [
+    '０７９１２３４５６７７',  # full-width, one digit too many (11) -> must reject
+    '०१९१२३४५६७',  # Devanagari 0791234567 shape -> must reject (non-ASCII script)
+    '+962۷۹۱۲۳۴۵۶۷',  # +962 then all-Persian local9 -> must reject
+    '00962' + '7' * 9,  # ASCII control: a genuinely valid 00962-prefixed number
+    '+962-79-999-9999',  # ASCII control: dashes, a different valid local9
+]
+
+_PHONE_PARITY_INPUTS = _PHONE_PARITY_VERIFIER_INPUTS + _PHONE_PARITY_OWN_INPUTS
+
+_SHARE_JS_PATH = SUITE_ROOT / 'products' / 'retail' / 'frontend' / 'share.js'
+
+_NODE_PARITY_SCRIPT = (
+    "const S = require(process.argv[1]);"
+    "let d = '';"
+    "process.stdin.setEncoding('utf8');"
+    "process.stdin.on('data', c => d += c);"
+    "process.stdin.on('end', () => {"
+    "  const inputs = JSON.parse(d);"
+    "  const out = inputs.map(i => { const r = S.normalizeJoPhone(i); return r === false ? null : r; });"
+    "  process.stdout.write(JSON.stringify(out));"
+    "});"
+)
+
+
+def _share_js_normalize_all(inputs):
+    proc = subprocess.run(
+        ['node', '-e', _NODE_PARITY_SCRIPT, str(_SHARE_JS_PATH)],
+        input=json.dumps(inputs), capture_output=True, text=True, encoding='utf-8', timeout=30,
+    )
+    assert proc.returncode == 0, f"node share.js parity harness failed: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def test_phone_normalizer_matches_share_js_across_unicode_digit_scripts():
+    js_results = _share_js_normalize_all(_PHONE_PARITY_INPUTS)
+    assert len(js_results) == len(_PHONE_PARITY_INPUTS)
+    mismatches = []
+    for raw, js_val in zip(_PHONE_PARITY_INPUTS, js_results):
+        py_val = _retail_api_module._normalize_jo_phone(raw)
+        if py_val != js_val:
+            mismatches.append(f"{raw!r}: js={js_val!r} py={py_val!r}")
+    assert not mismatches, (
+        "the server normaliser and share.js's normalizeJoPhone must agree on EVERY input -- disagreements:\n  "
+        + "\n  ".join(mismatches)
     )

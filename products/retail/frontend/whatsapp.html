@@ -63,9 +63,9 @@
     display: inline-block; padding: 4px 10px; border-radius: 20px;
     font-size: 0.8rem; font-weight: 600; margin-bottom: 12px; margin-inline-end: 6px;
   }
-  .state-active { background: var(--state-success-border); color: var(--state-success-text); }
-  .state-warning { background: var(--state-warning-border); color: var(--state-warning-text); }
-  .state-restricted { background: var(--state-danger-border); color: var(--state-danger-text); }
+  .state-active { background: var(--state-success-surface); color: var(--state-success-text); }
+  .state-warning { background: var(--state-warning-surface); color: var(--state-warning-text); }
+  .state-restricted { background: var(--state-danger-surface); color: var(--state-danger-text); }
   .state-neutral { background: var(--surface-hover); color: var(--text-dim); }
   label { display: block; font-size: 0.85rem; font-weight: 600; margin: 12px 0 6px; }
   input[type=text], input[type=tel], select, textarea {
@@ -86,8 +86,8 @@
   button.small { padding: 4px 10px; font-size: 0.78rem; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
   .message { padding: 10px 12px; border-radius: 6px; font-size: 0.88rem; margin-bottom: 14px; }
-  .message-error { background: var(--state-danger-border); color: var(--state-danger-text); }
-  .message-info { background: var(--state-info-border); color: var(--state-info-text); }
+  .message-error { background: var(--state-danger-surface); color: var(--state-danger-text); }
+  .message-info { background: var(--state-info-surface); color: var(--state-info-text); }
   dl { margin: 0; }
   dt { font-size: 0.78rem; color: var(--text-dim); margin-top: 10px; }
   dd { margin: 0; font-size: 0.92rem; }
@@ -108,11 +108,14 @@
      lighter inset than the outer .card so the eye reads them as one group. */
   .report-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
   .report-card {
-    border: 1px solid var(--border-soft); border-radius: 8px; padding: 14px;
+    border: 1px solid var(--border-soft); border-radius: var(--radius-card, 12px); padding: 14px;
     background: var(--surface-sunken); display: flex; flex-direction: column; gap: 8px;
   }
-  .report-card-title { font-size: 0.92rem; font-weight: 600; margin: 0; }
-  .report-card-note { font-size: 0.78rem; color: var(--text-dim); margin: 0; flex: 1; }
+  /* DESIGN.md §5's type scale (11/12/14/15/17/22/30/40px), not an ad-hoc
+     rem value -- 15px for a card title (one step above body text), 12px
+     for its supporting note (the "meta" step). */
+  .report-card-title { font-size: 15px; font-weight: 600; margin: 0; }
+  .report-card-note { font-size: 12px; color: var(--text-dim); margin: 0; flex: 1; }
   /* P1a -- the Meta template fields, collapsed behind "Advanced: Meta
      setup" (contract item 5). <details>/<summary> rather than a JS-driven
      toggle: no state to wire up, keyboard-operable for free, and it degrades

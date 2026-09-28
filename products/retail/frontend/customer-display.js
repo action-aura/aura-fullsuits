@@ -208,16 +208,36 @@
     // function because "is the row still live" and "can we name what it
     // applies to" are independent questions the caller must both answer
     // yes to before showing anything (see _loadPromotion's `eligible` filter).
+    // REAL BUG this exact function used to have (found by the E2E scenario
+    // below on a real run, not by inspection): this used to compare
+    // `promo.ends_at` against `_nowLocalSortable()` as a plain STRING at
+    // SECOND granularity (core/retail/promotions.py's own SQL does the
+    // same, deliberately, since the SQL only ever needs "is this promotion
+    // live right now" once per request). `_schedulePromotionExpiry` below,
+    // by contrast, has always needed MILLISECOND precision (a setTimeout
+    // delay), via `_msUntilSortableTimestamp`. Two different precisions
+    // checking the SAME deadline created a real race: when the deadline
+    // timer fires, `_applyPromotion(null)` hides the row, then
+    // `_loadPromotion()` refetches -- and if that refetch's response and
+    // this re-check land within the SAME calendar second as `ends_at`
+    // (routine: the server's own `ends_at>=now_local` is inclusive of that
+    // second too), the second-granularity string compare here still said
+    // "current" while `_msUntilSortableTimestamp` for the SAME instant had
+    // already ticked past zero -- so the row was shown again AND
+    // `_schedulePromotionExpiry`'s `deltaMs<=0` guard silently refused to
+    // arm a new timer (correctly refusing to schedule a negative delay).
+    // Net effect: the promotion got stuck on screen forever, hidden=false,
+    // no timer, nothing left to ever hide it short of a sale/cart event --
+    // exactly the "quiet idle screen" bug Item 2 exists to catch, just
+    // moved one layer deeper than the fix that introduced the timer.
+    // Fix: use the SAME millisecond-precision parser the scheduler already
+    // uses, so there is only ONE definition of "current" in this file and
+    // the two can never disagree.
     _promotionIsCurrent: function (promo) {
       if (!promo) return false;
       if (promo.ends_at) {
-        // Same sortable 'YYYY-MM-DD HH:MM:SS' shape and the same plain
-        // string comparison core/retail/promotions.py's own SQL uses --
-        // never parsed into a Date, matching this file's "never invent a
-        // clock/format the server did not give it" discipline (see the
-        // module comment's MONEY section for the same rule applied to
-        // figures instead of timestamps).
-        if (String(promo.ends_at) < this._nowLocalSortable()) return false;
+        var deltaMs = this._msUntilSortableTimestamp(promo.ends_at);
+        if (deltaMs != null && deltaMs <= 0) return false;
       }
       return true;
     },
@@ -243,16 +263,65 @@
       return null;
     },
 
-    _nowLocalSortable: function () {
-      var d = new Date();
-      var p = function (n) { return String(n).padStart(2, '0'); };
-      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
-        ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    // Item 2 (verifier fix round) -- "expired promotion stays on a quiet
+    // idle screen". Until now this screen only learned a promotion had
+    // expired the NEXT time something re-triggered _renderIdle (a sale
+    // completing, a cart clearing) -- on a genuinely quiet till, nothing
+    // does that, so an expired promotion could sit on screen indefinitely.
+    // Fix: a SINGLE deadline timer armed for THIS promotion's own ends_at
+    // the moment it is applied -- not a poll, not a repeating interval, one
+    // timeout that fires once. This is the ONE place in the file that
+    // parses `ends_at` into an actual clock reading -- `_promotionIsCurrent`
+    // above calls straight into this function too (see its own comment on
+    // why it no longer keeps a separate, lower-precision check), via a
+    // local-time Date CONSTRUCTOR (y, m-1, d, h, mi, s) -- never
+    // `new Date(theString)`, whose parsing of a bare "YYYY-MM-DD HH:MM:SS"
+    // (no 'T', no zone) is implementation-defined across browsers (some
+    // read it as UTC, some as local) and would silently disagree with
+    // every OTHER comparison in this file, which treats the string as
+    // local wall-clock, byte for byte.
+    _msUntilSortableTimestamp: function (s) {
+      var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(s == null ? '' : s));
+      if (!m) return null;
+      var target = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+      return target - Date.now();
+    },
+
+    _clearPromotionExpiryTimer: function () {
+      if (this._promoExpiryTimer) { global.clearTimeout(this._promoExpiryTimer); this._promoExpiryTimer = null; }
+    },
+
+    // Armed only when the promotion actually carries an ends_at (many
+    // don't -- "never ends" is a real, common shape, see
+    // _promotionIsCurrent's own comment) and clamped to a SANE MAXIMUM
+    // (24h): a promotion ending next month must not leave a 30-day
+    // `setTimeout` sitting in memory on a kiosk screen that may never
+    // reload -- the clamp just means a still-current promotion gets a
+    // harmless extra re-check after 24h, at worst re-arming itself for the
+    // remaining time (this fires _applyPromotion() again via
+    // _loadPromotion() below, and the caller schedules a fresh timer off
+    // whatever ends_at that fetch returns, exactly like any other re-apply).
+    _schedulePromotionExpiry: function (endsAt) {
+      if (!endsAt) return;
+      var deltaMs = this._msUntilSortableTimestamp(endsAt);
+      if (deltaMs == null || deltaMs <= 0) return;   // unparseable, or already past -- _promotionIsCurrent already refused this promotion in that case
+      var MAX_TIMER_MS = 24 * 60 * 60 * 1000;
+      var self = this;
+      this._promoExpiryTimer = global.setTimeout(function () {
+        self._promoExpiryTimer = null;
+        self._applyPromotion(null);   // hide the instant the deadline passes, never wait for the next sale/cart event
+        self._loadPromotion();        // and refetch -- a DIFFERENT promotion may already be active
+      }, Math.min(deltaMs, MAX_TIMER_MS));
     },
 
     _applyPromotion: function (promo) {
       var el = byId('cd-promo');
       if (!el) return;
+      // Cleared on EVERY call, not just the ones that end up showing
+      // something -- a stale timer from a PREVIOUS promotion must never
+      // outlive the row it was armed for, whether this call is hiding the
+      // row, showing a different promotion, or showing nothing at all.
+      this._clearPromotionExpiryTimer();
       var scopeName = this._promotionScopeName(promo);
       if (!promo || !this._promotionIsCurrent(promo) || !scopeName) { el.hidden = true; return; }
       // discount_pct is a plain DB value (core/retail/promotions.py), never
@@ -275,6 +344,7 @@
         .split('{pct}').join(pct)
         .split('{category}').join(scopeName);
       el.hidden = false;
+      this._schedulePromotionExpiry(promo.ends_at);
     },
 
     // ── Shop WhatsApp QR (idle screen only) ───────────────────────────────────

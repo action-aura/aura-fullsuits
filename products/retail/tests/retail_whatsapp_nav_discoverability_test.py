@@ -18,6 +18,7 @@ Run:
     pytest products/retail/tests/retail_whatsapp_nav_discoverability_test.py -v
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -176,3 +177,39 @@ def test_templates_advanced_details_is_collapsed_by_default():
         f"#templates-advanced must be COLLAPSED by default (no `open` attribute) -- an ordinary shop "
         f"owner sending a receipt should never see raw Meta template fields unasked: {tag_src!r}"
     )
+
+
+# Item 3(b) (verifier finding): a regression guard for the WHOLE class of
+# bug F3 fixed, not just the one container that bug happened to be found
+# on. i18n.js's apply() runs TWICE for a page like this one (once from the
+# page's own boot(), and AGAIN, independently, from i18n.js's own
+# DOMContentLoaded self-boot -- see whatsapp.html's own comment on
+# #reports-content for the full mechanism), and it overwrites the
+# textContent of EVERY element carrying data-i18n unconditionally. Any
+# container whose CHILDREN get replaced by JS (every one of these *-content
+# divs does) must never carry data-i18n on ITSELF, or the second, racing
+# apply() call wipes out whatever JS just rendered. This scans the OPENING
+# TAG ONLY (bounded by the first '>'), so a data-i18n on a CHILD element
+# inside the container -- the correct fix, e.g. `<div id="reports-content">
+# <span data-i18n="Loading…">` -- is never flagged; only the container's
+# OWN attribute is.
+def _content_container_ids_with_data_i18n(html):
+    offenders = []
+    for m in re.finditer(r'<[a-zA-Z][^>]*\bid="([^"]*-content)"[^>]*>', html):
+        if 'data-i18n' in m.group(0):
+            offenders.append(m.group(1))
+    return offenders
+
+
+def test_no_content_container_carries_data_i18n_in_whatsapp_or_einvoicing():
+    client = app.test_client()
+    for page in ('whatsapp.html', 'einvoicing.html'):
+        r = client.get(f'/static/{page}')
+        assert r.status_code == 200
+        body = r.get_data(as_text=True)
+        offenders = _content_container_ids_with_data_i18n(body)
+        assert not offenders, (
+            f"{page}: these *-content containers carry data-i18n on themselves, which the "
+            f"SECOND, racing apply() call will use to wipe out whatever JS rendered into them "
+            f"in Arabic (F3's defect class, not just its one original instance): {offenders}"
+        )

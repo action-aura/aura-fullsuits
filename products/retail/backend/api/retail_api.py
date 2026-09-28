@@ -14678,7 +14678,8 @@ def _normalize_jo_phone(raw):
     cross-reference (this docstring, and share.js's own) than to build one.
 
     Accepts, after converting Arabic-Indic digits (٠-٩) to Western and
-    stripping every non-digit character (spaces, dashes, '+'):
+    stripping every non-ASCII-digit character (spaces, dashes, '+', AND any
+    OTHER script's digits -- see the ASCII-only note just below):
       - '00962' + 9-digit local number
       - '962' + 9-digit local number (12 digits total)
       - a leading '0' + 9-digit local number (10 digits total, the shape a
@@ -14688,11 +14689,27 @@ def _normalize_jo_phone(raw):
     mobile prefix -- landlines are not a WhatsApp number). Returns the E.164
     string ('+9627XXXXXXXX') on success, None for anything else -- an empty/
     unparseable value is the CALLER's job to treat as "clear the number",
-    never this function's."""
+    never this function's.
+
+    D2 fix (verifier finding, mutation-proved in retail_share_audit_test.py):
+    Python's bare `\\d`/`\\D` are UNICODE-aware -- they match/reject any
+    script's digit character, not just ASCII 0-9. share.js's own
+    normalizeJoPhone runs in a JS regex, where `\\d`/`\\D` (no `u` flag) ARE
+    ASCII-only by definition. That mismatch meant a Persian ('۰۷۹۱۲۳۴۵۶۷'),
+    full-width ('７９１２３４５６７'), or Devanagari ('7९१२३४५६७') digit
+    string that share.js correctly REJECTS (`None`) used to be silently
+    ACCEPTED here after the Arabic-Indic mapping -- because `\\D` never
+    stripped those non-Arabic-Indic Unicode digits either, `str.isdigit()`-
+    style logic further down would treat them as real digits, and the
+    result was a `+962...` string containing NON-ASCII characters -- a wa.me
+    link and a QR payload that could never actually resolve. `[^0-9]`
+    (an explicit ASCII digit class, not `\\D`) makes the two implementations
+    agree on the ONE digit alphabet both accept post-mapping: ASCII 0-9 and
+    the Arabic-Indic block this function converts to it -- nothing else."""
     if raw is None:
         return None
     western = str(raw).translate(_ARABIC_INDIC_DIGITS)
-    digits = re.sub(r'\D', '', western)
+    digits = re.sub(r'[^0-9]', '', western)
     if not digits:
         return None
     if digits.startswith('00962'):
@@ -14705,7 +14722,7 @@ def _normalize_jo_phone(raw):
         local9 = digits
     else:
         return None
-    if not re.match(r'^7\d{8}$', local9):
+    if not re.match(r'^7[0-9]{8}$', local9):
         return None
     return '+962' + local9
 
@@ -14732,8 +14749,17 @@ def _shop_whatsapp_qr_data_uri(raw_number):
     encoder, never a second one. Imported lazily, matching that call site's
     own reasoning (an optional feature must not cost every other route an
     import it does not need).
+
+    D2 fix: `[^0-9]`, not the Unicode-aware `\\D` -- see
+    _normalize_jo_phone's own docstring for the full reasoning (a bare `\\D`
+    strips no non-ASCII-digit characters, so a value containing them would
+    build a wa.me URL/QR payload with non-ASCII bytes in it, which cannot
+    resolve). This function is a defensive read (the stored value is
+    already E.164-normalised at write time by _normalize_jo_phone), but a
+    row written by an older build or edited directly in the database gets
+    the same ASCII-only guarantee here.
     """
-    digits = re.sub(r'\D', '', raw_number or '')
+    digits = re.sub(r'[^0-9]', '', raw_number or '')
     if not digits:
         return None
     from commercial_runtime.einvoicing.qr import render_qr_svg_data_uri

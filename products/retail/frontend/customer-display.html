@@ -96,9 +96,11 @@
      smaller than #cd-shop-name/#cd-welcome above them -- this is supporting
      content, not the headline -- but still comfortably readable from a
      metre or two away, matching this whole document's "second screen" brief. */
+  /* DESIGN.md §5's fixed type scale (11/12/14/15/17/22/30/40px), not a
+     responsive clamp() -- 22px, one step below #cd-welcome. */
   #cd-promo {
     margin: 0; color: var(--text); font-weight: var(--text-weight-semibold);
-    font-size: clamp(16px, 2vw, 24px); max-inline-size: 60ch;
+    font-size: 22px; max-inline-size: 60ch;
   }
   #cd-whatsapp {
     display: flex; flex-direction: column; align-items: center; gap: var(--space-tight);
@@ -113,6 +115,9 @@
      alone is more specific. */
   #cd-whatsapp[hidden] { display: none; }
   #cd-whatsapp-qr {
+    /* White in EVERY theme, deliberately not a token: a QR code needs a
+       light "quiet zone" around its modules to scan reliably, and a dark
+       theme's own surface tokens would put dark modules on a dark ground. */
     inline-size: 128px; block-size: 128px; background: #fff; border-radius: var(--radius-card);
     padding: var(--space-tight);
   }

@@ -143,7 +143,12 @@
       var status = document.createElement('td');
       var badge = document.createElement('span');
       badge.className = 'state-badge ' + (device.revoked ? 'state-restricted' : 'state-active');
-      badge.textContent = device.revoked ? t('Removed') : t('Connected');
+      // Item 4(e) (verifier finding, DESIGN.md review): the main catalogue's
+      // 'Removed' key ("المحذوفة") reads as a plural/collective adjective
+      // ("the deleted ones") in Arabic, not "this device was removed from
+      // the shop" -- the two meanings share an English word but not an
+      // Arabic one. Its own key, not shared with anything else.
+      badge.textContent = device.revoked ? t('Removed from the shop') : t('Connected');
       status.appendChild(badge);
       tr.appendChild(status);
 
