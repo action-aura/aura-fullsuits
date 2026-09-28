@@ -526,8 +526,12 @@ real-screen walk for every visual change.** Drivers exist:
    QR for e-invoicing when enabled.
 4. **Messages the shop sends.** Email (SMTP notifications exist) and
    WhatsApp templates for low stock, shift close, daily summary and overdue
-   receivables, in both languages; later, per-shop templates when each shop
-   has its own WhatsApp number.
+   receivables, in both languages. Owner decision 2026-09-28: there is ONE
+   automatic-message WhatsApp number, Action Aura's own, and no per-shop
+   WhatsApp Business numbers; copy must never promise "your business number".
+   A till's one-tap "Send on WhatsApp" (wa.me link) sends from whatever
+   WhatsApp that computer is signed into, and the customer-screen QR shows
+   the shop's own contact number.
 5. **Aura Clinic's identity.** Same shell and tokens; decide whether Clinic
    gets its own accent within the same rules or stays on the shared one; a
    CLINIC lockup exists by construction.
