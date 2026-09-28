@@ -24,6 +24,74 @@ now an explicit state machine (LauncherState), the readiness check targets
 the unauthenticated /api/health endpoint via
 commercial_runtime.launcher_support.check_readiness(), and the fatal-error
 dialog is time-bounded so it can never block process exit indefinitely.
+
+Item W4 (Phase 0 review round 3 correction, on items #10/#11/D1-D3 below):
+those items WERE measured live against a real, frozen PyInstaller exe built
+from this tree, in round 2 -- despite an earlier round-2 verifier session in
+this same file's history believing native-window checks (Win32 EnumWindows,
+a real WM_CLOSE) were environmentally infeasible from a sandboxed agent
+session ("EnumWindows found ZERO windows for the whole launcher process").
+That diagnosis was wrong, not a real limitation: `.venv\\Scripts\\python.exe`
+is a redirector stub, and the pywebview/WebView2 windows belong to ITS CHILD
+PROCESS, not the stub's own PID, so a PID-only EnumWindows lookup finds
+nothing even while WebView2 is rendering correctly underneath it. Walking
+the process tree (enumerate every descendant PID of the launched process and
+match windows against ANY of them, not just the top one) finds the real
+windows. A later round-2 verifier session, using exactly that technique,
+drove real WM_CLOSE against this exact code and the frozen exe and confirmed:
+D1 (6/6 default relaunches came back signed out; 4/4
+AURA_TILL_REMEMBER_LOGIN=1 relaunches came back signed in; a cookie row was
+on disk before every relaunch), #10 (the theme and aura_printer_cfg survived
+all 14 relaunches, 3 of them on the exe), D2 (WM_CLOSE on the display removes
+its window and CDP target; a second open call does not duplicate it; WM_CLOSE
+on the till with the display still open ends the process within 15s), and D3
+(native titles went from ['Aura Retail'] to ['Customer Display','Aura
+Retail']). A future session hitting the same "EnumWindows sees nothing"
+symptom against this launcher should walk the process tree before concluding
+the check is infeasible -- it usually is not.
+
+CORRECTION to the paragraph above (Phase 0 review round 3, SECOND pass on
+item W4 itself): it originally labelled those relaunch numbers "D1/W1"
+together, as if they also verified W1's fail-closed retry branch
+(`_clear_cookies_then_load`'s `except` path, below). They did not -- every
+one of those relaunches was a NORMAL launch where `clear_cookies()`
+succeeded on the first try, so none of them ever reached that branch at all.
+This was a real, live instance of the exact thing this being a bare
+docstring risks: a specific, cited-looking pass count ("D1/W1... 6/6...")
+sitting next to code it does not actually cover, with nothing mechanical to
+catch the claim drifting from the code -- precisely the "stale status doc"
+failure mode this codebase has hit before (see CLAUDE.md's own history of
+correcting itself). A round-3 adversarial verifier, working from this exact
+paragraph, found that the fail-closed branch it seemed to vouch for was
+ITSELF BROKEN: `window.load_html(_SESSION_SAFETY_BLOCKED_HTML)` alone never
+reaches the screen when CoreWebView2 is not yet ready (real
+`Window.load_html()`, webview/window.py:290-302, never sets `window.html`;
+`on_webview_ready`, edgechromium.py:305-311, is what falls back to
+`window.html` once the core comes up, and that attribute was never set) --
+the till was left on a permanently blank window instead of the blocked page.
+Now fixed (`_clear_cookies_then_load` sets `window.html` directly before
+calling `load_html()` -- see that function's own docstring) and covered two
+ways that WOULD have caught the original gap: a mutation-proven unit test
+(`retail_p0_desktop_launcher_test.py::
+test_cookie_clear_fails_closed_when_both_attempts_raise`, extended with
+`_FlakyClearCookiesWindow.simulate_core_becomes_ready()`, which reproduces
+`on_webview_ready`'s exact real_url/window.html/DEFAULT_HTML decision
+instead of only recording that `load_html()` was called), and a live check
+against the real, unmodified `_clear_cookies_then_load` on a real pywebview/
+WebView2 window with `clear_cookies()` forced to raise with NO warm-up delay
+(the actual not-ready-core precondition; an earlier live check in this same
+round had slept first and always landed in the already-ready fast path,
+which cannot see this bug -- same shape as the fixture gap above). Measured
+(`C:\\Users\\MSI\\.claude\\jobs\\c5051313\\tmp\\p0\\r2\\desktop\\r3\\live_w1.py`
+/ `live_w1_results.json`): with the fix, the blocked page's own text was in
+the DOM within 2.3s and the live app URL was never reached; with the fix
+reverted, every one of 46 samples across 12s stayed `{title:'', body:'',
+href:'about:blank'}` -- the exact permanently-blank window the finding
+described, restored and reconfirmed green afterwards (byte-identical
+restore, `cmp`). The lesson this correction leaves in place on purpose,
+rather than deleting: a claim like the paragraph above, however accurately
+cited at the time it was written, is not the same thing as a test that
+would notice if the code it describes stopped being true.
 """
 import os
 import sys
@@ -45,6 +113,15 @@ from commercial_runtime.launcher_support import (  # noqa: E402
 )
 
 APP_NAME = 'Aura Retail'
+# Item D1 (Phase 0 review round 2) -- SESSION SAFETY DEFAULT. Set to skip the
+# launch-time cookie clear below and let the till stay signed in across a
+# relaunch/reboot (Flask's session cookie is permanent for 31 days --
+# commercial_runtime/identity/mt_auth.py sets session.permanent=True on every
+# login with no "remember me" opt-in of its own). Off by default: see
+# _run_native_window()'s comment for why "off" is the conservative choice
+# pending the owner's decision on till session lifetime, not a claim that
+# 31-day auto-login is the intended final behaviour.
+REMEMBER_LOGIN_ENV = 'AURA_TILL_REMEMBER_LOGIN'
 HOST = '127.0.0.1'  # what THIS machine's own UI/readiness-checks talk to --
 # always loopback, regardless of bind mode below (binding 0.0.0.0 still
 # accepts loopback connections, so this never needs to change).
@@ -144,6 +221,33 @@ def _acquire_single_instance():
         return 'unsupported'
 
 
+def _clear_edge_fallback_cookies(profile_dir: str) -> None:
+    """Item W2 (Phase 0 review round 3 finding). `_open_app_window` below
+    launches Edge/Chrome with a PERSISTENT `--user-data-dir` -- unlike the
+    native WebView2 path (item D1/W1 above), nothing has ever cleared ITS
+    cookie jar, so a till that ends up on this fallback (WebView2 missing or
+    unavailable) stays signed in as the last cashier for the full 31-day
+    Flask session lifetime, across every relaunch, indefinitely -- D1's
+    'session safety default' held for only one of the launcher's two UI
+    paths.
+
+    Chromium (Edge included, since Chromium-based) keeps its cookie jar at
+    `<user-data-dir>/Default/Network/Cookies`, since the cookie store moved
+    into the Network Service process; `-journal` is SQLite's write-ahead-log
+    sidecar for that same file and must go with it, or a stale journal can
+    replay old rows back into a fresh database on next open. Best-effort and
+    silent on a profile that was never launched before (first run has
+    neither file) -- `missing_ok=True` makes that the common case, not a
+    logged warning.
+    """
+    cookies_dir = Path(profile_dir) / 'Default' / 'Network'
+    for name in ('Cookies', 'Cookies-journal'):
+        try:
+            (cookies_dir / name).unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning(f'Could not clear Edge/Chrome fallback cookie file {name}: {exc}')
+
+
 def _open_app_window(url):
     import subprocess
     import shutil
@@ -159,6 +263,11 @@ def _open_app_window(url):
     if not exe:
         return None
     profile = str(Path(_app_data) / 'app_window')
+    # Item W2 (Phase 0 review round 3): mirrors D1/W1's REMEMBER_LOGIN_ENV
+    # opt-out on the native path -- the same explicit escape hatch for a
+    # shop that wants this fallback to stay signed in too.
+    if os.environ.get(REMEMBER_LOGIN_ENV) != '1':
+        _clear_edge_fallback_cookies(profile)
     try:
         return subprocess.Popen([
             exe, f'--app={url}', f'--user-data-dir={profile}',
@@ -190,13 +299,389 @@ def _fatal(message: str, reason_code: str):
     sys.exit(1)
 
 
+class CustomerDisplayAPI:
+    """js_api exposed to the till's own window as `window.pywebview.api`.
+
+    Backs cross-crew interface I-1's `open_customer_display()`. Before this
+    class existed, create_window() was never given a js_api=, so
+    `window.pywebview.api` never existed and the till's own
+    _openCustomerDisplay() (subsystem-retail.js:1244-1310) always fell
+    through to its `window.open(url)` branch. pywebview hands window.open
+    calls to the SYSTEM BROWSER (webview/platforms/edgechromium.py:255-261),
+    a different program with no session cookie -- so the display's own API
+    calls came back 401. This class opens a real second NATIVE window
+    instead, which (once item #10's private_mode=False is in effect) shares
+    this process's WebView2 profile and therefore the till's own session.
+
+    Item #10 is what makes that shared session possible; this class is what
+    actually opens the second window. Moving sale state across to it (I-1
+    (b): the /customer-display/state relay) and the till's status dot (I-1
+    (d)) are C2/C3c/C6's items, not this file's.
+
+    Phase 0 review round 2 (C7): the first version of this class detected a
+    closed display window by catching an exception from Window.restore().
+    Real pywebview 6.2.1 never raises there -- see open_customer_display()'s
+    comment below -- so that branch was dead code and every call after the
+    operator closed the display returned True with nothing on screen for
+    the rest of the process's life. close_display() is also new: it is
+    wired to the TILL window's own closed event in _run_native_window, and
+    fixes the mirror-image bug (the process surviving as an orphan when the
+    till closes while the display is still open).
+
+    Item D3 (Phase 0 review round 2): the native window's title used to be
+    f'{APP_NAME} - Customer Display' -- literally 'Aura Retail - Customer
+    Display' -- which puts Action Aura's own vendor name on a screen the
+    SHOP's customer looks at, not the shop's own identity. The title is now
+    neutral ('Customer Display') or, when the caller passes shop_name (the
+    shop's own branding/signup name -- see item #12's read-time fallback in
+    retail_api.py), '{shop_name} — Customer Display', matching the exact
+    wording and em-dash separator customer-display.js:159 already uses for
+    that page's own document.title -- so the OS taskbar/alt-tab text agrees
+    with what the in-page title already says once the page itself loads.
+    """
+
+    def __init__(self, base_url: str):
+        self._base_url = base_url
+        self._window = None
+
+    def _on_display_closed(self):
+        """Subscribed to the display window's own events.closed the moment
+        it is created below. This is the PRIMARY way self._window is kept
+        in sync with reality: it fires the instant the operator closes the
+        display (or close_display() destroys it), independent of whether
+        open_customer_display() is ever called again. Without it,
+        close_display() could be left holding a reference to a Window
+        whose native handle is already gone."""
+        self._window = None
+
+    def open_customer_display(self, title: str | None = None, shop_name: str | None = None):
+        """Called from JS as window.pywebview.api.open_customer_display().
+
+        Item W3 (Phase 0 review round 3 finding): D3 (round 2) fixed the
+        vendor-name half of the native title but left it permanently
+        English -- the till calls this with no arguments at all, so an
+        Arabic shop's taskbar/title bar always read 'Customer Display',
+        never its translation. `title` is the new, preferred parameter: a
+        caller (the till, which owns t() and can pass an already-translated
+        string, e.g. t('Customer Display')) that supplies one gets it used
+        VERBATIM -- this file has no i18n mechanism of its own and must not
+        invent one. `shop_name` (existing, round-2 behaviour) is the
+        fallback when no ready-made title is given, and the neutral English
+        'Customer Display' is the last resort, unchanged from round 2, so
+        today's zero-argument caller keeps its exact current behaviour."""
+        title = (title or '').strip() or None
+        import webview
+        try:
+            # Real pywebview 6.2.1's restore() on a window the operator has
+            # already closed is a SILENT NO-OP, never an exception:
+            # winforms.py's restore() (and destroy()/hide()/etc) resolve the
+            # uid via `BrowserView.instances.get(uid)`, get None, and simply
+            # return (winforms.py:389-395 deletes the closed window from
+            # `instances` in on_close; :1033-1036 is restore()'s own lookup).
+            # An earlier version of this method relied on restore() RAISING
+            # to detect a dead window -- a real closed pywebview Window
+            # never does that, so restore() would silently "succeed", this
+            # method would unconditionally `return True`, and NO window
+            # would ever open again for the life of the process while the
+            # till was told every call succeeded (Phase 0 review round 2
+            # finding). `self._window in webview.windows` is the real
+            # signal pywebview itself maintains -- on_close removes a
+            # closed window from that exact module-level list
+            # (winforms.py:392-393) -- and is the backstop for any race
+            # that gets ahead of _on_display_closed above, which is the
+            # primary path.
+            if self._window is not None and self._window in webview.windows:
+                # Already open -- bring the existing one back instead of
+                # spawning a duplicate window on every till click.
+                self._window.restore()
+                return True
+            self._window = None
+            # webview.screens is a pywebview @module_property (see the
+            # installed 6.2.1 source, webview/__init__.py:512-521) -- a
+            # plain list read WITHOUT calling it. `webview.screens()[1]`
+            # would raise TypeError; `webview.screens[1]` is correct.
+            screens = webview.screens
+            second_screen = screens[1] if len(screens) > 1 else None
+            # Item D3: neutral title, never the vendor name. Item W3: a
+            # caller-supplied `title` (already resolved/translated by the
+            # caller) wins outright; otherwise fall back to shop_name plus
+            # the same wording/em-dash convention customer-display.js:159
+            # already uses for that page's own document.title; 'Customer
+            # Display' is the final, neutral default.
+            resolved_title = title or (
+                f'{shop_name} — Customer Display' if shop_name else 'Customer Display'
+            )
+            window = webview.create_window(
+                resolved_title,
+                f'{self._base_url}/static/customer-display.html',
+                screen=second_screen,
+                # Fullscreen only when a dedicated second monitor exists --
+                # fullscreening on the till's own single monitor would just
+                # bury the till itself.
+                fullscreen=second_screen is not None,
+                width=1024,
+                height=768,
+            )
+            window.events.closed += self._on_display_closed
+            self._window = window
+            return True
+        except Exception as exc:
+            log.warning(f'Could not open customer display window: {exc}')
+            return False
+
+    def close_display(self):
+        """Wired to the TILL window's own events.closed in
+        _run_native_window (item #11(a) orphan-process fix). pywebview
+        (winforms) only exits the process once EVERY window it owns has
+        closed -- on_close checks `len(BrowserView.instances) == 0`
+        (winforms.py:397) before invoking WinForms.Application.Exit(). So
+        if the operator closes the till while the customer display is
+        still open, the process -- and the backend thread it hosts --
+        survives as an orphan with only the display on screen, and a
+        relaunch then hits the single-instance mutex ("Aura Retail is
+        already running") with no till window to find (Phase 0 review
+        round 2 finding). Destroying the display here as soon as the till
+        closes means the till closing is always enough on its own to reach
+        zero instances. Swallows errors: this runs during teardown and
+        must never prevent the till itself from closing."""
+        try:
+            if self._window is not None:
+                self._window.destroy()
+        except Exception:
+            pass
+
+
+# Item W1 (Phase 0 review round 3). How many times `_clear_cookies_then_load`
+# calls `window.clear_cookies()` before giving up and failing closed: one
+# normal attempt, one retry.
+_COOKIE_CLEAR_ATTEMPTS = 2
+
+# Item W1 (Phase 0 review round 3). Shown via `window.load_html()` -- never
+# `load_url()` -- when clear_cookies() could not be confirmed to have run
+# after a retry, so the till is never left facing the live app with a
+# session cookie that might still belong to the previous cashier. Deliberately
+# does not attempt to reach the app's own `/api/auth/logout` route
+# (commercial_runtime/identity/auth_routes.py:58-61, `session.clear()`):
+# that route is POST-only, so a plain navigation (a GET) would 405 rather
+# than log anyone out, and driving a real POST from this blank, not-yet-
+# loaded page would mean a JS `fetch()` racing the same WebView2 core that
+# just failed to confirm it was even ready -- no more trustworthy than the
+# thing that failed. Refusing to load the app at all is the guaranteed-safe
+# version of "do not show a live session".
+#
+# Hardcoded bilingual (EN then AR), not run through t(): this Python file has
+# no bridge into the frontend's JS translation catalogue (the same reason
+# D3's shop_name-only native title above stays English -- see that item's
+# round-2 review note), and even if it did, nothing here can read the
+# operator's saved language preference before the app itself has loaded,
+# which is exactly the thing this page exists to refuse to do. The Arabic
+# translation is also recorded in i18n-R2-desktop.json per the crew contract,
+# even though no t() call site will ever consume it from this file.
+_SESSION_SAFETY_BLOCKED_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Aura Retail</title>
+<style>
+  body { margin:0; height:100vh; display:flex; align-items:center;
+         justify-content:center; background:#16233D; color:#F6F4EF;
+         font-family:sans-serif; text-align:center; }
+  div { max-width:480px; padding:24px; }
+  p[dir="rtl"] { font-family:"Segoe UI",Tahoma,sans-serif; }
+  hr { border:none; border-top:1px solid rgba(246,244,239,0.25); margin:16px 0; }
+</style></head>
+<body><div>
+  <h1>Aura Retail could not start safely</h1>
+  <p>The app window could not confirm the previous session was cleared, so it
+  will not open with a possibly signed-in session.</p>
+  <p>Please close this window and relaunch Aura Retail.</p>
+  <hr>
+  <p dir="rtl">تعذر تشغيل Aura Retail بأمان. تعذر التأكد من مسح الجلسة
+  السابقة، لذلك لن يتم فتح التطبيق مع جلسة قد تكون لا تزال مسجّلة الدخول.
+  يرجى إغلاق هذه النافذة وإعادة تشغيل Aura Retail.</p>
+</div></body></html>"""
+
+
+def _clear_cookies_then_load(window, app_url: str) -> None:
+    """`webview.start()`'s `func=` callback (item D1, Phase 0 review round 2;
+    made fail-CLOSED by item W1, Phase 0 review round 3).
+
+    Real pywebview starts this on its OWN background thread the instant
+    `webview.start()` is called, before the native window has even been
+    created (.venv/Lib/site-packages/webview/__init__.py:294-301) -- it does
+    NOT wait for anything first. That is safe here because `load_url` and
+    `load_html` are both decorated `@_shown_call`, and `clear_cookies` is
+    `@_loaded_call`, in the installed source (webview/window.py:269-289
+    `load_url`, :290-302 `load_html`, :321-326 `clear_cookies`) -- each
+    blocks on the matching `Window` event before running, so this function
+    naturally waits for its own turn instead of racing the GUI thread that
+    is about to create the window.
+
+    `_run_native_window` creates the till window on a BLANK page (no
+    `url=`) specifically so this is the very first thing that ever happens
+    in this WebView2 profile on a given launch: nothing has had a chance to
+    read whatever session cookie is already sitting in the profile before
+    this clears it.
+
+    Item W1 (Phase 0 review round 3 finding): the previous version caught
+    every exception from `clear_cookies()` and called `load_url(app_url)`
+    regardless -- the safety default FAILED OPEN. `window.clear_cookies()`
+    is `@_loaded_call`, and `_api_call` (window.py:32-50) waits up to 20s on
+    the 'loaded' event -- WebView2's own core becoming ready -- before
+    raising `WebViewException('Main window failed to start')` when a cold
+    start is unusually slow. On that path the old code loaded the app URL
+    anyway, into a profile that might still hold the PREVIOUS cashier's
+    session cookie -- exactly the 31-day leak item #10/D1 exists to close,
+    reopened by its own error path. Now: retry `clear_cookies()` once (a
+    slow-but-not-stuck WebView2 core often finishes initialising within the
+    same startup window), and if it STILL raises, refuse to load the live
+    app at all -- `load_html()` shows a neutral blocked page instead.
+    `load_html()`, like `load_url()`, is `@_shown_call`, not `@_loaded_call`,
+    so it waits on the EARLIER 'shown' event (the native window itself,
+    already visible by this point in a real launch) rather than the
+    still-unconfirmed 'loaded'/WebView2-core-ready event, so showing it does
+    not itself risk another 20s hang.
+
+    Item W1 (Phase 0 review round 3, SECOND finding on this same function --
+    the retry/fail-closed logic above was correct, but calling
+    `window.load_html()` alone was not enough to make it STICK). This is
+    exactly the case `clear_cookies()` timing out normally means: CoreWebView2
+    itself is not ready yet. On that exact state, real
+    `Window.load_html()` (webview/window.py:290-302) never touches
+    `window.html` -- it only forwards to the GUI layer -- and WebView2's own
+    GUI layer (edgechromium.py:209-216) checks `self.webview.CoreWebView2`;
+    when that is still falsy it stores the HTML on `self.html`, AN ATTRIBUTE
+    OF THE EdgeChrome WRAPPER OBJECT, NOT of the pywebview `Window` model,
+    calls `EnsureCoreWebView2Async(None)`, and returns without navigating.
+    When the core eventually does finish initialising, `on_webview_ready`
+    (edgechromium.py:305-311) decides what to show by reading
+    `self.pywebview_window.real_url`, then `self.pywebview_window.html` --
+    the WINDOW MODEL's own `html` attribute, which the `load_html()` call
+    above never set -- and falls back to pywebview's own blank
+    `DEFAULT_HTML` when both are empty. So the call below alone left the
+    till showing a permanently blank window once WebView2 finally came up:
+    the "blocked page" only ever reached a GUI-internal attribute
+    `on_webview_ready` does not read. Setting `window.html` (the Window
+    model attribute) directly, in addition to calling `load_html()`, closes
+    that gap: `on_webview_ready`'s `elif self.pywebview_window.html:` branch
+    then finds the blocked page and loads it itself once the core is ready,
+    with `real_url` staying `None` because `load_url()` was never called on
+    this path. Order does not matter for correctness here (both are set
+    before the native window can possibly act on either), but `window.html`
+    is set first so a reader sees the state that `on_webview_ready` will
+    actually consult before the call that merely mirrors it into the
+    session's live GUI, in case one is ever read without the other.
+    """
+    for attempt in range(1, _COOKIE_CLEAR_ATTEMPTS + 1):
+        try:
+            window.clear_cookies()
+            window.load_url(app_url)
+            return
+        except Exception as exc:
+            log.warning(f'clear_cookies() attempt {attempt}/{_COOKIE_CLEAR_ATTEMPTS} '
+                        f'failed: {exc}')
+    log.error('Could not confirm WebView2 cookies were cleared after retrying -- '
+              'refusing to load the app with a possibly-live session (fail closed).')
+    # Item W1: must be set BEFORE load_html() -- see the docstring above.
+    # `load_html()` alone stores the HTML on the EdgeChrome GUI wrapper's own
+    # `self.html`, which `on_webview_ready` never reads; `window.html` is the
+    # separate Window-model attribute it actually falls back to once
+    # CoreWebView2 finishes initialising.
+    window.html = _SESSION_SAFETY_BLOCKED_HTML
+    window.load_html(_SESSION_SAFETY_BLOCKED_HTML)
+
+
 def _run_native_window(url: str) -> bool:
     try:
         import webview
         log.info('Opening native application window (pywebview / WebView2).')
-        webview.create_window(APP_NAME, url, width=1400, height=900,
-                               text_select=True, zoomable=True)
-        webview.start()
+        display_api = CustomerDisplayAPI(url)
+
+        # Item D1 (Phase 0 review round 2) -- SESSION SAFETY DEFAULT.
+        # private_mode=False below (item #10) makes WebView2 keep a real,
+        # persisted profile instead of wiping it every relaunch -- that is
+        # correct for localStorage (theme, aura_printer_cfg), but it also
+        # means the session COOKIE now survives too, and mt_auth.py's
+        # session.permanent=True gives that cookie Flask's default 31-day
+        # lifetime with no "remember me" opt-in. A security review of this
+        # same diff flagged that combination: a lost, stolen or briefly
+        # unattended till would stay signed in as the last cashier for up to
+        # a month. The owner has not decided the till's session lifetime
+        # (that needs a real PERMANENT_SESSION_LIFETIME + idle-timeout
+        # design in commercial_runtime/identity/mt_auth.py and/or
+        # products/retail/backend/app.py, outside this file's ownership) --
+        # so THIS IS THE CONSERVATIVE DEFAULT PENDING THAT DECISION, not the
+        # final answer: clear the WebView2 profile's cookies at the start of
+        # every launch, before the till's own page (and the session cookie
+        # it would read) ever loads, via a BLANK-page create_window() +
+        # window.clear_cookies() + window.load_url() sequence
+        # (_clear_cookies_then_load, below). private_mode=False/storage_path
+        # still keep localStorage/theme/printer settings exactly as item #10
+        # intended; only the cookie is force-cleared. REMEMBER_LOGIN_ENV
+        # (AURA_TILL_REMEMBER_LOGIN=1) is an explicit escape hatch for a shop
+        # that wants the till to stay signed in anyway, once that is a real
+        # decision rather than an accidental side effect.
+        remember_login = os.environ.get(REMEMBER_LOGIN_ENV) == '1'
+        if remember_login:
+            log.info(f'{REMEMBER_LOGIN_ENV}=1 -- skipping the launch cookie '
+                      'clear; the till will stay signed in across a relaunch.')
+            till_window = webview.create_window(APP_NAME, url, width=1400, height=900,
+                                                 text_select=True, zoomable=True,
+                                                 js_api=display_api)
+            start_kwargs = {}
+        else:
+            till_window = webview.create_window(APP_NAME, width=1400, height=900,
+                                                 text_select=True, zoomable=True,
+                                                 js_api=display_api)
+            start_kwargs = {'func': _clear_cookies_then_load, 'args': (till_window, url)}
+        # Item #11(a) orphan-process fix (Phase 0 review round 2): without
+        # this, closing the till while the customer display is still open
+        # leaves the process (and the backend it hosts) running with only
+        # the display on screen -- see close_display()'s docstring for the
+        # exact pywebview mechanism. Wiring the till's own closed event to
+        # close its companion window means the till closing is always
+        # enough by itself.
+        till_window.events.closed += display_api.close_display
+        # Item #10 (Phase 0): webview.start() used to be called with no
+        # arguments at all, and pywebview 6.2.1 defaults BOTH of these to
+        # values that silently destroy persistence -- private_mode defaults
+        # True (a throwaway WebView2 profile: localStorage, including
+        # aura_printer_cfg and the chosen theme, plus the session cookie,
+        # are wiped on every relaunch) and storage_path defaults None (no
+        # persistent profile even if private_mode were off). Pass both
+        # explicitly. storage_path lives under AURA_APP_DATA, never the
+        # exe's own install directory, which can be read-only and is
+        # replaced wholesale on upgrade.
+        #
+        # Do NOT set webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] =
+        # False here -- it must stay at its True default. That setting is
+        # what sends a genuine external link (e.g. a help URL) to the
+        # system browser instead of hijacking this window. The customer
+        # display is deliberately opened as its OWN native window via
+        # CustomerDisplayAPI.open_customer_display() (item #11a) above,
+        # never by loading it into the till's own window.
+        #
+        # SECURITY TRADE-OFF, recorded rather than left as a silent side
+        # effect (Phase 0 review round 2 finding on this same line, ADDRESSED
+        # by item D1 above): turning private_mode off does not just persist
+        # localStorage/theme/printer config (the reason this line exists) --
+        # on its own it would also let the session cookie survive a relaunch
+        # and a full machine reboot, because commercial_runtime/identity/
+        # mt_auth.py unconditionally sets session.permanent = True with no
+        # "remember me" opt-in and products/retail/backend/app.py sets no
+        # PERMANENT_SESSION_LIFETIME, so that cookie carries Flask's default
+        # 31-DAY lifetime. D1's launch-time cookie clear (the branch above)
+        # is what keeps that from taking effect by default: this call itself
+        # is unchanged from item #10 (still needed for localStorage/theme/
+        # printer persistence), and start_kwargs carries D1's func=/args=
+        # cookie-clear callback unless AURA_TILL_REMEMBER_LOGIN=1 opted out
+        # of it. A real bounded session lifetime (Owner's app.py pattern is
+        # PERMANENT_SESSION_LIFETIME_SECONDS=28800 (8h) + a 30-minute idle
+        # timeout) is still the better long-term fix and still needs the
+        # owner's decision plus a security reviewer's sign-off -- that change
+        # belongs in products/retail/backend/app.py and/or mt_auth.py,
+        # outside this file's ownership -- but D1 means an unattended till no
+        # longer stays signed in for a month by accident in the meantime.
+        webview.start(private_mode=False,
+                      storage_path=str(Path(_app_data) / 'webview'),
+                      **start_kwargs)
         log.info('Native application window closed.')
         return True
     except Exception as exc:
