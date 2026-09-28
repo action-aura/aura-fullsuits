@@ -494,6 +494,52 @@ def test_period_boundaries_are_both_ends_inclusive(client, monkeypatch):
         f"-- a boundary date was wrongly included or excluded")
 
 
+def test_non_padded_period_dates_still_find_a_sale_on_a_single_digit_day(client, monkeypatch):
+    """P0 round 2 (item B2, adversarial-verifier finding): the guard this
+    file's own test above proves is period BOUNDARIES, never that a
+    non-zero-padded `start_date`/`end_date` STRING resolves correctly at
+    all -- every date it ever passes ('2026-01-04' etc.) is already
+    zero-padded, so a caller-side padding bug could ship with this whole
+    file green. `_parse_period_date` is deliberately LENIENT about a
+    non-padded month/day (`datetime.strptime` parses '2026-9-5' to the same
+    calendar date as '2026-09-05'), but `gl_journals.business_date` is
+    ALWAYS stored zero-padded ISO (every real posting site dates through
+    `general_ledger._today()`, which is always `strftime('%Y-%m-%d')`) and
+    SQLite compares that column as TEXT. Binding the ORIGINAL, non-padded
+    `start_date`/`end_date` string straight into that comparison -- rather
+    than the PARSED date's own zero-padded `.isoformat()` -- silently
+    excludes a real, in-period sale: `'2026-09-05' >= '2026-9-5'` is FALSE
+    as a text comparison (the 6th character '0' sorts before '9'), even
+    though 2026-09-05 the calendar date is well inside [2026-9-5, 2026-9-5].
+    Mutation: comment out `start_date, end_date = start.isoformat(),
+    end.isoformat()` in `income_statement` and this goes red."""
+    cid = client.test_company_id
+    pid = _seed_product(client, sell_price=25.0, tax_rate=0, initial_stock=10)
+
+    monkeypatch.setattr(gl, '_today', lambda: '2026-09-05')  # a REAL, padded business_date
+    r = client.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'payment_method': 'cash', 'amount_paid': 25.0,
+        'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+
+    # The CALLER passes a non-padded single-digit month and day -- exactly
+    # the shape a naive `f'{year}-{month}-{day}'` query-string builder
+    # produces, and exactly what `_parse_period_date` accepts without
+    # complaint.
+    data = _income_statement(cid, '2026-9-5', '2026-9-5')
+    assert data['revenue'] == 25.0, (
+        f"a sale dated 2026-09-05 must be found by the non-padded period "
+        f"'2026-9-5'..'2026-9-5' -- got revenue={data['revenue']} "
+        f"(has_activity={data.get('has_activity')}), the exact silent-wrong-"
+        f"rows shape a TEXT-lexicographic date comparison produces")
+    # The echoed-back period must ALSO be normalized -- a caller that resends
+    # `data['period']['start_date']` verbatim must get the SAME rows again,
+    # which only holds if it comes back zero-padded.
+    assert data['period']['start_date'] == '2026-09-05', data['period']
+    assert data['period']['end_date'] == '2026-09-05', data['period']
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # 6. The pre-v39 / unknown-cost-basis honesty flag
 # ═════════════════════════════════════════════════════════════════════════

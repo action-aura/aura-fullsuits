@@ -105,6 +105,31 @@ function load(opts) {
     return { success: true, employees: options.employees || [] };
   };
 
+  // P0 round 2 (item B3, retail-hardware-viewports): employees.js's own
+  // `_modal()` calls `RetailSystem._wireModalA11y(overlay, dialogId)` (item
+  // #4's a11y ratchet, closed for this file in the round-1 pass -- see that
+  // function's own comment a few lines below in the REAL employees.js
+  // source). This stub used to have no `_wireModalA11y` at all, so every
+  // test that opens a modal (`_openInvite`/`_openRole`/`_openBranch`/
+  // `_openPin`/`_showInviteLink`) crashed with `TypeError:
+  // RetailSystem._wireModalA11y is not a function` the instant production
+  // code called it -- NOT a production bug: `index.html` loads
+  // subsystem-retail.js (which defines the real `RetailSystem`) before
+  // employees.js on every real page (confirmed by reading index.html's own
+  // script order), so `RetailSystem._wireModalA11y` always exists in the
+  // shipped app. The bug was this harness's stub silently drifting behind
+  // what production code actually calls on it -- decided at the root
+  // (ENGINEERING.md failure shape 2: the fixture, not the code, made the
+  // defect) by mirroring the real function's shape here rather than making
+  // `_modal()` guard the call away, which would have hidden a REAL missing
+  // wiring the same ratchet exists to catch.
+  //
+  // Faithful enough to prove wiring happened (records every call, in
+  // `wireModalA11yCalls` below, for a test to assert against) without
+  // reimplementing the real function's Escape-key/`_modalKeyStack`
+  // machinery, which subsystem-retail.js already owns and already has its
+  // own coverage for (retail_modal_a11y_coverage_test.js).
+  const wireModalA11yCalls = [];
   const RetailSystemStub = {
     _injectStyles() {},
     _esc(v) {
@@ -113,6 +138,19 @@ function load(opts) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     },
     _badge(text, color) { return `<span class="ret-badge ret-badge-${color || 'blue'}">${text}</span>`; },
+    _wireModalA11y(overlay, dialogId) {
+      wireModalA11yCalls.push(dialogId);
+      const close = () => { overlay.remove(); };
+      // The one piece of the real function's contract employees.js's own
+      // `_closeModal` actually reads back (see that function's comment in
+      // the real file) -- everything else (the Escape listener, the
+      // `_modalKeyStack` push/pop, restoring focus to the trigger) is
+      // subsystem-retail.js's own machinery and out of scope for a stub
+      // that exists to prove employees.js WIRED the call, not to
+      // reimplement what it wires to.
+      overlay._a11yClose = close;
+      return close;
+    },
     async _get(url) { calls.push(['GET', url]); return respond(url); },
     async _post(url, body) { calls.push(['POST', url, body]); return { success: true, setup_link: 'http://x/#setup/tok' }; },
     async _put(url, body) { calls.push(['PUT', url, body]); return { success: true }; },
@@ -158,7 +196,10 @@ function load(opts) {
   vm.runInContext(fs.readFileSync(FRONTEND_FILE, 'utf8'), sandbox, { filename: FRONTEND_FILE });
 
   assert.ok(sandbox.RetailEmployees, 'employees.js did not expose window.RetailEmployees');
-  return { screen: sandbox.RetailEmployees, calls, toasts, overlays, content, doc: sandbox.document };
+  return {
+    screen: sandbox.RetailEmployees, calls, toasts, overlays, content, doc: sandbox.document,
+    wireModalA11yCalls,
+  };
 }
 
 const OWNER_ROW = {
@@ -394,7 +435,15 @@ function testBranchManagerInviteModalHasNoRoleSelector() {
     'a branch manager must not be offered a role selector in the invite modal');
   assert.ok(overlay.innerHTML.includes('always cashiers'),
     'the branch-manager invite modal must say new staff are always cashiers');
-  console.log('PASS: the branch-manager invite modal offers no role selector');
+  // P0 round 2 (item B3): the modal this test just opened is built through
+  // `_modal()`, which must call `RetailSystem._wireModalA11y` (item #4) --
+  // asserted here, not merely exercised, so a future `_modal()` edit that
+  // dropped the call (production silently regressing to unwired) would fail
+  // THIS test rather than only the source-reading ratchet
+  // (retail_modal_a11y_coverage_test.js) catching it on a separate run.
+  assert.ok(ctx.wireModalA11yCalls.includes('emp-invite-modal-dialog'),
+    `_openInvite's modal must be wired through RetailSystem._wireModalA11y -- got calls: ${JSON.stringify(ctx.wireModalA11yCalls)}`);
+  console.log('PASS: the branch-manager invite modal offers no role selector, and RetailSystem._wireModalA11y wired it');
 }
 
 async function testBranchManagerInviteSendsRoleCashierWithoutReadingASelector() {

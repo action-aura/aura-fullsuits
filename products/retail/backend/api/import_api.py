@@ -171,7 +171,16 @@ SCHEMAS = {
                 {'key': 'category',      'label': 'Category',            'required': False, 'type': 'text',    'example': 'Clothing'},
                 {'key': 'cost_price',    'label': 'Cost Price',          'required': False, 'type': 'number',  'example': '15.00'},
                 {'key': 'sell_price',    'label': 'Selling Price',       'required': True,  'type': 'number',  'example': '29.99'},
-                {'key': 'tax_rate',      'label': 'Tax Rate (%)',         'required': False, 'type': 'number',  'example': '15'},
+                # '16', not '15' (P0 item #13) -- Jordan's own GST rate, so a
+                # shop that copies the example literally, rather than typing
+                # its own, lands on the actual day-one rate instead of a
+                # nearby but wrong one. `label` is untouched: it is schema
+                # metadata the WIZARD renders through its own t() catalogue
+                # (see `STOCK_COLUMN_HELP`'s neighbouring comment two fields
+                # below -- "import-wizard.js renders them through t()"),
+                # never a server-side untranslated string, so there is
+                # nothing here for this Python file to wrap.
+                {'key': 'tax_rate',      'label': 'Tax Rate (%)',         'required': False, 'type': 'number',  'example': '16'},
                 {'key': 'unit',          'label': 'Unit (pcs/kg/box)',    'required': False, 'type': 'text',    'example': 'pcs'},
                 {'key': 'reorder_level', 'label': 'Reorder Level',        'required': False, 'type': 'integer', 'example': '10'},
                 # Renamed from "Current Stock Qty" when this column stopped
@@ -1320,11 +1329,60 @@ def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
 _IMPORT_STOCK_REFERENCE = 'IMPORT'
 
 
+def _import_tax_cell_is_blank(rec):
+    """True when the sheet's own `tax_rate` cell is absent or blank --
+    factored out of `_resolve_import_tax_rate` (P0 round 2, item #13
+    sibling) so an EXISTING-row re-import (below) can ask the identical
+    blank-vs-explicit-0 question without a second, hand-typed copy of the
+    same test drifting from this one."""
+    raw = rec.get('tax_rate')
+    return raw is None or (isinstance(raw, str) and not raw.strip())
+
+
+def _resolve_import_tax_rate(rec, default_tax_rate):
+    """P0 item #13 (interface I-4): the shop's `default_tax_rate` setting,
+    applied the SAME way `retail_api.py::create_product` applies it -- when
+    the sheet's own `tax_rate` cell is absent or blank, NEVER when it is an
+    explicit 0. A row that typed 0 is asserting "this specific item is
+    zero-rated" and must stay 0 even when the shop default is 16; treating
+    an explicit 0 the same as a blank cell (the pre-existing `rec.get(
+    'tax_rate') or 0` at both call sites below) would silently overtax
+    every zero-rated item the moment a shop ever sets a default.
+
+    Duplicated in import_api.py rather than imported from retail_api.py --
+    this file's own module comment on `require_license_capability`
+    ("Own instance rather than importing retail_api's -- retail_api.py is a
+    peer route module... importing a name across it would create exactly
+    the route-module coupling this file otherwise avoids") is the standing
+    reason, applied here to a second name.
+
+    ONLY correct for a NEW SKU (the INSERT below). An EXISTING row's
+    re-import must NOT call this for its UPDATE -- see that block's own
+    comment for why a blank cell has to mean "leave the stored value alone"
+    there, not "apply the default".
+    """
+    if _import_tax_cell_is_blank(rec):
+        return default_tax_rate
+    return rec.get('tax_rate')
+
+
 def _handle_retail_products(records):
     from database.schema import get_retail_conn
     conn  = get_retail_conn()
     cur   = conn.cursor()
     cid   = _cid()
+    # Resolved ONCE per import run, not per row -- same "resolve once"
+    # discipline `_stamp()` two lines below already documents for
+    # actor/terminal/utc_now. '' (unset) resolves to 0, matching
+    # `_DEFAULT_SETTINGS['default_tax_rate']`'s own "unset means the
+    # pre-existing behaviour, not a surprise nonzero rate" contract in
+    # retail_api.py.
+    _default_tax_rate_row = conn.execute(
+        "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='default_tax_rate'",
+        (cid,)
+    ).fetchone()
+    _default_tax_rate_raw = ((_default_tax_rate_row['svalue'] if _default_tax_rate_row else '') or '').strip()
+    default_tax_rate = float(_default_tax_rate_raw) if _default_tax_rate_raw else 0
     imported, skipped, dupes, cat_cache = 0, 0, 0, {}
     # Products whose declared opening stock could NOT be applied. Structured,
     # not prose: the wizard translates the fixed `reason` sentence out of the
@@ -1498,9 +1556,33 @@ def _handle_retail_products(records):
             # in a sheet is asserting "this product exists" (Decision B), the
             # same reasoning delete_product's own restore-clears-tombstone
             # comment uses.
-            set_clause = ("name=?, barcode=?, category_id=?, cost_price=?, "
-                          "sell_price=?, tax_rate=?, unit=?, reorder_level=?, "
-                          "row_version=row_version+1, updated_at_utc=?")
+            # P0 round 2 (item #13 sibling, adversarial-verifier finding):
+            # `tax_rate` used to sit in this SET clause unconditionally,
+            # bound to `_resolve_import_tax_rate(rec, default_tax_rate)` --
+            # correct for a NEW SKU (the INSERT branch below), but wrong
+            # here: for an EXISTING row, a blank/absent sheet cell must mean
+            # "this re-import says nothing about tax", not "apply the shop
+            # default". With a default of 16, re-importing a supplier price
+            # list that carries no tax column silently retaxed every
+            # existing zero-rated product (bread, exempt items) from 0 to
+            # 16 -- items.md #13 promises "Existing products are
+            # untouched". `has_tax_cell` decides whether `tax_rate` is
+            # written at ALL: omitted from both the SET clause and
+            # `changed` below when the cell is blank, so the stored value
+            # (and the sync payload every peer receives) is left exactly as
+            # it was. A cell that DOES carry a value (including an explicit
+            # '0') still writes through `_resolve_import_tax_rate`, which
+            # only ever returns that same explicit value in that case.
+            has_tax_cell = not _import_tax_cell_is_blank(rec)
+            set_cols = ["name=?", "barcode=?", "category_id=?", "cost_price=?", "sell_price=?"]
+            set_params = [rec.get('name',''), rec.get('barcode',''), cat_id,
+                          rec.get('cost_price') or 0, rec.get('sell_price') or 0]
+            if has_tax_cell:
+                set_cols.append("tax_rate=?")
+                set_params.append(_resolve_import_tax_rate(rec, default_tax_rate))
+            set_cols += ["unit=?", "reorder_level=?", "row_version=row_version+1", "updated_at_utc=?"]
+            set_params += [rec.get('unit','pcs') or 'pcs', rec.get('reorder_level') or 5, utc_now]
+            set_clause = ", ".join(set_cols)
             if resurrecting:
                 set_clause += ", deleted_at_utc=NULL"
             # COLLATE NOCASE here too, matching the SELECT above -- must key
@@ -1509,11 +1591,7 @@ def _handle_retail_products(records):
             # different (or zero) rows underneath it.
             cur.execute(
                 f"UPDATE products SET {set_clause} WHERE company_id=? AND sku=? COLLATE NOCASE",
-                (rec.get('name',''), rec.get('barcode',''), cat_id,
-                 rec.get('cost_price') or 0, rec.get('sell_price') or 0,
-                 rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
-                 rec.get('reorder_level') or 5, utc_now,
-                 cid, sku))
+                (*set_params, cid, sku))
             pid = existing['id']
             # Same full-current-row 'update' payload update_product queues
             # (re-SELECTed after the UPDATE, status/deleted_at_utc included)
@@ -1552,7 +1630,20 @@ def _handle_retail_products(records):
             # never touches either) are also no longer falsely claimed as
             # changed, for the identical reason.
             changed = {'name', 'barcode', 'category_id', 'cost_price',
-                       'sell_price', 'tax_rate', 'unit', 'reorder_level'}
+                       'sell_price', 'unit', 'reorder_level'}
+            # `tax_rate` only named as changed when the SET clause above
+            # actually wrote it -- an untouched column must not appear in
+            # `_changed_fields`, the same untouched-field-clobber discipline
+            # stage 6b-i's own comment (further down this block) already
+            # applies to `deleted_at_utc`. Naming it unconditionally here
+            # would push this device's UNCHANGED stored tax_rate onto every
+            # peer as if it HAD changed, which happens to read correctly
+            # today only because the value re-selected below is the
+            # (unmodified) row's own -- but see this file's own delta-gate
+            # docstring for why that coincidence is not a fix, and getting
+            # it right here rather than relying on it.
+            if has_tax_cell:
+                changed.add('tax_rate')
             if resurrecting:
                 changed.add('deleted_at_utc')
             # `parent_product_id,variant_label` added to this SELECT (schema
@@ -1601,7 +1692,7 @@ def _handle_retail_products(records):
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)
             """, (pid, cid, sku, rec.get('barcode',''), rec.get('name',''), cat_id,
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
-                  rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
+                  _resolve_import_tax_rate(rec, default_tax_rate), rec.get('unit','pcs') or 'pcs',
                   rec.get('reorder_level') or 5, 1, utc_now))
             # Mirrors create_product's payload key-for-key. supplier_id is
             # None (the import schema has no supplier column) and
@@ -1643,7 +1734,18 @@ def _handle_retail_products(records):
                 # so a bulk-imported product's cost basis never reached a
                 # second device.
                 'avg_cost': 0,
-                'sell_price': rec.get('sell_price') or 0, 'tax_rate': rec.get('tax_rate') or 0,
+                # `tax_rate`: the SAME `_resolve_import_tax_rate(rec,
+                # default_tax_rate)` call the INSERT above uses, never
+                # `rec.get('tax_rate') or 0` again (P0 item #13 reviewer
+                # finding). The raw form sends 0 for every row whose sheet
+                # cell was blank -- the normal case a shop relies on the
+                # shop-wide default for -- so a peer device (phone, second
+                # till) received tax_rate 0 for a product this device
+                # correctly priced at the default, e.g. 16: item #13's
+                # day-one defect, reintroduced on every other device by the
+                # sync wire instead of by the import itself.
+                'sell_price': rec.get('sell_price') or 0,
+                'tax_rate': _resolve_import_tax_rate(rec, default_tax_rate),
                 'unit': rec.get('unit', 'pcs') or 'pcs', 'reorder_level': rec.get('reorder_level') or 5,
                 'reorder_method': 'none',
                 'parent_product_id': None, 'variant_label': None,

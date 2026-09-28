@@ -354,6 +354,16 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'update_doc_series': CAP_EMPLOYEES,
     'retire_doc_series': CAP_EMPLOYEES,
     'claim_doc_series': CAP_EMPLOYEES,
+
+    # ── Customer display relay, P0 item #11(b) (interface I-1): retail.sell
+    # ────────────────────────────────────────────────────────────────────
+    # The till pushing its own already-built cart/sale-complete payload to
+    # the relay is a till operation, the same tier as create_sale/printer_
+    # kick immediately above -- not settings (retail.employees) and not a
+    # report (retail.reports). The two GET siblings this POST has
+    # (customer_display_get_state/customer_display_status) carry the SAME
+    # code -- see EXPECTED_READ_CAPABILITIES below.
+    'customer_display_set_state': CAP_SELL,
 }
 
 #: Read routes that deliberately DO carry a capability. Reads are not required
@@ -567,6 +577,34 @@ EXPECTED_READ_CAPABILITIES = {
     # Identical disclosure tier: a full period's cash receipts/payments, not
     # a till operation.
     'report_cash_flow': CAP_REPORTS,
+
+    # ── P0 item #15(e), interface I-6 ─────────────────────────────────────
+    # `product_stock_value` (GET /products/stock-value) discloses the whole
+    # catalogue's current cost-basis value as one company-wide total -- the
+    # same disclosure tier as every other report route in this table
+    # (report_summary, daily_cash, report_trial_balance immediately above),
+    # not a till operation.
+    'product_stock_value': CAP_REPORTS,
+
+    # ── P0 item #18, interface I-8 ────────────────────────────────────────
+    # `ai_status` (GET /ai/status) -- same code as `ai_chat` itself
+    # (EXPECTED_MUTATION_CAPABILITIES above), by this item's own instruction
+    # ("same decorators as /ai/chat"): knowing whether the reporting
+    # assistant is configured at all is the same disclosure tier as using
+    # it.
+    'ai_status': CAP_REPORTS,
+
+    # ── Customer display relay, P0 item #11(b) (interface I-1): retail.sell
+    # ────────────────────────────────────────────────────────────────────
+    # Both GETs are the till's/display's own operational reads -- same tier
+    # as `list_active_promotions`/`get_product_modifier_groups` above (a
+    # cashier needs these to run the till, not to see the shop's numbers).
+    # `customer_display_get_state` is the DISPLAY's own poll;
+    # `customer_display_status` is the TILL's read of the display's health.
+    # See `customer_display_set_state` in EXPECTED_MUTATION_CAPABILITIES
+    # above for the POST sibling.
+    'customer_display_get_state': CAP_SELL,
+    'customer_display_status': CAP_SELL,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each
@@ -622,6 +660,69 @@ EXPECTED_COMPANY_ADMIN_ROUTES = {
     # `ownerOnly` (the USER axis), never `adminOnly` (the DEVICE axis).
     'inventory_reconciliation',
     'repair_inventory_reconciliation',
+
+    # ── P0 item #2 / interface I-10 (retail-hardware-viewports) ──────────────
+    # The shipped 'Allow to Manage Branch Staff' delegation toggle
+    # (employees.js) grants `retail.employees=full` to a branch-scoped
+    # manager -- but `mt_require_capability` only ever reads that ONE row, so
+    # that manager passed every route below too, none of which is "manage my
+    # own branch's staff". Two groups, both owner-only regardless of
+    # CAP_EMPLOYEES:
+    #
+    # (a) Company-wide settings -- reshape the whole shop, not one branch:
+    'create_branch', 'tax_settings_set', 'business_day_settings_set',
+    'branding_settings_set', 'payment_methods_add', 'create_doc_series',
+    # (b) Money the branch-staff toggle must never unlock. These EIGHT stay
+    # on CAP_EMPLOYEES in EXPECTED_MUTATION_CAPABILITIES above (the nav entry
+    # that reaches them is retail.reports-gated, so no cashier-reachable path
+    # exists without it either way -- see create_cheque's own comment) and
+    # ALSO now require the owner. supplier_payment/pay_purchase_order move to
+    # books.record for the Accountant preset in Phase 1b (see their own
+    # comments); owner-only until then.
+    'create_cheque', 'deposit_cheque', 'clear_cheque', 'bounce_cheque',
+    'reinstate_cheque', 'endorse_cheque', 'cancel_cheque', 'write_off_cheque',
+    'supplier_payment', 'pay_purchase_order',
+
+    # ── Reviewer pass on the I-10 rollout above (retail-hardware-viewports,
+    # second C2 dispatch) -- every entry below closes a sibling route the
+    # first pass left reachable through CAP_EMPLOYEES alone. Each route's own
+    # comment in retail_api.py carries the full reasoning; this table only
+    # needs the name and a one-line pointer.
+    #
+    # (c) The SAME money-out action as supplier_payment/pay_purchase_order in
+    # group (b) above, reached through a different door:
+    # `create_purchase_order` -- CONDITIONAL: only guarded when its own
+    # `amount_paid` field posts a down-payment (> the currency's epsilon);
+    # amount_paid=0 (receiving/ordering stock) stays on CAP_EMPLOYEES alone,
+    # a manager action. The static scan below still finds the call
+    # unconditionally (it walks the whole function body, not a branch), so
+    # this route belongs in the table regardless of which path a given
+    # request takes.
+    'create_purchase_order',
+    # `void_payment` -- CONDITIONAL: only guarded in the
+    # `party_type == 'supplier'` branch (a customer-account receipt void
+    # stays on CAP_REFUND, its own pre-existing authority). Reversing a
+    # supplier payment must require the same authority as creating one.
+    'void_payment',
+    # (d) `credit_settings_set` writes base_currency alongside the credit
+    # policy and loyalty fields -- the single most disruptive company-wide
+    # setting in this file, previously reachable through CAP_EMPLOYEES alone.
+    'credit_settings_set',
+    # (e) Numbering siblings: create_doc_series was already in group (a);
+    # these are its PATCH/DELETE siblings, which can retire or reassign the
+    # branch of ANY series in the company, not just the caller's own.
+    # `claim_doc_series` is DELIBERATELY NOT in this table -- see its own
+    # docstring in retail_api.py for the "own-terminal action" reasoning,
+    # the same tier as `set_device_branch` (also deliberately not here).
+    'update_doc_series', 'retire_doc_series',
+    # (f) Branding logo siblings: branding_settings_set (the text fields) was
+    # already in group (a); the logo upload/erase is the same company-wide
+    # identity write and was left ungated.
+    'branding_logo_set', 'branding_logo_delete',
+    # (g) Branch reshaping beyond create: create_branch was already in group
+    # (a); a branch-staff-delegated manager could still rename or retire ANY
+    # branch in the company (not just their own) through these two siblings.
+    'update_branch', 'retire_branch',
 }
 
 
@@ -703,15 +804,93 @@ MUTATING_ROUTES = [r for r in ALL_ROUTES if r.methods & MUTATING_METHODS]
 READ_ROUTES = [r for r in ALL_ROUTES if not (r.methods & MUTATING_METHODS)]
 
 
-def _company_admin_routes(path):
-    """Every @route handler whose OWN BODY calls `_require_company_admin()`.
+def _is_not_none_test(test, name):
+    """True for the literal shape `<name> is not None`."""
+    return (
+        isinstance(test, ast.Compare) and isinstance(test.left, ast.Name) and test.left.id == name
+        and len(test.ops) == 1 and isinstance(test.ops[0], ast.IsNot)
+        and len(test.comparators) == 1 and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value is None
+    )
 
-    Body, not decorators, because that is where the check lives -- and it is
-    the reason this needs its own walk rather than another field on _Route.
-    `ast.walk` over the function node finds the call wherever it sits: on its
-    own line, inside the `for guard in (...)` tuple both demo routes use, or
-    inside a nested block.
+
+def _returns_name(body, name):
+    """True when some statement in `body` is `return <name>` -- not merely
+    ANY return, and not merely a call somewhere in the function. A guard
+    that runs and is discarded (falls through instead of returning it) denies
+    nobody."""
+    return any(isinstance(s, ast.Return) and isinstance(s.value, ast.Name) and s.value.id == name for s in body)
+
+
+def _block_has_admin_guard_shape(stmts):
+    """Scans one statement LIST (a function body, or any nested block inside
+    it) for the two shapes every real call site in retail_api.py uses:
+
+      (1) `<var> = _require_company_admin()` immediately followed by
+          `if <var> is not None: ... return <var>` as the NEXT statement in
+          the same block (demo_wipe's own bare call plus a `conn.close()`
+          ahead of the return both still match: the `if` body is scanned for
+          ANY `return <var>`, not required to be its first statement).
+      (2) `for <var> in (..., _require_company_admin(), ...): if <var> is not
+          None: return <var>` -- the `_require_retail_demo_mode()` /
+          `_require_confirmation()` shared-tuple idiom both demo routes and
+          `inventory_reconciliation` use.
+
+    Recurses into every nested block (if/elif/else, for/while, try/except/
+    finally) so a guard placed inside a conditional branch -- exactly what
+    the P0 #2 reviewer pass's `create_purchase_order` (amount_paid > 0 only)
+    and `void_payment` (party_type == 'supplier' only) fixes do -- is still
+    found.
+
+    THIS REPLACES a weaker scan that only asked "does
+    `_require_company_admin()` get CALLED anywhere in this function", which
+    a reviewer pass on this exact table (retail-hardware-viewports, second
+    C2 dispatch) found could not tell a route that calls the guard and
+    RETURNS its 403 apart from one that calls it and silently discards the
+    result -- i.e. it would stay green if a future edit dropped the
+    `if ...: return ...` half and kept only the bare call. Mutation-proved
+    below (test_the_company_admin_scan_requires_an_actual_return_not_just_
+    a_call): a body that calls the guard but never returns it must NOT be
+    found.
     """
+    for i, stmt in enumerate(stmts):
+        if (
+            isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.Call)
+            and _decorator_name(stmt.value) == '_require_company_admin'
+        ):
+            guard_name = stmt.targets[0].id
+            nxt = stmts[i + 1] if i + 1 < len(stmts) else None
+            if (
+                isinstance(nxt, ast.If) and _is_not_none_test(nxt.test, guard_name)
+                and _returns_name(nxt.body, guard_name)
+            ):
+                return True
+        if isinstance(stmt, ast.For) and isinstance(stmt.iter, (ast.Tuple, ast.List)) and isinstance(stmt.target, ast.Name):
+            loop_var = stmt.target.id
+            calls_the_guard = any(
+                isinstance(e, ast.Call) and _decorator_name(e) == '_require_company_admin' for e in stmt.iter.elts
+            )
+            if calls_the_guard:
+                for inner in stmt.body:
+                    if isinstance(inner, ast.If) and _is_not_none_test(inner.test, loop_var) and _returns_name(inner.body, loop_var):
+                        return True
+        for field in ('body', 'orelse', 'finalbody'):
+            sub = getattr(stmt, field, None)
+            if isinstance(sub, list) and _block_has_admin_guard_shape(sub):
+                return True
+        for h in getattr(stmt, 'handlers', []):
+            if _block_has_admin_guard_shape(h.body):
+                return True
+    return False
+
+
+def _company_admin_routes(path):
+    """Every @route handler whose OWN BODY actually RETURNS
+    `_require_company_admin()`'s 403 when it fires -- see
+    `_block_has_admin_guard_shape`'s own docstring for why this is not just
+    "calls it somewhere"."""
     tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
     found = set()
     for node in ast.walk(tree):
@@ -719,10 +898,8 @@ def _company_admin_routes(path):
             continue
         if not any(_decorator_name(d).endswith('.route') for d in node.decorator_list):
             continue
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Call) and _decorator_name(inner) == '_require_company_admin':
-                found.add(node.name)
-                break
+        if _block_has_admin_guard_shape(node.body):
+            found.add(node.name)
     return found
 
 
@@ -806,6 +983,76 @@ def test_the_company_admin_routes_match_exactly():
         "shop's whole stock position.\n"
         f"only in code:  {sorted(COMPANY_ADMIN_ROUTES - EXPECTED_COMPANY_ADMIN_ROUTES)}\n"
         f"only in table: {sorted(EXPECTED_COMPANY_ADMIN_ROUTES - COMPANY_ADMIN_ROUTES)}"
+    )
+
+
+def test_the_company_admin_scan_requires_an_actual_return_not_just_a_call():
+    """Mutation-proves `_block_has_admin_guard_shape` itself (P0 item #2's
+    "test coverage" reviewer finding). The OLD scan only asked "does
+    `_require_company_admin()` get called anywhere in this function" --
+    which stays true even after deleting the `if guard is not None: return
+    guard` half, so a regression that calls the guard and drops its return
+    (exactly the shape a careless refactor of, say, `bounce_cheque` could
+    introduce) would pass every assertion in this file while the route
+    admits a delegated manager again.
+
+    RED (the bug this guards): a body that calls the guard and assigns it,
+    but never returns it, must NOT be found. GREEN (the fix): the real
+    two-statement shape every live call site in retail_api.py uses IS found.
+    Both are asserted here so this test fails in both directions if either
+    half of the scanner regresses.
+    """
+    called_but_discarded = ast.parse(
+        "def route():\n"
+        "    admin_guard = _require_company_admin()\n"
+        "    do_something(admin_guard)\n"  # never returned -- the exact regression shape
+        "    return ok()\n"
+    ).body[0]
+    assert _block_has_admin_guard_shape(called_but_discarded.body) is False, (
+        "the scanner found a company-admin guard in a function that calls "
+        "_require_company_admin() but never returns its result -- this is "
+        "the vacuity the P0 #2 reviewer pass's 'test coverage' finding named: "
+        "a body that discards the guard's 403 denies nobody."
+    )
+
+    real_shape = ast.parse(
+        "def route():\n"
+        "    admin_guard = _require_company_admin()\n"
+        "    if admin_guard is not None:\n"
+        "        return admin_guard\n"
+        "    return ok()\n"
+    ).body[0]
+    assert _block_has_admin_guard_shape(real_shape.body) is True, (
+        "the scanner failed to find the exact 'admin_guard = ...; if "
+        "admin_guard is not None: return admin_guard' shape every real call "
+        "site in retail_api.py uses -- it would report zero routes gated and "
+        "fail every route's admin check as a false negative."
+    )
+
+    tuple_shape = ast.parse(
+        "def route():\n"
+        "    for guard in (_require_retail_demo_mode(), _require_company_admin()):\n"
+        "        if guard is not None:\n"
+        "            return guard\n"
+        "    return ok()\n"
+    ).body[0]
+    assert _block_has_admin_guard_shape(tuple_shape.body) is True, (
+        "the scanner failed to find the shared for-loop tuple shape "
+        "demo_wipe/demo_seed/inventory_reconciliation use."
+    )
+
+    nested_conditional_shape = ast.parse(
+        "def route():\n"
+        "    if amount_paid > eps:\n"
+        "        admin_guard = _require_company_admin()\n"
+        "        if admin_guard is not None:\n"
+        "            return admin_guard\n"
+        "    return ok()\n"
+    ).body[0]
+    assert _block_has_admin_guard_shape(nested_conditional_shape.body) is True, (
+        "the scanner failed to find a guard nested inside a conditional "
+        "branch -- the exact shape create_purchase_order's amount_paid > 0 "
+        "fix and void_payment's party_type == 'supplier' fix both use."
     )
 
 
@@ -1048,6 +1295,22 @@ class _CapabilityProbe:
         return result
 
 
+class _GuardProbe:
+    """The zero-argument sibling of `_CapabilityProbe`, for guard functions
+    like `_require_company_admin()` that take no argument and return either
+    `None` (pass) or a `(response, status)` tuple (refuse). Same transparent
+    call-counting discipline: delegates through unchanged, so swapping it in
+    cannot itself alter which requests pass or fail."""
+    def __init__(self, real):
+        self._real = real
+        self.calls = []
+
+    def __call__(self):
+        result = self._real()
+        self.calls.append(result)
+        return result
+
+
 def _create_customer(client, **extra):
     payload = dict({'name': f'Cap Matrix Customer {uuid.uuid4().hex[:6]}'}, **extra)
     r = client.post('/api/sub/retail/customers', json=payload)
@@ -1074,8 +1337,9 @@ def _customer_account_payment_id(admin, company_id):
 
 def _supplier_account_payment_id(admin, company_id):
     """A SUPPLIER-account payment (party_type='supplier', related_type=NULL)
-    -- created behind CAP_EMPLOYEES at ~retail_api.py:3495, so voiding one
-    must require the same code (B1)."""
+    -- created by supplier_payment, owner-only since the P0 item #2 / I-10
+    reviewer pass (was CAP_EMPLOYEES at B1's original writing), so voiding
+    one must require the same authority."""
     sup_id = _create_supplier(admin)
     r = admin.post(f'/api/sub/retail/suppliers/{sup_id}/payments', json={'amount': 20})
     assert r.status_code == 200, r.get_json()
@@ -1085,7 +1349,8 @@ def _supplier_account_payment_id(admin, company_id):
 def _po_payment_id(admin, company_id, product_id):
     """A PO payment (party_type='supplier', related_type='po') -- posted
     inline by create_purchase_order's own `amount_paid` down-payment, the
-    same code path pay_purchase_order uses, both behind CAP_EMPLOYEES."""
+    same code path pay_purchase_order uses. Both require CAP_EMPLOYEES AND
+    (since the P0 item #2 / I-10 reviewer pass) the shop owner."""
     sup_id = _create_supplier(admin)
     r = admin.post('/api/sub/retail/purchase-orders', json={
         'supplier_id': sup_id, 'amount_paid': 15,
@@ -1544,20 +1809,28 @@ def test_the_sale_receipt_refusal_survives_the_authority_split(shop):
 # call-counting stub around mt_auth._get_registry_conn.
 
 def test_void_payment_authority_check_is_actually_consulted(shop, monkeypatch):
-    """Wraps the REAL session_has_capability transparently (pass-through,
-    behaviour unchanged) and asserts it was genuinely invoked with
-    retail.employees whenever the payment being voided is party_type=
-    'supplier' -- for every role, INCLUDING admin, whose eventual True
-    comes from INSIDE session_has_capability's own role bypass, not from
-    retail_api skipping the call. For a customer-account payment the
-    check must NOT be called at all (party_type != 'supplier' short-
-    circuits it) -- verified against the payment row's actual party_type
-    read fresh from the database, not inferred from the response, so a
-    fixture that quietly stopped creating what it claims to create would
-    fail this test rather than pass it vacuously."""
+    """UPDATED (P0 item #2 / I-10, reviewer finding): void_payment's
+    supplier-branch authority moved from `session_has_capability(CAP_
+    EMPLOYEES)` to `_require_company_admin()` -- the authority to REVERSE a
+    supplier payment now equals the authority to CREATE one, which is
+    owner-only (supplier_payment/pay_purchase_order/create_purchase_order's
+    amount_paid branch, all fixed in the same pass; see each one's own
+    comment). This test used to wrap `session_has_capability` and assert it
+    was consulted for a supplier/PO payment void; that assertion no longer
+    describes what the route does -- `session_has_capability` is not called
+    AT ALL on this path any more, by design, so the old test would now fail
+    for the RIGHT reason (the mechanism changed on purpose) while looking
+    like a regression. Rewritten to wrap `_require_company_admin` instead,
+    same transparent call-counting discipline (`_GuardProbe`, pass-through,
+    behaviour unchanged) so a 403 cannot be misread as "the check ran and
+    refused" when it could equally be "the check never ran and something
+    else refused". What this version can no longer catch, stated per
+    ENGINEERING.md: whether `session_has_capability(CAP_EMPLOYEES)`
+    specifically was consulted -- it no longer is, and that is the fix, not
+    a regression."""
     admin, company_id, product_id = shop
-    probe = _CapabilityProbe(retail_api_module.session_has_capability)
-    monkeypatch.setattr(retail_api_module, 'session_has_capability', probe)
+    probe = _GuardProbe(retail_api_module._require_company_admin)
+    monkeypatch.setattr(retail_api_module, '_require_company_admin', probe)
 
     def _void(actor, pid, reason):
         probe.calls.clear()
@@ -1569,23 +1842,20 @@ def test_void_payment_authority_check_is_actually_consulted(shop, monkeypatch):
         ('manager', lambda: _make_user('manager', company_id=company_id)[0]),
         ('admin', lambda: admin),
     ):
-        # supplier-account payment -- the check MUST be consulted
+        # supplier-account payment -- the guard MUST be consulted
         actor = make_actor()
         pid = _supplier_account_payment_id(admin, company_id)
         r, calls = _void(actor, pid, 'reachability: supplier')
-        assert calls, (role, 'supplier-account', 'session_has_capability(retail.employees) was never called',
-                        r.get_json())
-        assert all(code == user_accounts.CAP_EMPLOYEES for code, _verdict in calls), (role, calls)
+        assert calls, (role, 'supplier-account', '_require_company_admin() was never called', r.get_json())
 
         # PO payment -- same authority, same requirement
         actor = make_actor()
         pid = _po_payment_id(admin, company_id, product_id)
         r, calls = _void(actor, pid, 'reachability: po')
-        assert calls, (role, 'po', 'session_has_capability(retail.employees) was never called', r.get_json())
-        assert all(code == user_accounts.CAP_EMPLOYEES for code, _verdict in calls), (role, calls)
+        assert calls, (role, 'po', '_require_company_admin() was never called', r.get_json())
 
         # customer-account payment -- ground-truthed against the real row,
-        # then the check must NOT fire at all (party_type short-circuits it)
+        # then the guard must NOT fire at all (party_type short-circuits it)
         actor = make_actor()
         pid = _customer_account_payment_id(admin, company_id)
         conn = get_retail_conn()
@@ -1594,27 +1864,32 @@ def test_void_payment_authority_check_is_actually_consulted(shop, monkeypatch):
         assert real_party_type == 'customer', "fixture drifted -- this case no longer proves what it claims to"
         r, calls = _void(actor, pid, 'reachability: customer')
         assert not calls, (role, 'customer-account',
-                            'session_has_capability was called for a customer-account payment -- '
+                            '_require_company_admin() was called for a customer-account payment -- '
                             'the party_type branch is not doing what it claims', r.get_json())
 
 
 def test_void_payment_authority_outcome_tracks_the_live_capability_verdict(shop, monkeypatch):
-    """Stronger than reachability: proves the response is actually DRIVEN
-    by session_has_capability's return value, for every role including
-    admin -- which rules out a second, duplicated admin exemption sitting
-    next to the real check (e.g. an accidental `or session.get('mt_role')
-    == 'admin'` written directly into void_payment). Admin's normal pass
-    has exactly one source in this codebase: the role check inside
-    session_has_capability itself. Forcing that function to always deny
-    must therefore refuse admin too, at this specific call site, when
-    voiding a supplier payment -- and forcing it to always grant must let
-    even a bare cashier through."""
+    """UPDATED (P0 item #2 / I-10, reviewer finding) -- see the docstring on
+    test_void_payment_authority_check_is_actually_consulted just above for
+    why the mechanism changed. Stronger than reachability: proves the
+    response is actually DRIVEN by `_require_company_admin`'s return value,
+    for every role including a real logged-in owner -- which rules out a
+    second, duplicated exemption sitting next to the real check (e.g. an
+    accidental early `return` bypassing it). Forcing the guard to always
+    ADMIT (return None) must let even a bare cashier through; forcing it to
+    always REFUSE (return the same 403 shape the real guard returns) must
+    refuse the real owner too, at this specific call site -- proving there
+    is no hardcoded `role == 'admin'` shortcut written directly into
+    void_payment that could keep working even if the shared guard function
+    itself were ever broken."""
     admin, company_id, _product_id = shop
 
-    def _always(value):
-        def stub(code):
-            return value
-        return stub
+    def _always_admit():
+        return None
+
+    def _always_refuse():
+        from flask import jsonify as _jsonify
+        return _jsonify({'error': 'Administrator permission required.', 'code': 'OWNER_ONLY'}), 403
 
     def _roles():
         return (
@@ -1623,19 +1898,28 @@ def test_void_payment_authority_outcome_tracks_the_live_capability_verdict(shop,
             ('admin', admin),
         )
 
-    monkeypatch.setattr(retail_api_module, 'session_has_capability', _always(True))
-    for role, actor in _roles():
-        pid = _supplier_account_payment_id(admin, company_id)
-        r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-grant probe'})
-        assert r.status_code == 200, (role, 'forced True', r.get_json())
+    # Every fixture payment is created with the REAL guard still in effect
+    # (supplier_payment is itself owner-only, per this same reviewer pass) --
+    # built BEFORE either monkeypatch below installs, because patching
+    # `_require_company_admin` to `_always_refuse` would otherwise refuse
+    # this SETUP call too, not just the void call under test, and patching
+    # it to `_always_admit` first and creating fixtures for the SECOND
+    # (refuse) half while that patch is still active would prove nothing
+    # about the real guard. One payment id per role, per half.
+    admit_targets = [(role, actor, _supplier_account_payment_id(admin, company_id)) for role, actor in _roles()]
+    refuse_targets = [(role, actor, _supplier_account_payment_id(admin, company_id)) for role, actor in _roles()]
+
+    monkeypatch.setattr(retail_api_module, '_require_company_admin', _always_admit)
+    for role, actor, pid in admit_targets:
+        r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-admit probe'})
+        assert r.status_code == 200, (role, 'forced None (admit)', r.get_json())
     monkeypatch.undo()
 
-    monkeypatch.setattr(retail_api_module, 'session_has_capability', _always(False))
-    for role, actor in _roles():
-        pid = _supplier_account_payment_id(admin, company_id)
-        r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-deny probe'})
-        assert r.status_code == 403, (role, 'forced False -- including admin: no hardcoded bypass at this '
-                                       'call site is allowed to exist', r.get_json())
+    monkeypatch.setattr(retail_api_module, '_require_company_admin', _always_refuse)
+    for role, actor, pid in refuse_targets:
+        r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-refuse probe'})
+        assert r.status_code == 403, (role, 'forced refuse -- including the real owner: no hardcoded bypass '
+                                       'at this call site is allowed to exist', r.get_json())
 
 
 # ── Fix 1: create_purchase_order's amount_paid is a weaker second path to a ──
@@ -2188,3 +2472,42 @@ def test_a_manager_can_restore_a_deleted_customer(shop):
 
     assert _customer_deleted_at(company_id, cust_id) is None, \
         "a manager's restore must clear deleted_at_utc"
+
+
+# =============================================================================
+# -- P0 round 3 (item V6): this file was rewritten LF-only (read_bytes /
+#    .replace(b'\r\n', b'\n') / write_bytes, no content change) to match
+#    the repo-wide `* text=auto eol=lf` normalization every other tracked
+#    file already gets under .gitattributes -- CRLF here was never a
+#    deliberate choice, just whatever a prior Windows editor happened to
+#    save with. The round-3 serial mutation runner flagged the rewrite
+#    itself as an UNGUARDED change: a line-ending conversion with no test
+#    anywhere to notice a regression (a Windows editor, or a `git
+#    checkout` on a machine whose local .gitattributes/core.autocrlf
+#    differs, silently reintroducing CRLF into the working copy before
+#    the next commit's normalization ever sees it). This is that guard.
+# =============================================================================
+
+def test_this_file_has_lf_only_line_endings():
+    """Self-referential regression guard for P0-V6.
+
+    Reads THIS test file's own source as raw bytes -- never via a
+    text-mode open(), which transparently normalizes CRLF/LF on read and
+    would hide the exact regression this test exists to catch -- and
+    asserts no CR byte survives in the working copy.
+
+    Mutation: reintroduce a single CRLF pair anywhere in this file (or
+    convert the whole file back to CRLF) and this goes red immediately;
+    restoring LF-only bytes turns it green again. git's own
+    `* text=auto eol=lf` attribute only normalizes at COMMIT time, so a
+    CRLF regression sitting in the uncommitted working copy -- exactly
+    where a live pytest run reads from -- would otherwise go unnoticed
+    until the next `git add`/`git commit`, by which point this suite may
+    already have been run against the wrong bytes.
+    """
+    raw = Path(__file__).read_bytes()
+    cr_count = raw.count(b'\r')
+    assert cr_count == 0, (
+        f"{Path(__file__).name} must stay LF-only (P0-V6) -- found "
+        f"{cr_count} CR byte(s) in the working copy"
+    )

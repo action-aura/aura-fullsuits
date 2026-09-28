@@ -402,6 +402,25 @@ def income_statement(conn, cid, start_date, end_date, branch_id=None):
             f"start_date {start_date!r} is after end_date {end_date!r} -- "
             f"a reporting period cannot run backwards."
         )
+    # P0 round 2 (item B2): NORMALIZE, not just VALIDATE, before either
+    # string reaches the SQL parameter below. `_parse_period_date` is
+    # lenient about a non-zero-padded month/day -- `datetime.strptime`
+    # parses '2026-9-1' to the same date as '2026-09-01' -- but this
+    # function's own `period_params` (a few lines down) binds the ORIGINAL
+    # `start_date`/`end_date` strings, not `start`/`end`'s parsed value,
+    # against `gl_journals.business_date`, which is always stored
+    # zero-padded ISO. SQLite compares TEXT lexicographically, and that
+    # disagrees with calendar order the instant one side is not
+    # zero-padded (`'2026-09-15' < '2026-9-1'` as TEXT, since the 6th
+    # character '0' sorts before '9') -- a caller passing '2026-9-1' would
+    # silently get the WRONG revenue/expense rows with no error anywhere,
+    # exactly the trap `_parse_period_date`'s own validation looks like it
+    # already closed. `general_ledger.trial_balance`'s `as_of` parameter had
+    # the identical bug and got the identical fix. Reassigning here also
+    # normalizes the `period` block this function echoes back below, so a
+    # caller that sent '2026-9-1' sees '2026-09-01' in its own response
+    # rather than a value that would fail to round-trip if resent verbatim.
+    start_date, end_date = start.isoformat(), end.isoformat()
 
     currency = _resolve_currency(conn, cid)
     quant = currency_quantum(currency)
@@ -710,11 +729,22 @@ def balance_sheet(conn, cid, as_of_date, branch_id=None):
     gl.ensure_default_chart(conn, cid)
     # Validated the same way `income_statement` validates its own dates --
     # `_parse_period_date` raises `StatementPeriodError` on anything that is
-    # not a real 'YYYY-MM-DD' calendar date; its returned `date` object is
-    # not needed further here (the SQL below compares the original STRING,
-    # matching `_parse_period_date`'s own docstring on why that sorts
-    # identically to chronological order).
-    _parse_period_date('as_of_date', as_of_date)
+    # not a real 'YYYY-MM-DD' calendar date.
+    #
+    # P0 round 2 (item B2): the RETURNED `date` object now IS needed here --
+    # the paragraph this comment used to carry ("not needed further here,
+    # the SQL below compares the original STRING") described the exact bug,
+    # not a design choice: `_parse_period_date` is lenient about a
+    # non-zero-padded month/day ('2026-9-1' parses to the same date as
+    # '2026-09-01'), but `gl_journals.business_date` is always stored
+    # zero-padded ISO and SQLite compares TEXT lexicographically, which
+    # disagrees with calendar order the instant one side is not padded
+    # ('2026-09-15' < '2026-9-1' as TEXT). A caller passing '2026-9-1' got
+    # silently wrong balances with no error anywhere. Reassigning
+    # `as_of_date` to the parsed date's own `.isoformat()` (always padded)
+    # closes that for every use of the variable below, including the
+    # `income_statement` call this function makes for retained_earnings.
+    as_of_date = _parse_period_date('as_of_date', as_of_date).isoformat()
 
     currency = _resolve_currency(conn, cid)
     quant = currency_quantum(currency)
@@ -986,6 +1016,13 @@ def cash_flow(conn, cid, start_date, end_date, branch_id=None):
             f"start_date {start_date!r} is after end_date {end_date!r} -- "
             f"a reporting period cannot run backwards."
         )
+    # P0 round 2 (item B2): same normalize-not-just-validate fix as
+    # income_statement's identical two lines above in this file (see that
+    # comment for the full 'gl_journals.business_date is TEXT-compared'
+    # reasoning) -- this function's own `period_params` a few lines down
+    # binds these two strings directly, so a non-zero-padded caller must be
+    # normalized here too, not just have its calendar-date validity checked.
+    start_date, end_date = start.isoformat(), end.isoformat()
 
     currency = _resolve_currency(conn, cid)
     quant = currency_quantum(currency)

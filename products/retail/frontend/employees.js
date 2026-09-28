@@ -531,8 +531,13 @@ const RetailEmployees = {
   _delegationButton(emp) {
     if (this._isOwnerRow(emp) || !this._isDelegationEligible(emp)) return '';
     const id = this._esc(emp.id);
+    // P0 item #2 / interface I-10: the grant copy already said "Branch";
+    // the revoke copy did not, which reads as if the toggle's authority is
+    // wider than it is (retail.employees own-branch staff management --
+    // never the company-wide settings/money writes I-10 now gates
+    // separately, server-side, in retail_api.py). Copy fixed to match.
     return emp.can_manage_staff
-      ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="delegation" data-delegate="revoke" data-id="${id}">${t('Revoke Staff Management')}</button>`
+      ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="delegation" data-delegate="revoke" data-id="${id}">${t('Revoke Branch Staff Management')}</button>`
       : `<button class="ret-btn ret-btn-primary ret-btn-sm" data-action="delegation" data-delegate="grant" data-id="${id}">${t('Allow to Manage Branch Staff')}</button>`;
   },
 
@@ -603,15 +608,55 @@ const RetailEmployees = {
 
   _find(id) { return (this._rows || []).find(r => String(r.id) === String(id)); },
 
-  _closeModal(elementId) { document.getElementById(elementId)?.remove(); },
+  // AUDIT (P0 item #4, retail-hardware-viewports reviewer pass): this
+  // helper built a `.ret-modal-overlay` -- the same class every OTHER
+  // hand-rolled dialog in this product uses -- but never called
+  // _wireModalA11y, so its five modals (invite/link/role/branch/PIN) had no
+  // role=dialog, no aria-modal, Escape did nothing, and closing never
+  // returned focus to the trigger. Invisible to
+  // retail_modal_a11y_coverage_test.js until that ratchet was widened past
+  // subsystem-retail.js (see cash-drawer.js's identical note on its own
+  // five modals, item #4's other half) -- this file is what the widened
+  // ratchet actually caught. Routes the bare `.remove()` this used to call
+  // through the SAME `_a11yClose` _wireModalA11y hands back, so a caller
+  // that never got wired (there are none left, but a future modal added
+  // without going through `_modal()` would be one) still falls back to a
+  // plain remove() rather than throwing.
+  _closeModal(elementId) {
+    const overlay = document.getElementById(elementId);
+    if (!overlay) return;
+    if (typeof overlay._a11yClose === 'function') overlay._a11yClose();
+    else overlay.remove();
+  },
 
   _modal(id, innerHtml, width) {
+    const dialogId = `${id}-dialog`;
+    const titleId = `${id}-title`;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = id;
-    overlay.innerHTML = `<div class="ret-modal" style="width:${width || 480}px">${innerHtml}</div>`;
+    // `aria-labelledby="${titleId}"` is written INTO the template literal
+    // itself, not added later via setAttribute -- retail_modal_a11y_
+    // coverage_test.js's "every dialog is named" check is a STATIC source
+    // scan (it reads this file's text, never executes it), so an attribute
+    // only ever set at runtime is invisible to it: the wiring check passed
+    // while the naming check still read this exact div tag as having no
+    // aria-labelledby at all. Every one of this helper's five callers opens
+    // `innerHtml` with a single <h3> heading, given the SAME `titleId`
+    // below -- one id, one source of truth, instead of a second label that
+    // could drift from the visible title.
+    overlay.innerHTML = `<div class="ret-modal" style="width:${width || 480}px" id="${dialogId}" role="dialog" aria-modal="true" aria-labelledby="${titleId}">${innerHtml}</div>`;
+    const dialogEl = overlay.querySelector('.ret-modal');
+    const heading = dialogEl && dialogEl.querySelector('h3');
+    if (heading && !heading.id) heading.id = titleId;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', ev => { if (ev.target === overlay) overlay.remove(); });
+    RetailSystem._wireModalA11y(overlay, dialogId);
+    // Backdrop click now routes through the SAME close() _wireModalA11y
+    // just registered (via `_closeModal`, which reads `overlay._a11yClose`)
+    // -- a bare overlay.remove() here, as this used to be, would leave the
+    // Escape listener and the shared `_modalKeyStack` entry behind: closed
+    // on screen, still occupying the front of the Escape queue.
+    overlay.addEventListener('click', ev => { if (ev.target === overlay) this._closeModal(id); });
     return overlay;
   },
 

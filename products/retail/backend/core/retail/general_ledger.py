@@ -1321,70 +1321,167 @@ def reverse_journal(conn, cid, journal_id, memo=None, posted_by=None, business_d
     )
 
 
-def trial_balance(conn, cid):
-    """Every seeded account for company `cid`, with its lifetime debit/
-    credit totals and net `balance` (signed per the account's own
-    `normal_balance` -- positive means "a normal balance for this account
-    type", matching how a real trial balance reads).
+def trial_balance(conn, cid, as_of=None):
+    """Every seeded account for company `cid`, with its debit/credit
+    totals -- lifetime, unless `as_of` narrows them -- and net `balance`
+    (signed per the account's own `normal_balance` -- positive means "a
+    normal balance for this account type", matching how a real trial
+    balance reads).
 
-    COMPANY SCOPING WITHOUT TOUCHING `gl_journals` AT ALL: `gl_journal_
-    lines` carries no `company_id` of its own (see the module docstring),
-    but every line's `account_id` was resolved by `_account_id`, which only
-    ever returns an id scoped `WHERE company_id=?` -- so
-    `gl_journal_lines.account_id` is transitively company-scoped through
-    `gl_accounts`, and joining on `a.company_id = ?` alone is already
-    correct; no second join to `gl_journals` is needed to avoid a cross-
-    tenant leak here.
+    COMPANY SCOPING WITHOUT TOUCHING `gl_journals` AT ALL (the `as_of=None`
+    path only): `gl_journal_lines` carries no `company_id` of its own (see
+    the module docstring), but every line's `account_id` was resolved by
+    `_account_id`, which only ever returns an id scoped `WHERE
+    company_id=?` -- so `gl_journal_lines.account_id` is transitively
+    company-scoped through `gl_accounts`, and joining on `a.company_id = ?`
+    alone is already correct; no second join to `gl_journals` is needed to
+    avoid a cross-tenant leak here.
 
     `LEFT JOIN`, not `JOIN`: an account `ensure_default_chart` seeded but
     nothing has ever posted to (the common case for 1200/5900/3000 in a
     v38 install -- see DEFAULT_CHART's own comment) must still appear, at
     zero, not vanish from the report.
 
-    Company-wide, all branches, all time -- v38 deliberately ships no
-    branch or as-of-date filtering (see the ROADMAP.md entry's "Is NOT"
-    list: a presentation/reporting layer is a later wave). Every account
-    this function returns is still individually correct for any narrower
-    report built on top of `gl_journal_lines`/`gl_journals` directly.
+    `as_of` (P0 item #15d, interface I-5) -- an optional `'YYYY-MM-DD'`
+    string. `None` (the default, and the ONLY behaviour that existed before
+    this parameter) is the original all-time query above: no join to
+    `gl_journals` at all, so a v38/v39 install that has never posted a
+    single journal outside today still sees the exact same numbers it
+    always has, byte for byte -- adding an optional filter must never
+    change the no-filter answer. When given, `business_date <= as_of` is
+    applied INSIDE a subquery's WHERE (never appended outside the join),
+    the identical shape `financial_statements.balance_sheet` already uses
+    for its own `as_of_date` and for the identical reason that function's
+    own comment gives: an account with real lifetime activity but nothing
+    ON OR BEFORE this specific date must still come back a LEFT-JOIN NULL
+    (COALESCE'd to 0), never vanish from the report. Filtered on
+    `gl_journals.business_date`, the accounting date, NEVER `posted_at` --
+    matching every other period-scoped query in this codebase (see
+    `financial_statements.py`'s module docstring point 3, not repeated
+    here). Raises `ValueError` on a string that is not a real calendar
+    date -- this module has no `StatementPeriodError` of its own
+    (`financial_statements.py` imports `general_ledger`, so the reverse
+    import would be circular), and the route this function serves
+    (`api/retail_api.py::report_trial_balance`) catches plain `ValueError`
+    for the same 400-with-message contract `report_balance_sheet` gives
+    `StatementPeriodError`.
+
+    Company-wide, all branches -- v38's branch-scoping decision is
+    unchanged and out of scope for this date-only addition (see the
+    ROADMAP.md entry's "Is NOT" list).
     """
     ensure_default_chart(conn, cid)
     currency = _resolve_currency(conn, cid)
     quant = currency_quantum(currency)
 
-    rows = conn.execute(
-        "SELECT a.code, a.name, a.account_type, a.normal_balance, "
-        "       COALESCE(SUM(l.debit), 0) AS total_debit, "
-        "       COALESCE(SUM(l.credit), 0) AS total_credit "
-        "FROM gl_accounts a "
-        "LEFT JOIN gl_journal_lines l ON l.account_id = a.id "
-        "WHERE a.company_id = ? "
-        "GROUP BY a.id ORDER BY a.code",
-        (cid,)
-    ).fetchall()
+    if as_of is not None:
+        try:
+            _as_of_date = datetime.strptime(as_of, '%Y-%m-%d')
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"as_of must be a 'YYYY-MM-DD' date, got {as_of!r}"
+            ) from exc
+        # P0 round 2 (item B2): NORMALIZE, do not just VALIDATE.
+        # `datetime.strptime(..., '%Y-%m-%d')` is lenient about a
+        # non-zero-padded month/day -- '2026-9-1' parses successfully to the
+        # same date as '2026-09-01' -- but the query below compares
+        # `gl_journals.business_date` (always stored zero-padded ISO,
+        # 'YYYY-MM-DD') against `as_of` as a plain SQLite TEXT string, not a
+        # calendar date. Lexicographic string comparison disagrees with
+        # calendar order the instant the string is not zero-padded:
+        # '2026-09-15' < '2026-9-1' as TEXT (comparing the 6th character,
+        # '0' < '9'), so an as_of of '2026-9-1' would have INCLUDED every
+        # September date up to the 9-<=-9 boundary and EXCLUDED October
+        # dates that string-sort before it -- silently wrong totals with no
+        # error anywhere, exactly the trap this line existed to guard
+        # against by validating the date at all. Reassigning `as_of` to the
+        # parsed date's own `.isoformat()` (always zero-padded) before it
+        # ever reaches the SQL parameter below closes that gap for every
+        # caller, not just a hypothetical one: `financial_statements.py`'s
+        # `income_statement`/`balance_sheet` had the identical bug (see
+        # their own `_parse_period_date` call sites) and got the same fix.
+        as_of = _as_of_date.date().isoformat()
+
+    if as_of is None:
+        rows = conn.execute(
+            "SELECT a.code, a.name, a.account_type, a.normal_balance, "
+            "       COALESCE(SUM(l.debit), 0) AS total_debit, "
+            "       COALESCE(SUM(l.credit), 0) AS total_credit "
+            "FROM gl_accounts a "
+            "LEFT JOIN gl_journal_lines l ON l.account_id = a.id "
+            "WHERE a.company_id = ? "
+            "GROUP BY a.id ORDER BY a.code",
+            (cid,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT a.code, a.name, a.account_type, a.normal_balance, "
+            "       COALESCE(SUM(fl.debit), 0) AS total_debit, "
+            "       COALESCE(SUM(fl.credit), 0) AS total_credit "
+            "FROM gl_accounts a "
+            "LEFT JOIN ( "
+            "    SELECT gjl.account_id, gjl.debit, gjl.credit "
+            "    FROM gl_journal_lines gjl "
+            "    JOIN gl_journals gj ON gj.id = gjl.journal_id "
+            "    WHERE gj.company_id = ? AND gj.business_date <= ? "
+            ") fl ON fl.account_id = a.id "
+            "WHERE a.company_id = ? "
+            "GROUP BY a.id ORDER BY a.code",
+            (cid, as_of, cid)
+        ).fetchall()
 
     accounts = []
     total_debit_all = Decimal('0')
     total_credit_all = Decimal('0')
+    total_closing_debit_all = Decimal('0')
+    total_closing_credit_all = Decimal('0')
     for r in rows:
         debit = Decimal(str(r['total_debit']))
         credit = Decimal(str(r['total_credit']))
         total_debit_all += debit
         total_credit_all += credit
         net = (debit - credit) if r['normal_balance'] == 'debit' else (credit - debit)
+        # Closing Dr/Cr (P0 item #15d): sided by the BALANCE SIGN, not just
+        # the account's normal side -- a `net` of 0 or more sits on the
+        # account's own normal side (the common case: an asset with a debit
+        # balance shows in the Dr column); a NEGATIVE `net` is an abnormal
+        # balance (e.g. Inventory oversold into a credit position -- the
+        # exact -0.792-with-no-side-shown case this item's own bug report
+        # names) and must flip to the OPPOSITE column instead of printing a
+        # signed negative number in a column that is supposed to only ever
+        # hold non-negative amounts. Exactly one of the two is nonzero for
+        # every row, so `total_closing_debit`/`total_closing_credit` below
+        # are just a re-sorted split of the same lifetime debit/credit
+        # totals and are therefore ALWAYS equal to each other -- this is
+        # arithmetic (both column pairs sum to the same total_debit_all -
+        # total_credit_all), not a claim that needs its own reconciliation.
+        if net >= 0:
+            closing_debit = net if r['normal_balance'] == 'debit' else Decimal('0')
+            closing_credit = net if r['normal_balance'] == 'credit' else Decimal('0')
+        else:
+            closing_debit = -net if r['normal_balance'] == 'credit' else Decimal('0')
+            closing_credit = -net if r['normal_balance'] == 'debit' else Decimal('0')
+        total_closing_debit_all += closing_debit
+        total_closing_credit_all += closing_credit
         accounts.append({
             'code': r['code'], 'name': r['name'], 'account_type': r['account_type'],
             'normal_balance': r['normal_balance'],
             'debit': float(debit.quantize(quant, rounding=ROUND_HALF_UP)),
             'credit': float(credit.quantize(quant, rounding=ROUND_HALF_UP)),
             'balance': float(net.quantize(quant, rounding=ROUND_HALF_UP)),
+            'closing_debit': float(closing_debit.quantize(quant, rounding=ROUND_HALF_UP)),
+            'closing_credit': float(closing_credit.quantize(quant, rounding=ROUND_HALF_UP)),
         })
 
     eps = _gl_epsilon(currency)
     return {
         'currency': currency,
+        'as_of': as_of,
         'accounts': accounts,
         'total_debit': float(total_debit_all.quantize(quant, rounding=ROUND_HALF_UP)),
         'total_credit': float(total_credit_all.quantize(quant, rounding=ROUND_HALF_UP)),
+        'closing_debit': float(total_closing_debit_all.quantize(quant, rounding=ROUND_HALF_UP)),
+        'closing_credit': float(total_closing_credit_all.quantize(quant, rounding=ROUND_HALF_UP)),
         'is_balanced': abs(total_debit_all - total_credit_all) <= eps,
     }
 
@@ -1465,10 +1562,89 @@ def subledger_tie(conn, cid, tb):
     compared against a hardcoded 0.005... never make one of these finer on
     its own") for why a fixed literal here would silently under-report a
     real divergence on any 3-decimal currency (JOD, KWD, BHD, OMR).
+
+    `tb['as_of']` NOT NONE (P0 item #15d, reviewer finding): `customers`/
+    `suppliers.credit_balance` are LIVE, TODAY'S figures -- there is no
+    history table behind them (rule 2 in this module's own header:
+    `AR`/`AP` themselves are the closest thing to a subledger this codebase
+    keeps). `tb`'s own GL side, by contrast, is correctly as-of the date
+    asked for. Comparing today's live balance against a PAST GL balance
+    reports a false "Does Not Tie" the instant AR/AP has moved even once
+    since that date -- measured: one paid PO today, `as_of=yesterday`, gave
+    `ap_gl=0.0` (correct: nothing had posted by yesterday) against
+    `ap_subledger=10.0` (today's live balance), `ap_ties=False`, on a ledger
+    that in fact ties perfectly for both "all time" and "as of today". The
+    comparison is therefore SKIPPED entirely for a genuine past date: `ar_
+    ties`/`ap_ties` come back `True` (there being nothing false to report --
+    a past-dated GL slice was never claimed to tie to today's live balance
+    in the first place) and `applicable` is `False`, so a caller that reads
+    THAT key can render "not applicable for a past date" instead of either
+    badge. The subledger figures themselves are set to mirror the GL side
+    (`ar_subledger = ar_gl`, `ap_subledger = ap_gl`) rather than left at
+    today's live, unrelated number or at `None` -- both of the routes this
+    function serves render `ar_subledger`/`ap_subledger` unconditionally, so
+    a caller that has not yet been updated to branch on `applicable` still
+    shows one internally-consistent pair of figures and a "Ties" badge
+    instead of a stale, contradicting live balance next to a red "Does Not
+    Tie" that was never really about this date at all.
+
+    P0 round 3 (item V5, reviewer finding) UPDATED the MECHANISM, not the
+    goal just described: `applicable` used to be decided by `tb['as_of'] <
+    _today()`, the server's own clock. That is wrong the moment a journal
+    can be business-dated after this server's "today" (the v41 GL journal
+    sync makes cross-device clock/timezone skew real, not hypothetical) --
+    `as_of=today` then fell through to a REAL comparison and reported a
+    false "Does Not Tie" against a journal the live subledger already
+    counted but `tb` correctly excluded. `applicable` is now decided from
+    the DATA: false whenever any `gl_journals` row for this company is
+    dated after `as_of`, regardless of what day it is. See the code just
+    below for the query and the exact measured case.
     """
     ar_gl = _account_balance_in(tb, ACCOUNT_AR)
     ap_gl = _account_balance_in(tb, ACCOUNT_AP)
     eps = _gl_epsilon(tb['currency'])
+
+    # P0 round 3 (item V5, reviewer finding): this used to read `tb['as_of']
+    # < _today()` -- THE SERVER'S OWN CLOCK. That is the wrong question. A
+    # peer's clock/timezone skew, or a shop `business_timezone` ahead of
+    # this server, can post a journal business-dated AFTER this server's
+    # own "today" -- the v41 GL journal sync makes this a real cross-device
+    # case, not a hypothetical one. When that happens with `as_of=today`,
+    # the old check's `today < today` was False, so it fell through to the
+    # REAL comparison below -- and reported a false "Does Not Tie", because
+    # `tb` (filtered `business_date <= as_of`) correctly excludes that
+    # future-dated journal while the live `credit_balance` subledger side
+    # already reflects it (that journal's underlying sale/payment already
+    # happened; only its BUSINESS DATE is ahead of as_of). Measured
+    # (probe3.log): a credit sale posted with `business_date` tomorrow made
+    # `as_of=today` report `ar_gl=10.0` / `ar_subledger=20.0` / `ar_ties=
+    # False`, while all-time and `as_of=tomorrow` both tied at 20/20 --
+    # the SAME data, disagreeing only because of which clock decided
+    # "applicable".
+    #
+    # Decided from the DATA instead: the comparison is applicable exactly
+    # when no `gl_journals` row for this company is dated after `as_of` --
+    # i.e. nothing has been excluded from `tb` that the live subledger
+    # could already be counting. This subsumes the old past-date case (a
+    # genuine past `as_of` almost always has at least one journal dated
+    # after it, namely everything posted since) without ever asking what
+    # day the SERVER thinks it is, and it also catches the future-dated-
+    # journal case the old clock check could not, because the question is
+    # now "does excluded data exist" rather than "is as_of before today".
+    _future_journal = conn.execute(
+        "SELECT 1 FROM gl_journals WHERE company_id=? AND business_date > ? LIMIT 1",
+        (cid, tb['as_of']),
+    ).fetchone() if tb.get('as_of') is not None else None
+    if _future_journal is not None:
+        return {
+            'ar_gl': ar_gl, 'ar_subledger': ar_gl, 'ar_ties': True,
+            'ap_gl': ap_gl, 'ap_subledger': ap_gl, 'ap_ties': True,
+            'applicable': False,
+            'reason': (
+                'a journal is business-dated after as_of; subledger balances are '
+                'current-only and not comparable while activity is excluded by the date filter'
+            ),
+        }
 
     def _credit_balance_sum(table):
         try:
@@ -1492,6 +1668,14 @@ def subledger_tie(conn, cid, tb):
     ar_ties = abs(Decimal(str(ar_gl)) - Decimal(str(ar_sub))) <= eps
     ap_ties = abs(Decimal(str(ap_gl)) - Decimal(str(ap_sub))) <= eps
 
+    # No `applicable` key on this, the pre-existing (`as_of=None`) path --
+    # deliberately BYTE-COMPATIBLE with every caller from before P0 item
+    # #15d, including retail_gl_route_test.py's own exact-dict-equality
+    # guard (`test_subledger_tie_does_not_explode_when_credit_balance_was_
+    # never_created`), matching this codebase's "invisible unless opted in"
+    # rule (CLAUDE.md): the new key only appears on the NEW, explicitly
+    # opted-into `as_of` path above, never on the response every existing
+    # caller already reads.
     return {
         'ar_gl': ar_gl, 'ar_subledger': ar_sub, 'ar_ties': ar_ties,
         'ap_gl': ap_gl, 'ap_subledger': ap_sub, 'ap_ties': ap_ties,

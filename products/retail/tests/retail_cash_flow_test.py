@@ -633,6 +633,44 @@ def test_business_date_boundary_is_exact_both_ends_inclusive(client):
     assert _cash_flow(cid, '2026-06-01', '2026-06-14')['has_activity'] is False
 
 
+def test_non_padded_period_dates_still_find_activity_on_a_single_digit_day(client):
+    """P0 round 2 (item B2, adversarial-verifier finding): every date the
+    boundary test above passes ('2026-06-15' etc.) is already zero-padded,
+    so it cannot tell "the boundary arithmetic is right" from "the STRING
+    happens to already be padded". `_parse_period_date` is deliberately
+    lenient about a non-padded month/day, but `gl_journals.business_date` is
+    ALWAYS stored zero-padded ISO and SQLite compares it as TEXT. Binding
+    the ORIGINAL, non-padded `start_date`/`end_date` string -- rather than
+    the parsed dates' own zero-padded `.isoformat()` -- means
+    `business_date >= start_date` fails for a real padded date against a
+    non-padded single-digit-month target ('2026-09-05' >= '2026-9-5' is
+    FALSE as TEXT, since the 6th character '0' sorts before '9'), so a real
+    payment silently DISAPPEARS from the report -- the same silent-wrong-
+    rows shape `income_statement`'s identical fix (this file's sibling
+    guard) closes. Mutation: comment out `start_date, end_date =
+    start.isoformat(), end.isoformat()` in `cash_flow` and this goes red."""
+    cid = client.test_company_id
+    conn = get_retail_conn()
+    try:
+        gl.post_customer_payment(conn, cid, None, 'CF-NONPADDED', 'JOD', 18.0,
+                                  business_date='2026-09-05')
+        conn.commit()
+    finally:
+        conn.close()
+
+    # The CALLER passes a non-padded single-digit month and day -- exactly
+    # what `_parse_period_date` accepts without complaint.
+    cf = _cash_flow(cid, '2026-9-5', '2026-9-5')
+    assert cf['has_activity'] is True, (
+        "a real payment dated 2026-09-05 must be found by the non-padded period "
+        "'2026-9-5'..'2026-9-5' -- has_activity is False, the exact silent-wrong-rows "
+        "shape a TEXT-lexicographic date comparison produces")
+    assert cf['total_cash_in'] == 18.0, cf
+    # The echoed-back period must ALSO be normalized.
+    assert cf['period']['start_date'] == '2026-09-05', cf['period']
+    assert cf['period']['end_date'] == '2026-09-05', cf['period']
+
+
 # ── 9. An empty period reads as nothing moved, not a set of zeros ───────
 
 def test_empty_period_reads_as_nothing_moved(client):

@@ -10,10 +10,12 @@ import os
 import re
 import csv
 import io
+import math
 import time
 import json
 import logging
 import sqlite3
+import threading
 import uuid as _uuid
 import requests
 from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
@@ -576,7 +578,7 @@ def _stamp():
 #: identifiers a user row carries are `email` and `employee_id` ('ADMIN-0001').
 #: Any design that assumes a person's name exists is designing against a
 #: schema that is not there.
-_ACTOR_IDENTITY_SELECT = "SELECT uid, employee_id, email FROM users WHERE company_id=? AND uid IN ({})"
+_ACTOR_IDENTITY_SELECT = "SELECT {0}, employee_id, email FROM users WHERE company_id=? AND {0} IN ({1})"
 
 #: Comfortably under SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999), with
 #: room for the company_id bind. Chunked rather than assumed safe: an
@@ -600,8 +602,9 @@ def _identity_or_none(value):
     return text or None
 
 
-def _resolve_actor_identities(cid, uids):
-    """`{users.uid: {'employee_id', 'email', 'employee_name'}}` for `uids`.
+def _resolve_actor_identities(cid, uids, key_column='uid'):
+    """`{<key_column value>: {'employee_id', 'email', 'employee_name'}}` for
+    `uids`.
 
     ONE batched query (chunked only for the parameter limit), scoped to this
     company. The scoping is free defence-in-depth rather than a correctness
@@ -618,8 +621,29 @@ def _resolve_actor_identities(cid, uids):
     `attributedName` ordering, and the desktop has no established preference,
     so Android's wins by default.
 
+    `key_column` (P0 item #17, interface I-7) -- 'uid' (default, every
+    caller before this item) matches `users.uid`, the WIRE identity every
+    OTHER stamped column in this file holds (`actor_user_uid`, resolved by
+    the three existing callers below). `audit_log.user_id` is DIFFERENT: it
+    is written by `_audit()` as `_uid()` -- `session['mt_user_id']`, i.e.
+    `users.id`, the LOCAL primary key -- NEVER `_actor_user_uid()`'s wire
+    uid (see that function's own docstring: "`_uid()` returns
+    `session['mt_user_id']`... NOT `users.uid`"). Matching the default 'uid'
+    against `audit_log.user_id` values would silently resolve NOTHING --
+    two independent uuid4 spaces that happen to look identical -- which is
+    exactly the class of trap this file's own security review process
+    exists to catch before it ships as a confirmed no-op. `list_audit_log`
+    passes `key_column='id'`; every other caller is unaffected (this
+    defaults to the pre-existing behaviour byte-for-byte -- see this
+    function's own callers, all three of which still resolve on `uid`).
+    Restricted to this exact pair (never an arbitrary caller-supplied
+    string) because it is interpolated directly into the SQL column
+    position, not bound as a parameter.
+
     Never raises.
     """
+    if key_column not in ('uid', 'id'):
+        raise ValueError(f"_resolve_actor_identities: invalid key_column {key_column!r}")
     wanted = sorted({u for u in uids if _identity_or_none(u)})
     if not wanted:
         return {}
@@ -629,11 +653,11 @@ def _resolve_actor_identities(cid, uids):
         try:
             for i in range(0, len(wanted), _ACTOR_UID_CHUNK):
                 chunk = wanted[i:i + _ACTOR_UID_CHUNK]
-                sql = _ACTOR_IDENTITY_SELECT.format(','.join('?' * len(chunk)))
+                sql = _ACTOR_IDENTITY_SELECT.format(key_column, ','.join('?' * len(chunk)))
                 for row in conn.execute(sql, [cid, *chunk]).fetchall():
                     employee_id = _identity_or_none(row['employee_id'])
                     email = _identity_or_none(row['email'])
-                    resolved[row['uid']] = {
+                    resolved[row[key_column]] = {
                         'employee_id': employee_id,
                         'email': email,
                         'employee_name': email or employee_id,
@@ -891,6 +915,31 @@ def _resolve_working_branch(conn, cid, explicit_branch_id=None):
     pinned_uid = _onboarding_get_device_branch_uid()
     if not pinned_uid:
         return _default_branch(conn, cid), None
+
+    # P0 round 2 (item #2 (I-10) D7 gap) defense in depth -- see
+    # `set_device_branch`'s docstring for the full story. That route (after
+    # this same round's fix) already refuses to pin a scoped caller's till
+    # to a foreign branch, but a foreign pin could still reach a scoped
+    # caller's WRITE through some other route to the same device-local
+    # config key (a device pinned before this fix landed and never
+    # re-pinned; an owner deliberately sharing one till across branches).
+    # Refuse it here too, so the pinned tier gets the identical scope
+    # refusal the explicit-`branch_id` tier above already has -- the D7 gap
+    # this whole function exists to close must not have one tier that skips
+    # the check just because its branch id came from a device config key
+    # instead of a request body. Fail CLOSED on a lookup failure, matching
+    # every other D7 site.
+    try:
+        scope_uid = session_branch_scope()
+    except BranchScopeLookupError:
+        return None, (jsonify({
+            'status': 'error',
+            'message': 'Could not verify your branch access. Try again.',
+        }), 403)
+    if scope_uid is not None and pinned_uid != scope_uid:
+        return None, (jsonify({
+            'status': 'error', 'message': 'You may only write to your own branch.',
+        }), 403)
 
     fallback_sink = []
     bid = _SyncService._resolve_branch_id(conn, cid, pinned_uid, fallback_sink=fallback_sink)
@@ -1649,8 +1698,20 @@ def list_products():
     # for the single-row counterpart the scan path is meant to move onto.
     q = request.args.get('q', '').strip()
     raw_limit = request.args.get('limit')
+    # P0 item #15(e), interface I-6 (reviewer finding): `bid` is THIS
+    # DEVICE's working branch -- see `metrics.inventory_value`'s own
+    # docstring for why `avg_cost` is branch-scoped as of schema v40 and
+    # `create_product`'s identical `_resolve_working_branch` call for the
+    # write-side precedent. Resolved once, before the query, and bound into
+    # the FIRST `?` placeholder in `sql` below (see `params` immediately
+    # after) -- the cost_basis subquery correlates on this one fixed branch
+    # id for every row, never the row's own `total_stock`-aggregated branch
+    # set, so a multi-branch company's Products screen shows what stock at
+    # THIS till's branch actually cost, not a figure blended across branches
+    # nobody here can act on.
+    bid, _ = _resolve_working_branch(conn, cid)
     conditions = ["p.company_id=?", "p.status='active'", "p.deleted_at_utc IS NULL"]
-    params = [cid]
+    params = [bid, cid]
     if q:
         conditions.append("(p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)")
         like = f'%{q}%'
@@ -1658,6 +1719,22 @@ def list_products():
     sql = (
         "SELECT p.*, c.name as category_name, "
         "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock, "
+        # `cost_basis`: the branch avg cost the books actually use for THIS
+        # product at THIS device's working branch -- the SAME three-level
+        # `COALESCE(NULLIF(branch avg_cost,0), NULLIF(company avg_cost,0),
+        # cost_price)` chain `metrics.inventory_value` sums for the "Stock
+        # value at cost" figure, so the two numbers on this same screen
+        # (this per-row cell, and stock-value's header total) can never
+        # disagree about what "cost" means for a product that has never
+        # been received through a PO -- previously the raw `products.
+        # avg_cost` column (0 for exactly that case, per `p.*` below) was
+        # what the Products screen's "Avg cost" cell showed, JD 0.000 beside
+        # a nonzero "Stock value at cost" computed from the SAME row through
+        # the fallback chain this subquery now shares.
+        "(SELECT COALESCE(NULLIF(wb.avg_cost, 0), NULLIF(p.avg_cost, 0), p.cost_price) "
+        " FROM inventory_balances wb "
+        " WHERE wb.company_id = p.company_id AND wb.product_id = p.id AND wb.branch_id = ?"
+        ") AS cost_basis, "
         # Modifier picker cold-start fix (launch-readiness "restaurant
         # modifiers, wave 2 follow-up"): the till used to have no way to
         # know a product carries modifier groups until it separately asked
@@ -2036,6 +2113,22 @@ def create_product():
         # stamped explicitly at creation, same reasoning as
         # create_category's identical comment above.
         now = now_utc_iso()
+        # P0 item #13 (interface I-4): `tax_rate` absent/null/empty falls
+        # back to the shop's `default_tax_rate` setting -- an EXPLICIT 0
+        # stays 0 (a shop that types 0 is asserting "this item is
+        # zero-rated", not "I forgot"). Before this fix `data.get(
+        # 'tax_rate', 0)` treated "never sent the key" as 0 unconditionally,
+        # so a Jordanian shop that did not type 16 on every single product
+        # sold at tax 0.000 -- the real day-one defect this item names.
+        # `.get('tax_rate')` with NO default (unlike the old call) is what
+        # makes "absent" distinguishable from "sent as 0" below; a caller
+        # that sends 0 explicitly still reaches the `else` branch untouched.
+        _tax_rate_in = data.get('tax_rate')
+        if _tax_rate_in is None or (isinstance(_tax_rate_in, str) and not _tax_rate_in.strip()):
+            _default_rate_raw = (_settings(conn, cid).get('default_tax_rate') or '').strip()
+            tax_rate = float(_default_rate_raw) if _default_rate_raw else 0
+        else:
+            tax_rate = _tax_rate_in
         cur.execute("""
             INSERT INTO products (id,company_id,sku,barcode,name,category_id,supplier_id,cost_price,
                                   sell_price,tax_rate,unit,reorder_level,reorder_method,status,
@@ -2044,7 +2137,7 @@ def create_product():
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)
         """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
               data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
-              data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5),
+              tax_rate, data.get('unit','pcs'), data.get('reorder_level',5),
               data.get('reorder_method','none'), parent_product_id, variant_label, 1, now))
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _resolve_working_branch), so a sale
@@ -2100,7 +2193,20 @@ def create_product():
             # this payload, rather than relying on the receiving device's
             # own local schema default to happen to agree.
             'avg_cost': 0,
-            'sell_price': data.get('sell_price', 0), 'tax_rate': data.get('tax_rate', 0),
+            # `tax_rate` (the RESOLVED local, never `data.get('tax_rate', 0)`
+            # again -- P0 item #13 reviewer finding): re-reading the raw
+            # client field here is the exact "balance and movement disagree
+            # about the same number" trap this route's own opening-stock
+            # comment already names, reopened for tax. `create_product`
+            # stores the shop's `default_tax_rate` fallback (resolved just
+            # above) into `products.tax_rate` locally, but this sync payload
+            # used to send the RAW `data.get('tax_rate', 0)` -- 0 whenever the
+            # client omitted the field, which is the normal case a shop
+            # relies on the default for. Every OTHER device therefore
+            # received tax_rate 0 for a product this device correctly priced
+            # at, e.g., 16: item #13's day-one defect, reintroduced on every
+            # peer till by the sync wire instead of by the till itself.
+            'sell_price': data.get('sell_price', 0), 'tax_rate': tax_rate,
             'unit': data.get('unit', 'pcs'), 'reorder_level': data.get('reorder_level', 5),
             # reorder automation foundation: propagated through the outbox so
             # a second device's SyncService._apply_event product upsert
@@ -2484,16 +2590,52 @@ def adjust_stock(pid):
         if requested_bid in (None, ''):
             # Launch-readiness chain wave C1: pinned-branch-aware fallback,
             # in place of the bare self-heal -- see _resolve_working_branch's
-            # own docstring. The explicit-branch validation just below is
-            # untouched; this route already had it before this fix.
-            bid, _ = _resolve_working_branch(conn, cid)
+            # own docstring. _resolve_working_branch's own D7 scope check
+            # (round 2 addition, see that function's docstring) now covers
+            # this branch of the call too.
+            bid, err = _resolve_working_branch(conn, cid)
+            if err:
+                conn.rollback()
+                return err
         else:
+            # P0 round 2 (pre-existing D7 gap, adversarial-verifier
+            # finding): this lookup used to stop at "does this branch
+            # belong to my company", the SAME cross-tenant check
+            # _resolve_working_branch's explicit-id tier makes, but never
+            # went on to that tier's OWN-branch D7 refusal for a
+            # branch-scoped caller. A branch-scoped manager holds
+            # CAP_STOCK_ADJUST regardless of the branch-staff toggle, so
+            # they could name a same-company, FOREIGN branch_id and move
+            # that branch's stock -- inventory value in the books -- with
+            # no refusal at all (probe4.log control: a Branch-A-scoped
+            # dmgr POSTs {quantity:-5, branch_id:B} -> 200, expected 403).
+            # Deliberately NOT routed through _resolve_working_branch
+            # itself: that helper's `COALESCE(status,'active')='active'`
+            # filter would also change an unknown/foreign-company id's
+            # response from this route's existing 404 "Branch not found"
+            # to a 400 "Unknown branch_id" -- a second, unrelated behaviour
+            # change that retail_stock_accuracy_test.py's cross-tenant test
+            # already pins at 404. The cross-tenant lookup and its 404 stay
+            # exactly as they were; only the OWN-branch scope check is new.
             branch = conn.execute(
-                "SELECT id FROM branches WHERE id=? AND company_id=?", (requested_bid, cid)
+                "SELECT id, uid FROM branches WHERE id=? AND company_id=?", (requested_bid, cid)
             ).fetchone()
             if not branch:
                 conn.rollback()
                 return jsonify({'status': 'error', 'message': 'Branch not found'}), 404
+            try:
+                scope_uid = session_branch_scope()
+            except BranchScopeLookupError:
+                conn.rollback()
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Could not verify your branch access. Try again.',
+                }), 403
+            if scope_uid is not None and branch['uid'] != scope_uid:
+                conn.rollback()
+                return jsonify({
+                    'status': 'error', 'message': 'You may only write to your own branch.',
+                }), 403
             bid = branch['id']
 
         conn.execute("""
@@ -3382,9 +3524,26 @@ def create_purchase_order():
     # apart again the way they just did.
     amount_paid = max(0.0, _money(data.get('amount_paid', 0), currency))
     _eps = _money_epsilon(currency)
-    if amount_paid > _eps and not session_has_capability(CAP_EMPLOYEES):
-        conn.close()
-        return jsonify({'status': 'error', 'message': SUPPLIER_PAYMENT_DENIED_MESSAGE}), 403
+    if amount_paid > _eps:
+        if not session_has_capability(CAP_EMPLOYEES):
+            conn.close()
+            return jsonify({'status': 'error', 'message': SUPPLIER_PAYMENT_DENIED_MESSAGE}), 403
+        # I-10 (P0 item #2, reviewer finding): CAP_EMPLOYEES alone is not
+        # enough once a down-payment is posted here -- it is the exact same
+        # money-out action supplier_payment and pay_purchase_order's own
+        # amount_paid branch both require the owner for (see
+        # _require_company_admin's own docstring). Without this, the
+        # branch-staff delegation toggle's CAP_EMPLOYEES grant (employees.js)
+        # let a manager pay a supplier by typing a number into a brand-new
+        # PO's amount_paid instead of being refused by the two dedicated
+        # payment routes -- reopening exactly the "weaker second path" the
+        # capability matrix's Fix 1 closed. amount_paid=0 (the far more
+        # common case -- receiving/ordering stock) stays on CAP_EMPLOYEES
+        # alone; only the money-out half needs the owner.
+        admin_guard = _require_company_admin()
+        if admin_guard is not None:
+            conn.close()
+            return admin_guard
 
     _ensure_credit_schema(conn)
     # 2026-08-28: defense-in-depth error containment, same shape and same
@@ -6400,8 +6559,14 @@ def create_sale():
             # basis that line's `unit_cost` snapshot needs -- see the
             # `cost_basis`/`unit_cost` computation below, right after
             # `unit_price`/`tax_rate` are resolved from this SAME row.
+            #
+            # `p.variant_label` added (P0 item #6, interface I-9): this row
+            # already carried `p.name`, but never the variant label, so a
+            # sold VARIANT's response line named only the parent product
+            # ("Polo Shirt") with no size/colour -- see `resolved_lines`'s
+            # own comment below for where both are actually used.
             product = cur.execute(
-                "SELECT p.id, p.name, p.sell_price, p.tax_rate, p.status, p.category_id, "
+                "SELECT p.id, p.name, p.variant_label, p.sell_price, p.tax_rate, p.status, p.category_id, "
                 "p.avg_cost, p.cost_price, "
                 "p.parent_product_id, EXISTS("
                 "  SELECT 1 FROM products c WHERE c.parent_product_id = p.id "
@@ -6679,6 +6844,20 @@ def create_sale():
                 'product_id': pid, 'quantity': qty, 'unit_price': unit_price,
                 'discount_pct': effective_discount_pct, 'tax_rate': tax_rate,
                 'line_total': calc['taxable_amount'], 'branch_id': bid,
+                # P0 item #6 (interface I-9): the response line never carried
+                # the product's own name, so the Sale Complete modal and the
+                # printed slip both fell back to '#'+product_id -- a raw
+                # UUID on every single line (4 of 4 in the probe that found
+                # this). `product['name']`/`product['variant_label']` are
+                # the SAME row this loop already fetched to price the line
+                # (see the SELECT's own comment above); reading them here
+                # costs nothing extra and cannot disagree with what was
+                # actually sold. `variant_label` is None for an ordinary,
+                # non-variant product -- the client's own fallback chain
+                # (cart's own name -> t('Item'), never the id) handles a
+                # missing name; it never needs a missing label handled
+                # specially.
+                'name': product['name'], 'variant_label': product['variant_label'],
                 # Schema v39: the cost-basis snapshot resolved above,
                 # BEFORE any quotation price-winner logic runs -- cost basis
                 # is independent of which side (quoted vs. live) wins this
@@ -11078,14 +11257,29 @@ def report_trial_balance():
     subledger=...)` builds a NEW response dict rather than mutating `tb` in
     place, matching this codebase's immutability convention.
 
-    Company-wide, all branches, all time, exactly like `trial_balance()`
-    itself -- no `?branch_id=`/date filtering in v38 (see that function's
-    own docstring for why: a presentation/reporting layer over the ledger
-    is a later, unclaimed wave, not this one).
+    `?as_of=YYYY-MM-DD` (P0 item #15d, interface I-5) -- OPTIONAL, unlike
+    `report_balance_sheet`'s required `as_of_date`: an absent/blank value is
+    passed through as `None`, which is `gl.trial_balance`'s own "no filter,
+    all time" default and keeps this route's response byte-for-byte
+    unchanged for every caller that does not ask (this codebase's standing
+    "invisible unless opted in" rule). A malformed date raises `ValueError`
+    inside `gl.trial_balance` (see that function's own docstring for why it
+    is a plain `ValueError` and not `fin_statements.StatementPeriodError`
+    here), caught below the same way `report_balance_sheet` catches
+    `StatementPeriodError` -- a 400 with the message verbatim, never a
+    silent fallback to today.
+
+    Company-wide, all branches -- v38's branch-scoping decision is
+    unchanged (see `gl.trial_balance`'s own docstring).
     """
     cid = _cid()
+    as_of = request.args.get('as_of', '').strip() or None
     conn = get_retail_conn()
-    tb = gl.trial_balance(conn, cid)
+    try:
+        tb = gl.trial_balance(conn, cid, as_of=as_of)
+    except ValueError as exc:
+        conn.close()
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
     subledger = gl.subledger_tie(conn, cid, tb)
     conn.close()
     data = dict(tb, subledger=subledger)
@@ -11250,6 +11444,288 @@ def report_cash_flow():
         return jsonify({'status': 'error', 'message': str(exc)}), 400
     conn.close()
     return jsonify({'success': True, 'data': data})
+
+# P0 item #15(e) (interface I-6): the Products screen's header wants "how
+# much is my whole shelf worth right now" -- the SAME figure the shift-close
+# email already prints (`_render_report_email_body`'s own 'Current inventory
+# value' line, immediately below) and Android's own summary screen already
+# shows, both already reading `metrics.inventory_value`. No route ever
+# exposed it to the desktop Products screen on its own -- a caller wanting
+# just this one number had no smaller request than the whole dashboard/
+# summary payload. Deliberately its OWN tiny route rather than a field
+# bolted onto `list_products`: that route returns EVERY product row, and
+# this figure is one company-wide total, not a per-row column (per-row cost
+# is `avg_cost`, already on every `list_products` row via that route's own
+# `SELECT p.*` -- see this item's own investigation note, nothing to add
+# there).
+@retail_bp.route('/products/stock-value', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def product_stock_value():
+    """`{"value": number, "currency": str}` -- the literal shape interface
+    I-6 specifies, with NO envelope (unlike `report_trial_balance`'s
+    `{'success', 'data'}` a few sections up): this is a one-figure read for
+    a header, not a report screen, and every other Phase 0 relay/status
+    route this same wave adds (`/customer-display/status`, `/ai/status`)
+    is specified the identical bare-object way.
+
+    Company-wide for an UNSCOPED caller (the owner, or a manager the owner
+    never scoped) -- `metrics.inventory_value`'s own default (`branch_id=
+    None`, "every branch"), matching what the Products screen this feeds
+    shows there: the whole catalogue, not one branch's slice.
+
+    P0 round 3 (item V4, reviewer finding): a branch-SCOPED caller used to
+    get that same company-wide figure regardless, because this route never
+    called `_coerce_branch_id_for_scope` at all -- the one report route in
+    this wave that skipped it. Measured: a Branch-A-scoped manager received
+    the combined Branch-A+B value, not Branch-A's own. Coerced exactly the
+    way `dashboard_stats`/`sales-trend`/`cash_flow` above already do: a
+    scoped caller's `branch_id` is overridden to THEIR OWN branch (never an
+    error -- see that helper's own docstring on why probing for other
+    branches must not be possible), an unscoped caller passes straight
+    through untouched (`raw_branch_id=None` here, since this route accepts
+    no `?branch_id=` query of its own to begin with -- there was never an
+    unscoped-caller behaviour to preserve beyond "company-wide").
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, None)
+    if _scope_err:
+        conn.close()
+        return _scope_err
+    currency = _settings(conn, cid)['base_currency']
+    value = metrics.inventory_value(conn, cid, branch_id=branch_id, currency=currency)
+    conn.close()
+    return jsonify({'value': value, 'currency': currency})
+
+
+# ── Customer display relay (P0 item #11(b), interface I-1) ─────────────────
+# pywebview hands `window.open` to the SYSTEM BROWSER (see launcher_
+# retail.py's own item #11 comment) -- a different program, with no session
+# and no BroadcastChannel -- so the till's existing BroadcastChannel-only
+# path (`_broadcastDisplayState`) never crosses over in the desktop app at
+# all. This relay carries the SAME message objects (`{type:'cart', ...}` /
+# `{type:'sale_complete', ...}`) through the backend instead: the till POSTs
+# its already-built payload, the display SHORT-POLLS for it. Waitress runs
+# only 12 threads (see interface I-1's own text), so this is deliberately
+# NOT long-poll -- a GET that blocked waiting for the next message could
+# starve the till's own requests on the same process.
+#
+# IN-MEMORY ONLY, NO SCHEMA CHANGE, GONE ON RESTART -- deliberately: this is
+# a live hand-off between two windows on ONE computer for as long as this
+# process runs, not a durable record anything needs to survive a restart or
+# reach a second device. Keyed by (company_id, this computer's device) --
+# `local_terminal_id()` is the SAME "which device is this" identity
+# `_stamp()` already stamps onto every sale (database/schema.py's own
+# docstring: "deliberately NOT a new notion of device identity"), reused
+# here rather than minting a second one. The company half of the key is
+# real defence-in-depth, not a feature: this codebase's own CLAUDE.md is
+# explicit that one install hosts exactly one company in practice, but nothing
+# stops two DIFFERENT sessions (a stale cookie from a prior company, a
+# multi-tenant test harness) from hitting this same process, and a display
+# relay is exactly the kind of state that must never let one company's live
+# sale rendering leak into another's popup.
+_CUSTOMER_DISPLAY_LOCK = threading.Lock()
+
+#: {(company_id, device_id): {'seq': int, 'message': dict, 'shop': dict}}
+_CUSTOMER_DISPLAY_STATE = {}
+
+#: {(company_id, device_id): float} -- `time.monotonic()` of the last GET
+#: .../state poll a DISPLAY made (never .../status, which the TILL polls to
+#: READ that fact, not to announce itself -- see customer_display_status's
+#: own docstring). `time.monotonic()`, never wall-clock time: a system clock
+#: change mid-shift (DST, NTP correction) must never make "seconds since
+#: last seen" jump backward or forward.
+_CUSTOMER_DISPLAY_LAST_SEEN = {}
+
+# P0 item #11(b) / interface I-1 reviewer finding (severity high):
+# customer_display_set_state had no shape or size validation of any kind --
+# "a relay, not a validator", per its own docstring below -- and only
+# requires CAP_SELL, the base "can ring a sale" grant every cashier holds.
+# No route in this product sets `app.config['MAX_CONTENT_LENGTH']` anywhere
+# (confirmed by search across products/retail/backend/app.py; only the
+# unrelated Owner stack sets one, 12MB, for its own app), and waitress runs
+# only 12 worker threads for the WHOLE process, the same process that must
+# also serve create_sale. A generous cart's worth of line items is a few KB;
+# 64KB leaves comfortable room for a long cart or a shop name in a language
+# that expands under UTF-8, while still making an oversized/rapid-fire body
+# from an authenticated (or compromised) cashier session cheap to refuse
+# rather than something the money path pays for in threads and memory.
+_CUSTOMER_DISPLAY_MAX_BYTES = 64 * 1024
+
+
+def _customer_display_key(cid):
+    return (cid, local_terminal_id())
+
+
+def _customer_display_last_seen_ms_ago(key):
+    """None when this display has never polled `.../state` this process
+    lifetime (the till's own 'grey dot' state, per interface I-1) -- never
+    0, which would claim a poll that never happened."""
+    seen = _CUSTOMER_DISPLAY_LAST_SEEN.get(key)
+    if seen is None:
+        return None
+    return int(max(0.0, time.monotonic() - seen) * 1000)
+
+
+@retail_bp.route('/customer-display/state', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.customer_display.state", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
+def customer_display_set_state():
+    """The TILL pushes its already-formatted cart/sale-complete payload here
+    (body: `{"message": {...}, "shop": {"name", "lang", "theme"}}`), and the
+    sequence number bumps on every call -- a plain incrementing int, not a
+    hash or a timestamp, so `.../state?since=` below is a trivial `>`
+    comparison with no clock-skew or payload-equality question to get
+    wrong. `message`/`shop` are stored exactly as sent: this route is a
+    relay, not a validator of till-built commercial content -- the shapes
+    themselves are interface I-1's contract, owned by the till (C3c) and the
+    display (C6), not this route.
+
+    Bare-object response (no `{'status'|'success', 'data'}` envelope),
+    matching `product_stock_value`'s identical reasoning above: `ok`/`seq`/
+    `display_last_seen_ms_ago` are interface I-1's own literal shape.
+
+    SIZE-CAPPED at `_CUSTOMER_DISPLAY_MAX_BYTES` (reviewer finding, see that
+    constant's own comment) -- checked twice: from the `Content-Length`
+    HEADER first, before `request.json` (or any other body read) ever runs,
+    so an oversized request is refused without first buffering it into
+    memory at all; then, as a backstop for a body sent with no
+    `Content-Length` (chunked transfer encoding), from the DECODED shape's
+    own re-serialized size, before it is stored and held in memory for as
+    long as the display keeps polling it back.
+    """
+    content_length = request.content_length
+    if content_length is not None and content_length > _CUSTOMER_DISPLAY_MAX_BYTES:
+        return jsonify({'error': (
+            f'This request is {content_length // 1024}KB, over the '
+            f'{_CUSTOMER_DISPLAY_MAX_BYTES // 1024}KB limit for a customer-display update.'
+        )}), 413
+    data = request.json or {}
+    message = data.get('message')
+    if not isinstance(message, dict):
+        return jsonify({'error': 'message is required.'}), 400
+    shop = data.get('shop')
+    if not isinstance(shop, dict):
+        shop = {}
+    try:
+        # P0 round 3 (item V3, reviewer finding): `json.dumps(...)` with its
+        # DEFAULT `ensure_ascii=True` re-encodes every non-ASCII character
+        # (every Arabic letter in a shop name or cart, for a start) as a
+        # `\uXXXX` escape -- six ASCII characters standing in for what is
+        # only 2 bytes in real UTF-8. `len()` of THAT string is therefore
+        # not a byte count of anything that ever crosses the wire; it is a
+        # ~3x-inflated proxy that only happens to equal the real byte count
+        # for pure-ASCII content. Measured: a genuine 41,899-byte UTF-8
+        # Arabic cart was refused by this cap at roughly 64% of its real
+        # size, because the escaped-string length this line used to compute
+        # came out well over `_CUSTOMER_DISPLAY_MAX_BYTES`. `ensure_ascii=
+        # False` keeps every character as itself, and `.encode('utf-8')`
+        # then counts the SAME bytes the `Content-Length` check just above
+        # already measures correctly from the wire -- the two checks must
+        # agree on what "over the cap" means, or a display relay update a
+        # real till legitimately sent (small on the wire) could still be
+        # refused here, on this purely-internal re-measurement, for no
+        # reason a caller could ever see or fix. `separators=(',', ':')`
+        # (no spaces) so this backstop measures the same compact encoding
+        # this route would store, not a padded one that overstates size.
+        _measured_bytes = len(json.dumps(
+            {'message': message, 'shop': shop}, ensure_ascii=False, separators=(',', ':'),
+        ).encode('utf-8'))
+    except (TypeError, ValueError):
+        # Unserializable content cannot be measured -- refuse rather than
+        # guess, the same "fail closed on the unmeasurable case" posture
+        # `_decoded_logo_size`'s caller uses for a malformed data URI.
+        _measured_bytes = _CUSTOMER_DISPLAY_MAX_BYTES + 1
+    if _measured_bytes > _CUSTOMER_DISPLAY_MAX_BYTES:
+        return jsonify({'error': (
+            f'This customer-display update is {_measured_bytes // 1024}KB, over the '
+            f'{_CUSTOMER_DISPLAY_MAX_BYTES // 1024}KB limit.'
+        )}), 413
+    key = _customer_display_key(_cid())
+    with _CUSTOMER_DISPLAY_LOCK:
+        prev = _CUSTOMER_DISPLAY_STATE.get(key)
+        seq = (prev['seq'] + 1) if prev else 1
+        _CUSTOMER_DISPLAY_STATE[key] = {'seq': seq, 'message': message, 'shop': shop}
+    return jsonify({
+        'ok': True, 'seq': seq,
+        'display_last_seen_ms_ago': _customer_display_last_seen_ms_ago(key),
+    })
+
+
+@retail_bp.route('/customer-display/state', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def customer_display_get_state():
+    """The DISPLAY short-polls this every ~600ms (interface I-1). `?since=`
+    is the caller's own last-seen `seq`; `204` (no body) means "nothing
+    newer", `200` carries the current message. EVERY call here -- 200 or
+    204 -- counts as the display having been seen just now, which is what
+    lets the till's own `.../status` (immediately below) and its 'green
+    dot' rely on this route being polled rather than on the display
+    announcing itself through some second channel.
+
+    No `@require_license_capability`: unlike the POST above, a restricted
+    or expired licence must not stop an ALREADY-OPEN display from reading
+    whatever the till last posted -- unlike `create_sale` itself, this read
+    discloses nothing new and blocking it would just leave the display
+    frozen on stale content instead of gracefully going idle.
+    """
+    key = _customer_display_key(_cid())
+    with _CUSTOMER_DISPLAY_LOCK:
+        _CUSTOMER_DISPLAY_LAST_SEEN[key] = time.monotonic()
+        current = _CUSTOMER_DISPLAY_STATE.get(key)
+    try:
+        since = int(request.args.get('since', '0'))
+    except (TypeError, ValueError):
+        since = 0
+    if current is None:
+        return ('', 204)
+    # P0 item #11 (routes) reviewer finding: THE BUG was `current['seq'] <=
+    # since` -- true both for "nothing newer than what you already have"
+    # (since == seq, the intended 204 case) AND for "your remembered seq is
+    # HIGHER than this process has ever produced" (since > seq), which can
+    # only happen after a backend restart: `seq` restarts at 1 in the new
+    # process (see `customer_display_set_state` above), but a display that
+    # stayed open across the restart -- the Edge/Chrome --app fallback, or
+    # any browser tab -- keeps polling with its OLD, now-impossibly-high
+    # `since`. That display got 204 forever, on every poll, until the new
+    # process happened to rack up more posts than the old one had, and every
+    # one of those 204s still counted as "seen" (the LAST_SEEN write above
+    # runs unconditionally), so the till's own dot showed green the whole
+    # time a photo of the second screen would have shown yesterday's cart.
+    #
+    # FIX: only `since == current['seq']` (exactly caught up) is a real
+    # "nothing new" 204. Anything else -- since either behind (the ordinary
+    # case) or IMPOSSIBLY ahead (the stale-process case) -- resyncs the
+    # caller to the current message. A display picking this up mid-restart
+    # sees one message arrive slightly out of its own sequence, exactly as
+    # if the till had just posted for the first time this process lifetime,
+    # which is the true state of the world.
+    if current['seq'] == since:
+        return ('', 204)
+    return jsonify({'seq': current['seq'], 'message': current['message'], 'shop': current['shop']})
+
+
+@retail_bp.route('/customer-display/status', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def customer_display_status():
+    """The TILL polls this every 3s (only after it has opened the display,
+    per interface I-1) to drive its 'Customer screen' dot -- grey/amber/
+    green off `display_last_seen_ms_ago`. Deliberately READ-ONLY: unlike
+    `customer_display_get_state` above, calling this must never itself
+    count as "the display was seen", or the till polling its OWN status
+    route would make itself look green with no display open at all.
+    """
+    key = _customer_display_key(_cid())
+    return jsonify({'display_last_seen_ms_ago': _customer_display_last_seen_ms_ago(key)})
+
 
 def _render_report_email_body(data, currency):
     """Plain-text only, no templating engine (matches this whole feature's
@@ -11492,6 +11968,13 @@ def _branch_limit():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def create_branch():
+    # I-10 (P0 item #2): creating a branch reshapes the whole company, not
+    # one branch's own staff -- the branch-staff delegation toggle
+    # (employees.js) must not reach this. See _require_company_admin's
+    # own docstring for the full reasoning shared by every route below.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     data = request.json or {}
     if not data.get('name'):
         return jsonify({'status': 'error', 'message': 'Branch name required'}), 400
@@ -11547,7 +12030,17 @@ def update_branch(branch_id):
     Emits the `branch` sync event as `update` with the row's uid --
     sync_service.py's branch handler upserts on uid, so the rename converges
     on every other device of the shop (a legacy row with no uid is given
-    one here first, exactly like _default_branch's self-heal)."""
+    one here first, exactly like _default_branch's self-heal).
+
+    I-10 (P0 item #2, reviewer finding): matches create_branch's identical
+    guard above. create_branch alone being owner-only was not enough -- a
+    branch-staff-delegated manager (employees.js) could still rename ANY
+    branch in the company through this route, not just their own, which is
+    reshaping the company, not managing one branch's own staff. See
+    _require_company_admin's own docstring."""
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     data = request.json or {}
     name = (data.get('name') or '').strip()
     if not name:
@@ -11589,8 +12082,13 @@ def update_branch(branch_id):
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def retire_branch(branch_id):
-    """Close a branch. CAP_EMPLOYEES, the same authority create_branch and
-    update_branch already require.
+    """Close a branch. Owner-only, the same authority create_branch and
+    update_branch already require (I-10 / P0 item #2, reviewer finding: a
+    branch-staff-delegated manager could otherwise retire ANOTHER branch --
+    including the owner's -- through CAP_EMPLOYEES alone; the four 409
+    refusals below stop the LAST-active-branch case but never scoped the
+    authority itself to the caller's own branch. See
+    _require_company_admin's own docstring).
 
     A SOFT STATUS FLIP, NEVER A DELETE. Nothing FK-references `branches.id`
     -- every referencing column says so in its own comment, because the id is
@@ -11633,6 +12131,9 @@ def retire_branch(branch_id):
     than incidental: `create_branch` counts only ACTIVE branches against the
     licence's `max_branches`, so retiring one genuinely returns a slot.
     """
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid()
     conn = get_retail_conn()
     row = conn.execute(
@@ -12024,6 +12525,15 @@ _DEFAULT_SETTINGS = {
     # CLAUDE.md's "How to give a good suggestion here"). A shop turns this on
     # by deliberately setting a non-zero value.
     'loyalty_point_value': '0',
+    # P0 item #13 (interface I-4): the shop-wide GST/VAT rate new products
+    # default to when a caller (create_product, the import) leaves tax_rate
+    # absent/null/empty. '' -- NOT '0' -- is "unset", exactly matching
+    # `_signup_company_name()`'s "empty means try the fallback" convention a
+    # few sections up: a product posted with no tax_rate while this is unset
+    # stores 0, byte-for-byte the pre-existing behaviour (see
+    # tax_settings_get's own comment), so shipping this key changes nothing
+    # for an install that has never opened the Tax settings screen.
+    'default_tax_rate': '',
 }
 _DEFAULT_METHODS = [('Cash', 'cash'), ('Card', 'card'), ('Bank Transfer', 'bank'),
                     ('Mobile Wallet', 'wallet'), ('Check', 'check')]
@@ -12375,6 +12885,18 @@ def credit_settings_get():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def credit_settings_set():
+    # I-10 (P0 item #2, reviewer finding): this route writes base_currency,
+    # default_credit_mode, default_credit_limit, enforce_credit_limit and
+    # loyalty_point_value -- all five company-wide, not branch-scoped (see
+    # _require_company_admin's own docstring). base_currency is the most
+    # disruptive of the five: every historical money display and report reads
+    # it, so a branch-scoped manager holding the delegation toggle's
+    # CAP_EMPLOYEES grant (employees.js) could otherwise repaint the whole
+    # shop's currency from a branch till. Matches tax_settings_set's identical
+    # guard immediately below in this file.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     # 'loyalty_point_value' rides this same endpoint rather than a new
@@ -12428,12 +12950,21 @@ def tax_settings_get():
     # drift. If the two ever disagreed, the till would DISPLAY a different
     # number from the one it charges -- the exact class of defect a mutation
     # caught twice during the promotions work.
+    #
+    # `default_tax_rate` (P0 item #13, interface I-4) -- a NUMBER when the
+    # shop has set one, `null` when it has not (the `_DEFAULT_SETTINGS`
+    # sentinel is '', never '0' -- see that dict's own comment for why 0
+    # would be indistinguishable from a shop that deliberately charges no
+    # tax). First run and the Settings screen both read this to prefill/ask.
+    _default_tax_rate_raw = (_s.get('default_tax_rate') or '').strip()
+    default_tax_rate = float(_default_tax_rate_raw) if _default_tax_rate_raw != '' else None
     return jsonify({'status': 'success', 'data': {
         'tax_calculation_mode': tax_engine.normalize_mode(mode),
         'available_modes': list(tax_engine.VALID_MODES),
         'base_currency': currency,
         'currency_decimals': -tax_engine.currency_quantum(currency).as_tuple().exponent,
         'currency_symbol': tax_engine.currency_symbol(currency),
+        'default_tax_rate': default_tax_rate,
     }})
 
 @retail_bp.route('/settings/tax', methods=['POST'])
@@ -12442,29 +12973,159 @@ def tax_settings_get():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def tax_settings_set():
+    # I-10 (P0 item #2): the shop's tax mode is company-wide, not
+    # branch-scoped -- see _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
-    if 'tax_calculation_mode' not in data:
-        return jsonify({'status': 'error', 'message': 'tax_calculation_mode is required'}), 400
-    mode = tax_engine.normalize_mode(data.get('tax_calculation_mode'))
+    # P0 item #13 (interface I-4): `default_tax_rate` rides this SAME route
+    # rather than a new one -- identical reasoning to `loyalty_point_value`
+    # riding credit_settings_set above (retail_route_capability_matrix_test.py
+    # freezes the mutation table by view-function name, so a new route means
+    # a deliberate table edit, not a blocker for this key). Relaxed from
+    # "tax_calculation_mode is required" to "at least one of the two is
+    # present": every EXISTING caller still sends tax_calculation_mode and
+    # is completely unaffected (this OR-condition is true for them exactly
+    # as the old AND-less check was); a caller that wants to set only its
+    # default tax rate -- the first-run wizard and a future Tax-only
+    # Settings save -- no longer has to resend a tax mode it is not
+    # changing.
+    if 'tax_calculation_mode' not in data and 'default_tax_rate' not in data:
+        # P0 round 2 (item B1, retail-hardware-viewports): this message used
+        # to name ONLY `tax_calculation_mode`, which was misleading even
+        # though the OR-condition above already made `default_tax_rate`
+        # alone a legal call -- a caller who sent neither key (a genuine
+        # empty POST, not the default-tax-rate-only case, which never
+        # reaches this branch) read an error naming a field it may not have
+        # been trying to set at all. Name both keys this route actually
+        # accepts.
+        return jsonify({'status': 'error',
+                         'message': 'tax_calculation_mode or default_tax_rate is required'}), 400
+
+    mode = None
+    if 'tax_calculation_mode' in data:
+        mode = tax_engine.normalize_mode(data.get('tax_calculation_mode'))
+
+    default_tax_rate_response = _UNSET  # sentinel: key not touched this call
+    if 'default_tax_rate' in data:
+        raw = data.get('default_tax_rate')
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            # Explicit clear -- back to "unset" (I-4: new products fall back
+            # to 0, exactly the pre-existing behaviour), never stored as '0'
+            # (see `_DEFAULT_SETTINGS['default_tax_rate']`'s own comment on
+            # why those two must stay distinguishable).
+            stored_rate = ''
+            default_tax_rate_response = None
+        else:
+            # P0 round 3 (item V2, reviewer finding): `bool` is a subclass of
+            # `int` in Python, so `float(True) == 1.0` and `float(False) ==
+            # 0.0` -- BOTH succeed at the `float(raw)` call below with no
+            # exception, so a JSON body's literal `true`/`false` used to
+            # sail straight through as a real 1%/0% shop-wide GST default,
+            # stored and audited (`RETAIL_DEFAULT_TAX_RATE_CHANGED`) as if a
+            # human had typed a rate. Every OTHER non-number shape ([16],
+            # {...}, "abc") already 400s via the `except` below; only the
+            # two JSON boolean literals slipped through, because `isinstance
+            # (raw, (int, float))` (the obvious-looking guard) would not
+            # have caught them either -- `isinstance(True, int)` is also
+            # True. Checked explicitly, before `float()` ever runs, so both
+            # `true` and `false` get the same refusal `float()` gives every
+            # other non-numeric JSON value.
+            if isinstance(raw, bool):
+                return jsonify({'status': 'error',
+                                 'message': 'default_tax_rate must be a number.'}), 400
+            try:
+                rate = float(raw)
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error',
+                                 'message': 'default_tax_rate must be a number.'}), 400
+            # P0 round 2 (item B1): `nan < 0`, `nan > 100`, `inf > 100` and
+            # `-inf < 0` do NOT all behave the way a reader would assume --
+            # specifically `float('nan') < 0` and `float('nan') > 100` are
+            # BOTH False (every comparison against NaN is False), so the
+            # range check two lines below silently let a JSON body carrying
+            # a literal `NaN`/`Infinity` (Python's stdlib `json` module
+            # accepts both by default, even though neither is valid JSON)
+            # straight through to `str(rate)` == `'nan'`, stored verbatim in
+            # `retail_settings` and then re-parsed by `float('nan')` on
+            # every future `create_product`/import that reads this default
+            # -- a shop-wide tax default that silently became "not a
+            # number" forever, with no 400 anywhere to say so. Refused here,
+            # before the range check, so `inf`/`-inf` (which DO fail the
+            # range check on their own, but only by accident of `inf > 100`
+            # being True) and `nan` (which does not) get the same explicit
+            # refusal rather than two different code paths by luck.
+            if not math.isfinite(rate):
+                return jsonify({'status': 'error',
+                                 'message': 'default_tax_rate must be a finite number.'}), 400
+            if rate < 0 or rate > 100:
+                return jsonify({'status': 'error',
+                                 'message': 'default_tax_rate must be between 0 and 100.'}), 400
+            stored_rate = str(rate)
+            default_tax_rate_response = rate
+
     conn = get_retail_conn(); _ensure_credit_schema(conn)
-    conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
-                 "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
-                 (cid, 'tax_calculation_mode', mode))
-    # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
-    # docstring for the "$" vs "JOD" defect this closes.
-    _queue_setting_sync_event(conn, 'tax_calculation_mode', mode)
+    # P0 round 2 (item B1): read the OLD value BEFORE either write below, so
+    # the audit event records a real before/after pair rather than "new
+    # value" alone -- the same "old and new" shape a rate-change audit trail
+    # needs to be useful (what changed, not just what it is now). Read
+    # unconditionally into `_old_settings` (cheap: one already-open
+    # connection, no extra query beyond what `_settings` always does) but
+    # only interpreted when `default_tax_rate` is actually in this request,
+    # matching `default_tax_rate_response is not _UNSET` below.
+    _old_default_tax_rate = None
+    if default_tax_rate_response is not _UNSET:
+        _old_settings = _settings(conn, cid)
+        _old_raw = (_old_settings.get('default_tax_rate') or '').strip()
+        _old_default_tax_rate = float(_old_raw) if _old_raw != '' else None
+    if mode is not None:
+        conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                     "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+                     (cid, 'tax_calculation_mode', mode))
+        # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
+        # docstring for the "$" vs "JOD" defect this closes.
+        _queue_setting_sync_event(conn, 'tax_calculation_mode', mode)
+    if default_tax_rate_response is not _UNSET:
+        conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                     "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+                     (cid, 'default_tax_rate', stored_rate))
+        # Same sync path as every other retail_settings key here (I-4: "make
+        # the key sync like the other retail_settings keys").
+        _queue_setting_sync_event(conn, 'default_tax_rate', stored_rate)
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
-    try:
-        from commercial_runtime.security.audit import record as _sec_audit
-        _sec_audit(cid, _uid(), 'RETAIL_TAX_MODE_CHANGED', entity_type='SETTINGS',
-                   context={'tax_calculation_mode': mode})
-    except Exception:
-        # Swallowed so a settings save cannot fail on its audit trail, but
-        # logged so the missing trail is discoverable -- see _audit().
-        log.exception('security audit write FAILED and was swallowed: %s',
-                      'RETAIL_TAX_MODE_CHANGED')
-    return jsonify({'status': 'success', 'data': {'tax_calculation_mode': mode}})
+    if mode is not None:
+        try:
+            from commercial_runtime.security.audit import record as _sec_audit
+            _sec_audit(cid, _uid(), 'RETAIL_TAX_MODE_CHANGED', entity_type='SETTINGS',
+                       context={'tax_calculation_mode': mode})
+        except Exception:
+            # Swallowed so a settings save cannot fail on its audit trail, but
+            # logged so the missing trail is discoverable -- see _audit().
+            log.exception('security audit write FAILED and was swallowed: %s',
+                          'RETAIL_TAX_MODE_CHANGED')
+    # P0 round 2 (item B1): RETAIL_DEFAULT_TAX_RATE_CHANGED, mirroring
+    # RETAIL_TAX_MODE_CHANGED immediately above -- ONLY when the value
+    # actually moved (matches this codebase's "record a change, not a
+    # no-op resave" convention; re-POSTing the same rate the shop already
+    # has would otherwise fill the audit log with rows that say nothing
+    # happened). `default_tax_rate_response is not _UNSET` is the same
+    # "was this key touched at all this call" gate the writes above use.
+    if default_tax_rate_response is not _UNSET and default_tax_rate_response != _old_default_tax_rate:
+        try:
+            from commercial_runtime.security.audit import record as _sec_audit
+            _sec_audit(cid, _uid(), 'RETAIL_DEFAULT_TAX_RATE_CHANGED', entity_type='SETTINGS',
+                       context={'old': _old_default_tax_rate, 'new': default_tax_rate_response})
+        except Exception:
+            log.exception('security audit write FAILED and was swallowed: %s',
+                          'RETAIL_DEFAULT_TAX_RATE_CHANGED')
+    response_data = {}
+    if mode is not None:
+        response_data['tax_calculation_mode'] = mode
+    if default_tax_rate_response is not _UNSET:
+        response_data['default_tax_rate'] = default_tax_rate_response
+    return jsonify({'status': 'success', 'data': response_data})
 
 # ── Settings (receipt printer hardware) ───────────────────────────────────────
 # `core/retail/escpos_receipt.py` and `escpos_transport.py` (commit f606739)
@@ -13076,16 +13737,68 @@ def get_device_branch():
 @mt_require_capability(CAP_EMPLOYEES)
 def set_device_branch():
     """Pins (or, given a null/empty `branch_uid`, clears) this device's
-    working branch. Administrative act -- CAP_EMPLOYEES, matching
-    tax_settings_set/credit_settings_set's identical settings-write gate --
-    validates the uid belongs to a branch of THIS company before writing,
-    the same cross-tenant guard _resolve_working_branch applies to every
-    other by-id write in this file."""
+    working branch. Administrative act -- CAP_EMPLOYEES -- validates the uid
+    belongs to a branch of THIS company before writing, the same cross-tenant
+    guard _resolve_working_branch applies to every other by-id write in this
+    file.
+
+    DELIBERATELY NOT owner-gated (I-10 / P0 item #2, reviewer finding
+    explicitly asked this to be decided, not left silent -- see
+    claim_doc_series' identical decision comment). This is the stale half of
+    the old "matching tax_settings_set/credit_settings_set's identical
+    settings-write gate" comparison it used to carry: both of those are
+    owner-only now, and this route is not their sibling. It re-pins only
+    THIS device/till, never another one and never a company-wide setting --
+    the same "own-terminal action" tier as claim_doc_series, not the tier
+    create_branch/update_branch/retire_branch are gated at.
+
+    ROUND 2 (item #2 (I-10) D7 gap, adversarial-verifier finding): "not
+    owner-gated" was never meant to mean "not scope-gated". This route was
+    the one D7-dimensioned write in the whole file with NO branch-scope
+    check at all -- every other write resolves its branch through
+    `_resolve_working_branch`, whose explicit-`branch_id` tier refuses a
+    foreign branch for a scoped caller (see that function's own D7
+    comment). This route bypasses that helper entirely (it writes the
+    device's pin directly, not a `branches` row), so a manager scoped to
+    Branch A could POST `{"branch_uid": "<Branch B's uid>"}` and re-pin
+    THIS TILL to Branch B: every subsequent write on it that omits an
+    explicit `branch_id` -- the manager's own stock adjustments and sales,
+    and every other cashier's sales on the same till -- then silently filed
+    under Branch B instead of A (probe4.log `d7_pin_bypass`: dmgr scoped to
+    Branch A POSTs `{branch_uid: B}` -> 200, then an un-scoped stock-adjust
+    and two sales all land on branch_id=2). The bare `{}` body, which
+    UNPINS the till, is refused identically -- an unpin hands tier 3
+    (`_default_branch`'s self-heal) the next write, which is exactly as
+    unaccountable as a foreign pin for a scoped caller, and the same probe
+    showed it can also silently deny a branch's till (a Branch-B cashier's
+    next sale refused "Insufficient stock" against the now-wrong branch's
+    empty stock). Fail CLOSED on a scope-lookup failure, matching every
+    other D7 site (`_resolve_working_branch`, `_coerce_branch_id_for_scope`)
+    rather than defaulting to "unscoped" -- see `BranchScopeLookupError`'s
+    own docstring for why that default would be unsafe here.
+    """
     data = request.json or {}
     uid = (data.get('branch_uid') or '').strip() or None
     cid = _cid()
     conn = get_retail_conn()
     try:
+        try:
+            scope_uid = session_branch_scope()
+        except BranchScopeLookupError:
+            return jsonify({
+                'status': 'error',
+                'message': 'Could not verify your branch access. Try again.',
+            }), 403
+        if scope_uid is not None and uid != scope_uid:
+            # Covers BOTH directions: a foreign uid, and a bare `{}` (uid is
+            # None) trying to unpin a scoped caller's till -- see the
+            # docstring above for why an unpin is not a safe "no branch"
+            # noop for a scoped caller.
+            return jsonify({
+                'status': 'error',
+                'message': 'You may only pin this till to your own branch.',
+            }), 403
+
         branch_row = None
         if uid:
             branch_row = conn.execute(
@@ -13190,6 +13903,11 @@ def business_day_settings_set():
     settings screen that had to write it to mean "unset" would silently
     re-file the trading history of every shop that merely stopped declaring.
     """
+    # I-10 (P0 item #2): the shop's own trading-day clock is company-wide --
+    # see _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     known = ('business_timezone', 'business_day_start_hour')
     present = [k for k in known if k in data]
@@ -13394,6 +14112,11 @@ def create_doc_series():
     NOT `RETAIL_RESTRICTED_ALLOWLIST`-exempt: a lapsed licence does not get
     to reconfigure numbering. Does NOT bind an allocator -- see
     `claim_doc_series` below, a separate act."""
+    # I-10 (P0 item #2): what number the shop's documents carry is
+    # company-wide -- see _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     data = request.json or {}
     cid = _cid()
 
@@ -13514,6 +14237,15 @@ def update_doc_series(series_id):
     `allocator_terminal_uid`/`claimed_at_utc` change ONLY through
     `claim_doc_series` below -- a separate act with its own authorization
     story (server-side terminal id), never a plain field edit."""
+    # I-10 (P0 item #2, reviewer finding): numbering is company-wide, not
+    # branch-scoped -- create_doc_series already required the owner; this
+    # sibling did not, so a branch-staff-delegated manager (employees.js)
+    # could relabel, retire or reassign the branch of ANY series in the
+    # company, including another branch's or the owner's own book, purely
+    # through CAP_EMPLOYEES. See _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     data = request.json or {}
     cid = _cid()
     conn = get_retail_conn()
@@ -13578,6 +14310,14 @@ def retire_doc_series(series_id):
     receipt (database/schema.py's own column comment). Retiring is
     idempotent: retiring an already-retired book is a 200, not a 404 or a
     409 -- there is no invariant a second retire could violate."""
+    # I-10 (P0 item #2, reviewer finding): matches update_doc_series'
+    # identical guard immediately above -- retiring ANY series (including
+    # another branch's or the owner's ACTIVE numbering book) is a
+    # company-wide reshape, not "manage my own branch's staff". See
+    # _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid()
     conn = get_retail_conn()
     row = conn.execute("SELECT * FROM doc_series WHERE id=? AND company_id=?", (series_id, cid)).fetchone()
@@ -13641,6 +14381,18 @@ def claim_doc_series(series_id):
         winner rather than refuse the second claim outright.
       * 409 if `_is_device_behind_on_sync()` -- the same offline-race
         preventer `create_doc_series` applies; see that route's comment.
+
+    DELIBERATELY NOT owner-gated (I-10 / P0 item #2, reviewer finding
+    explicitly asked this to be decided, not left silent): unlike
+    update_doc_series/retire_doc_series just above, this route does not
+    reshape the company's numbering -- it binds an ALREADY-EXISTING series to
+    THIS terminal only, read server-side from `local_terminal_id()`, never
+    from the request body (see the docstring above), so a manager on till A
+    cannot use it to claim a book for till B either. That is the same
+    "own-terminal action" tier as `set_device_branch` (CAP_EMPLOYEES, also
+    deliberately not owner-gated), not the tier `create_doc_series`/
+    `update_doc_series`/`retire_doc_series` are gated at. Recorded here in
+    writing so a future reader does not reopen this as an oversight.
     """
     terminal_uid = local_terminal_id()
     if not terminal_uid:
@@ -13702,6 +14454,41 @@ def claim_doc_series(series_id):
 # receipt legally adequate for its OWN shop, let alone a co-op's brand.
 # retail_settings is already a per-company key/value table (_DEFAULT_SETTINGS
 # above), so this is new keys, never a schema change.
+def _signup_company_name():
+    """The Company Name typed at first-run signup -- P0 item #12, interface
+    I-3's read-time fallback for `branding_business_name`.
+
+    Read straight out of `<AURA_APP_DATA>/config.json`'s `company_id` key
+    (yes, that key holds the shop's NAME, not an id -- see
+    `commercial_runtime/identity/onboarding_routes.py::create_admin`'s own
+    `company = data.get('company_name', ...)` -> `_write_config({'company_id':
+    company, ...})`), duplicated here rather than imported: that module's
+    `_read_config`/`_write_config` are private (leading underscore) and this
+    file already avoids reaching into another module's underscore-prefixed
+    internals for a one-line read (see `financial_statements.py` duplicating
+    `general_ledger._resolve_currency`/`_gl_epsilon` for the identical
+    layering reason, stated in its own docstring). `get_device_branch_uid`
+    is onboarding_routes.py's own public export for its one field
+    (`branch_uid`); there is no equivalent export for `company_id`, and
+    ownership boundaries for this Phase 0 wave keep that file untouched (see
+    the crew contract), so this reads the same file directly instead.
+
+    Best-effort, like every other config.json reader in this codebase: a
+    missing file, a missing key, or a corrupt JSON body all return '' (never
+    raise), because "the signup name could not be read" must fall through to
+    'none' below, not 500 a receipt.
+    """
+    try:
+        path = os.path.join(os.environ.get('AURA_APP_DATA') or os.getcwd(), 'config.json')
+        if not os.path.exists(path):
+            return ''
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        return str(cfg.get('company_id') or '').strip()
+    except Exception:
+        return ''
+
+
 _BRANDING_TEXT_KEYS = (
     'branding_business_name', 'branding_address', 'branding_phone',
     'branding_tax_number', 'branding_receipt_header', 'branding_receipt_footer',
@@ -13765,6 +14552,28 @@ def branding_settings_get():
     data = {k: s[k] for k in _BRANDING_TEXT_KEYS}
     data['has_logo'] = has_logo
     data['einvoicing_seller'] = einvoicing_seller
+    # P0 item #12 (interface I-3): a READ-TIME fallback only -- never a
+    # write, and `branding_business_name` above is left exactly as stored
+    # (empty or not). Before this, the sidebar, the window title, the
+    # printed receipt header and the customer display all said 'Aura
+    # Retail' until an owner found Settings and typed the name again, even
+    # though the shop's real name was typed once already, at signup, and
+    # sitting unused in config.json -- a fresh, unlicensed install cannot
+    # write branding at signup time (the write path needs a licence
+    # capability this install does not have yet), so a read-time fallback is
+    # the only fix that does not block first run on activation.
+    business_name = (data.get('branding_business_name') or '').strip()
+    if business_name:
+        data['business_name'] = business_name
+        data['business_name_source'] = 'branding'
+    else:
+        signup_name = _signup_company_name()
+        if signup_name:
+            data['business_name'] = signup_name
+            data['business_name_source'] = 'signup'
+        else:
+            data['business_name'] = ''
+            data['business_name_source'] = 'none'
     return jsonify({'status': 'success', 'data': data})
 
 @retail_bp.route('/settings/branding', methods=['POST'])
@@ -13773,6 +14582,12 @@ def branding_settings_get():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def branding_settings_set():
+    # I-10 (P0 item #2): the shop's own identity (name, address, tax
+    # number, receipt text, logo) is company-wide -- see
+    # _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     for k in _BRANDING_TEXT_KEYS:
@@ -13851,6 +14666,16 @@ def branding_logo_get():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def branding_logo_set():
+    # I-10 (P0 item #2, reviewer finding): the logo is company-wide, exactly
+    # like the branding TEXT fields branding_settings_set already guards
+    # immediately above in this file (that route's own comment: "the shop's
+    # own identity ... is company-wide") -- the logo upload was left ungated
+    # as its sibling, so a branch-staff-delegated manager could still repaint
+    # every receipt/sidebar/customer-display logo. See
+    # _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     logo = (data.get('logo') or '').strip()
     if not logo:
@@ -13876,6 +14701,12 @@ def branding_logo_set():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def branding_logo_delete():
+    # I-10 (P0 item #2, reviewer finding): matches branding_logo_set's
+    # identical guard immediately above -- erasing the shop's logo is the
+    # same company-wide identity write as setting it.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     conn.execute("DELETE FROM retail_settings WHERE company_id=? AND skey=?", (cid, _BRANDING_LOGO_KEY))
     conn.commit(); conn.close()
@@ -13898,6 +14729,11 @@ def payment_methods_list():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def payment_methods_add():
+    # I-10 (P0 item #2): the shop's tender list is company-wide -- see
+    # _require_company_admin's own docstring.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     if not data.get('name'):
         return jsonify({'status': 'error', 'message': 'Method name required'}), 400
@@ -14319,6 +15155,14 @@ def supplier_statement(sid):
 # not the person who signs the cheque.
 @mt_require_capability(CAP_EMPLOYEES)
 def supplier_payment(sid):
+    # I-10 (P0 item #2): paying a supplier moves the shop's own money, which
+    # the branch-staff delegation toggle must not unlock -- see
+    # _require_company_admin's own docstring. Moved to books.record for the
+    # Accountant preset in Phase 1b (see the comment on this route's
+    # decorators above); owner-only until then.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     # See customer_payment's identical comment just above in this file --
@@ -14353,6 +15197,12 @@ def supplier_payment(sid):
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def pay_purchase_order(po_id):
+    # I-10 (P0 item #2): paying a PO moves the shop's own money -- see
+    # _require_company_admin's own docstring (and supplier_payment's
+    # identical Phase 1b note just above in this file).
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     # Read once, apply to every figure this route touches -- amt, new_paid
@@ -14701,6 +15551,15 @@ def get_cheque(cheque_id):
 @require_license_capability("retail.cheque.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def create_cheque():
+    # I-10 (P0 item #2): all eight cheque routes are owner-only money
+    # authority -- see _require_company_admin's own docstring and this
+    # route's own gate comment in EXPECTED_MUTATION_CAPABILITIES
+    # (retail_route_capability_matrix_test.py) for why CAP_EMPLOYEES alone
+    # was never enough. Moves to books.record for the Accountant preset in
+    # Phase 1b.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     direction = data.get('direction')
@@ -14780,6 +15639,10 @@ def deposit_cheque(cheque_id):
     """Refused for `direction='out'`: a shop cannot observe its own issued
     cheque being lodged at a bank it does not bank at -- a state nobody
     could ever set truthfully must not exist."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -14810,6 +15673,10 @@ def clear_cheque(cheque_id):
     """Both directions. `pending -> cleared` is legal directly (not only via
     `deposited -> cleared`) precisely so an ISSUED cheque can skip the
     deposit step this shop can never observe for its own outgoing cheque."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -14839,6 +15706,10 @@ def bounce_cheque(cheque_id):
     real sequence this table must be able to record. `reason` is required:
     a bounce with no reason recorded is the one event in this feature an
     owner will need to explain to the counterparty later."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -14868,6 +15739,10 @@ def bounce_cheque(cheque_id):
 def reinstate_cheque(cheque_id):
     """Both directions -- a bounced cheque re-presented by the bank and
     honoured the second time round."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -14900,6 +15775,10 @@ def endorse_cheque(cheque_id):
     same transition would move TWO parties' balances from one write and make
     `endorsed -> bounced` responsible for unwinding both atomically, the most
     error-prone corner available in this wave for its least-used stage."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -14938,6 +15817,10 @@ def cancel_cheque(cheque_id):
     """`pending` only (enforced by LEGAL_TRANSITIONS, not re-checked here) --
     a DEPOSITED cheque pulled back is a RETURN, i.e. a bounce; there is no
     second path to the same effect."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -14964,6 +15847,10 @@ def write_off_cheque(cheque_id):
     bounce that preceded it already put the debt back; this only marks the
     instrument itself as dead paper (uncollectable) rather than leaving it
     sitting in 'bounced' as if collection were still being pursued."""
+    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -15436,10 +16323,20 @@ def void_payment(pid):
     # Checked BEFORE any UPDATE and before this handler's write ever takes
     # place, so a refusal is total rather than partial -- same placement
     # rule create_sale's discount check documents for BEGIN IMMEDIATE.
-    if p['party_type'] == 'supplier' and not session_has_capability(CAP_EMPLOYEES):
-        conn.close()
-        return jsonify({'status': 'error', 'error': CAPABILITY_DENIED_MESSAGE,
-                         'message': CAPABILITY_DENIED_MESSAGE}), 403
+    if p['party_type'] == 'supplier':
+        # I-10 (P0 item #2, reviewer finding): the authority to REVERSE a
+        # supplier payment must equal the authority to CREATE one.
+        # supplier_payment, pay_purchase_order and create_purchase_order's own
+        # amount_paid branch are all owner-only now (see
+        # _require_company_admin's own docstring) -- CAP_EMPLOYEES alone used
+        # to be the check here, which the branch-staff delegation toggle
+        # (employees.js) grants to a branch-scoped manager, letting that
+        # manager void a supplier payment the owner recorded and silently
+        # reopen the payable it had settled.
+        admin_guard = _require_company_admin()
+        if admin_guard is not None:
+            conn.close()
+            return admin_guard
 
     try:
         conn.execute("UPDATE payments SET status='voided', voided_by=?, voided_at=?, notes=COALESCE(notes,'')||? WHERE id=?",
@@ -15563,7 +16460,36 @@ def list_audit_log():
         entities = [r[0] for r in conn.execute(
             'SELECT DISTINCT entity FROM audit_log WHERE company_id=? AND entity IS NOT NULL ORDER BY entity', (cid,)).fetchall()]
 
-        return jsonify({'status': 'success', 'data': [dict(r) for r in rows],
+        # P0 item #17 (interface I-7): `actor_name` per row, ONE batched
+        # lookup for the whole page (never one registry read per row -- the
+        # same "resolve once per request" discipline `_resolve_actor_
+        # identities`'s own docstring states for its other callers).
+        #
+        # `key_column='id'`, NOT the default 'uid' -- CONFIRMED, not assumed:
+        # `audit_log.user_id` is written by `_audit()` as `_uid()` ==
+        # `session['mt_user_id']` == `users.id` (the LOCAL primary key), and
+        # is NEVER touched by `_actor_user_uid()`, the wire-identity helper
+        # every OTHER stamped column (`actor_user_uid`, on sales/returns/
+        # cash movements) goes through. Calling this with the default 'uid'
+        # would have compiled, run, and returned `actor_name: null` on every
+        # single row forever -- two independent uuid4 spaces that happen to
+        # look identical, silently resolving nothing -- exactly the trap
+        # `_resolve_actor_identities`'s own new docstring section names.
+        # See `_uid()`'s and `_actor_user_uid()`'s docstrings for the full
+        # "NOT `_uid()`... the single most likely wrong answer" reasoning.
+        actor_identities = _resolve_actor_identities(cid, [r['user_id'] for r in rows], key_column='id')
+        data = []
+        for r in rows:
+            row = dict(r)
+            identity = actor_identities.get(r['user_id'])
+            # Never invented -- a uid that does not resolve (deleted
+            # account, pre-attribution row, a lookup that failed) gets
+            # JSON null, matching `_UNRESOLVED_IDENTITY`'s own "all fields
+            # null together" contract elsewhere in this file.
+            row['actor_name'] = identity['employee_name'] if identity else None
+            data.append(row)
+
+        return jsonify({'status': 'success', 'data': data,
                          'meta': {'total': total, 'page': page, 'limit': limit,
                                   'actions': actions, 'entities': entities}})
     finally:
@@ -15601,8 +16527,61 @@ def _require_retail_demo_mode():
 
 
 def _require_company_admin():
-    if session.get('mt_role') != 'admin' and session.get('role_level', 0) < 4:
-        return jsonify({'error': 'Administrator permission required.'}), 403
+    """The shop OWNER, not a delegated manager -- interface I-10 (P0 item #2).
+
+    `code: 'OWNER_ONLY'` was added to the existing 403 body (the message
+    itself is unchanged, so demo_wipe/demo_seed/inventory_reconciliation's
+    own behaviour and every test that reads their status code are
+    untouched) so the client can distinguish "not logged in as the owner"
+    from every other 403 shape in this file without string-matching the
+    English message. See I-10's own comment in contracts.md for the full
+    list of routes this now gates: the branch-staff-management delegation
+    toggle (employees.js) grants `retail.employees=full` to a manager, and
+    `mt_require_capability` only ever reads that one row -- it has no idea
+    the toggle's own copy promises 'own-branch staff' only. Every
+    company-wide settings write and every money write the toggle must NOT
+    unlock calls this at the top of its body, before any write.
+
+    P0 round 3 (item V1, reviewer finding): the check used to read
+    `session.get('mt_role') != 'admin' and session.get('role_level', 0) < 4`
+    -- a leftover `role_level >= 4` bypass clause from before this codebase
+    settled on the single `mt_role` string as its one notion of "admin".
+    Grepping every `*.py` in this repo for an assignment to
+    `session['role_level']` (or `session.setdefault`/`session.update`
+    touching that key) finds NONE: nothing anywhere ever sets it, so
+    `session.get('role_level', 0)` is always its own default, `0`, and the
+    `< 4` half of the `and` is always True -- today this clause is a no-op
+    by accident of every session dict lacking the key, not a design choice.
+    But an `and` with an always-true second operand reduces to just the
+    first operand, which means this dead code is ALSO a live bypass
+    waiting to happen: the day anything (a future SSO integration, a
+    session-shape refactor, a stale cookie replayed from a different
+    build) ever sets `session['role_level']` to 4 or more, a NON-admin
+    session would sail through this owner-only gate on every single route
+    I-10 protects -- tax mode, branding, numbering, cheques, supplier/PO
+    payments -- with no test anywhere able to catch it, since nothing sets
+    the key today. Reduced to the single predicate every other owner-only
+    check in this file already uses (device/backup/einvoicing/notification
+    routes), so there is exactly one way to become "the owner" in this
+    codebase, not two.
+
+    P0 round 3 (item V1, reviewer finding): the 403 body also gained a
+    `message` key carrying the SAME catalogued sentence as `error`, because
+    the client's generic `_post` error path (subsystem-retail.js) reads
+    `resp.message` for its toast text, not `resp.error` -- the old body had
+    only `error`, so a denied manager saw no toast at all, just a silent
+    403. `message` and `error` are intentionally byte-identical: this is
+    not two different strings to keep in sync, it is the one sentence
+    every caller of this body might read under either key. No `t()` here
+    (unlike the frontend's `t('English text')` convention): this module has
+    no server-side translation helper -- every other message in this file
+    is a plain English literal for the same reason -- so the Arabic
+    rendering of this new sentence is the client's job, catalogued for the
+    i18n merge in `i18n-R3-backend.json` rather than called here.
+    """
+    if session.get('mt_role') != 'admin':
+        _msg = 'Only the shop owner can change this.'
+        return jsonify({'status': 'error', 'error': _msg, 'message': _msg, 'code': 'OWNER_ONLY'}), 403
     return None
 
 
@@ -17084,6 +18063,31 @@ def _ai_upstream_payload(prompt, stream):
         'keep_alive': _AI_KEEP_ALIVE,
         'options': {'num_predict': _AI_REPLY_MAX_TOKENS},
     }
+
+
+@retail_bp.route('/ai/status', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+# Same decorators, same reasoning, as ai_chat immediately below -- P0 item
+# #18 says so explicitly ("GET /ai/status ... same decorators as /ai/chat").
+# retail.reports because knowing WHETHER the reporting assistant is even
+# configured is the same disclosure tier as using it.
+@mt_require_capability(CAP_REPORTS)
+def ai_status():
+    """`{"configured": bool}` -- the literal shape interface I-8 specifies,
+    no envelope (see `product_stock_value`'s identical reasoning a few
+    sections up). Before this route existed the AI panel said 'Online'
+    unconditionally and reset to 'Online' after every reply, including a
+    failed one -- there was no way for the CLIENT to ask this question
+    itself, only to try a chat turn and read the result. `configured` means
+    exactly what `ai_chat` itself checks before it will even build a prompt
+    -- `bool(AURA_AI_ENDPOINT_URL)` -- and nothing more: it does not probe
+    the endpoint (no network call here), so 'configured: true' answers "is
+    an endpoint set on this install", never "is that endpoint currently
+    reachable" -- the panel's own 'Unavailable' state (after a failed reply)
+    is what covers that second, live question.
+    """
+    return jsonify({'configured': bool(AURA_AI_ENDPOINT_URL)})
 
 
 @retail_bp.route('/ai/chat', methods=['POST'])

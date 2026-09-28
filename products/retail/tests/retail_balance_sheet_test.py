@@ -532,6 +532,51 @@ def test_as_of_date_boundary_is_inclusive_of_that_date_and_excludes_the_day_afte
     assert data['equity']['retained_earnings'] == 1250.0
 
 
+def test_non_padded_as_of_date_still_excludes_the_day_after(client, monkeypatch):
+    """P0 round 2 (item B2, adversarial-verifier finding): the boundary test
+    above never feeds a non-zero-padded `as_of_date` STRING -- every date it
+    passes ('2026-02-10' etc.) is already zero-padded, so that guard cannot
+    tell "the as-of boundary is right" from "the STRING happens to already
+    be padded". `_parse_period_date` is deliberately lenient about a
+    non-padded month/day, but `gl_journals.business_date` is ALWAYS stored
+    zero-padded ISO and SQLite compares it as TEXT. Binding the ORIGINAL,
+    non-padded `as_of_date` string -- rather than the parsed date's own
+    zero-padded `.isoformat()` -- makes the bug WORSE than merely wrong here:
+    every zero-padded date string this year or earlier this year sorts LESS
+    than a non-padded single-digit-month string like '2026-9-5' (its 6th
+    character is '0', which sorts before '9'), so `business_date <=
+    as_of_date` as TEXT lets in dates STRICTLY AFTER the intended as-of date
+    -- the balance sheet silently reports MORE assets/equity than it should,
+    with no error anywhere. Mutation: comment out `as_of_date =
+    _parse_period_date('as_of_date', as_of_date).isoformat()` in
+    `balance_sheet` and this goes red."""
+    cid = client.test_company_id
+    pid = _seed_product(client, sell_price=1.0, tax_rate=0, cost_price=0, initial_stock=3000)
+
+    on_the_day = '2026-09-05'    # the REAL, padded business_date of the as-of sale
+    the_day_after = '2026-09-06'  # must be EXCLUDED from an as-of-2026-9-5 snapshot
+
+    for amount, business_date in ((75.0, on_the_day), (500.0, the_day_after)):
+        monkeypatch.setattr(gl, '_today', lambda d=business_date: d)
+        r = client.post(f'{API}/sales', json={
+            'items': [{'product_id': pid, 'quantity': amount}],  # sell_price 1.0 -> total==amount
+            'payment_method': 'cash', 'amount_paid': amount,
+            'idempotency_key': str(uuid.uuid4())})
+        assert r.status_code == 200, r.get_json()
+
+    # The CALLER passes a non-padded single-digit month and day -- exactly
+    # what `_parse_period_date` accepts without complaint.
+    data = _balance_sheet(cid, '2026-9-5')
+    cash = _account(data['assets'], gl.ACCOUNT_CASH)
+    assert cash['amount'] == 75.0, (
+        f"a non-padded as_of_date '2026-9-5' must exclude the {the_day_after} sale (500.0) -- "
+        f"got cash={cash['amount']}, the exact 'more than it should' shape a TEXT-lexicographic "
+        f"date comparison produces when the as_of string is not zero-padded")
+    # The echoed-back as_of_date must ALSO be normalized -- a caller that
+    # resends `data['as_of_date']` verbatim must get the SAME snapshot again.
+    assert data['as_of_date'] == '2026-09-05', data['as_of_date']
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # 8. An empty ledger reads as nothing-posted, and balances trivially
 # ═════════════════════════════════════════════════════════════════════════
