@@ -165,6 +165,28 @@
       ? stateBadge({ text: 'Enabled', cls: 'state-active' })
       : stateBadge({ text: 'Disabled', cls: 'state-neutral' });
     statusContent.appendChild(badge);
+
+    // P0 #18 -- JoFotara honesty. `data.enabled` is the EFFECTIVE flag
+    // (settings.py::is_enabled() checks tax_regime BEFORE the raw toggle),
+    // so it reads false on every fresh install: tax_regime defaults to
+    // 'none'. Everything below this point used to render regardless --
+    // provider row, queue counts, a Pause button for a queue that cannot be
+    // running, and (see the old notConnected line just below the old
+    // version of this comment) a notice claiming e-invoicing was ON and
+    // recording every sale, checked against provider_configured ALONE, with
+    // no regard for whether the feature itself was even on. A shop that had
+    // never touched e-invoicing therefore saw a banner insisting a feature
+    // it never enabled was silently running. One honest, neutral line
+    // replaces the whole rest of the card instead of controls that quietly
+    // do nothing while it is off.
+    if (!data.enabled) {
+      statusContent.appendChild(el('p', {
+        className: 'hint',
+        text: t('E-invoicing is off for this shop. Nothing is recorded or sent.'),
+      }));
+      return;
+    }
+
     if (data.killswitch && data.killswitch.disabled) {
       statusContent.appendChild(stateBadge({ text: t('Paused:') + ' ' + data.killswitch.reason, cls: 'state-warning' }));
     }
@@ -177,13 +199,33 @@
     // a growing Queued count and nothing telling the shop owner why
     // nothing is clearing. Missing on an older backend (undefined) reads
     // as "configured" -- only an explicit false trips this.
+    //
+    // P0 review-fix (2026-09-27) -- this used to also require
+    // `data.enabled === true` here, "stated explicitly per the item spec
+    // rather than relying on the early return alone to imply it". That
+    // reasoning did not hold up: by this line `data.enabled` can only ever
+    // be truthy -- the `if (!data.enabled) return;` a few lines above has
+    // already left the function otherwise -- so the extra clause was dead
+    // code no mutation could ever exercise. A reviewer traced it and found
+    // exactly that: removing `data.enabled === true &&` here changes
+    // nothing a test can observe, because nothing can reach this line with
+    // data.enabled falsy in the first place. Keeping an unreachable
+    // condition around, captioned as "the item spec's own honesty
+    // requirement", is worse than removing it: it reads as tested when it
+    // structurally cannot be. Simplified to the one condition that can
+    // actually vary at this point.
     const notConnected = data.provider_configured === false;
     if (notConnected) {
       statusContent.appendChild(el('div', {
         className: 'state-warning',
-        text: t('E-invoicing is on and every sale is being recorded, but nothing has been sent to the tax authority yet ' +
-          'because this installation is not connected to JoFotara. To connect, register the business on the JoFotara ' +
-          'portal and enter the Client-ID, Secret-Key and activity number it issues.'),
+        // P0 #18 -- exact wording the item specifies. Never "waiting" (there
+        // is no queue progressing toward delivery in this version) and never
+        // "compliant" (an unconnected install is not filing anything with
+        // ISTD, so calling it compliant would be false, not merely
+        // optimistic). The follow-up sentence is the actionable half kept
+        // from the old wording: what to actually go do about it.
+        text: t('Not being reported to JoFotara. Sending is not available in this version.') + ' ' +
+          t('To connect, register the business on the JoFotara portal and enter the Client-ID, Secret-Key and activity number it issues.'),
       }));
     }
 
@@ -270,6 +312,15 @@
 
   // ─── settings card ──────────────────────────────────────────────────
 
+  // P0 #18 review-fix -- onSaveSettingsClicked() needs the RAW stored
+  // `enabled` value when the checkbox below is disabled (see its own
+  // comment), and the only place that value is ever read is this module's
+  // last GET /api/einvoicing/settings response. One module-level snapshot,
+  // overwritten every renderSettings(), is the single source both read --
+  // never re-fetched separately, so the two can never disagree about what
+  // was actually last loaded.
+  let lastLoadedSettings = null;
+
   async function refreshSettings() {
     const { status, body } = await apiGet('/api/einvoicing/settings');
     if (status !== 200) {
@@ -282,6 +333,7 @@
 
   function renderSettings(settings) {
     clearChildren(settingsContent);
+    lastLoadedSettings = settings;
 
     // The shop's tax regime comes FIRST on this card, above the on/off
     // toggle, because it is the question the toggle only makes sense inside:
@@ -333,12 +385,36 @@
     const toggleLabel = el('label', { text: t('Enable Jordan e-invoicing for this business'), htmlFor: 'einv-enabled' });
     toggleLabel.style.margin = '0';
     const toggle = el('input', { id: 'einv-enabled', type: 'checkbox' });
-    toggle.checked = settings.enabled === '1';
+    // P0 #18 -- the box used to tick straight off the raw `enabled` setting
+    // no matter which regime was selected, so a shop could flip it on while
+    // the regime was still 'none' and read "Enabled" on this very form --
+    // a state settings.py::is_enabled() would immediately override back to
+    // effectively off (regime is checked BEFORE the toggle there). Disabling
+    // the box here, with the same reason surfaced as a hint, matches that
+    // precedence instead of letting the click silently do nothing on save.
+    const regimeIsJordan = settings.tax_regime === 'jordan';
+    const enableReason = t('Set the tax regime above to Jordan before enabling e-invoicing.');
+    // P0 #18 review-fix -- disabling the box (below) was only HALF of the
+    // item's own fix text ("the enable box ticks from the raw setting").
+    // This line was still `toggle.checked = settings.enabled === '1'`, so a
+    // fresh install -- commercial_runtime/einvoicing/settings.py's own
+    // DEFAULTS has enabled:'1', only tax_regime defaults to 'none' -- showed
+    // a TICKED, greyed-out checkbox sitting right next to the "Disabled"
+    // status pill: two true-on-their-own facts that read as a contradiction
+    // to whoever opens this page. The box must show the EFFECTIVE state
+    // (does the toggle plus the regime together mean "on"), not the raw
+    // stored bit alone.
+    toggle.checked = regimeIsJordan && settings.enabled === '1';
+    if (!regimeIsJordan) {
+      toggle.disabled = true;
+      toggle.title = enableReason;
+    }
     toggleRow.appendChild(toggleLabel);
     toggleRow.appendChild(toggle);
     settingsContent.appendChild(toggleRow);
     settingsContent.appendChild(el('div', {
-      className: 'hint', text: t('When off, nothing about your existing records or receipts changes.'),
+      className: 'hint',
+      text: regimeIsJordan ? t('When off, nothing about your existing records or receipts changes.') : enableReason,
     }));
 
     settingsContent.appendChild(el('label', { text: t('Invoice type'), htmlFor: 'einv-family' }));
@@ -370,9 +446,24 @@
   async function onSaveSettingsClicked(btn) {
     clearMessage();
     btn.disabled = true;
+    const enabledBox = document.getElementById('einv-enabled');
+    // P0 #18 review-fix -- while enabledBox.disabled (regime is not
+    // 'jordan'), its .checked reflects the EFFECTIVE-state render in
+    // renderSettings() above (see that assignment's own comment), not
+    // something the shopkeeper could have just changed here -- sending it
+    // as '0' unconditionally would silently overwrite a previously-saved
+    // raw enabled='1' just because an unrelated field (the TIN, say) got
+    // saved while the regime selector happened to read 'none'. That would
+    // change what flipping the regime BACK to Jordan later means, with
+    // nobody having touched the toggle at all. Preserve the last-loaded raw
+    // value in that case instead of deriving one from a control the user
+    // could not touch.
+    const enabledValue = enabledBox.disabled
+      ? (lastLoadedSettings ? lastLoadedSettings.enabled : '0')
+      : (enabledBox.checked ? '1' : '0');
     const payload = {
       tax_regime: document.getElementById('einv-tax-regime').value,
-      enabled: document.getElementById('einv-enabled').checked ? '1' : '0',
+      enabled: enabledValue,
       invoice_family: document.getElementById('einv-family').value,
       seller_name: document.getElementById('einv-seller-name').value,
       seller_tin: document.getElementById('einv-seller-tin').value,

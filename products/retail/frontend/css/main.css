@@ -896,7 +896,19 @@ html[data-theme="sand"] {
   --surface-till: #fffdf8;
   --surface-panel: #fbf7f0;
   --surface-sunken: #f4eee4;
-  --surface-raised: #faf6ee;
+  /* P0 #14c -- was #faf6ee. Card/canvas measured 1.21:1 and panel/card 1.01:1
+     against --surface-raised at that value, both essentially indistinguishable
+     from the surfaces around them. Lifted to #FFFCF7 (still warm-paper, still
+     lighter than --surface-panel) puts canvas/card at 1.28 and panel/card at
+     1.04 -- small moves, on purpose: darkening --surface-panel instead was
+     tried and rejected, because it collapses sunken/panel to 1.02 and
+     hover/panel to 1.05, trading one flat pair for two. --surface-app stays at
+     #eae0cd (deepened 2026-09-19) and --surface-panel is untouched. Computed
+     on this new card surface: tertiary text 6.93:1, money-in/out 9.20:1,
+     accent 5.86:1, danger 7.95:1 -- all still clear with margin. Mirror any
+     future change here in android/.../ui/theme/Color.kt's surfaceRaised, or
+     DesktopTokenParityContractTest goes red by design. */
+  --surface-raised: #FFFCF7;
   --surface-hover: #f1eadf;
   --surface-active: #e8e0d2;
   --text-primary: #2a2119;
@@ -951,6 +963,20 @@ html[data-theme="sand"] {
 /*                                                     [design-tokens-sand:end] */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* P0 #14a -- form controls do not inherit fonts by default (a UA-stylesheet
+   quirk, not a bug in this file), and .ret-btn never set one either, so every
+   button/input/select/textarea on the till rendered in the BROWSER's own
+   control font (Arial on Windows/Edge) instead of this product's typeface.
+   About 20 components were patched one call site at a time before this was
+   traced to its root. :where() is used deliberately (zero specificity) so
+   this can never outrank a component's own font override -- it exists only
+   to give unstyled controls the same inherited family everything else
+   already has, never to win a fight. FAMILY ONLY: no font-size/weight/
+   line-height here, because a control that relies on the browser's own
+   sizing (checkboxes, native pickers) must not be resized as a side effect
+   of a fix that was never reviewed for that. */
+:where(button, input, select, textarea) { font-family: inherit; }
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3487,6 +3513,53 @@ html[data-theme] .sub-chart-title,
 html[data-theme] .modern-card *,
 html[data-theme] .sub-chart-card *  { color: inherit; }
 html[data-theme] .sub-chart-title   { color: var(--text) !important; }
+/* P0 #14b -- the `color: inherit` reset immediately above exists to defeat
+   stale literal colours left over inside cards, and it must stay (a
+   :where()-based rewrite of THAT rule was proposed and rejected -- :where()
+   has zero specificity and would stop winning against the very literals it
+   is there to beat). But at specificity (0,2,1) it also beats
+   .ret-btn-primary/.sub-btn-primary's own `color:var(--text-on-accent)`
+   (0,1,0) from subsystem-retail.js's injected sheet, so any primary button
+   placed inside a card silently took the CARD's dark text on the accent fill
+   instead of its own -- measured 1.34-2.63:1 across the five themes, worse
+   than AA anywhere, and it also stripped .ret-btn-danger's red the same way.
+   Restated here at higher specificity (html[data-theme] + two more classes)
+   so it always outranks the inherit rule above regardless of source order.
+   retail_btn_primary_contrast_test.js stayed green through this whole defect
+   because it reads the token declarations out of the source text and never
+   runs the cascade -- see retail_design_contrast_test.js's rendered in-card
+   button check, which resolves this exact rule through the real rule table.
+
+   P0 #14b REVIEW-FIX (2026-09-27) -- this was first shipped as
+     html[data-theme] :is(.sub-chart-card, .modern-card) :is(.ret-btn-primary, .sub-btn-primary) { ... }
+   which is valid CSS and DOES win the cascade in a real browser (measured
+   9.48/9.86/11.45:1 across themes) -- but it made retail_design_contrast_
+   test.js's own TIER 9 guard vacuous. That guard re-parses this exact rule
+   through retail_surface_domlite.js's shared parseCss(), and parseCss splits
+   a selector list on EVERY top-level comma, including the ones inside
+   :is(...): `html[data-theme] :is(.sub-chart-card, .modern-card) :is(...)`
+   came back as THREE broken fragments
+   (`html[data-theme] :is(.sub-chart-card`, `.modern-card) :is(.ret-btn-
+   primary`, `.sub-btn-primary)`), none of which parses as a selector, so the
+   fix rule silently never entered TIER 9's rule table -- reverting the fix
+   and re-running TIER 9 stayed exactly as green as leaving it in. The same
+   shared parseCss() also backs retail_design_render_test.js's own rule
+   table, so the same :is() rule turned INTO 4 "selector could not be parsed"
+   failures there, in a file this crew does not own. parseCss() is a shared,
+   unowned test helper (retail_surface_domlite.js) -- the fix belongs here,
+   in the rule, not in that parser. Written as a plain comma-separated
+   selector list instead, which is exactly what :is(A,B) :is(C,D) expands to,
+   parses correctly through the exact same naive comma-split, and keeps
+   equivalent specificity (each branch is still html[data-theme] + 2 classes,
+   still ahead of the (0,2,1) inherit reset above). */
+html[data-theme] .sub-chart-card .ret-btn-primary,
+html[data-theme] .sub-chart-card .sub-btn-primary,
+html[data-theme] .modern-card .ret-btn-primary,
+html[data-theme] .modern-card .sub-btn-primary { color: var(--text-on-accent); }
+html[data-theme] .sub-chart-card .ret-btn-danger,
+html[data-theme] .sub-chart-card .sub-btn-danger,
+html[data-theme] .modern-card .ret-btn-danger,
+html[data-theme] .modern-card .sub-btn-danger { color: var(--state-danger-text); }
 /* Clinic-specific dashboard cards */
 html[data-theme] .cl-kpi           { background: var(--surface-card) !important; border-color: var(--border-soft) !important; }
 html[data-theme] .cl-kpi-value     { color: var(--text); }

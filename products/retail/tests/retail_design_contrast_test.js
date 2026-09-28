@@ -129,6 +129,12 @@ const fs = require('fs');
 const path = require('path');
 
 const render = require('./retail_design_render_test.js');
+// Used only by TIER 9 below, to parse a small fixture fragment and to
+// re-parse the real cascade sources with a wider selector engine than the
+// shared harness has -- see that tier's own header for why. Requiring it
+// here does not touch or own retail_design_render_test.js's file, which
+// already has this exact dependency.
+const dom = require('./retail_surface_domlite.js');
 
 const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
 
@@ -1466,6 +1472,253 @@ function testUnexercisedChromeIsCountedNotAssumedFine(h) {
   );
 }
 
+/* ── TIER 9 — P0 #14b: AN IN-CARD PRIMARY/DANGER BUTTON KEEPS ITS OWN COLOUR,
+ * NOT THE CARD'S ───────────────────────────────────────────────────────────
+ *
+ * THE BUG. `html[data-theme] .modern-card *, html[data-theme] .sub-chart-card
+ * * { color: inherit }` exists to defeat stale literal colours left inside
+ * cards, and it must stay. At specificity (0,2,1) it also beat
+ * .ret-btn-primary/.sub-btn-primary's own `color:var(--text-on-accent)`
+ * (0,1,0), so a primary button placed inside a card silently took the CARD's
+ * dark text on the button's own accent fill instead of its own -- the probe
+ * measured 1.34-2.63:1 across the five themes, and it stripped
+ * .ret-btn-danger/.sub-btn-danger's red the same way. The fix, immediately
+ * after the rule it defeats (main.css ~3555-3562), restates both colours as
+ * a plain comma-separated selector list -- `html[data-theme] .sub-chart-card
+ * .ret-btn-primary, html[data-theme] .sub-chart-card .sub-btn-primary,
+ * html[data-theme] .modern-card .ret-btn-primary, html[data-theme]
+ * .modern-card .sub-btn-primary` (and the danger pair) -- at specificity
+ * (0,3,0) per branch, still ahead of the (0,2,1) reset, regardless of source
+ * order.
+ *
+ * REVIEW-FIX (2026-09-27) -- THIS TIER WAS ITSELF VACUOUS FOR ONE BUILD.
+ * The very first version of the fix above was written with `:is(A, B)
+ * :is(C, D)` instead of the plain list, and this tier's OWN re-parse
+ * (buildIsAwareRuleTable below) went through the exact same shared,
+ * unowned retail_surface_domlite.js::parseCss() the production rule table
+ * uses -- which splits a selector list on EVERY top-level comma, including
+ * the ones inside `:is(...)`. `parseCss()` handed back
+ * `html[data-theme] :is(.sub-chart-card` / `.modern-card) :is(.ret-btn-
+ * primary` / `.sub-btn-primary)` as three separate, unparseable fragments,
+ * so expandIsWhere() never even saw a whole `:is()` group to expand --
+ * the fix rule silently never entered this tier's rule table, and TIER 9
+ * reported the stale pre-fix ratios (1.84/1.58/1.34:1) while the real
+ * browser was already rendering 9.48/9.86/11.45:1. Reverting the CSS fix
+ * and re-running this tier changed nothing, because the bug and the fix
+ * were BOTH already invisible to it -- the textbook vacuous guard
+ * ENGINEERING.md warns about. Fixed at the root, in main.css (this crew's
+ * own file), not in the shared parser: a plain selector list is exactly
+ * what `:is(A,B) :is(C,D)` expands to, survives the naive comma-split
+ * unharmed, and keeps equivalent specificity. See main.css's own comment on
+ * the restated rule for the full account.
+ *
+ * expandIsWhere()/buildIsAwareRuleTable() below are KEPT rather than deleted
+ * even though the current fix no longer needs them (a selector list with no
+ * `:is()`/`:where()` passes through expandIsWhere() unchanged) -- they cost
+ * nothing to keep and are the one thing standing between a future `:is()`
+ * rewrite of this exact fix and a silent repeat of the bug just described.
+ * Removing them would remove that safety net, not just dead code.
+ *
+ * WHY THIS IS NOT COVERED BY TIER 2 ABOVE, AND COULD NOT BE MADE SO BY
+ * WIDENING ITS CORPUS. Tier 2 already renders real .ret-btn-primary/
+ * .ret-btn-danger buttons inside real .sub-chart-card screens (Products'
+ * Delete button among them) and measures every one of them. It still cannot
+ * see this regression, for a VERIFIED reason in retail_design_render_test.js
+ * -- a file this crew does not own, so it is not patched there; it is
+ * worked around LOCALLY, in this tier only, and reported as a finding
+ * rather than fixed silently:
+ *
+ *   1. screenFrom() (that file) builds every corpus screen from
+ *      `<body>...</body>` -- there is no `<html>` element anywhere in the
+ *      fragment tree. Every `html[data-theme] ...` rule in main.css,
+ *      INCLUDING the buggy reset above, therefore never matches anything in
+ *      that corpus, in any theme: the walk in compoundMatches() needs an
+ *      ancestor with tag `html`, and none exists. Reverting this very fix
+ *      and re-running the full Tier 2 suite leaves it exactly as green as
+ *      before, not because the bug is gone but because neither the bug's
+ *      rule nor its fix has ever been reachable there.
+ *
+ *      (A second, independent reason used to apply here too -- parseCompound()
+ *      in that file has no case for a functional pseudo-class that is a
+ *      SELECTOR LIST rather than a state, so a `:is(...)`-based fix could
+ *      never have matched there even given an `<html>` ancestor. The plain-
+ *      selector-list fix above no longer uses `:is()` at all, so that
+ *      specific reason no longer applies to THIS rule's exact text -- reason
+ *      1 alone is why Tier 2 still cannot see it, and is why this tier's own
+ *      `<html>`-wrapped fixture below still earns its keep.)
+ *
+ * WHAT THIS TIER DOES INSTEAD. It builds its own tiny fragment -- a real
+ * `<html data-theme="...">` ancestor around `.sub-chart-card`/`.modern-card`
+ * divs holding real button markup -- and its own rule table that expands
+ * `:is()`/`:where()` into the plain selector list they are shorthand for
+ * before handing each variant to the SAME parseSelector()/specificityOf()
+ * the shared harness exports (see buildIsAwareRuleTable/expandIsWhere).
+ * Everything else is the real thing: the real cascade sources (h.sources,
+ * every stylesheet in real document order), the real effectiveColour()/
+ * effectiveBackground()/contrastRatio(), reading main.css and the injected
+ * sheet live rather than a hand-copied approximation of either -- so this
+ * tier tracks the product if the fix's exact wording ever changes, and
+ * cannot be satisfied by a selector that merely looks similar.
+ *
+ * expandIsWhere() is deliberately narrow -- one or more `:is()`/`:where()`
+ * groups of plain, non-nested alternatives, which is exactly the shape a
+ * future revision of this fix might use -- and asserts rather than guessing
+ * on anything wider. Widening it to a general CSS4 selector expander
+ * belongs in retail_design_render_test.js itself, as a change for whoever
+ * owns that file (see this crew's out_of_scope_requests); duplicating that
+ * scope here would be exactly the kind of unreviewed generality this
+ * codebase's own coding-style guidance warns against.
+ */
+const CARD_CLASSES = ['sub-chart-card', 'modern-card'];
+const IN_CARD_BUTTON_VARIANTS = [
+  { classes: ['ret-btn', 'ret-btn-primary'], kind: 'primary', label: 'Save' },
+  { classes: ['ret-btn', 'ret-btn-danger'], kind: 'danger', label: 'Delete' },
+  { classes: ['sub-btn-primary'], kind: 'primary', label: 'Save' },
+  { classes: ['sub-btn-danger'], kind: 'danger', label: 'Delete' },
+];
+
+/**
+ * A limited, single-purpose expansion of `:is()`/`:where()` into the
+ * selector list they are shorthand for -- see the tier header for why this
+ * exists instead of a change to the shared harness. Recurses on the
+ * LEFTMOST remaining group so a selector with two groups (this fix's own
+ * shape) yields their full cross product. Refuses (throws, via the depth
+ * assertion) rather than silently matching less than the real selector does
+ * on anything nested deeper than this narrow helper was built for.
+ */
+function expandIsWhere(selector, depth) {
+  const FUNCTIONAL = /:(?:is|where)\(([^()]*)\)/;
+  const m = FUNCTIONAL.exec(selector);
+  if (!m) return [selector];
+  assert.ok(
+    (depth || 0) < 10,
+    `expandIsWhere() recursed past 10 levels on "${selector}" -- more :is()/:where() nesting than this ` +
+    'narrow helper (built for exactly one P0 #14b regression) supports. Extend it deliberately rather ' +
+    'than raising this floor blindly.'
+  );
+  const alts = m[1].split(',').map((s) => s.trim()).filter(Boolean);
+  assert.ok(alts.length >= 1, `:is()/:where() with no alternatives in "${selector}"`);
+  const out = [];
+  for (const alt of alts) {
+    const substituted = selector.slice(0, m.index) + alt + selector.slice(m.index + m[0].length);
+    out.push(...expandIsWhere(substituted, (depth || 0) + 1));
+  }
+  return out;
+}
+
+/**
+ * The real cascade (h.sources, in real document order), re-parsed with
+ * `:is()`/`:where()` expanded first. Rule objects are shaped exactly like
+ * retail_design_render_test.js's own ruleTable.rules ({selector, parts,
+ * decls, specificity, order, source}) so h.effectiveColour()/
+ * effectiveBackground()/winningDeclaration() -- all exported, all unchanged
+ * -- work against it exactly as they work against the shared one.
+ */
+function buildIsAwareRuleTable(h) {
+  const rules = [];
+  h.sources.forEach((src, sourceIndex) => {
+    dom.parseCss(src.css).forEach((rule, ruleIndex) => {
+      if (rule.at) return; // conditional rules play no part in this narrow check
+      for (const rawSelector of rule.selectors) {
+        for (const selector of expandIsWhere(rawSelector)) {
+          const parts = h.parseSelector(selector);
+          if (!parts) continue; // unparseable for some other reason -- not this check's concern
+          rules.push({
+            selector, parts, decls: rule.decls,
+            specificity: h.specificityOf(parts),
+            order: sourceIndex * 1e6 + ruleIndex,
+            source: src.label,
+          });
+        }
+      }
+    });
+  });
+  // ANTI-VACUITY. The shared ruleTable parses >=1200 rules from these same
+  // sources (testRuleTableParsed, retail_design_render_test.js); re-parsing
+  // them here should land in the same neighbourhood. A number far below that
+  // means the expansion or the source list broke, not that fewer rules exist.
+  assert.ok(
+    rules.length >= 1200,
+    `Re-parsing every cascade source with :is()/:where() expanded produced only ${rules.length} rules ` +
+    '-- expected at least as many as the shared ruleTable parses from the same sources. The source list ' +
+    'or the expansion step is broken, so a green result below would prove nothing.'
+  );
+  return { rules, mediaColour: [], unparseable: [] };
+}
+
+/**
+ * Builds `.sub-chart-card`/`.modern-card` each holding one of every
+ * IN_CARD_BUTTON_VARIANTS, under a real `<html data-theme="...">` ancestor --
+ * the one piece of structure screenFrom() (retail_design_render_test.js)
+ * does not build into any corpus screen (see the tier header, point 1).
+ * Returns [{cardClass, buttonClasses, kind, el}], one per rendered button.
+ */
+function buildInCardButtonFixture(themeAttr) {
+  const combos = [];
+  let markup = '';
+  for (const cardClass of CARD_CLASSES) {
+    markup += `<div class="${cardClass}">`;
+    for (const v of IN_CARD_BUTTON_VARIANTS) {
+      combos.push({ cardClass, buttonClasses: v.classes, kind: v.kind });
+      markup += `<button class="${v.classes.join(' ')}">${v.label}</button>`;
+    }
+    markup += '</div>';
+  }
+  const root = dom.parseFragment(`<html data-theme="${themeAttr}"><body>${markup}</body></html>`);
+  const buttons = dom.allElements(root).filter((el) => el.tag === 'button');
+  // ANTI-VACUITY. If the fixture markup and the parser ever disagree on
+  // count, every combo below would silently pair with the WRONG element
+  // (or none), and a coincidentally-passing ratio would prove nothing about
+  // the button it claims to be.
+  assert.strictEqual(
+    buttons.length, combos.length,
+    `Built ${combos.length} in-card buttons but the fragment parser returned ${buttons.length} <button> ` +
+    'element(s) -- the fixture markup or retail_surface_domlite.js\'s parser has drifted.'
+  );
+  return combos.map((c, i) => Object.assign({}, c, { el: buttons[i] }));
+}
+
+function testInCardButtonsKeepTheirOwnColour(h, isAwareRuleTable, tokens, themeLabel) {
+  const combos = buildInCardButtonFixture(themeLabel);
+  const failures = [];
+  const unresolved = [];
+  for (const combo of combos) {
+    const where = `${combo.cardClass} .${combo.buttonClasses.join('.')}`;
+    const fg = h.effectiveColour(isAwareRuleTable, combo.el, tokens, new Set());
+    const bg = h.effectiveBackground(isAwareRuleTable, combo.el, tokens, new Set());
+    if (fg.unresolved || bg.unresolved) {
+      unresolved.push(`${where}: ${fg.unresolved || bg.unresolved}`);
+      continue;
+    }
+    const painted = fg.colour.a < 1 ? h.composite(fg.colour, bg.colour) : fg.colour;
+    const ratio = h.contrastRatio(painted, bg.colour);
+    if (ratio < AA) {
+      failures.push(
+        `${ratio.toFixed(2)}:1  ${where} (${combo.kind})\n` +
+        `      colour  <- ${fg.from}\n` +
+        `      surface <- ${bg.layers.map((l) => l.from).join('  over  ')}`
+      );
+    }
+  }
+  assert.deepStrictEqual(
+    unresolved, [],
+    `${unresolved.length} in-card button pairing(s) could not be resolved in the ${themeLabel} theme:\n  ` +
+    unresolved.join('\n  ')
+  );
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} in-card primary/danger button(s) fall below WCAG AA (${AA}:1) in the ` +
+    `${themeLabel} theme:\n  ` + failures.join('\n  ') +
+    '\n\nThis is P0 #14b: a button placed inside .sub-chart-card/.modern-card must keep its OWN colour ' +
+    '(var(--text-on-accent) or var(--state-danger-text)) on its OWN accent/danger fill, never the ' +
+    "card's inherited body text."
+  );
+  console.log(
+    `PASS: all ${combos.length} in-card primary/danger button pairings (${CARD_CLASSES.join(' & ')} x ` +
+    `ret-btn-*/sub-btn-* x primary/danger) clear AA (${AA}:1) in the ${themeLabel} theme`
+  );
+}
+
 /* ── PER-TEST ISOLATION ─────────────────────────────────────────────────────
  *
  * main() used to be a flat sequence. The first assertion that threw ended the
@@ -1512,8 +1765,9 @@ const BLOCK_THEMES = ['dark', 'night', 'dusk', 'sand'];
 
    5 (light TIER 1) + 4 themes x 5 (per-theme TIER 1) + 1 (TIER 8 cross-theme
    distinguishability) + 6 (light TIER 2-5 rendered) + 4 themes x 3
-   (per-theme TIER 2 rendered) = 44. */
-const EXPECTED_CHECKS = 45;
+   (per-theme TIER 2 rendered) + 1 (light TIER 9 in-card buttons, P0 #14b) +
+   4 themes x 1 (per-theme TIER 9) = 50. */
+const EXPECTED_CHECKS = 50;
 
 async function main() {
   const checks = [];
@@ -1624,6 +1878,23 @@ async function main() {
       ['unexercised chrome is measured, not assumed fine', () => testUnexercisedChromeIsCountedNotAssumedFine(h)],
     );
 
+    // TIER 9 setup — see that tier's own header for why this needs a rule
+    // table the shared harness cannot supply (:is()/:where() unmodelled) and
+    // why the fixture builds its own `<html data-theme>` ancestor (the
+    // shared corpus's screens have none).
+    let isAwareRuleTable = null;
+    try {
+      isAwareRuleTable = buildIsAwareRuleTable(h);
+    } catch (err) {
+      setupFailed('in-card button :is()-aware rule table (5 P0 #14b checks could not run)', err);
+    }
+    if (isAwareRuleTable) {
+      checks.push(
+        ['in-card primary/danger buttons keep their own colour (P0 #14b)',
+          () => testInCardButtonsKeepTheirOwnColour(h, isAwareRuleTable, h.tokens, 'light')],
+      );
+    }
+
     // TIER 2, EVERY NON-LIGHT THEME — the whole rendered corpus again,
     // resolved through each theme's map. This is the tier that would have
     // caught the ORIGINAL dark theme (whose failure was never in a token
@@ -1646,6 +1917,12 @@ async function main() {
           [`nothing resolves to unknown in silence in ${upper}`, () => testNothingResolvesToUnknownInSilence(hTheme, renderedTheme().unresolved, themeName)],
           [`badge variants are self-contained in ${upper}`, () => testBadgeVariantsAreSelfContained(hTheme, themeName)],
         );
+        if (isAwareRuleTable) {
+          checks.push(
+            [`in-card primary/danger buttons keep their own colour in ${upper} (P0 #14b)`,
+              () => testInCardButtonsKeepTheirOwnColour(h, isAwareRuleTable, themeTokensObj, themeName)],
+          );
+        }
       } else {
         setupFailed(`${themeName} rendered tier (3 checks could not run)`,
           new Error(`the ${themeName} token map failed to build, so the rendered corpus cannot be resolved in ${themeName}`));

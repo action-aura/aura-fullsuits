@@ -1369,7 +1369,28 @@ const SubsystemApp = {
     } catch (e) {
       this.branding = {};
     }
-    document.title = (this.branding && this.branding.branding_business_name) || 'Aura Retail';
+    // P0 #12-sidebar / I-3 -- branding_settings_get returns `business_name`:
+    // the branding value the shop typed in Settings, or, when that is empty,
+    // a READ-TIME fallback to the Company Name typed at signup (never
+    // written into branding_business_name itself -- a fresh, unlicensed
+    // install has no capability to write settings at all). Until this
+    // client's raw `branding_business_name` was the only thing ever shown,
+    // the sidebar, the window title, the receipt header and the customer
+    // display all said 'Aura Retail' until an owner found Settings and typed
+    // the name a second time. Prefer the new field; fall back to the old one
+    // so this client still degrades correctly against a server that has not
+    // deployed the fallback yet, and finally to the product name so an
+    // empty response never blanks the title.
+    document.title = this._shopDisplayName() || 'Aura Retail';
+  },
+
+  // Single source for "what does this shop call itself", read the same way
+  // by document.title above and the sidebar wordmark in _renderShell()
+  // below -- one fallback chain, so the two can never disagree about which
+  // name is showing.
+  _shopDisplayName() {
+    const b = this.branding || {};
+    return (b.business_name || b.branding_business_name || '').trim() || null;
   },
 
   // ── Admin-device claim prompt ───────────────────────────────────────────────
@@ -1500,6 +1521,60 @@ const SubsystemApp = {
     // so without this the user would have to restart the app to see the
     // thing they just enabled.
     this.launch(this.active || 'retail', this.currentSection || 'dashboard');
+  },
+
+  // P0 #20 -- the computer that just typed the company's name into the
+  // signup form IS the store's main computer, and asking its own owner to
+  // then click a dismissible red bar to confirm that (see
+  // _maybeOfferAdminDeviceClaim/_claimAdminDevice above) produced a
+  // permanent dead end: "Not now" removed Settings with no way back, on the
+  // very install where Settings matters most. Trust-on-first-claim, fired
+  // the instant create-admin succeeds, before this device's owner has seen a
+  // single real screen.
+  //
+  // Deliberately does NOT reuse _claimAdminDevice(button): that method wants
+  // a button to disable and always ends in a toast, because it answers a
+  // click. This runs unattended and must never surface anything -- neither a
+  // success toast for an action nobody asked to see, nor an error for the
+  // one case that is not an error at all:
+  //
+  //   * 200 -- the ordinary fresh-install case. isAdminDevice/
+  //     canClaimAdminDevice are set here as a fast path, but init()'s own
+  //     GET /api/devices/me (a few lines above this method, run moments
+  //     later by the same setTimeout(...SubsystemApp.init()...) this call
+  //     sits ahead of) re-derives both from the server anyway, so this can
+  //     never leave the two sources of truth disagreeing.
+  //   * 409 ADMIN_DEVICE_ALREADY_CLAIMED -- another device already holds the
+  //     flag (a race between two signup windows on a brand-new company, or a
+  //     retry of this very call). Not a defect: it means the property this
+  //     item asks for -- "the owner's first screen shows no red bar" --
+  //     already holds for a DIFFERENT reason, so there is nothing to tell
+  //     anyone. init()'s own read decides whether the bar is shown at all.
+  //   * network failure -- leaves isAdminDevice/canClaimAdminDevice
+  //     untouched; init()'s read (or, failing that, the dismissible bar) is
+  //     still the fallback route to Settings, exactly as it was before this
+  //     method existed.
+  //
+  // The devices table itself never syncs (see device_registry.py), so "this
+  // is the main computer" is known only on the machine that just claimed it,
+  // until DEVICE-SYNC ships -- this call changes nothing about that, it only
+  // removes one unnecessary click on the one machine where the answer is
+  // already obvious.
+  async _autoClaimAdminOnSignup() {
+    try {
+      const res = await fetch('/api/devices/me/claim-admin', {
+        method: 'POST', credentials: 'include', cache: 'no-store',
+      });
+      if (res.ok) {
+        this.isAdminDevice = true;
+        this.canClaimAdminDevice = false;
+      }
+      // Any non-2xx (409 included): nothing to do here. See the method
+      // comment above for why 409 specifically is not an error worth
+      // reading the body for.
+    } catch (e) {
+      // Network failure -- same no-op; see the method comment above.
+    }
   },
 
   // ── Device-activation gate ──────────────────────────────────────────────────
@@ -1872,6 +1947,12 @@ const SubsystemApp = {
       // Account exists and this session is already authenticated (create-
       // admin calls create_session() itself) from this point on -- a key
       // failure below must NEVER send the user back through registration.
+
+      // P0 #20 -- right after create-admin succeeds, regardless of which
+      // licensing branch follows below: see _autoClaimAdminOnSignup()'s own
+      // comment for why this fires unconditionally and silently here.
+      await this._autoClaimAdminOnSignup();
+
       if (this._setupNeedsKey && key) {
         if (btn) btn.textContent = t('Activating license…');
         let activation = null;
@@ -2963,7 +3044,15 @@ const SubsystemApp = {
     const shell = document.getElementById('subsystem-shell');
     if (!shell) return;
 
-    const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
+    // P0 #18 -- AI. `hasAI` used to gate on the licensed module alone, so the
+    // button showed for every role the module was entitled to, including a
+    // cashier with no `retail.reports` grant -- the same capability the AI
+    // route's own status/chat endpoints are read-gated on server-side
+    // (retail_api.py). Hiding the button for that role is not new
+    // enforcement (the route still 403s on its own), it is not showing a
+    // door that only ever answers "no" for that person.
+    const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'))
+      && this.hasCapability('retail.reports');
 
     // ── Phone tab bar (≤640px, css/main.css) — docs/design/phone-ui-redesign.md
     // §2/§7 Step 1. Renders unconditionally (like the sidebar it replaces at
@@ -3086,8 +3175,11 @@ const SubsystemApp = {
             <!-- this.branding is loaded once in init() (_loadBranding) and is
                  operator-entered text, so it is escaped like every other
                  shop-typed string this file interpolates (see _esc's own
-                 comment). -->
-            ${(this.branding && this.branding.branding_business_name) ? `<span class="sub-system-name">${this._esc(this.branding.branding_business_name)}</span>` : ''}
+                 comment). P0 #12-sidebar: _shopDisplayName() is the same
+                 fallback chain document.title uses (business_name, then the
+                 legacy branding_business_name, then nothing), so the two
+                 surfaces can never show a different name for the same shop. -->
+            ${this._shopDisplayName() ? `<span class="sub-system-name">${this._esc(this._shopDisplayName())}</span>` : ''}
           </div>
         </div>
 
@@ -3097,9 +3189,23 @@ const SubsystemApp = {
 
         <div class="sub-sidebar-bottom">
           ${hasAI ? `
-          <button class="sub-ai-btn" onclick="SubAI.open('${systemId}')">
+          <button class="sub-ai-btn" id="sub-ai-sidebar-btn" onclick="SubAI.open('${systemId}')">
             <span>${window.AuraIcons ? AuraIcons.render('sparkles', 18) : '🤖'}</span> <span>${t('AI Assistant')}</span>
-            <span class="ai-pulse"></span>
+            <!-- P0 review-fix (2026-09-27) -- this dot used to render
+                 unconditionally, an always-on "the assistant is live" claim
+                 next to a panel that could just as easily say 'Not set up'.
+                 Gate it on a REAL answer: window.SubAI._configured starts
+                 as null and only ever becomes true or false once GET
+                 .../ai/status has actually resolved (sub-ai.js), so this
+                 render (which happens before that ever fires) paints no dot
+                 by default. sub-ai.js's own _checkStatus()/_syncPulseDot()
+                 then add or remove #sub-ai-pulse-dot on the live button once
+                 the real answer is known -- see that method's comment for
+                 why the decision cannot be made once, here, at first paint.
+                 The id below (SIDEBAR_BTN_ID in sub-ai.js) is the coupling
+                 point between the two files; matches index.html's own
+                 documented app-shell.js/i18n.js bare-name coupling note. -->
+            ${window.SubAI && window.SubAI._configured === true ? '<span class="ai-pulse" id="sub-ai-pulse-dot"></span>' : ''}
           </button>
           ` : ''}
           <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="${t('Device license activation and status')}">
@@ -3392,7 +3498,10 @@ const SubsystemApp = {
     const sys = this.systems[this.active];
     if (!sys) return;
 
-    const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
+    // P0 #18 -- AI. Same capability gate as _renderShell's sidebar button
+    // above; see that comment for why.
+    const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'))
+      && this.hasCapability('retail.reports');
     const icon = (val) => window.AuraIcons ? AuraIcons.render(val, 20) : val;
     const byId = new Map(sys.nav.map((item) => [item.id, item]));
 

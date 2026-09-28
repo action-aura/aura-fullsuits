@@ -35,6 +35,15 @@
   const STATUS_ID = 'sub-ai-status';
   const SEND_ID = 'sub-ai-send';
   const TYPING_ID = 'sub-ai-typing';
+  // P0 review-fix (2026-09-27) -- the sidebar liveness dot. Coupled to
+  // app-shell.js by these bare id strings, not by any shared module (there
+  // isn't one): SIDEBAR_BTN_ID must match the literal `id="..."` app-shell.js
+  // writes on `.sub-ai-btn`, and PULSE_ID is the id this file itself gives
+  // the dot when it creates one. Same "two files share a bare name on
+  // purpose" coupling index.html's own header comment documents for
+  // app-shell.js/i18n.js.
+  const SIDEBAR_BTN_ID = 'sub-ai-sidebar-btn';
+  const PULSE_ID = 'sub-ai-pulse-dot';
 
   // Guarded AuraIcons.render(), the shape every other file in this frontend
   // uses. This panel kept four raw emoji longer than anywhere else -- 🙂/🤖
@@ -65,6 +74,18 @@
     _systemId: 'retail',
     _history: [],   // [{role:'user'|'assistant', content:string}] -- sent back to the server for multi-turn context
     _sending: false,
+    // P0 #18 -- AI. This panel used to hardcode 'Online' in its markup and
+    // reset the status pill to 'Online' after EVERY reply, including a
+    // failed one -- see the old _setBusy(false) line this replaced. There
+    // was no state here at all for "is an endpoint even configured"; the
+    // panel simply asserted it always was.
+    //   _configured: null until GET /ai/status resolves once (this session),
+    //     then true/false from the server's own answer.
+    //   _lastCallFailed: true only across the idle moment right after a
+    //     failed send() -- cleared optimistically the next time the user
+    //     tries again, so one failure does not permanently brick the pill.
+    _configured: null,
+    _lastCallFailed: false,
 
     open(systemId) {
       this._systemId = systemId || 'retail';
@@ -77,6 +98,75 @@
       }
       const input = document.getElementById(INPUT_ID);
       if (input) setTimeout(() => input.focus(), 50);
+      this._checkStatus();
+    },
+
+    // GET /api/sub/<systemId>/ai/status -- same decorators as POST .../ai/chat
+    // (retail_api.py), so an unauthenticated/uncapable request fails the same
+    // way a chat message already would. Shows 'Checking…' the instant the
+    // panel opens (never a stale 'Online' left over from a previous system),
+    // then the real answer: 'Online' only when the server reports a
+    // configured endpoint, 'Not set up' otherwise. Skipped while a message is
+    // in flight so it can never stomp 'Thinking…'/'Typing…'.
+    async _checkStatus() {
+      if (this._sending) return;
+      this._lastCallFailed = false;
+      this._configured = null;
+      this._setStatusText(t('Checking…'));
+      try {
+        const res = await fetch(`/api/sub/${this._systemId}/ai/status`, { credentials: 'include', cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        this._configured = !!(res.ok && data && data.configured === true);
+      } catch (e) {
+        // Network failure answering the STATUS check is not the same claim
+        // as a failed CHAT reply, so this resolves to 'Not set up' rather
+        // than 'Unavailable' -- there is no reply to have failed yet.
+        this._configured = false;
+      }
+      if (!this._sending) this._setStatusText(this._idleStatusText());
+      this._syncPulseDot();
+    },
+
+    // P0 review-fix (2026-09-27) -- the sidebar '.ai-pulse' dot. app-shell.js
+    // only ever gates it at RENDER time (`window.SubAI._configured === true`
+    // when the sidebar HTML string is built), but that render happens before
+    // _checkStatus() has ever run, so left alone the dot would freeze on
+    // whatever _configured happened to be at that one instant -- null,
+    // forever, on an install where the sidebar is painted once and never
+    // rebuilt. This is the live half of that fix: the one place that
+    // actually LEARNS the answer folds it back into the already-rendered
+    // button. Both directions matter, not just "turn it on": an endpoint
+    // that answered before and now does not (_configured flips back to
+    // false) must lose its dot too, or the dot becomes a stale claim in the
+    // other direction instead.
+    _syncPulseDot() {
+      const btn = document.getElementById(SIDEBAR_BTN_ID);
+      if (!btn) return;   // AI button not in this render (no retail.reports, or module not licensed)
+      const existing = document.getElementById(PULSE_ID);
+      if (this._configured === true) {
+        if (!existing) {
+          const dot = document.createElement('span');
+          dot.id = PULSE_ID;
+          dot.className = 'ai-pulse';
+          btn.appendChild(dot);
+        }
+      } else if (existing) {
+        existing.remove();
+      }
+    },
+
+    // The single source _setBusy(false) and _checkStatus() both read, so the
+    // pill can never show two different ideas of "idle" depending on which
+    // one last wrote to it.
+    _idleStatusText() {
+      if (this._lastCallFailed) return t('Unavailable');
+      if (this._configured === null) return t('Checking…');
+      return this._configured ? t('Online') : t('Not set up');
+    },
+
+    _setStatusText(text) {
+      const status = document.getElementById(STATUS_ID);
+      if (status) status.textContent = text;
     },
 
     close() {
@@ -112,6 +202,7 @@
       this._history.push({ role: 'user', content: message });
 
       this._sending = true;
+      this._lastCallFailed = false;   // optimistic -- this attempt may still succeed
       this._setBusy(true);
 
       const controller = new AbortController();
@@ -265,6 +356,12 @@
     // include the UI-only error string.
     _finishStream(bubble, acc, failed) {
       if (failed) {
+        // P0 #18 -- AI. The status pill must say 'Unavailable' for THIS
+        // failure, not silently fall back to whatever _configured already
+        // was -- _setBusy(false), called right after this in send()'s
+        // `finally`, reads this flag ahead of _configured (see
+        // _idleStatusText()).
+        this._lastCallFailed = true;
         if (acc) {
           bubble.textContent = acc + '\n\n' + UNAVAILABLE_MSG();
           this._history.push({ role: 'assistant', content: acc });
@@ -280,7 +377,15 @@
         this._history.push({ role: 'assistant', content: acc });
       } else if (!bubble) {
         // Stream reported success but produced zero fragments -- treat the
-        // same as the non-streaming route's "empty reply" 503 case.
+        // same as the non-streaming route's "empty reply" 503 case. P0
+        // review-fix (2026-09-27): this branch used to leave _lastCallFailed
+        // untouched, so _setBusy(false) right after this (send()'s `finally`)
+        // fell through to _idleStatusText()'s _configured branch and claimed
+        // "Online" beside a bubble telling the user the assistant is
+        // unavailable -- the exact lie the `failed` branch above already
+        // removes for a genuinely FAILED reply, reached here instead through
+        // the "succeeded but said nothing" gap.
+        this._lastCallFailed = true;
         this._appendMessage('assistant', UNAVAILABLE_MSG());
       }
     },
@@ -358,7 +463,11 @@
       const status = document.getElementById(STATUS_ID);
       const sendBtn = document.getElementById(SEND_ID);
       if (orb) orb.style.opacity = busy ? '0.4' : '1';
-      if (status) status.textContent = busy ? t('Thinking…') : t('Online');
+      // P0 #18 -- AI. Was the unconditional t('Online') that made the pill
+      // lie after a failed reply, and before the endpoint was ever checked
+      // at all -- see _idleStatusText()'s own comment for the three-way
+      // answer this replaces it with.
+      if (status) status.textContent = busy ? t('Thinking…') : this._idleStatusText();
       if (sendBtn) sendBtn.disabled = !!busy;
 
       const msgs = document.getElementById(MESSAGES_ID);
@@ -381,13 +490,35 @@
 
     _panelHTML() {
       return `
-        <div class="ai-panel sub-ai-panel hidden" id="${PANEL_ID}" role="dialog" aria-label="${t('AI Assistant')}" aria-hidden="true">
+        <!-- P0 review-fix (2026-09-27) -- this carried role="dialog" with no
+             aria-modal="true", found by retail_modal_a11y_coverage_test.js's
+             widened check 2 (item #4) and correctly left failing there and
+             handed to this crew rather than "fixed" in a file C5 does not own
+             (see that test's own header comment on this exact gap).
+             role="dialog" was the wrong call either way: this panel is a
+             PERSISTENT side panel toggled .hidden/un-hidden (.ai-panel is
+             'position:absolute', no backdrop/scrim -- css/main.css), the
+             same shape CLAUDE.md already calls out for the mobile POS cart
+             bottom-sheet as needing "its own answer" rather than the modal
+             convention. Unlike a real dialog it never traps focus, never
+             blocks the rest of the shell, and has no Escape-to-close --
+             adding aria-modal="true" without also adding that behaviour
+             would tell assistive tech the page behind it is unavailable
+             when it plainly still is. role="complementary" (a persistent,
+             supporting region, same category the ARIA spec gives a sidebar)
+             is the honest read of what this actually is; aria-label is kept
+             unchanged so it is still announced as "AI Assistant". -->
+        <div class="ai-panel sub-ai-panel hidden" id="${PANEL_ID}" role="complementary" aria-label="${t('AI Assistant')}" aria-hidden="true">
           <div class="ai-panel-header">
             <div class="ai-panel-title">
               <div class="ai-orb" id="${ORB_ID}"></div>
               <div>
                 <span class="ai-name">${t('AI Assistant')}</span><br>
-                <span class="ai-status" id="${STATUS_ID}">${t('Online')}</span>
+                <!-- P0 #18 -- 'Checking…' at injection time (this markup is
+                     built once, well before open()/its GET /ai/status ever
+                     runs): the pill must never assert 'Online' before the
+                     server has said so. -->
+                <span class="ai-status" id="${STATUS_ID}">${t('Checking…')}</span>
               </div>
             </div>
             <div class="ai-header-actions">

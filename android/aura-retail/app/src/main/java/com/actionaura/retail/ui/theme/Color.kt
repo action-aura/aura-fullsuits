@@ -276,7 +276,17 @@ object AuraPalette {
         surfaceApp = Color(0xFFEAE0CD),
         surfaceSunken = Color(0xFFF4EEE4),
         surfacePanel = Color(0xFFFBF7F0),
-        surfaceRaised = Color(0xFFFAF6EE),
+        // P0 #14c -- was #FAF6EE. Desktop lifted this to #FFFCF7 on
+        // 2026-09-27 (css/main.css's own comment on the sand block carries
+        // the full measurement: card/canvas 1.21->1.28, panel/card
+        // 1.01->1.04, computed on the new card surface tertiary 6.93:1,
+        // money-in/out 9.20:1, accent 5.86:1, danger 7.95:1). Mirrored here
+        // because DesktopTokenParityContractTest reads main.css's sand block
+        // at test time and compares it against this exact field -- leaving
+        // the two apart is precisely the drift that test exists to catch
+        // (see its own header: BorderHairline once drifted #222B37 vs
+        // #232B37, invisible on screen, invisible to every other guard).
+        surfaceRaised = Color(0xFFFFFCF7),
         surfaceTill = Color(0xFFFFFDF8),
         surfaceHover = Color(0xFFF1EADF),
         surfaceActive = Color(0xFFE8E0D2),

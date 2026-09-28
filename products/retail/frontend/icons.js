@@ -889,6 +889,13 @@ window.AuraIcons = (function () {
     "📂": "folder",
     "💼": "briefcase",
     "💸": "banknote",
+    // P0 #14e -- the Cash Flow nav item (app-shell.js) and its own screen
+    // header (subsystem-retail.js) both use U+1F4B5 (dollar banknote), a
+    // DIFFERENT code point from U+1F4B8 (banknote with wings) mapped just
+    // above. Missing from this map, render() fell through to its raw-emoji
+    // fallback and painted the '?' placeholder in the sidebar instead of the
+    // banknote glyph every other nav item uses.
+    "💵": "banknote",
     "💳": "credit-card",
     "💊": "pill",
     "👨‍⚕️": "user-round",

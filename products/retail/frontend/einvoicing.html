@@ -108,10 +108,19 @@
 <body>
   <a class="back-link" href="/"><span class="i18n-arrow">&larr;</span> <span data-i18n="Back to Aura Retail">Back to Aura Retail</span></a>
   <h1 data-i18n="Jordan E-Invoicing (JoFotara)">Jordan E-Invoicing (JoFotara)</h1>
-  <!-- "Off by default" was true until 2026-09-08 and is now the opposite of
-       the truth: Jordan has mandated e-invoicing since 2024, so the feature
-       ships enabled and every sale is recorded from the first one. -->
-  <div class="subtitle" data-i18n="Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.">Government e-invoicing status and settings for this installation. On by default: every sale is recorded, and submitted once this installation is connected to JoFotara.</div>
+  <!-- P0 #18 -- this line said "On by default" from 2026-09-08 until
+       2026-09-22, when the ONE thing that actually decides on/off
+       (einvoice_settings.tax_regime) had its own default flipped back to
+       'none' -- see commercial_runtime/einvoicing/settings.py's own
+       DEFAULTS['tax_regime'] comment for the full history: "it used to
+       default to 'jordan' and now defaults to 'none'". A fresh install is
+       therefore OFF, not on, and this static line never re-fetches
+       is_enabled() the way #status-content below does -- so it must not
+       claim either state as the default. Naming neither keeps this line
+       true regardless of which way tax_regime is set, which #status-content
+       (already fixed for the same honesty requirement -- see einvoicing.js)
+       states precisely, one line down. -->
+  <div class="subtitle" data-i18n="Government e-invoicing status and settings for this installation. Recording and submission depend on the tax regime and connection status below.">Government e-invoicing status and settings for this installation. Recording and submission depend on the tax regime and connection status below.</div>
 
   <div id="message-area"></div>
 
