@@ -429,24 +429,32 @@ const CashDrawer = {
   },
 
   // ── Open shift ───────────────────────────────────────────────────────────
+  //
+  // AUDIT (item #4, 2026-09-27): this modal, and the four below it, were
+  // built with `.ret-modal-overlay` -- the class every OTHER hand-rolled
+  // dialog in this product uses -- but never called _wireModalA11y. They
+  // were invisible to retail_modal_a11y_coverage_test.js because that ratchet
+  // only ever read subsystem-retail.js, so "31 of 31 wired" was true of that
+  // one file and false of this one. See that test's now-widened file list.
   openOpenShiftModal() {
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-open-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:380px">
-        <h3>${t('Open Cash Shift')}</h3>
+      <div class="ret-modal" style="width:380px" id="cd-open-dialog" role="dialog" aria-modal="true" aria-labelledby="cd-open-dialog-title">
+        <h3 id="cd-open-dialog-title">${t('Open Cash Shift')}</h3>
         <p class="cd-note">${t('This drawer belongs to')} <span class="cd-terminal">${this._thisTerminalLabel()}</span></p>
         <div class="ret-field">
           <label>${t('Opening Float')}</label>
           <input type="number" id="cd-opening-float" min="0" step="0.01" value="0" />
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('cd-open-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="cd-open-btn" onclick="CashDrawer._submitOpenShift()">${t('Open Shift')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'cd-open-dialog');
   },
 
   async _submitOpenShift() {
@@ -457,7 +465,7 @@ const CashDrawer = {
     try {
       const res = await this._post('/api/sub/retail/cash-sessions/open', { opening_float: val });
       if (res.status === 'success') {
-        document.getElementById('cd-open-modal')?.remove();
+        RetailSystem._closeModalOverlay(document.getElementById('cd-open-modal'));
         SubsystemApp.showToast(t('Cash shift opened'), 'success');
         this.refresh();
       } else {
@@ -477,8 +485,8 @@ const CashDrawer = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-mv-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:400px">
-        <h3>${t('Cash Movement')}</h3>
+      <div class="ret-modal" style="width:400px" id="cd-mv-dialog" role="dialog" aria-modal="true" aria-labelledby="cd-mv-dialog-title">
+        <h3 id="cd-mv-dialog-title">${t('Cash Movement')}</h3>
         <p class="cd-note">${t('This drawer belongs to')} <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(this._session)}</span></p>
         <div class="ret-field">
           <label>${t('Type')}</label>
@@ -498,11 +506,12 @@ const CashDrawer = {
           <input type="text" id="cd-mv-reason" data-i18n-ph="Optional note" placeholder="${t('Optional note')}" maxlength="200" />
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('cd-mv-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-primary" id="cd-mv-btn" onclick="CashDrawer._submitMovement()">${t('Record')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'cd-mv-dialog');
   },
 
   async _submitMovement() {
@@ -518,7 +527,7 @@ const CashDrawer = {
         type, amount, reason,
       });
       if (res.status === 'success') {
-        document.getElementById('cd-mv-modal')?.remove();
+        RetailSystem._closeModalOverlay(document.getElementById('cd-mv-modal'));
         SubsystemApp.showToast(t('Cash movement recorded'), 'success');
       } else {
         SubsystemApp.showToast(res.message || t('Failed to record movement'), 'error');
@@ -592,18 +601,19 @@ const CashDrawer = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-x-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:440px">
-        <h3>${t('X Report — mid-shift snapshot')}</h3>
+      <div class="ret-modal" style="width:440px" id="cd-x-dialog" role="dialog" aria-modal="true" aria-labelledby="cd-x-dialog-title">
+        <h3 id="cd-x-dialog-title">${t('X Report — mid-shift snapshot')}</h3>
         <p class="cd-note">
           <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(r)}</span>
           ${t('Non-destructive -- does not end the shift. Safe to check any time.')}
         </p>
         ${this._reportRows(r)}
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('cd-x-modal').remove()">${t('Close')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Close')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'cd-x-dialog');
   },
 
   // ── End shift / Z report ────────────────────────────────────────────
@@ -633,8 +643,8 @@ const CashDrawer = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-close-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:440px">
-        <h3>${t('End Shift — Z Report')}</h3>
+      <div class="ret-modal" style="width:440px" id="cd-close-dialog" role="dialog" aria-modal="true" aria-labelledby="cd-close-dialog-title">
+        <h3 id="cd-close-dialog-title">${t('End Shift — Z Report')}</h3>
         <p class="cd-note">
           <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(report)}</span>
         </p>
@@ -649,20 +659,42 @@ const CashDrawer = {
         ${this._contaminationNote(report)}
         <p class="cd-note">${t('Ending locks this count. A short drawer never blocks you from ending your shift -- the variance is recorded and someone with approval authority reviews it.')}</p>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('cd-close-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
           <button class="ret-btn ret-btn-danger" id="cd-close-btn" onclick="CashDrawer._submitClose(${expected})">${t('End Shift')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'cd-close-dialog');
   },
 
+  // AUDIT-item#15(a), 2026-09-27: this used to be a hardcoded
+  // Math.round(x*100)/100 -- two decimals, i.e. CENTS -- so a JOD drawer
+  // (three decimals, fils) expecting 50.005 against a 50.000 count rounded
+  // the fil-level shortfall to the wrong number: measured (not asserted --
+  // see retail_p0_modals_test.js) at exactly -0.01, not the "-0.005 rounds
+  // away to 0.000" a hand-worked example suggests, because
+  // 50.000 - 50.005 lands on -0.005000000000002558 in a float, which the old
+  // *100 rounding pushes to -1 cent rather than 0 -- so the old bug's exact
+  // wrong figure was never even stable, only "wrong for this currency" was.
+  // Same class of bug the 2026-09-18 `_money_epsilon` sweep fixed at ~25
+  // other gates (never hardcode the currency's own precision), except this
+  // one is a PREVIEW/display rounding rather than a >0 gate, so it reuses
+  // the same "read the precision from the currency, never bake in 100"
+  // approach via _currencyDp() -- the same helper _fmt() already trusts for
+  // this shop's real decimal count -- rather than importing _money_epsilon
+  // itself, which computes a tolerance for a comparison, not a display
+  // rounding. The server's own reported variance (report.variance, read in
+  // _submitClose below) is the one that is actually recorded; this is only
+  // ever a client-side preview of what that will say once Server-side
+  // rounding is applied.
   _previewVariance(expected) {
     const counted = parseFloat(document.getElementById('cd-close-counted')?.value);
     const row = document.getElementById('cd-close-variance');
     const val = document.getElementById('cd-close-variance-val');
     if (!row || !val) return;
     if (isNaN(counted)) { row.style.display = 'none'; return; }
-    const variance = Math.round((counted - expected) * 100) / 100;
+    const q = Math.pow(10, RetailSystem._currencyDp());
+    const variance = Math.round((counted - expected) * q) / q;
     row.style.display = 'flex';
     // innerHTML, not textContent: the value has to arrive wrapped in
     // `.money` or it loses tabular figures, the typographic minus, the
@@ -684,7 +716,7 @@ const CashDrawer = {
         closing_float_counted: counted,
       });
       if (res.status === 'success') {
-        document.getElementById('cd-close-modal')?.remove();
+        RetailSystem._closeModalOverlay(document.getElementById('cd-close-modal'));
         const report = (res.data && res.data.report) || {};
         const variance = (typeof report.variance === 'number') ? report.variance : (counted - expected);
         // Two different outcomes, said differently. A cashier whose shift is
@@ -737,8 +769,8 @@ const CashDrawer = {
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'cd-hist-modal';
     overlay.innerHTML = `
-      <div class="ret-modal ret-modal-wide" style="width:760px">
-        <h3>${t('Drawer History')}</h3>
+      <div class="ret-modal ret-modal-wide" style="width:760px" id="cd-hist-dialog" role="dialog" aria-modal="true" aria-labelledby="cd-hist-dialog-title">
+        <h3 id="cd-hist-dialog-title">${t('Drawer History')}</h3>
         <p class="cd-note">${res.scope === 'all_terminals'
           ? t('Every terminal in this shop.')
           : t('Drawers worked on this terminal.')}</p>
@@ -753,10 +785,11 @@ const CashDrawer = {
               <tbody>${rows.map((s) => this._historyRow(s, mayApprove)).join('')}</tbody>
             </table>`}
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('cd-hist-modal').remove()">${t('Close')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Close')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'cd-hist-dialog');
   },
 
   _historyRow(s, mayApprove) {
@@ -798,7 +831,7 @@ const CashDrawer = {
             ? t('Variance accepted. You approved a drawer you ended yourself.')
             : t('Variance accepted.'),
           'success');
-        document.getElementById('cd-hist-modal')?.remove();
+        RetailSystem._closeModalOverlay(document.getElementById('cd-hist-modal'));
         this.openHistoryModal();
       } else {
         SubsystemApp.showToast(res.message || t('Failed to accept the variance'), 'error');

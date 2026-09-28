@@ -68,20 +68,39 @@ const ImportWizard = {
     this._smartStep1();
   },
 
+  // AUDIT (item #4, 2026-09-27): this overlay used its own 'iw-overlay'
+  // class rather than the product-wide 'ret-modal-overlay' convention, so it
+  // was invisible both to _wireModalA11y's dialog semantics (no role, no
+  // aria-modal, Escape did nothing) and to retail_modal_a11y_coverage_test.js
+  // (which counts sites by that class name). Added 'ret-modal-overlay'
+  // alongside the wizard's own 'iw-overlay' rather than replacing it, so the
+  // wizard keeps its own <style> block's sizing/backdrop rules unchanged and
+  // only gains the shared dialog wiring.
+  //
+  // this.close() FIRST, not a bare .remove(): _shell/_smartShell rebuild this
+  // overlay on every step transition (same id, brand-new element each time),
+  // and the OLD implementation dropped the old element straight out of the
+  // DOM without ever running the close() _wireModalA11y had registered for
+  // it -- which left that step's document-level keydown listener and its
+  // _modalKeyStack entry behind, permanently, once per step. Routing through
+  // close() (a no-op when nothing is open yet) tears the previous step's
+  // wiring down properly before this step's replaces it, so at most one
+  // listener for this wizard is ever live at a time.
   _smartShell(body, foot) {
-    document.getElementById('iw-overlay')?.remove();
+    this.close();
     const overlay = document.createElement('div');
-    overlay.className = 'iw-overlay'; overlay.id = 'iw-overlay';
+    overlay.className = 'iw-overlay ret-modal-overlay'; overlay.id = 'iw-overlay';
     overlay.innerHTML = `
-      <div class="iw-modal">
+      <div class="iw-modal" id="iw-dialog" role="dialog" aria-modal="true" aria-labelledby="iw-dialog-title">
         <div class="iw-head">
-          <div><h3>${this._t('Smart Import')}</h3><p>${this._t('Upload one file — we route it to the right functions')}</p></div>
+          <div><h3 id="iw-dialog-title">${this._t('Smart Import')}</h3><p>${this._t('Upload one file — we route it to the right functions')}</p></div>
           <button class="iw-close" onclick="ImportWizard.close()">✕</button>
         </div>
         <div class="iw-body">${body}</div>
         <div class="iw-foot">${foot}</div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'iw-dialog');
   },
 
   _smartStep1() {
@@ -365,17 +384,20 @@ const ImportWizard = {
     document.head.appendChild(s);
   },
 
+  // Same 'ret-modal-overlay' + close()-first reasoning as _smartShell above
+  // -- this is the per-entity wizard's own shell, called fresh for each of
+  // the three steps, and shares the single close() below with it.
   _shell(stepNum, bodyHtml, footHtml) {
-    document.getElementById('iw-overlay')?.remove();
+    this.close();
     const steps = [this._t('Upload File'), this._t('Map Columns'), this._t('Clean & Review')];
     const overlay = document.createElement('div');
-    overlay.className = 'iw-overlay';
+    overlay.className = 'iw-overlay ret-modal-overlay';
     overlay.id = 'iw-overlay';
     overlay.innerHTML = `
-      <div class="iw-modal">
+      <div class="iw-modal" id="iw-dialog" role="dialog" aria-modal="true" aria-labelledby="iw-dialog-title">
         <div class="iw-head">
           <div>
-            <h3>${this._t('Import')} ${this._esc(this._t(this._schema.label))}</h3>
+            <h3 id="iw-dialog-title">${this._t('Import')} ${this._esc(this._t(this._schema.label))}</h3>
             <p>${this._esc(this._t(this._schema.description))}</p>
           </div>
           <button class="iw-close" onclick="ImportWizard.close()">✕</button>
@@ -390,10 +412,17 @@ const ImportWizard = {
         <div class="iw-foot">${footHtml}</div>
       </div>`;
     document.body.appendChild(overlay);
+    RetailSystem._wireModalA11y(overlay, 'iw-dialog');
   },
 
+  // Routes through the SAME close() _wireModalA11y hands back for whichever
+  // shell is currently open (found via the overlay's own _a11yClose, see
+  // RetailSystem._closeModalOverlay) rather than a bare .remove() -- so
+  // Escape, the ✕ button and every "Done" callback below all tear down the
+  // document-level keydown listener and the modal-key-stack entry the same
+  // way. A no-op when nothing is open (el is then null).
   close() {
-    document.getElementById('iw-overlay')?.remove();
+    RetailSystem._closeModalOverlay(document.getElementById('iw-overlay'));
   },
 
   // ── STEP 1: Upload ──────────────────────────────────────────────────────
