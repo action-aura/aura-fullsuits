@@ -6184,14 +6184,13 @@ Measured, not asserted:
   only (it reads that worktree's trust anchor); it passes here. The full
   suite was NOT rerun after those two fixes.
 - Real-browser suites (not collected by the canonical runner, system
-  Python): retail_smoke_e2e.py passed on the final tree. Last green runs of
-  the others: retail_p0_till_e2e.py 42/42 (round-3 verifier),
-  retail_p0_modals_e2e.py 49/49 (round-2 final fixer, after its verifier
-  had found 8 failures), retail_p0_shell_css_e2e.py 4/4 and
-  scripts/ui-sweep/retail_ui_sweep.py exit 0 with 216 screenshots (round-2
-  verifier). A final rerun of those four on this exact tree was stopped by
-  Claude Code for low memory and has NOT been redone -- rerun them before
-  merging.
+  Python), all on the final tree 2026-09-28: retail_smoke_e2e.py passed;
+  retail_p0_till_e2e.py 45/45; retail_p0_modals_e2e.py 49/49;
+  retail_p0_shell_css_e2e.py 4/4 (both mutations red as required);
+  scripts/ui-sweep/retail_ui_sweep.py exit 0, 216 screenshots, "no page
+  errors, no navigation failures, no rendering failures". (A first rerun was
+  reaped by Claude Code for low memory; the second ran as a detached
+  process.)
 - Customer display: dead because `.cd-screen[hidden]` lost to the
   `#cd-*{display:flex}` ID rules (the live cart rendered at y=768 under
   overflow:hidden); plus the desktop app sends window.open to the system
