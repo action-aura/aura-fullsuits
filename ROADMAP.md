@@ -6215,3 +6215,42 @@ Recorded gaps (decisions or next phases, not forgotten):
   settings write needs the licence capability a fresh install lacks.
 - The printed-receipt/customer-screen hardware photo on the owner's own
   second monitor and printer is still the owner's check.
+
+## 2026-09-28 — owner's answers to the 11 UX-programme questions; P1a opened (no schema claim)
+
+Recorded verbatim-in-substance from the owner, 2026-09-28. These change
+what later phases build, so they live here rather than in a chat log.
+
+1. Paid extras: YES — "for certain features we will add extra fees". The
+   public website's "no subscription, ever" line must change BEFORE any
+   add-on (Care / Connect) is sold.
+2. Accountant's toolkit: included in Aura Shop, no extra price.
+3. JoFotara: the owner is starting the tax-office registration now so
+   selling can begin as soon as possible. Test and real credentials are
+   still to come; until they do, nothing may say "compliant".
+4. Test hardware (printer, drawer, scanner, second screen): being rented.
+5. Till session: sign out EVERY time (at a shift change the next person
+   signs in with their own login). This is already the P0 default;
+   AURA_TILL_REMEMBER_LOGIN stays off by default. CLOSED.
+6. Manager PIN at the till: may approve a DISCOUNT (and similar
+   exceptions); may NOT approve a REFUND. Phase 3's manager override must
+   encode both halves and test both.
+7. WhatsApp: ONE number only — Action Aura's own — for every kind of
+   service (demos, support, automatic messages). No per-shop WhatsApp
+   Business numbers. UI copy must never promise "your business number".
+   (The till's "Send on WhatsApp" wa.me links are unaffected: they open
+   whatever WhatsApp the till computer is signed into.)
+8. Sample shop "Abu Tareq Market": OK to run without a licence, marked
+   SAMPLE.
+9. Sync ownership: the owner did not follow the question. What they said:
+   the licence key and every intangible asset are theirs, and they want to
+   give the partner access. Whether the partner BUILDS the sync parts is
+   still open and must be re-asked in plain words.
+10. No real shop / accountant for now: the owner runs the tests.
+11. Arabic demo, Day for accountants, Night on a projector, Sand as the
+    owner's default: OK for now.
+
+P1a ("everyone in their place, and WhatsApp you can find") opened on
+`feat/retail-ux-p0` the same day. No schema change is planned; the shop's
+customer-facing WhatsApp number for the idle-screen QR is a
+`retail_settings` key, which needs no migration.
