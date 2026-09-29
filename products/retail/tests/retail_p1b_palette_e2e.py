@@ -392,9 +392,12 @@ def main() -> int:
                 open_with_ctrl_k(pg)
                 assert "Recent" not in pg.evaluate("() => [...document.querySelectorAll('.aura-palette-group')].map(g => g.textContent.trim())"), \
                     "a brand-new session already lists Recent"
-                pg.keyboard.type("stock accuracy")
+                # The page was renamed "Stock records check" by the shopkeeper-English
+                # pass (de328e89); the query follows the label a person now sees. The
+                # assertion is unchanged: the same page must be the first row.
+                pg.keyboard.type("stock records")
                 target = row_keys(pg)[0]
-                assert target == "page:stock-accuracy", f"'stock accuracy' first row is {target!r}"
+                assert target == "page:stock-accuracy", f"'stock records' first row is {target!r}"
                 pg.keyboard.press("Enter")
                 pg.wait_for_function("() => SubsystemApp.currentSection === 'stock-accuracy'", timeout=DEFAULT_WAIT_MS)
                 pg.reload(wait_until="domcontentloaded")

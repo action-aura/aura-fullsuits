@@ -236,14 +236,17 @@ const AuraPalette = {
       out.push({
         key: 'action:open-till', kind: 'action', label: t('Open till'), iconName: 'banknote',
         keywords: ['shift', 'cash drawer', 'float'],
-        run: () => { app._navigate('pos'); cd.openOpenShiftModal(); },
+        // A leave guard may say stay: then the till never opened, so the
+        // shift form must not appear over the screen the person kept.
+        run: async () => { if ((await app._navigate('pos')) === false) return; cd.openOpenShiftModal(); },
       });
     }
     if (this._navVisible(app, 'products') && app.hasCapability('retail.stock.adjust')) {
       out.push({
         key: 'action:new-product', kind: 'action', label: t('New product'), iconName: 'plus',
         keywords: ['add product', 'item', 'stock'],
-        run: () => this._openProductsScreen().then(() => {
+        run: () => this._openProductsScreen().then((moved) => {
+          if (moved === false) return;
           if (window.RetailSystem && typeof RetailSystem._openAddProduct === 'function') RetailSystem._openAddProduct();
         }),
       });
@@ -323,7 +326,7 @@ const AuraPalette = {
     const app = this._app();
     if (!app) return;
     const before = window.RetailSystem ? RetailSystem._categories : null;
-    app._navigate('products');
+    if ((await app._navigate('products')) === false) return false;   // a leave guard said stay
     await this._whenPainted();
     const deadline = Date.now() + this.PAINT_WAIT_MS;
     while (window.RetailSystem && RetailSystem._categories === before && Date.now() < deadline) {
@@ -338,7 +341,7 @@ const AuraPalette = {
       sub: [p.sku, p.barcode].filter(Boolean).join(' · '),
       live: { id: p.id, name, sub: [p.sku, p.barcode].filter(Boolean).join(' · ') },
       run: async () => {
-        await this._openProductsScreen();
+        if ((await this._openProductsScreen()) === false) return;
         const rs = window.RetailSystem;
         if (!rs) return;
         const app = this._app();

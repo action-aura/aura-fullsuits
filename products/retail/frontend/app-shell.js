@@ -1938,6 +1938,11 @@ const SubsystemApp = {
   },
 
   async logout() {
+    // Signing out throws the screen away just as surely as navigating does:
+    // unsaved Settings changes get the same question, and "stay" leaves the
+    // session untouched. Before the unsynced-sales question so a person is
+    // never asked about sync for a sign-out they then cancel here.
+    if (!(await this._askLeaveGuards('logout', 'logout'))) return;
     // Asked BEFORE anything is torn down, so answering "stay signed in"
     // leaves the session exactly as it was -- the sync poll still running,
     // the session still live. Nothing below this line is reversible.
@@ -4210,7 +4215,69 @@ const SubsystemApp = {
     return false;
   },
 
+  // ── Leave guards ──────────────────────────────────────────────────────────
+  // A screen holding unsaved work (the Settings hub's edit bar) registers a
+  // function here; every way OUT of the current screen asks it first. Every
+  // route out already funnels through _navigate() (sidebar, phone tab bar,
+  // More sheet, identity/settings menus, Ctrl+K) or logout(), so guarding
+  // those two is guarding all of them -- no per-button wiring to forget.
+  //
+  // A guard is `(target, kind) => boolean | Promise<boolean>`; kind is
+  // 'navigate' or 'logout'. ONLY a strict `false` means "stay". A guard that
+  // throws or rejects is logged and treated as ALLOW: a broken guard must
+  // never trap the person on a screen they cannot leave (a dead sidebar is
+  // worse than a lost draft). Truthy, undefined and null all mean allow.
+  //
+  // One prompt at a time: while one is open, a second attempt to leave is
+  // refused (false), not queued -- two stacked "discard changes?" dialogs
+  // would let the second click answer the first.
+  _leaveGuards: new Set(),
+  _leavePromptBusy: false,
+
+  registerLeaveGuard(fn) {
+    if (typeof fn !== 'function') return () => {};
+    this._leaveGuards.add(fn);
+    return () => { this._leaveGuards.delete(fn); };
+  },
+
+  async _askLeaveGuards(target, kind) {
+    if (this._leavePromptBusy) return false;
+    if (!this._leaveGuards.size) return true;
+    this._leavePromptBusy = true;
+    try {
+      for (const guard of Array.from(this._leaveGuards)) {
+        let verdict;
+        try {
+          verdict = await guard(target, kind || 'navigate');
+        } catch (e) {
+          console.error('[leave-guard] a guard failed; treating it as "allow"', e);
+          continue;
+        }
+        if (verdict === false) return false;
+      }
+      return true;
+    } finally {
+      this._leavePromptBusy = false;
+    }
+  },
+
+  // Public entry. Returns true (moved) / false (a guard said stay, or another
+  // prompt is open). Synchronous whenever nothing needs asking -- the same
+  // section (the 60 s dashboard refresh, language switch, wizard "Done"
+  // re-render) or no guard registered -- because dozens of callers rely on the
+  // screen starting to paint before this returns. Only a REAL leave awaits.
   _navigate(sectionId) {
+    if (sectionId === this.currentSection || !this._leaveGuards.size) {
+      this._navigateNow(sectionId);
+      return true;
+    }
+    return this._askLeaveGuards(sectionId, 'navigate').then((ok) => {
+      if (ok) this._navigateNow(sectionId);
+      return ok;
+    });
+  },
+
+  _navigateNow(sectionId) {
     // F5 belt-and-braces: the disabled row never calls this, but a saved URL
     // hash or a stale bookmark can still ask for a device-bound screen on a
     // computer that is not the main one. Explain it and land on home rather
