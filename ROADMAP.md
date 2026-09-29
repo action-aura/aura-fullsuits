@@ -6443,3 +6443,18 @@ Waiting, deliberately not started:
   so this is claimed only after the two agree -- not by a background crew.
 - [Track S] default branch uid and device registry sync: partner / Q9.
 - Silent Arabic receipt printing: needs the rented printer and drawer.
+
+## 2026-09-29 — owner decisions: Claude builds sync (Track S); the Settings leave warning is approved
+
+Recorded from the owner, 2026-09-29, in plain words:
+
+- Q9 answered: **"B" -- Claude builds the "computers talk to each other"
+  parts** (Track S: every computer agrees on the default branch, devices known
+  on every computer) and the registry v9 work (display names, role presets,
+  the Accountant). The partner does NOT work on those same parts at the same
+  time. Any schema version these need is still claimed here, by name, BEFORE
+  work is dispatched (single-writer rule), and checked against the other
+  branches first.
+- **Approved:** the Settings hub's "Discard unsaved changes?" leave warning,
+  which needs `SubsystemApp.registerLeaveGuard` in app-shell.js (the edit the
+  permission system had refused without the owner's say-so).
