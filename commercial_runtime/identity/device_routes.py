@@ -51,7 +51,7 @@ See device_context.py's module docstring for the full history of the
 Android ModuleNotFoundError('cryptography') regression this constraint
 guards against.
 """
-from flask import Blueprint, jsonify, session
+from flask import Blueprint, jsonify, request, session
 
 from commercial_runtime.identity import device_context, device_registry
 from commercial_runtime.identity.mt_auth import mt_login_required
@@ -92,6 +92,47 @@ def _resolve_branch_name(company_id):
     return name or None
 
 
+# Registry v9 refusal strings. FIXED LITERALS on purpose: the frontend's t()
+# looks a whole sentence up in the locale files, so a sentence assembled from
+# parts would never be translated. New ones are listed in tmp/p2s/i18n-R.json.
+JOINED_DEVICE_MESSAGE = (
+    'This computer joined an existing shop, so it cannot become the main '
+    'computer by itself. Ask the main computer to hand the role over.'
+)
+MAIN_MUST_BE_WINDOWS_MESSAGE = 'Only a Windows computer can be the main computer.'
+NOT_MAIN_FOR_DEVICES_MESSAGE = 'Only the main computer can rename or remove other computers.'
+CANNOT_REVOKE_MAIN_MESSAGE = (
+    'The main computer cannot be removed. Move the main role to another computer first.'
+)
+DEVICE_CLASH_MESSAGE = (
+    'That computer shares an identity with another one, so it cannot be made the main computer.'
+)
+DEVICE_NAME_TOO_LONG_MESSAGE = 'Name must be 60 characters or fewer.'
+DEVICE_NAME_REQUIRED_MESSAGE = 'Enter a name for this computer.'
+
+
+def _platform_can_be_main(platform) -> bool:
+    """Only a Windows computer may be main. A device that has not reported its
+    platform yet (a row from before v9, never announced) is NOT refused on
+    that ground: refusing an unknown platform would lock out every upgrade
+    until the boot announcement runs, and an unknown platform here is a
+    Windows desktop in practice (Android has always announced 'ANDROID')."""
+    return not platform or str(platform).upper() == device_registry.WINDOWS_PLATFORM
+
+
+def _session_user_uid(conn):
+    """The signed-in user's synced `uid` (what other devices know them by),
+    or None. `mt_user_id` is the local row id and means nothing to a peer."""
+    user_id = session.get('mt_user_id')
+    if not user_id:
+        return None
+    try:
+        row = conn.execute("SELECT uid FROM users WHERE id=?", (user_id,)).fetchone()
+    except Exception:
+        return None
+    return row['uid'] if row and row['uid'] else None
+
+
 def _serialize_device(device: dict) -> dict:
     """Normalizes a device_registry row dict for JSON responses -- casts
     `is_admin_device` from SQLite's stored INTEGER (0/1, see
@@ -126,10 +167,41 @@ def list_devices_route():
     conn = get_conn()
     try:
         devices = device_registry.list_devices(conn, company_id)
+        blockers = device_registry.registry_rollout_blockers(conn, company_id)
     finally:
         conn.close()
 
-    return jsonify({'success': True, 'devices': [_serialize_device(d) for d in devices]})
+    # v9: peers arrive by sync, so the list is now "every computer in this
+    # shop", and the page needs to say which row is THIS one. peek (never
+    # creates identity) -- a corrupt identity file just means "unknown".
+    try:
+        this_id = device_context.peek_local_device_uuid()
+    except device_context.LocalDeviceStateCorruptError:
+        this_id = None
+    out = []
+    for d in devices:
+        s = _serialize_device(d)
+        s['is_this_device'] = bool(this_id) and d['id'] == this_id
+        out.append(s)
+
+    # Rollout advisory, NOT enforcement: preset cards and role edits should be
+    # disabled while any active computer reports registry version < 9 (an old
+    # build stores but never reads the books grants). The server does not
+    # refuse the edit itself yet -- until the boot announcement is wired into
+    # app.py, every existing device would read as "old" and the owner could
+    # not edit roles at all. The UI reads this block.
+    return jsonify({
+        'success': True, 'devices': out,
+        'role_editing': {
+            'allowed': not blockers,
+            'min_registry_schema_version': device_registry.REGISTRY_ROLLOUT_MIN_VERSION,
+            'blocking_devices': [
+                {'id': b['id'], 'device_label': b['device_label'], 'platform': b['platform'],
+                 'registry_schema_version': b['registry_schema_version']}
+                for b in blockers
+            ],
+        },
+    })
 
 
 def _tenant_context():
@@ -275,7 +347,18 @@ def claim_admin_device_route():
         device, err = _resolve_or_error(conn, company_id)
         if err:
             return err
-        claimed = device_registry.claim_admin_device(conn, company_id, device['id'])
+        # v9: a joined device (one that entered an existing shop) never
+        # bootstraps itself into the main computer, and only a Windows
+        # computer can be main. Both are refusals of a decision the user
+        # asked for, so they name the reason in plain words.
+        if device_registry.is_joined_device(conn, company_id, device['id']):
+            return jsonify({'error': JOINED_DEVICE_MESSAGE,
+                            'code': 'JOINED_DEVICE_CANNOT_CLAIM'}), 409
+        if not _platform_can_be_main(device.get('platform')):
+            return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
+                            'code': 'MAIN_MUST_BE_WINDOWS'}), 409
+        claimed = device_registry.claim_admin_device_with_assignment(
+            conn, company_id, device['id'], by_user_uid=_session_user_uid(conn))
         if claimed is None:
             holder = device_registry.admin_device(conn, company_id)
             return jsonify({
@@ -343,9 +426,195 @@ def transfer_admin_device_route(device_id):
         if (target['status'] or '').lower() != 'active':
             return jsonify({'error': 'That device has been revoked.',
                              'code': 'DEVICE_REVOKED'}), 409
-        updated = device_registry.set_admin_device(conn, company_id, device_id)
+        # v9: the new main computer must be a Windows computer and must not be
+        # one the sync engine has flagged as sharing an identity with another.
+        if not _platform_can_be_main(target.get('platform')):
+            return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
+                            'code': 'MAIN_MUST_BE_WINDOWS'}), 409
+        if device_registry.device_has_open_clash(conn, device_id):
+            return jsonify({'error': DEVICE_CLASH_MESSAGE,
+                            'code': 'DEVICE_IDENTITY_CLASH'}), 409
+        # Clear-then-set + epoch+1 + `admin_device` event, one transaction.
+        updated = device_registry.transfer_admin_device_with_assignment(
+            conn, company_id, device_id,
+            by_user_uid=_session_user_uid(conn),
+            by_device_id=device_context.peek_local_device_uuid())
     finally:
         conn.close()
 
     device_context.invalidate_cache()
     return jsonify({'success': True, 'device': _serialize_device(updated)})
+
+
+def _require_main_device(conn, company_id):
+    """(None) when this request comes from the main computer, else an error
+    response. Rename/remove are decisions about OTHER computers; like the
+    transfer route they are only allowed to be made at the main one."""
+    try:
+        if not device_context.local_device_is_admin(conn, company_id):
+            return jsonify({'error': NOT_MAIN_FOR_DEVICES_MESSAGE,
+                            'code': 'NOT_ADMIN_DEVICE'}), 403
+    except device_context.LocalDeviceStateCorruptError as exc:
+        return jsonify({'error': str(exc), 'code': 'LOCAL_DEVICE_STATE_CORRUPT'}), 500
+    return None
+
+
+@device_bp.route('/<device_id>/label', methods=['POST'])
+@mt_login_required
+def label_device_route(device_id):
+    """POST /api/devices/<device_id>/label {"label": "..."} -- rename a
+    computer. Admin role, from the main computer. 1-60 characters after
+    trimming. row_version+1 and a `device` event, so the new name reaches
+    every peer."""
+    company_id, err = _tenant_context()
+    if err:
+        return err
+    err = _require_admin_role()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    label = body.get('label')
+    label = label.strip() if isinstance(label, str) else ''
+    if not label:
+        return jsonify({'error': DEVICE_NAME_REQUIRED_MESSAGE, 'code': 'DEVICE_NAME_REQUIRED'}), 400
+    if len(label) > device_registry.DEVICE_LABEL_MAX:
+        return jsonify({'error': DEVICE_NAME_TOO_LONG_MESSAGE, 'code': 'DEVICE_NAME_TOO_LONG'}), 400
+
+    conn = get_conn()
+    try:
+        err = _require_main_device(conn, company_id)
+        if err:
+            return err
+        updated = device_registry.set_device_label_synced(conn, company_id, device_id, label)
+        if updated is None:
+            return jsonify({'error': 'Device not found.', 'code': 'DEVICE_NOT_FOUND'}), 404
+    finally:
+        conn.close()
+    device_context.invalidate_cache()
+    return jsonify({'success': True, 'device': _serialize_device(updated)})
+
+
+@device_bp.route('/<device_id>/revoke', methods=['POST'])
+@mt_login_required
+def revoke_device_route(device_id):
+    """POST /api/devices/<device_id>/revoke -- remove a computer from the
+    shop (status 'revoked'; the row is never deleted, so its history and
+    sales keep their meaning). Admin role, from the main computer. The main
+    computer itself cannot be revoked: hand the role over first."""
+    company_id, err = _tenant_context()
+    if err:
+        return err
+    err = _require_admin_role()
+    if err:
+        return err
+
+    conn = get_conn()
+    try:
+        err = _require_main_device(conn, company_id)
+        if err:
+            return err
+        try:
+            updated = device_registry.revoke_device_synced(conn, company_id, device_id)
+        except ValueError:
+            return jsonify({'error': CANNOT_REVOKE_MAIN_MESSAGE,
+                            'code': 'CANNOT_REVOKE_MAIN'}), 409
+        if updated is None:
+            return jsonify({'error': 'Device not found.', 'code': 'DEVICE_NOT_FOUND'}), 404
+    finally:
+        conn.close()
+    device_context.invalidate_cache()
+    return jsonify({'success': True, 'device': _serialize_device(updated)})
+
+
+# ==== LOCAL TAKEOVER (option b) -- BEGIN ====================================
+# One removable unit; see device_takeover.py's docstring for the why, the
+# guards, and what to delete if the owner picks Owner-CC reset (option a)
+# instead: this block, that file, its test, its i18n strings. Nothing above
+# refers to anything below.
+import json as _json
+import logging as _logging
+import uuid as _uuid
+
+from commercial_runtime.identity import device_takeover
+from commercial_runtime.identity.mt_auth import authenticate_registry_user
+
+_takeover_log = _logging.getLogger('aura.security.identity')
+
+
+@device_bp.route('/me/take-over', methods=['POST'])
+@mt_login_required
+def take_over_main_route():
+    """POST /api/devices/me/take-over {"password": "...", "confirm": "TAKE OVER"}
+    -- make THIS computer the main computer when the real one is gone.
+
+    Order of the guards, each a hard stop and none skippable by the next:
+      1. company admin (not a demo session)             403 ADMIN_ROLE_REQUIRED
+      2. the typed phrase is exact                      400 TAKEOVER_CONFIRM_REQUIRED
+         (before the password, so a typo never burns a login attempt)
+      3. the admin's own password, through the SAME
+         throttled check the login uses                 403 TAKEOVER_PASSWORD_INCORRECT
+                                                        429 when that account is locked
+      4. this computer may be main at all (Windows, no
+         identity clash)                                409
+      5. device_takeover: current main silent >= 7 days,
+         this computer is not already main, etc.        409 TAKEOVER_*
+    Only ever THIS computer -- there is no target id to pass."""
+    company_id, err = _tenant_context()
+    if err:
+        return err
+    err = _require_admin_role()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    if not device_takeover.confirm_phrase_ok(body.get('confirm')):
+        return jsonify({'error': device_takeover.TAKEOVER_CONFIRM_MESSAGE,
+                        'code': 'TAKEOVER_CONFIRM_REQUIRED'}), 400
+
+    # The password must belong to the person who is signed in RIGHT NOW: an
+    # admin's password typed into another admin's session is not consent from
+    # this session's user, so the returned user id has to match.
+    auth = authenticate_registry_user(session.get('email'), body.get('password'))
+    if auth.get('locked'):
+        return jsonify({'error': auth['error'], 'code': 'TAKEOVER_LOCKED'}), 429
+    if not auth.get('ok') or (auth.get('user') or {}).get('id') != session.get('mt_user_id'):
+        return jsonify({'error': device_takeover.TAKEOVER_PASSWORD_MESSAGE,
+                        'code': 'TAKEOVER_PASSWORD_INCORRECT'}), 403
+
+    conn = get_conn()
+    try:
+        device, err = _resolve_or_error(conn, company_id)
+        if err:
+            return err
+        if not _platform_can_be_main(device.get('platform')):
+            return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
+                            'code': 'MAIN_MUST_BE_WINDOWS'}), 409
+        if device_registry.device_has_open_clash(conn, device['id']):
+            return jsonify({'error': DEVICE_CLASH_MESSAGE,
+                            'code': 'DEVICE_IDENTITY_CLASH'}), 409
+        before = device_registry.get_assignment(conn, company_id)
+        try:
+            updated = device_takeover.take_over_main(
+                conn, company_id, device['id'], by_user_uid=_session_user_uid(conn))
+        except device_takeover.TakeoverRefused as exc:
+            return jsonify({'error': exc.message, 'code': exc.code}), 409
+        # Best effort, like every other privilege-change record in this
+        # package (a full audit table must not undo a completed handover),
+        # but never silent: a lost row is logged with its traceback.
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, "
+                "entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+                (str(_uuid.uuid4()), company_id, session.get('mt_user_id'),
+                 'TAKEOVER_MAIN_DEVICE', 'DEVICE', device['id'],
+                 _json.dumps({'from_device_id': before['device_id'] if before else None,
+                              'to_device_id': device['id']})),
+            )
+            conn.commit()
+        except Exception:
+            _takeover_log.exception('TAKEOVER_MAIN_DEVICE audit row was not written')
+    finally:
+        conn.close()
+
+    device_context.invalidate_cache()
+    return jsonify({'success': True, 'device': _serialize_device(updated)})
+# ==== LOCAL TAKEOVER (option b) -- END ======================================

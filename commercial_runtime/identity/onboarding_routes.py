@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -718,6 +719,8 @@ def get_session():
         #     and its comment names `"capabilities": null` as the value that
         #     type exists for.
         capabilities = None
+        display_name = None
+        role_preset = None
         # ACCEPTED TRADE, recorded deliberately -- do not "fix" this without
         # reading what it reopens. `null` here makes both clients fail OPEN:
         # a non-admin whose capability read failed sees the Reports and
@@ -747,6 +750,22 @@ def get_session():
             ).fetchone()
             if row and row['language']:
                 lang = row['language']
+            # Registry v9: the person's name and chosen preset ride on the
+            # session so the shell can say "Sara -- Accountant" instead of an
+            # email address. Read in their OWN small guard, not folded into the
+            # language SELECT above: a registry that has not reached v9 yet has
+            # no such columns, and that must cost the client a name, never the
+            # capability list below (the tri-state contract in this route's
+            # docstring). NULL/absent is a normal answer ("no name set").
+            try:
+                extra = conn.execute(
+                    "SELECT display_name, role_preset FROM users WHERE id=?",
+                    (session['mt_user_id'],),
+                ).fetchone()
+                if extra:
+                    display_name, role_preset = extra['display_name'], extra['role_preset']
+            except sqlite3.OperationalError:
+                display_name, role_preset = None, None
             capabilities = _capabilities_for_session(conn, session['mt_user_id'], session.get('mt_role'))
         except Exception:
             # Logged, never swallowed. The failure downgrades what the client
@@ -811,7 +830,10 @@ def get_session():
                 'employee_id': session.get('employee_id'),
                 'email': session.get('email'),
                 'role': session.get('mt_role'),
-                'clinic_role': session.get('clinic_role') or ''
+                'clinic_role': session.get('clinic_role') or '',
+                # Registry v9. Additive keys; null when unset.
+                'display_name': display_name,
+                'role_preset': role_preset,
             }
         })
     return jsonify({'authenticated': False})
@@ -883,7 +905,8 @@ def get_employees():
         if is_admin:
             emps = conn.execute(
                 "SELECT u.id, u.employee_id, u.email, u.role, u.clinic_role, u.status, u.created_at, "
-                "       u.branch_scope_uid, (u.pin_hash IS NOT NULL) AS has_pin, "
+                "       u.branch_scope_uid, u.display_name, u.role_preset, "
+                "       (u.pin_hash IS NOT NULL) AS has_pin, "
                 "       (p.access_level = ?) AS can_manage_staff "
                 "FROM users u LEFT JOIN user_permissions p "
                 "  ON p.user_id = u.id AND p.subsystem = ? "
@@ -893,7 +916,8 @@ def get_employees():
         else:
             emps = conn.execute(
                 "SELECT u.id, u.employee_id, u.email, u.role, u.clinic_role, u.status, u.created_at, "
-                "       u.branch_scope_uid, (u.pin_hash IS NOT NULL) AS has_pin, "
+                "       u.branch_scope_uid, u.display_name, u.role_preset, "
+                "       (u.pin_hash IS NOT NULL) AS has_pin, "
                 "       (p.access_level = ?) AS can_manage_staff "
                 "FROM users u LEFT JOIN user_permissions p "
                 "  ON p.user_id = u.id AND p.subsystem = ? "
@@ -914,6 +938,10 @@ def get_employees():
             row['effective_role'] = _accounts.normalize_role(row.get('role'))
             row['has_pin'] = bool(row.get('has_pin'))
             row['can_manage_staff'] = bool(row.get('can_manage_staff'))
+            # False only when a stored preset no longer matches the person's
+            # capability rows (the owner tuned one switch afterwards): the
+            # Team screen shows "Custom" instead of a label that lies.
+            row['preset_matches'] = _accounts.preset_matches(conn, row['id'])
             rows.append(row)
         return jsonify({'success': True, 'employees': rows})
     finally:
@@ -1070,6 +1098,29 @@ def create_employee():
         # accepted for API compatibility but is not a choice any UI offers.
         return jsonify({'error': 'Role must be manager or cashier.'}), 400
 
+    # Registry v9 (Track S). Both OPTIONAL, so every existing caller (Clinic's
+    # admin screen, older Retail screens) is unaffected.
+    #   name   -- the person's name, NFC, 1-60 chars. Blank counts as "not
+    #             given" on create (the setup link can be sent before the
+    #             owner knows the name); over-long is refused.
+    #   preset -- a ROLE_PRESETS key. It decides the role AND the twelve
+    #             capability rows, so it cannot be combined with an explicit
+    #             `permissions` dict (two sources for one answer) and, when
+    #             `role` is also sent, must agree with it.
+    try:
+        display_name = _accounts.normalize_display_name(data.get('name'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    preset = (data.get('preset') or '').strip().lower() or None
+    if preset is not None:
+        if preset not in _accounts.ROLE_PRESETS:
+            return jsonify({'error': 'Unknown preset.'}), 400
+        if perms:
+            return jsonify({'error': 'Choose a preset or set permissions, not both.'}), 400
+        if data.get('role') and _accounts.normalize_role(role) != _accounts.PRESET_BASE_ROLE[preset]:
+            return jsonify({'error': 'Role does not match the chosen preset.'}), 400
+        role = _accounts.PRESET_BASE_ROLE[preset]
+
     is_admin = session.get('mt_role') == 'admin'
 
     conn = get_conn()
@@ -1123,7 +1174,9 @@ def create_employee():
 
             # G2 -- the escalation channel. REFUSED, never silently dropped
             # -- see this route's own docstring and design §0.2/§4.1 G2.
-            if perms:
+            # A preset is a grant channel too (the Accountant preset is books
+            # access): same refusal, same words.
+            if perms or preset:
                 conn.rollback()
                 return jsonify({'error': 'A branch manager may not grant permissions directly.'}), 403
 
@@ -1136,6 +1189,22 @@ def create_employee():
         if existing:
             conn.rollback()
             return jsonify({'error': 'Email already registered.'}), 400
+
+        # AUDIT-032: refuse a non-admin who would hold BOTH cash.close and
+        # cash.approve. What the new person will actually hold = the explicit
+        # grants below (a 'none' is skipped at insert, so the seed fills that
+        # code from the default) + the role/preset defaults for the gaps.
+        # Checked BEFORE anything is written, so a refusal leaves no half-made
+        # account behind.
+        _default_grants = (_accounts.ROLE_PRESETS[preset] if preset
+                           else _accounts.capabilities_for_role(role))
+        _effective_grants = set(_default_grants) | {
+            code for code, lvl in perms.items()
+            if lvl != 'none' and code in _accounts.CAPABILITY_CODES
+        }
+        if _accounts.cash_self_approval_conflict(role, _effective_grants):
+            conn.rollback()
+            return jsonify({'error': _accounts.CASH_SELF_APPROVAL_MESSAGE}), 400
 
         company_id = session.get('company_id', 'local')
         user_id = str(uuid.uuid4())
@@ -1153,10 +1222,10 @@ def create_employee():
         cur.execute("""
             INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status,
                                require_password_change, clinic_role, uid, row_version, updated_at_utc,
-                               branch_scope_uid)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending_setup', 0, ?, ?, 1, ?, ?)
+                               branch_scope_uid, display_name, role_preset)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending_setup', 0, ?, ?, 1, ?, ?, ?, ?)
         """, (user_id, company_id, emp_id, email, 'PENDING', role, clinic_role,
-              str(uuid.uuid4()), _accounts.now_utc_iso(), scope_uid))
+              str(uuid.uuid4()), _accounts.now_utc_iso(), scope_uid, display_name, preset))
 
         # Phase 5 wave B2 stage 2b. `conn`, never `cur` -- `cur` is reused
         # below for the permission rows, the secure_links insert and the
@@ -1186,7 +1255,11 @@ def create_employee():
         # headline stage-3 site -- a new hire arrives on another till with a
         # WORKING permission set, not an account that logs in and can do
         # nothing there.
-        _accounts.seed_capabilities_for_user(conn, user_id, role, emit_sync=True)
+        # A preset seeds ITS set (`granted=`), not the role default: an
+        # Accountant is a manager by role but holds books and no selling.
+        _accounts.seed_capabilities_for_user(
+            conn, user_id, role, emit_sync=True,
+            granted=_accounts.ROLE_PRESETS[preset] if preset else None)
 
         raw_token = uuid.uuid4().hex
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -1518,17 +1591,30 @@ def update_role(user_id):
         if _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
             return jsonify({'error': "The owner account's role cannot be changed."}), 409
 
-        conn.execute(
-            "UPDATE users SET role=?, session_version=session_version+1, "
-            "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
-            "WHERE id=? AND company_id=?",
-            (role, _accounts.now_utc_iso(), user_id, session['company_id']),
-        )
-        # Phase 5 wave B2 stage 2b: a promotion/demotion must reach every
-        # other till -- `session_version` above already forces re-login
-        # there, but without this the account's stale `role` would still be
-        # what a second device's OWN capability table was seeded against.
-        _accounts._queue_user_sync_event(conn, user_id, 'update')
+        # Registry v9: a role change IS applying the preset of the same name
+        # ('manager' / 'cashier' are both entries in ROLE_PRESETS), so this
+        # route and PUT .../preset share ONE implementation
+        # (`user_accounts.apply_preset`) instead of two copies that could
+        # drift. It moves role + `role_preset` + session_version +
+        # row_version, queues the user event and then the bounded
+        # delete-and-reseed of the twelve capability rows -- exactly what this
+        # route did inline before v9, in the same order. Clearing a previous
+        # preset ('accountant', 'branch_manager') is the point: after a plain
+        # role change the label must say the role, not the old preset.
+        #
+        # The comments below explain WHY the reset is bounded and why it
+        # deletes before it reseeds; they now describe `_reset_capability_rows`.
+        #
+        # AUDIT-032: raises CashSelfApprovalError if the target grants would
+        # breach it (no shipped default does) -- answered as a refusal, not a 500.
+        try:
+            _accounts.apply_preset(conn, user_id, role, emit_sync=True)
+        except _accounts.CashSelfApprovalError as exc:
+            conn.rollback()
+            return jsonify({'error': str(exc)}), 400
+        except _accounts.PresetError as exc:
+            conn.rollback()
+            return jsonify({'error': str(exc)}), 400
 
         # RESET the capability rows to the new role's defaults.
         #
@@ -1551,24 +1637,8 @@ def update_role(user_id):
         # routes TODAY; an unbounded `DELETE ... WHERE user_id=?` would delete
         # it and lock the employee out of the entire retail app as a side
         # effect of changing their job title.
-        placeholders = ','.join('?' * len(_accounts.CAPABILITY_CODES))
-        conn.execute(
-            f"DELETE FROM user_permissions WHERE user_id=? AND subsystem IN ({placeholders})",
-            (user_id, *_accounts.CAPABILITY_CODES),
-        )
-        # Phase 5 wave B2 stage 3 (Decision 4): each of the eight rows just
-        # removed must reach every other device, or a peer that already had
-        # this user's OLD grants keeps them after this device revoked them
-        # -- a silent privilege escalation elsewhere. The reseed immediately
-        # below re-queues a `create` for every one of these same eight
-        # `(user, subsystem)` pairs with the NEW role's defaults, so a
-        # receiver ends up correct either way the two arrive relative to
-        # each other -- but the explicit delete is what keeps a receiver
-        # correct even if only PART of this transaction's events have
-        # arrived so far (see the design doc's own D4 reasoning).
-        for _code in _accounts.CAPABILITY_CODES:
-            _accounts._queue_user_permission_sync_event(conn, user_id, _code, 'delete')
-        _accounts.seed_capabilities_for_user(conn, user_id, role, emit_sync=True)
+        # (Bounded DELETE over CAPABILITY_CODES, a `delete` event per code, then
+        # the reseed with `create` events: all inside `apply_preset` above.)
 
         try:
             conn.execute(
@@ -1793,11 +1863,23 @@ def update_perms(user_id):
         # tenant-safe, exactly the way update_role's own unscoped
         # `user_permissions` DELETE is protected by its prior row lookup.
         row = conn.execute(
-            "SELECT id FROM users WHERE id=? AND company_id=?",
+            "SELECT id, role FROM users WHERE id=? AND company_id=?",
             (user_id, session['company_id']),
         ).fetchone()
         if not row:
             return jsonify({'error': 'User not found.'}), 404
+
+        # AUDIT-032: whoever closes the drawer must not also be the person who
+        # signs off the variance. Checked on the grants the person WOULD hold
+        # after this write (their current set, with this one code set or
+        # cleared), BEFORE any write, so a refusal changes nothing. Only a
+        # grant can create the conflict, so a revoke ('none') skips the check
+        # -- it must always be allowed, or an owner could never repair an
+        # account that was already in breach.
+        if lvl == _accounts.ACCESS_FULL and sub in _accounts.CAPABILITY_CODES:
+            _after = set(_accounts.granted_capability_codes(conn, user_id)) | {sub}
+            if _accounts.cash_self_approval_conflict(row['role'], _after):
+                return jsonify({'error': _accounts.CASH_SELF_APPROVAL_MESSAGE}), 400
 
         conn.execute("DELETE FROM user_permissions WHERE user_id=? AND subsystem=?", (user_id, sub))
         # Phase 5 wave B2 stage 3 (Decision 4): this DELETE really can leave
@@ -1831,6 +1913,99 @@ def update_perms(user_id):
             (str(uuid.uuid4()), session['company_id'], session['mt_user_id'], 'UPDATE_PERM', 'USER_PERMISSION', str(user_id), json.dumps({sub: lvl})))
         conn.commit()
         return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/admin/employees/<string:user_id>/preset', methods=['PUT'])
+@mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
+def update_preset(user_id):
+    """Give an employee a named permission preset (Registry v9, Track S).
+
+    A preset is a role PLUS the twelve capability rows, applied together by
+    `user_accounts.apply_preset` (bounded delete + reseed, session_version bump
+    so their live session re-reads, sync events queued in the same
+    transaction). Admin only -- the same gate as `update_role`, and for the
+    same reason: this hands out access.
+
+    Refusals are fixed literals (translated by whole-sentence lookup):
+      * unknown preset            -> 400
+      * owner account             -> 409 (same as update_role: not demotable)
+      * cash.approve + cash.close -> 400 (AUDIT-032; no shipped preset trips it)
+    """
+    if session.get('mt_role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+
+    preset = str((request.json or {}).get('preset') or '').strip().lower()
+    if preset not in _accounts.ROLE_PRESETS:
+        return jsonify({'error': 'Unknown preset.'}), 400
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, role, role_preset FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+        if _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
+            return jsonify({'error': "The owner account's role cannot be changed."}), 409
+        try:
+            result = _accounts.apply_preset(conn, user_id, preset, emit_sync=True)
+        except _accounts.CashSelfApprovalError as exc:
+            conn.rollback()
+            return jsonify({'error': str(exc)}), 400
+        except _accounts.PresetError as exc:
+            conn.rollback()
+            return jsonify({'error': str(exc)}), 400
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), session['company_id'], session['mt_user_id'],
+                 'UPDATE_PRESET', 'USER', user_id,
+                 json.dumps({'from': row['role_preset'] or row['role'], 'to': preset})),
+            )
+        except Exception:
+            _audit_write_failed('UPDATE_PRESET', 'USER', user_id)
+        conn.commit()
+        return jsonify({'success': True, 'role': result['role'], 'role_preset': result['role_preset']})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/admin/employees/<string:user_id>/name', methods=['PUT'])
+@mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
+def update_name(user_id):
+    """Set or clear an employee's display name (Registry v9). 1-60 chars, NFC;
+    blank clears it. Bumps row_version and queues the user event so the name
+    reaches every till; does NOT bump session_version -- a rename is not a
+    change of access and must not log the person out."""
+    if session.get('mt_role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    try:
+        name = _accounts.normalize_display_name((request.json or {}).get('name'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+        conn.execute(
+            "UPDATE users SET display_name=?, row_version=COALESCE(row_version, 1)+1, "
+            "updated_at_utc=? WHERE id=? AND company_id=?",
+            (name, _accounts.now_utc_iso(), user_id, session['company_id']),
+        )
+        _accounts._queue_user_sync_event(conn, user_id, 'update')
+        conn.commit()
+        return jsonify({'success': True, 'display_name': name})
     finally:
         conn.close()
 

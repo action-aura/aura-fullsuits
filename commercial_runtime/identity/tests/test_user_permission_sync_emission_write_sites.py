@@ -153,7 +153,8 @@ def test_create_admin_seeds_and_emits_capability_rows_for_the_owner(admin, db_pa
     admin_row = _user_row(db_path, session_user['id'])
 
     perm_events = _perm_events(_outbox_rows(db_path))
-    assert len(perm_events) == 8, f"expected one event per capability code, got {perm_events}"
+    # Literal 12 (registry v9: 8 -> 12), never len(CAPABILITY_CODES).
+    assert len(perm_events) == 12, f"expected one event per capability code, got {perm_events}"
     assert {e["payload"]["subsystem"] for e in perm_events} == set(user_accounts.CAPABILITY_CODES)
     for e in perm_events:
         assert e["event_type"] == "create"
@@ -202,7 +203,7 @@ def test_create_admin_reonboard_wipe_emits_deletes_for_the_old_admins_grants(adm
         if e["entity_type"] == "user_permission" and e["event_type"] == "delete"
         and e["payload"].get("user_uid") == old_uid
     ]
-    assert len(delete_events) == 8, f"expected one delete per capability code for the OLD admin, got {new_rows}"
+    assert len(delete_events) == 12, f"expected one delete per capability code for the OLD admin, got {new_rows}"
     assert {e["payload"]["subsystem"] for e in delete_events} == set(user_accounts.CAPABILITY_CODES)
     for e in delete_events:
         assert "access_level" not in e["payload"], "a delete payload must not carry a stale access_level"
@@ -236,9 +237,9 @@ def test_create_employee_explicit_grant_and_seed_gap_fill_both_emit_create(admin
     perm_events = _perm_events(new_rows)
     # The explicit grant (line 688's loop) and the seed's gap-fill (line
     # 696) target the SAME row for retail.discount -- INSERT then INSERT OR
-    # IGNORE -- so this is exactly 8, never 9: one event per capability
+    # IGNORE -- so this is exactly 12, never 13: one event per capability
     # code, not one per statement that touched it.
-    assert len(perm_events) == 8, f"expected exactly 8 user_permission events, got {perm_events}"
+    assert len(perm_events) == 12, f"expected exactly 12 user_permission events, got {perm_events}"
     assert {e["payload"]["subsystem"] for e in perm_events} == set(user_accounts.CAPABILITY_CODES)
     discount_ev = next(e for e in perm_events if e["payload"]["subsystem"] == "retail.discount")
     assert discount_ev["event_type"] == "create"
@@ -265,12 +266,12 @@ def test_update_role_emits_delete_then_create_for_every_capability_code(admin, d
     perm_events = _perm_events(new_rows)
     deletes = [e for e in perm_events if e["event_type"] == "delete"]
     creates = [e for e in perm_events if e["event_type"] == "create"]
-    assert len(deletes) == 8, f"expected one delete per capability code, got {perm_events}"
+    assert len(deletes) == 12, f"expected one delete per capability code, got {perm_events}"
     assert {e["payload"]["subsystem"] for e in deletes} == set(user_accounts.CAPABILITY_CODES)
     for e in deletes:
         assert "access_level" not in e["payload"]
 
-    assert len(creates) == 8, f"expected one reseed create per capability code, got {perm_events}"
+    assert len(creates) == 12, f"expected one reseed create per capability code, got {perm_events}"
     manager_caps = user_accounts.capabilities_for_role('manager')
     for e in creates:
         expected = 'full' if e["payload"]["subsystem"] in manager_caps else 'none'
@@ -294,8 +295,16 @@ def test_update_perms_emits_delete_then_update_with_the_new_access_level(admin, 
     row = _user_row(db_path, user_id)
     before = len(_outbox_rows(db_path))
 
+    # Track S: this used to grant retail.cash.approve to a default cashier.
+    # A cashier holds retail.cash.close, so that grant is now REFUSED (AUDIT-032,
+    # test_cash_self_approval.py proves the refusal). The code under test here is
+    # the delete-then-update emission ORDER of update_perms, which is identical
+    # for any code, so it uses retail.stock.adjust instead. What this test can no
+    # longer catch: emission for the cash.approve code specifically -- covered
+    # by the allow-half in test_cash_self_approval.py (a manager who does not
+    # hold cash.close can still be granted it, and the events travel).
     r = admin.post(f'/api/admin/employees/{user_id}/permissions', json={
-        'subsystem': 'retail.cash.approve', 'access_level': 'full',
+        'subsystem': 'retail.stock.adjust', 'access_level': 'full',
     })
     assert r.status_code == 200, r.get_json()
 
@@ -303,10 +312,10 @@ def test_update_perms_emits_delete_then_update_with_the_new_access_level(admin, 
     perm_events = _perm_events(new_rows)
     assert len(perm_events) == 2, f"expected exactly a delete+update pair, got {new_rows}"
     assert perm_events[0]["event_type"] == "delete"
-    assert perm_events[0]["payload"]["subsystem"] == "retail.cash.approve"
+    assert perm_events[0]["payload"]["subsystem"] == "retail.stock.adjust"
     assert "access_level" not in perm_events[0]["payload"]
     assert perm_events[1]["event_type"] == "update"
-    assert perm_events[1]["payload"]["subsystem"] == "retail.cash.approve"
+    assert perm_events[1]["payload"]["subsystem"] == "retail.stock.adjust"
     assert perm_events[1]["payload"]["access_level"] == "full"
     for e in perm_events:
         assert e["payload"]["user_uid"] == row["uid"]
@@ -397,7 +406,7 @@ def test_migration_context_seeding_emits_no_user_permission_events(tmp_path, mon
         perm_count = conn.execute(
             "SELECT COUNT(*) FROM user_permissions WHERE user_id='u-existing'"
         ).fetchone()[0]
-        assert perm_count == 8, "fixture sanity: the migration must still have SEEDED the rows locally"
+        assert perm_count == 12, "fixture sanity: the migration must still have SEEDED the rows locally"
         outbox_perm_events = conn.execute(
             "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='user_permission'"
         ).fetchone()[0]
@@ -428,5 +437,5 @@ def test_seed_capabilities_for_user_direct_call_defaults_to_no_emission(tmp_path
     )
     # No `users` table and no `sync_outbox` table at all -- must not raise.
     inserted = user_accounts.seed_capabilities_for_user(conn, 'm1', 'manager')
-    assert inserted == 8
+    assert inserted == 12
     conn.close()

@@ -704,6 +704,53 @@ def mt_require_capability(code):
     return decorator
 
 
+def mt_require_any_capability(*codes):
+    """Require AT LEAST ONE of several capability codes on this route.
+
+    Registry v9 (Track S): the books screens are reachable to a person who
+    holds any one of view/record/approve/close, and a single-code decorator
+    cannot say "or". Mirrors `mt_require_capability` above in every property
+    that matters, on purpose -- read its docstring for the reasoning; only the
+    differences are written here:
+
+    * ADMIN and demo-mode bypass are identical.
+    * Placed BELOW `@mt_login_required` for the same 401-not-403 reason.
+    * FAILS CLOSED. A registry read failure for one code is NOT read as "not
+      granted, try the next" and then allowed by a later code's stale answer:
+      a definite grant on any code allows the request (a grant is a positive
+      fact), but if no code was granted AND any lookup failed, the answer is
+      the same denial a missing grant gives -- never a pass, and never a
+      response that tells the caller whether the registry is healthy.
+    * Called with no codes it denies everyone but the admin (an empty "any of"
+      is false, not vacuously true) -- a route mis-declared with no codes must
+      not become an open door.
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if session.get('is_demo_mode'):
+                return f(*args, **kwargs)
+            if session.get('mt_role') == 'admin':
+                return f(*args, **kwargs)
+
+            user_id = session.get('mt_user_id')
+            if not user_id:
+                return _unauthenticated_response()
+
+            for code in codes:
+                try:
+                    if _read_capability(user_id, code):
+                        return f(*args, **kwargs)
+                except CapabilityLookupError as exc:
+                    log.warning(
+                        "mt_require_any_capability(%s): registry lookup for user %s "
+                        "failed on %s: %s", codes, user_id, code, exc,
+                    )
+            return _capability_denied_response()
+        return decorated
+    return decorator
+
+
 def _subsystem_denied_response(subsystem):
     """THE refusal shape for 'signed in, but not granted this subsystem' --
     and, because `mt_require_subsystem` fails closed (below), also the shape

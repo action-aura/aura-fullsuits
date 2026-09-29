@@ -26,7 +26,9 @@ DB_PATH constant and does no import-time filesystem access -- callers own
 connection lifecycle (typically via `registry_db.get_conn()`), this module
 only ever operates on the connection it's handed.
 """
+import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 
 
@@ -343,3 +345,575 @@ def allowed_on_device(conn: sqlite3.Connection, user_id: str, device_id: str) ->
         (user_id, device_id),
     ).fetchone()
     return row is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# registry v9 DEVICE-SYNC -- devices become a synced entity, "main computer"
+# becomes a synced assignment with an epoch.
+#
+# Everything below is ADDED; nothing above changed behaviour. The "apply"
+# helpers (apply_*) never commit: they run inside the sync engine's
+# transaction. Every helper that is a whole user action (claim / transfer /
+# label / revoke / announce) commits, like the functions above do.
+#
+# ANDROID-SAFE: stdlib only. No cryptography, no licensing_contracts -- this
+# module is imported eagerly by the phone build.
+# ══════════════════════════════════════════════════════════════════════════════
+
+WINDOWS_PLATFORM = 'WINDOWS'
+
+#: A device announces itself at least this often. It is the ONLY thing that
+#: heals a peer running an older build (a v8 build plain-skips `device` and
+#: `admin_device` events and, the registry stream being unstamped, cannot park
+#: them) -- the next announcement after that peer upgrades carries the row
+#: again. Six hours keeps "last seen" honest on the Plan & devices page
+#: without spamming the outbox.
+ANNOUNCE_HEARTBEAT_SECONDS = 6 * 60 * 60
+
+DEVICE_LABEL_MAX = 60
+
+#: Registry schema version from which the books rows and presets exist. An
+#: ACTIVE device reporting less (or nothing -- a v8 build never announces)
+#: blocks preset/role editing: that build would store the Accountant
+#: preset's books grants and never read them.
+REGISTRY_ROLLOUT_MIN_VERSION = 9
+
+
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def _parse_utc(value):
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _utc_before(a, b) -> bool:
+    """a strictly earlier than b. Compares as datetimes when both parse (a
+    naive and an aware ISO string sort wrong as text), text otherwise."""
+    pa, pb = _parse_utc(a), _parse_utc(b)
+    if pa is not None and pb is not None:
+        return pa < pb
+    return str(a) < str(b)
+
+
+def _max_utc(a, b):
+    if not a:
+        return b
+    if not b:
+        return a
+    return b if _utc_before(a, b) else a
+
+
+# ── outbox: one place each event is built ────────────────────────────────────
+
+def device_sync_payload(row: dict) -> dict:
+    """The `device` wire payload. Pure. NEVER carries `is_admin_device` (a
+    derived local cache -- the synced fact is the assignment) and never
+    `company_id` (the receiver uses its OWN)."""
+    return {
+        'device_id': row['id'],
+        'device_label': row.get('device_label'),
+        'platform': row.get('platform'),
+        'status': row.get('status') or 'active',
+        'owner_installation_id': row.get('owner_installation_id'),
+        'device_fingerprint': row.get('device_fingerprint'),
+        'first_seen_at': row.get('first_seen_at'),
+        'last_seen_at': row.get('last_seen_at'),
+        'row_version': int(row.get('row_version') or 1),
+        'updated_at_utc': row.get('updated_at_utc'),
+        'app_version': row.get('app_version'),
+        'retail_schema_version': row.get('retail_schema_version'),
+        'registry_schema_version': row.get('registry_schema_version'),
+    }
+
+
+def admin_device_sync_payload(assignment: dict) -> dict:
+    """The `admin_device` wire payload. Pure. No company_id: the receiver's
+    own company owns the row."""
+    return {
+        'device_id': assignment['device_id'],
+        'epoch': int(assignment['epoch']),
+        'assigned_at_utc': assignment['assigned_at_utc'],
+        'assigned_by_user_uid': assignment.get('assigned_by_user_uid'),
+        'assigned_by_device_id': assignment.get('assigned_by_device_id'),
+    }
+
+
+def queue_device_sync_event(conn: sqlite3.Connection, device_id: str, event_type: str) -> None:
+    """Queue a `device` event into registry.db's sync_outbox in the caller's
+    transaction (no commit). Re-reads the row so the payload is what is
+    stored. `entity_id` = the device's own uuid (Owner requires a uuid). A
+    hand-built test schema with no outbox skips silently, like the user
+    emitters do."""
+    if not _has_table(conn, 'sync_outbox'):
+        return
+    row = get_device(conn, device_id)
+    if row is None:
+        return
+    conn.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), 'device', device_id, event_type,
+         json.dumps(device_sync_payload(row)), _now_iso()),
+    )
+
+
+def queue_admin_device_sync_event(conn: sqlite3.Connection, company_id: str, event_type: str) -> None:
+    """Queue an `admin_device` event for the company's CURRENT assignment (no
+    commit). `entity_id` is a fresh uuid4: the wire key is the assignment
+    itself (one per company, ordered by epoch), and a company id is not
+    guaranteed to be a uuid, which Owner requires of `entity_id`."""
+    if not _has_table(conn, 'sync_outbox'):
+        return
+    assignment = get_assignment(conn, company_id)
+    if assignment is None:
+        return
+    conn.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), 'admin_device', str(uuid.uuid4()), event_type,
+         json.dumps(admin_device_sync_payload(assignment)), _now_iso()),
+    )
+
+
+# ── the main-computer assignment ─────────────────────────────────────────────
+
+def get_assignment(conn: sqlite3.Connection, company_id: str):
+    """The company's admin_device_assignment row as a dict, or None (also
+    None on a pre-v9 hand-built schema with no such table)."""
+    if not _has_table(conn, 'admin_device_assignment'):
+        return None
+    row = conn.execute(
+        "SELECT * FROM admin_device_assignment WHERE company_id=?", (company_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def admin_assignment_wins(local, incoming: dict) -> bool:
+    """Pure ordering: does `incoming` replace `local`?
+
+    A higher epoch wins. Equal epochs (two computers both claimed while
+    apart, or two transfers from the same epoch) resolve by the EARLIER
+    `assigned_at_utc`, then the SMALLER device_id -- deterministic, so every
+    device reaches the same answer without talking to the others. An
+    identical assignment does not "win" (nothing to apply, nothing to emit)."""
+    if local is None:
+        return True
+    inc_epoch, loc_epoch = int(incoming['epoch']), int(local['epoch'])
+    if inc_epoch != loc_epoch:
+        return inc_epoch > loc_epoch
+    if incoming['assigned_at_utc'] != local['assigned_at_utc']:
+        return _utc_before(incoming['assigned_at_utc'], local['assigned_at_utc'])
+    return str(incoming['device_id']) < str(local['device_id'])
+
+
+def recompute_admin_flag(conn: sqlite3.Connection, company_id: str) -> None:
+    """Derive `devices.is_admin_device` from the assignment: clear every row
+    for the company, then set the assigned device if it exists locally AND is
+    active. Clear-then-set, same reason as `set_admin_device` (the partial
+    unique index would reject two transient holders). No commit -- the caller
+    owns the transaction. If the assigned device row has not arrived yet,
+    nobody holds the flag until the device event lands and this runs again."""
+    conn.execute("UPDATE devices SET is_admin_device=0 WHERE company_id=?", (company_id,))
+    assignment = get_assignment(conn, company_id)
+    if assignment is not None:
+        conn.execute(
+            "UPDATE devices SET is_admin_device=1 "
+            "WHERE id=? AND company_id=? AND status='active'",
+            (assignment['device_id'], company_id),
+        )
+
+
+def _write_assignment(conn, company_id, device_id, epoch, assigned_at_utc,
+                      by_user_uid, by_device_id) -> None:
+    conn.execute(
+        "INSERT INTO admin_device_assignment "
+        "(company_id, device_id, epoch, assigned_at_utc, assigned_by_user_uid, assigned_by_device_id) "
+        "VALUES (?,?,?,?,?,?) "
+        "ON CONFLICT(company_id) DO UPDATE SET device_id=excluded.device_id, "
+        "epoch=excluded.epoch, assigned_at_utc=excluded.assigned_at_utc, "
+        "assigned_by_user_uid=excluded.assigned_by_user_uid, "
+        "assigned_by_device_id=excluded.assigned_by_device_id",
+        (company_id, device_id, int(epoch), assigned_at_utc, by_user_uid, by_device_id),
+    )
+
+
+def apply_admin_assignment(conn: sqlite3.Connection, company_id: str, incoming: dict) -> bool:
+    """SYNC APPLY for an `admin_device` event (for the sync engine). Stores
+    the assignment if `admin_assignment_wins`, then recomputes the flag -- on
+    the caller's connection, NO commit, so the caller's transaction covers the
+    store and the recompute together. Returns True if it changed anything.
+    `company_id` is the RECEIVER's own; the payload has none.
+
+    Stores the assignment even when the named device row has not arrived
+    (recompute then leaves nobody flagged; `apply_device_event` recomputes
+    when the row lands). Raises ValueError on a malformed payload so the
+    engine can quarantine it instead of guessing."""
+    try:
+        device_id = incoming['device_id']
+        epoch = int(incoming['epoch'])
+        assigned_at = incoming['assigned_at_utc']
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f'malformed admin_device payload: {exc!r}') from exc
+    if not device_id or not isinstance(device_id, str) or epoch < 1 or not assigned_at:
+        raise ValueError('malformed admin_device payload: device_id/epoch/assigned_at_utc')
+    candidate = {'device_id': device_id, 'epoch': epoch, 'assigned_at_utc': assigned_at}
+    if not admin_assignment_wins(get_assignment(conn, company_id), candidate):
+        return False
+    _write_assignment(conn, company_id, device_id, epoch, assigned_at,
+                      incoming.get('assigned_by_user_uid'), incoming.get('assigned_by_device_id'))
+    recompute_admin_flag(conn, company_id)
+    return True
+
+
+def claim_admin_device_with_assignment(conn: sqlite3.Connection, company_id: str,
+                                       device_id: str, *, by_user_uid: str = None):
+    """The user-facing FIRST claim: same database-enforced bootstrap as
+    `claim_admin_device` (the partial unique index rejects a second holder),
+    plus the synced fact -- epoch 1 and an `admin_device` event, in ONE
+    transaction so a peer can never see the flag without the assignment.
+
+    Returns the device row, or None if another device holds the role (flagged
+    locally OR named by a synced assignment this device received but could not
+    yet flag because that device row has not arrived -- the flag alone would
+    miss that and let a second main be born). Raises ValueError for a device
+    that is not active for this company. Re-claiming from the holder is an
+    idempotent success with NO new epoch and NO new event."""
+    assignment = get_assignment(conn, company_id)
+    if assignment is not None and assignment['device_id'] != device_id:
+        return None
+    before = get_device(conn, device_id)
+    was_flagged = bool(before and before.get('is_admin_device') and before.get('company_id') == company_id)
+    try:
+        cur = conn.execute(
+            "UPDATE devices SET is_admin_device=1 "
+            "WHERE id=? AND company_id=? AND status='active'",
+            (device_id, company_id),
+        )
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return None
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise ValueError(
+            f"device {device_id!r} is not an active device for company {company_id!r}"
+        )
+    if not (was_flagged and assignment is not None):
+        epoch = (assignment['epoch'] + 1) if assignment is not None else 1
+        if _has_table(conn, 'admin_device_assignment'):
+            _write_assignment(conn, company_id, device_id, epoch, _now_iso(), by_user_uid, device_id)
+            queue_admin_device_sync_event(conn, company_id, 'create' if epoch == 1 else 'update')
+    conn.commit()
+    return get_device(conn, device_id)
+
+
+def transfer_admin_device_with_assignment(conn: sqlite3.Connection, company_id: str,
+                                          target_id: str, *, by_user_uid: str = None,
+                                          by_device_id: str = None) -> dict:
+    """Hand the main-computer role to `target_id`: epoch+1, the flag moves
+    clear-then-set, the `admin_device` event is queued -- one transaction.
+    Raises ValueError if the target is not this company's device.
+    Transferring to the device that already holds the role is a no-op (no
+    epoch burned, no event)."""
+    target = get_device(conn, target_id)
+    if not target or target['company_id'] != company_id:
+        raise ValueError(f"device {target_id!r} not found for company {company_id!r}")
+    assignment = get_assignment(conn, company_id)
+    if assignment is not None and assignment['device_id'] == target_id and target.get('is_admin_device'):
+        return target
+    epoch = (assignment['epoch'] + 1) if assignment is not None else 1
+    conn.execute("UPDATE devices SET is_admin_device=0 WHERE company_id=?", (company_id,))
+    conn.execute("UPDATE devices SET is_admin_device=1 WHERE id=? AND company_id=?",
+                 (target_id, company_id))
+    if _has_table(conn, 'admin_device_assignment'):
+        _write_assignment(conn, company_id, target_id, epoch, _now_iso(), by_user_uid, by_device_id)
+        queue_admin_device_sync_event(conn, company_id, 'create' if epoch == 1 else 'update')
+    conn.commit()
+    return get_device(conn, target_id)
+
+
+# ── the device rows: announce, label, revoke, apply ──────────────────────────
+
+def _bump_device(conn, device_id, sets: dict, now: str, *, touch_seen: bool = True) -> None:
+    """One write path for every synced change to a device row: the given
+    columns, row_version+1, updated_at_utc, and (only when the device itself
+    is speaking) last_seen_at. Centralised so no caller can change a synced
+    field without moving the version peers gate on (same reasoning as
+    user_accounts._touch_user). A remote rename/revoke passes touch_seen=False:
+    the owner renaming a phone says nothing about when the phone was last on."""
+    cols = ''.join(f'{k}=?, ' for k in sets)
+    seen = ', last_seen_at=?' if touch_seen else ''
+    params = [*sets.values(), now] + ([now] if touch_seen else []) + [device_id]
+    conn.execute(
+        f"UPDATE devices SET {cols}row_version=COALESCE(row_version,1)+1, "
+        f"updated_at_utc=?{seen} WHERE id=?",
+        params,
+    )
+
+
+def announce_device_fields(conn: sqlite3.Connection, device_id: str, *,
+                           device_label=None, platform=None, app_version=None,
+                           retail_schema_version=None, registry_schema_version=None,
+                           force: bool = False, now: str = None,
+                           heartbeat_seconds: int = ANNOUNCE_HEARTBEAT_SECONDS):
+    """A device announces ITSELF. Returns (row, announced).
+
+    Announces (row_version+1, one `device` event, committed) when ANY of:
+      - `force` (boot: a device that just started, possibly on a newer build
+        than its peers last heard, always says so -- this heals an old peer
+        that plain-skipped everything we sent before it upgraded),
+      - the row has never announced (`updated_at_utc` NULL),
+      - a provided field differs from what is stored,
+      - the last announcement is `heartbeat_seconds` old or older.
+    Otherwise it changes nothing and emits nothing (a call per request would
+    flood the outbox). Fields passed as None are left alone."""
+    row = get_device(conn, device_id)
+    if row is None:
+        raise ValueError(f'device {device_id!r} not found')
+    now = now or _now_iso()
+    wanted = {
+        'device_label': device_label, 'platform': platform, 'app_version': app_version,
+        'retail_schema_version': retail_schema_version,
+        'registry_schema_version': registry_schema_version,
+    }
+    changed = {k: v for k, v in wanted.items() if v is not None and row.get(k) != v}
+    last = _parse_utc(row.get('updated_at_utc'))
+    current = _parse_utc(now)
+    stale = last is None or (current is not None and (current - last).total_seconds() >= heartbeat_seconds)
+    if not (force or changed or stale):
+        return row, False
+    first = row.get('updated_at_utc') is None
+    _bump_device(conn, device_id, changed, now)
+    queue_device_sync_event(conn, device_id, 'create' if first else 'update')
+    conn.commit()
+    return get_device(conn, device_id), True
+
+
+def set_device_label_synced(conn: sqlite3.Connection, company_id: str, device_id: str, label: str):
+    """Rename a device (the owner, from the main computer). row_version+1 and
+    a `device` event, one transaction. None if the device is not this
+    company's."""
+    row = get_device(conn, device_id)
+    if not row or row['company_id'] != company_id:
+        return None
+    _bump_device(conn, device_id, {'device_label': label}, _now_iso(), touch_seen=False)
+    queue_device_sync_event(conn, device_id, 'update')
+    conn.commit()
+    return get_device(conn, device_id)
+
+
+def revoke_device_synced(conn: sqlite3.Connection, company_id: str, device_id: str):
+    """Revoke (never delete) a device: status 'revoked', flag cleared,
+    row_version+1, `device` event. Returns the row; None if not this
+    company's. Raises ValueError for the current main computer -- its role
+    must be handed over first, or the company is left with no main at all.
+    Revoking an already revoked device is an idempotent success with no new
+    version or event."""
+    row = get_device(conn, device_id)
+    if not row or row['company_id'] != company_id:
+        return None
+    if (row.get('status') or '').lower() == 'revoked':
+        return row
+    assignment = get_assignment(conn, company_id)
+    if row.get('is_admin_device') or (assignment and assignment['device_id'] == device_id):
+        raise ValueError('main computer cannot be revoked')
+    _bump_device(conn, device_id, {'status': 'revoked', 'is_admin_device': 0},
+                 _now_iso(), touch_seen=False)
+    queue_device_sync_event(conn, device_id, 'update')
+    conn.commit()
+    return get_device(conn, device_id)
+
+
+def device_sync_apply_plan(local_same_id, local_same_fingerprint, incoming: dict) -> dict:
+    """PURE decision for an incoming `device` event. Returns
+    {'action': 'insert'|'update'|'touch'|'skip'|'quarantine',
+     'reason': str|None, 'set': {column: value}}.
+
+      quarantine device_identity_clash         same id, DIFFERENT
+                 owner_installation_id (two installs sharing one device id).
+                 Both sides must be non-empty to clash -- an unknown
+                 installation is not evidence.
+      quarantine duplicate_device_fingerprint  another local id already owns
+                 this fingerprint (the unique index would reject the write;
+                 surface it instead).
+      insert   no local row: everything from the payload, is_admin_device 0.
+      update   incoming row_version greater: label/platform/status/versions/
+               row_version/updated_at from the payload; identity columns only
+               fill blanks (never blank out); last_seen_at = MAX.
+      touch    not newer, but a later last_seen_at: only last_seen_at moves.
+      skip     nothing to do.
+    REVOKED IS STICKY: an incoming 'revoked' applies even when its
+    row_version is not greater, and a local 'revoked' is never turned back to
+    'active' by a peer -- otherwise a revoked phone announcing at the same
+    version as the revoke would silently resurrect. Never deletes."""
+    inc_id = incoming['device_id']
+    inc_owner = incoming.get('owner_installation_id')
+    inc_fp = incoming.get('device_fingerprint')
+    if local_same_id is not None:
+        loc_owner = local_same_id.get('owner_installation_id')
+        if inc_owner and loc_owner and inc_owner != loc_owner:
+            return {'action': 'quarantine', 'reason': 'device_identity_clash', 'set': {}}
+    if inc_fp and local_same_fingerprint is not None and local_same_fingerprint['id'] != inc_id:
+        return {'action': 'quarantine', 'reason': 'duplicate_device_fingerprint', 'set': {}}
+
+    inc_version = int(incoming.get('row_version') or 1)
+    if local_same_id is None:
+        return {'action': 'insert', 'reason': None, 'set': {
+            'device_label': incoming.get('device_label'), 'platform': incoming.get('platform'),
+            'status': incoming.get('status') or 'active',
+            'owner_installation_id': inc_owner, 'device_fingerprint': inc_fp,
+            'first_seen_at': incoming.get('first_seen_at') or incoming.get('last_seen_at') or _now_iso(),
+            'last_seen_at': incoming.get('last_seen_at'), 'row_version': inc_version,
+            'updated_at_utc': incoming.get('updated_at_utc'),
+            'app_version': incoming.get('app_version'),
+            'retail_schema_version': incoming.get('retail_schema_version'),
+            'registry_schema_version': incoming.get('registry_schema_version'),
+        }}
+
+    last_seen = _max_utc(local_same_id.get('last_seen_at'), incoming.get('last_seen_at'))
+    local_revoked = (local_same_id.get('status') or '').lower() == 'revoked'
+    inc_revoked = (incoming.get('status') or '').lower() == 'revoked'
+    if inc_version > int(local_same_id.get('row_version') or 1):
+        return {'action': 'update', 'reason': None, 'set': {
+            'device_label': incoming.get('device_label'), 'platform': incoming.get('platform'),
+            'status': 'revoked' if (local_revoked or inc_revoked) else (incoming.get('status') or 'active'),
+            'owner_installation_id': local_same_id.get('owner_installation_id') or inc_owner,
+            'device_fingerprint': local_same_id.get('device_fingerprint') or inc_fp,
+            'row_version': inc_version, 'updated_at_utc': incoming.get('updated_at_utc'),
+            'app_version': incoming.get('app_version'),
+            'retail_schema_version': incoming.get('retail_schema_version'),
+            'registry_schema_version': incoming.get('registry_schema_version'),
+            'last_seen_at': last_seen,
+        }}
+    if inc_revoked and not local_revoked:
+        return {'action': 'update', 'reason': None, 'set': {
+            'status': 'revoked', 'last_seen_at': last_seen}}
+    if last_seen != local_same_id.get('last_seen_at'):
+        return {'action': 'touch', 'reason': None, 'set': {'last_seen_at': last_seen}}
+    return {'action': 'skip', 'reason': None, 'set': {}}
+
+
+def apply_device_event(conn: sqlite3.Connection, company_id: str, incoming: dict) -> dict:
+    """SYNC APPLY for a `device` event (for the sync engine): look up, decide
+    with `device_sync_apply_plan`, write, then recompute the main-computer
+    flag (a device row arriving or being revoked is exactly when the derived
+    flag can change). `company_id` = the RECEIVER's own; `is_admin_device` is
+    never taken from the payload. NO commit. Returns the plan (its 'action'
+    and 'reason' tell the engine whether to quarantine). A malformed payload
+    (no device_id) raises ValueError."""
+    device_id = incoming.get('device_id') if isinstance(incoming, dict) else None
+    if not device_id or not isinstance(device_id, str):
+        raise ValueError('malformed device payload: device_id')
+    local = get_device(conn, device_id)
+    if local is not None and local['company_id'] != company_id:
+        # A row under another company on THIS registry is not ours to edit.
+        return {'action': 'quarantine', 'reason': 'device_identity_clash', 'set': {}}
+    fp = incoming.get('device_fingerprint')
+    by_fp = None
+    if fp:
+        r = conn.execute("SELECT * FROM devices WHERE device_fingerprint=?", (fp,)).fetchone()
+        by_fp = dict(r) if r else None
+    plan = device_sync_apply_plan(local, by_fp, incoming)
+    action, values = plan['action'], plan['set']
+    if action == 'insert':
+        cols = ['id', 'company_id', 'is_admin_device', *values]
+        conn.execute(
+            f"INSERT INTO devices ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+            (device_id, company_id, 0, *values.values()),
+        )
+    elif action in ('update', 'touch'):
+        conn.execute(
+            f"UPDATE devices SET {', '.join(k + '=?' for k in values)} WHERE id=?",
+            (*values.values(), device_id),
+        )
+    if action in ('insert', 'update'):
+        recompute_admin_flag(conn, company_id)
+    return plan
+
+
+# ── reads used by the routes ─────────────────────────────────────────────────
+
+def device_has_open_clash(conn: sqlite3.Connection, device_id: str) -> bool:
+    """True if the sync engine holds an open quarantine row that is a clash
+    (`device_identity_clash` / `duplicate_device_fingerprint`) for this
+    device: keyed by its id, or (the duplicate-fingerprint case, where the
+    quarantined event names the OTHER device) its `detail` names it. A
+    clashing device must not be handed the main role -- two installs would
+    each believe they are the same computer."""
+    if not _has_table(conn, 'sync_apply_quarantine'):
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM sync_apply_quarantine WHERE entity_type='device' "
+        "AND reason IN ('device_identity_clash','duplicate_device_fingerprint') "
+        "AND (entity_id=? OR instr(COALESCE(detail,''), ?) > 0) LIMIT 1",
+        (device_id, device_id),
+    ).fetchone()
+    return row is not None
+
+
+def is_joined_device(conn: sqlite3.Connection, company_id: str, device_id: str) -> bool:
+    """Did THIS device join an existing shop (as opposed to founding it)?
+    Such a device must never bootstrap itself into the main computer: the
+    role belongs to whoever the shop already gave it to, and a joined device
+    has (or will receive by sync) that answer.
+
+    NO DDL -- there is no "joined" column, and adding one would be a schema
+    change for a fact the registry already implies. Two independent arms:
+
+      (a) an `admin_device_assignment` row names ANOTHER device -- the shop
+          already has a main computer and it is not this one. Certain.
+      (b) this registry never created the shop's admin (no `ADMIN_CREATED`
+          audit row: `create_admin` writes one on the founding device only)
+          AND `company_settings.country` is NULL (a joining device is seeded
+          by company_rebind.seed_company_settings_for_joining_device with only
+          id + company_id; the founding device's create_admin writes a
+          country). Both must hold, so an older founding device whose audit
+          row is missing but whose settings are filled in is NOT refused.
+
+    RESIDUAL RISK, stated: a genuine founding device whose ADMIN_CREATED audit
+    write failed (that write is best-effort by design) AND whose country is
+    NULL would be treated as joined and refused. It is recoverable: the
+    owner-side reset, or completing the company settings, clears arm (b)."""
+    assignment = get_assignment(conn, company_id)
+    if assignment is not None and assignment['device_id'] != device_id:
+        return True
+    if not (_has_table(conn, 'audit_logs') and _has_table(conn, 'company_settings')):
+        return False
+    founded_here = conn.execute(
+        "SELECT 1 FROM audit_logs WHERE company_id=? AND action='ADMIN_CREATED' LIMIT 1",
+        (company_id,),
+    ).fetchone() is not None
+    if founded_here:
+        return False
+    settings = conn.execute(
+        "SELECT country FROM company_settings WHERE company_id=?", (company_id,)
+    ).fetchone()
+    return settings is not None and settings['country'] is None
+
+
+def registry_rollout_blockers(conn: sqlite3.Connection, company_id: str) -> list:
+    """Active devices that cannot be trusted to honour the v9 books grants:
+    reporting `registry_schema_version` below 9, or nothing at all (an older
+    build never announces). Preset cards and role edits stay disabled while
+    this is non-empty. A registry not yet migrated to v9 has no such column;
+    that cannot occur on a running install (ensure_schema_version runs first)
+    so it reads as "nothing blocks" rather than crashing the device list."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(devices)").fetchall()}
+    if 'registry_schema_version' not in cols:
+        return []
+    rows = conn.execute(
+        "SELECT id, device_label, platform, registry_schema_version FROM devices "
+        "WHERE company_id=? AND status='active' "
+        "AND (registry_schema_version IS NULL OR registry_schema_version < ?) "
+        "ORDER BY first_seen_at",
+        (company_id, REGISTRY_ROLLOUT_MIN_VERSION),
+    ).fetchall()
+    return [dict(r) for r in rows]

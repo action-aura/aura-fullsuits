@@ -260,10 +260,10 @@ def _drive_a_capability_failure(client, monkeypatch, caplog, failure):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# The precondition: a healthy owner really does get all eight
+# The precondition: a healthy owner really does get all twelve
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_a_healthy_owner_session_reports_all_eight_capability_codes(owner):
+def test_a_healthy_owner_session_reports_all_twelve_capability_codes(owner):
     """The baseline the failure tests are measured against. Without it, a
     change that broke the happy path outright would make every assertion
     below pass -- `None` for everyone is trivially not `[]`."""
@@ -273,7 +273,8 @@ def test_a_healthy_owner_session_reports_all_eight_capability_codes(owner):
     assert body['authenticated'] is True
     assert body['capabilities'] == sorted(_accounts.CAPABILITY_CODES), \
         f"an owner must hold every capability code; got {body.get('capabilities')!r}"
-    assert len(body['capabilities']) == 8
+    # Literal on purpose (registry v9 took it from 8 to 12), never len(CODES).
+    assert len(body['capabilities']) == 12
 
 
 def test_capabilities_stays_a_top_level_key_beside_user(owner):

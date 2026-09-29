@@ -276,9 +276,17 @@ DESIGN_SECTION_3_CODES = (
 )
 
 
-def test_the_eight_codes_are_exactly_the_ones_the_design_names():
-    assert set(user_accounts.CAPABILITY_CODES) == set(DESIGN_SECTION_3_CODES)
-    assert len(user_accounts.CAPABILITY_CODES) == 8
+# Registry v9 (Track S) appended four books codes to the design's eight. The
+# literal 12 below is deliberate -- never len(CAPABILITY_CODES): comparing the
+# tuple's length with itself could not notice a code being added or dropped.
+V9_BOOKS_CODES = (
+    'retail.books.view', 'retail.books.record', 'retail.books.approve', 'retail.books.close',
+)
+
+
+def test_the_twelve_codes_are_the_design_eight_plus_the_four_v9_books_codes():
+    assert set(user_accounts.CAPABILITY_CODES) == set(DESIGN_SECTION_3_CODES) | set(V9_BOOKS_CODES)
+    assert len(user_accounts.CAPABILITY_CODES) == 12
 
 
 def test_every_user_is_seeded_with_every_capability_code(migrated):
@@ -471,6 +479,14 @@ def pin_conn(migrated):
     # install is ever in, because `init_registry_db()` always reaches the
     # CURRENT version before any production write function runs.
     apply_branch_scope_schema(conn)
+    # Registry v9 adds `users.display_name` / `users.role_preset`, and
+    # `_SYNCED_USER_COLUMNS` now names both. Same reasoning as the two calls
+    # above, one version later: init_registry_db() always reaches the current
+    # version before a production write runs. This does NOT weaken the test --
+    # it still proves the PIN storage rules; it only stops a schema-less
+    # fixture from failing on an unrelated missing column.
+    from commercial_runtime.identity.accounts_v9_schema import apply_accounts_v9_schema
+    apply_accounts_v9_schema(conn)
     return conn
 
 

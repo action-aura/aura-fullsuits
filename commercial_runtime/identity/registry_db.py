@@ -102,7 +102,20 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # re-run the chain and would keep failing. NULL means "not bound to a known
 # relay", costing one harmless full re-pull per device, exactly as retail
 # v31 specifies. See registry_sync_schema.py's own docstring.
-REGISTRY_SCHEMA_VERSION = 8
+# v9: Track S (ROADMAP.md "registry v9 CLAIMED"). Two additive steps, applied
+# last. ACCOUNTS: `users` gains `display_name` and `role_preset` (both
+# nullable, no default, no backfill -- accounts_v9_schema.py), and the
+# capability list grows from 8 to 12 codes (`retail.books.view/record/approve/
+# close`, user_accounts.CAPABILITY_CODES). The four new rows are seeded by the
+# EXISTING v3 step (`account_schema._seed_capability_rows`, INSERT OR IGNORE,
+# emit_sync=False), which this version re-runs like every other step: admin
+# 'full', everyone else 'none'. DEVICE-SYNC: `devices` gains a row_version and
+# the build-version columns, and `admin_device_assignment` records which
+# device is main, epoch-numbered (device_sync_schema.py). Neither step emits a
+# sync event. A v8 build ignores the new user keys, stores but never reads the
+# books rows, and plain-skips the new device/admin_device event types; a
+# re-announce heals that (device_context.announce_local_device).
+REGISTRY_SCHEMA_VERSION = 9
 
 
 def _migrate_registry_schema(conn):
@@ -156,6 +169,15 @@ def _migrate_registry_schema(conn):
     apply_registry_sync_schema(conn)
     apply_registry_quarantine_schema(conn)
     apply_branch_scope_schema(conn)
+    # v9. DO NOT make the v3 capability seed above run-once "because v9 is
+    # already handled": `_seed_capability_rows` is what creates the four
+    # retail.books.* rows for every pre-v9 account, and it only does so
+    # because this function re-runs EVERY step on any database behind the
+    # version. Accounts step first (columns), then device-sync. Neither emits.
+    from commercial_runtime.identity.accounts_v9_schema import apply_accounts_v9_schema
+    from commercial_runtime.identity.device_sync_schema import apply_device_sync_schema
+    apply_accounts_v9_schema(conn)
+    apply_device_sync_schema(conn)
 
 
 def get_conn():

@@ -108,6 +108,13 @@ _SYNCED_USER_COLUMNS = (
     "uid", "email", "employee_id", "role", "status", "require_password_change",
     "language", "password_hash", "pin_hash", "row_version", "updated_at_utc",
     "session_version", "branch_scope_uid",
+    # Registry v9 (Track S). Both nullable, both travel: a person's NAME and
+    # the PRESET they were given must read the same on every till, or the
+    # employee list on the second computer shows a blank name and a "Custom"
+    # badge for an Accountant. An OLD (v8) sender's payload lacks both keys;
+    # the receiver treats an ABSENT key as "keep what I have" (see
+    # `user_sync_apply_plan` below), never as NULL.
+    "display_name", "role_preset",
 )
 
 # ── Roles ────────────────────────────────────────────────────────────────────
@@ -161,11 +168,29 @@ CAP_REPORTS = 'retail.reports'
 CAP_CASH_CLOSE = 'retail.cash.close'
 CAP_CASH_APPROVE = 'retail.cash.approve'
 CAP_EMPLOYEES = 'retail.employees'
+# Registry v9 (Track S): the four "books" codes. Appended, never inserted, so
+# the first eight keep their positions (an old peer's seed order and every
+# test that indexes the tuple keep meaning what they meant).
+CAP_BOOKS_VIEW = 'retail.books.view'
+CAP_BOOKS_RECORD = 'retail.books.record'
+CAP_BOOKS_APPROVE = 'retail.books.approve'
+CAP_BOOKS_CLOSE = 'retail.books.close'
 
-#: Exactly the eight codes design §3 names, in that order. The tuple is the
-#: seeding contract: every account gets a row for every code, so "this user
-#: was never provisioned" and "this user is explicitly denied" stay
-#: distinguishable instead of both reading as a missing row.
+#: The four books codes together -- named once because three places need to
+#: subtract or reset exactly this set (ROLE_MANAGER/ROLE_CASHIER below, the
+#: fail-closed reset in `books_codes_reset_plan`, the mixed-build tests).
+BOOKS_CAPABILITY_CODES = (
+    CAP_BOOKS_VIEW,
+    CAP_BOOKS_RECORD,
+    CAP_BOOKS_APPROVE,
+    CAP_BOOKS_CLOSE,
+)
+
+#: The eight codes design §3 names, in that order, followed (v9) by the four
+#: books codes. The tuple is the seeding contract: every account gets a row
+#: for every code, so "this user was never provisioned" and "this user is
+#: explicitly denied" stay distinguishable instead of both reading as a
+#: missing row.
 CAPABILITY_CODES = (
     CAP_SELL,
     CAP_REFUND,
@@ -175,6 +200,10 @@ CAPABILITY_CODES = (
     CAP_CASH_CLOSE,
     CAP_CASH_APPROVE,
     CAP_EMPLOYEES,
+    CAP_BOOKS_VIEW,
+    CAP_BOOKS_RECORD,
+    CAP_BOOKS_APPROVE,
+    CAP_BOOKS_CLOSE,
 )
 
 #: `user_permissions.access_level` values. The table's own DEFAULT is 'none'
@@ -228,10 +257,26 @@ ACCESS_NONE = 'none'
 #: from, they are the access every account of that role actually has, full
 #: stop -- the escape hatch this reasoning leans on exists in the server and
 #: not, yet, for the person the reasoning is about.
+#:
+#: REGISTRY V9 -- THE BOOKS CODES ARE OWNER-ONLY BY DEFAULT. `retail.books.*`
+#: (view / record / approve / close) were appended to CAPABILITY_CODES, and
+#: the manager line below was `frozenset(CAPABILITY_CODES) - {...}`: a
+#: subtraction from "everything". Left as it was, the four new codes would
+#: have silently become MANAGER defaults the day CAPABILITY_CODES grew, on
+#: every shop, with no route anyone could point to. So the manager line now
+#: names the books codes in its subtraction explicitly -- a manager gets no
+#: access to the books unless the owner gives it (the Accountant preset is the
+#: intended way). The cashier set is an explicit three-code list and could not
+#: pick them up, but the subtraction is written out anyway so the intent
+#: ("cashier: no books, ever, by default") is in the line and survives
+#: someone rewriting that set as a subtraction later.
 ROLE_CAPABILITIES = {
     ROLE_ADMIN: frozenset(CAPABILITY_CODES),
-    ROLE_MANAGER: frozenset(CAPABILITY_CODES) - {CAP_EMPLOYEES, CAP_CASH_APPROVE},
-    ROLE_CASHIER: frozenset({CAP_SELL, CAP_REFUND, CAP_CASH_CLOSE}),
+    ROLE_MANAGER: (frozenset(CAPABILITY_CODES)
+                   - {CAP_EMPLOYEES, CAP_CASH_APPROVE}
+                   - frozenset(BOOKS_CAPABILITY_CODES)),
+    ROLE_CASHIER: (frozenset({CAP_SELL, CAP_REFUND, CAP_CASH_CLOSE})
+                   - frozenset(BOOKS_CAPABILITY_CODES)),
 }
 
 
@@ -242,7 +287,7 @@ def capabilities_for_role(role) -> frozenset:
 
 
 def seed_capabilities_for_user(conn: sqlite3.Connection, user_id: str, role, *,
-                                emit_sync: bool = False) -> int:
+                                emit_sync: bool = False, granted=None) -> int:
     """Write one `user_permissions` row per capability code for `user_id`,
     granting the ones `role` implies and explicitly denying the rest. Returns
     the number of rows actually inserted.
@@ -290,7 +335,10 @@ def seed_capabilities_for_user(conn: sqlite3.Connection, user_id: str, role, *,
     stage 2b's own v3/v4 backfills never emit either (see this module's
     docstring, item 4, and account_schema.py's own module docstring).
     """
-    granted = capabilities_for_role(role)
+    # `granted` (registry v9): a preset seeds an EXPLICIT set instead of the
+    # role's defaults (`apply_preset`). Left None, behaviour is exactly what
+    # it was -- the role decides.
+    granted = capabilities_for_role(role) if granted is None else frozenset(granted)
     inserted = 0
     for code in CAPABILITY_CODES:
         cur = conn.execute(
@@ -381,6 +429,250 @@ def user_holds_subsystem(conn: sqlite3.Connection, user_id: str, subsystem: str)
         if name.startswith(prefix) and granted:
             any_code_granted = True
     return any_code_granted
+
+
+# ── Role presets (registry v9, Track S) ──────────────────────────────────────
+#
+# A PRESET is a named starting set of the twelve capability codes that the
+# owner picks from a card instead of ticking twelve boxes. It is stored on the
+# person (`users.role_preset`, nullable) so the screen can say "Accountant"
+# rather than describe twelve switches -- and so a later role edit knows what
+# the owner MEANT. The rows in `user_permissions` stay the only thing the
+# server ever enforces; the stored name is a label. That is why
+# `preset_matches` exists: the owner can still tune a single switch afterwards,
+# at which point the rows and the label disagree and the screen must say
+# "Custom" instead of lying.
+
+PRESET_CASHIER = 'cashier'
+PRESET_MANAGER = 'manager'
+PRESET_BRANCH_MANAGER = 'branch_manager'
+PRESET_ACCOUNTANT = 'accountant'
+
+#: preset -> the twelve-code set it grants. Everything not listed is 'none'.
+#:
+#: branch_manager = manager + retail.employees. That is the exact predicate
+#: `create_employee` uses to decide a manager is "delegated" (role manager AND
+#: holding retail.employees AND a branch scope), so this preset is how an owner
+#: gives a branch head the right to invite cashiers for their own store.
+#:
+#: accountant = books.view + books.record + reports + cash.approve, nothing
+#: else -- deliberately NOT retail.sell, and deliberately without
+#: retail.cash.close: an Accountant who can sign off a drawer variance must
+#: not also be able to close the drawer (AUDIT-032, `cash_self_approval_
+#: conflict` below). Its base role is 'manager' because the legacy coarse
+#: gate (`mt_require_subsystem('retail')`) is derived from "holds at least one
+#: retail.* code" and the role string decides nothing else for this person.
+ROLE_PRESETS = {
+    PRESET_CASHIER: frozenset(ROLE_CAPABILITIES[ROLE_CASHIER]),
+    PRESET_MANAGER: frozenset(ROLE_CAPABILITIES[ROLE_MANAGER]),
+    PRESET_BRANCH_MANAGER: frozenset(ROLE_CAPABILITIES[ROLE_MANAGER] | {CAP_EMPLOYEES}),
+    PRESET_ACCOUNTANT: frozenset({CAP_BOOKS_VIEW, CAP_BOOKS_RECORD, CAP_REPORTS, CAP_CASH_APPROVE}),
+}
+
+#: The `users.role` each preset lives on. update_role compares against this to
+#: decide whether a stored preset survives a role change.
+PRESET_BASE_ROLE = {
+    PRESET_CASHIER: ROLE_CASHIER,
+    PRESET_MANAGER: ROLE_MANAGER,
+    PRESET_BRANCH_MANAGER: ROLE_MANAGER,
+    PRESET_ACCOUNTANT: ROLE_MANAGER,
+}
+
+#: Fixed literal, translated by whole-sentence lookup -- do not assemble at
+#: runtime.
+CASH_SELF_APPROVAL_MESSAGE = 'Approving cash variances and closing the drawer cannot be given to the same person.'
+
+
+class PresetError(ValueError):
+    """Unknown preset name, or a preset applied to an account that cannot take
+    one (the owner)."""
+
+
+class CashSelfApprovalError(ValueError):
+    """The requested grants would let one non-admin both close a drawer and
+    approve that drawer's variance (AUDIT-032)."""
+
+
+def cash_self_approval_conflict(role, granted) -> bool:
+    """True when a NON-ADMIN would hold BOTH `retail.cash.close` and
+    `retail.cash.approve`.
+
+    The owner is exempt by definition -- there is one admin per install and
+    the admin bypass already reads as "holds everything" (see
+    ROLE_CAPABILITIES). Everyone else is one person counting the drawer and
+    then accepting their own shortfall, the AUDIT-032 hole the manager
+    defaults were written to avoid. `granted` is any iterable of code strings
+    (only those two are looked at).
+    """
+    if normalize_role(role) == ROLE_ADMIN:
+        return False
+    held = set(granted)
+    return CAP_CASH_CLOSE in held and CAP_CASH_APPROVE in held
+
+
+def granted_capability_codes(conn: sqlite3.Connection, user_id: str) -> frozenset:
+    """The set of the twelve codes this user currently holds -- rows only.
+    A missing row is not held (same fail-closed reading as
+    `user_has_capability`)."""
+    placeholders = ','.join('?' * len(CAPABILITY_CODES))
+    rows = conn.execute(
+        f"SELECT subsystem, access_level FROM user_permissions "
+        f"WHERE user_id=? AND subsystem IN ({placeholders})",
+        (user_id, *CAPABILITY_CODES),
+    ).fetchall()
+    return frozenset(r[0] for r in rows if r[1] not in (None, '', ACCESS_NONE))
+
+
+def _reset_capability_rows(conn: sqlite3.Connection, user_id: str, granted, *, emit_sync: bool) -> None:
+    """Delete the user's rows for the twelve codes (and ONLY those -- the
+    legacy `subsystem='retail'` row that `mt_require_subsystem` reads on ~80
+    routes must survive, see update_role), tell peers each one is gone, then
+    re-seed exactly `granted`. Shared by `apply_preset` and by
+    onboarding_routes.update_role so the two cannot drift apart."""
+    placeholders = ','.join('?' * len(CAPABILITY_CODES))
+    conn.execute(
+        f"DELETE FROM user_permissions WHERE user_id=? AND subsystem IN ({placeholders})",
+        (user_id, *CAPABILITY_CODES),
+    )
+    if emit_sync:
+        for code in CAPABILITY_CODES:
+            _queue_user_permission_sync_event(conn, user_id, code, "delete")
+    seed_capabilities_for_user(conn, user_id, ROLE_CASHIER, emit_sync=emit_sync, granted=granted)
+
+
+def apply_preset(conn: sqlite3.Connection, user_id: str, preset: str, *,
+                 emit_sync: bool = True, store_label: bool = True) -> dict:
+    """Give `user_id` the named preset: role, stored label and the twelve
+    capability rows, in the caller's transaction (never commits).
+
+    Everything that identifies the person's access moves together, because a
+    half-applied preset is worse than none: `role` (the preset's base role),
+    `role_preset`, `session_version` (the revocation channel -- their live
+    session re-reads the row on its very next request), `row_version` and
+    `updated_at_utc`. The user event is queued BEFORE the permission events so
+    a receiver that sees only part of the batch already knows which preset the
+    new rows belong to.
+
+    Bounded DELETE + reseed exactly like `update_role` (which is why a plain
+    seed would be a silent no-op: INSERT OR IGNORE against rows that already
+    exist). A preset never touches the legacy `retail`/`clinic` subsystem rows.
+
+    Raises PresetError for an unknown name, a missing user, or the owner
+    account; CashSelfApprovalError if the resulting grants would breach
+    AUDIT-032 (no shipped preset does -- the check is the backstop for a future
+    edit to ROLE_PRESETS). Returns {'role', 'role_preset', 'granted'}.
+
+    A plain role change ('manager' / 'cashier') goes through here too, and
+    stores its own name as the label ('manager'), which is what replaces a
+    previous 'accountant' / 'branch_manager' label. `store_label=False`
+    stores NULL instead (kept for a caller that must not name a preset).
+    """
+    if preset not in ROLE_PRESETS:
+        raise PresetError('Unknown preset.')
+    row = conn.execute("SELECT id, role FROM users WHERE id=?", (user_id,)).fetchone()
+    if row is None:
+        raise PresetError('User not found.')
+    if normalize_role(row[1]) == ROLE_ADMIN:
+        raise PresetError("The owner account's role cannot be changed.")
+    base_role = PRESET_BASE_ROLE[preset]
+    granted = ROLE_PRESETS[preset]
+    if cash_self_approval_conflict(base_role, granted):
+        raise CashSelfApprovalError(CASH_SELF_APPROVAL_MESSAGE)
+    conn.execute(
+        "UPDATE users SET role=?, role_preset=?, session_version=COALESCE(session_version, 0)+1, "
+        "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=?",
+        (base_role, preset if store_label else None, now_utc_iso(), user_id),
+    )
+    if emit_sync:
+        _queue_user_sync_event(conn, user_id, "update")
+    _reset_capability_rows(conn, user_id, granted, emit_sync=emit_sync)
+    return {'role': base_role, 'role_preset': preset if store_label else None, 'granted': granted}
+
+
+def preset_matches(conn: sqlite3.Connection, user_id: str) -> bool:
+    """False ONLY when a stored preset disagrees with the person's twelve
+    capability rows (the screen's "Custom" badge). True when the rows equal
+    the preset, and also True when no preset is stored -- there is then no
+    label to contradict."""
+    row = conn.execute("SELECT role_preset FROM users WHERE id=?", (user_id,)).fetchone()
+    stored = row[0] if row else None
+    if not stored:
+        return True
+    expected = ROLE_PRESETS.get(stored)
+    if expected is None:
+        # A preset name this build does not know (written by a newer build):
+        # we cannot say the rows match it, so we do not claim they do.
+        return False
+    return granted_capability_codes(conn, user_id) == expected
+
+
+# ── User sync: pure rules the apply side (sync_service.py) calls ─────────────
+#
+# Kept here, next to the column list they qualify, so the payload keys and the
+# rules for reading them are edited together. sync_service.py is another
+# crew's file; it imports these instead of re-deriving them.
+
+def books_codes_reset_plan(new_role) -> dict:
+    """{books code: 'full'|'none'} -- what the four books rows should read for
+    a person whose role has just become `new_role`, per ROLE_CAPABILITIES.
+    Admin gets 'full' (never sent for a role change in practice -- the owner
+    is not demotable -- but a plan that lied about admin would be a trap)."""
+    granted = ROLE_CAPABILITIES[normalize_role(new_role)]
+    return {code: (ACCESS_FULL if code in granted else ACCESS_NONE) for code in BOOKS_CAPABILITY_CODES}
+
+
+def user_sync_apply_plan(incoming: dict, local_role) -> dict:
+    """How a receiver of a `user` sync event must treat the two v9 keys.
+
+    `incoming` is the event payload dict; `local_role` the receiver's stored
+    role for this uid, or None when the user is new here.
+
+      has_display_name / has_role_preset -- was the KEY present? An ABSENT key
+        (a v8 sender never writes it) means "keep my local value"; a present
+        key with a None value means "clear it". Apply with
+        `CASE WHEN :has_key THEN excluded.col ELSE users.col END`, NEVER a
+        bare `excluded.col` -- that would let every PIN change on an old
+        build blank the Accountant preset everywhere.
+      reset_books -- True when an OLD sender (no `role_preset` key) CHANGED the
+        person's role. A v8 role change re-seeds only the eight codes it
+        knows, so the four books rows on this device would keep whatever the
+        old role had (an ex-Accountant would stay an Accountant). Fail
+        closed: the receiver rewrites the four books rows to
+        `books_codes_reset_plan(incoming role)` WITHOUT emitting -- every
+        device reaches the same answer from the same event, so there is
+        nothing to tell anyone.
+    """
+    has_display_name = 'display_name' in incoming
+    has_role_preset = 'role_preset' in incoming
+    reset_books = False
+    if not has_role_preset and local_role is not None and 'role' in incoming:
+        reset_books = normalize_role(incoming.get('role')) != normalize_role(local_role)
+    return {
+        'has_display_name': has_display_name,
+        'has_role_preset': has_role_preset,
+        'reset_books': reset_books,
+        'books_plan': books_codes_reset_plan(incoming.get('role')) if reset_books else {},
+    }
+
+
+# Person-name rule (create/edit): 1-60 characters after NFC and trimming.
+DISPLAY_NAME_MAX = 60
+
+
+def normalize_display_name(raw):
+    """NFC-normalise and trim a person's name. Returns the clean string, or
+    None when it is empty/whitespace (caller decides whether that is "no
+    name" or an error). Raises ValueError when longer than DISPLAY_NAME_MAX
+    -- measured AFTER normalisation, so a decomposed Arabic or accented name
+    is judged by what a reader sees, not by its code points."""
+    if raw is None:
+        return None
+    text = unicodedata.normalize('NFC', str(raw)).strip()
+    if not text:
+        return None
+    if len(text) > DISPLAY_NAME_MAX:
+        raise ValueError('Name must be 60 characters or fewer.')
+    return text
 
 
 # ── PINs ─────────────────────────────────────────────────────────────────────

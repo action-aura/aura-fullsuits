@@ -36,6 +36,7 @@ or Android process actually has.
 """
 import json
 import os
+import sys
 import threading
 import uuid
 from typing import Optional
@@ -474,3 +475,66 @@ def binding_enforced() -> bool:
     yet."""
     value = os.environ.get("AURA_DEVICE_BINDING_ENFORCED", "")
     return value.strip().lower() in _TRUTHY_VALUES
+
+
+# ── registry v9: a device announces ITSELF ───────────────────────────────────
+
+def detect_platform() -> str:
+    """'ANDROID' | 'WINDOWS' | 'LINUX' | 'DARWIN'. Android first: Chaquopy's
+    Python reports sys.platform 'linux', so the Android env vars are the only
+    reliable tell. Pure stdlib -- this module is imported eagerly on Android."""
+    if os.environ.get("ANDROID_ROOT") or os.environ.get("ANDROID_DATA"):
+        return "ANDROID"
+    plat = sys.platform.lower()
+    if plat.startswith("win"):
+        return "WINDOWS"
+    if plat == "darwin":
+        return "DARWIN"
+    return "LINUX"
+
+
+def announce_local_device(conn, company_id: str, *, device_label: str = None,
+                          platform: str = None, app_version: str = None,
+                          retail_schema_version: int = None,
+                          registry_schema_version: int = None,
+                          reason: str = "heartbeat", force: bool = None) -> dict:
+    """THIS device announces ITSELF to its peers (registry v9). Never speaks
+    for another device: every other device's row reaches us only through the
+    sync stream, never through this function.
+
+    Callers (app.py, wired by the sync crew):
+      - reason='boot'      on process start. Forces an announcement even when
+                           nothing changed: a device that just started may be
+                           running a newer build than its peers last heard, and
+                           a peer still on the old build skipped every earlier
+                           `device` event. Without this, the only thing that
+                           heals such a peer is the 6-hour heartbeat.
+      - reason='changed'   when label / platform / app or schema version moved.
+                           (Differences are also detected from the stored row,
+                           so the reason is informational.)
+      - reason='heartbeat' periodically; announces only when the last
+                           announcement is >= ANNOUNCE_HEARTBEAT_SECONDS old.
+
+    Resolves (and inserts, if new) the local row first, so the company
+    mismatch refusal still applies -- DeviceCompanyMismatchError propagates.
+    Returns {'device': row, 'announced': bool}. Android-safe: stdlib and
+    device_registry only."""
+    if platform is None:
+        platform = detect_platform()
+    if registry_schema_version is None:
+        # Lazy: registry_db imports the identity schema modules, and this
+        # module is imported by routes that registry_db does not know about.
+        from commercial_runtime.identity.registry_db import REGISTRY_SCHEMA_VERSION
+        registry_schema_version = REGISTRY_SCHEMA_VERSION
+    resolve_local_device(conn, company_id, device_label=device_label, platform=platform)
+    device_id = local_device_uuid()
+    row, announced = device_registry.announce_device_fields(
+        conn, device_id,
+        device_label=device_label, platform=platform, app_version=app_version,
+        retail_schema_version=retail_schema_version,
+        registry_schema_version=registry_schema_version,
+        force=bool(force) if force is not None else (reason == "boot"),
+    )
+    if announced:
+        invalidate_cache()
+    return {"device": row, "announced": announced}
