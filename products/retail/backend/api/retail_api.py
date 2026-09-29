@@ -22,6 +22,7 @@ from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
 from flask import Blueprint, request, jsonify, session, current_app, Response, stream_with_context
 from commercial_runtime.identity.mt_auth import (
     mt_login_required, mt_require_subsystem, mt_require_capability, session_has_capability,
+    mt_require_any_capability,
     CAPABILITY_DENIED_MESSAGE,
     # Launch-readiness account-hierarchy design §3.3/§4.2 D6/D7 -- the
     # branch-scope read helper and its fail-closed lookup error. See
@@ -32,6 +33,7 @@ from commercial_runtime.identity.mt_auth import (
 from commercial_runtime.identity.user_accounts import (
     CAP_SELL, CAP_REFUND, CAP_DISCOUNT, CAP_STOCK_ADJUST, CAP_REPORTS,
     CAP_CASH_CLOSE, CAP_CASH_APPROVE, CAP_EMPLOYEES, normalize_role,
+    CAP_BOOKS_VIEW, CAP_BOOKS_RECORD,
     # The ONE format every *_at_utc column in this suite is written in --
     # timezone-aware '...+00:00', never `datetime.utcnow()`'s naive string.
     # Imported rather than re-spelled inline so retail's `created_at_utc` and
@@ -90,7 +92,12 @@ from database.schema import (
     # collaborator instead): retail_api.py already lives in this module's
     # own product, so there is no layering concern importing it here.
     record_or_refresh_stock_exception,
+    # Schema v42 (branch identity + till allocation): the ONE definition of
+    # "the branch uid every install of this licence agrees on" and the alias
+    # canonicaliser. Imported, never re-derived here.
+    default_branch_uid_for_company, canonical_branch_uid,
 )
+from commercial_runtime.identity import device_registry as _device_registry
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
@@ -712,6 +719,20 @@ def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
          json.dumps(payload), datetime.now(timezone.utc).isoformat()),
     )
 
+def _canon_branch_uid(conn, cid, uid):
+    """`uid` followed through `branch_uid_aliases` (schema v42) to the canonical
+    branch uid, or unchanged. Used at every place a branch uid that came from
+    OUTSIDE the `branches` table is compared or resolved (a user's
+    `branch_scope_uid` in registry.db, the device pin in config.json): those
+    live in files the v42 converge cannot rewrite. Never raises."""
+    if not uid:
+        return uid
+    try:
+        return canonical_branch_uid(conn, uid, cid)
+    except Exception:
+        return uid
+
+
 def _default_branch(conn, cid):
     """Resolve this company's working branch the SAME way create_product files stock —
     the company's first branch, self-healing one if none exists. Inventory rows are
@@ -741,7 +762,15 @@ def _default_branch(conn, cid):
     # No actor stamp: `branches` is in RETAIL_UID_TABLES only. It is a place,
     # not an event, and v13 gave the actor triple to the five tables that
     # record events.
-    branch_uid = _new_uid()
+    #
+    # Schema v42: when this install knows its licence id, the placeholder is
+    # born with the ONE uid every install of that licence computes for it
+    # (`default_branch_uid_for_company`), not a random one. That is what stops
+    # a second computer inventing a second, unmergeable 'Main Branch' and is
+    # the new-install half of `converge_default_branch_uid` (the migration
+    # half rewrites the ones that already exist). No licence id -> None ->
+    # a random uid exactly as before.
+    branch_uid = default_branch_uid_for_company(cid) or _new_uid()
     cur.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
                 (cid, 'Main Branch', '', '', branch_uid))
     # `cur.lastrowid` is captured immediately after the INSERT it describes.
@@ -907,13 +936,18 @@ def _resolve_working_branch(conn, cid, explicit_branch_id=None):
                 'status': 'error',
                 'message': 'Could not verify your branch access. Try again.',
             }), 403)
-        if scope_uid is not None and row['uid'] != scope_uid:
+        # v42: a scope written down before the default-branch uid converged
+        # (registry `users.branch_scope_uid` lives in another file this
+        # migration cannot rewrite) names the OLD uid of the very same
+        # branch; compare canonical to canonical or a scoped cashier is
+        # locked out of their own branch.
+        if scope_uid is not None and _canon_branch_uid(conn, cid, row['uid']) != _canon_branch_uid(conn, cid, scope_uid):
             return None, (jsonify({
                 'status': 'error', 'message': 'You may only write to your own branch.',
             }), 403)
         return row['id'], None
 
-    pinned_uid = _onboarding_get_device_branch_uid()
+    pinned_uid = _canon_branch_uid(conn, cid, _onboarding_get_device_branch_uid())
     if not pinned_uid:
         return _default_branch(conn, cid), None
 
@@ -937,7 +971,7 @@ def _resolve_working_branch(conn, cid, explicit_branch_id=None):
             'status': 'error',
             'message': 'Could not verify your branch access. Try again.',
         }), 403)
-    if scope_uid is not None and pinned_uid != scope_uid:
+    if scope_uid is not None and pinned_uid != _canon_branch_uid(conn, cid, scope_uid):
         return None, (jsonify({
             'status': 'error', 'message': 'You may only write to your own branch.',
         }), 403)
@@ -990,7 +1024,8 @@ def _coerce_branch_id_for_scope(conn, cid, raw_branch_id):
     if scope_uid is None:
         return raw_branch_id, None
     row = conn.execute(
-        "SELECT id FROM branches WHERE uid=? AND company_id=?", (scope_uid, cid),
+        "SELECT id FROM branches WHERE uid=? AND company_id=?",
+        (_canon_branch_uid(conn, cid, scope_uid), cid),
     ).fetchone()
     # A scope that does not resolve to a LOCAL branch (not yet synced to
     # this device, or a stale uid) must not silently fall back to "every
@@ -3693,7 +3728,7 @@ def create_purchase_order():
         # retail_po_number_uniqueness_test.py exists precisely because
         # fixing one PO mint site and not the other left a real bug fully
         # live, and the same rule applies to this feature.
-        _po_series = doc_series.resolve_series(conn, cid, 'po', local_terminal_id())
+        _po_series = _resolve_series_gated(conn, cid, 'po')
         if _po_series is not None:
             po_number = doc_series.allocate(conn, _po_series)
         else:
@@ -5155,7 +5190,7 @@ def accept_reorder_request(rid):
         # a configured series or neither may, which is exactly what
         # retail_po_number_uniqueness_test.py's own two-mint-site coverage
         # is extended to prove for this feature.
-        _po_series = doc_series.resolve_series(conn, cid, 'po', local_terminal_id())
+        _po_series = _resolve_series_gated(conn, cid, 'po')
         if _po_series is not None:
             po_number = doc_series.allocate(conn, _po_series)
         else:
@@ -7136,7 +7171,7 @@ def create_sale():
         # not "equivalent behaviour", the SAME code path, which is what
         # keeps AUDIT-032B's fix intact for every shop that has not opted
         # in. See retail_doc_series_test.py's allow-half proof.
-        _sale_series = doc_series.resolve_series(conn, cid, 'sale', local_terminal_id())
+        _sale_series = _resolve_series_gated(conn, cid, 'sale')
         if _sale_series is not None:
             sale_number = doc_series.allocate(conn, _sale_series)
         else:
@@ -7331,6 +7366,10 @@ def create_sale():
                 'movement_type': 'sale_out', 'quantity': -qty, 'unit_cost': 0,
                 'reference': sale_number, 'notes': None, 'created_by': _uid(),
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                # v42: WHICH document caused this stock change, by uid, so the
+                # receiving side can drill from a movement to its sale even when
+                # the readable number is not unique across tills.
+                'source_type': 'sale', 'source_uid': sale_uid,
             })
             cur.execute("""
                 UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ?
@@ -8980,7 +9019,7 @@ def create_return():
         # Aseel-parity wave A-PAR (schema v34): identical treatment as
         # create_sale's own 'sale' mint site -- see that route's comment
         # for the full reasoning.
-        _return_series = doc_series.resolve_series(conn, cid, 'return', local_terminal_id())
+        _return_series = _resolve_series_gated(conn, cid, 'return')
         if _return_series is not None:
             ret_num = doc_series.allocate(conn, _return_series)
         else:
@@ -9093,6 +9132,7 @@ def create_return():
                 'movement_type': 'return_in', 'quantity': qty, 'unit_cost': 0,
                 'reference': ret_num, 'notes': None, 'created_by': _uid(),
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                'source_type': 'return', 'source_uid': ret_uid,
             })
 
         # AR forgiveness + store credit -- DEFECT 1 fix. `ar_forgiven` and
@@ -10460,7 +10500,12 @@ def current_cash_session():
 # The runtime money sweep could not see it because its fixture never opens a
 # drawer, so every row it swept was empty and every money key was absent --
 # a fixture that manufactured the state that hid the hole.
-@mt_require_capability(CAP_CASH_CLOSE)
+# cash.close OR cash.approve. The Accountant preset holds approve but NOT close
+# (AUDIT-032: nobody but the owner holds both), and an approver has to be able
+# to see the drawers whose variance they are asked to accept -- the widening
+# below already says "you cannot accept a variance you may not look at".
+# Any-of, never both: a cashier with close only is unchanged.
+@mt_require_any_capability(CAP_CASH_CLOSE, CAP_CASH_APPROVE)
 def list_cash_sessions():
     """This terminal's own drawer history -- widened to the whole shop for a
     caller who holds the authority to look at other tills.
@@ -10520,7 +10565,8 @@ def list_cash_sessions():
 @retail_bp.route('/cash-sessions/<session_id>', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
-@mt_require_capability(CAP_CASH_CLOSE)
+# Same any-of as the list above: the approver opens the drawer they approve.
+@mt_require_any_capability(CAP_CASH_CLOSE, CAP_CASH_APPROVE)
 def get_cash_session(session_id):
     cid = _cid()
     conn = get_retail_conn()
@@ -10736,7 +10782,18 @@ def close_cash_session(session_id):
     # disagree across a permission change mid-request, and the row would then
     # say 'closed' with no acceptor recorded -- an approval attributed to
     # nobody, which is worse than no approval at all.
-    may_approve = session_has_capability(CAP_CASH_APPROVE)
+    #
+    # AUDIT-032 AT THE POINT OF USE (close half): only the owner (mt_role
+    # 'admin') may accept the count of a drawer they are closing themselves.
+    # Any other caller closing their own drawer is by definition the person
+    # who ended it, so their variance ALWAYS goes to pending approval, even
+    # when a permission that arrived by sync gives them retail.cash.approve
+    # next to retail.cash.close (the grant-time check in ROLE_CAPABILITIES
+    # never saw that grant). Mirrors SELF_APPROVAL_FORBIDDEN in
+    # approve_cash_variance; the owner exemption is the same one, for the same
+    # reason: a one-person shop has no second authority.
+    may_approve = (session_has_capability(CAP_CASH_APPROVE)
+                   and session.get('mt_role') == 'admin')
     conn = get_retail_conn()
     try:
         # A BRAND-NEW SHOP COULD NOT CLOSE ITS FIRST DRAWER -- reproduced
@@ -10913,9 +10970,10 @@ def close_cash_session(session_id):
 # Withheld from ROLE_MANAGER as well as ROLE_CASHIER, deliberately, and that is
 # the entire guard: a role holding this alongside retail.cash.close could count
 # its own drawer and sign off its own shortfall in two clicks with nobody else
-# involved. That is AUDIT-032, closed once already on the Owner side. Nothing
-# below re-checks it -- the decorator IS the check, and the seeding table is
-# where the property lives.
+# involved. That is AUDIT-032, closed once already on the Owner side. The
+# seeding table is where the property lives at GRANT time; because a grant that
+# arrives by sync skips that check, the body repeats it at the point of use
+# (SELF_APPROVAL_FORBIDDEN, below).
 @mt_require_capability(CAP_CASH_APPROVE)
 def approve_cash_variance(session_id):
     """Accept the variance an ENDED shift recorded, moving it to CLOSED.
@@ -10952,6 +11010,18 @@ def approve_cash_variance(session_id):
             conn.rollback(); conn.close()
             return jsonify({'status': 'error',
                             'message': 'This variance has already been accepted.'}), 409
+
+        # AUDIT-032 AT THE POINT OF USE (P2S security review): a non-admin may
+        # not accept the variance of a shift THEY ended. The grant-time check
+        # (a non-admin never holds close+approve) is bypassed by a permission
+        # that arrives by sync, so it is repeated here where the act happens.
+        # The owner is exempt: in a one-person shop the owner is the only
+        # authority there is (and the response still surfaces self_approved).
+        if _same_actor(sess, _uid()) and session.get('mt_role') != 'admin':
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'code': 'SELF_APPROVAL_FORBIDDEN',
+                            'message': 'You cannot approve the variance of a shift you ended yourself. '
+                                       'Ask somebody else to approve it.'}), 403
 
         # A DRAWER NOBODY COUNTED CANNOT BE RUBBER-STAMPED BY ACCIDENT.
         #
@@ -14383,6 +14453,13 @@ def create_doc_series():
         return admin_guard
     data = request.json or {}
     cid = _cid()
+    # v42 (coordinator item 3): MAIN COMPUTER ONLY. A hand-made book is a
+    # number nobody else knows about; two computers that were both offline
+    # could each create and claim the same code and print the same receipt
+    # number for different sales -- the collision the till allocations exist to
+    # end. Refused BEFORE any write, so a refusal changes nothing.
+    if not _local_device_is_main(cid):
+        return _till_needs_main_response()
 
     doc_type = data.get('doc_type')
     if doc_type not in doc_series.DOC_SERIES_TYPES:
@@ -14619,12 +14696,20 @@ def retire_doc_series(series_id):
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def claim_doc_series(series_id):
-    """Binds `allocator_terminal_uid = local_terminal_id()`, read
-    SERVER-SIDE only -- NEVER from the request body. A client-supplied
-    terminal uid would let an admin signed in on till A bind a book to
-    till B by typing its id, which is exactly the two-allocators-one-book
-    state this whole feature exists to prevent structurally (see
-    doc_series.py's own module docstring, "THE ONE DECISION").
+    """Binds `allocator_terminal_uid` to a terminal.
+
+    v42 (main computer only): before schema v42 the bound terminal was
+    `local_terminal_id()`, read SERVER-SIDE and NEVER from the request body,
+    so a client-typed id could not bind a book to another till. That
+    protection now comes from the caller instead: only the shop's MAIN
+    computer may call this route (409 TILL_NEEDS_MAIN_COMPUTER otherwise),
+    and the main may name a target `terminal_uid` in the body, which is
+    checked against the device registry (never trusted as typed). Two
+    offline computers therefore cannot both claim the same code -- the
+    non-main one is refused and nothing is written. The default, with no
+    `terminal_uid` in the body, is still "this computer". The
+    two-allocators-one-book state this feature exists to prevent (see
+    doc_series.py's own module docstring, "THE ONE DECISION") is unchanged.
 
     All four checks below run INSIDE one read-then-write pass so the
     decision is made against a consistent snapshot of this row and this
@@ -14650,8 +14735,8 @@ def claim_doc_series(series_id):
     explicitly asked this to be decided, not left silent): unlike
     update_doc_series/retire_doc_series just above, this route does not
     reshape the company's numbering -- it binds an ALREADY-EXISTING series to
-    THIS terminal only, read server-side from `local_terminal_id()`, never
-    from the request body (see the docstring above), so a manager on till A
+    THIS terminal only (v42: or, on the main computer alone, a registry-checked
+    target -- see the docstring above), so a manager on till A
     cannot use it to claim a book for till B either. That is the same
     "own-terminal action" tier as `set_device_branch` (CAP_EMPLOYEES, also
     deliberately not owner-gated), not the tier `create_doc_series`/
@@ -14665,6 +14750,22 @@ def claim_doc_series(series_id):
             'someone signs in or opens a drawer here.'}), 400
 
     cid = _cid()
+    # v42 (coordinator item 3): main computer only, and the MAIN names the
+    # terminal that gets the book (`terminal_uid` in the body, optional -- the
+    # default stays "this computer"). Deciding which terminal owns a book is
+    # the same authority as handing out a till number; leaving it to whichever
+    # computer the request lands on is how two offline computers claimed the
+    # same code. The target is checked against the device registry, never
+    # trusted as typed.
+    if not _local_device_is_main(cid):
+        return _till_needs_main_response()
+    body = request.get_json(silent=True) or {}
+    target_uid = body.get('terminal_uid')
+    if target_uid is not None and target_uid != terminal_uid:
+        if not isinstance(target_uid, str) or not _registry_device_is_active(cid, target_uid):
+            return jsonify({'status': 'error', 'message':
+                'That computer is not one of this shop\'s active computers.'}), 400
+        terminal_uid = target_uid
     conn = get_retail_conn()
     row = conn.execute("SELECT * FROM doc_series WHERE id=? AND company_id=?", (series_id, cid)).fetchone()
     if not row:
@@ -14746,26 +14847,35 @@ def claim_doc_series(series_id):
 #                                 database copied onto another computer does not
 #                                 make that computer a till it never was.
 #
-# REMAINING WINDOW, written down: two computers that are BOTH offline can still
-# be given the same till number by their owners. The second is refused (409)
-# when it already knows the first's books; when it does not, the second book's
-# create is quarantined on sync exactly as before. That quarantine is still
-# INVISIBLE to the owner: no screen reads retail `sync_apply_quarantine` (a
-# recorded pre-existing gap). What changed is that it now needs a person to
-# type the same number twice, instead of happening to every new shop.
+# REMAINING WINDOW, written down (schema v42 changed it): a till number is now
+# GIVEN by the shop's main computer (`till_allocations`), so two ordinary
+# computers can no longer pick the same one. What is left is a DOUBLE-MAIN shop
+# (two computers that each believe they are main while apart): both can hand
+# out "till 1". Sync resolves it deterministically (higher admin epoch, then
+# earlier creation, then smaller id); the loser's allocation is superseded and
+# its next document falls back to plain numbering.
 _BRANCH_CODE_KEY_PREFIX = 'branch_code:'
 _TILL_STATE_KEY_PREFIX = 'numbering_till:'
 
-# READABLE NUMBERS ARE UNAVAILABLE until the device registry syncs (Track S).
-# Re-verifier B2 (attacks X4/X5) showed the per-till opt-in cannot keep two
+# READABLE NUMBERS WORK ONLY THROUGH A TILL ALLOCATION (schema v42, Track S).
+# Re-verifier B2 (attacks X4/X5) showed a per-computer opt-in cannot keep two
 # computers off the same till number: offline, and even online when the second
-# computer is switched on before the first computer's first shift, both hold
-# `AAA1`. Each side parks the other's clashing sales, but the stock movements and
-# GL journals of those parked sales ARE applied (write-up: the comment above
-# `_sync_review_view`; pinned by retail_p1b_parked_sale_children_test.py), so the books stop matching the
-# takings. The code below is kept whole for Track S; this one switch turns it off.
-# Flip it to True ONLY when a synced device registry hands out till numbers.
-READABLE_NUMBERS_AVAILABLE = False
+# computer is switched on before the first computer's first shift, both held
+# `AAA1`, and each side parked the other's clashing sales (whose stock movements
+# and GL journals were STILL applied, so the books stopped matching the takings;
+# write-up above `_sync_review_view`). The switch was therefore turned off in
+# the build before this one. It comes back on because the choice is no longer
+# private: the shop's MAIN computer hands out a till number as one
+# `till_allocations` row (a synced fact; unique per branch and per computer by
+# partial unique index), and a computer may mint readable numbers ONLY while it
+# holds an active row. No row, no readable number -- whatever the device-local
+# `numbering_till:<terminal>` row says (that row is now only a record of which
+# books this computer created; see `_resolve_series_gated`).
+#
+# This constant is the KILL SWITCH, not the feature: False turns readable
+# numbers off everywhere on this build (mint, screen, checklist) and is what
+# the tests flip to prove the mint gate. It defaults to True.
+READABLE_NUMBERS_AVAILABLE = True
 READABLE_NEEDS_DEVICE_REGISTRY = 'READABLE_NEEDS_DEVICE_REGISTRY'
 _READABLE_UNAVAILABLE_REASON = (
     "Readable numbers are switched off until multi-computer support arrives. "
@@ -14774,6 +14884,234 @@ _READABLE_UNAVAILABLE_REASON = (
 _READABLE_WITHDRAWN_REASON = (
     "This computer was using readable numbers. They are switched off until "
     "multi-computer support arrives, and it now uses the long numbers again.")
+
+
+TILL_NEEDS_MAIN_COMPUTER = 'TILL_NEEDS_MAIN_COMPUTER'
+TILL_NUMBER_TAKEN = 'TILL_NUMBER_TAKEN'
+TILL_ALREADY_ALLOCATED = 'TILL_ALREADY_ALLOCATED'
+DEVICE_IDENTITY_CLASH = 'DEVICE_IDENTITY_CLASH'
+
+
+def _local_device_is_main(cid):
+    """True only when THIS computer is the shop's main computer, as the device
+    registry says. Read through the `device_context` module attribute (never a
+    `from ... import`) so the one seam every caller and test shares is the one
+    that answers. FAILS CLOSED: an unreadable registry, a corrupt local device
+    record or any other error is "not main" -- handing out a till number is a
+    thing only the main computer may do, and doing it by mistake is the
+    collision this exists to prevent."""
+    rconn = None
+    try:
+        rconn = _registry_conn()
+        return bool(device_context.local_device_is_admin(rconn, cid))
+    except Exception:
+        log.warning('till allocation: could not tell whether this is the main computer; '
+                    'treated as not main', exc_info=True)
+        return False
+    finally:
+        if rconn is not None:
+            rconn.close()
+
+
+def _till_needs_main_response():
+    """The one refusal for "only the main computer may do this". Same words on
+    every route so the screen keys on the code, not on a sentence."""
+    return jsonify({'status': 'error', 'code': TILL_NEEDS_MAIN_COMPUTER, 'message':
+        "Only the shop's main computer can give out till numbers and create "
+        "number books. Do this on the main computer."}), 409
+
+
+def _registry_device_is_active(cid, device_id):
+    """True when `device_id` is an ACTIVE device of this company in the registry.
+    Fails closed (False) on any error."""
+    rconn = None
+    try:
+        rconn = _registry_conn()
+        dev = _device_registry.get_device(rconn, device_id)
+        return bool(dev and str(dev.get('company_id')) == str(cid)
+                    and (dev.get('status') or 'active') == 'active')
+    except Exception:
+        return False
+    finally:
+        if rconn is not None:
+            rconn.close()
+
+
+def _current_admin_epoch(cid):
+    """The registry's main-computer epoch, stamped on every allocation as the
+    FIRST tie-break when two computers both believed they were main. 0 when it
+    cannot be read (an allocation is never blocked by that; a 0 simply loses to
+    any real epoch)."""
+    rconn = None
+    try:
+        rconn = _registry_conn()
+        assignment = _device_registry.get_assignment(rconn, cid)
+        return int(assignment['epoch']) if assignment else 0
+    except Exception:
+        return 0
+    finally:
+        if rconn is not None:
+            rconn.close()
+
+
+def _adopt_reinstalled_counter(conn, row):
+    """X3 reinstall adoption: a book that is ours (resolved for this terminal)
+    but has no local counter row yet is seeded from the highest number already
+    seen locally -- only once this device is NOT behind on sync, i.e. after a
+    completed pull. Runs inside the caller's transaction. Never raises: on any
+    doubt the counter stays unseeded and `doc_series.allocate` still skips every
+    number already present."""
+    try:
+        if not _is_device_behind_on_sync():
+            doc_series.adopt_counter_after_pull(conn, row)
+    except Exception:
+        log.warning('reinstall counter adoption skipped', exc_info=True)
+    return row
+
+
+def _resolve_series_gated(conn, cid, doc_type):
+    """THE MINT GATE. `doc_series.resolve_series` for this computer, except that
+    a READABLE book this computer created (one its own `numbering_till` record
+    tracks) is handed out only while ALL of these hold, and otherwise the sale,
+    return or purchase falls back to plain numbering (None):
+
+      * `READABLE_NUMBERS_AVAILABLE` (the kill switch) is on;
+      * this computer holds an ACTIVE till allocation (the main computer gave it
+        a number -- a synced fact, not a private choice);
+      * the book's own code carries that allocated number (`ABD1` <-> till 1);
+      * the allocation and the book are for the same branch.
+
+    Why HERE and not only at shift open (coordinator item 1, HIGH): the old
+    withdrawal ran in `_book_till_at_shift_open`, but `create_sale` needs no
+    open shift, so a computer whose shift was left open across an update kept
+    minting `ABD1-...` numbers while its own screen said readable numbers were
+    off. Deciding at MINT time closes every path at once.
+
+    Hand-made books (`POST /doc-series` then `/allocator-claim`) are NOT tracked
+    by that record and pass through unchanged: they are a separate, explicit
+    mechanism (now main-only), and gating them here would change numbering the
+    owner deliberately set up. Known limit, written down: a hand-made book whose
+    code merely LOOKS readable is not gated; only books this feature created
+    are."""
+    terminal = local_terminal_id()
+    row = doc_series.resolve_series(conn, cid, doc_type, terminal)
+    if row is None:
+        return None
+    row = _adopt_reinstalled_counter(conn, row)
+    try:
+        state = _read_till_state(conn, cid, terminal)
+    except Exception:
+        return row
+    if row['id'] not in state['series_ids']:
+        return row
+    if not READABLE_NUMBERS_AVAILABLE:
+        return None
+    alloc = doc_series.active_allocation(conn, cid, terminal)
+    if alloc is None:
+        return None
+    parsed = doc_series.parse_readable_code(row['code'])
+    if parsed is None or parsed[1] != int(alloc['till_number']):
+        return None
+    if _canon_branch_uid(conn, cid, alloc['branch_uid']) != _canon_branch_uid(
+            conn, cid, row['branch_uid']):
+        return None
+    return row
+
+
+def _till_allocation_sync_payload(row):
+    """The whole row, as plain JSON. An allocation is small and every field is
+    part of the tie-break, so it is always sent whole (no changed_fields)."""
+    return {k: row[k] for k in row.keys()}
+
+
+def _allocate_till_in_txn(conn, cid, branch, terminal_uid, till_number, main_uid):
+    """Give `terminal_uid` a till number in `branch`. The CALLER has already
+    checked this is the main computer and holds an open write transaction
+    (`BEGIN IMMEDIATE`), so the "is it free" checks below and the INSERT are one
+    atomic step. Returns (row, None) or (None, refusal) where refusal is a
+    ready `(response, status)`. Idempotent: asking for the number this terminal
+    already holds returns the existing row and writes nothing. NO commit."""
+    if not terminal_uid:
+        return None, (jsonify({'status': 'error', 'message':
+            'That computer has no identity yet, so it cannot be given a till number.'}), 409)
+    if not main_uid:
+        return None, (jsonify({'status': 'error', 'message':
+            'This computer has no identity yet, so it cannot give out till numbers.'}), 409)
+    if not branch['uid']:
+        return None, (jsonify({'status': 'error', 'message':
+            'This branch has no identity yet, so its tills cannot be numbered.'}), 400)
+    branch_uid = _canon_branch_uid(conn, cid, branch['uid'])
+    code, _default, _saved, taken_by = _branch_code_info(conn, cid, branch)
+    if not code:
+        return None, (jsonify({'status': 'error', 'message':
+            'This branch has no code yet. Choose 2 to 4 letters for it first.'}), 400)
+    if taken_by:
+        return None, (jsonify({'status': 'error', 'code': 'BRANCH_CODE_TAKEN', 'message':
+            f"{code} is also the code of {taken_by}. Give this branch its own code first."}), 409)
+    if not _registry_device_is_active(cid, terminal_uid):
+        return None, (jsonify({'status': 'error', 'code': DEVICE_IDENTITY_CLASH, 'message':
+            "That computer is not one of this shop's active computers, so it cannot "
+            "be given a till number."}), 409)
+
+    existing = doc_series.active_allocation(conn, cid, terminal_uid)
+    if existing is not None:
+        same_branch = _canon_branch_uid(conn, cid, existing['branch_uid']) == branch_uid
+        if same_branch and (till_number is None or int(till_number) == int(existing['till_number'])):
+            return existing, None
+        return None, (jsonify({'status': 'error', 'code': TILL_ALREADY_ALLOCATED, 'message':
+            f"That computer already is till {existing['till_number']}. "
+            "Release its number first, then give it a new one."}), 409)
+
+    if till_number is None:
+        till_number = doc_series.lowest_free_till_number(conn, cid, branch_uid, code, terminal_uid)
+        if till_number is None:
+            return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN, 'message':
+                f"All {doc_series.MAX_TILL_NUMBER} till numbers of this branch are in use."}), 409)
+    problem = doc_series.till_number_problem(conn, cid, branch_uid, code, till_number, terminal_uid)
+    inspected = doc_series.inspect_till_books(conn, cid, terminal_uid, code, till_number)
+    why = _why_till_cannot_be_numbered(inspected, till_number)
+    if problem is not None or why:
+        return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN, 'message':
+            why or f"Till number {till_number} is already used by another computer or book. "
+                   "Pick a different number."}), 409)
+
+    now = now_utc_iso()
+    alloc_id = _new_uid()
+    try:
+        conn.execute(
+            "INSERT INTO till_allocations (id, company_id, branch_uid, till_number, terminal_uid, "
+            "status, allocated_by_terminal_uid, admin_epoch, row_version, created_at_utc, "
+            "updated_at_utc) VALUES (?,?,?,?,?,'active',?,?,1,?,?)",
+            (alloc_id, str(cid), branch_uid, int(till_number), terminal_uid, main_uid,
+             _current_admin_epoch(cid), now, now))
+    except sqlite3.IntegrityError:
+        # The partial unique indexes are the backstop for anything the checks
+        # above could not see; a refusal, never a 500.
+        return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN, 'message':
+            f"Till number {till_number} was just given to another computer. "
+            "Pick a different number."}), 409)
+    row = conn.execute("SELECT * FROM till_allocations WHERE id=?", (alloc_id,)).fetchone()
+    _queue_sync_event(conn.cursor(), 'till_allocation', alloc_id, 'create',
+                      _till_allocation_sync_payload(row))
+    _audit(conn, 'TILL_ALLOCATED', 'till_allocation', alloc_id,
+           f"till {till_number} -> {terminal_uid}")
+    return row, None
+
+
+def _release_till_in_txn(conn, cid, alloc_row):
+    """Mark one allocation 'released' (synced). NO commit. The books stay: their
+    codes keep the number reserved, so a later computer cannot be handed the same
+    code while the old counter still exists (the release limit, written down)."""
+    now = now_utc_iso()
+    conn.execute(
+        "UPDATE till_allocations SET status='released', row_version=row_version+1, "
+        "updated_at_utc=? WHERE id=? AND status='active'", (now, alloc_row['id']))
+    row = conn.execute("SELECT * FROM till_allocations WHERE id=?", (alloc_row['id'],)).fetchone()
+    _queue_sync_event(conn.cursor(), 'till_allocation', alloc_row['id'], 'update',
+                      _till_allocation_sync_payload(row))
+    _audit(conn, 'TILL_RELEASED', 'till_allocation', alloc_row['id'],
+           f"till {alloc_row['till_number']} <- {alloc_row['terminal_uid']}")
+    return row
 
 
 def _reserved_book_prefixes():
@@ -14966,9 +15304,10 @@ def _withdraw_readable_numbers(conn, cid, terminal, state):
 
 def _book_till_at_shift_open(conn, cid, bid):
     """Called once after a shift-open commits. Gives THIS till its readable
-    books if, and only if, the owner switched readable numbers on for THIS
-    computer (`numbering_till:<terminal>`), with an explicit till number.
-    Nothing here ever picks a number: the number was chosen by a person.
+    books if, and only if, the shop's main computer ALLOCATED this computer a
+    till number (`till_allocations`, schema v42). The number is never picked
+    here and never read from `numbering_till` (that row is now only a record of
+    which books this computer created).
 
     It can never break the shift: the drawer is already open and committed, so
     every failure here is logged and swallowed, and every skip is logged with
@@ -14976,12 +15315,10 @@ def _book_till_at_shift_open(conn, cid, bid):
     asking "why does this till still say SALE-..."). Known, accepted gaps,
     written down instead of left to be found:
       * It fires on shift-open only. A till that sells without ever opening a
-        shift keeps the legacy numbering.
-      * Two computers that are both offline can be given the same till number
-        by their owners; the second book's create is quarantined on sync (see
-        create_doc_series), which no screen shows yet. The
-        `_is_device_behind_on_sync()` check below shrinks the window; it
-        cannot close it.
+        shift keeps whatever books it already has (the MINT gate,
+        `_resolve_series_gated`, is what stops a stale book being used).
+      * A computer that is behind on sync creates nothing: it may not yet know
+        an allocation was released or superseded.
     """
     try:
         _ensure_credit_schema(conn)
@@ -14990,14 +15327,26 @@ def _book_till_at_shift_open(conn, cid, bid):
             log.info('readable numbering skipped: this device has no identity yet')
             return
         state = _read_till_state(conn, cid, terminal)
-        if not state['on']:
-            log.info('readable numbering skipped: not switched on for this computer')
-            return
         if not READABLE_NUMBERS_AVAILABLE:
-            # Switched on by an earlier build: create nothing, take back what
-            # this computer created (audited). See READABLE_NUMBERS_AVAILABLE.
-            log.info('readable numbering withdrawn: unavailable until the device registry syncs')
-            _withdraw_readable_numbers(conn, cid, terminal, state)
+            if state['on']:
+                # Kill switch off, books made while it was on: take them back
+                # (audited). See READABLE_NUMBERS_AVAILABLE.
+                log.info('readable numbering withdrawn: switched off in this build')
+                _withdraw_readable_numbers(conn, cid, terminal, state)
+            else:
+                log.info('readable numbering skipped: switched off in this build')
+            return
+        alloc = doc_series.active_allocation(conn, cid, terminal)
+        if alloc is None:
+            if state['on']:
+                # The number was released or superseded: stop using its books.
+                _retire_tracked_books(conn, cid, terminal, state, 'till allocation gone')
+                _write_till_state(conn, cid, terminal, False, None, None, [])
+                _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, '0:allocation gone')
+                conn.commit()
+                _sync_nudge()
+            log.info('readable numbering skipped: the main computer has not given this '
+                     'computer a till number')
             return
         if _is_device_behind_on_sync():
             log.info('readable numbering skipped: this device is behind on sync')
@@ -15008,23 +15357,32 @@ def _book_till_at_shift_open(conn, cid, bid):
         if branch is None or not branch['uid']:
             log.info('readable numbering skipped: branch has no wire identity')
             return
-        if branch['uid'] != state['branch_uid']:
+        branch_uid = _canon_branch_uid(conn, cid, branch['uid'])
+        if branch_uid != _canon_branch_uid(conn, cid, alloc['branch_uid']):
             log.info('readable numbering skipped: this shift is on a different branch '
-                     'than the one this computer was switched on for')
+                     'than the one this computer was given a till number for')
             return
+        till = int(alloc['till_number'])
+        if state['on'] and state['till'] != till:
+            # Re-allocated a different number: the old books must go first, or
+            # this terminal would have two active books per document type.
+            _retire_tracked_books(conn, cid, terminal, state, 'till number changed')
+            _write_till_state(conn, cid, terminal, False, None, None, [])
         code, _default, _saved = _effective_branch_code(conn, cid, branch, _reserved_book_prefixes())
         if not code:
             log.info('readable numbering skipped: the branch has no code')
             return
-        inspected = doc_series.inspect_till_books(conn, cid, terminal, code, state['till'])
-        why = _why_till_cannot_be_numbered(inspected, state['till'])
+        inspected = doc_series.inspect_till_books(conn, cid, terminal, code, till)
+        why = _why_till_cannot_be_numbered(inspected, till)
         if why:
             log.info('readable numbering skipped: %s', why)
             return
-        ids, changed = _apply_till_books(conn, cid, terminal, branch, inspected)
-        if not changed and sorted(ids) == sorted(state['series_ids']):
+        canon_branch = {'id': branch['id'], 'name': branch['name'], 'uid': branch_uid}
+        ids, changed = _apply_till_books(conn, cid, terminal, canon_branch, inspected)
+        if (not changed and state['on'] and state['till'] == till
+                and sorted(ids) == sorted(state['series_ids'])):
             return
-        _write_till_state(conn, cid, terminal, True, state['till'], state['branch_uid'], ids)
+        _write_till_state(conn, cid, terminal, True, till, branch_uid, ids)
         conn.commit()
         _sync_nudge()
     except sqlite3.IntegrityError as exc:
@@ -15061,10 +15419,17 @@ def _numbering_payload(conn, cid, branch_row, preview_till=None):
     # While unavailable nothing is "on", whatever an earlier build stored: the
     # books are retired at the next shift open (`_withdraw_readable_numbers`).
     was_on = bool(state['on'] or state['withdrawn'])
-    on_here = bool(READABLE_NUMBERS_AVAILABLE and state['on']
-                   and state['branch_uid'] == branch_row['uid'])
-    till = state['till'] if on_here else None
-    own = _tracked_books(conn, cid, terminal, state) if on_here else {}
+    # "On" now means: the main computer gave THIS computer a till number in THIS
+    # branch (a synced fact), and the kill switch is up. The device-local state
+    # only says which books were made for it.
+    alloc = doc_series.active_allocation(conn, cid, terminal)
+    alloc_here = bool(alloc is not None and branch_row['uid'] and
+                      _canon_branch_uid(conn, cid, alloc['branch_uid'])
+                      == _canon_branch_uid(conn, cid, branch_row['uid']))
+    on_here = bool(READABLE_NUMBERS_AVAILABLE and alloc_here)
+    till = int(alloc['till_number']) if on_here else None
+    own = (_tracked_books(conn, cid, terminal, state)
+           if on_here and state['on'] and state['till'] == till else {})
     preview = None
     is_example = True
     note = None
@@ -15102,6 +15467,9 @@ def _numbering_payload(conn, cid, branch_row, preview_till=None):
         'branch_code_taken_by': taken_by,
         'branch_code_note': branch_note,
         'readable_enabled': on_here,
+        'is_main': _local_device_is_main(cid),
+        'allocation': ({'id': alloc['id'], 'till_number': int(alloc['till_number']),
+                        'branch_uid': alloc['branch_uid']} if alloc_here else None),
         'available': READABLE_NUMBERS_AVAILABLE,
         'unavailable_reason': None if READABLE_NUMBERS_AVAILABLE else (
             _READABLE_WITHDRAWN_REASON if was_on else _READABLE_UNAVAILABLE_REASON),
@@ -15147,11 +15515,14 @@ def _numbering_branch(conn, cid, explicit_uid):
 #                               has the same code, else null),
 #        branch_code_note       plain sentence: a code change applies only to
 #                               tills switched on afterwards
-#        readable_enabled       THIS COMPUTER's switch (device-local, never synced);
-#                               always false while `available` is false
-#        available              false in this build: readable numbers stay off until
-#                               the device registry syncs (Track S). Setting the
-#                               branch code is still allowed.
+#        readable_enabled       true when the main computer gave THIS computer a
+#                               till number in this branch (a synced fact,
+#                               schema v42); false while `available` is false
+#        is_main, allocation    whether this is the main computer; the allocation
+#                               ({id, till_number, branch_uid}) or null
+#        available              the kill switch (READABLE_NUMBERS_AVAILABLE); false
+#                               only if a build turns readable numbers off.
+#                               Setting the branch code is still allowed.
 #        unavailable_reason     null when available; else a plain sentence. It is
 #                               the "switched off until multi-computer support
 #                               arrives" wording for a computer an earlier build
@@ -15170,11 +15541,14 @@ def _numbering_branch(conn, cid, explicit_uid):
 # POST /api/sub/retail/numbering
 #   body {branch_uid?, branch_code?, readable_enabled?, till_number?}
 #   At least one of branch_code / readable_enabled. -> the same body as GET.
-#   readable_enabled true REQUIRES till_number (int 1-99): the number is never
-#   picked for the owner. readable_enabled false retires this till's books.
+#   MAIN COMPUTER ONLY: any other computer gets 409 TILL_NEEDS_MAIN_COMPUTER and
+#   nothing is written. readable_enabled true gives THIS (main) computer a till
+#   number (till_number REQUIRED, 1-99, never picked for the owner; "number all
+#   tills" is POST /tills/allocations {all: true}). readable_enabled false
+#   releases it and retires its books.
 #   400 bad / reserved / no code, 404 unknown branch,
-#   409 code used by another branch / till number already used / this computer
-#   already numbers with other books / this computer has no identity.
+#   409 code used by another branch / TILL_NUMBER_TAKEN / TILL_ALREADY_ALLOCATED /
+#   DEVICE_IDENTITY_CLASH / this computer has no identity.
 #   409 {status:'error', code:'READABLE_NEEDS_DEVICE_REGISTRY', message} for ANY
 #   attempt to switch readable_enabled ON while READABLE_NUMBERS_AVAILABLE is
 #   false (switching OFF and saving a branch code still work).
@@ -15211,13 +15585,19 @@ def get_numbering():
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_EMPLOYEES)
 def set_numbering():
-    """Owner only, like every company-wide numbering write. Changing a branch
-    code affects only books created AFTER it; a book that exists keeps its
-    code forever (codes are immutable, see update_doc_series).
+    """Owner only, and MAIN COMPUTER only (schema v42): both a branch code and a
+    till number are shop-wide facts that must not be chosen by two computers
+    that cannot hear each other. Anything else is refused with 409
+    TILL_NEEDS_MAIN_COMPUTER before a single write.
 
-    `readable_enabled` here is about THIS computer only and needs an explicit
-    `till_number`. Every refusal is decided BEFORE the first write, and the
-    writes share one transaction, so a refused request changes nothing."""
+    `readable_enabled: true` here gives THIS (main) computer a till number
+    through `_allocate_till_in_txn` -- the same code path as
+    `POST /tills/allocations` -- with `till_number` REQUIRED (never picked for
+    the owner). `false` releases this computer's allocation and
+    retires the books it tracks. Every refusal is decided inside one
+    `BEGIN IMMEDIATE` transaction that is rolled back, so a refused request
+    changes nothing. Changing a branch code affects only books created AFTER
+    it; a book that exists keeps its code forever (see update_doc_series)."""
     admin_guard = _require_company_admin()
     if admin_guard is not None:
         return admin_guard
@@ -15243,6 +15623,9 @@ def set_numbering():
         new_enabled = data['readable_enabled']
         if new_enabled:
             raw_till = data.get('till_number')
+            # Auto-picking stays EXPLICIT here: this route never chooses a number
+            # for the owner (the one-click "number every till" is
+            # POST /tills/allocations {all: true}, which says so in its name).
             if (not isinstance(raw_till, int) or isinstance(raw_till, bool)
                     or not 1 <= raw_till <= doc_series.MAX_TILL_NUMBER):
                 return jsonify({'status': 'error', 'message':
@@ -15256,13 +15639,19 @@ def set_numbering():
                                 'message': _READABLE_UNAVAILABLE_REASON}), 409
 
     cid = _cid()
+    if not _local_device_is_main(cid):
+        return _till_needs_main_response()
     conn = get_retail_conn()
     try:
         _ensure_credit_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
         branch, err = _numbering_branch(conn, cid, data.get('branch_uid'))
         if err:
+            conn.rollback()
             return err
         if new_code is not None and not branch['uid']:
+            conn.rollback()
             return jsonify({'status': 'error', 'message':
                 'This branch has no identity yet, so a code cannot be saved for it.'}), 400
         reserved = _reserved_book_prefixes()
@@ -15271,52 +15660,231 @@ def set_numbering():
                     "SELECT id, name, uid FROM branches WHERE company_id=? AND id != ? ORDER BY id",
                     (cid, branch['id'])).fetchall():
                 if _effective_branch_code(conn, cid, other, reserved)[0] == new_code:
+                    conn.rollback()
                     return jsonify({'status': 'error', 'code': 'BRANCH_CODE_TAKEN', 'message':
                         f"{new_code} is already the code of {other['name']}. "
                         "Each branch needs its own code."}), 409
 
         terminal = local_terminal_id()
         state = _read_till_state(conn, cid, terminal)
-        enable_inspected = None
-        if new_enabled:
-            if not terminal:
-                return jsonify({'status': 'error', 'message':
-                    "This computer has no identity yet, so it cannot have its own numbers."}), 409
-            if not branch['uid']:
-                return jsonify({'status': 'error', 'message':
-                    'This branch has no identity yet, so its tills cannot be numbered.'}), 400
-            if new_code is not None:
-                code = new_code
-            else:
-                code, _d, _s, taken_by = _branch_code_info(conn, cid, branch)
-                if code and taken_by:
-                    return jsonify({'status': 'error', 'code': 'BRANCH_CODE_TAKEN', 'message':
-                        f"{code} is also the code of {taken_by}. Give this branch its own code first."}), 409
-            if not code:
-                return jsonify({'status': 'error', 'message':
-                    'This branch has no code yet. Choose 2 to 4 letters for it first.'}), 400
-            enable_inspected = doc_series.inspect_till_books(conn, cid, terminal, code, new_till)
-            why = _why_till_cannot_be_numbered(enable_inspected, new_till)
-            if why:
-                return jsonify({'status': 'error', 'code': 'TILL_NUMBER_TAKEN', 'message': why}), 409
-
         if new_code is not None:
             _write_retail_setting(conn, cid, _BRANCH_CODE_KEY_PREFIX + branch['uid'], new_code)
             _audit(conn, 'NUMBERING_BRANCH_CODE_SET', 'branch', branch['uid'], new_code)
         if new_enabled is True:
-            ids = [r['id'] for r in enable_inspected['have']]
-            _write_till_state(conn, cid, terminal, True, new_till, branch['uid'], ids)
-            _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, f"1:till {new_till}")
+            row, refusal = _allocate_till_in_txn(conn, cid, branch, terminal, new_till, terminal)
+            if refusal is not None:
+                conn.rollback()
+                return refusal
+            _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, f"1:till {row['till_number']}")
         elif new_enabled is False and terminal:
-            # Switching OFF really stops it: the books this till numbers with are
-            # retired (the counter stays, so switching on again continues the
-            # numbers instead of repeating them), and `resolve_series` -- which
-            # only matches active books -- falls back to the legacy numbers.
+            # Switching OFF really stops it: the allocation is released (synced)
+            # and the books this till numbers with are retired (the counter
+            # stays, so switching on again continues the numbers instead of
+            # repeating them); the mint gate refuses them from this moment.
+            mine = doc_series.active_allocation(conn, cid, terminal)
+            if mine is not None:
+                _release_till_in_txn(conn, cid, mine)
             _retire_tracked_books(conn, cid, terminal, state, 'readable numbers switched off')
             _write_till_state(conn, cid, terminal, False, None, None, [])
             _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, '0')
         conn.commit()
         payload = _numbering_payload(conn, cid, branch)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': payload})
+
+
+# ── Till allocations (schema v42) ────────────────────────────────────────────
+# GET    /api/sub/retail/tills[?branch_uid=]     owner; who the shop's computers
+#            are, which till number each holds, and a suggested free number for
+#            each that holds none. Read-only, any computer.
+# POST   /api/sub/retail/tills/allocations       owner + MAIN computer only
+#            body {terminal_uid?, till_number?, branch_uid?} gives one computer a
+#            number (omitted number = the lowest free one), or {all: true}
+#            numbers every active computer that has none, in ONE transaction
+#            (the one-click "Number all tills"; auto-picking is never silent).
+# DELETE /api/sub/retail/tills/allocations       owner + MAIN computer only
+#            body/query {terminal_uid} releases that computer's number.
+# Refusals: 409 TILL_NEEDS_MAIN_COMPUTER (not the main computer -- nothing is
+# written or parked), TILL_NUMBER_TAKEN, TILL_ALREADY_ALLOCATED,
+# DEVICE_IDENTITY_CLASH (target is not an active computer of this shop).
+def _registry_active_devices(cid):
+    """[{id, label, platform, is_admin_device}] of this shop's ACTIVE computers,
+    from the registry. [] when it cannot be read (fails closed for callers that
+    would allocate: a computer that is not listed is not numbered)."""
+    rconn = None
+    try:
+        rconn = _registry_conn()
+        out = []
+        for dev in _device_registry.list_devices(rconn, cid):
+            if (dev.get('status') or 'active') != 'active':
+                continue
+            out.append({'id': dev['id'], 'label': dev.get('device_label'),
+                        'platform': dev.get('platform'),
+                        'is_admin_device': bool(dev.get('is_admin_device'))})
+        return out
+    except Exception:
+        log.warning('till allocation: the device registry could not be read', exc_info=True)
+        return []
+    finally:
+        if rconn is not None:
+            rconn.close()
+
+
+def _tills_payload(conn, cid, branch):
+    code, _default, _saved, _taken_by = _branch_code_info(conn, cid, branch)
+    branch_uid = _canon_branch_uid(conn, cid, branch['uid']) if branch['uid'] else None
+    allocs = list(doc_series.allocations_in_branch(conn, cid, branch_uid)) if branch_uid else []
+    by_terminal = {a['terminal_uid']: a for a in allocs}
+    used = {int(a['till_number']) for a in allocs}
+    me = local_terminal_id()
+    devices = []
+    for dev in _registry_active_devices(cid):
+        alloc = by_terminal.get(dev['id'])
+        suggested = None
+        if alloc is None and code and branch_uid:
+            for cand in range(1, doc_series.MAX_TILL_NUMBER + 1):
+                if cand in used:
+                    continue
+                if doc_series.till_number_problem(conn, cid, branch_uid, code, cand, dev['id']) is None:
+                    suggested = cand
+                    used.add(cand)
+                    break
+        devices.append({
+            'terminal_uid': dev['id'], 'label': dev['label'], 'platform': dev['platform'],
+            'is_main': dev['is_admin_device'], 'is_this_computer': dev['id'] == me,
+            'till_number': int(alloc['till_number']) if alloc is not None else None,
+            'allocation_id': alloc['id'] if alloc is not None else None,
+            'suggested_till_number': suggested})
+    return {
+        'available': READABLE_NUMBERS_AVAILABLE,
+        'is_main': _local_device_is_main(cid),
+        'terminal_uid': me,
+        'branch_uid': branch_uid, 'branch_name': branch['name'], 'branch_code': code,
+        'max_till_number': doc_series.MAX_TILL_NUMBER,
+        'devices': devices,
+        'allocations': [{'id': a['id'], 'terminal_uid': a['terminal_uid'],
+                         'till_number': int(a['till_number']), 'branch_uid': a['branch_uid']}
+                        for a in allocs],
+    }
+
+
+@retail_bp.route('/tills', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def get_tills():
+    admin_guard = _require_company_admin(verb='open')
+    if admin_guard is not None:
+        return admin_guard
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        branch, err = _numbering_branch(conn, cid, request.args.get('branch_uid'))
+        if err:
+            return err
+        return jsonify({'status': 'success', 'data': _tills_payload(conn, cid, branch)})
+    finally:
+        conn.close()
+
+
+@retail_bp.route('/tills/allocations', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def allocate_tills():
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
+    data = request.get_json(silent=True) or {}
+    do_all = data.get('all') is True
+    target = data.get('terminal_uid')
+    raw_till = data.get('till_number')
+    if not do_all and not (isinstance(target, str) and target):
+        return jsonify({'status': 'error', 'message':
+            'Say which computer (terminal_uid), or send all: true.'}), 400
+    if raw_till is not None and (not isinstance(raw_till, int) or isinstance(raw_till, bool)
+                                 or not 1 <= raw_till <= doc_series.MAX_TILL_NUMBER):
+        return jsonify({'status': 'error', 'message':
+            f"A till number is from 1 to {doc_series.MAX_TILL_NUMBER}."}), 400
+    if not READABLE_NUMBERS_AVAILABLE:
+        return jsonify({'status': 'error', 'code': READABLE_NEEDS_DEVICE_REGISTRY,
+                        'message': _READABLE_UNAVAILABLE_REASON}), 409
+    cid = _cid()
+    if not _local_device_is_main(cid):
+        return _till_needs_main_response()
+    main_uid = local_terminal_id()
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        branch, err = _numbering_branch(conn, cid, data.get('branch_uid'))
+        if err:
+            conn.rollback()
+            return err
+        if do_all:
+            targets = [d['id'] for d in _registry_active_devices(cid)
+                       if doc_series.active_allocation(conn, cid, d['id']) is None]
+            numbers = [None] * len(targets)
+        else:
+            targets, numbers = [target], [raw_till]
+        for terminal_uid, number in zip(targets, numbers):
+            row, refusal = _allocate_till_in_txn(conn, cid, branch, terminal_uid, number, main_uid)
+            if refusal is not None:
+                conn.rollback()
+                return refusal
+        conn.commit()
+        payload = _tills_payload(conn, cid, branch)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': payload})
+
+
+@retail_bp.route('/tills/allocations', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def release_till():
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
+    data = request.get_json(silent=True) or {}
+    target = data.get('terminal_uid') or request.args.get('terminal_uid')
+    if not (isinstance(target, str) and target):
+        return jsonify({'status': 'error', 'message': 'Say which computer (terminal_uid).'}), 400
+    cid = _cid()
+    if not _local_device_is_main(cid):
+        return _till_needs_main_response()
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        alloc = doc_series.active_allocation(conn, cid, target)
+        if alloc is None:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message':
+                'That computer has no till number to release.'}), 404
+        _release_till_in_txn(conn, cid, alloc)
+        me = local_terminal_id()
+        if target == me:
+            state = _read_till_state(conn, cid, me)
+            _retire_tracked_books(conn, cid, me, state, 'till number released')
+            _write_till_state(conn, cid, me, False, None, None, [])
+        conn.commit()
+        branch, err = _numbering_branch(conn, cid, data.get('branch_uid'))
+        payload = _tills_payload(conn, cid, branch) if not err else None
     except Exception:
         conn.rollback()
         raise
@@ -16387,7 +16955,11 @@ def customer_statement(cust_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.payment.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_SELL)
+# Taking a customer's payment is either a till job (retail.sell) or a books job
+# (retail.books.record -- the Accountant preset, who records receipts but does
+# not ring sales). Any-of: a holder of EITHER may record it, holding neither is
+# refused. The accountant still cannot open a drawer or ring a sale.
+@mt_require_any_capability(CAP_SELL, CAP_BOOKS_RECORD)
 def customer_payment(cust_id):
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -16534,22 +17106,20 @@ def supplier_statement(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-# retail.employees (= owner authority), NOT retail.stock.adjust like the rest
-# of the supplier surface. Receiving a delivery and PAYING for it are two
-# different authorities on purpose: a manager who could do both could receive
-# a short delivery and settle it in full, and nobody else in the shop would
-# ever see the two facts side by side. The person who signs for the goods is
-# not the person who signs the cheque.
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record, NOT retail.stock.adjust like the rest of the supplier
+# surface. Receiving a delivery and PAYING for it are two different authorities
+# on purpose: a manager who could do both could receive a short delivery and
+# settle it in full, and nobody else in the shop would ever see the two facts
+# side by side. The person who signs for the goods is not the person who signs
+# the cheque. This used to be retail.employees + an owner-only body guard
+# (Phase 1a/1b) because no capability existed for "the books"; registry v9
+# added retail.books.record, which the Accountant preset holds and a manager
+# does NOT, so the separation of duties survives and the Accountant can do the
+# job it exists for. The delegation toggle still cannot unlock this: a
+# capability grant is per-user and owner-set, unlike the branch-staff toggle
+# _require_company_admin exists to defuse (I-10).
+@mt_require_capability(CAP_BOOKS_RECORD)
 def supplier_payment(sid):
-    # I-10 (P0 item #2): paying a supplier moves the shop's own money, which
-    # the branch-staff delegation toggle must not unlock -- see
-    # _require_company_admin's own docstring. Moved to books.record for the
-    # Accountant preset in Phase 1b (see the comment on this route's
-    # decorators above); owner-only until then.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     # See customer_payment's identical comment just above in this file --
@@ -16582,14 +17152,11 @@ def supplier_payment(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- same authority and same reasoning as supplier_payment
+# just above (was retail.employees + an owner-only body guard until registry
+# v9 gave the Accountant a capability of its own).
+@mt_require_capability(CAP_BOOKS_RECORD)
 def pay_purchase_order(po_id):
-    # I-10 (P0 item #2): paying a PO moves the shop's own money -- see
-    # _require_company_admin's own docstring (and supplier_payment's
-    # identical Phase 1b note just above in this file).
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     # Read once, apply to every figure this route touches -- amt, new_paid
@@ -16936,17 +17503,13 @@ def get_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# Cheques are the shop's own money in and out, so they sit under the
+# books authority (retail.books.record: the Accountant preset and the
+# owner), not under retail.employees + an owner-only body guard as they
+# did before registry v9 (I-10, P0 item #2). A manager holds neither
+# books.record nor employees, so the separation of duties is unchanged.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def create_cheque():
-    # I-10 (P0 item #2): all eight cheque routes are owner-only money
-    # authority -- see _require_company_admin's own docstring and this
-    # route's own gate comment in EXPECTED_MUTATION_CAPABILITIES
-    # (retail_route_capability_matrix_test.py) for why CAP_EMPLOYEES alone
-    # was never enough. Moves to books.record for the Accountant preset in
-    # Phase 1b.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     direction = data.get('direction')
@@ -17021,15 +17584,12 @@ def create_cheque():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def deposit_cheque(cheque_id):
     """Refused for `direction='out'`: a shop cannot observe its own issued
     cheque being lodged at a bank it does not bank at -- a state nobody
     could ever set truthfully must not exist."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17055,15 +17615,12 @@ def deposit_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def clear_cheque(cheque_id):
     """Both directions. `pending -> cleared` is legal directly (not only via
     `deposited -> cleared`) precisely so an ISSUED cheque can skip the
     deposit step this shop can never observe for its own outgoing cheque."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17086,17 +17643,14 @@ def clear_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def bounce_cheque(cheque_id):
     """Both directions; `cleared -> bounced` is legal and is NOT a
     workaround -- banks credit provisionally and debit back days later, a
     real sequence this table must be able to record. `reason` is required:
     a bounce with no reason recorded is the one event in this feature an
     owner will need to explain to the counterparty later."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17122,14 +17676,11 @@ def bounce_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def reinstate_cheque(cheque_id):
     """Both directions -- a bounced cheque re-presented by the bank and
     honoured the second time round."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17152,7 +17703,8 @@ def reinstate_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def endorse_cheque(cheque_id):
     """`direction='in'` only -- a shop endorses a cheque it RECEIVED on to a
     third party (typically one of its own suppliers); it cannot endorse a
@@ -17162,10 +17714,6 @@ def endorse_cheque(cheque_id):
     same transition would move TWO parties' balances from one write and make
     `endorsed -> bounced` responsible for unwinding both atomically, the most
     error-prone corner available in this wave for its least-used stage."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17199,15 +17747,12 @@ def endorse_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def cancel_cheque(cheque_id):
     """`pending` only (enforced by LEGAL_TRANSITIONS, not re-checked here) --
     a DEPOSITED cheque pulled back is a RETURN, i.e. a bounce; there is no
     second path to the same effect."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17228,16 +17773,13 @@ def cancel_cheque(cheque_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cheque.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-@mt_require_capability(CAP_EMPLOYEES)
+# retail.books.record -- see create_cheque's gate comment above.
+@mt_require_capability(CAP_BOOKS_RECORD)
 def write_off_cheque(cheque_id):
     """`bounced` only (enforced by LEGAL_TRANSITIONS). Moves NO money -- the
     bounce that preceded it already put the debt back; this only marks the
     instrument itself as dead paper (uncollectable) rather than leaving it
     sitting in 'bounced' as if collection were still being pursued."""
-    # I-10 (P0 item #2): see create_cheque's identical gate comment above.
-    admin_guard = _require_company_admin()
-    if admin_guard is not None:
-        return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
     cheque, err = _cheque_or_404(conn, cid, cheque_id)
@@ -17659,12 +18201,16 @@ def export_cash_sessions_csv():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
-# retail.refund, not an owner code, because of what this route has already
+# retail.refund OR retail.books.record, because of what this route has already
 # been narrowed to: it REFUSES any receipt belonging to a sale (see the long
 # comment below) and only ever voids a customer-account, supplier-account or
 # PO payment. That is reversing money that was taken or paid in error, which
-# is the refund authority -- the same one create_return needs.
-@mt_require_capability(CAP_REFUND)
+# is the refund authority -- the same one create_return needs -- or, for the
+# Accountant who records those receipts and payments, the books authority.
+# This decorator is only the FLOOR: the supplier-payment half is narrowed to
+# books.record alone in the body below, because a refund-only cashier must
+# still not be able to undo money the shop paid OUT.
+@mt_require_any_capability(CAP_REFUND, CAP_BOOKS_RECORD)
 def void_payment(pid):
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -17751,13 +18297,14 @@ def void_payment(pid):
     # and those two do NOT share an authority upstream, so they must not
     # share one here either:
     #
-    #   * customer_payment (~3421) is gated CAP_SELL. Voiding a
+    #   * customer_payment is gated CAP_SELL or CAP_BOOKS_RECORD. Voiding a
     #     party_type='customer' row is therefore a till-level correction --
-    #     the same tier as create_return, which is why CAP_REFUND (the
-    #     decorator floor) is already the right and sufficient check for it.
-    #   * supplier_payment (~3495) and pay_purchase_order's inline
-    #     down-payment (~3535, and create_purchase_order's own amount_paid
-    #     branch) are gated CAP_EMPLOYEES -- owner authority, on purpose:
+    #     the same tier as create_return, which is why the decorator floor
+    #     (CAP_REFUND or CAP_BOOKS_RECORD) is already the right and sufficient
+    #     check for it.
+    #   * supplier_payment and pay_purchase_order are gated CAP_BOOKS_RECORD
+    #     (create_purchase_order's own amount_paid branch stays owner-only) --
+    #     the books authority, on purpose:
     #     receiving a delivery and paying for it are different authorities,
     #     and separately, money paid OUT to a supplier is the shop's own
     #     money leaving, not till cash. Both write party_type='supplier'
@@ -17776,17 +18323,18 @@ def void_payment(pid):
     if p['party_type'] == 'supplier':
         # I-10 (P0 item #2, reviewer finding): the authority to REVERSE a
         # supplier payment must equal the authority to CREATE one.
-        # supplier_payment, pay_purchase_order and create_purchase_order's own
-        # amount_paid branch are all owner-only now (see
-        # _require_company_admin's own docstring) -- CAP_EMPLOYEES alone used
-        # to be the check here, which the branch-staff delegation toggle
-        # (employees.js) grants to a branch-scoped manager, letting that
-        # manager void a supplier payment the owner recorded and silently
-        # reopen the payable it had settled.
-        admin_guard = _require_company_admin()
-        if admin_guard is not None:
+        # supplier_payment and pay_purchase_order are retail.books.record now
+        # (the owner bypasses every capability check, so still allowed), so
+        # that is the check here. CAP_REFUND is NOT enough: it is a cashier's
+        # authority, and a refund-only cashier who could void a supplier
+        # payment could undo money the shop paid out and silently reopen the
+        # payable it had settled. The old _require_company_admin() owner-only
+        # guard is gone with the routes it mirrored -- the Accountant records
+        # supplier payments, so the Accountant may reverse one.
+        if not session_has_capability(CAP_BOOKS_RECORD):
             conn.close()
-            return admin_guard
+            return jsonify({'status': 'error', 'error': CAPABILITY_DENIED_MESSAGE,
+                            'message': CAPABILITY_DENIED_MESSAGE, 'code': 403}), 403
 
     try:
         conn.execute("UPDATE payments SET status='voided', voided_by=?, voided_at=?, notes=COALESCE(notes,'')||? WHERE id=?",
@@ -17882,10 +18430,12 @@ def void_payment(pid):
 #   satisfies mt_require_capability, so it changes nobody's access today, but
 #   it keeps this route inside the capability matrix's read-gate sweep.
 #
-# P1b-waits: registry v9 (Accountant books.view read-only) -- a read-only
-# Accountant preset would be allowed here as well. Deliberately NOT built:
-# registry v9 needs the partner's agreement. Add the `books.view` branch to the
-# guard below and to test_manager_and_cashier_are_refused when it lands.
+# The books.view half (registry v9, built P2S): a holder of retail.books.view --
+# the Accountant preset -- may READ the log as well as the owner. Read-only by
+# construction: this is a GET and nothing here writes. A manager or cashier,
+# even one holding retail.reports, is still refused with OWNER_ONLY, because
+# holding reports says "may see the shop's numbers", not "may read who did
+# what". The owner still passes (admin bypasses every capability check).
 @retail_bp.route('/audit-log', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -17896,10 +18446,12 @@ def list_audit_log():
     # OWNER_ONLY code the client can key on, and retail_route_capability_
     # matrix_test.py's EXPECTED_COMPANY_ADMIN_ROUTES pins it by AST -- so
     # deleting this line fails a test instead of silently opening the log to
-    # every manager holding retail.reports.
-    denied = _require_company_admin(verb='open')
-    if denied is not None:
-        return denied
+    # every manager holding retail.reports. It now runs only for a caller
+    # WITHOUT retail.books.view; books.view is the Accountant's read-only door.
+    if not session_has_capability(CAP_BOOKS_VIEW):
+        denied = _require_company_admin(verb='open')
+        if denied is not None:
+            return denied
     cid = _cid()
 
     conn = get_retail_conn()
@@ -18906,6 +19458,12 @@ _SYNC_REVIEW_REASONS = {
     'gl_unknown_account': ('it uses an account this computer does not have', False),
     'schema_version_too_new': ('the other computer runs a newer version of Aura than this one', False),
     'schema_version_unverifiable': ('this computer could not check which version of Aura the other one runs', False),
+    # Registry v9 / Track S: the sync engine parks these too, and the test that
+    # parses its source refuses any reason without a plain sentence.
+    'malformed_device': ('the other computer described a device in a way this one cannot read', False),
+    'malformed_admin_device': ('the other computer named a main computer in a way this one cannot read', False),
+    'branch_alias_conflict': ('two computers disagree about which shop branch this is the same as', False),
+    'till_allocation_conflict': ('a till number it gives out clashes with one already recorded here', False),
 }
 _SYNC_REVIEW_REASON_SALE_DUPLICATE = 'the same receipt number already exists here'
 _SYNC_REVIEW_REASON_MISSING_OTHER = ('something it belongs to is missing here', True)
@@ -18955,9 +19513,17 @@ _SYNC_REVIEW_FIELDS = {
 # as `missing_parent:sale` -- a reason this table calls "may fix itself" -- and
 # can never resolve. This screen must not promise otherwise (round 3, point 3).
 #
-# WRITE-UP of why the parked sale's STOCK and BOOKS are still applied (engine
-# facts, `commercial_runtime/sync/sync_service.py::_apply_event`, line numbers
-# as of round 3). The engine is NOT changed here (Track S owns its apply order);
+# UPDATE 2026-09-30 (Track S, crew Y's 52aa477c): the engine now parks a set-aside
+# sale's/return's stock movement and journal WITH it (`missing_parent:sale|return`),
+# so on a current build NOTHING of a parked document is added and the note says
+# so. The WRITE-UP below describes the OLD engine and is still true of any till
+# that took the row before it learned that, which is why the flag
+# `stock_and_books_applied` is DERIVED from the tables (`_sync_review_applied_uids`)
+# and never assumed either way.
+#
+# WRITE-UP of why the parked sale's STOCK and BOOKS were (on the old engine) still
+# applied (engine facts, `commercial_runtime/sync/sync_service.py::_apply_event`,
+# line numbers as of round 3). The engine is NOT changed here (Track S owns its apply order);
 # `retail_p1b_parked_sale_children_test.py` pins each fact so a change to the
 # engine makes a test fail and this screen's wording gets revisited:
 #   * events apply in relay order, one entity type at a time, each on its own;
@@ -18976,16 +19542,107 @@ _SYNC_REVIEW_FIELDS = {
 #     lines (3790-3797) are written. Its only parent park is
 #     `missing_parent:gl_journal` (3683). So the parked sale's journal IS applied.
 # Net: stock and books count a sale the takings and the sales list do not.
-_SYNC_REVIEW_CHILD_KINDS = ('sale_item', 'payment')
+#
+# RETURNS (coordinator item 2, after the P1b verifier's c1-c3): the same is true
+# one level down. A `return` whose sale is permanently parked waits as
+# `missing_parent:sale`, and a `return_item` of a permanently parked return
+# waits as `missing_parent:return` -- both "may fix themselves", neither can.
+# A `return` parked for `duplicate_document_number` is permanent too, and its
+# stock movement and journal are applied exactly like a sale's. What this
+# still does NOT do: promise anything about a merely MISSING parent -- that
+# one really does retry, and keeps saying so (the allow-half).
+_SYNC_REVIEW_CHILD_KINDS = ('sale_item', 'payment', 'return')
+_SYNC_REVIEW_RETURN_CHILD_KINDS = ('return_item',)
 _SYNC_REVIEW_REASON_PARKED_SALE = (
     'its sale was set aside here because the same receipt number already exists, '
     'so it cannot be added on its own')
+_SYNC_REVIEW_REASON_PARKED_RETURN = (
+    'its return was set aside here because the same return number already exists, '
+    'or because the sale it belongs to was, so it cannot be added on its own')
 _SYNC_REVIEW_NOTE_PARKED_SALE_CHILD = (
     'This will not fix itself. It needs a person to look at the sale it belongs to.')
+_SYNC_REVIEW_NOTE_PARKED_RETURN_CHILD = (
+    'This will not fix itself. It needs a person to look at the return it belongs to.')
 _SYNC_REVIEW_NOTE_PARKED_SALE = (
     'The sale itself was not added, but the stock it took off the shelf and the '
     'accounting entries it made WERE added here. Stock and accounts can therefore '
     'be ahead of the takings until a person sorts this sale out.')
+_SYNC_REVIEW_NOTE_PARKED_RETURN = (
+    'The return itself was not added, but the stock it put back on the shelf and the '
+    'accounting entries it made WERE added here. Stock and accounts can therefore '
+    'be ahead of the refunds until a person sorts this return out.')
+# The other truth (Track S, crew Y's 52aa477c): on a build that parks a set-aside
+# document's stock movement and journal WITH it, none of them was added here.
+_SYNC_REVIEW_NOTE_PARKED_SALE_HELD = (
+    'The sale itself was not added, and the stock it took off the shelf and the '
+    'accounting entries it made were set aside with it, so nothing of it has been '
+    'counted here. They wait until a person sorts this sale out.')
+_SYNC_REVIEW_NOTE_PARKED_RETURN_HELD = (
+    'The return itself was not added, and the stock it put back on the shelf and the '
+    'accounting entries it made were set aside with it, so nothing of it has been '
+    'counted here. They wait until a person sorts this return out.')
+
+
+def _sync_review_applied_uids(conn, rows, kind):
+    """uids of the set-aside `kind` ('sale' or 'return') documents whose stock
+    movement or accounting journal WAS added on THIS computer anyway.
+
+    DERIVED FROM THE DATABASE, never assumed from the engine's version: a till
+    that took the row before it learned to park a document's children with it
+    (crew Y, 52aa477c) really did add them, and one that took it after did not.
+    The wording must follow what is there.
+
+    Matches, per document:
+      * a `gl_journals` row with (source_type, source_uid) = (kind, its uid) --
+        the same key the engine's parking rule uses; and
+      * an `inventory_movements` row of the document's movement type with
+        reference = its number AND terminal_id = the sender's. The terminal is
+        part of the key on purpose: the computer whose document WON that number
+        holds a movement with the SAME reference, and it must not be mistaken
+        for the loser's (the engine's legacy matching uses the same pair).
+    A missing table or column (an older database) simply matches nothing."""
+    number_key = 'sale_number' if kind == 'sale' else 'return_number'
+    movement_type = 'sale_out' if kind == 'sale' else 'return_in'
+    found = set()
+    for r in rows:
+        if r['reason'] != 'duplicate_document_number':
+            continue
+        try:
+            p = json.loads(r['payload'])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(p, dict) or not isinstance(p.get('uid'), str) or not p.get('uid'):
+            continue
+        uid = p['uid']
+        try:
+            if conn.execute("SELECT 1 FROM gl_journals WHERE source_type=? AND source_uid=? LIMIT 1",
+                            (kind, uid)).fetchone():
+                found.add(uid)
+                continue
+        except sqlite3.OperationalError:
+            pass
+        number, terminal = p.get(number_key), p.get('terminal_id')
+        if not number or not terminal:
+            continue
+        try:
+            if conn.execute("SELECT 1 FROM inventory_movements WHERE movement_type=? AND reference=? "
+                            "AND terminal_id=? LIMIT 1", (movement_type, number, terminal)).fetchone():
+                found.add(uid)
+        except sqlite3.OperationalError:
+            pass
+    return found
+
+
+def _sync_review_payload_uid(row):
+    try:
+        p = json.loads(row['payload'])
+    except (TypeError, ValueError):
+        return None, None
+    if not isinstance(p, dict):
+        return None, None
+    uid = p.get('uid') if isinstance(p.get('uid'), str) and p.get('uid') else None
+    sale_uid = p.get('sale_uid') if isinstance(p.get('sale_uid'), str) and p.get('sale_uid') else None
+    return uid, sale_uid
 
 
 def _sync_review_parked_sale_uids(sale_rows):
@@ -18994,16 +19651,28 @@ def _sync_review_parked_sale_uids(sale_rows):
     for r in sale_rows:
         if r['reason'] != 'duplicate_document_number':
             continue
-        try:
-            p = json.loads(r['payload'])
-        except (TypeError, ValueError):
-            continue
-        if isinstance(p, dict) and isinstance(p.get('uid'), str) and p['uid']:
-            uids.add(p['uid'])
+        uid, _ = _sync_review_payload_uid(r)
+        if uid:
+            uids.add(uid)
     return uids
 
 
-def _sync_review_view(row, parked_sale_uids=frozenset()):
+def _sync_review_parked_return_uids(return_rows, parked_sale_uids):
+    """uids of the return rows that can NEVER be added: a repeated return
+    number, or a sale that is itself permanently set aside. A return that is
+    only waiting for a sale that has not arrived yet is deliberately NOT here."""
+    uids = set()
+    for r in return_rows:
+        uid, sale_uid = _sync_review_payload_uid(r)
+        if not uid:
+            continue
+        if r['reason'] == 'duplicate_document_number' or sale_uid in parked_sale_uids:
+            uids.add(uid)
+    return uids
+
+
+def _sync_review_view(row, parked_sale_uids=frozenset(), parked_return_uids=frozenset(),
+                      applied_uids=frozenset()):
     try:
         p = json.loads(row['payload']) if row['payload'] else {}
     except (TypeError, ValueError):
@@ -19019,16 +19688,47 @@ def _sync_review_view(row, parked_sale_uids=frozenset()):
     parent_parked = bool(etype in _SYNC_REVIEW_CHILD_KINDS
                          and isinstance(p.get('sale_uid'), str)
                          and p.get('sale_uid') in parked_sale_uids)
+    # A set-aside document's stock movement / journal now waits WITH it (crew Y,
+    # 52aa477c) as `missing_parent:sale|return`, keyed by source_type/source_uid.
+    # If that document is permanently set aside, they can never resolve either.
+    src_uid = p.get('source_uid') if isinstance(p.get('source_uid'), str) else None
+    if (etype in ('inventory_movement', 'gl_journal') and src_uid
+            and p.get('source_type') == 'sale' and src_uid in parked_sale_uids):
+        parent_parked = True
+    return_parent_parked = bool(
+        (etype in _SYNC_REVIEW_RETURN_CHILD_KINDS
+         and isinstance(p.get('return_uid'), str)
+         and p.get('return_uid') in parked_return_uids)
+        or (etype in ('inventory_movement', 'gl_journal') and src_uid
+            and p.get('source_type') == 'return' and src_uid in parked_return_uids))
     note = None
     stock_and_books_applied = None
-    if parent_parked:
+    # Whether the stock and books of a set-aside document were added HERE is a
+    # fact read from the database (`applied_uids`), never a constant: it depends
+    # on whether this till's engine parked the document's children with it.
+    this_uid = p.get('uid') if isinstance(p.get('uid'), str) else None
+    was_applied = bool(this_uid) and this_uid in applied_uids
+    if parent_parked and etype == 'return' and row['reason'] == 'duplicate_document_number':
+        # Parked for TWO permanent reasons; its own stock-and-books note is the
+        # more important thing to say, and it is still not retried.
+        reason_text, retries = _sync_review_reason(row['reason'], etype)[0], False
+        stock_and_books_applied = was_applied
+        note = _SYNC_REVIEW_NOTE_PARKED_RETURN if was_applied else _SYNC_REVIEW_NOTE_PARKED_RETURN_HELD
+    elif parent_parked:
         # Whatever the row's own reason says, it can never resolve: its sale is
         # permanently set aside.
         reason_text, retries = _SYNC_REVIEW_REASON_PARKED_SALE, False
         note = _SYNC_REVIEW_NOTE_PARKED_SALE_CHILD
+    elif return_parent_parked:
+        reason_text, retries = _SYNC_REVIEW_REASON_PARKED_RETURN, False
+        note = _SYNC_REVIEW_NOTE_PARKED_RETURN_CHILD
+        parent_parked = True
     elif etype == 'sale' and row['reason'] == 'duplicate_document_number':
-        stock_and_books_applied = True
-        note = _SYNC_REVIEW_NOTE_PARKED_SALE
+        stock_and_books_applied = was_applied
+        note = _SYNC_REVIEW_NOTE_PARKED_SALE if was_applied else _SYNC_REVIEW_NOTE_PARKED_SALE_HELD
+    elif etype == 'return' and row['reason'] == 'duplicate_document_number':
+        stock_and_books_applied = was_applied
+        note = _SYNC_REVIEW_NOTE_PARKED_RETURN if was_applied else _SYNC_REVIEW_NOTE_PARKED_RETURN_HELD
     return {
         'kind_code': etype if etype in _SYNC_REVIEW_KINDS else 'other',
         'kind': _SYNC_REVIEW_KINDS.get(etype, _SYNC_REVIEW_KIND_FALLBACK),
@@ -19061,9 +19761,11 @@ def list_sync_review():
     Each item: kind_code, kind, reason, retries_itself, number, amount, source,
     arrived_at, plus (round 3) `parent_parked` (an item/payment whose sale is set
     aside for good: retries_itself is false and `note` says a person is needed),
-    `stock_and_books_applied` (true on a sale set aside for a repeated receipt
-    number: its stock and accounting entries WERE still added here; null on
-    every other row) and `note` (the plain sentence for either case, else null)."""
+    `stock_and_books_applied` (on a sale or return set aside for a repeated
+    number: true when a stock movement or accounting journal of that document
+    really is in this computer's own tables, false when none is -- DERIVED from
+    the tables, see `_sync_review_applied_uids`; null on every other row) and
+    `note` (the plain sentence for either case, else null)."""
     # The ONE spelling of "the shop owner" -- pinned by AST in
     # retail_route_capability_matrix_test.py's EXPECTED_COMPANY_ADMIN_ROUTES.
     denied = _require_company_admin(verb='open')
@@ -19071,7 +19773,8 @@ def list_sync_review():
         return denied
 
     empty = {'items': [], 'next_cursor': None,
-             'summary': {'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0}}
+             'summary': {'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0,
+                         'returns_count': 0, 'returns_total': 0.0}}
     from commercial_runtime.sync import sync_service as _ss
     if _ss.local_company_id_from_registry() != _cid():
         # See COMPANY SCOPE above: these rows belong to this install's sync
@@ -19096,11 +19799,17 @@ def list_sync_review():
             count = conn.execute('SELECT COUNT(*) FROM sync_apply_quarantine').fetchone()[0]
             sale_rows = conn.execute(
                 "SELECT reason, payload FROM sync_apply_quarantine WHERE entity_type='sale'").fetchall()
+            return_rows = conn.execute(
+                "SELECT reason, payload FROM sync_apply_quarantine WHERE entity_type='return'").fetchall()
             rows = conn.execute(
                 'SELECT rowid AS rid, entity_type, reason, payload, quarantined_at '
                 f'FROM sync_apply_quarantine {where} '
                 'ORDER BY quarantined_at DESC, rowid DESC LIMIT ?',
                 params + [limit + 1]).fetchall()
+            # Which set-aside sales/returns have their stock or books on THIS
+            # computer anyway. Read here, while the connection is open.
+            applied = (_sync_review_applied_uids(conn, sale_rows, 'sale')
+                       | _sync_review_applied_uids(conn, return_rows, 'return'))
         except sqlite3.OperationalError as exc:
             if 'no such table' in str(exc).lower():
                 return jsonify({'status': 'success', 'data': empty})
@@ -19118,17 +19827,33 @@ def list_sync_review():
         if amt is not None:
             sales_total += amt
 
+    # Refunds are counted on their OWN, never netted against sales: a shop that
+    # is short 100 in sales and 40 in refunds is not "short 60" -- the two go to
+    # different places in the books (coordinator item 2).
+    returns_total = Decimal('0.000')
+    for r in return_rows:
+        try:
+            p = json.loads(r['payload'])
+        except (TypeError, ValueError):
+            continue
+        amt = _sync_review_money(p.get('refund_amount')) if isinstance(p, dict) else None
+        if amt is not None:
+            returns_total += amt
+
     page = rows[:limit]
     next_cursor = None
     if len(rows) > limit and page:
         last = page[-1]
         next_cursor = f"{last['quarantined_at']}|{last['rid']}"
     parked = _sync_review_parked_sale_uids(sale_rows)
+    parked_returns = _sync_review_parked_return_uids(return_rows, parked)
     return jsonify({'status': 'success', 'data': {
-        'items': [_sync_review_view(r, parked) for r in page],
+        'items': [_sync_review_view(r, parked, parked_returns, applied) for r in page],
         'next_cursor': next_cursor,
         'summary': {'waiting_count': count, 'sales_count': len(sale_rows),
-                    'sales_total': float(sales_total)},
+                    'sales_total': float(sales_total),
+                    'returns_count': len(return_rows),
+                    'returns_total': float(returns_total)},
     }})
 
 
@@ -19514,19 +20239,15 @@ def _checklist_main_computer(cid):
 
 
 def _checklist_shop_and_tax(conn, cid):
+    # The setup guide completes this step on the shop NAME alone (a logo is a
+    # nicety, not a blocker), so the server must agree or the two would show
+    # different progress for the same shop. The step key keeps its old id
+    # (`shop_name_logo`); only the rule changed.
     saved_name = (_read_stored_setting(conn, cid, 'branding_business_name') or '').strip()
-    has_logo = conn.execute(
-        "SELECT 1 FROM retail_settings WHERE company_id=? AND skey=?", (cid, _BRANDING_LOGO_KEY)
-    ).fetchone() is not None
-    if saved_name and has_logo:
-        shop = _checklist_step('shop_name_logo', True, 'Name and logo are saved.')
+    if saved_name:
+        shop = _checklist_step('shop_name_logo', True, 'The shop name is saved.')
     else:
-        missing = []
-        if not saved_name:
-            missing.append('shop name')
-        if not has_logo:
-            missing.append('logo')
-        shop = _checklist_step('shop_name_logo', False, 'Missing: ' + ' and '.join(missing) + '.')
+        shop = _checklist_step('shop_name_logo', False, 'Missing: shop name.')
     rate = (_read_stored_setting(conn, cid, 'default_tax_rate') or '').strip()
     gst = _checklist_step('default_gst', bool(rate),
                           'A default tax rate is set.' if rate else 'No default tax rate is set.')
@@ -19566,26 +20287,27 @@ def _checklist_cashier(cid):
 
 
 def _checklist_numbers(conn, cid):
-    """Per-computer: "on" means THIS computer's switch is on (the state is
-    device-local, see the numbering block). The books may not exist until the
-    next shift, and the detail says so."""
+    """Per-computer: "on" means the main computer GAVE THIS computer a till
+    number (a synced `till_allocations` row, schema v42). The books may not exist
+    until the next shift, and the detail says so."""
     if not READABLE_NUMBERS_AVAILABLE:
-        # Whatever an earlier build stored, nothing is "on" while unavailable
-        # (see READABLE_NUMBERS_AVAILABLE): the step can be neither done nor
-        # actionable, and it says why in plain words.
+        # The kill switch is down (see READABLE_NUMBERS_AVAILABLE): the step can
+        # be neither done nor actionable, and it says why in plain words.
         return _checklist_step('readable_numbers', False,
-                               'Readable numbers are switched off until multi-computer '
-                               'support arrives. Documents use the long default numbers.')
+                               'Readable numbers are switched off in this version. '
+                               'Documents use the long default numbers.')
     terminal = local_terminal_id()
-    state = _read_till_state(conn, cid, terminal)
-    if not state['on']:
+    alloc = doc_series.active_allocation(conn, cid, terminal) if terminal else None
+    if alloc is None:
         return _checklist_step('readable_numbers', False,
                                'Off on this computer. Documents use the long default numbers.')
-    if _tracked_books(conn, cid, terminal, state):
+    state = _read_till_state(conn, cid, terminal)
+    till = int(alloc['till_number'])
+    if state['on'] and state['till'] == till and _tracked_books(conn, cid, terminal, state):
         return _checklist_step('readable_numbers', True,
-                               f"On for this computer (till {state['till']}).")
+                               f"On for this computer (till {till}).")
     return _checklist_step('readable_numbers', True,
-                           f"On for this computer (till {state['till']}). "
+                           f"On for this computer (till {till}). "
                            "The books are created when it opens its next shift.")
 
 

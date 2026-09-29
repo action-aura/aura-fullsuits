@@ -58,6 +58,36 @@ TERM_A = 'docseries-isolation-till-a'
 TERM_B = 'docseries-isolation-till-b'
 
 
+def _make_main_computer(device_dir, relay_db, email, password, term, tag):
+    """Make this device the shop's main computer, by the real route.
+
+    DELIBERATE UPDATE (P2S, schema v42): creating or claiming a numbering book
+    is main-computer-only now (409 TILL_NEEDS_MAIN_COMPUTER). This file used to
+    call those routes on a bare harness shop, which was never "the main
+    computer" -- it just was not asked. The harness founds a shop by inserting
+    the owner directly, so it plants the ADMIN_CREATED audit row the real
+    founding route writes (the only thing that tells a founder from a joiner --
+    same step as _v42_shop.Shop), then announces and claims through
+    POST /api/devices/me/claim-admin.
+
+    WHAT THIS FILE CAN NO LONGER CATCH: whether create_doc_series /
+    claim_doc_series refuse a computer that is NOT main. That is pinned, both
+    directions, in retail_v42_till_allocation_test.py."""
+    run_accept_device(PY, device_dir, relay_db, [
+        {"op": "reg_exec",
+         "sql": ("INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id) "
+                 "SELECT ?, company_id, NULL, 'ADMIN_CREATED', 'user', 'founder' FROM users LIMIT 1"),
+         "params": [f"founder-audit-{tag}"]},
+    ])
+    out = run_accept_device(PY, device_dir, relay_db, [
+        {"op": "set_terminal_id", "terminal_id": term},
+        {"op": "login", "email": email, "password": password},
+        {"op": "announce", "reason": "boot"},
+        {"op": "claim_main"},
+    ])
+    assert out[-1]["status_code"] == 200, out[-1]["body"]
+
+
 def test_a_book_claimed_by_one_device_is_never_used_by_another_and_neither_wedges_the_other(tmp_path):
     device_a = tmp_path / "device_a"
     device_b = tmp_path / "device_b"
@@ -68,6 +98,7 @@ def test_a_book_claimed_by_one_device_is_never_used_by_another_and_neither_wedge
     ])
     a_pid = shop["product_id"]
 
+    _make_main_computer(device_a, relay_db, shop["email"], shop["password"], TERM_A, "a")
     [_term_a, _login_a, created] = run_accept_device(PY, device_a, relay_db, [
         {"op": "set_terminal_id", "terminal_id": TERM_A},
         {"op": "login", "email": shop["email"], "password": shop["password"]},
@@ -182,6 +213,7 @@ def test_two_offline_devices_coding_the_same_book_quarantine_without_wedging_the
     [shop] = run_accept_device(PY, device_a, relay_db, [
         {"op": "create_shop", "price": 5.0, "initial_stock": 10},
     ])
+    _make_main_computer(device_a, relay_db, shop["email"], shop["password"], TERM_A, "a")
     run_accept_device(PY, device_a, relay_db, [
         {"op": "set_terminal_id", "terminal_id": TERM_A},
         {"op": "login", "email": shop["email"], "password": shop["password"]},
@@ -194,6 +226,7 @@ def test_two_offline_devices_coding_the_same_book_quarantine_without_wedging_the
     # reachable collision B2's revised conclusion names (not the
     # allocator-index path the original review guessed at).
     [bootstrap] = run_accept_device(PY, device_b, relay_db, [{"op": "bootstrap"}])
+    _make_main_computer(device_b, relay_db, bootstrap["email"], bootstrap["password"], TERM_B, "b")
     run_accept_device(PY, device_b, relay_db, [
         {"op": "set_terminal_id", "terminal_id": TERM_B},
         {"op": "login", "email": bootstrap["email"], "password": bootstrap["password"]},

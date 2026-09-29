@@ -300,13 +300,23 @@ def test_main_computer_true_only_when_this_device_is_the_admin_device(monkeypatc
 
 # ── shop name + logo, default tax ────────────────────────────────────────
 
-def test_shop_name_and_logo_need_both_saved():
+def test_shop_step_is_done_on_the_shop_name_alone():
+    """DELIBERATE CHANGE (P1b, setup guide completes the shop step on the name
+    alone): this used to be `test_shop_name_and_logo_need_both_saved`, which
+    pinned 'name saved, no logo -> NOT done, detail "Missing: logo."'. That
+    behaviour is gone on purpose -- the guide and the server must agree.
+
+    WHAT THIS CAN NO LONGER CATCH: a regression that makes the server demand a
+    logo again is caught only by the 'name alone ticks it' assertion below; the
+    old 'a logo is required' guarantee is deliberately NOT pinned any more. The
+    logo is a nicety and a shop without one is fully set up."""
     c, cid = _make_shop()
     s = _steps(c)['shop_name_logo']
-    assert s['done'] is False and 'shop name' in s['detail'] and 'logo' in s['detail']
+    assert s['done'] is False and s['detail'] == 'Missing: shop name.'
     _put_setting(cid, 'branding_business_name', 'Blue Door')
     s = _steps(c)['shop_name_logo']
-    assert s['done'] is False and s['detail'] == 'Missing: logo.'
+    assert s['done'] is True, s          # no logo saved, and it still ticks
+    # a logo on top changes nothing about the step
     _put_setting(cid, retail_api._BRANDING_LOGO_KEY, 'data:image/png;base64,AAAA')
     assert _steps(c)['shop_name_logo']['done'] is True
     _put_setting(cid, 'branding_business_name', '   ')   # blank name is not a name
@@ -451,30 +461,53 @@ def _steps_at(client, terminal):
         return _steps(client)
 
 
-def test_readable_numbers_step_is_unavailable_by_default_and_enabling_is_refused():
-    """Round 3: readable numbers are UNAVAILABLE until the device registry syncs
-    (READABLE_NUMBERS_AVAILABLE=False). The step can never tick, and says why in
-    plain words; a request to switch it on is refused with a 409 and changes
-    nothing."""
+@pytest.fixture
+def _as_main_computer(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42). Switching readable numbers on gives
+    THIS computer a till number, which only the shop's main computer may do
+    (409 TILL_NEEDS_MAIN_COMPUTER), and only to a computer the registry lists as
+    active. These tests are about what the CHECKLIST STEP reads back, not about
+    who may hand out numbers, so they run AS the main computer with the two
+    registry answers pinned true (same seam retail_p1b_backend_numbering_test.py
+    pins).
+
+    WHAT THIS FILE CAN NO LONGER CATCH: whether the main-only gate fires. That is
+    proven with a REAL registry, both directions, in
+    retail_v42_till_allocation_test.py."""
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+    monkeypatch.setattr(retail_api, '_registry_device_is_active', lambda cid, device_id: True)
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
+
+
+def test_readable_numbers_step_is_unavailable_when_the_kill_switch_is_off_and_enabling_is_refused(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42): the flag now DEFAULTS ON, so this is
+    the operator's KILL SWITCH case, not the shipped default it used to be. With
+    READABLE_NUMBERS_AVAILABLE off the step can never tick, says why in plain
+    words, and a request to switch it on is refused with a 409 and changes
+    nothing. (The flag check runs BEFORE the main-computer check, so this needs no
+    registry.)
+
+    WHAT THIS CAN NO LONGER CATCH: that a fresh build ships with the flag off --
+    it ships on now; a build that flipped the default back would pass here."""
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', False)
     c, cid = _make_shop()
     s = _steps_at(c, TILL_A)['readable_numbers']
-    assert s['done'] is False and 'multi-computer support' in s['detail'], s
+    assert s['done'] is False and 'switched off in this version' in s['detail'], s
     r = _numbering(c, TILL_A, {'readable_enabled': True, 'till_number': 3, 'branch_code': _unique_code()})
     assert r.status_code == 409 and r.get_json()['code'] == 'READABLE_NEEDS_DEVICE_REGISTRY', r.get_json()
     assert _steps_at(c, TILL_A)['readable_numbers']['done'] is False
 
 
-def test_readable_numbers_step_reads_unavailable_even_over_a_stored_on_switch(monkeypatch):
+def test_readable_numbers_step_reads_unavailable_even_over_a_stored_on_switch(monkeypatch, _as_main_computer):
     """A computer switched ON while the feature was available must not tick the
     step once it is not: the step reads the flag, not just the stored switch."""
     c, cid = _make_shop()
-    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
     assert _numbering(c, TILL_A, {'readable_enabled': True, 'till_number': 3,
                                   'branch_code': _unique_code()}).status_code == 200
     assert _steps_at(c, TILL_A)['readable_numbers']['done'] is True
     monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', False)
     s = _steps_at(c, TILL_A)['readable_numbers']
-    assert s['done'] is False and 'multi-computer support' in s['detail'], s
+    assert s['done'] is False and 'switched off in this version' in s['detail'], s
 
 
 def test_readable_numbers_is_off_until_the_owner_switches_this_computer_on(monkeypatch):
@@ -490,8 +523,7 @@ def test_readable_numbers_is_off_until_the_owner_switches_this_computer_on(monke
     assert _steps_at(c, TILL_A)['readable_numbers']['done'] is False
 
 
-def test_readable_numbers_on_for_this_computer_before_and_after_the_books_exist(monkeypatch):
-    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
+def test_readable_numbers_on_for_this_computer_before_and_after_the_books_exist(monkeypatch, _as_main_computer):
     c, cid = _make_shop()
     r = _numbering(c, TILL_A, {'readable_enabled': True, 'till_number': 3, 'branch_code': _unique_code()})
     assert r.status_code == 200, r.get_json()
@@ -508,8 +540,7 @@ def test_readable_numbers_on_for_this_computer_before_and_after_the_books_exist(
     assert s['done'] is False and 'Off on this computer' in s['detail'], s
 
 
-def test_readable_numbers_tick_is_per_computer_and_ignores_another_shops_books(monkeypatch):
-    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
+def test_readable_numbers_tick_is_per_computer_and_ignores_another_shops_books(monkeypatch, _as_main_computer):
     a, cid_a = _make_shop()
     b, cid_b = _make_shop()
     assert _numbering(b, TILL_B, {'readable_enabled': True, 'till_number': 4,

@@ -290,6 +290,23 @@ def _app():
     return flask_app
 
 
+@pytest.fixture(autouse=True)
+def _runs_as_the_main_computer(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42). Creating a number book is now a
+    main-computer-only action (409 TILL_NEEDS_MAIN_COMPUTER anywhere else) and
+    the local test device is not the registry's main computer. This file is
+    about the e-invoice number firewall, not about who may create a book, so
+    the routes run AS the main computer with the one registry answer pinned true.
+    `_app()` runs FIRST for the import-order reason `_make_admin_client` spells out.
+
+    WHAT THIS FILE CAN NO LONGER CATCH: whether create_doc_series refuses a
+    non-main computer. That is proven with a REAL registry, both directions,
+    in retail_v42_till_allocation_test.py."""
+    _app()
+    from commercial_runtime.identity import device_context
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+
+
 def _make_admin_client():
     # `_app()` FIRST, deliberately -- it is what sets AURA_APP_DATA before
     # ANYTHING under commercial_runtime is ever imported. `registry_db.py`/

@@ -95,6 +95,26 @@ def _readable_numbers_available(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _this_computer_is_the_main_computer(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42). Till numbers are now given out ONLY
+    by the shop's main computer (`TILL_NEEDS_MAIN_COMPUTER` otherwise), and only
+    to a computer the device registry lists as active. Every test below was
+    written when any signed-in owner could pick a number for their own machine,
+    so this file now runs AS the main computer, with the two registry answers
+    pinned true.
+
+    WHAT THIS FILE CAN NO LONGER CATCH: whether the main-only gate and the
+    "is that computer really in the registry" check fire. Those are pinned, with
+    a REAL registry, in retail_v42_till_allocation_test.py (offline second
+    computer refused, nothing written; unknown computer refused; mutation-proved).
+    Also: the terminal ids used here are made-up strings, so the real
+    terminal_uid == registry device id identity is exercised there, not here."""
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+    monkeypatch.setattr(retail_api, '_registry_device_is_active', lambda cid, device_id: True)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_device_cache():
     device_context._cached_device = None
     yield
@@ -603,8 +623,18 @@ def test_enabling_stores_a_device_local_switch_and_creates_no_books_yet():
     assert d['preview_is_example'] is False
     assert d['preview'] == {'sale': code + '3-000001', 'return': code + '3-R-000001'}
     assert 'next shift' in d['preview_note']
-    assert _till_state(cid, TILL_1) == {'on': True, 'till': 3, 'branch_uid': buid, 'series_ids': [],
-                                        'withdrawn': False}
+    # DELIBERATE UPDATE (schema v42). The switch used to WRITE the device-local
+    # `numbering_till` state itself; now "on" means an ACTIVE ALLOCATION for this
+    # computer (`till_allocations`, given by the main computer), and the state row
+    # is only a record of which books this computer made, written at shift open
+    # (`_book_till_at_shift_open`). So straight after the switch the allocation
+    # exists and the state row does not. This line can no longer catch "the
+    # switch forgot to write the state"; the allocation assertion below and the
+    # next-shift tests (state written at shift open) carry that instead.
+    alloc = _rows("SELECT till_number, branch_uid FROM till_allocations WHERE "
+                  "CAST(company_id AS TEXT)=? AND terminal_uid=? AND status='active'", (cid, TILL_1))
+    assert len(alloc) == 1 and int(alloc[0]['till_number']) == 3 and alloc[0]['branch_uid'] == buid
+    assert _till_state(cid, TILL_1) is None
     assert _books(cid) == [], 'the books are made at the next shift, not by the switch'
     assert [a['details'] for a in _audit_rows(cid, 'NUMBERING_READABLE_SET')] == ['1:till 3']
     # the switch is DEVICE-LOCAL: it must not have been queued for sync
@@ -1076,7 +1106,13 @@ def test_a_taken_code_race_is_swallowed_and_leaves_no_half_set_of_books(monkeypa
     r = _open_shift(c, TILL_1)
     assert r.status_code == 200, r.get_json()
     assert _books(cid) == [], 'a half set of books must not survive a refused insert'
-    assert _till_state(cid, TILL_1)['series_ids'] == []
+    # DELIBERATE UPDATE (schema v42): the till-state row is written only when
+    # books are made (it is no longer written by the switch), so after a refused
+    # insert it does not exist at all. "No state" and "state with no books" both
+    # mean "this till tracks no books"; what can no longer be told apart here is
+    # those two, which nothing reads differently.
+    st = _till_state(cid, TILL_1)
+    assert st is None or st['series_ids'] == []
 
 
 def test_a_refused_insert_is_rolled_back_on_the_callers_own_connection(monkeypatch):
@@ -1271,5 +1307,86 @@ def test_an_already_on_computer_without_books_yet_gets_none_at_its_next_shift(mo
     assert _open_shift(c, TILL_1).status_code == 200
     assert _books(cid) == []
     assert LEGACY.match(_sale_number(c, pid, TILL_1))
-    assert len(_audit_rows(cid, 'NUMBERING_READABLE_WITHDRAWN')) == 1
+    # DELIBERATE UPDATE (v42, crew M). This used to assert exactly one
+    # NUMBERING_READABLE_WITHDRAWN audit row. That row was written from the
+    # device-local `numbering_till:<terminal>` state, which "switch on" itself
+    # used to create; under v42 "on" is an ALLOCATION (main computer), and the
+    # local state is written only when the books are actually made at shift
+    # open. A computer that never got books therefore has no state to withdraw
+    # and no audit row is written. What this test can no longer catch: a
+    # withdrawal audit for a computer that was switched on but never had books.
+    # What it still catches (and what matters): no books are created at the next
+    # shift and the sale is a long number -- pinned above.
+    assert _audit_rows(cid, 'NUMBERING_READABLE_WITHDRAWN') == []
     assert _audit_rows(cid, 'DOC_SERIES_RETIRED') == []
+
+
+# ── the mint gate (coordinator item 1, HIGH: readable numbers leaked past the flag)
+#
+# Ported from the P1b verifier's attack file (vb_attack_test.py b2). WHAT THE OLD
+# FIXTURE COULD NOT CATCH: `_switched_on_by_an_earlier_build` CLOSES the shift
+# before the kill switch is flipped, so the withdrawal that used to run only at
+# shift open always got its chance. Here the shift is LEFT OPEN -- the state of a
+# till whose owner never closed the drawer across an update, or across the main
+# computer taking its number back. `create_sale` needs no open shift, so the
+# decision has to be made when the number is MINTED, not when a shift opens.
+
+def _readable(number, code, till):
+    return number.startswith(f'{code}{till}-')
+
+
+def test_an_open_shift_across_the_kill_switch_stops_minting_readable_numbers(monkeypatch):
+    c, cid, buid, code = _make_shop()
+    pid = _product(c)
+    assert _enable(c, 5).status_code == 200
+    assert _open_shift(c, TILL_1).status_code == 200
+    before = _sale_number(c, pid, TILL_1)
+    assert _readable(before, code, 5), before          # the allow half: it DOES mint while on
+    # --- the update lands; the shift stays OPEN ---
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', False)
+    d = _get(c).get_json()['data']
+    after = _sale_number(c, pid, TILL_1)
+    assert d['readable_enabled'] is False
+    assert LEGACY.match(after), f"screen says off but the till printed {after}"
+    # and it comes straight back when the switch does (nothing was destroyed)
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
+    assert _readable(_sale_number(c, pid, TILL_1), code, 5)
+
+
+def _set_allocation(cid, **cols):
+    sets = ', '.join(f'{k}=?' for k in cols)
+    conn = get_retail_conn()
+    try:
+        conn.execute(f"UPDATE till_allocations SET {sets} WHERE CAST(company_id AS TEXT)=? "
+                     "AND status='active'", (*cols.values(), cid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_an_open_shift_after_the_main_computer_takes_the_number_back_mints_plain_numbers():
+    """The allocation is a SYNCED fact: the main computer can release it while
+    this till's own local record still says 'I have books'. Simulated by
+    flipping the row exactly as the sync apply does."""
+    c, cid, buid, code = _make_shop()
+    pid = _product(c)
+    assert _enable(c, 5).status_code == 200
+    assert _open_shift(c, TILL_1).status_code == 200
+    assert _readable(_sale_number(c, pid, TILL_1), code, 5)
+    _set_allocation(cid, status='released')
+    n = _sale_number(c, pid, TILL_1)
+    assert LEGACY.match(n), f"no allocation, yet the till printed {n}"
+    assert _sale_number(c, pid, TILL_1) != n
+
+
+def test_an_open_shift_whose_allocated_number_changed_does_not_keep_the_old_books():
+    """The book is `<code>5`; the allocation now says 6. Printing ABD5- numbers
+    under a till-6 allocation would let two tills share a prefix."""
+    c, cid, buid, code = _make_shop()
+    pid = _product(c)
+    assert _enable(c, 5).status_code == 200
+    assert _open_shift(c, TILL_1).status_code == 200
+    assert _readable(_sale_number(c, pid, TILL_1), code, 5)
+    _set_allocation(cid, till_number=6)
+    n = _sale_number(c, pid, TILL_1)
+    assert LEGACY.match(n), f"allocation says 6, the till printed {n}"

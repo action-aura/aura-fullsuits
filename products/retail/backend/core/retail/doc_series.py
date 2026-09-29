@@ -239,6 +239,54 @@ def allocate(conn, series_row) -> str:
     return number
 
 
+def highest_local_number(conn, series_row) -> int:
+    """The largest N among the documents of this book's doc type whose number
+    reads `<code>-<N>` on THIS database (ours, or pulled from another
+    computer). 0 when there are none. Pure read; a database without the
+    document table answers 0."""
+    spot = NUMBER_COLUMNS.get(series_row['doc_type'])
+    if spot is None:
+        return 0
+    table, column = spot
+    prefix = f"{series_row['code']}-"
+    try:
+        rows = conn.execute(
+            f"SELECT {column} FROM {table} WHERE {column} LIKE ?", (prefix + '%',)).fetchall()
+    except sqlite3.OperationalError as exc:
+        if 'no such table' in str(exc):
+            return 0
+        raise
+    best = 0
+    for r in rows:
+        number = str(r[0])
+        tail = number[len(prefix):]
+        if number.startswith(prefix) and tail.isdigit():
+            best = max(best, int(tail))
+    return best
+
+
+def adopt_counter_after_pull(conn, series_row) -> bool:
+    """REINSTALL ADOPTION. A computer reinstalled with the same identity gets its
+    own book back by sync but has no `doc_series_counter` row (the counter is
+    device-local), so it would restart at the book's first number and walk
+    through every number it already used. When the counter row is missing, seed
+    it to the highest number seen locally. The CALLER only asks after a
+    completed pull -- before that the local tables are not yet the truth, and
+    `allocate` still skips any number already present. Returns True when it
+    seeded. Never lowers an existing counter. No commit."""
+    have = conn.execute(
+        "SELECT 1 FROM doc_series_counter WHERE series_id=?", (series_row['id'],)).fetchone()
+    if have is not None:
+        return False
+    seen = highest_local_number(conn, series_row)
+    if seen <= max(series_row['start_no'] - 1, 0):
+        return False
+    conn.execute(
+        "INSERT OR IGNORE INTO doc_series_counter (series_id, last_no) VALUES (?,?)",
+        (series_row['id'], seen))
+    return True
+
+
 def peek_next_no(conn, series_row) -> str:
     """The READ-ONLY twin of `allocate` -- the exact string the NEXT
     document from this book will carry, without consuming it. Used by
@@ -408,6 +456,79 @@ def preview_next(conn, inspected):
         out[dt] = (peek_next_no(conn, row) if row is not None
                    else f"{inspected['codes'][dt]}-{1:0{READABLE_PAD_WIDTH}d}")
     return out
+
+
+# ── Till allocations (schema v42) ────────────────────────────────────────────
+# A readable till number is no longer a private choice each computer makes for
+# itself (that is how two computers that had not heard from each other both
+# picked "till 1" and minted the same `ABD1-000001`). It is GIVEN by the shop's
+# MAIN computer, one row per (branch, till number) in `till_allocations`, and a
+# row is what lets a terminal mint readable numbers at all. Pure reads and one
+# validation live here; the routes (retail_api.py) own the transaction, the
+# main-computer check and the sync event.
+
+def active_allocation(conn, company_id, terminal_uid):
+    """This terminal's ACTIVE till allocation row, or None. A terminal with no
+    identity can never hold one."""
+    if not terminal_uid:
+        return None
+    return conn.execute(
+        "SELECT * FROM till_allocations WHERE CAST(company_id AS TEXT)=? AND terminal_uid=? "
+        "AND status='active' ORDER BY created_at_utc, id LIMIT 1",
+        (str(company_id), terminal_uid)).fetchone()
+
+
+def allocations_in_branch(conn, company_id, branch_uid, active_only=True):
+    """Allocation rows of one branch, lowest till number first."""
+    sql = ("SELECT * FROM till_allocations WHERE CAST(company_id AS TEXT)=? AND branch_uid=?"
+           + (" AND status='active'" if active_only else "") + " ORDER BY till_number, id")
+    return conn.execute(sql, (str(company_id), branch_uid)).fetchall()
+
+
+def till_number_problem(conn, company_id, branch_uid, branch_code, till_number, terminal_uid):
+    """Why `till_number` cannot be given to `terminal_uid`, or None when it can.
+    Returns the string 'allocated' (another terminal holds an ACTIVE allocation
+    of this number in this branch) or 'book' (a book coded for this number
+    exists that is NOT this terminal's own -- a hand-made book, an older
+    terminal's book that a release left behind). Both are the same refusal to
+    the operator: TILL_NUMBER_TAKEN. Checked against `idx_doc_series_code`'s
+    global code space, not only this branch, because that index is global."""
+    for row in allocations_in_branch(conn, company_id, branch_uid):
+        if int(row['till_number']) == int(till_number) and row['terminal_uid'] != terminal_uid:
+            return 'allocated'
+    if inspect_till_books(conn, company_id, terminal_uid, branch_code, till_number)['conflicts']:
+        return 'book'
+    return None
+
+
+def lowest_free_till_number(conn, company_id, branch_uid, branch_code, terminal_uid=None):
+    """The smallest till number 1..MAX_TILL_NUMBER nothing else holds, or None
+    when all are taken. Always a SUGGESTION -- the caller still validates the
+    number it is finally asked to write, inside its own transaction."""
+    for n in range(1, MAX_TILL_NUMBER + 1):
+        if till_number_problem(conn, company_id, branch_uid, branch_code, n, terminal_uid) is None:
+            return n
+    return None
+
+
+_READABLE_CODE_RE = re.compile(r'^([A-Z]{2,4})(\d{1,2})(-R|-P)?$')
+
+
+def parse_readable_code(code):
+    """(branch_code, till_number) when `code` has the shape a readable till book
+    is coded with (`ABD1`, `ABD1-R`, `ABD1-P`), else None. Used at MINT time to
+    tell a readable book from a hand-made one whatever a settings row says: a
+    book's code is the one thing nobody can forget to update."""
+    if not isinstance(code, str):
+        return None
+    m = _READABLE_CODE_RE.match(code)
+    if not m:
+        return None
+    return m.group(1), int(m.group(2))
+
+
+def is_readable_code(code):
+    return parse_readable_code(code) is not None
 
 
 def till_numbers_in_use(conn, branch_code):

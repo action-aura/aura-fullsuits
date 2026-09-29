@@ -93,6 +93,18 @@ CAP_REPORTS = 'retail.reports'
 CAP_CASH_CLOSE = 'retail.cash.close'
 CAP_CASH_APPROVE = 'retail.cash.approve'
 CAP_EMPLOYEES = 'retail.employees'
+# Registry v9 (P2S): the Accountant's two codes.
+CAP_BOOKS_VIEW = 'retail.books.view'
+CAP_BOOKS_RECORD = 'retail.books.record'
+
+
+def ANY_OF(*codes):
+    """A route gated by `@mt_require_any_capability(a, b)`: holding ANY ONE of
+    the codes reaches it. Written as a frozenset so the table can say "either"
+    without pretending it is one code -- and so a route quietly changed from
+    any-of to a single code (or the reverse) is a red comparison, not a silent
+    widening or narrowing."""
+    return frozenset(codes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -165,7 +177,9 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'discard_held_sale': CAP_SELL,
     'create_customer': CAP_SELL,
     'update_customer': CAP_SELL,
-    'customer_payment': CAP_SELL,
+    # Taking a customer's payment is a till job (sell) OR a books job
+    # (books.record: the Accountant records receipts but cannot ring a sale).
+    'customer_payment': ANY_OF(CAP_SELL, CAP_BOOKS_RECORD),
     # Cash-drawer kick fired from the till on a completed CASH sale
     # (retail-hardware-viewports). Deliberately NOT with printer_test/
     # printer_devices below under CAP_EMPLOYEES: those are Settings-screen
@@ -203,7 +217,11 @@ EXPECTED_MUTATION_CAPABILITIES = {
 
     # ── Reversing money already taken: retail.refund ─────────────────────────
     'create_return': CAP_REFUND,
-    'void_payment': CAP_REFUND,
+    # Refund OR books.record (the Accountant reverses the receipts and payments
+    # it records). The decorator is only the floor: the supplier-payment half
+    # is narrowed to books.record ALONE inside the body -- proved live in
+    # retail_accountant_regate_test.py, which this static table cannot see.
+    'void_payment': ANY_OF(CAP_REFUND, CAP_BOOKS_RECORD),
 
     # ── This terminal's drawer: retail.cash.close ────────────────────────────
     # All three are own-terminal-only in the handler as well as capability-
@@ -279,8 +297,10 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # untouched and carries no route of its own to gate.
     'printer_test': CAP_EMPLOYEES,
     'payment_methods_add': CAP_EMPLOYEES,
-    'supplier_payment': CAP_EMPLOYEES,
-    'pay_purchase_order': CAP_EMPLOYEES,
+    # Money OUT to a supplier: books.record (was employees + an owner-only body
+    # guard until registry v9). Same move as the cheque block below.
+    'supplier_payment': CAP_BOOKS_RECORD,
+    'pay_purchase_order': CAP_BOOKS_RECORD,
     'demo_wipe': CAP_EMPLOYEES,
     'demo_seed': CAP_EMPLOYEES,
 
@@ -322,26 +342,26 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'attach_product_modifier_group': CAP_STOCK,
     'detach_product_modifier_group': CAP_STOCK,
 
-    # ── Cheques, Aseel-parity wave A-PAR (schema v32): retail.employees ──────
+    # ── Cheques, Aseel-parity wave A-PAR (schema v32): retail.books.record ───
     # ALL EIGHT, including create -- deliberately uniform, unlike every tier
     # above. Cheques are back-office end to end in v32: the nav entry that
     # reaches this screen is gated retail.reports (app-shell.js), which no
     # cashier holds, so a retail.sell gate on create would be a decorator no
     # cashier could ever reach. A cheque's state is also a claim about what
     # the BANK did, and `endorse` disposes of a negotiable instrument at face
-    # value -- the same "owner authority over the shop's own money" tier
-    # retail.employees already carries for supplier/PO payments above. See
-    # create_cheque's own comment for the full reasoning, including why an
-    # earlier draft's CAP_SELL-gated create was decorative (no cashier-
-    # reachable path exists to it at all).
-    'create_cheque': CAP_EMPLOYEES,
-    'deposit_cheque': CAP_EMPLOYEES,
-    'clear_cheque': CAP_EMPLOYEES,
-    'bounce_cheque': CAP_EMPLOYEES,
-    'reinstate_cheque': CAP_EMPLOYEES,
-    'endorse_cheque': CAP_EMPLOYEES,
-    'cancel_cheque': CAP_EMPLOYEES,
-    'write_off_cheque': CAP_EMPLOYEES,
+    # value -- the shop's own money, which is the BOOKS authority. They were
+    # retail.employees + an owner-only body guard until registry v9 (P2S) gave
+    # the Accountant a capability of its own. A manager holds neither
+    # books.record nor employees, so that separation of duties is unchanged.
+    # See create_cheque's own comment in retail_api.py.
+    'create_cheque': CAP_BOOKS_RECORD,
+    'deposit_cheque': CAP_BOOKS_RECORD,
+    'clear_cheque': CAP_BOOKS_RECORD,
+    'bounce_cheque': CAP_BOOKS_RECORD,
+    'reinstate_cheque': CAP_BOOKS_RECORD,
+    'endorse_cheque': CAP_BOOKS_RECORD,
+    'cancel_cheque': CAP_BOOKS_RECORD,
+    'write_off_cheque': CAP_BOOKS_RECORD,
 
     # ── Quotations and sales orders, Aseel-parity wave A-PAR (schema v33):
     # retail.sell ────────────────────────────────────────────────────────
@@ -384,6 +404,13 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # Owner-only on top (see EXPECTED_COMPANY_ADMIN_ROUTES); CAP_EMPLOYEES is
     # the same tier as every other numbering write above.
     'set_numbering': CAP_EMPLOYEES,
+    # Schema v42 (Track S): the owner hands a till number to a second computer,
+    # or takes it back. Same tier as every numbering write above, and owner-only
+    # on top (EXPECTED_COMPANY_ADMIN_ROUTES). Both routes are also main-computer
+    # only in the body (TILL_NEEDS_MAIN_COMPUTER) -- that axis is proved by
+    # retail_v42_till_allocation_test.py, not by this table.
+    'allocate_tills': CAP_EMPLOYEES,
+    'release_till': CAP_EMPLOYEES,
 
     # ── Customer display relay, P0 item #11(b) (interface I-1): retail.sell
     # ────────────────────────────────────────────────────────────────────
@@ -496,8 +523,12 @@ EXPECTED_READ_CAPABILITIES = {
     # and that split is enforced in the handlers and asserted by
     # retail_drawer_terminal_scope_test.py.
     'current_cash_session': CAP_CASH_CLOSE,
-    'list_cash_sessions': CAP_CASH_CLOSE,
-    'get_cash_session': CAP_CASH_CLOSE,
+    # P2S: close OR approve on the two multi-drawer reads -- an approver has to
+    # see the drawers whose variance they are asked to accept. The Accountant
+    # holds approve, never close (AUDIT-032). current_cash_session above stays
+    # close-only: it is the operator's OWN drawer.
+    'list_cash_sessions': ANY_OF(CAP_CASH_CLOSE, CAP_CASH_APPROVE),
+    'get_cash_session': ANY_OF(CAP_CASH_CLOSE, CAP_CASH_APPROVE),
 
     # ── Promotions, wave 1 (schema v23) ───────────────────────────────────────
     # `list_promotions` (GET /promotions) is the management screen's own list
@@ -711,16 +742,15 @@ EXPECTED_COMPANY_ADMIN_ROUTES = {
     # (a) Company-wide settings -- reshape the whole shop, not one branch:
     'create_branch', 'tax_settings_set', 'business_day_settings_set',
     'branding_settings_set', 'payment_methods_add', 'create_doc_series',
-    # (b) Money the branch-staff toggle must never unlock. These EIGHT stay
-    # on CAP_EMPLOYEES in EXPECTED_MUTATION_CAPABILITIES above (the nav entry
-    # that reaches them is retail.reports-gated, so no cashier-reachable path
-    # exists without it either way -- see create_cheque's own comment) and
-    # ALSO now require the owner. supplier_payment/pay_purchase_order move to
-    # books.record for the Accountant preset in Phase 1b (see their own
-    # comments); owner-only until then.
-    'create_cheque', 'deposit_cheque', 'clear_cheque', 'bounce_cheque',
-    'reinstate_cheque', 'endorse_cheque', 'cancel_cheque', 'write_off_cheque',
-    'supplier_payment', 'pay_purchase_order',
+    # (b) [REMOVED, P2S / registry v9] The eight cheque routes, supplier_payment
+    # and pay_purchase_order used to be listed HERE (an owner-only body guard on
+    # top of CAP_EMPLOYEES). They now sit on retail.books.record alone, so the
+    # owner-only call is gone from all ten and they LEAVE this set on purpose.
+    # WHAT THIS CAN NO LONGER CATCH: someone re-adding an owner-only guard to
+    # them is no longer flagged here. Their protection is now the
+    # EXPECTED_MUTATION_CAPABILITIES row (books.record) plus
+    # retail_accountant_regate_test.py, which proves an Accountant reaches all
+    # ten while a manager and a cashier do not, with a mutation per direction.
 
     # ── Reviewer pass on the I-10 rollout above (retail-hardware-viewports,
     # second C2 dispatch) -- every entry below closes a sibling route the
@@ -738,11 +768,11 @@ EXPECTED_COMPANY_ADMIN_ROUTES = {
     # this route belongs in the table regardless of which path a given
     # request takes.
     'create_purchase_order',
-    # `void_payment` -- CONDITIONAL: only guarded in the
-    # `party_type == 'supplier'` branch (a customer-account receipt void
-    # stays on CAP_REFUND, its own pre-existing authority). Reversing a
-    # supplier payment must require the same authority as creating one.
-    'void_payment',
+    # (void_payment LEFT this set in P2S: its supplier branch is now
+    # `session_has_capability(CAP_BOOKS_RECORD)`, not the owner-only call.
+    # This AST scan only sees the owner-only call shape, so it can no longer
+    # notice that supplier-half check being deleted -- the live test in
+    # retail_accountant_regate_test.py does.)
     # (d) `credit_settings_set` writes base_currency alongside the credit
     # policy and loyalty fields -- the single most disruptive company-wide
     # setting in this file, previously reachable through CAP_EMPLOYEES alone.
@@ -770,8 +800,12 @@ EXPECTED_COMPANY_ADMIN_ROUTES = {
     # _require_company_admin() -- so a manager holding retail.reports, who
     # used to be served on the main computer, is now refused. Listing it here
     # is what makes deleting that one call a red test rather than a silent
-    # widening. P1b-waits: registry v9 adds an Accountant (books.view) branch;
-    # this entry changes then, deliberately.
+    # widening. P2S: registry v9's books.view branch is now built -- the call is
+    # CONDITIONAL (`if not session_has_capability(CAP_BOOKS_VIEW):`), which this
+    # scanner still finds because it recurses into nested blocks. What it can
+    # no longer catch on its own: the books.view holder being let in is not
+    # visible here; retail_accountant_regate_test.py proves that side
+    # (Accountant 200; manager and cashier 403) with a mutation for each.
     'list_audit_log',
 
     # ── Phase 1b items 6 and 9 (2026-09-29) ─────────────────────────────────
@@ -785,6 +819,15 @@ EXPECTED_COMPANY_ADMIN_ROUTES = {
     # view, never a cashier's. P1b-waits: registry v9 (an Accountant preset
     # would not see it either).
     'get_numbering', 'set_numbering', 'setup_checklist',
+
+    # -- Schema v42 (Track S) --
+    # get_tills / allocate_tills / release_till: which computers hold a till
+    # number. Handing one out or taking it back changes the number every receipt
+    # on that computer will carry, so it is the owner's call, the same authority
+    # as set_numbering. get_tills is a GET with NO capability on purpose (the
+    # get_numbering posture): the owner check is the whole gate, and listing it
+    # here is what turns deleting that check into a red test.
+    'get_tills', 'allocate_tills', 'release_till',
 }
 
 
@@ -831,6 +874,14 @@ def _literal(node):
     return value if isinstance(value, str) else None
 
 
+def _capability_members(capability):
+    """The set of codes a route's `capability` names: one for a plain
+    `@mt_require_capability`, several for `@mt_require_any_capability`."""
+    if isinstance(capability, frozenset):
+        return set(capability)
+    return {capability}
+
+
 def _routes_in(path):
     tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
     routes = []
@@ -856,6 +907,13 @@ def _routes_in(path):
                         }
             elif name == 'mt_require_capability' and isinstance(dec, ast.Call) and dec.args:
                 capability = _literal(dec.args[0])
+            elif name == 'mt_require_any_capability' and isinstance(dec, ast.Call) and dec.args:
+                # Any-of (P2S): kept as a frozenset of the literals. One
+                # argument that does not resolve to a string poisons the whole
+                # thing to None, which the "explicit capability" guard then
+                # reports -- never a silently shorter set.
+                members = [_literal(a) for a in dec.args]
+                capability = frozenset(members) if all(members) else None
         if rule is not None:
             routes.append(_Route(node.name, rule, methods, names, capability, node.lineno))
     return routes
@@ -1000,7 +1058,7 @@ def test_every_declared_capability_is_one_of_the_eight_seeded_codes():
     known = set(user_accounts.CAPABILITY_CODES)
     wrong = sorted(
         f"{r.func}: {r.capability!r}" for r in ALL_ROUTES
-        if r.capability is not None and r.capability not in known
+        if r.capability is not None and not _capability_members(r.capability) <= known
     )
     assert not wrong, f"not seeded capability codes (known: {sorted(known)}):\n  " + "\n  ".join(wrong)
 
@@ -1172,8 +1230,10 @@ def test_capability_is_checked_inside_the_login_check():
         if 'mt_login_required' not in r.decorators:
             wrong.append(f"{r.func}: capability gate with no mt_login_required")
             continue
-        if r.decorators.index('mt_login_required') > r.decorators.index('mt_require_capability'):
-            wrong.append(f"{r.func}: mt_require_capability is written above mt_login_required")
+        gate = ('mt_require_any_capability' if 'mt_require_any_capability' in r.decorators
+                else 'mt_require_capability')
+        if r.decorators.index('mt_login_required') > r.decorators.index(gate):
+            wrong.append(f"{r.func}: {gate} is written above mt_login_required")
     assert not wrong, "\n  ".join(wrong)
 
 
@@ -1399,9 +1459,9 @@ def _customer_account_payment_id(admin, company_id):
 
 def _supplier_account_payment_id(admin, company_id):
     """A SUPPLIER-account payment (party_type='supplier', related_type=NULL)
-    -- created by supplier_payment, owner-only since the P0 item #2 / I-10
-    reviewer pass (was CAP_EMPLOYEES at B1's original writing), so voiding
-    one must require the same authority."""
+    -- created by supplier_payment, gated retail.books.record since registry v9
+    (P2S; it was CAP_EMPLOYEES at B1's original writing and owner-only in
+    between), so voiding one must require the same authority."""
     sup_id = _create_supplier(admin)
     r = admin.post(f'/api/sub/retail/suppliers/{sup_id}/payments', json={'amount': 20})
     assert r.status_code == 200, r.get_json()
@@ -1411,8 +1471,10 @@ def _supplier_account_payment_id(admin, company_id):
 def _po_payment_id(admin, company_id, product_id):
     """A PO payment (party_type='supplier', related_type='po') -- posted
     inline by create_purchase_order's own `amount_paid` down-payment, the
-    same code path pay_purchase_order uses. Both require CAP_EMPLOYEES AND
-    (since the P0 item #2 / I-10 reviewer pass) the shop owner."""
+    same code path pay_purchase_order uses. pay_purchase_order requires
+    retail.books.record since registry v9 (P2S). NOTE the fixture path here:
+    create_purchase_order's own `amount_paid` branch is still an owner-only
+    body check, so the ADMIN creates this fixture."""
     sup_id = _create_supplier(admin)
     r = admin.post('/api/sub/retail/purchase-orders', json={
         'supplier_id': sup_id, 'amount_paid': 15,
@@ -1736,14 +1798,17 @@ def test_the_refusal_message_is_a_translation_catalog_key(shop):
 
 # ── B1: void_payment's authority must match the creating route's authority ──
 #
-# CREATING a supplier or PO payment requires CAP_EMPLOYEES (owner authority,
-# ~retail_api.py:3495/3519 -- receiving a delivery and paying for it are
-# deliberately different authorities). Before this fix, VOIDING any of the
-# three payment shapes this route accepts required only CAP_REFUND -- a
-# cashier default -- so a cashier who could never create a supplier payment
-# could still reverse one and reopen the payable. That is owner money, not
-# till money. Voiding a CUSTOMER-account payment stays on CAP_REFUND,
-# symmetric with customer_payment's CAP_SELL.
+# CREATING a supplier or PO payment requires retail.books.record since
+# registry v9 (P2S; it was CAP_EMPLOYEES / owner-only before -- receiving a
+# delivery and paying for it are deliberately different authorities). Before
+# B1's fix, VOIDING any of the three payment shapes this route accepts
+# required only CAP_REFUND -- a cashier default -- so a cashier who could never
+# create a supplier payment could still reverse one and reopen the payable.
+# That is books money, not till money. Voiding a CUSTOMER-account payment stays
+# open to CAP_REFUND (or books.record), symmetric with customer_payment's
+# sell-or-books.record; the supplier/PO half is books.record ONLY. The two live
+# void tests below were rewritten in P2S; see their docstrings for what they
+# can no longer catch.
 
 def test_the_three_roles_used_by_the_void_split_actually_differ():
     """The tests below derive their expected status codes from
@@ -1802,8 +1867,8 @@ def test_void_payment_authority_matches_the_creating_routes_authority(shop):
     assert r.status_code == expected, _diagnose(pid, cashier, r)
     assert _payment_status(pid) == ('voided' if expected == 200 else 'active')
 
-    # manager voids a supplier payment -> 403 (manager lacks retail.employees,
-    # same as it lacks retail.cash.approve -- owner-only is owner-only)
+    # manager voids a supplier payment -> 403 (manager lacks retail.employees
+    # here; the expectation is derived from capabilities_for_role above)
     manager, _, _ = _make_user('manager', company_id=company_id)
     pid = _supplier_account_payment_id(admin, company_id)
     r = manager.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'sneaky'})
@@ -1871,87 +1936,76 @@ def test_the_sale_receipt_refusal_survives_the_authority_split(shop):
 # call-counting stub around mt_auth._get_registry_conn.
 
 def test_void_payment_authority_check_is_actually_consulted(shop, monkeypatch):
-    """UPDATED (P0 item #2 / I-10, reviewer finding): void_payment's
-    supplier-branch authority moved from `session_has_capability(CAP_
-    EMPLOYEES)` to `_require_company_admin()` -- the authority to REVERSE a
-    supplier payment now equals the authority to CREATE one, which is
-    owner-only (supplier_payment/pay_purchase_order/create_purchase_order's
-    amount_paid branch, all fixed in the same pass; see each one's own
-    comment). This test used to wrap `session_has_capability` and assert it
-    was consulted for a supplier/PO payment void; that assertion no longer
-    describes what the route does -- `session_has_capability` is not called
-    AT ALL on this path any more, by design, so the old test would now fail
-    for the RIGHT reason (the mechanism changed on purpose) while looking
-    like a regression. Rewritten to wrap `_require_company_admin` instead,
-    same transparent call-counting discipline (`_GuardProbe`, pass-through,
-    behaviour unchanged) so a 403 cannot be misread as "the check ran and
-    refused" when it could equally be "the check never ran and something
-    else refused". What this version can no longer catch, stated per
-    ENGINEERING.md: whether `session_has_capability(CAP_EMPLOYEES)`
-    specifically was consulted -- it no longer is, and that is the fix, not
-    a regression."""
+    """UPDATED (P2S / registry v9). The supplier-branch authority moved a
+    second time: retail.employees -> `_require_company_admin()` (P0 I-10) ->
+    `session_has_capability(CAP_BOOKS_RECORD)` (now), because the Accountant
+    records supplier payments and so must be able to reverse one, while a
+    refund-only cashier still must not. This test wraps
+    `session_has_capability` in the transparent call-counting probe and asserts
+    it was consulted WITH retail.books.record for a supplier/PO void, so a 403
+    cannot be misread as "the check ran and refused" when it could equally be
+    "the check never ran and something else refused".
+
+    WHAT THIS VERSION CAN NO LONGER CATCH: whether `_require_company_admin`
+    was consulted on this path -- it is not, by design; the owner-only call
+    was removed with the routes it mirrored (see EXPECTED_COMPANY_ADMIN_ROUTES).
+    The customer-account case still asserts the books check is NOT reached."""
     admin, company_id, product_id = shop
-    probe = _GuardProbe(retail_api_module._require_company_admin)
-    monkeypatch.setattr(retail_api_module, '_require_company_admin', probe)
+    probe = _CapabilityProbe(retail_api_module.session_has_capability)
+    monkeypatch.setattr(retail_api_module, 'session_has_capability', probe)
 
     def _void(actor, pid, reason):
         probe.calls.clear()
         r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': reason})
-        return r, list(probe.calls)
+        return r, [code for code, _ in probe.calls]
 
     for role, make_actor in (
         ('cashier', lambda: _make_user('cashier', company_id=company_id)[0]),
         ('manager', lambda: _make_user('manager', company_id=company_id)[0]),
         ('admin', lambda: admin),
     ):
-        # supplier-account payment -- the guard MUST be consulted
+        # supplier-account payment -- the books check MUST be consulted
         actor = make_actor()
         pid = _supplier_account_payment_id(admin, company_id)
-        r, calls = _void(actor, pid, 'reachability: supplier')
-        assert calls, (role, 'supplier-account', '_require_company_admin() was never called', r.get_json())
+        r, codes = _void(actor, pid, 'reachability: supplier')
+        assert user_accounts.CAP_BOOKS_RECORD in codes, (
+            role, 'supplier-account', 'session_has_capability(CAP_BOOKS_RECORD) was never called', r.get_json())
 
         # PO payment -- same authority, same requirement
         actor = make_actor()
         pid = _po_payment_id(admin, company_id, product_id)
-        r, calls = _void(actor, pid, 'reachability: po')
-        assert calls, (role, 'po', '_require_company_admin() was never called', r.get_json())
+        r, codes = _void(actor, pid, 'reachability: po')
+        assert user_accounts.CAP_BOOKS_RECORD in codes, (
+            role, 'po', 'session_has_capability(CAP_BOOKS_RECORD) was never called', r.get_json())
 
         # customer-account payment -- ground-truthed against the real row,
-        # then the guard must NOT fire at all (party_type short-circuits it)
+        # then the books check must NOT fire at all (party_type short-circuits it)
         actor = make_actor()
         pid = _customer_account_payment_id(admin, company_id)
         conn = get_retail_conn()
         real_party_type = conn.execute("SELECT party_type FROM payments WHERE id=?", (pid,)).fetchone()['party_type']
         conn.close()
         assert real_party_type == 'customer', "fixture drifted -- this case no longer proves what it claims to"
-        r, calls = _void(actor, pid, 'reachability: customer')
-        assert not calls, (role, 'customer-account',
-                            '_require_company_admin() was called for a customer-account payment -- '
-                            'the party_type branch is not doing what it claims', r.get_json())
+        r, codes = _void(actor, pid, 'reachability: customer')
+        assert user_accounts.CAP_BOOKS_RECORD not in codes, (
+            role, 'customer-account',
+            'session_has_capability(CAP_BOOKS_RECORD) was called for a customer-account payment -- '
+            'the party_type branch is not doing what it claims', r.get_json())
 
 
 def test_void_payment_authority_outcome_tracks_the_live_capability_verdict(shop, monkeypatch):
-    """UPDATED (P0 item #2 / I-10, reviewer finding) -- see the docstring on
-    test_void_payment_authority_check_is_actually_consulted just above for
-    why the mechanism changed. Stronger than reachability: proves the
-    response is actually DRIVEN by `_require_company_admin`'s return value,
-    for every role including a real logged-in owner -- which rules out a
-    second, duplicated exemption sitting next to the real check (e.g. an
-    accidental early `return` bypassing it). Forcing the guard to always
-    ADMIT (return None) must let even a bare cashier through; forcing it to
-    always REFUSE (return the same 403 shape the real guard returns) must
-    refuse the real owner too, at this specific call site -- proving there
-    is no hardcoded `role == 'admin'` shortcut written directly into
-    void_payment that could keep working even if the shared guard function
-    itself were ever broken."""
+    """UPDATED (P2S / registry v9) -- see the docstring on
+    test_void_payment_authority_check_is_actually_consulted just above for why
+    the mechanism changed. Stronger than reachability: proves the response is
+    DRIVEN by `session_has_capability(CAP_BOOKS_RECORD)`'s return value, for
+    every role including a real logged-in owner. Forcing it to always ADMIT
+    must let even a bare cashier through; forcing it to always REFUSE must
+    refuse the real owner too at this call site -- proving there is no
+    hardcoded `role == 'admin'` shortcut written into void_payment that would
+    keep working if the shared check were broken. (The decorator floor is
+    untouched by the patch: it lives in mt_auth, not in retail_api's namespace,
+    and a cashier holds retail.refund, so the floor admits all three roles.)"""
     admin, company_id, _product_id = shop
-
-    def _always_admit():
-        return None
-
-    def _always_refuse():
-        from flask import jsonify as _jsonify
-        return _jsonify({'error': 'Administrator permission required.', 'code': 'OWNER_ONLY'}), 403
 
     def _roles():
         return (
@@ -1960,24 +2014,18 @@ def test_void_payment_authority_outcome_tracks_the_live_capability_verdict(shop,
             ('admin', admin),
         )
 
-    # Every fixture payment is created with the REAL guard still in effect
-    # (supplier_payment is itself owner-only, per this same reviewer pass) --
-    # built BEFORE either monkeypatch below installs, because patching
-    # `_require_company_admin` to `_always_refuse` would otherwise refuse
-    # this SETUP call too, not just the void call under test, and patching
-    # it to `_always_admit` first and creating fixtures for the SECOND
-    # (refuse) half while that patch is still active would prove nothing
-    # about the real guard. One payment id per role, per half.
+    # Fixture payments are built BEFORE either monkeypatch installs, one id per
+    # role per half, so the setup calls run under the real gates.
     admit_targets = [(role, actor, _supplier_account_payment_id(admin, company_id)) for role, actor in _roles()]
     refuse_targets = [(role, actor, _supplier_account_payment_id(admin, company_id)) for role, actor in _roles()]
 
-    monkeypatch.setattr(retail_api_module, '_require_company_admin', _always_admit)
+    monkeypatch.setattr(retail_api_module, 'session_has_capability', lambda code: True)
     for role, actor, pid in admit_targets:
         r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-admit probe'})
-        assert r.status_code == 200, (role, 'forced None (admit)', r.get_json())
+        assert r.status_code == 200, (role, 'forced True (admit)', r.get_json())
     monkeypatch.undo()
 
-    monkeypatch.setattr(retail_api_module, '_require_company_admin', _always_refuse)
+    monkeypatch.setattr(retail_api_module, 'session_has_capability', lambda code: False)
     for role, actor, pid in refuse_targets:
         r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-refuse probe'})
         assert r.status_code == 403, (role, 'forced refuse -- including the real owner: no hardcoded bypass '

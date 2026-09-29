@@ -18,6 +18,7 @@ import logging
 import os
 import sqlite3
 import random
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -1105,7 +1106,44 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # (core/retail/general_ledger.py) and APPLY side (commercial_runtime/
 # sync/sync_service.py) are each a separate builder's own files, not this
 # one's.
-RETAIL_SCHEMA_VERSION = 41
+#
+# v42 (2026-09-29, Track S -- ONE BRANCH IDENTITY PER SHOP, AND A TILL NUMBER
+# THAT ONE COMPUTER HANDS OUT). Two tables, no column changes on any existing
+# table, and one data step that touches no money table:
+#
+#   * `branch_uid_aliases` -- old branch uid -> the shop's single canonical
+#     uid. Every install used to invent its OWN 'Main Branch' the first time
+#     it needed a branch (`_default_branch`'s self-heal, import_api's
+#     'Main Store'), each with a fresh random uuid, so two tills in one shop
+#     disagreed about which branch a sale belonged to and a branch-scoped
+#     employee synced from one till matched NOTHING on the other. The fix is
+#     to make the placeholder's uid a pure function of the licence
+#     (`default_branch_uid`), so every device derives the SAME one, and to
+#     record old->canonical in this table so a uid already written into a
+#     scope, a pin, a `branch_code:<uid>` setting or a `doc_series` row
+#     still resolves. See `converge_default_branch_uid` for the exact rule
+#     (it rewrites a branch's uid ONLY when the shop has exactly one
+#     placeholder-named active branch and it is the one `_default_branch`
+#     would return -- a branch called 'Downtown' is never touched).
+#
+#   * `till_allocations` -- which physical computer is till number N of
+#     which branch. One authoritative writer (the MAIN computer,
+#     `device_context.local_device_is_admin`), synced to the rest. The
+#     readable document number (`<CODE><till>-000001`) is only ever minted
+#     from a row here, never from a device-local guess, because two tills
+#     that each guessed "I am till 1" is precisely how two receipts got the
+#     same number. Two partial UNIQUE indexes (one per number, one per
+#     terminal, active rows only) make the database itself refuse a second
+#     claim; `admin_epoch` + `created_at_utc` + `id` give two computers that
+#     BOTH believed they were main a deterministic winner.
+#
+# No money table is read or written by this migration. It is appended LAST
+# and gated on `PRAGMA table_info`, so a replay of the whole chain is a
+# no-op. Sync entities (`till_allocation`, `branch_alias`) are applied by
+# commercial_runtime/sync/sync_service.py, a separate crew's file. A v41
+# peer parks every v42 event through the schema-skew guard, so a shop's
+# tills must upgrade together.
+RETAIL_SCHEMA_VERSION = 42
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2221,6 +2259,15 @@ def _migrate_retail_schema(conn):
     # RETAIL_SCHEMA_VERSION v41 comment above and
     # _migrate_add_gl_journal_sync's own docstring for the full reasoning.
     _migrate_add_gl_journal_sync(conn)
+    # v41 -> v42 (one branch identity per shop + till allocations): appended
+    # LAST, same convention as every step above except v37 itself. It must
+    # ALSO stay after the v13 `branches.uid` backfill and the v14 company
+    # rebind, because the converge step at the end of it reads both (a
+    # branch with no uid cannot be converged, and a company that has not yet
+    # been rebound onto the licence id has nothing to derive the canonical
+    # uid from). See the RETAIL_SCHEMA_VERSION v42 comment above and
+    # _migrate_add_branch_identity_and_till_allocation's docstring.
+    _migrate_add_branch_identity_and_till_allocation(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -3578,7 +3625,17 @@ def _rebind_to_owner_issued(conn, new_company_id):
             'new_company_id': new_company_id,
             'tables': (),
         }
-    return rebind_company_id(conn, new_company_id)
+    result = rebind_company_id(conn, new_company_id)
+    # v42: the moment the shop is on the licence id, its placeholder branch
+    # can be given the licence-derived uid (converge_default_branch_uid is
+    # 'skipped' until then, by design). Only after a real 'rebound' or an
+    # 'already_bound' -- never after 'skipped' or the 'deferred' return above --
+    # and it never raises, so it cannot turn a successful rebind into a
+    # failed one. The result rides along so a caller/log can see it.
+    if isinstance(result, dict) and result.get('status') in ('rebound', 'already_bound'):
+        result = dict(result)
+        result['branch_converge'] = converge_default_branch_uid(conn)
+    return result
 
 
 def _migrate_rebind_company_id_to_owner_issued(conn):
@@ -7677,6 +7734,15 @@ def _init_retail(conn):
     # function.
     _v16_rebind_orphaned_open_drawers(conn)
 
+    # v42: NOT version-gated, same reasoning as the v16 line above. The
+    # licence may only become readable AFTER the boot that reached v42 (a
+    # shop activates later), so converge is retried every launch -- it is
+    # 'skipped' in one query when there is nothing to do and idempotent when
+    # there is -- and any alias it (or an earlier boot) wrote is announced to
+    # the other devices exactly once. Both swallow their own errors.
+    converge_default_branch_uid(conn)
+    announce_branch_aliases(conn)
+
     # Wave 1 (2026-09-26, ROADMAP.md's "retail schema v41 CLAIMED: one set
     # of books across devices" entry): heal every pre-v41 journal's
     # missing `uid` so it can finally travel to the other devices on this
@@ -10563,6 +10629,395 @@ def _migrate_add_branch_cost_basis(conn):
             # there is no historical evidence of what a completed transfer
             # cost at send time, and nothing reads this column for one.
             conn.execute('ALTER TABLE stock_transfer_items ADD COLUMN unit_cost REAL DEFAULT 0')
+
+
+# ── v42: one branch identity per shop, and till allocations ──────────────────
+
+#: Fixed namespace for `default_branch_uid`. COMMITTED IN CODE and never
+#: regenerated: two computers that derive the shop's default-branch uid must
+#: agree byte for byte, so this constant is part of the wire contract the
+#: moment it ships. Changing it would give every already-converged shop a
+#: second "canonical" uid and re-open exactly the split this exists to close.
+DEFAULT_BRANCH_UID_NAMESPACE = _uuid.UUID('6f1d0c52-8b3e-4f7a-9c41-2a5e7d90b3c8')
+
+#: The only two names a self-healed placeholder branch has ever been given:
+#: `_default_branch` invents 'Main Branch', import_api invents 'Main Store'.
+#: A branch an operator NAMED anything else ('Downtown') is a real place and
+#: is never converged -- see converge_default_branch_uid.
+PLACEHOLDER_BRANCH_NAMES = ('Main Branch', 'Main Store')
+
+#: Why an alias row exists. One value today; a column rather than a constant
+#: so a future merge tool can say why it wrote one.
+ALIAS_REASON_DEFAULT_BRANCH = 'default_branch_converge'
+
+
+def default_branch_uid(license_public_id):
+    """The uid EVERY device of one licence gives that licence's default
+    branch: a pure function of the licence id, so two computers that have
+    never spoken derive the same answer. `uuid5`, not `uuid4` -- it must be
+    a valid RFC-4122 uuid (Owner's sync ingest gates on `uuid.UUID(...)`,
+    see retail_api._new_uid) AND deterministic. Returns None for a missing
+    licence id: an unlicensed install has no shop-wide identity to derive
+    from, and the caller must fall back to a random uid exactly as before."""
+    if license_public_id is None or not str(license_public_id).strip():
+        return None
+    return str(_uuid.uuid5(
+        DEFAULT_BRANCH_UID_NAMESPACE,
+        'aura-retail:default-branch:' + str(license_public_id).strip()))
+
+
+def canonical_branch_uid(conn, uid, company_id=None):
+    """Follow `branch_uid_aliases` from an old branch uid to the canonical
+    one, or return `uid` unchanged.
+
+    READ-TIME canonicalisation, because a uid can be written down in places
+    this migration cannot rewrite: another device's `users.branch_scope_uid`
+    (registry.db, a different file, a different crew), a `config.json` device
+    pin, an event still in flight. Every comparison of a branch uid that
+    came from outside `branches` goes through here first. Bounded to a few
+    hops so a hand-made alias loop can never spin a request thread.
+    Never raises: no alias table (a pre-v42 file) or an unreadable row is
+    'no alias', which is the pre-v42 behaviour."""
+    if not uid:
+        return uid
+    seen = 0
+    current = uid
+    try:
+        while seen < 4:
+            if company_id is None:
+                row = conn.execute(
+                    'SELECT canonical_uid FROM branch_uid_aliases WHERE alias_uid=?',
+                    (current,)).fetchone()
+            else:
+                row = conn.execute(
+                    'SELECT canonical_uid FROM branch_uid_aliases '
+                    'WHERE alias_uid=? AND CAST(company_id AS TEXT)=?',
+                    (current, str(company_id))).fetchone()
+            if not row or not row[0] or row[0] == current:
+                break
+            current = row[0]
+            seen += 1
+    except sqlite3.Error:
+        return uid
+    return current
+
+
+def _table_names(conn):
+    return {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+
+def _normalise_branch_uid_refs(conn, company_id):
+    """Rewrite the device-local and shop-wide REFERENCES to an aliased branch
+    uid so they name the canonical one. Runs inside the caller's transaction
+    and NEVER queues a sync event: every device performs the same rewrite
+    from its own alias table, and an emitted event here would race the
+    other devices' rewrites of the same rows.
+
+    Touches exactly three things, none of them money:
+      * `doc_series.branch_uid` -- WITHOUT bumping `row_version`. The
+        rewrite is deterministic on every device; bumping it would let this
+        device's copy outrank a peer's in the sync row_version gate for no
+        reason.
+      * `retail_settings` key `branch_code:<alias>` -> `branch_code:<canon>`,
+        only when the canonical key is ABSENT (a value already saved under
+        the canonical uid wins; the orphan alias key is left, unread).
+      * `branch_uid` inside every device-local `numbering_till:<terminal>`
+        JSON value.
+    Returns the number of rewritten references."""
+    tables = _table_names(conn)
+    if 'branch_uid_aliases' not in tables:
+        return 0
+    cid = str(company_id)
+    aliases = conn.execute(
+        'SELECT alias_uid, canonical_uid FROM branch_uid_aliases '
+        'WHERE CAST(company_id AS TEXT)=?', (cid,)).fetchall()
+    changed = 0
+    for alias_uid, canonical_uid in aliases:
+        if not alias_uid or not canonical_uid or alias_uid == canonical_uid:
+            continue
+        if 'doc_series' in tables:
+            cur = conn.execute(
+                'UPDATE doc_series SET branch_uid=? '
+                'WHERE branch_uid=? AND CAST(company_id AS TEXT)=?',
+                (canonical_uid, alias_uid, cid))
+            changed += cur.rowcount or 0
+        if 'retail_settings' in tables:
+            cur = conn.execute(
+                'UPDATE retail_settings SET skey=? '
+                'WHERE skey=? AND CAST(company_id AS TEXT)=? '
+                'AND NOT EXISTS (SELECT 1 FROM retail_settings n '
+                '                WHERE n.skey=? AND CAST(n.company_id AS TEXT)=?)',
+                ('branch_code:' + canonical_uid, 'branch_code:' + alias_uid, cid,
+                 'branch_code:' + canonical_uid, cid))
+            changed += cur.rowcount or 0
+    if 'retail_settings' in tables and aliases:
+        import json as _json
+        amap = {a: c for a, c in aliases if a and c and a != c}
+        rows = conn.execute(
+            "SELECT skey, svalue FROM retail_settings "
+            "WHERE skey LIKE 'numbering_till:%' AND CAST(company_id AS TEXT)=?",
+            (cid,)).fetchall()
+        for skey, svalue in rows:
+            try:
+                state = _json.loads(svalue)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(state, dict) and state.get('branch_uid') in amap:
+                state['branch_uid'] = amap[state['branch_uid']]
+                conn.execute(
+                    'UPDATE retail_settings SET svalue=? WHERE skey=? '
+                    'AND CAST(company_id AS TEXT)=?',
+                    (_json.dumps(state), skey, cid))
+                changed += 1
+    return changed
+
+
+def converge_default_branch_uid(conn):
+    """Give the shop's placeholder branch the ONE uid every device derives
+    from the licence. One transaction, idempotent, MONEY-NEUTRAL: it changes
+    exactly one `branches.uid` cell, adds one alias row, and rewrites the
+    non-money references `_normalise_branch_uid_refs` lists. `branches.id`
+    never changes, so every sale, movement, balance, journal and cash
+    session keeps pointing at the same local row; nothing in a money table
+    is read or written. Returns a status dict, one of:
+
+      'skipped'   -- no licence id, no `uid` column / alias table yet, no
+                     branches, or the company is not rebound onto the
+                     licence id yet (retail's `company_id` differs from
+                     `license_public_id`): there is nothing shop-wide to
+                     converge onto until the rebind has happened. The rebind
+                     calls this again the moment it completes.
+      'already'   -- a branch already carries the canonical uid (a new
+                     install, or a second boot). References re-normalised.
+      'converged' -- the one placeholder was re-uid'd.
+      'ambiguous' -- see below. NOTHING CHANGED, audited and logged.
+      'failed'    -- unexpected error; rolled back, never raised (this runs
+                     inside the migration chain and the licence-activation
+                     hook, and a wedge in either is worse than an unmerged
+                     branch).
+
+    THE RULE, and why it is this narrow. The placeholder is rewritten ONLY
+    when there is EXACTLY ONE active branch of this company named
+    'Main Branch' / 'Main Store' AND it is also the lowest-id active branch
+    -- the row `_default_branch` returns, i.e. the one every unpinned till
+    has been filing its sales under. Two placeholders, or a real branch
+    ('Downtown') sitting at the lowest id, cannot be resolved by a name
+    match: guessing would silently re-key the wrong place, and a re-keyed
+    branch drags its scoped employees and its pins with it. That case is
+    'ambiguous' -- a person decides."""
+    try:
+        license_id = owner_issued_company_id()
+        if not license_id:
+            return {'status': 'skipped', 'reason': 'no licence id'}
+        canonical = default_branch_uid(license_id)
+        tables = _table_names(conn)
+        if 'branches' not in tables or 'branch_uid_aliases' not in tables:
+            return {'status': 'skipped', 'reason': 'branches/alias table missing'}
+        branch_cols = {r[1] for r in conn.execute('PRAGMA table_info(branches)').fetchall()}
+        if 'uid' not in branch_cols:
+            return {'status': 'skipped', 'reason': 'branches has no uid column yet'}
+        has_status = 'status' in branch_cols
+
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute('BEGIN IMMEDIATE')
+        try:
+            status_sql = "COALESCE(status,'active')" if has_status else "'active'"
+            rows = conn.execute(
+                f'SELECT id, uid, name, {status_sql} AS st FROM branches '
+                'WHERE CAST(company_id AS TEXT)=? ORDER BY id',
+                (str(license_id),)).fetchall()
+            if not rows:
+                conn.rollback()
+                return {'status': 'skipped',
+                        'reason': 'no branches under the licence id (not rebound yet, or a new install)'}
+            if any(r[1] == canonical for r in rows):
+                n = _normalise_branch_uid_refs(conn, license_id)
+                conn.commit()
+                return {'status': 'already', 'canonical_uid': canonical, 'rewritten': n}
+
+            active = [r for r in rows if r[3] == 'active']
+            candidates = [r for r in active if r[2] in PLACEHOLDER_BRANCH_NAMES]
+            if len(candidates) == 1 and active and active[0][0] == candidates[0][0]:
+                branch_id, old_uid = candidates[0][0], candidates[0][1]
+                now = datetime.now(timezone.utc).isoformat()
+                if old_uid:
+                    conn.execute(
+                        'INSERT OR IGNORE INTO branch_uid_aliases '
+                        '(alias_uid, canonical_uid, company_id, reason, created_at_utc, '
+                        ' origin_terminal_uid, announced_at_utc) VALUES (?,?,?,?,?,?,NULL)',
+                        (old_uid, canonical, str(license_id),
+                         ALIAS_REASON_DEFAULT_BRANCH, now, local_terminal_id()))
+                conn.execute('UPDATE branches SET uid=? WHERE id=?', (canonical, branch_id))
+                n = _normalise_branch_uid_refs(conn, license_id)
+                conn.commit()
+                return {'status': 'converged', 'branch_id': branch_id,
+                        'old_uid': old_uid, 'canonical_uid': canonical, 'rewritten': n}
+
+            detail = (f'{len(candidates)} placeholder-named active branch(es); '
+                      f'lowest active id={active[0][0] if active else None} '
+                      f'named {active[0][2] if active else None!r}. '
+                      'Nothing was changed; the default-branch uid was NOT converged.')
+            # Deduped: this is retried on EVERY boot (init_retail), and an
+            # ambiguous shop stays ambiguous until a person acts -- one audit
+            # row per distinct finding, not one per launch.
+            if 'audit_log' in tables and not conn.execute(
+                    'SELECT 1 FROM audit_log WHERE action=? AND details=? '
+                    'AND CAST(company_id AS TEXT)=? LIMIT 1',
+                    ('DEFAULT_BRANCH_CONVERGE_SKIPPED', detail, str(license_id))).fetchone():
+                conn.execute(
+                    'INSERT INTO audit_log (company_id,user_id,action,entity,entity_id,details) '
+                    'VALUES (?,?,?,?,?,?)',
+                    (license_id, None, 'DEFAULT_BRANCH_CONVERGE_SKIPPED',
+                     'branch', None, detail))
+            conn.commit()
+            logging.getLogger(__name__).warning(
+                'DEFAULT_BRANCH_CONVERGE_SKIPPED: %s', detail)
+            return {'status': 'ambiguous', 'reason': detail}
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+    except Exception as exc:
+        logging.getLogger(__name__).exception('converge_default_branch_uid failed')
+        return {'status': 'failed', 'reason': f'{type(exc).__name__}: {exc}'}
+
+
+def default_branch_uid_for_company(company_id):
+    """The canonical default-branch uid for `company_id`, or None when it
+    cannot be known honestly. It is known only when the company id IS this
+    install's licence id (i.e. the shop is rebound onto it): a self-heal for
+    an unlicensed / not-yet-rebound company must keep inventing a random uid,
+    because deriving one from a company id that is not the licence would give
+    two unrelated shops the same branch uid the day either is licensed.
+    Never raises."""
+    try:
+        license_id = owner_issued_company_id()
+        if license_id and str(license_id) == str(company_id):
+            return default_branch_uid(license_id)
+    except Exception:
+        logging.getLogger(__name__).exception('default_branch_uid_for_company failed')
+    return None
+
+
+def announce_branch_aliases(conn):
+    """Boot step: queue one `branch_alias`/`create` sync event for every
+    alias row whose `announced_at_utc` is NULL, then stamp it.
+
+    WHY NOT FROM THE MIGRATION: the converge runs inside the migration
+    transaction on a file whose sync tables may be mid-upgrade, and a
+    canonical uid is DERIVED (never sent). Only the alias -- "this old uid
+    now means that one" -- has to travel, so a peer that still holds
+    branch-scoped rows under the old uid can canonicalise them. Doing it at
+    boot, after the schema settled, keeps the migration free of any outbox
+    write and makes the announce retryable: a crash between queue and stamp
+    is impossible (one transaction), and a boot that finds nothing NULL does
+    nothing. Returns the number announced. Never raises."""
+    try:
+        tables = _table_names(conn)
+        if 'branch_uid_aliases' not in tables or 'sync_outbox' not in tables:
+            return 0
+        rows = conn.execute(
+            'SELECT alias_uid, canonical_uid, company_id, reason, created_at_utc, '
+            'origin_terminal_uid FROM branch_uid_aliases WHERE announced_at_utc IS NULL'
+        ).fetchall()
+        if not rows:
+            return 0
+        import json as _json
+        now = datetime.now(timezone.utc).isoformat()
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute('BEGIN IMMEDIATE')
+        try:
+            for r in rows:
+                payload = {
+                    'alias_uid': r[0], 'canonical_uid': r[1], 'company_id': r[2],
+                    'reason': r[3], 'created_at_utc': r[4],
+                    'origin_terminal_uid': r[5],
+                }
+                conn.execute(
+                    'INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, '
+                    'payload, created_at) VALUES (?,?,?,?,?,?)',
+                    (str(_uuid.uuid4()), 'branch_alias', r[0], 'create',
+                     _json.dumps(payload), now))
+                conn.execute(
+                    'UPDATE branch_uid_aliases SET announced_at_utc=? WHERE alias_uid=?',
+                    (now, r[0]))
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        return len(rows)
+    except Exception:
+        logging.getLogger(__name__).exception('announce_branch_aliases failed')
+        return 0
+
+
+def _migrate_add_branch_identity_and_till_allocation(conn):
+    """One-time migration (schema v41 -> v42): two additive tables, then a
+    best-effort call to `converge_default_branch_uid`. Claimed in writing in
+    ROADMAP.md before dispatch ("registry v9 and retail v42 for Track S").
+
+    `branch_uid_aliases` and `till_allocations` are created `IF NOT EXISTS`
+    with every index `IF NOT EXISTS`, so a replay of the whole chain (which
+    happens on every bump) is a no-op. Neither table exists on an older file,
+    so no `PRAGMA table_info` gate is needed for the CREATEs; the converge
+    step gates itself on the columns it reads.
+
+    `till_allocations`: two PARTIAL unique indexes carry the invariants --
+    one active row per (company, branch, number) and one per (company,
+    terminal). The database refuses a second claim even if a route forgets to
+    check. `company_id` is TEXT: it holds the licence id after the v14
+    rebind. `admin_epoch` is the registry's main-computer epoch at allocation
+    time and is the FIRST tie-break when two computers both believed they were
+    main; `created_at_utc` then `id` finish the ordering (see the sync apply
+    side). No CHECK constrains `terminal_uid`'s shape: it is whatever
+    `local_terminal_id()` produced on the device.
+
+    The converge call is last and swallow-everything by design (it returns a
+    status dict and never raises): a shop whose placeholder cannot be
+    converged yet -- not licensed, not rebound -- must still reach v42.
+    `rebind_company_id_after_activation` calls it again when the rebind lands.
+
+    NO EMIT. Nothing here queues a sync event: an alias created by the
+    converge is announced later by the boot step that scans
+    `announced_at_utc IS NULL`, and a canonical uid is derived, never sent.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS branch_uid_aliases (
+            alias_uid           TEXT PRIMARY KEY,
+            canonical_uid       TEXT NOT NULL,
+            company_id          TEXT NOT NULL,
+            reason              TEXT NOT NULL,
+            created_at_utc      TEXT NOT NULL,
+            origin_terminal_uid TEXT,
+            announced_at_utc    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_branch_uid_aliases_canonical
+            ON branch_uid_aliases(company_id, canonical_uid);
+
+        CREATE TABLE IF NOT EXISTS till_allocations (
+            id                        TEXT PRIMARY KEY,
+            company_id                TEXT NOT NULL,
+            branch_uid                TEXT NOT NULL,
+            till_number               INTEGER NOT NULL CHECK (till_number BETWEEN 1 AND 99),
+            terminal_uid              TEXT NOT NULL,
+            status                    TEXT NOT NULL DEFAULT 'active'
+                                      CHECK (status IN ('active','released','superseded')),
+            allocated_by_terminal_uid TEXT NOT NULL,
+            admin_epoch               INTEGER NOT NULL,
+            row_version               INTEGER NOT NULL DEFAULT 1,
+            created_at_utc            TEXT NOT NULL,
+            updated_at_utc            TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_till_alloc_number
+            ON till_allocations(company_id, branch_uid, till_number) WHERE status='active';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_till_alloc_terminal
+            ON till_allocations(company_id, terminal_uid) WHERE status='active';
+    """)
+    converge_default_branch_uid(conn)
 
 
 def _migrate_add_gl_journal_sync(conn):

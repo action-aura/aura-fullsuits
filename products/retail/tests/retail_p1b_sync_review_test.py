@@ -173,7 +173,11 @@ def test_owner_gets_200_with_the_documented_shape(monkeypatch):
     assert r.status_code == 200, body
     data = body['data']
     assert set(data) == {'items', 'next_cursor', 'summary'}
-    assert data['summary'] == {'waiting_count': 1, 'sales_count': 1, 'sales_total': 12.5}
+    # Coordinator item 2 added the two `returns_*` keys: parked refunds are
+    # counted on their own, so the summary is compared whole (a key that
+    # silently vanished or a sale leaking into the refund figure fails here).
+    assert data['summary'] == {'waiting_count': 1, 'sales_count': 1, 'sales_total': 12.5,
+                               'returns_count': 0, 'returns_total': 0.0}
     [item] = data['items']
     assert item['kind'] == 'A sale from another computer'
     assert item['reason'] == 'the same receipt number already exists here'
@@ -209,7 +213,8 @@ def test_another_companys_owner_never_sees_this_installs_rows(monkeypatch):
     _, b = _get(owner_b)
     assert a['data']['summary']['waiting_count'] == 1 and len(a['data']['items']) == 1
     assert b['data']['items'] == [] and b['data']['summary'] == {
-        'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0}, b
+        'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0,
+        'returns_count': 0, 'returns_total': 0.0}, b
     assert 'S-A' not in json.dumps(b)
 
 
@@ -312,6 +317,9 @@ def test_total_is_exact_to_the_fil_and_counts_sales_only(monkeypatch):
     assert s['sales_count'] == 8 and s['waiting_count'] == 11
     # 0.1 + 0.2 + 10.125 + 0.005 + 1.87 = 12.300 ; 0.005 rounds to 0.005 (3dp keeps it)
     assert s['sales_total'] == 12.3, s
+    # The parked refund is its OWN figure (item 2) and is never netted against
+    # the sales: sales_total above must stay 12.3 with a 999 refund parked.
+    assert s['returns_count'] == 1 and s['returns_total'] == 999.0, s
     by_num = {i['number']: i for i in body['data']['items']}
     assert by_num['S10.125']['amount'] == 10.125            # the fil survives
     assert by_num['S-none']['amount'] is None and by_num['S-bool']['amount'] is None
@@ -372,62 +380,348 @@ def test_empty_table(monkeypatch):
     r, body = _get(client)
     assert r.status_code == 200
     assert body['data'] == {'items': [], 'next_cursor': None,
-                            'summary': {'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0}}
+                            'summary': {'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0,
+                                        'returns_count': 0, 'returns_total': 0.0}}
+
+
+# ── returns: the same honesty a parked sale already gets (coordinator item 2) ─
+#
+# The P1b verifier (vb c1-c3) showed the screen said "this will retry" about
+# rows that can never resolve, one level below the sale: a RETURN of a
+# permanently parked sale, and a return_item of a permanently parked RETURN.
+# Their parent is not "missing", it is set aside for good, so nothing will ever
+# bring it back. The three tests below are ported from that attack file; the
+# first two were RED against the code before this change ("retries_itself" was
+# True), the third is the ALLOW half and must stay green.
+
+def _rows_by_kind(items, *kinds):
+    return [i for i in items if i['kind_code'] in kinds]
+
+
+def test_a_return_of_a_permanently_parked_sale_does_not_claim_it_retries(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _park('sale', 'duplicate_document_number', {'uid': 'ps-1', 'sale_number': 'AAA1-000001', 'total': 50})
+    _park('return', 'missing_parent:sale', {'uid': 'rt-1', 'sale_uid': 'ps-1',
+                                            'return_number': 'AAA1-R-000001', 'refund_amount': 20})
+    _, body = _get(client)
+    [ret] = _rows_by_kind(body['data']['items'], 'return')
+    assert ret['retries_itself'] is False, ret
+    assert ret['parent_parked'] is True and ret['note'], ret
+
+
+def test_children_of_a_permanently_parked_return_do_not_claim_they_retry(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _park('return', 'duplicate_document_number', {'uid': 'rt-2', 'sale_uid': 'x',
+                                                  'return_number': 'AAA1-R-000002', 'refund_amount': 20})
+    _park('return_item', 'missing_parent:return', {'uid': 'ri-2', 'return_uid': 'rt-2', 'quantity': 1})
+    _, body = _get(client)
+    kids = [i for i in body['data']['items'] if i['kind_code'] not in ('return', 'sale')]
+    assert kids, body['data']['items']
+    assert all(i['retries_itself'] is False and i['parent_parked'] is True and i['note'] for i in kids), kids
+
+
+def test_a_chain_sale_then_return_then_return_item_all_stop_claiming_a_retry(monkeypatch):
+    """The whole ladder: parked sale -> its return waiting on it -> that
+    return's item. Each rung is decided from the rung above."""
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _park('sale', 'duplicate_document_number', {'uid': 'ps-9', 'sale_number': 'S9', 'total': 50})
+    _park('return', 'missing_parent:sale', {'uid': 'rt-9', 'sale_uid': 'ps-9', 'refund_amount': 5})
+    _park('return_item', 'missing_parent:return', {'uid': 'ri-9', 'return_uid': 'rt-9', 'quantity': 1})
+    _, body = _get(client)
+    by = {i['kind_code']: i for i in body['data']['items']}
+    assert by['return']['retries_itself'] is False and by['return_item']['retries_itself'] is False, by
+
+
+def test_allow_half_a_merely_missing_parent_still_says_it_retries(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _park('sale_item', 'missing_parent:sale', {'sale_uid': 'late-sale', 'quantity': 1})
+    _park('payment', 'missing_parent:sale', {'sale_uid': 'late-sale', 'related_type': 'sale', 'amount': 1})
+    # Same allow-half for the return ladder: a return waiting on a sale that has
+    # simply not arrived yet, and an item waiting on THAT return (same uid: an
+    # earlier draft pointed the item at a different, absent return, which let a
+    # mutation that treats every return as parked go unnoticed -- the item could
+    # not tell, because it never referred to a return that was in the table).
+    _park('return', 'missing_parent:sale', {'uid': 'rt-late', 'sale_uid': 'not-parked', 'refund_amount': 3})
+    _park('return_item', 'missing_parent:return', {'uid': 'ri-late', 'return_uid': 'rt-late', 'quantity': 1})
+    _, body = _get(client)
+    items = body['data']['items']
+    assert len(items) == 4
+    assert all(i['retries_itself'] is True and i['parent_parked'] is False and i['note'] is None
+               for i in items), items
+
+
+# Track S (crew Y, 52aa477c): a set-aside sale's/return's stock movement and journal
+# now park WITH it, so the flag `stock_and_books_applied` is DERIVED from what is in
+# this computer's tables (gl_journals by (source_type, source_uid); inventory_movements
+# by (type, reference, terminal_id)), never assumed. Both halves are pinned below:
+#   deny  -> nothing of the document is here  -> False + the "set aside with it" wording
+#   allow -> a journal or a movement IS here  -> True  + the old "WERE added" wording
+# (a till that took the row on the older engine really did add them).
+
+def _uid():
+    return 'u-' + uuid.uuid4().hex[:12]
+
+
+def _plant_journal(source_type, source_uid, company_id=1):
+    """A journal of the document exists here. gl_journals is append-only (a delete
+    ABORTs), so tests use fresh uids instead of cleaning up."""
+    conn = get_retail_conn()
+    try:
+        conn.execute(
+            "INSERT INTO gl_journals (company_id, business_date, source_type, source_uid, currency) "
+            "VALUES (?, '2026-09-30', ?, ?, 'JOD')", (company_id, source_type, source_uid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _plant_movement(movement_type, reference, terminal_id):
+    conn = get_retail_conn()
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")     # the product is irrelevant to what is read
+        conn.execute(
+            "INSERT INTO inventory_movements (product_id, movement_type, quantity, reference, terminal_id) "
+            "VALUES (999999, ?, 1, ?, ?)", (movement_type, reference, terminal_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _one(body, kind):
+    [row] = _rows_by_kind(body['data']['items'], kind)
+    return row
+
+
+def _dup_sale(uid=None, number=None, terminal='T-SENDER'):
+    uid = uid or _uid()
+    number = number or f"S-{uid}"
+    _park('sale', 'duplicate_document_number',
+          {'uid': uid, 'sale_number': number, 'terminal_id': terminal, 'total': 10})
+    return uid, number, terminal
+
+
+def _dup_return(uid=None, number=None, terminal='T-SENDER', sale_uid='x'):
+    uid = uid or _uid()
+    number = number or f"R-{uid}"
+    _park('return', 'duplicate_document_number',
+          {'uid': uid, 'return_number': number, 'terminal_id': terminal, 'sale_uid': sale_uid,
+           'refund_amount': '7.5'})
+    return uid, number, terminal
+
+
+def test_deny_half_a_parked_sale_with_nothing_of_it_here_says_it_was_set_aside_with_it(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _dup_sale()
+    _, body = _get(client)
+    sale = _one(body, 'sale')
+    assert sale['stock_and_books_applied'] is False and sale['retries_itself'] is False, sale
+    assert 'set aside with it' in sale['note'] and 'WERE added' not in sale['note'], sale
+
+
+def test_allow_half_a_parked_sale_whose_journal_is_here_says_it_was_applied(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    uid, _, _ = _dup_sale()
+    _plant_journal('sale', uid)
+    _, body = _get(client)
+    sale = _one(body, 'sale')
+    assert sale['stock_and_books_applied'] is True and sale['retries_itself'] is False, sale
+    assert 'WERE added' in sale['note'] and 'accounting' in sale['note'] and 'stock' in sale['note'], sale
+
+
+def test_allow_half_a_parked_sale_whose_movement_is_here_says_it_was_applied(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _, number, terminal = _dup_sale()
+    _plant_movement('sale_out', number, terminal)
+    _, body = _get(client)
+    sale = _one(body, 'sale')
+    assert sale['stock_and_books_applied'] is True and 'WERE added' in sale['note'], sale
+
+
+def test_the_winners_movement_with_the_same_number_is_not_mistaken_for_the_losers(monkeypatch):
+    """The computer whose sale WON the number holds a sale_out with the SAME
+    reference but ITS OWN terminal. That is not the parked sale's movement, so the
+    flag stays False -- this is why terminal_id is part of the key."""
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _, number, _ = _dup_sale(terminal='T-LOSER')
+    _plant_movement('sale_out', number, 'T-WINNER')
+    _, body = _get(client)
+    assert _one(body, 'sale')['stock_and_books_applied'] is False
+
+
+def test_a_journal_or_movement_of_the_wrong_kind_does_not_count(monkeypatch):
+    """A RETURN journal with the same uid text, or a return_in movement with the
+    sale's number, is not the sale's stock or books."""
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    uid, number, terminal = _dup_sale()
+    _plant_journal('return', uid)
+    _plant_movement('return_in', number, terminal)
+    _, body = _get(client)
+    assert _one(body, 'sale')['stock_and_books_applied'] is False
+
+
+def test_only_the_document_that_has_a_journal_is_flagged(monkeypatch):
+    """Two parked sales, one with a journal here: each row gets its OWN answer."""
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    with_j, _, _ = _dup_sale()
+    without, _, _ = _dup_sale()
+    _plant_journal('sale', with_j)
+    _, body = _get(client)
+    got = [i['stock_and_books_applied'] for i in body['data']['items'] if i['kind_code'] == 'sale']
+    assert sorted(got) == [False, True], got
+
+
+def test_the_movement_and_journal_parked_with_a_dead_sale_do_not_claim_they_retry(monkeypatch):
+    """Y's engine parks a set-aside sale's stock movement and journal as
+    `missing_parent:sale`. If that sale is permanently set aside they can never
+    resolve, so the screen must not promise a retry (deny half). The allow half:
+    the same rows for a sale that is merely late keep saying they retry."""
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    dead, _, _ = _dup_sale()
+    ret_dead, _, _ = _dup_return()
+    late = _uid()
+    _park('inventory_movement', 'missing_parent:sale',
+          {'uid': _uid(), 'source_type': 'sale', 'source_uid': dead, 'movement_type': 'sale_out'})
+    _park('gl_journal', 'missing_parent:sale', {'uid': _uid(), 'source_type': 'sale', 'source_uid': dead})
+    _park('gl_journal', 'missing_parent:return', {'uid': _uid(), 'source_type': 'return', 'source_uid': ret_dead})
+    _park('inventory_movement', 'missing_parent:sale',
+          {'uid': _uid(), 'source_type': 'sale', 'source_uid': late, 'movement_type': 'sale_out'})
+    _, body = _get(client)
+    kids = [i for i in body['data']['items'] if i['kind_code'] in ('inventory_movement', 'gl_journal')]
+    assert len(kids) == 4, kids
+    stuck = [i for i in kids if i['parent_parked']]
+    assert len(stuck) == 3 and all(i['retries_itself'] is False and i['note'] for i in stuck), kids
+    [waiting] = [i for i in kids if not i['parent_parked']]
+    assert waiting['retries_itself'] is True and waiting['note'] is None, waiting
+
+
+def test_deny_half_a_parked_duplicate_return_with_nothing_here_says_it_was_set_aside(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _dup_return()
+    _, body = _get(client)
+    ret = _one(body, 'return')
+    assert ret['stock_and_books_applied'] is False and ret['retries_itself'] is False, ret
+    assert 'set aside with it' in ret['note'] and 'WERE added' not in ret['note'], ret
+
+
+def test_allow_half_a_parked_duplicate_return_with_its_journal_or_movement_here(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    by_journal, _, _ = _dup_return()
+    _, number, terminal = _dup_return()
+    _plant_journal('return', by_journal)
+    _plant_movement('return_in', number, terminal)
+    _, body = _get(client)
+    rets = _rows_by_kind(body['data']['items'], 'return')
+    assert len(rets) == 2 and all(r['stock_and_books_applied'] is True for r in rets), rets
+    assert all('stock' in r['note'] and 'accounting' in r['note'] and 'WERE added' in r['note']
+               for r in rets), rets
+
+
+def test_a_parked_duplicate_return_of_a_parked_sale_keeps_its_own_stronger_note(monkeypatch):
+    """Parked for two permanent reasons: the stock-and-books sentence is the
+    more important one and must win over the generic 'sale was set aside'. Both
+    halves: journal here -> applied wording; nothing here -> set-aside wording."""
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    sale_uid, _, _ = _dup_sale()
+    ret_uid, _, _ = _dup_return(sale_uid=sale_uid)
+    _, body = _get(client)
+    ret = _one(body, 'return')
+    assert ret['stock_and_books_applied'] is False and ret['retries_itself'] is False, ret
+    assert ret['parent_parked'] is True and 'set aside with it' in ret['note'], ret
+    _plant_journal('return', ret_uid)
+    _, body = _get(client)
+    ret = _one(body, 'return')
+    assert ret['stock_and_books_applied'] is True and ret['retries_itself'] is False, ret
+    assert 'accounting' in ret['note'] and 'WERE added' in ret['note'], ret
+
+
+def test_parked_refunds_are_their_own_figure_and_never_netted_against_sales(monkeypatch):
+    client, cid = _make_admin()
+    _local_company_is(monkeypatch, cid)
+    _park('sale', 'duplicate_document_number', {'uid': 's1', 'sale_number': 'S1', 'total': 100})
+    _park('return', 'duplicate_document_number', {'uid': 'r1', 'sale_uid': 'x', 'refund_amount': 40})
+    _park('return', 'missing_parent:sale', {'uid': 'r2', 'sale_uid': 's1', 'refund_amount': '0.125'})
+    _park('return', 'duplicate_document_number', {'uid': 'r3', 'sale_uid': 'x', 'refund_amount': 'junk'})
+    _, body = _get(client)
+    s = body['data']['summary']
+    # 100 of sales and 40.125 of refunds is NOT "59.875 short": two figures.
+    assert s['sales_count'] == 1 and s['sales_total'] == 100.0, s
+    assert s['returns_count'] == 3 and s['returns_total'] == 40.125, s
 
 
 # ── REAL rows from two real computers ───────────────────────────────────────
 
 def test_real_two_computer_quarantine_rows_read_back_through_the_route(tmp_path, monkeypatch):
-    """Two real processes (separate retail.db each) both pick till 1 while
-    offline from each other (the pinned T5 window of retail_p1b_numbering_
-    twodevice_test.py). The rows the ENGINE parked on them -- not hand-written
-    ones -- are copied into this process's DB and read through the route."""
-    from _accept_harness import run_accept_device
-    py = sys.executable
-    TA, TB = 'q-till-a-0000-0000-000000000001', 'q-till-b-0000-0000-000000000002'
-
-    def dev(d, relay, acts):
-        # Round 3: the shipped build refuses to switch readable numbers on (409
-        # READABLE_NEEDS_DEVICE_REGISTRY). This test needs the underlying
-        # two-computer clash to make the engine park REAL rows, so the flag is
-        # flipped inside each device process (its own op), exactly as
-        # retail_p1b_numbering_twodevice_test.py's `readable_available` does.
-        flip = {"op": "set_readable_available", "value": True}
-        return run_accept_device(py, d, relay, [flip] + list(acts), timeout=240)[1:]
-
-    a, b, relay = tmp_path / 'a', tmp_path / 'b', tmp_path / 'relay.db'
-    [shop] = dev(a, relay, [{"op": "create_shop", "price": 5.0, "initial_stock": 100}])
-    [boot] = dev(b, relay, [{"op": "bootstrap"}])
-    [_, _, prod] = dev(b, relay, [{"op": "set_terminal_id", "terminal_id": TB},
-                                  {"op": "login", "email": boot["email"], "password": boot["password"]},
-                                  {"op": "create_product", "name": "B widget", "initial_stock": 50}])
-    [br] = dev(b, relay, [{"op": "list_branches", "company_id": boot["company_id"]}])
-    bbid = br["branches"][0]["id"]
-
-    def login(term, who):
-        return [{"op": "set_terminal_id", "terminal_id": term},
-                {"op": "login", "email": who["email"], "password": who["password"]}]
-
-    on = {"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}
-    assert dev(a, relay, login(TA, shop) + [on])[-1]["status_code"] == 200
-    assert dev(b, relay, login(TB, boot) + [on])[-1]["status_code"] == 200
-    dev(a, relay, login(TA, shop) + [{"op": "cash_session_open", "branch_id": shop["branch_id"]},
-                                     {"op": "sell", "product_id": shop["product_id"], "quantity": 1}])
-    dev(b, relay, login(TB, boot) + [{"op": "cash_session_open", "branch_id": bbid},
-                                     {"op": "sell", "product_id": prod["product_id"], "quantity": 1}])
-    dev(b, relay, [{"op": "push"}])
-    dev(a, relay, [{"op": "push"}])
-    dev(a, relay, login(TA, shop) + [{"op": "pull"}])
-    dev(b, relay, login(TB, boot) + [{"op": "pull"}])
+    """Two REAL computers of one shop (separate retail.db each, one shared device
+    registry, joined by the repo's FileRelay -- `_v42_shop.Shop`) that BOTH believe
+    they are the main computer, so both give away till 1 (the pinned residual T5b of
+    retail_p1b_numbering_twodevice_test.py). REWRITTEN for schema v42: the old
+    version got its clash from two offline computers each picking till 1 on their
+    own; the main-computer rule now refuses that (409 TILL_NEEDS_MAIN_COMPUTER), so
+    the only way left for the engine to see the clash is two computers that each
+    think they are main. The rows the ENGINE parked -- not hand-written ones -- are
+    copied into this process's DB and read through the route."""
+    from _v42_shop import Shop
+    shop = Shop(tmp_path).build()
+    a, b = shop.ids['a'], shop.ids['b']
+    a_branch_uid = shop.sel('a', "SELECT uid FROM branches ORDER BY id LIMIT 1")[0]['uid']
+    shop.patch_branch_uid('b', a_branch_uid)             # both mean the same branch
+    # B becomes a second main computer with a NEWER epoch and A never hears of it
+    # (one admin per registry, so B's copy demotes A before it promotes B).
+    shop.run('b', [
+        {"op": "reg_exec", "sql": "UPDATE devices SET is_admin_device=0 WHERE id=?", "params": [a]},
+        {"op": "reg_exec", "sql": "UPDATE devices SET is_admin_device=1 WHERE id=?", "params": [b]},
+        {"op": "reg_exec", "sql": "UPDATE admin_device_assignment SET epoch=epoch+1", "params": []}])
+    for w in ('a', 'b'):
+        [r] = shop.login(w, [{"op": "numbering_set", "branch_code": "AAA",
+                              "readable_enabled": True, "till_number": 1}])
+        assert r["status_code"] == 200, (w, r)          # neither computer can refuse the other
+        [bid] = shop.sel(w, "SELECT id FROM branches ORDER BY id LIMIT 1")
+        out = shop.login(w, [{"op": "cash_session_open", "branch_id": bid["id"]},
+                             {"op": "sell", "product_id": shop.shop["product_id"], "quantity": 1}])
+        assert out[0]["status_code"] == 200 and out[1]["status_code"] == 200, (w, out)
+    shop.sync_all()
+    shop.sync_all()
 
     cols = "entity_id, entity_type, event_type, payload, reason, detail"
     real = []
-    for d in (a, b):
-        [r] = dev(d, relay, [{"op": "raw_select", "sql": f"SELECT {cols} FROM sync_apply_quarantine", "params": []}])
-        real += r["rows"]
+    per_device = {}
+    for w in ('a', 'b'):
+        rows = shop.sel(w, f"SELECT {cols} FROM sync_apply_quarantine")
+        per_device[w] = rows
+        real += rows
     assert real, "the two-computer scenario parked nothing -- the window closed; update this test on purpose"
     types = {r["entity_type"] for r in real}
     assert 'doc_series' in types, types
+    # What the engine did with the parked sale's stock and books, on the DEVICES'
+    # own databases (this is the fact the route's derived flag reads): nothing of a
+    # parked sale is in gl_journals or inventory_movements; both waited with it.
+    for w in ('a', 'b'):
+        parked = [json.loads(r["payload"]) for r in per_device[w] if r["entity_type"] == "sale"]
+        assert parked, f"{w}: no sale was parked -- the scenario changed; update this test on purpose"
+        for p in parked:
+            assert shop.sel(w, "SELECT 1 FROM gl_journals WHERE source_type='sale' AND source_uid=?",
+                            [p["uid"]]) == [], f"{w}: a parked sale's journal was applied"
+            assert shop.sel(w, "SELECT 1 FROM inventory_movements WHERE movement_type='sale_out' "
+                               "AND reference=? AND terminal_id=?",
+                            [p["sale_number"], p["terminal_id"]]) == [], \
+                f"{w}: a parked sale's stock movement was applied"
+        kinds = {(r["entity_type"], r["reason"]) for r in per_device[w]}
+        assert ("inventory_movement", "missing_parent:sale") in kinds, (w, kinds)
+        assert ("gl_journal", "missing_parent:sale") in kinds, (w, kinds)
 
     client, cid = _make_admin('srreal')
     _local_company_is(monkeypatch, cid)
@@ -459,17 +753,28 @@ def test_real_two_computer_quarantine_rows_read_back_through_the_route(tmp_path,
         assert abs(data['summary']['sales_total'] - want) < 0.0005
         assert all(i['reason'] == 'the same receipt number already exists here'
                    for i in data['items'] if i['kind_code'] == 'sale')
-        # Round 3 point 3, on rows the ENGINE really wrote: every parked sale is
-        # flagged as having had its stock and books applied; a parked sale's
-        # items/payments (if the engine parked any) are permanent, not "retrying".
+        # Round 3 point 3, on rows the ENGINE really wrote: a parked sale's
+        # items/payments are permanent, not "retrying". The flag is DERIVED: the
+        # asserts above showed the devices hold no journal or movement of any
+        # parked sale, and this process's tables hold none either, so every parked
+        # sale reads "set aside with it" (False). The allow half (True) is pinned
+        # above on planted rows; a device snapshot of applied rows is not
+        # reproducible with the current engine, which parks them.
         for i in data['items']:
             if i['kind_code'] == 'sale':
-                assert i['stock_and_books_applied'] is True and i['note'], i
+                assert i['stock_and_books_applied'] is False and 'set aside with it' in i['note'], i
         parked_uids = {json.loads(r["payload"]).get("uid") for r in real_sales}
         kids = [r for r in real if r["entity_type"] in ("sale_item", "payment")
                 and json.loads(r["payload"]).get("sale_uid") in parked_uids]
-        if kids:
-            got = [i for i in data['items'] if i['kind_code'] in ('sale_item', 'payment')
-                   and i['parent_parked']]
-            assert len(got) == len(kids), (len(got), len(kids))
-            assert all(i['retries_itself'] is False and i['note'] for i in got), got
+        # Coordinator item 4: this used to be `if kids:`, so if the engine parked
+        # no children the assertions below never ran and the test passed without
+        # checking the very claim it exists to make. A parked sale here always
+        # leaves its items/payments behind (a sale is never parked without its
+        # children arriving), so an empty `kids` means the scenario changed --
+        # fail loudly and let a person update this test on purpose.
+        assert kids, ("the engine parked a sale but none of its sale_item/payment "
+                      "children -- the scenario changed; update this test on purpose")
+        got = [i for i in data['items'] if i['kind_code'] in ('sale_item', 'payment')
+               and i['parent_parked']]
+        assert len(got) == len(kids), (len(got), len(kids))
+        assert all(i['retries_itself'] is False and i['note'] for i in got), got

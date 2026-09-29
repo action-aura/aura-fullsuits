@@ -169,6 +169,21 @@ def _clean_install_a_outbox():
     conn.close()
 
 
+@pytest.fixture(autouse=True)
+def _runs_as_the_main_computer(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42). Creating a number book is now a
+    main-computer-only action (409 TILL_NEEDS_MAIN_COMPUTER anywhere else), and
+    the local test device is not the registry's main computer. These tests are
+    about how a book SYNCS, not about who may create one, so every route call
+    here runs AS the main computer with the one registry answer pinned true.
+
+    WHAT THIS FILE CAN NO LONGER CATCH: whether create_doc_series /
+    claim_doc_series refuse a non-main computer. That is proven with a REAL
+    registry, both directions, in retail_v42_till_allocation_test.py."""
+    from commercial_runtime.identity import device_context
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+
+
 @contextlib.contextmanager
 def _as_device_b(get_conn):
     """Runs the enclosed real HTTP calls against device B's OWN separate

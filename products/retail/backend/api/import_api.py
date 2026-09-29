@@ -1409,7 +1409,14 @@ def _handle_retail_products(records):
         # _default_branch does, and it has to agree with it: a branch invented
         # by an upload is as real as one created through /branches, and the
         # stock this import is about to file lands against it.
-        self_heal_branch_uid = _new_uid()
+        #
+        # Schema v42: when the licence id is known, the placeholder gets the
+        # DETERMINISTIC default-branch uid (D) -- the same one _default_branch
+        # and the sync-side resolver use -- so two computers of one shop that
+        # each self-heal mint the SAME branch instead of two unmergeable ones.
+        # No licence yet (fresh, pre-activation install): a random uid, as before.
+        from database.schema import default_branch_uid_for_company
+        self_heal_branch_uid = default_branch_uid_for_company(cid) or _new_uid()
         cur.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,'Main Store',?)",
                     (cid, self_heal_branch_uid))
         bid = cur.lastrowid

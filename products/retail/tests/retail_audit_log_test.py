@@ -15,7 +15,10 @@ HTTP routes (never a raw INSERT into audit_log) and confirms:
   - The gate (Phase 1b, 2026-09-29): the PERSON, not the machine. Role
     'admin' (the shop owner) is served on ANY computer -- including one that
     is not the company's admin device; a manager holding retail.reports and
-    a cashier are refused everywhere. This file used to prove the opposite
+    a cashier are refused everywhere. Registry v9 adds one read-only
+    exception: a person holding retail.books.view (the Accountant preset) is
+    served too (test_the_accountant_reads_the_audit_log_read_only_...).
+    This file used to prove the opposite
     (device-gated); see test_the_owner_is_served_on_a_computer_that_is_not_
     the_admin_device and test_manager_and_cashier_are_refused_...
   - Company scoping: a second company's audit_log rows never appear in the
@@ -310,6 +313,71 @@ def test_a_cashier_without_retail_reports_is_still_refused_by_the_capability():
     r = cashier.get('/api/sub/retail/audit-log')
     assert r.status_code == 403, r.get_json()
     assert r.get_json().get('code') != 'OWNER_ONLY', "the capability layer should have refused first"
+
+
+def _make_accountant(company_id):
+    """A real Accountant: manager account put through the production
+    apply_preset (registry v9), then logged in. Holds retail.books.view."""
+    email = f"aud-acct-{uuid.uuid4().hex[:10]}@test.local"
+    password = "AuditLogPW1"
+    user_id = str(uuid.uuid4())
+    conn = registry_conn()
+    try:
+        conn.execute(
+            "INSERT INTO users (id, uid, company_id, employee_id, email, password_hash, role, status, require_password_change) "
+            "VALUES (?,?,?,?,?,?,?,?,0)",
+            (user_id, str(uuid.uuid4()), company_id, f"EMP-{uuid.uuid4().hex[:6]}", email,
+             hash_password(password), "manager", "active"),
+        )
+        conn.execute(
+            "INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?)",
+            (str(uuid.uuid4()), user_id, "retail", "full"),
+        )
+        user_accounts.seed_capabilities_for_user(conn, user_id, "manager")
+        user_accounts.apply_preset(conn, user_id, user_accounts.PRESET_ACCOUNTANT, emit_sync=False)
+        conn.commit()
+    finally:
+        conn.close()
+    client = app.test_client()
+    r = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert r.status_code == 200, r.get_json()
+    return client, user_id
+
+
+def test_the_accountant_reads_the_audit_log_read_only_and_manager_and_cashier_still_cannot():
+    """registry v9 books.view half of the gate, BOTH directions in one shop.
+    The Accountant (retail.books.view) is served the log and it is their own
+    company's rows; it stays READ-ONLY (no write verb exists on the route).
+    A manager and a cashier, given retail.reports explicitly, hold no
+    books.view and remain OWNER_ONLY -- so the 200 above can only be the
+    books.view branch and the 403s can only be the owner-only check."""
+    client, cid, uid = _make_admin('aud-acct')
+    _seed_real_actions(client, cid)
+    accountant, acct_uid = _make_accountant(cid)
+    manager, manager_uid = _make_staff(cid, 'manager', {'retail.reports': 'full'})
+    cashier, cashier_uid = _make_staff(cid, 'cashier', {'retail.reports': 'full'})
+
+    rconn = registry_conn()
+    try:
+        assert user_accounts.CAP_BOOKS_VIEW in user_accounts.granted_capability_codes(rconn, acct_uid)
+        for who_uid in (manager_uid, cashier_uid):
+            assert user_accounts.CAP_BOOKS_VIEW not in user_accounts.granted_capability_codes(rconn, who_uid), \
+                "precondition: only the Accountant holds books.view"
+    finally:
+        rconn.close()
+
+    r = accountant.get('/api/sub/retail/audit-log?limit=100')
+    assert r.status_code == 200, r.get_json()
+    rows = r.get_json()['data']
+    assert rows, "the Accountant must see the shop's rows, not an empty page"
+    assert {row['action'] for row in rows} >= {'PRODUCT_CREATED', 'PAYMENT_VOIDED'}
+    assert accountant.post('/api/sub/retail/audit-log', json={}).status_code == 405, \
+        "the books.view branch is read-only: the route exposes no write verb"
+
+    for who, c in (('manager', manager), ('cashier', cashier)):
+        r = c.get('/api/sub/retail/audit-log')
+        assert r.status_code == 403, (who, r.get_json())
+        assert r.get_json().get('code') == 'OWNER_ONLY', (who, r.get_json())
 
 
 def test_anonymous_is_401_not_403():
