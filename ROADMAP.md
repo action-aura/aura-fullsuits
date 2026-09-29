@@ -6417,3 +6417,29 @@ Recorded gaps (decisions or later work, not forgotten):
   (constant is 41) -- pre-existing, fails on the P0 baseline too.
 - Sync accepts any retail_settings key from a paired device without
   normalising (pre-existing trust model).
+
+## 2026-09-29 — P1b opened (partial, no schema claim): what starts now and what waits
+
+Started the same day P1a cashed in, on `feat/retail-ux-p0`. Only the P1b
+items that need no owner decision, no shared-schema claim and no hardware:
+
+- Audit log follows the person (admin half; the Accountant's books.view
+  half waits for registry v9).
+- Settings hub with sections and a live receipt preview (no Books section).
+- Plan & devices (licence first); add-on tiles say "price on request"
+  until the owner sets prices; "Request" hides until Action Aura's sales
+  WhatsApp number is known.
+- Readable per-till numbers for NEW companies; existing shops opt in.
+- Command palette (Ctrl+K).
+- Shopkeeper copy and teaching empty states.
+- "Get your shop ready" checklist.
+- Help inside the product (the support WhatsApp link hides until Action
+  Aura's support number is known).
+
+Waiting, deliberately not started:
+- Registry v9 (display_name, role_preset, books codes) and the Accountant
+  preset: a single-writer claim on the SHARED identity registry. The
+  partner works on registry/sync on other branches (owner Q9 still open),
+  so this is claimed only after the two agree -- not by a background crew.
+- [Track S] default branch uid and device registry sync: partner / Q9.
+- Silent Arabic receipt printing: needs the rented printer and drawer.
