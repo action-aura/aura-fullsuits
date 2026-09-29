@@ -960,9 +960,16 @@ def _build_windows_sync_services(relay_base_url):
         from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
         return _registry_get_conn()
 
+    # `on_tick` is the device HEARTBEAT (registry v9): this stream's own 10s
+    # timer re-runs the announcer, which decides for itself whether the last
+    # announcement is old enough to repeat. Passed ONLY here -- the retail
+    # stream has no business announcing devices.
     _registry_sync_service = SyncService(
         _sync_relay_selector, _registry_sync_get_conn, local_company_id_from_registry,
-        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+        # Late-bound: this runs at IMPORT time (the `if _SYNC_RELAY_URL_IS_USABLE`
+        # block below), long before `_announce_heartbeat_device` is defined.
+        on_tick=lambda: _announce_heartbeat_device())
 
     return _sync_service, _registry_sync_service
 
@@ -2429,6 +2436,91 @@ def _start_site_relay_if_enabled():
         )
 
 
+def _announce_device(reason):
+    """Registry v9 (Track S): tell the shop's other computers that THIS device
+    is up, what build it runs and which schema versions it speaks.
+
+    reason='boot' forces the announcement even when nothing changed: a peer
+    that is still on an older build skipped every earlier `device` event, and
+    a fresh start is the cheapest moment to heal that. Runs BEFORE the
+    registry SyncService starts, so the event it queues rides the very first
+    push. reason='heartbeat' (from `_announce_heartbeat_device`, driven by the
+    registry stream's own timer) announces only when the last announcement is
+    at least `ANNOUNCE_HEARTBEAT_SECONDS` old -- `announce_local_device`
+    decides, this function only opens the door. Without it a till that stays
+    up for a week looks dead to every peer.
+
+    NEVER RAISES -- same contract as every other boot seam in `init_app()`:
+    a till must boot (and keep syncing) even when it cannot announce. Two
+    normal reasons it does nothing: no company exists yet (not onboarded --
+    the row is written by the first announce after onboarding/activation), or
+    the device row belongs to another company (`DeviceCompanyMismatchError`,
+    logged loudly, never overwritten)."""
+    try:
+        from commercial_runtime.sync.sync_service import local_company_id_from_registry
+        company_id = local_company_id_from_registry()
+        if not company_id:
+            # A heartbeat fires every tick; only the one-off boot line is worth
+            # writing, or an un-onboarded till logs this every 10 seconds.
+            if reason == 'boot':
+                logging.getLogger(__name__).info(
+                    'Device announce skipped: no company on this install yet.')
+            return
+        from commercial_runtime.identity.device_context import announce_local_device
+        conn = get_registry_conn()
+        try:
+            announce_local_device(
+                conn, company_id, reason=reason,
+                app_version=APP_VERSION,
+                retail_schema_version=RETAIL_SCHEMA_VERSION,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Device announce (%s) failed; this till keeps running.', reason,
+            exc_info=True)
+
+
+def _announce_boot_device():
+    """`_announce_device('boot')`, called once from `init_app()`."""
+    _announce_device('boot')
+
+
+def _announce_heartbeat_device():
+    """`_announce_device('heartbeat')`, called on every tick of the registry
+    SyncService (its `on_tick` hook)."""
+    _announce_device('heartbeat')
+
+
+def _sweep_cash_pair_at_boot():
+    """AUDIT-032 boot sweep: a non-admin who ALREADY holds both cash.close and
+    cash.approve (written by a build before the guard, or by hand) is never
+    looked at by the per-event rule, so narrow them once per boot. Runs right
+    after the registry migration. NEVER RAISES: a till must boot. Only ever
+    narrows access and emits no sync (every device reaches the same answer)."""
+    try:
+        from commercial_runtime.sync.sync_service import local_company_id_from_registry
+        from commercial_runtime.identity.user_accounts import enforce_cash_pair_all
+        company_id = local_company_id_from_registry()
+        if not company_id:
+            return
+        conn = get_registry_conn()
+        try:
+            fixed = enforce_cash_pair_all(conn, company_id)
+            conn.commit()
+        finally:
+            conn.close()
+        if fixed:
+            logging.getLogger(__name__).warning(
+                'Boot sweep removed cash.approve from %d account(s) that held '
+                'both cash.close and cash.approve.', len(fixed))
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Cash-pair boot sweep failed; this till keeps booting.', exc_info=True)
+
+
 def init_app():
     """Initialize the registry + retail schema, and start the background
     sync loop (if configured). Call once before serving.
@@ -2465,6 +2557,8 @@ def init_app():
     # bootstrap. Never fatal: a logging failure must not stop a till booting.
     _configure_file_logging()
     init_registry_db()
+    # AUDIT-032: narrow any pre-existing cash.close + cash.approve pair.
+    _sweep_cash_pair_at_boot()
     init_retail()
     # Launch-readiness Phase 5 prerequisite #1 -- must run AFTER both
     # migrations (it is what catches up when a migration's own version gate
@@ -2496,6 +2590,9 @@ def init_app():
     _ensure_runtime_schema_for_sync()
     if LICENSING_PLATFORM != 'ANDROID' and _hub_self_sync_was_active_before():
         _enter_hub_self_sync(start_timers=False)
+    # Registry v9: announce this device BEFORE the registry stream starts, so
+    # the queued `device` event rides the first push. Never fatal.
+    _announce_boot_device()
     if _sync_service is not None:
         _sync_service.start()
     if _registry_sync_service is not None:

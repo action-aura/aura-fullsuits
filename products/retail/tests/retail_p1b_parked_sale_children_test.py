@@ -12,16 +12,21 @@ Two halves, deliberately separate:
      `parent_parked=true`, a plain "needs a person" note. The parked sale itself
      says `stock_and_books_applied=true`.
 
-  B. THE ENGINE PIN (two REAL computers, real relay, real sync engine). The
-     screen's `stock_and_books_applied` claim is a claim about
-     `commercial_runtime/sync/sync_service.py::_apply_event`, which we do NOT
-     change here (Track S owns its apply order). This half PROVES the claim on
-     rows the engine really wrote: a parked sale's stock movement and its
-     accounting journal ARE applied on the receiving computer, while its items and
-     payments park as `missing_parent:sale`. If a future engine change groups a
-     sale with its stock/journal (so they park together), THIS TEST GOES RED on
-     purpose -- and the screen's wording (`stock_and_books_applied`, the note)
-     must be revisited in the same change. That is its whole job.
+  B. THE ENGINE PIN (two REAL computers, real relay, real sync engine). This
+     half pins what `commercial_runtime/sync/sync_service.py::_apply_event`
+     really does with a sale that was parked as `duplicate_document_number`.
+
+     HISTORY -- read this before touching the test. Until the P2S "parked
+     children" rule, the engine applied that sale's stock movement and its
+     accounting journal on the receiving computer while the sale row itself, its
+     items and its payments were parked: stock and books for a sale that did not
+     exist there, which nobody could ever reconcile. This half used to pin THAT
+     (and the screen's `stock_and_books_applied=true` wording in Part A repeats
+     it). The rule now parks the movement and the journal WITH the sale
+     (`missing_parent:sale`), so a parked sale leaves nothing behind but its four
+     quarantine rows. This half therefore pins the NEW behaviour: no movement, no
+     journal, and their quarantine rows. If a future engine change applies them
+     again, THIS TEST GOES RED on purpose.
 
 Run (repo venv):
     aura-fullsuits/.venv/Scripts/python.exe -m pytest \
@@ -200,7 +205,7 @@ def test_a_payment_that_is_not_for_a_sale_is_not_swept_up(monkeypatch):
 
 # ── B. the engine pin ───────────────────────────────────────────────────────
 
-def test_engine_pin_a_parked_sales_stock_and_books_are_applied_but_its_children_park(tmp_path):
+def test_engine_pin_a_parked_sale_takes_its_stock_and_books_with_it(tmp_path):
     """Two real computers both number their first sale AAA1-000001 (the clash
     that retail_p1b_numbering_twodevice_test.py T5 pins; reachable here only with
     READABLE_NUMBERS_AVAILABLE flipped inside each device process). After they
@@ -208,13 +213,21 @@ def test_engine_pin_a_parked_sales_stock_and_books_are_applied_but_its_children_
 
       * the other computer's SALE is parked `duplicate_document_number`;
       * its items/payments are parked `missing_parent:sale`;
-      * BUT its stock movement is applied (the receiving computer holds a movement
-        for a product that only the parked sale sold), and
-      * BUT its accounting journal is applied (a gl_journals row whose source is
-        the parked sale exists).
+      * its stock movement is parked `missing_parent:sale` and NOT applied (no
+        movement exists for the product only the parked sale sold);
+      * its accounting journal is parked `missing_parent:sale` and NOT applied.
 
-    This is the engine behaviour the screen's `stock_and_books_applied` and the
-    "needs a person" note describe. Go RED = the engine changed = revisit both."""
+    WHAT THIS CHANGE CAN NO LONGER CATCH (stated on purpose, per the rule that a
+    changed pin says what it lost): the old pin failed if the engine STOPPED
+    applying a parked sale's stock and journal. That behaviour was the defect --
+    stock and books for a document that does not exist on this computer -- so
+    losing that guard is the point, and a future engine that regresses to it is
+    caught by the opposite assertions below. What the old pin protected that the
+    new one does not: the receiving computer's stock count now leaves out the
+    losing sale's units until a person resolves the clash. That is the correct
+    trade (a count that is short by one visible, parked sale beats a count that is
+    off by a sale nobody can see), but it means the stock is not 'as sold' on this
+    computer in the meantime. `sale_number` clash resolution is unchanged."""
     from _accept_harness import run_accept_device
     py = sys.executable
     TA, TB = 'pk-till-a-0000-0000-000000000001', 'pk-till-b-0000-0000-000000000002'
@@ -223,7 +236,10 @@ def test_engine_pin_a_parked_sales_stock_and_books_are_applied_but_its_children_
     def dev(d, relay, acts):
         return run_accept_device(py, d, relay, [flip] + list(acts), timeout=240)[1:]
 
+    term_of = {}
+
     def login(term, who):
+        term = term_of.get(a if who is shop else b, term)
         return [{"op": "set_terminal_id", "terminal_id": term},
                 {"op": "login", "email": who["email"], "password": who["password"]}]
 
@@ -235,9 +251,29 @@ def test_engine_pin_a_parked_sales_stock_and_books_are_applied_but_its_children_
                                   {"op": "create_product", "name": "B only widget", "initial_stock": 50}])
     [br] = dev(b, relay, [{"op": "list_branches", "company_id": boot["company_id"]}])
     bbid = br["branches"][0]["id"]
+    # v42: switching readable numbers on is main-computer-only. Make each
+    # computer main of its OWN registry (planted ADMIN_CREATED row -- the
+    # harness inserts the owner directly, skipping the founding route that
+    # writes it -- then announce, then claim_main).
+    for d, who in ((a, shop), (b, boot)):
+        cl = dev(d, relay, [
+            {"op": "reg_exec",
+             "sql": "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id) "
+                    "VALUES (?, ?, NULL, 'ADMIN_CREATED', 'user', ?)",
+             "params": ["founder-" + who["company_id"], who["company_id"], "founder"]},
+            {"op": "login", "email": who["email"], "password": who["password"]},
+            {"op": "announce", "reason": "boot"},
+            {"op": "claim_main"},
+        ])
+        assert cl[-1]["status_code"] == 200, f"could not become main: {cl[-1]}"
+        # a till number can only go to a computer the registry lists, so this
+        # computer's till identity from here on IS its registry device id
+        term_of[d] = cl[-2]["device"]["id"]
     on = {"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}
-    assert dev(a, relay, login(TA, shop) + [on])[-1]["status_code"] == 200
-    assert dev(b, relay, login(TB, boot) + [on])[-1]["status_code"] == 200
+    ron_a = dev(a, relay, login(TA, shop) + [on])[-1]
+    ron_b = dev(b, relay, login(TB, boot) + [on])[-1]
+    assert ron_a["status_code"] == 200, ron_a
+    assert ron_b["status_code"] == 200, ron_b
     ra = dev(a, relay, login(TA, shop) + [{"op": "cash_session_open", "branch_id": shop["branch_id"]},
                                           {"op": "sell", "product_id": shop["product_id"], "quantity": 1}])
     rb = dev(b, relay, login(TB, boot) + [{"op": "cash_session_open", "branch_id": bbid},
@@ -264,20 +300,28 @@ def test_engine_pin_a_parked_sales_stock_and_books_are_applied_but_its_children_
     assert {k["entity_type"] for k in kids} == {"sale_item", "payment"}, q
     assert all(k["reason"] == "missing_parent:sale" for k in kids), kids
 
-    # ...and yet its stock and books went in. (1) a movement for B's product,
-    # a product only the parked sale sold.
-    # (products carry no uid column here; the name is unique in this fixture)
+    # The parked sale's stock and books were parked WITH it, not applied.
+    # (1) its movement is quarantined as a child of the sale...
+    parked_kinds = {(r["entity_type"], r["reason"]) for r in q}
+    assert ("inventory_movement", "missing_parent:sale") in parked_kinds, (
+        f"the parked sale's stock movement is not quarantined: {sorted(parked_kinds)}")
+    assert ("gl_journal", "missing_parent:sale") in parked_kinds, (
+        f"the parked sale's journal is not quarantined: {sorted(parked_kinds)}")
+    # (2) ...and NOT applied: no movement for the product only that sale sold
+    # (products carry no uid column here; the name is unique in this fixture).
     moved = select(
         "SELECT m.movement_type, m.quantity FROM inventory_movements m "
         "JOIN products p ON p.id = m.product_id WHERE p.name = 'B only widget' "
         "AND m.reference = ?", (number,))
-    assert moved and moved[0]["quantity"] != 0, (
-        "the parked sale's stock movement was NOT applied -- the engine now keeps a "
-        f"sale and its stock together; revisit stock_and_books_applied: {moved}")
-    # (2) an accounting journal for the parked sale (source_id is left NULL when
-    # the sale row is missing; the journal's reference is the sale number).
+    assert not moved, (
+        "the parked sale's stock movement WAS applied on the receiving computer -- "
+        f"stock for a sale that does not exist here: {moved}")
+    # (3) no journal for it either. `source_id` is NULL when the sale row is
+    # missing and the journal's reference is the sale number; A's own journal for
+    # ITS sale (same number) has a real source_id and is expected to be there.
     journals = select("SELECT source_type, source_id FROM gl_journals WHERE reference = ?", (number,))
     b_journals = [j for j in journals if j["source_id"] is None]
-    assert b_journals, (
-        "no journal arrived for the parked sale (or it was tied to a local sale) -- "
-        f"the engine changed; revisit stock_and_books_applied: {journals}")
+    assert not b_journals, (
+        "the parked sale's accounting journal WAS applied on the receiving "
+        f"computer -- books for a sale that does not exist here: {journals}")
+    assert journals, "A's own journal for its own sale vanished -- the negative checks above prove nothing"

@@ -37,8 +37,33 @@ do not offer:
     it to that action's own result entry as `_log_warnings` -- so a test can
     assert on the log output of one specific `pull`, not the whole process.
 
+Track S + registry v9 additions (P2S crew Y). All are OPT-IN through an
+optional fifth argv: a JSON object of options. A caller that passes four
+arguments gets exactly the behaviour every earlier acceptance test was written
+against.
+
+  * `code_root` -- run this device on a DIFFERENT checkout of the product (an
+    export of an older commit) while still using THIS file and this tests
+    directory's `FileRelay`. That is how one test process drives a real OLD
+    build and a real NEW build against each other: the point of a mixed-build
+    check is that the old side is old CODE, not a flag on new code. Every op an
+    old tree does not support fails there (an ImportError or a 404), which a
+    test sees as a failure, never as a silent pass.
+  * `registry_relay` -- path of a second FileRelay for the REGISTRY stream. The
+    real app runs two SyncService instances (retail.db and registry.db); the
+    harness used to build only the retail one, so user and device events had no
+    way to leave a harness device. With this option a registry-stream service
+    is built exactly as `app._build_windows_sync_services` builds it (same
+    handled_entity_types, no schema-version provider: registry.db carries its
+    own version, and stamping retail's integer onto it would quarantine good
+    rows).
+  * `arm_provider` -- give the RETAIL service the same
+    `local_schema_version_provider` the real app gives it, so the skew guard is
+    live. Off by default because the harness never armed it and older tests
+    were written without it.
+
 Run as a bare subprocess, same contract as its ancestors:
-    python _accept_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path>
+    python _accept_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path> [<options_json>]
 """
 from __future__ import annotations
 
@@ -64,11 +89,18 @@ class _ListHandler(logging.Handler):
 
 def main() -> None:
     app_data_dir, relay_db_path, actions_path, output_path = sys.argv[1:5]
+    options = json.loads(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else {}
 
     tests_dir = Path(__file__).resolve().parent
-    product_dir = tests_dir.parent
+    if options.get("code_root"):
+        # An older checkout. `tests_dir` stays THIS directory (FileRelay lives
+        # here); only the product code is swapped.
+        suite_root = Path(options["code_root"]).resolve()
+        product_dir = suite_root / "products" / "retail"
+    else:
+        product_dir = tests_dir.parent
+        suite_root = product_dir.parent.parent
     backend_dir = product_dir / "backend"
-    suite_root = product_dir.parent.parent
     for p in (str(suite_root), str(backend_dir), str(tests_dir)):
         if p not in sys.path:
             sys.path.insert(0, p)
@@ -107,12 +139,31 @@ def main() -> None:
     _sync_logger.addHandler(_handler)
 
     relay = FileRelay(relay_db_path)
+    service_kwargs = {}
+    if options.get("arm_provider"):
+        from database.schema import RETAIL_SCHEMA_VERSION as _RSV
+        service_kwargs["local_schema_version_provider"] = lambda: _RSV
     service = SyncService(
         client_factory=lambda: relay,
         get_conn=get_retail_conn,
         local_company_id_provider=local_company_id_from_registry,
         local_ensure_schema=_ensure_credit_schema,
+        **service_kwargs,
     )
+
+    # The REGISTRY stream (users, permissions, and from registry v9 devices and
+    # the main-computer assignment) -- built the way the real app builds it,
+    # see the module docstring. Absent unless the caller asks for it.
+    registry_service = None
+    if options.get("registry_relay"):
+        from commercial_runtime.sync.sync_service import REGISTRY_SYNC_ENTITY_TYPES
+        registry_relay = FileRelay(options["registry_relay"])
+        registry_service = SyncService(
+            client_factory=lambda: registry_relay,
+            get_conn=registry_conn,
+            local_company_id_provider=local_company_id_from_registry,
+            handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+        )
 
     API = "/api/sub/retail"
     client = flask_app.test_client()
@@ -450,6 +501,18 @@ def main() -> None:
             r = client.post(f"{API}/numbering", json=payload)
             results.append({"status_code": r.status_code, "body": r.get_json()})
 
+        elif op == "allocate_till":
+            # v42: the MAIN computer hands a till number to a computer
+            # (POST /tills/allocations). Body keys are passed through only when
+            # given, so a test can also send {all: true} or omit the number.
+            payload = {k: action[k] for k in ("terminal_uid", "till_number", "branch_uid", "all") if k in action}
+            r = client.post(f"{API}/tills/allocations", json=payload)
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "release_till":
+            r = client.delete(f"{API}/tills/allocations", json={"terminal_uid": action["terminal_uid"]})
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
         elif op == "set_readable_available":
             # Round 3: readable numbers are UNAVAILABLE in the shipped build
             # (retail_api.READABLE_NUMBERS_AVAILABLE=False) until the device
@@ -471,6 +534,168 @@ def main() -> None:
             finally:
                 conn.close()
             results.append({"ok": True})
+
+        # ── Track S + registry v9 ops (P2S crew Y) ─────────────────────────
+        elif op == "code_identity":
+            # Which checkout is this process REALLY running? A mixed-build test
+            # is worthless if the "old" device silently imported the new code
+            # (an editable install, a stray sys.path entry), so the test asks.
+            import commercial_runtime.identity.registry_db as _rdb
+            import commercial_runtime.sync.sync_service as _ss
+            import database.schema as _schema
+            results.append({
+                "suite_root": str(suite_root),
+                "sync_service_file": str(Path(_ss.__file__).resolve()),
+                "registry_schema_version": _rdb.REGISTRY_SCHEMA_VERSION,
+                "retail_schema_version": _schema.RETAIL_SCHEMA_VERSION,
+                "registry_entity_types": sorted(_ss.REGISTRY_SYNC_ENTITY_TYPES),
+            })
+
+        elif op == "activate_shared_licence":
+            # Two devices of ONE shop hold the same Owner licence. The harness's
+            # own `seed_active_license` cannot pin the id (and test_support.py is
+            # not ours to edit), so save a record whose signed envelope names it
+            # -- the same place `license_public_id` is read from at runtime.
+            from commercial_runtime.licensing_contracts.state_machine import LicenseState
+            from commercial_runtime.licensing_contracts.state_repository import (
+                LICENSING_SCHEMA_VERSION, LicenseStateRecord, LicenseStateRepository,
+            )
+            repo = LicenseStateRepository(Path(app_data_dir) / "database" / "subsystems" / "licensing.db")
+            repo.save(LicenseStateRecord(
+                licensing_schema_version=LICENSING_SCHEMA_VERSION,
+                product_code="AURA_RETAIL", platform=action.get("platform", "WINDOWS"),
+                current_state=LicenseState.ACTIVE_ONLINE.value,
+                owner_installation_id=action.get("installation_id", f"inst-{uuid.uuid4().hex[:8]}"),
+                license_status="ACTIVE", installation_status="ACTIVE", subscription_status="ACTIVE",
+                entitlements_json=json.dumps(action.get("entitlements") or {}),
+                assertion_envelope_json=json.dumps({"payload": {"license_public_id": action["license_public_id"]}}),
+            ))
+            results.append({"ok": True, "license_public_id": action["license_public_id"]})
+
+        elif op == "http":
+            # Generic route call, for routes a named op does not exist for yet.
+            # `path` is absolute (starts with /api/...).
+            method = action.get("method", "GET").lower()
+            kwargs = {"json": action["json"]} if "json" in action else {}
+            r = getattr(client, method)(action["path"], **kwargs)
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "sync_review":
+            r = client.get(f"{API}/sync-review")
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "devices_list":
+            r = client.get("/api/devices")
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "device_me":
+            r = client.get("/api/devices/me")
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "claim_main":
+            r = client.post("/api/devices/me/claim-admin")
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "transfer_main":
+            r = client.post(f"/api/devices/{action['device_id']}/admin")
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "take_over":
+            r = client.post("/api/devices/me/take-over",
+                            json={"password": action["password"], "confirm": action.get("confirm", "TAKE OVER")})
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "device_label":
+            r = client.post(f"/api/devices/{action['device_id']}/label", json={"label": action["label"]})
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "device_revoke":
+            r = client.post(f"/api/devices/{action['device_id']}/revoke")
+            results.append({"status_code": r.status_code, "body": r.get_json(silent=True)})
+
+        elif op == "announce":
+            # This device announces itself the way the boot seam does. The real
+            # boot seam (`app._announce_boot_device`) already ran once inside
+            # `init_app()` -- BEFORE this run created a company, so in a first
+            # run it correctly did nothing. A test that needs the real seam
+            # starts a SECOND process on the same app_data_dir.
+            from commercial_runtime.identity.device_context import announce_local_device
+            from database.schema import RETAIL_SCHEMA_VERSION as _RSV2
+            cid = local_company_id_from_registry()
+            rconn = registry_conn()
+            try:
+                out = announce_local_device(
+                    rconn, cid, reason=action.get("reason", "changed"),
+                    app_version=action.get("app_version", "harness-build"),
+                    retail_schema_version=action.get("retail_schema_version", _RSV2),
+                    device_label=action.get("device_label"),
+                )
+                rconn.commit()
+            finally:
+                rconn.close()
+            results.append({"announced": out["announced"], "device": dict(out["device"])})
+
+        elif op in ("reg_push", "reg_pull"):
+            if registry_service is None:
+                raise RuntimeError("registry stream not configured: pass options.registry_relay")
+            (registry_service.push_once if op == "reg_push" else registry_service.pull_once)()
+            results.append({"ok": True})
+
+        elif op == "reg_apply_raw":
+            # Registry-stream twin of `apply_result_raw`: a caller-supplied pull
+            # result, applied as-is, callable repeatedly with the SAME events to
+            # prove replay convergence across a process boundary.
+            if registry_service is None:
+                raise RuntimeError("registry stream not configured: pass options.registry_relay")
+            rconn = registry_conn()
+            try:
+                registry_service.apply_pull_result(rconn, {"events": action["events"], "cursor": action["cursor"]})
+                rconn.commit()
+            finally:
+                rconn.close()
+            results.append({"ok": True})
+
+        elif op == "reg_select":
+            rconn = registry_conn()
+            try:
+                rows = rconn.execute(action["sql"], action.get("params", [])).fetchall()
+            finally:
+                rconn.close()
+            results.append({"rows": [dict(r) for r in rows]})
+
+        elif op == "reg_exec":
+            # Plant a state no route can create (an OLD build's row shape).
+            rconn = registry_conn()
+            try:
+                rconn.execute(action["sql"], action.get("params", []))
+                rconn.commit()
+            finally:
+                rconn.close()
+            results.append({"ok": True})
+
+        elif op == "reg_outbox":
+            rconn = registry_conn()
+            try:
+                rows = rconn.execute(
+                    "SELECT entity_type, entity_id, event_type, payload FROM sync_outbox ORDER BY rowid"
+                ).fetchall()
+            finally:
+                rconn.close()
+            results.append({"rows": [{**dict(r), "payload": json.loads(r["payload"])} for r in rows]})
+
+        elif op == "reg_quarantine_rows":
+            rconn = registry_conn()
+            try:
+                has = rconn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_apply_quarantine'"
+                ).fetchone()
+                rows = rconn.execute(
+                    "SELECT entity_id, entity_type, event_type, reason, detail FROM sync_apply_quarantine "
+                    "ORDER BY quarantined_at, rowid"
+                ).fetchall() if has else []
+            finally:
+                rconn.close()
+            results.append({"rows": [dict(r) for r in rows]})
 
         else:
             raise ValueError(f"unknown device action op: {op!r}")
