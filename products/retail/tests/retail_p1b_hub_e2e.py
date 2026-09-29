@@ -50,7 +50,7 @@ for _p in (str(REPO), str(BACKEND_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-SCRATCH = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p1b\H")
+SCRATCH = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p1b\H2")
 SCRATCH.mkdir(parents=True, exist_ok=True)
 # New Arabic for this crew's strings; merged into the page dictionary because
 # locales/*.json are edited only at merge time (see the report).
@@ -93,9 +93,8 @@ def port_is_free(port):
 
 server = None
 PORT = None
-# crew H's own range (contract.md), minus 6000: Chromium refuses it as an
-# "unsafe port" (X11) with net::ERR_UNSAFE_PORT.
-for candidate in range(6001, 6020):
+# crew H2's own range (6380-6399). (Chromium refuses 6000 as an "unsafe port".)
+for candidate in range(6380, 6400):
     if not port_is_free(candidate):
         continue
     try:
@@ -105,7 +104,7 @@ for candidate in range(6001, 6020):
     except OSError:
         continue
 if server is None:
-    print("FATAL: no free port 6000-6019")
+    print("FATAL: no free port 6380-6399")
     sys.exit(2)
 
 threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -118,6 +117,7 @@ print(f"Backend up at {BASE}  AURA_APP_DATA={DATA}")
 # ---------------------------------------------------------------------------
 RESULTS = []
 PAGE_ERRORS = []
+CURRENT_CHECK = [""]   # the name of the check now running (go() logs it beside a leave prompt)
 _ONLY = [s for s in os.environ.get("H_ONLY", "").split("|") if s]
 if _ONLY:
     print(f"FILTERED RUN (H_ONLY={_ONLY!r}) -- not a full verification")
@@ -126,6 +126,7 @@ if _ONLY:
 def check(name, fn):
     if _ONLY and not any(s in name for s in _ONLY):
         return
+    CURRENT_CHECK[0] = name
     try:
         fn()
     except AssertionError as e:
@@ -179,7 +180,10 @@ def go(page, section, wait_ms=900):
     changes?' when a check leaves it dirty; _navigate then returns a Promise that
     only settles once somebody answers, so this call must NOT await it (it would
     hang the whole run). A check that ends with edits on screen is answered
-    'Discard' here and the section is logged in LEAVE_PROMPTS; the leave-guard
+    'Discard' here and (check name, section) is logged in LEAVE_PROMPTS, which the
+    last-but-one check of the run asserts is EMPTY (H2 item 6: it used to be
+    written and never read, so a check that left the hub dirty was answered
+    quietly and nobody ever knew); the leave-guard
     checks below drive the prompt by hand and never come through this shortcut
     while they are asserting on it."""
     page.evaluate("(s) => { SubsystemApp._navigate(s); }", section)
@@ -188,7 +192,7 @@ def go(page, section, wait_ms=900):
     except Exception:  # noqa: BLE001 - no prompt: the normal case
         pass
     else:
-        LEAVE_PROMPTS.append(section)
+        LEAVE_PROMPTS.append((CURRENT_CHECK[0], section))
         real_click(page, "#ret-confirm-ok", "Discard (a check ended with unsaved edits)")
     page.wait_for_timeout(wait_ms)
 
@@ -246,10 +250,22 @@ def grant_capability(user_id, code):
 I18N_ADD = json.loads(I18N_H.read_text(encoding="utf-8")) if I18N_H.exists() else {}
 
 
+I18N_H2 = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p1b\i18n-H2.json")
+I18N_H2_ADD = json.loads(I18N_H2.read_text(encoding="utf-8")) if I18N_H2.exists() else {}
+# Proof-only switch. The H2 Arabic (setup guide, Customers, Returns, scanner) is
+# NOT in locales/ar.json until the orchestrator merges i18n-H2.json. The checks
+# named "...in Arabic, no dictionary merged" therefore stay RED on purpose until
+# that merge; H2_PROOF_MERGE=1 merges the file into the live dictionary so the
+# rest of the run (and the screenshots) can be judged with the real words.
+H2_PROOF_MERGE = os.environ.get("H2_PROOF_MERGE") == "1"
+
+
 def merge_i18n(page):
     """The new Arabic is not in locales/ar.json until merge; add it to the live
     dictionary so the Arabic screens are judged with their real words."""
     page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_ADD)
+    if H2_PROOF_MERGE:
+        page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_H2_ADD)
 
 
 def set_lang(page, lang):
@@ -1422,6 +1438,65 @@ with sync_playwright() as p:
     pinned_check("numbering: while the Save bar is up the example is on screen and not under it (1366 and 1024)",
           numbering_save_bar_never_covers_the_example)
 
+    def numbering_save_bar_never_covers_the_advanced_summary():
+        # H2 item 5b. The Save bar is sticky at the foot of the pane. The "Advanced" fold
+        # sits at the foot of the numbering card, i.e. exactly where a sticky bar lands
+        # when the pane is a little shorter than the card. Rule 6b, in EN and AR, at both
+        # widths: the summary's box is inside the window, the topmost thing at its centre
+        # IS the summary (not the bar), and a real mouse click there opens the fold.
+        # The readable numbers cannot be switched on in this build (409 until the device
+        # registry lands), so the fold cannot be put lower by state. Its place is moved by
+        # window HEIGHT instead: the shorter the window, the nearer the fold is to the bar.
+        num_reset()
+        try:
+            for lang in ("en", "ar"):
+                set_lang(owner, lang)
+                # 1024 wide is the size where the bar wraps to two rows (126px tall at EN,
+                # taller than the pane's 96px scroll-padding). The fold sits ~960-1000px down
+                # the pane, so the tall 1024 windows (a tablet upright) are the ones where
+                # it is wholly on screen yet the padding still calls it clear of the bar.
+                for w, h in ((1366, 768), (1024, 768), (1024, 1100), (1024, 1120), (1024, 1140), (1024, 1366)):
+                    owner.set_viewport_size({"width": w, "height": h})
+                    owner.wait_for_timeout(300)
+                    numbering_hub()
+                    set_input(owner, "#num-branch-code", "abf")
+                    assert savebar_up(owner), f"the bar did not come up ({lang} {w}x{h})"
+                    owner.wait_for_timeout(300)
+                    what = f"Advanced summary ({lang} {w}x{h})"
+                    to_top = "() => { const s = document.getElementById('sub-content'); if (s) s.scrollTop = 0; window.scrollTo(0, 0); }"
+                    # Path 1, a person scrolling a little / a tool bringing it into view: the
+                    # pane is at its top, the bar is up, and the page must scroll the summary
+                    # CLEAR of the bar. reachable() asks the browser to scroll it into view only
+                    # if it is not already "visible" -- and "visible" is judged with the pane's
+                    # scroll-padding, so a padding shorter than the bar (126px tall at EN 1024,
+                    # two rows) calls a half-hidden summary visible and never moves it.
+                    owner.evaluate(to_top)
+                    owner.wait_for_timeout(200)
+                    reachable(owner, owner.locator("#numbering-advanced > summary"), what)
+                    assert not rects_overlap(owner, "#numbering-advanced > summary", "#sh-savebar"), \
+                        f"the Save bar covers the Advanced summary ({lang} {w}x{h})"
+                    # Path 2, the keyboard: focus() lets the browser do the scrolling itself.
+                    owner.evaluate(to_top)
+                    owner.evaluate("() => document.querySelector('#numbering-advanced > summary').focus()")
+                    owner.wait_for_timeout(400)
+                    info = owner.locator("#numbering-advanced > summary").first.evaluate(_CENTRE_JS)
+                    assert info["inView"], f"{what}: after focus() box {info['box']} is outside the {info['vw']}x{info['vh']} viewport"
+                    assert info["hits"], f"{what}: after focus() the topmost thing at its centre is {info['hitDesc']}, not the summary"
+                    if not owner.evaluate("() => document.getElementById('numbering-advanced').open"):
+                        real_click(owner, "#numbering-advanced > summary", what)
+                        owner.wait_for_function("() => document.getElementById('numbering-advanced').open", timeout=3000)
+                    if (w, h) in ((1024, 768), (1024, 1120)):
+                        owner.screenshot(path=str(SCRATCH / f"numbering_advanced_{lang}_{w}x{h}.png"))
+                    real_click(owner, "#sh-discard", "Discard")
+                    owner.wait_for_timeout(300)
+        finally:
+            owner.set_viewport_size({"width": 1366, "height": 768})
+            set_lang(owner, "en")
+            num_reset()
+
+    pinned_check("numbering (H2): while the Save bar is up the Advanced summary is on screen, on top, and clickable (EN and AR, 1366 and 1024)",
+          numbering_save_bar_never_covers_the_advanced_summary)
+
     def numbering_taken_till_number_is_hinted_before_save():
         num_reset()
         posts = spy_numbering_posts(owner)
@@ -2279,10 +2354,22 @@ with sync_playwright() as p:
         page.evaluate("() => { const o = document.querySelector('.sg-overlay'); if (o) o.remove(); }")
         if not page.evaluate("() => !!window.AuraSetupGuide"):
             page.add_script_tag(url=BASE + "/static/setup-guide.js")
-        page.evaluate("() => { try { localStorage.removeItem('aura_setup_ticks'); } catch (e) {} }")
+        sg_clear_ticks(page)
+
+    def sg_clear_ticks(page):
+        # H2 item 5a: ticks are keyed per company AND user now ('aura_setup_ticks:<co>:<user>'),
+        # with the old global 'aura_setup_ticks' as a one-time fallback. Clear every
+        # variant, or one check's ticks would leak into the next.
+        page.evaluate("""() => { try { Object.keys(localStorage).filter(k => k.indexOf('aura_setup_ticks') === 0)
+            .forEach(k => localStorage.removeItem(k)); } catch (e) {} }""")
 
     def sg_ticks(page):
-        return page.evaluate("() => { try { return JSON.parse(localStorage.getItem('aura_setup_ticks') || '{}'); } catch (e) { return {}; } }")
+        # the tick store the guide itself writes to (its own key, not a guess at it)
+        return page.evaluate("""() => { try { return JSON.parse(localStorage.getItem(window.AuraSetupGuide.ticksKey()) || '{}'); }
+            catch (e) { return {}; } }""")
+
+    def sg_set_ticks(page, ticks):
+        page.evaluate("(t) => localStorage.setItem(window.AuraSetupGuide.ticksKey(), JSON.stringify(t))", ticks)
 
     def sg_answer(page, done_by_id, default=False):
         rows = [{"id": i, "done": done_by_id.get(i, default)} for i in SG_SERVER_STEPS]
@@ -2348,6 +2435,7 @@ with sync_playwright() as p:
         for want in SG_SERVER_STEPS + ["printer_tested", "whatsapp_desktop"]:
             assert want in ids, f"step {want} is missing from the list {ids}"
         reachable(owner, owner.locator(".sg-dialog"), "setup dialog")
+        owner.screenshot(path=str(SCRATCH / "sg_dialog_en.png"))
         # Escape closes it
         owner.keyboard.press("Escape")
         owner.wait_for_timeout(300)
@@ -2399,7 +2487,7 @@ with sync_playwright() as p:
     def sg_a_null_step_needs_i_did_this_and_100_percent_clears_the_card():
         sg_load(owner)
         # everything done, EXCEPT one step the server cannot tell (null) and one plainly not done (false)
-        owner.evaluate("() => localStorage.setItem('aura_setup_ticks', JSON.stringify({printer_tested: true, whatsapp_desktop: true}))")
+        sg_set_ticks(owner, {"printer_tested": True, "whatsapp_desktop": True})
         answer = {i: True for i in SG_SERVER_STEPS}
         answer["cashier_invited"] = None
         answer["products"] = False
@@ -2408,7 +2496,7 @@ with sync_playwright() as p:
         try:
             sg_home(owner)
             owner.wait_for_selector("#setup-guide-card", timeout=8000)
-            assert "9 of 11 steps done" in owner.inner_text("#setup-guide-card"), owner.inner_text("#setup-guide-card")
+            assert "8 of 10 steps done" in owner.inner_text("#setup-guide-card"), owner.inner_text("#setup-guide-card")
             real_click(owner, '#setup-guide-card [data-sg="open"]', "See the steps")
             owner.wait_for_selector(".sg-dialog li.sg-step", timeout=8000)
             row_null = 'li.sg-step[data-step="cashier_invited"]'
@@ -2432,7 +2520,7 @@ with sync_playwright() as p:
         finally:
             owner.unroute(SG_ROUTE)
             owner.unroute(SG_NUM_ROUTE)
-            owner.evaluate("() => { try { localStorage.removeItem('aura_setup_ticks'); } catch (e) {} }")
+            sg_clear_ticks(owner)
 
     check("setup guide: a step the server cannot tell stays open until 'I did this'; a plain 'no' offers no tick; 100% removes the card",
           sg_a_null_step_needs_i_did_this_and_100_percent_clears_the_card)
@@ -2455,22 +2543,22 @@ with sync_playwright() as p:
             with pinned(available=False):
                 ids, total = steps_and_total()
             assert "readable_numbers" not in ids, f"an unattainable step is on the owner's list: {ids}"
-            assert total == len(ids) == 10, (total, ids)
+            assert total == len(ids) - 1 == 9, (total, ids)  # jofotara is listed but optional: not counted
             # the allow half: available -> the step is back and counted
             sg_numbering(owner, True)
             ids, total = steps_and_total()
             owner.unroute(SG_NUM_ROUTE)
-            assert "readable_numbers" in ids and total == len(ids) == 11, (total, ids)
+            assert "readable_numbers" in ids and total == len(ids) - 1 == 10, (total, ids)
             # the numbering route cannot be read -> fail OPEN (keep the step), never hide on a guess
             owner.route(SG_NUM_ROUTE, lambda route, request: route.fulfill(
                 status=500, content_type="application/json", body='{"status":"error","message":"boom"}'))
             ids, total = steps_and_total()
-            assert "readable_numbers" in ids and total == 11, (total, ids)
+            assert "readable_numbers" in ids and total == 10, (total, ids)
         finally:
             owner.unroute(SG_ROUTE)
             owner.unroute(SG_NUM_ROUTE)
             sg_close_any(owner)
-            owner.evaluate("() => { try { localStorage.removeItem('aura_setup_ticks'); } catch (e) {} }")
+            sg_clear_ticks(owner)
 
     check("setup guide: the 'readable numbers' step is hidden (and not counted) while the feature is unavailable, back when it is, kept if unreadable",
           sg_readable_step_is_hidden_while_unavailable_and_back_when_it_is_not)
@@ -2510,10 +2598,344 @@ with sync_playwright() as p:
         assert "printer_tested" not in sg_ticks(owner), "a refused test ticked the step"
         call_test(False, {"status": "success", "data": {"sent": True}})
         assert sg_ticks(owner).get("printer_tested") is True, f"a real test receipt did not tick: {sg_ticks(owner)}"
-        owner.evaluate("() => { try { localStorage.removeItem('aura_setup_ticks'); } catch (e) {} }")
+        sg_clear_ticks(owner)
 
     check("setup guide: only a test receipt that really reached a printer ticks 'Send a test receipt' (not a file, a drawer kick or a refusal)",
           sg_only_a_real_receipt_test_ticks_the_printer_step)
+
+    def sg_browser_test_print_ticks_only_if_the_dialog_really_opened():
+        # H2 item 2. The browser "Test Print" used to tick the step the moment it
+        # was clicked, whatever happened. Now it ticks only if print() returned
+        # without throwing. Both directions: a print() that throws must NOT tick,
+        # a print() that returns must. (The browser cannot tell Print from Cancel;
+        # a dialog that is never answered blocks print(), so it never reaches the tick.)
+        sg_load(owner)
+        sg_home(owner, 700)
+        sg_clear_ticks(owner)
+
+        def run_test_print(print_body):
+            owner.evaluate("""(body) => {
+                let f = document.getElementById('ret-print-frame');
+                if (!f) {
+                    f = document.createElement('iframe');
+                    f.id = 'ret-print-frame';
+                    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+                    document.body.appendChild(f);
+                }
+                f.contentWindow.print = new Function(body);
+            }""", print_body)
+            owner.evaluate("async () => { await RetailSystem._testPrint(); }")
+            owner.wait_for_timeout(200)
+
+        run_test_print("throw new Error('no print dialog available')")
+        assert "printer_tested" not in sg_ticks(owner), \
+            "a print() that threw still ticked 'Send a test receipt'"
+        run_test_print("/* dialog opened and closed */")
+        assert sg_ticks(owner).get("printer_tested") is True, \
+            f"a print() that returned did not tick: {sg_ticks(owner)}"
+        sg_clear_ticks(owner)
+
+    check("setup guide: the browser Test Print ticks 'Send a test receipt' only when print() really ran (a print() that throws does not tick)",
+          sg_browser_test_print_ticks_only_if_the_dialog_really_opened)
+
+    # =========================================================================
+    # 7c-H2. Setup guide fix round (crew H2). Each check below guards one thing the
+    #        verifier found wrong; the mutation that turns it red is in progress.md.
+    # =========================================================================
+    SG_BRAND_ROUTE = "**/api/sub/retail/settings/branding"
+
+    def sg_branding(page, name):
+        def handler(route, request):
+            if request.method != "GET":
+                route.continue_()
+                return
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"status": "success", "data": {"branding_business_name": name}}))
+        page.route(SG_BRAND_ROUTE, handler)
+
+    def sg_stub(page, answer, name="", readable=True):
+        """Everything the guide asks the server, stubbed: the checklist, the numbering
+        route and the saved shop name. Re-callable (drops the old stubs first)."""
+        sg_unstub(page)
+        sg_answer(page, answer)
+        sg_numbering(page, readable)
+        sg_branding(page, name)
+
+    def sg_unstub(page):
+        for pat in (SG_ROUTE, SG_NUM_ROUTE, SG_BRAND_ROUTE):
+            page.unroute(pat)
+
+    def sg_all_true(**over):
+        ans = {i: True for i in SG_SERVER_STEPS}
+        ans.update(over)
+        return ans
+
+    def sg_rows(page):
+        """Open the dialog and read what a person would read: per step, is it done,
+        does it offer 'I did this' / a go-button / Undo, and its visible text."""
+        sg_close_any(page)
+        page.evaluate("() => { window.AuraSetupGuide.open(); }")
+        page.wait_for_selector(".sg-dialog li.sg-step", timeout=8000)
+        return page.evaluate("""() => { const out = {};
+            document.querySelectorAll('.sg-dialog li.sg-step').forEach(l => {
+              out[l.dataset.step] = {done: l.classList.contains('is-done'),
+                tick: !!l.querySelector('[data-sg-tick]'), go: !!l.querySelector('[data-sg-go]'),
+                untick: !!l.querySelector('[data-sg-untick]'), waiting: !!l.querySelector('.sg-waiting'),
+                text: l.innerText}; });
+            const sub = document.querySelector('.sg-dialog .sg-sub');
+            out._sub = {text: sub ? sub.innerText : ''};
+            return out; }""")
+
+    def sg_teardown(page):
+        sg_unstub(page)
+        sg_close_any(page)
+        sg_clear_ticks(page)
+
+    # ---- item 3a: the licence step can never be hand-ticked ------------------
+    def sg_licence_is_a_fact_never_a_tick():
+        sg_load(owner)
+        sg_home(owner, 500)
+        # a stale 'licence' tick from an older build must not count either
+        sg_set_ticks(owner, {"licence": True, "printer_tested": True, "whatsapp_desktop": True})
+        try:
+            for label, val in (("null (the server cannot tell)", None), ("false", False)):
+                sg_stub(owner, sg_all_true(licence=val))
+                rows = sg_rows(owner)
+                r = rows["licence"]
+                assert not r["done"], f"licence answered {label} was counted done: {r}"
+                assert not r["tick"], f"licence answered {label} offers 'I did this': {r}"
+                assert r["go"], f"licence answered {label} has no way to go and fix it: {r}"
+                assert "9 of 10 steps done" in rows["_sub"]["text"], (label, rows["_sub"])
+            # the allow half: the server saying true closes it, with no button left
+            sg_stub(owner, sg_all_true())
+            rows = sg_rows(owner)
+            assert rows["licence"]["done"] and not rows["licence"]["go"], rows["licence"]
+            assert "Everything is set up." in rows["_sub"]["text"], rows["_sub"]
+            # ...and the ban is on the licence only: another step the server cannot tell still takes a tick
+            sg_stub(owner, sg_all_true(cashier_invited=None))
+            sg_clear_ticks(owner)
+            rows = sg_rows(owner)
+            assert rows["cashier_invited"]["tick"], "the licence rule swallowed the tick on an ordinary unknown step"
+        finally:
+            sg_teardown(owner)
+
+    check("setup guide (H2): the licence step is never hand-ticked, not for null, not for false, not from a stale tick; true still closes it",
+          sg_licence_is_a_fact_never_a_tick)
+
+    # ---- item 3b: e-invoicing is optional, uncounted, and says why -----------
+    def sg_jofotara_is_optional_and_waiting():
+        sg_load(owner)
+        sg_set_ticks(owner, {"printer_tested": True, "whatsapp_desktop": True})
+        try:
+            # everything required done, e-invoicing not: the card is GONE (it must not hold 100% back)
+            sg_stub(owner, sg_all_true(jofotara=False))
+            sg_home(owner)
+            assert owner.locator("#setup-guide-card").count() == 0, "an open optional step keeps the card on the home screen"
+            rows = sg_rows(owner)
+            j = rows["jofotara"]
+            assert not j["done"] and j["waiting"], f"e-invoicing does not show it is waiting: {j}"
+            assert "Optional" in j["text"], j["text"]
+            assert "tax authority" in j["text"], j["text"]
+            assert not j["tick"], f"e-invoicing can be hand-ticked: {j}"
+            assert "Everything is set up." in rows["_sub"]["text"], rows["_sub"]
+            sg_close_any(owner)
+            # allow half: one REQUIRED step open -> the card is back, counts 10 not 11, and 'Next' is that step
+            sg_stub(owner, sg_all_true(jofotara=False, products=False))
+            sg_home(owner)
+            owner.wait_for_selector("#setup-guide-card", timeout=8000)
+            card = owner.inner_text("#setup-guide-card")
+            assert "9 of 10 steps done" in card, card
+            assert "Next: Add your products" in card, card
+            assert "e-invoicing" not in card.lower(), f"e-invoicing was offered as the next step: {card!r}"
+        finally:
+            sg_teardown(owner)
+
+    check("setup guide (H2): e-invoicing is optional - not counted, never 'Next', shows it is waiting on the tax authority, cannot hold the card up",
+          sg_jofotara_is_optional_and_waiting)
+
+    # ---- item 3c: a shop name alone finishes the shop step -------------------
+    def sg_shop_name_alone_is_enough():
+        sg_load(owner)
+        try:
+            sg_stub(owner, sg_all_true(shop_name_logo=False, products=False), name="Corner Shop")
+            rows = sg_rows(owner)
+            assert rows["shop_name_logo"]["done"], f"a saved shop name with no logo left the step open: {rows['shop_name_logo']}"
+            # the deny half: no name (blank) and the server saying no -> still open, with its button
+            sg_stub(owner, sg_all_true(shop_name_logo=False, products=False), name="   ")
+            rows = sg_rows(owner)
+            r = rows["shop_name_logo"]
+            assert not r["done"] and r["go"], f"an empty shop name closed the step: {r}"
+            # and the server's own yes still closes it whatever the name says
+            sg_stub(owner, sg_all_true(products=False), name="")
+            assert sg_rows(owner)["shop_name_logo"]["done"]
+        finally:
+            sg_teardown(owner)
+
+    check("setup guide (H2): a shop name on its own completes 'Add your shop name' (logo optional); a blank name does not",
+          sg_shop_name_alone_is_enough)
+
+    # ---- item 3d: the WhatsApp step opens the real WhatsApp setup ------------
+    def sg_whatsapp_step_opens_the_real_whatsapp_page():
+        sg_load(owner)
+        sg_stub(owner, sg_all_true(products=False))
+        try:
+            rows = sg_rows(owner)
+            w = rows["whatsapp_desktop"]
+            assert w["go"] and w["tick"] and not w["done"], w
+            assert "Open WhatsApp" in w["text"], w["text"]
+            real_click(owner, '.sg-dialog [data-sg-go="whatsapp_desktop"]', "Open WhatsApp")
+            owner.wait_for_url("**/static/whatsapp.html*", timeout=10000)
+            assert owner.url.split("?")[0].endswith("/static/whatsapp.html"), owner.url
+        finally:
+            sg_teardown(owner)
+            # get the app back for the checks after this one
+            owner.goto(BASE)
+            dismiss_intro_overlay(owner)
+            owner.wait_for_selector("#sub-header-section", timeout=20000)
+            owner.wait_for_timeout(600)
+            merge_i18n(owner)
+
+    check("setup guide (H2): 'Set up WhatsApp on this computer' opens the real WhatsApp page",
+          sg_whatsapp_step_opens_the_real_whatsapp_page)
+
+    # ---- item 5a: ticks are kept per company AND user -------------------------
+    def sg_ticks_are_per_user_with_one_legacy_read():
+        sg_load(owner)
+        sg_stub(owner, sg_all_true(cashier_invited=None, products=False))
+        try:
+            key = owner.evaluate("() => AuraSetupGuide.ticksKey()")
+            uid = owner.evaluate("() => String(SubsystemApp.currentUser && SubsystemApp.currentUser.id)")
+            assert key.startswith("aura_setup_ticks:") and key.endswith(":" + uid) and uid not in ("", "undefined", "null", "anon"), (key, uid)
+            rows = sg_rows(owner)
+            assert rows["cashier_invited"]["tick"]
+            real_click(owner, 'li.sg-step[data-step="cashier_invited"] [data-sg-tick]', "I did this")
+            owner.wait_for_function("() => document.querySelector('.sg-dialog li[data-step=\"cashier_invited\"]').classList.contains('is-done')", timeout=8000)
+            assert sg_ticks(owner).get("cashier_invited") is True
+            assert owner.evaluate("() => localStorage.getItem('aura_setup_ticks')") is None, "the tick was written to the old global key"
+            # another person on the same computer does not inherit it
+            owner.evaluate("() => { window.__h2user = SubsystemApp.currentUser; "
+                           "SubsystemApp.currentUser = Object.assign({}, window.__h2user, {id: 'someone-else'}); }")
+            try:
+                assert owner.evaluate("() => AuraSetupGuide.isDone('cashier_invited')") is False, "a second user inherited the first user's tick"
+                rows = sg_rows(owner)
+                assert rows["cashier_invited"]["tick"] and not rows["cashier_invited"]["done"], rows["cashier_invited"]
+            finally:
+                owner.evaluate("() => { SubsystemApp.currentUser = window.__h2user; }")
+            assert owner.evaluate("() => AuraSetupGuide.isDone('cashier_invited')") is True, "the first user lost their own tick"
+            # the old global key is read ONCE, so ticks made before this change are not lost...
+            sg_clear_ticks(owner)
+            owner.evaluate("() => localStorage.setItem('aura_setup_ticks', JSON.stringify({cashier_invited: true}))")
+            assert owner.evaluate("() => AuraSetupGuide.isDone('cashier_invited')") is True, "an old tick was lost"
+            owner.evaluate("async () => { await AuraSetupGuide.tick('printer_tested', true); }")
+            scoped = sg_ticks(owner)
+            assert scoped.get("cashier_invited") is True and scoped.get("printer_tested") is True, scoped
+            # ...and never again once the person has their own key
+            owner.evaluate("() => localStorage.setItem('aura_setup_ticks', JSON.stringify({products: true}))")
+            assert owner.evaluate("() => AuraSetupGuide.isDone('products')") is False, "the old global key is still being read"
+        finally:
+            sg_teardown(owner)
+            owner.evaluate("() => { try { localStorage.removeItem('aura_setup_ticks'); } catch (e) {} }")
+
+    check("setup guide (H2): ticks are stored per user (a second user does not inherit them); the old global key is read once, then never",
+          sg_ticks_are_per_user_with_one_legacy_read)
+
+    # ---- item 1: the guide is Arabic on an Arabic page ------------------------
+    LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z'\-]{2,}")
+
+    def latin_words(text):
+        text = re.sub(r"\b[A-Z]+-\d+-\d+\b", "", text)          # the sample receipt number AMM-1-00001 stays as written
+        return sorted(set(LATIN_WORD.findall(text)))
+
+    def arabic_unmerged(page):
+        """A fresh page: nothing a previous check merged into the live dictionary
+        survives a reload, so what is on screen is what locales/ar.json alone says.
+        (H2_PROOF_MERGE=1 adds the H2 file back, to prove the check goes green once
+        the orchestrator has merged it.)"""
+        page.reload()
+        dismiss_intro_overlay(page)
+        page.wait_for_selector("#sub-header-section", timeout=20000)
+        page.wait_for_timeout(700)
+        page.evaluate("(l) => AuraI18n.setLang(l)", "ar")
+        page.wait_for_timeout(500)
+        if H2_PROOF_MERGE:
+            page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_H2_ADD)
+
+    def back_to_english(page):
+        set_lang(page, "en")
+
+    def sg_guide_is_arabic_without_any_dictionary_merge():
+        arabic_unmerged(owner)
+        sg_load(owner)
+        sg_set_ticks(owner, {"printer_tested": True})
+        sg_stub(owner, sg_all_true(products=False, cashier_invited=None, licence=None, jofotara=False))
+        try:
+            sg_home(owner, 1800)
+            owner.wait_for_selector("#setup-guide-card", timeout=8000)
+            assert owner.evaluate("() => document.documentElement.dir") == "rtl"
+            card = owner.inner_text("#setup-guide-card")
+            bad = latin_words(card)
+            assert not bad, f"English words on the Arabic card: {bad} in {card!r}"
+            assert re.search(r"[؀-ۿ]", card), card
+            assert owner.locator('#setup-guide-card .sg-sub bdi[dir="ltr"]').count() == 2, "the two numbers are not wrapped for bidi"
+            owner.screenshot(path=str(SCRATCH / "sg_card_ar.png"))
+            rows = sg_rows(owner)
+            dialog = owner.inner_text(".sg-dialog")
+            bad = latin_words(dialog)
+            assert not bad, f"English words in the Arabic setup dialog: {bad}"
+            assert owner.locator('.sg-dialog .sg-sub bdi[dir="ltr"]').count() == 2
+            assert len(rows) - 1 == 11, rows.keys()
+            owner.screenshot(path=str(SCRATCH / "sg_dialog_ar.png"))
+        finally:
+            sg_teardown(owner)
+            back_to_english(owner)
+
+    check("setup guide (H2): in Arabic, with NO extra dictionary merged, the card and the dialog have no English words and wrap their numbers",
+          sg_guide_is_arabic_without_any_dictionary_merge)
+
+    # ---- item 4: no English literal beside Arabic empty states ---------------
+    ITEM4_SCREENS = {
+        "customers": ["Loyalty Points", "Total Spent"],
+        "returns": ["Return #", "Original Sale", "Refund Method"],
+        "scanner": ["Scanner Status", "Test Scanner", "Configuration", "Scanner Enabled", "Input Mode",
+                    "Barcode Timeout (ms)", "Min Length", "Prefix (stripped)", "Suffix (stripped)", "Success Sound",
+                    "Save Settings", "Reset",
+                    "Click below, then scan any barcode — the captured value appears instantly.",
+                    "Note:"],
+    }
+
+    def item4_screen_text(page, section):
+        go(page, section, 1200)
+        return page.evaluate("() => (document.getElementById('sub-content') || document.body).textContent").lower()
+
+    def customers_returns_scanner_have_no_english_literals_in_arabic():
+        arabic_unmerged(owner)
+        problems = []
+        try:
+            for section, literals in ITEM4_SCREENS.items():
+                text = item4_screen_text(owner, section)
+                for lit in literals:
+                    if lit.lower() in text:
+                        problems.append(f"[{section}] still shows English {lit!r}")
+                    if H2_PROOF_MERGE and I18N_H2_ADD.get(lit) and I18N_H2_ADD[lit].lower() not in text:
+                        problems.append(f"[{section}] does not show the Arabic for {lit!r}")
+                owner.screenshot(path=str(SCRATCH / f"item4_{section}_ar.png"))
+        finally:
+            back_to_english(owner)
+        assert not problems, "\n      ".join(problems)
+
+    check("Arabic (H2): the Customers, Returns and Barcode Scanner screens carry no English literal, with NO extra dictionary merged",
+          customers_returns_scanner_have_no_english_literals_in_arabic)
+
+    def item4_english_unchanged():
+        # the allow half: in English the same screens still say what they always said
+        for section, literals in ITEM4_SCREENS.items():
+            text = item4_screen_text(owner, section)
+            missing = [lit for lit in literals if lit.lower() not in text]
+            assert not missing, f"[{section}] English lost {missing}"
+
+    check("English (H2): wrapping the literals in t() left the English Customers, Returns and Scanner screens unchanged",
+          item4_english_unchanged)
+
 
     # =========================================================================
     # 8. Looking at it: EN/AR x sand/night x every section, no overflow
@@ -2813,6 +3235,16 @@ with sync_playwright() as p:
 
     check("look: every section in EN/AR x sand/night at 1366x768 has no horizontal overflow (screenshots saved)",
           look_at_every_section_in_both_languages_and_themes)
+
+    def no_leave_prompt_was_ever_auto_discarded():
+        # H2 item 6: go() answers "Discard" to the leave guard so one dirty check cannot
+        # wedge the rest of the run. That answer used to be logged and never read, so a
+        # check that quietly left the hub dirty was invisible. Every check that wants to
+        # leave unsaved edits behind must discard them ITSELF; this fails on any that did not.
+        assert not LEAVE_PROMPTS, "checks that left the hub dirty (check, section): " + repr(LEAVE_PROMPTS)
+
+    check("no check left the hub with unsaved edits (go() never had to auto-discard)",
+          no_leave_prompt_was_ever_auto_discarded)
 
     def no_page_errors():
         mine = [e for e in PAGE_ERRORS if "hub" in e[1].lower() or "SettingsHub" in e[1]]

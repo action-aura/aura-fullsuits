@@ -246,8 +246,12 @@
 }
 .sh-savebar[hidden] { display: none; }
 /* While the bar is up, anything scrolled into view (a field being tabbed to, the
- * example beside it) is kept clear of it instead of landing underneath. */
-#sub-content:has(#sh-savebar:not([hidden])) { scroll-padding-block-end: 6rem; }
+ * example beside it) is kept clear of it instead of landing underneath.
+ * The padding has to be at least as tall as the bar AND the gap under it: at 1024px
+ * the bar wraps to two rows (about 126px, plus ~20px below it) at English text
+ * lengths. The old 6rem (96px) let the browser call the numbering card's "Advanced"
+ * summary "already clear" while the bar was still sitting on it. */
+#sub-content:has(#sh-savebar:not([hidden])) { scroll-padding-block-end: 10rem; }
 .sh-savebar-msg { font-size: var(--text-size-body); font-weight: var(--text-weight-semibold); color: var(--text-primary); }
 .sh-savebar-actions { display: flex; gap: var(--space-base); }
 /* Names the sections that still hold unsaved changes (P1b F6); each name opens it. */

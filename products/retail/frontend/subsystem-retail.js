@@ -8505,8 +8505,22 @@ const RetailSystem = {
     }
     const doc = frame.contentWindow.document;
     doc.open(); doc.write(html); doc.close();
+    // Tell the caller whether the browser's print() really ran without
+    // throwing. The timer below swallows a throw (that is deliberate: a print
+    // failure must never break the till), so the outcome is captured by
+    // wrapping print() itself for this one call. The line inside the timer is
+    // left byte-for-byte as it was (retail_receipt_localization_test.js slices
+    // this function up to it). Chromium's print() blocks until the dialog is
+    // closed, so the 151ms timer below fires only after it returned or threw.
+    // Limit: the browser cannot tell Print from Cancel -- both return normally.
+    let printed = false;
+    const nativePrint = frame.contentWindow.print;
+    frame.contentWindow.print = function () { nativePrint.call(this); printed = true; };
     // Give the iframe a tick to lay out before invoking the print dialog.
     setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) {} }, 150);
+    await new Promise((resolve) => setTimeout(resolve, 151));
+    try { frame.contentWindow.print = nativePrint; } catch (e) { /* frame gone */ }
+    return printed;
   },
 
   // ── PRODUCTS ──────────────────────────────────────────────────────────────
@@ -9130,15 +9144,15 @@ const RetailSystem = {
       <div class="ret-hdr">
         <div style="display:flex;gap:10px">
           <input class="ret-search" id="cust-search" data-i18n-ph="Search name, phone, email…" placeholder="${t('Search name, phone, email…')}" oninput="RetailSystem._filterCustomers()" />
-          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','customers',()=>RetailSystem._loadCustomers())">${this._icon('upload', 16, '⬆')} Import</button>
-          <button class="sub-btn-primary" onclick="RetailSystem._openAddCustomer()">+ Add Customer</button>
+          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','customers',()=>RetailSystem._loadCustomers())">${this._icon('upload', 16, '⬆')} ${t('Import')}</button>
+          <button class="sub-btn-primary" onclick="RetailSystem._openAddCustomer()">+ ${t('Add Customer')}</button>
         </div>
       </div>
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="cust-table">
-            <thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Loyalty Points</th><th>Total Spent</th><th>Orders</th><th>Actions</th></tr></thead>
-            <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+            <thead><tr><th>${t('Name')}</th><th>${t('Phone')}</th><th>${t('Email')}</th><th>${t('Loyalty Points')}</th><th>${t('Total Spent')}</th><th>${t('Orders')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -9317,7 +9331,7 @@ const RetailSystem = {
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
           <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
-            <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Total Spent</div>
+            <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">${t('Total Spent')}</div>
             <div style="color:var(--text-money);font-size:22px;font-weight:700">${this._fmt(cu.total_spent)}</div>
           </div>
           <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
@@ -9325,7 +9339,7 @@ const RetailSystem = {
             <div style="color:var(--text-primary);font-size:22px;font-weight:700">${cu.order_count||0}</div>
           </div>
           <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
-            <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Loyalty Points</div>
+            <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">${t('Loyalty Points')}</div>
             <div style="color:var(--text-primary);font-size:22px;font-weight:700">${cu.loyalty_points||0}</div>
           </div>
           <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
@@ -13436,13 +13450,13 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <button class="sub-btn-primary" onclick="RetailSystem._openCreateReturn()">+ Process Return</button>
+        <button class="sub-btn-primary" onclick="RetailSystem._openCreateReturn()">+ ${t('Process Return')}</button>
       </div>
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="ret-table">
-            <thead><tr><th>Return #</th><th>Original Sale</th><th>Customer</th><th>Refund Method</th><th>Amount</th><th>Date</th></tr></thead>
-            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+            <thead><tr><th>${t('Return #')}</th><th>${t('Original Sale')}</th><th>${t('Customer')}</th><th>${t('Refund Method')}</th><th>${t('Amount')}</th><th>${t('Date')}</th></tr></thead>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -13536,7 +13550,7 @@ const RetailSystem = {
               <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._findSaleForReturn()">Lookup</button>
             </div>
           </div>
-          <div class="ret-field"><label for="ret-refund-method">Refund Method</label>
+          <div class="ret-field"><label for="ret-refund-method">${t('Refund Method')}</label>
             <select id="ret-refund-method">
               <option value="cash">${t('Cash')}</option><option value="card">${t('Card')}</option>
             </select>
@@ -16344,27 +16358,27 @@ const RetailSystem = {
     c.innerHTML = `
       <div class="ret-hdr">
         <div style="display:flex;gap:10px">
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._resetScannerSettings()">Reset</button>
-          <button class="sub-btn-primary" onclick="RetailSystem._saveScannerSettings()">Save Settings</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._resetScannerSettings()">${t('Reset')}</button>
+          <button class="sub-btn-primary" onclick="RetailSystem._saveScannerSettings()">${t('Save Settings')}</button>
         </div>
       </div>
 
       ${!desktop ? `<div class="sub-chart-card" style="margin-bottom:18px;border-color:var(--state-warning-text)">
-        <div style="color:var(--state-warning-text)">${this._icon('triangle-alert', 16, '⚠️')} Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.</div>
+        <div style="color:var(--state-warning-text)">${this._icon('triangle-alert', 16, '⚠️')} ${t('Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.')}</div>
       </div>` : ''}
 
       <div class="sc-config-grid">
         <!-- Status + Test -->
         <div class="sub-chart-card">
-          <div class="sub-chart-title" style="margin-bottom:14px">Scanner Status</div>
+          <div class="sub-chart-title" style="margin-bottom:14px">${t('Scanner Status')}</div>
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
             <span id="sc-status-dot" style="width:12px;height:12px;border-radius:50%;background:var(--state-success-text);display:inline-block"></span>
-            <span id="sc-status-text" style="color:var(--text-primary);font-size:16px;font-weight:600">Ready</span>
+            <span id="sc-status-text" style="color:var(--text-primary);font-size:16px;font-weight:600">${t('Ready')}</span>
           </div>
-          <div id="sc-last-scan" style="color:var(--text-muted);font-size:13px;margin-bottom:18px">No scans yet this session</div>
+          <div id="sc-last-scan" style="color:var(--text-muted);font-size:13px;margin-bottom:18px">${t('No scans yet this session')}</div>
 
-          <div class="sub-chart-title" style="margin:0 0 10px">Test Scanner</div>
-          <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px">Click below, then scan any barcode — the captured value appears instantly.</p>
+          <div class="sub-chart-title" style="margin:0 0 10px">${t('Test Scanner')}</div>
+          <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px">${t('Click below, then scan any barcode — the captured value appears instantly.')}</p>
           <div style="display:flex;gap:8px;align-items:center">
             <!-- Same story as the Reports dropdowns: the paint was an inline
                  copy of .ret-search's recipe, outline:none included, on a
@@ -16374,22 +16388,20 @@ const RetailSystem = {
                  come from .ret-input. -->
             <input id="sc-test-value" class="ret-input" readonly data-i18n-ph="Captured value will appear here…" placeholder="${t('Captured value will appear here…')}"
               style="flex:1;font-family:monospace" />
-            <button class="ret-btn ret-btn-primary" id="sc-test-btn" onclick="RetailSystem._armTestScan()">Start Test</button>
+            <button class="ret-btn ret-btn-primary" id="sc-test-btn" onclick="RetailSystem._armTestScan()">${t('Start Test')}</button>
           </div>
 
           <div style="margin-top:18px;background:var(--state-info-surface);border:1px solid var(--state-info-border);border-radius:10px;padding:12px 14px;color:var(--text-secondary);font-size:12px;line-height:1.5">
-            ${this._icon('info', 16, 'ℹ️')} <strong style="color:var(--text-primary)">Note:</strong> USB &amp; Bluetooth HID scanners behave exactly like a keyboard,
-            so the app cannot reliably tell whether one is physically plugged in. Status is based on recent scan activity,
-            not a hardware connection. A true connection status will be possible once Serial/COM support is added.
+            ${this._icon('info', 16, 'ℹ️')} <strong style="color:var(--text-primary)">${t('Note:')}</strong> ${t('USB & Bluetooth HID scanners behave exactly like a keyboard, so the app cannot reliably tell whether one is physically plugged in. Status is based on recent scan activity, not a hardware connection. A true connection status will be possible once Serial/COM support is added.')}
           </div>
         </div>
 
         <!-- Configuration -->
         <div class="sub-chart-card">
-          <div class="sub-chart-title" style="margin-bottom:14px">Configuration</div>
+          <div class="sub-chart-title" style="margin-bottom:14px">${t('Configuration')}</div>
 
           <div class="ret-field">
-            <label for="sc-enabled">Scanner Enabled</label>
+            <label for="sc-enabled">${t('Scanner Enabled')}</label>
             <select id="sc-enabled">
               <option value="true"  ${cfg.enabled ? 'selected' : ''}>${t('On — listen for scans')}</option>
               <option value="false" ${!cfg.enabled ? 'selected' : ''}>${t('Off — manual entry only')}</option>
@@ -16397,7 +16409,7 @@ const RetailSystem = {
           </div>
 
           <div class="ret-field">
-            <label for="sc-mode">Input Mode</label>
+            <label for="sc-mode">${t('Input Mode')}</label>
             <select id="sc-mode">
               <option value="auto"     ${cfg.inputMode === 'auto' ? 'selected' : ''}>${t('Auto Detect (recommended)')}</option>
               <option value="keyboard" ${cfg.inputMode === 'keyboard' ? 'selected' : ''}>${t('USB scanner')}</option>
@@ -16407,22 +16419,22 @@ const RetailSystem = {
 
           <div class="ret-field-row">
             <div class="ret-field">
-              <label for="sc-timeout">Barcode Timeout (ms)</label>
+              <label for="sc-timeout">${t('Barcode Timeout (ms)')}</label>
               <input type="number" id="sc-timeout" value="${cfg.timeoutMs}" min="10" max="500" step="5" />
             </div>
             <div class="ret-field">
-              <label for="sc-minlen">Min Length</label>
+              <label for="sc-minlen">${t('Min Length')}</label>
               <input type="number" id="sc-minlen" value="${cfg.minLength}" min="1" max="64" />
             </div>
           </div>
 
           <div class="ret-field-row">
-            <div class="ret-field"><label for="sc-prefix">Prefix (stripped)</label><input id="sc-prefix" value="${cfg.prefix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
-            <div class="ret-field"><label for="sc-suffix">Suffix (stripped)</label><input id="sc-suffix" value="${cfg.suffix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
+            <div class="ret-field"><label for="sc-prefix">${t('Prefix (stripped)')}</label><input id="sc-prefix" value="${cfg.prefix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
+            <div class="ret-field"><label for="sc-suffix">${t('Suffix (stripped)')}</label><input id="sc-suffix" value="${cfg.suffix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
           </div>
 
           <div class="ret-field">
-            <label for="sc-sound">Success Sound</label>
+            <label for="sc-sound">${t('Success Sound')}</label>
             <select id="sc-sound">
               <option value="true"  ${cfg.sound ? 'selected' : ''}>${t('On — beep on each scan')}</option>
               <option value="false" ${!cfg.sound ? 'selected' : ''}>${t('Off')}</option>
@@ -16698,16 +16710,22 @@ const RetailSystem = {
   // Uses clearly-marked synthetic data (never a real sale) so testing the
   // print path never risks printing/exposing real customer or financial
   // records -- matches this project's synthetic-test-data convention.
-  _testPrint() {
-    this._printReceipt({
-      sale_number: 'TEST-0000',
-      created_at: this._fixedDateTime(new Date()),
-      lines: [{ name: 'Test Product (sample)', quantity: 1, line_total: 10 }],
-      subtotal: 10, discount_amount: 0, tax_amount: 0, total: 10, amount_paid: 10, change: 0,
-    });
-    // A receipt really went to the browser's print dialog: that closes the
-    // setup checklist's "Send a test receipt" step (browser-only knowledge).
-    this._tickSetupStep('printer_tested');
+  async _testPrint() {
+    let printed = false;
+    try {
+      printed = await this._printReceipt({
+        sale_number: 'TEST-0000',
+        created_at: this._fixedDateTime(new Date()),
+        lines: [{ name: 'Test Product (sample)', quantity: 1, line_total: 10 }],
+        subtotal: 10, discount_amount: 0, tax_amount: 0, total: 10, amount_paid: 10, change: 0,
+      });
+    } catch (e) { printed = false; }
+    // Tick the setup checklist's "Send a test receipt" step only if the
+    // browser's print dialog really opened and returned without throwing. A
+    // dialog that never opened (or threw) must not close the step. The
+    // browser cannot tell Print from Cancel, so this is the strongest signal
+    // it can give -- the hardware test (_testEscPosPrint) is the stronger one.
+    if (printed === true) this._tickSetupStep('printer_tested');
   },
 
   // Tell the setup checklist a client-only step is done. Never throws: the
