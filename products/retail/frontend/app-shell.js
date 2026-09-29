@@ -475,6 +475,62 @@ const SubsystemApp = {
       (!item.capability || this.hasCapability(item.capability));
   },
 
+  // P1a final polish (F5): three states, not two. A device-bound item (today
+  // only the Audit Log: `adminOnly`) used to VANISH on a computer that is not
+  // the main one, which teaches nobody anything -- the owner looks for it on
+  // the second till, it is simply not there, and there is no way to tell "this
+  // product has no such screen" from "it lives on the other computer". The
+  // plan said such items must SAY so instead.
+  //
+  // 'main-only' is deliberately narrow: it applies only when the device gate
+  // is the ONE thing failing. It is derived by re-asking _isNavItemVisible
+  // (the single source of truth for who sees what -- never a second copy of
+  // the rule that could drift) with that one axis relaxed, so a cashier who
+  // lacks the capability, or an item hidden by role or platform, still gets
+  // 'hidden' and sees nothing -- this surface must never advertise a screen
+  // the person could not use even on the main computer.
+  _navItemState(item) {
+    if (!item) return 'hidden';
+    if (this._isNavItemVisible(item)) return 'visible';
+    if (item.adminOnly && !this.isAdminDevice
+        && this._isNavItemVisible(Object.assign({}, item, { adminOnly: false }))) {
+      return 'main-only';
+    }
+    return 'hidden';
+  },
+
+  // What a click (or Enter/Space) on a 'main-only' row does: explain, never
+  // navigate. The sentence is ALSO printed on the row itself, so this toast is
+  // the confirmation of what the row already says, not the only place it lives.
+  _explainMainOnly() {
+    this.showToast(t('This can only be changed on the main computer'), 'info');
+    return false;
+  },
+
+  // F8: one word per connected-service state, shared by the initial render and
+  // the in-place repaint (they used to carry two hand-kept copies of the map).
+  // Each state has its OWN dictionary key with the context spelled out, because
+  // the bare English word is ambiguous in Arabic: 'Off' is translated as the
+  // imperative "إيقاف" (the verb "stop") for the toggle it labels elsewhere, and
+  // on a status line that reads as a button telling you to stop something.
+  // English is unchanged: if the context key has no translation (English, or an
+  // Arabic catalogue that has not merged it yet) we show the plain word and let
+  // t() translate THAT, so the worst case is the old behaviour, never the raw
+  // key "Off (status)" on screen.
+  _CONNECTED_STATUS_KEYS: {
+    off: ['Off (status)', 'Off'],
+    ok: ['Connected (status)', 'Connected'],
+    attention: ['Needs attention (status)', 'Needs attention'],
+    failing: ['Failing (status)', 'Failing'],
+    unknown: ['Can\'t check (status)', 'Can\'t check'],
+    checking: ['Checking… (status)', 'Checking…'],
+  },
+  _connectedStatusWord(state) {
+    const pair = this._CONNECTED_STATUS_KEYS[state] || this._CONNECTED_STATUS_KEYS.unknown;
+    const translated = t(pair[0]);
+    return translated !== pair[0] ? translated : t(pair[1]);
+  },
+
   // Resolve `this.capabilities` from a GET /api/auth/session body.
   //
   // Extracted from init() into its own named method for one reason: it is the
@@ -1431,12 +1487,23 @@ const SubsystemApp = {
           // 'ANDROID') is the fallback when nobody has named this till yet.
           // null when neither is known, so the chip can omit the segment
           // instead of rendering the word "null".
-          this.deviceLabel = (dev && dev.success && dev.device
-            && (dev.device.device_label || dev.device.platform)) || null;
+          //
+          // F6: `device_name` (a real, operator-given name) outranks
+          // `device_label`, which outranks the bare platform word. And the
+          // branch this computer belongs to, `branch_name`, is read from the
+          // same envelope: accepted on the device row or beside it, because
+          // the backend half (crew D) may put it on either -- the chip skips
+          // whichever is absent, so reading both costs nothing and a rename
+          // of the envelope cannot silently blank the chip.
+          const devRow = (dev && dev.success && dev.device) || null;
+          this.deviceLabel = (devRow && (devRow.device_name || devRow.device_label || devRow.platform)) || null;
+          this.branchName = (dev && dev.success
+            && ((devRow && devRow.branch_name) || dev.branch_name)) || null;
         } catch (e) {
           this.isAdminDevice = false;
           this.canClaimAdminDevice = false;
           this.deviceLabel = null;
+          this.branchName = null;
         }
 
         // ── Device activation gate ───────────────────────────────────────
@@ -3235,6 +3302,29 @@ const SubsystemApp = {
         ? `location.href='/static/${item.externalPage}'`
         : `SubsystemApp._navigate('${item.id}')`;
       const label = this._esc(t(item.label));
+      // F5: a device-bound item on a computer that is not the main one. Shown,
+      // disabled, with the reason printed ON the row (visible text, not only a
+      // tooltip -- a till has no hover). The click explains and never
+      // navigates. The full name + reason ride in title/aria-label because on
+      // the Till route's 64px rail the visible label and hint are hidden and
+      // the icon alone would otherwise carry no name at all.
+      if (this._navItemState(item) === 'main-only') {
+        const why = t('This can only be changed on the main computer');
+        const named = this._esc(`${t(item.label)}. ${why}`);
+        return `
+            <a class="sub-nav-item is-main-only"
+               data-section="${item.id}"
+               tabindex="0" role="button" aria-disabled="true"
+               title="${named}" aria-label="${named}"
+               onclick="return SubsystemApp._explainMainOnly()">
+              <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
+              <span class="sub-nav-text">
+                <span class="sub-nav-label">${t(item.label)}</span>
+                <span class="sub-nav-hint">${why}</span>
+              </span>
+            </a>
+          `;
+      }
       return `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
@@ -3279,7 +3369,10 @@ const SubsystemApp = {
     // 'checking' (LOW, fix round 3): the neutral state BEFORE the first poll
     // has answered -- "asking", not "failed to ask". Same rank as 'unknown'.
     const CONNECTED_STATUS_RANK = { ok: 0, off: 1, checking: 2, unknown: 2, attention: 3, failing: 4 };
-    const CONNECTED_STATUS_WORD = { off: t('Off'), ok: t('Connected'), attention: t('Needs attention'), failing: t('Failing'), unknown: t('Can\'t check'), checking: t('Checking…') };
+    // F8: the words come from _connectedStatusWord (context keys, so Arabic
+    // reads "stopped", not the imperative "stop") -- see that method's comment.
+    const CONNECTED_STATUS_WORD = {};
+    for (const s of Object.keys(CONNECTED_STATUS_RANK)) CONNECTED_STATUS_WORD[s] = this._connectedStatusWord(s);
     const CONNECTED_STATUS_CLASS = { off: 'is-off', ok: 'is-ok', attention: 'is-attention', failing: 'is-failing', unknown: 'is-unknown', checking: 'is-checking' };
     const connectedStateOf = (id) => (this._connectedStatus && this._connectedStatus[id]) || (this._connectedPolled ? 'unknown' : 'checking');
     // Wrapped in one .sub-nav-status span (not two bare siblings) so
@@ -3316,7 +3409,9 @@ const SubsystemApp = {
       const isConnected = gKey === 'connected';
       const visibleItems = group.items
         .map((id) => byId.get(id))
-        .filter((item) => item && this._isNavItemVisible(item));
+        // 'main-only' items stay in the list (rendered disabled, with the
+        // reason) -- see _navItemState. Only 'hidden' ones are dropped.
+        .filter((item) => item && this._navItemState(item) !== 'hidden');
       // THE EMPTY-GROUP RULE: no visible members means no header and no box
       // at all, not an empty section. See the mutation proof on this line in
       // retail_nav_groups_test.js -- rendering the header unconditionally
@@ -3402,15 +3497,18 @@ const SubsystemApp = {
     const chipHTML = `
       <div class="sub-identity-chip">
         <button type="button" class="sub-identity-chip-btn" id="sub-identity-chip-btn"
+           title="${this._esc([displayName, this._identityPlace()].filter(Boolean).join(' · '))}"
            aria-haspopup="true" aria-expanded="false"
            onclick="SubsystemApp._toggleIdentityMenu()">
           <span class="sub-identity-initials" aria-hidden="true">${this._esc(this._identityInitials(displayName))}</span>
           <span class="sub-identity-text">
-            <span class="sub-identity-name">${this._bdi(displayName, 'ltr')}</span>
+            <span class="sub-identity-head">
+              <span class="sub-identity-name">${this._bdi(displayName, 'ltr')}</span>
+              ${this.isAdminDevice ? `<span class="sub-main-computer-badge"><span class="sub-main-computer-badge-icon" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('laptop', 11) : ''}</span>${t('Main computer')}</span>` : ''}
+            </span>
             <span class="sub-identity-meta">
               ${this._identityRolePillHTML()}
-              ${this.deviceLabel ? this._bdi(this.deviceLabel, 'ltr') : ''}
-              ${this.isAdminDevice ? `<span class="sub-main-computer-badge"><span class="sub-main-computer-badge-icon" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('laptop', 11) : ''}</span>${t('Main computer')}</span>` : ''}
+              ${this._identityPlace() ? `<span class="sub-identity-place">${this._bdi(this._identityPlace(), 'ltr')}</span>` : ''}
             </span>
           </span>
         </button>
@@ -3588,7 +3686,25 @@ const SubsystemApp = {
   _identityDisplayName() {
     const email = (this.currentUser && this.currentUser.email) || '';
     const at = email.indexOf('@');
-    return (at > 0 ? email.slice(0, at) : email) || t('Signed in');
+    const local = (at > 0 ? email.slice(0, at) : email);
+    if (!local) return t('Signed in');
+    // F6: shown as a NAME, not a login -- "tareq" -> "Tareq", "sara.k" ->
+    // "Sara K". Display only: the local-part is still all this ever reads
+    // (real display names arrive in Phase 1b), and only the first letter of
+    // each word is touched, so a script with no case (Arabic) passes through
+    // unchanged and a mixed-case local-part ("McKay") is not flattened.
+    // A local-part that is nothing but separators falls back to itself.
+    const words = local.split(/[._\-+]+/).filter(Boolean)
+      .map((w) => w.charAt(0).toLocaleUpperCase() + w.slice(1));
+    return words.join(' ') || local;
+  },
+
+  // F6: the "where" half of the chip -- branch, then computer, whichever this
+  // computer actually knows. Absent parts are skipped, never rendered as
+  // "null" or an empty separator. Returned as ONE string so the header can
+  // ellipsize it as a unit and the chip's title can carry it in full.
+  _identityPlace() {
+    return [this.branchName, this.deviceLabel].filter((p) => p && String(p).trim()).join(' · ');
   },
 
   // Two letters, uppercased. An email local-part usually has no spaces to
@@ -3941,7 +4057,8 @@ const SubsystemApp = {
     // above the lowest rank silently prevented a genuinely all-'ok' group
     // from ever reporting 'ok'.
     const rank = { ok: 0, off: 1, checking: 2, unknown: 2, attention: 3, failing: 4 };
-    const word = { off: t('Off'), ok: t('Connected'), attention: t('Needs attention'), failing: t('Failing'), unknown: t('Can\'t check'), checking: t('Checking…') };
+    const word = {};
+    for (const s of Object.keys(rank)) word[s] = this._connectedStatusWord(s);
     const cls = { off: 'is-off', ok: 'is-ok', attention: 'is-attention', failing: 'is-failing', unknown: 'is-unknown', checking: 'is-checking' };
     const paintDot = (dotEl, wordEl, state) => {
       const s = rank.hasOwnProperty(state) ? state : 'unknown';
@@ -4000,6 +4117,16 @@ const SubsystemApp = {
   },
 
   _navigate(sectionId) {
+    // F5 belt-and-braces: the disabled row never calls this, but a saved URL
+    // hash or a stale bookmark can still ask for a device-bound screen on a
+    // computer that is not the main one. Explain it and land on home rather
+    // than opening a screen the server would refuse anyway.
+    const navSys = this.systems && this.systems[this.active];
+    const navEntry = navSys && (navSys.nav || []).find((i) => i.id === sectionId);
+    if (navEntry && this._navItemState(navEntry) === 'main-only') {
+      this._explainMainOnly();
+      sectionId = this._isSellOnlyCapabilities() ? 'pos' : 'dashboard';
+    }
     this.currentSection = sectionId;
 
     // ── Stop any active auto-refresh from the previous section ────────────────
@@ -4234,7 +4361,25 @@ const SubsystemApp = {
     // browser-navigate correctly from the desktop sidebar (_renderShell's
     // own navItemHTML already branches on `item.externalPage`). Mirrors
     // that exact branch here so the two surfaces cannot disagree again.
-    const rowHTML = (item) => `
+    const rowHTML = (item) => this._navItemState(item) === 'main-only' ? (() => {
+      // F5, same as the sidebar: shown disabled with the reason as visible
+      // text; a tap explains and never navigates (and leaves the sheet open --
+      // the person is still choosing).
+      const why = t('This can only be changed on the main computer');
+      const named = this._esc(`${t(item.label)}. ${why}`);
+      return `
+            <a class="sub-more-row is-main-only" data-section="${item.id}"
+               tabindex="0" role="button" aria-disabled="true"
+               title="${named}" aria-label="${named}"
+               onclick="return SubsystemApp._explainMainOnly()">
+              <span class="sub-more-row-icon">${icon(item.icon)}</span>
+              <span class="sub-more-row-text">
+                <span>${t(item.label)}</span>
+                <span class="sub-more-row-hint">${why}</span>
+              </span>
+            </a>
+          `;
+    })() : `
             <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
                tabindex="0" role="button"
                onclick="${item.externalPage ? `location.href='/static/${item.externalPage}'` : `SubsystemApp._navigate('${item.id}')`}">
@@ -4245,7 +4390,7 @@ const SubsystemApp = {
     const groupsHTML = (sys.navGroups || []).map((group) => {
       const visibleItems = group.items
         .map((id) => byId.get(id))
-        .filter((item) => item && this._isNavItemVisible(item))
+        .filter((item) => item && this._navItemState(item) !== 'hidden')
         // A destination that is already a BOTTOM TAB must not also appear in
         // this sheet. The sheet exists for "the other fifteen"; a row for Till
         // or Customers teaches two routes to the same place and makes the

@@ -2593,6 +2593,17 @@ html[data-theme="light"] {
    as tall as the glyph, and the 38px floor is the real height again. */
 .sub-nav-icon { font-size: 16px; display: inline-flex; align-items: center; line-height: 1; }
 .sub-nav-label { font-size: 13px; }
+/* F5 (final polish): a device-bound item on a computer that is not the main
+   one -- shown, quiet, with its reason PRINTED under the name (a till has no
+   hover, so a tooltip alone would explain nothing). Only tokens the contrast
+   test already pairs: --text-tertiary is the same ink the status words and
+   group headers use. No opacity: fading the whole row would drop the
+   sentence below the text-contrast floor, which is the one part that must
+   stay readable. */
+.sub-nav-text { display: flex; flex-direction: column; gap: 2px; min-inline-size: 0; text-align: start; }
+.sub-nav-hint { font-size: 11px; line-height: 1.3; color: var(--text-tertiary); white-space: normal; }
+.sub-nav-item.is-main-only { cursor: not-allowed; }
+.sub-nav-item.is-main-only .sub-nav-label { color: var(--text-tertiary); }
 /* P1a item 5: the Connected services status dot+word, pushed to the row's
    trailing edge. margin-inline-start (not a physical margin), so it pins to
    the END edge in both page directions. */
@@ -2656,7 +2667,12 @@ button.sub-nav-group-label:focus-visible { outline: var(--focus-ring-width) soli
    (flex-shrink:0, no overflow clipping) and the LABEL is the flexible part,
    ellipsizing instead. */
 button.sub-nav-group-label .sub-nav-status { margin-inline-start: 0; margin-inline-end: 6px; flex-shrink: 0; }
-button.sub-nav-group-label .sub-nav-group-label-text { flex: 0 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* F7 (final polish): the label used to ELLIPSIZE -- in English every theme
+   showed "CONNECTED SE... * OFF" at 1366, the status kept and the name of the
+   group cut to a stub. Now it WRAPS onto a second line instead, so the full
+   name is always readable and the status still never shrinks. `overflow-wrap:
+   anywhere` is only a safety net for one very long word in a translation. */
+button.sub-nav-group-label .sub-nav-group-label-text { flex: 0 1 auto; min-inline-size: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
 /* The label grows to push status + chevron to the end edge when the
    status is present; the chevron keeps its own margin-inline-start:auto
    when there is no status. */
@@ -2749,6 +2765,7 @@ button.sub-nav-group-label .sub-nav-group-label-text + .sub-nav-status { margin-
 .sub-sidebar.sub-sidebar-rail { inline-size: 64px; }
 .sub-sidebar.sub-sidebar-rail .sub-brand-text,
 .sub-sidebar.sub-sidebar-rail .sub-nav-label,
+.sub-sidebar.sub-sidebar-rail .sub-nav-text,
 .sub-sidebar.sub-sidebar-rail .sub-nav-group-label-text,
 .sub-sidebar.sub-sidebar-rail .sub-nav-group-chevron,
 .sub-sidebar.sub-sidebar-rail .sub-nav-status,
@@ -2816,12 +2833,25 @@ button.sub-nav-group-label .sub-nav-group-label-text + .sub-nav-status { margin-
    initials circle sits in, rather than the stack's own (now tighter)
    content height leaving a gap or, worse, still exceeding it. */
 .sub-identity-text { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; overflow: hidden; text-align: start; block-size: 36px; }
+/* F6: the 'Main computer' badge moved up beside the name. Row 2 now carries
+   "Role  Branch . Computer" and needs every pixel it can get: with the badge
+   on it, a real branch + computer name was measured cut down to 27px of its
+   127px at 1366 (the e2e's clipped-content check). Row 1 (name + badge) is
+   short, so it has room. */
+.sub-identity-head { display: flex; align-items: center; gap: 6px; max-inline-size: 100%; min-inline-size: 0; }
+.sub-identity-head > .sub-main-computer-badge { flex-shrink: 0; }
 .sub-identity-name {
   font-size: 13px; font-weight: 600; color: var(--text-primary);
   line-height: 15px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-inline-size: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-inline-size: 100%; min-inline-size: 0;
 }
-.sub-identity-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-tertiary); line-height: 14px; }
+.sub-identity-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-tertiary); line-height: 14px; max-inline-size: 100%; }
+/* F6: "Branch . Computer" -- the flexible part of the meta row. The role pill
+   and the Main computer badge keep their size; this is what gives way (with an
+   ellipsis, the full text in the chip's title) when the header is narrow. */
+.sub-identity-place { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-identity-meta > .sub-role-pill,
+.sub-identity-meta > .sub-main-computer-badge { flex-shrink: 0; }
 /* Role pills: NEUTRALS ONLY (M6/M7, fix round -- DESIGN.md §2 points 1-2,
    which OVERRIDES the P1a plan's own earlier "Retail accent and neutrals"
    wording where the two disagree, per the orchestrator's decision). Accent
@@ -3871,6 +3901,7 @@ html[data-theme] .sub-spinner { border-color: var(--border-mid); border-top-colo
 @media (max-width: 920px) {
   .sub-sidebar { width: 62px; }
   .sub-nav-label,
+  .sub-nav-text,
   .sub-brand-text,
   .sub-ai-btn span:not(:first-child),
   .sub-exit-btn span:not(:first-child) { display: none; }
@@ -4285,6 +4316,11 @@ html[data-theme] .cl-modal h3      { color: var(--text); }
     color: var(--accent-action);
     font-weight: var(--text-weight-semibold);
   }
+  /* F5: a device-bound row shown disabled, its reason printed under the name. */
+  .sub-more-row.is-main-only { cursor: not-allowed; padding-block: var(--space-tight); }
+  .sub-more-row-text { display: flex; flex-direction: column; gap: 2px; min-inline-size: 0; }
+  .sub-more-row.is-main-only .sub-more-row-text > span:first-child { color: var(--text-tertiary); }
+  .sub-more-row-hint { color: var(--text-tertiary); font-size: var(--text-size-meta); font-weight: var(--text-weight-regular, 400); line-height: 1.3; white-space: normal; }
   .sub-more-row-icon { display: flex; flex-shrink: 0; font-size: 18px; }
   .sub-more-row-icon svg { inline-size: 20px; block-size: 20px; }
   .sub-more-row-value { margin-inline-start: auto; color: var(--text-tertiary); font-size: var(--text-size-meta); }
