@@ -12,22 +12,14 @@ HTTP routes (never a raw INSERT into audit_log) and confirms:
   - The viewer route itself: pagination, date/action/entity filters, and
     that every returned row carries the SAME user_id _audit() actually
     wrote for that request.
-  - The admin-device gate: fails closed (403) by default, opens once this
-    device is promoted to admin for the company, via the SAME real
-    device_registry/device_context path
-    commercial_runtime/identity/tests/test_device_routes.py already uses
-    (see _promote_to_admin below) -- this route does not invent its own
-    admin-device mechanism.
+  - The gate (Phase 1b, 2026-09-29): the PERSON, not the machine. Role
+    'admin' (the shop owner) is served on ANY computer -- including one that
+    is not the company's admin device; a manager holding retail.reports and
+    a cashier are refused everywhere. This file used to prove the opposite
+    (device-gated); see test_the_owner_is_served_on_a_computer_that_is_not_
+    the_admin_device and test_manager_and_cashier_are_refused_...
   - Company scoping: a second company's audit_log rows never appear in the
-    first company's response. The admin-device gate itself is
-    single-company by design (device_context.resolve_local_device raises
-    DeviceCompanyMismatchError if the SAME local device resolves against a
-    SECOND company_id -- Phase 0 decision 0-a, see device_context.py's
-    module docstring), so the cross-company test below runs with
-    _is_admin_device monkeypatched True for both companies -- that gate is
-    real, already-tested per-install infrastructure this feature didn't
-    invent; that section is only about the SQL `WHERE company_id=?`
-    scoping this route itself is responsible for.
+    first company's response (the route's own `WHERE company_id=?`).
 
 Run:
     pytest products/retail/tests/retail_audit_log_test.py -v
@@ -65,7 +57,7 @@ app.config["TESTING"] = True
 app.config["PROPAGATE_EXCEPTIONS"] = False
 
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
-from commercial_runtime.identity import device_context, device_registry  # noqa: E402
+from commercial_runtime.identity import device_context, device_registry, user_accounts  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from api import retail_api  # noqa: E402
@@ -138,27 +130,40 @@ def _make_admin(email_prefix='aud'):
     return client, company_id, user_id
 
 
-def _promote_to_admin(client, company_id):
-    """Flips THIS test process's local device to admin for `company_id`,
-    the real way (device_registry.upsert_local_device + set_admin_device),
-    mirroring test_device_routes.py's
-    test_my_device_reflects_admin_flag_as_bool_true. Must run before any
-    earlier call in this process bound the local device to a DIFFERENT
-    company_id -- resolve_local_device() raises DeviceCompanyMismatchError
-    on a mismatch (Phase 0 decision 0-a), which is why the cross-company
-    test below takes a different approach entirely."""
+def _make_staff(company_id, role, capabilities=None):
+    """A real cashier/manager in an EXISTING company, seeded through the same
+    production helper account creation uses (so the capability rows are the
+    real defaults, not a fixture's guess), then logged in over real HTTP.
+    `capabilities` overrides individual rows AFTER seeding -- used to give the
+    manager retail.reports explicitly, so a 403 can only come from the
+    owner-only check and never from a missing capability."""
+    email = f"aud-{role}-{uuid.uuid4().hex[:10]}@test.local"
+    password = "AuditLogPW1"
+    user_id = str(uuid.uuid4())
     conn = registry_conn()
-    device_id = device_context.local_device_uuid()
-    device_registry.upsert_local_device(conn, device_id, company_id)
-    device_registry.set_admin_device(conn, company_id, device_id)
-    conn.close()
-    device_context._cached_device = None
-    # Materialize the resolution once through the real HTTP surface too --
-    # exactly what app-shell.js's own GET /api/devices/me call does on
-    # init() before it decides whether to show the Audit Log nav entry.
-    r = client.get('/api/devices/me')
+    try:
+        conn.execute(
+            "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change) "
+            "VALUES (?,?,?,?,?,?,?,0)",
+            (user_id, company_id, f"EMP-{uuid.uuid4().hex[:6]}", email, hash_password(password), role, "active"),
+        )
+        conn.execute(
+            "INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?)",
+            (str(uuid.uuid4()), user_id, "retail", "full"),
+        )
+        user_accounts.seed_capabilities_for_user(conn, user_id, role)
+        for code, level in (capabilities or {}).items():
+            conn.execute(
+                "UPDATE user_permissions SET access_level=? WHERE user_id=? AND subsystem=?",
+                (level, user_id, code),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    client = app.test_client()
+    r = client.post("/api/auth/login", json={"email": email, "password": password})
     assert r.status_code == 200, r.get_json()
-    assert r.get_json()['device']['is_admin_device'] is True
+    return client, user_id
 
 
 def _forget_local_device():
@@ -175,27 +180,6 @@ def _forget_local_device():
     conn = registry_conn()
     try:
         conn.execute("DELETE FROM devices WHERE id=?", (device_context.local_device_uuid(),))
-        conn.commit()
-    finally:
-        conn.close()
-    device_context._cached_device = None  # same reset the autouse fixture above uses
-
-
-def _rebind_local_device_to(company_id):
-    """Binds this install's local device row to `company_id` with the admin
-    flag explicitly cleared -- i.e. "this company has a known device and no
-    admin device yet", the state a real install is in the moment before
-    someone claims.
-
-    The explicit rebind is required, not cosmetic: resolve_local_device()
-    refuses to silently move a device row between companies (Phase 0
-    decision 0-a, DeviceCompanyMismatchError), and every test here uses a
-    different company_id against the same one local device UUID."""
-    conn = registry_conn()
-    try:
-        device_id = device_context.local_device_uuid()
-        device_registry.upsert_local_device(conn, device_id, company_id)
-        conn.execute("UPDATE devices SET is_admin_device=0 WHERE id=?", (device_id,))
         conn.commit()
     finally:
         conn.close()
@@ -259,86 +243,100 @@ def _seed_real_actions(client, company_id):
     return {'product_id': pid, 'sale_id': sale['id'], 'customer_id': cust_id, 'payment_id': payment_id}
 
 
-# ── Admin-device gate ─────────────────────────────────────────────────────
+# ── Owner-only gate (Phase 1b: the person, not the machine) ────────────────
+#
+# WHAT THESE TESTS CAN NO LONGER CATCH (the device-gate tests they replace
+# proved: "a computer that is not the admin device is refused", "a refused
+# request claims/creates nothing", "claiming admin opens the log"). Nothing
+# about the DEVICE is asserted to gate this route any more, on purpose -- if
+# someone re-adds a device check, test_the_owner_is_served_on_a_computer_that_
+# is_not_the_admin_device is the test that goes red. What replaced them is the
+# person axis, in both directions: owner in, manager and cashier out.
 
-def test_audit_log_403s_for_a_non_admin_device():
+def test_the_owner_is_served_on_a_computer_that_is_not_the_admin_device():
+    """ALLOW half, and the inversion of the old
+    test_audit_log_403s_for_a_non_admin_device: a fresh company whose local
+    device has never been registered (so it is emphatically NOT the admin
+    device) now serves its owner."""
     client, cid, uid = _make_admin()
+    _forget_local_device()
+    me = client.get('/api/devices/me')
+    assert me.status_code == 200, me.get_json()
+    assert me.get_json()['device']['is_admin_device'] is False, "precondition: this computer is not the admin device"
+
     r = client.get('/api/sub/retail/audit-log')
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['status'] == 'success'
+
+
+def test_manager_and_cashier_are_refused_even_holding_retail_reports_and_even_on_the_admin_device():
+    """DENY half. The manager and cashier are given retail.reports explicitly
+    and the computer IS the admin device, so the only thing left that can
+    refuse them is the owner-only check -- a 403 here cannot be the
+    capability or the device masquerading as it (the 'asserts an outcome, not
+    that the check ran' shape). OWNER_ONLY is the code
+    _require_company_admin() returns, which a capability 403 does not carry."""
+    client, cid, uid = _make_admin('aud-deny')
+    conn = registry_conn()
+    try:
+        device_id = device_context.local_device_uuid()
+        device_registry.upsert_local_device(conn, device_id, cid)
+        device_registry.set_admin_device(conn, cid, device_id)
+    finally:
+        conn.close()
+    device_context._cached_device = None
+
+    manager, _ = _make_staff(cid, 'manager', {'retail.reports': 'full'})
+    cashier, _ = _make_staff(cid, 'cashier', {'retail.reports': 'full'})
+    for who, c in (('manager', manager), ('cashier', cashier)):
+        r = c.get('/api/sub/retail/audit-log')
+        assert r.status_code == 403, (who, r.get_json())
+        assert r.get_json().get('code') == 'OWNER_ONLY', (who, r.get_json())
+
+    assert client.get('/api/sub/retail/audit-log').status_code == 200
+
+
+def test_a_cashier_without_retail_reports_is_still_refused_by_the_capability():
+    """Defence in depth: the CAP_REPORTS decorator was kept. Owner-only
+    subsumes it today (role admin passes any capability), so this pins that
+    the decorator still fires and refuses BEFORE the handler: the 403 does not
+    carry OWNER_ONLY."""
+    client, cid, uid = _make_admin('aud-cap')
+    cashier, _ = _make_staff(cid, 'cashier', {'retail.reports': 'none'})
+    r = cashier.get('/api/sub/retail/audit-log')
     assert r.status_code == 403, r.get_json()
-    assert r.get_json()['status'] == 'error'
+    assert r.get_json().get('code') != 'OWNER_ONLY', "the capability layer should have refused first"
 
 
-def test_a_refused_audit_log_request_never_makes_this_device_the_admin_device():
-    """The regression test for the actual hole (2026-08-20).
+def test_anonymous_is_401_not_403():
+    assert app.test_client().get('/api/sub/retail/audit-log').status_code == 401
 
-    _is_admin_device() used to answer "am I the admin device?" by calling
-    device_context.resolve_local_device(), which WRITES -- it upserted the
-    device row and auto-promoted the first device a company ever resolved to
-    admin. So the first request to this route on a fresh company was granted
-    admin BY THE CHECK and then honestly told "yes, you're admin": 200, with
-    every user in the company's refund/void/edit trail. The 403 above alone
-    does not pin that down -- what pins it down is that being refused
-    changes nothing, so a second identical request is refused identically
-    and the device registry still says this device is not admin."""
+
+def test_a_refused_audit_log_request_never_touches_the_device_registry():
+    """Kept from the 2026-08-20 hole (the old check WROTE: it upserted a
+    device row and auto-promoted the first device to admin). The route no
+    longer reads the device registry at all, so this pins the stronger
+    statement: neither a refused NOR a served request creates a device row
+    or flips admin -- nothing about this route may write device state."""
     client, cid, uid = _make_admin('aud-esc')
     _forget_local_device()
+    manager, _ = _make_staff(cid, 'manager', {'retail.reports': 'full'})
 
-    first = client.get('/api/sub/retail/audit-log')
-    second = client.get('/api/sub/retail/audit-log')
+    assert manager.get('/api/sub/retail/audit-log').status_code == 403
+    assert client.get('/api/sub/retail/audit-log').status_code == 200
 
-    assert first.status_code == 403, first.get_json()
-    assert second.status_code == 403, second.get_json()
-
-    # Not merely "still 403" -- the check must not have written anything at
-    # all. A device row conjured by an authorization check is the mechanism
-    # the bug was built out of, even before the promotion on top of it.
     conn = registry_conn()
     try:
         row = device_registry.get_device(conn, device_context.local_device_uuid())
     finally:
         conn.close()
-    assert row is None, "a refused authorization check must not create a device row"
-
-    # And the real device surface agrees: not admin, but claimable -- the
-    # fresh install is not a dead end, it just needs a deliberate claim.
-    me = client.get('/api/devices/me')
-    assert me.status_code == 200, me.get_json()
-    assert me.get_json()['device']['is_admin_device'] is False
-    assert me.get_json()['can_claim_admin'] is True
-
-
-def test_audit_log_opens_after_this_device_is_claimed_through_the_real_claim_route():
-    """The other half of the fix: the flag has a real, working setter, so
-    'refused' is a state a company can get out of -- through POST
-    /api/devices/me/claim-admin, over real HTTP, with no test-only
-    set_admin_device() shortcut anywhere in this test."""
-    client, cid, uid = _make_admin('aud-claim')
-    _rebind_local_device_to(cid)
-
-    assert client.get('/api/sub/retail/audit-log').status_code == 403
-
-    claim = client.post('/api/devices/me/claim-admin')
-    assert claim.status_code == 200, claim.get_json()
-    assert claim.get_json()['device']['is_admin_device'] is True
-
-    opened = client.get('/api/sub/retail/audit-log')
-    assert opened.status_code == 200, opened.get_json()
-    assert opened.get_json()['status'] == 'success'
-
-
-def test_audit_log_opens_once_this_device_is_promoted_to_admin():
-    client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
-    r = client.get('/api/sub/retail/audit-log')
-    assert r.status_code == 200, r.get_json()
-    assert r.get_json()['status'] == 'success'
+    assert row is None, "an authorization check must not create a device row"
 
 
 # ── Real data, correct attribution ────────────────────────────────────────
 
 def test_admin_device_sees_seeded_actions_with_correct_user_attribution():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     ids = _seed_real_actions(client, cid)
 
     r = client.get('/api/sub/retail/audit-log?limit=100')
@@ -369,7 +367,6 @@ def test_admin_device_sees_seeded_actions_with_correct_user_attribution():
 
 def test_action_filter_returns_only_that_action():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     _seed_real_actions(client, cid)
 
     r = client.get('/api/sub/retail/audit-log?action=PAYMENT_VOIDED')
@@ -381,7 +378,6 @@ def test_action_filter_returns_only_that_action():
 
 def test_entity_filter_returns_only_that_entity():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     _seed_real_actions(client, cid)
 
     r = client.get('/api/sub/retail/audit-log?entity=return')
@@ -393,7 +389,6 @@ def test_entity_filter_returns_only_that_entity():
 
 def test_date_range_filter_excludes_out_of_range_rows():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     _seed_real_actions(client, cid)
 
     r = client.get('/api/sub/retail/audit-log?date_from=2099-01-01')
@@ -411,7 +406,6 @@ def test_date_range_filter_excludes_out_of_range_rows():
 
 def test_pagination_limits_page_size_and_pages_dont_overlap():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     _seed_real_actions(client, cid)  # writes at least 6 audit rows
 
     r1 = client.get('/api/sub/retail/audit-log?limit=2&page=1')
@@ -432,7 +426,6 @@ def test_pagination_limits_page_size_and_pages_dont_overlap():
 
 def test_limit_is_capped_and_page_below_one_is_clamped():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     _seed_real_actions(client, cid)
 
     r = client.get('/api/sub/retail/audit-log?limit=99999&page=0')
@@ -446,7 +439,6 @@ def test_limit_is_capped_and_page_below_one_is_clamped():
 
 def test_meta_reports_distinct_actions_and_entities_actually_on_record():
     client, cid, uid = _make_admin()
-    _promote_to_admin(client, cid)
     _seed_real_actions(client, cid)
 
     r = client.get('/api/sub/retail/audit-log')
@@ -459,14 +451,10 @@ def test_meta_reports_distinct_actions_and_entities_actually_on_record():
 
 # ── Company scoping (no cross-bleed) ────────────────────────────────────────
 
-def test_second_company_never_sees_first_companys_audit_rows(monkeypatch):
-    # The admin-device gate is real, single-company, per-install
-    # infrastructure with its own dedicated tests above (and in
-    # commercial_runtime/identity/tests/test_device_routes.py) -- bypassing
-    # it here isolates what THIS test is actually about: the route's own
-    # `WHERE company_id=?` scoping, not device/company binding.
-    monkeypatch.setattr(retail_api, '_is_admin_device', lambda cid: True)
-
+def test_second_company_never_sees_first_companys_audit_rows():
+    # No device shim needed any more: the gate is the person, so two owners of
+    # two companies on ONE computer are both served, and what this test is
+    # about -- the route's own `WHERE company_id=?` scoping -- runs for real.
     client_a, cid_a, uid_a = _make_admin('aud-a')
     ids_a = _seed_real_actions(client_a, cid_a)
 

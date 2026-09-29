@@ -54,6 +54,7 @@ says everything a `mode='manual'` column would have, for zero extra state.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 
 #: MOVED here verbatim from retail_api.py's own module-level `_REF_PREFIX`
@@ -204,3 +205,122 @@ def peek_next_no(conn, series_row) -> str:
     ).fetchone()
     last_no = row['last_no'] if row is not None else max(series_row['start_no'] - 1, 0)
     return f"{series_row['code']}-{int(last_no) + 1:0{series_row['pad_width']}d}"
+
+
+# ── Readable per-till books (Retail UX P1b item 6) ───────────────────────────
+# A NEW shop's first shift on a till books that till its own sale / return /
+# purchase-order series automatically, coded from the branch and the till's
+# position: sale `ABD1`, return `ABD1-R`, purchase order `ABD1-P`, so the
+# receipt reads `ABD1-000001` instead of the legacy `SALE-<device>-000001`.
+# Everything below is PURE (no Flask, no settings, no sync): retail_api.py
+# decides WHEN (the flag, the hook, the routes); this module decides WHAT the
+# codes are, so the naming rules live in one testable place.
+#
+# `reserved` is always passed IN by the caller (the route derives it from the
+# tax-authority sequence module's own prefix table). It is deliberately a
+# parameter and not an import here -- see this module's opening docstring for
+# why nothing in this file may reach for that package.
+
+#: The suffix each doc type's book code carries after `<branch><till>`. A
+#: sale book has none, so the everyday receipt is the shortest one.
+BOOK_SUFFIX = {'sale': '', 'return': '-R', 'po': '-P'}
+
+#: Shop-facing label prefix for the settings card ("Sales ABD1").
+BOOK_LABEL = {'sale': 'Sales', 'return': 'Returns', 'po': 'Purchases'}
+
+#: Branch codes are 2-4 upper-case letters/digits, so `<code><till 1-99>-R`
+#: always fits `_DOC_SERIES_CODE_RE`'s 12-character ceiling.
+_BRANCH_CODE_RE = re.compile(r'^[A-Z0-9]{2,4}$')
+_ASCII_ALNUM_RE = re.compile(r'[A-Za-z0-9]')
+
+#: What a branch falls back to when its name gives no usable Latin letters
+#: (an Arabic-only name), or when the derived code would be a reserved one.
+FALLBACK_BRANCH_CODE = 'BR'
+
+#: A shop with more tills than this on one branch keeps the legacy numbering
+#: for the extras rather than minting 3-digit till numbers.
+MAX_TILL_NUMBER = 99
+
+#: The pad width a readable book uses; `ABD1-000001`.
+READABLE_PAD_WIDTH = 6
+
+
+def normalise_branch_code(raw):
+    """`raw` stripped and upper-cased if it is a valid branch code (2-4 ASCII
+    letters/digits), else None. Never raises on a non-string."""
+    if not isinstance(raw, str):
+        return None
+    code = raw.strip().upper()
+    return code if _BRANCH_CODE_RE.match(code) else None
+
+
+def default_branch_code(name, reserved=()):
+    """The code a branch gets before its owner chooses one: the first up to
+    three ASCII letters/digits of its name, upper-cased ("Abdoun" -> "ABD").
+    A name with fewer than two usable characters (Arabic-only, empty) gives
+    FALLBACK_BRANCH_CODE, and so does a result the caller lists as reserved --
+    an owner-visible default must never be a code the create route refuses."""
+    chars = _ASCII_ALNUM_RE.findall(name if isinstance(name, str) else '')
+    code = ''.join(chars[:3]).upper()
+    if len(code) < 2 or code in reserved:
+        return FALLBACK_BRANCH_CODE
+    return code
+
+
+def book_code(branch_code, till_number, doc_type):
+    """`ABD` + 1 + 'sale' -> `ABD1`; 'return' -> `ABD1-R`; 'po' -> `ABD1-P`."""
+    return f"{branch_code}{int(till_number)}{BOOK_SUFFIX[doc_type]}"
+
+
+def preview(branch_code, till_number=1, pad_width=READABLE_PAD_WIDTH):
+    """What the first documents of a till would read, for the settings card."""
+    return {
+        dt: f"{book_code(branch_code, till_number, dt)}-{1:0{pad_width}d}"
+        for dt in ('sale', 'return')
+    }
+
+
+def pick_till_number(conn, branch_code, reserved=()):
+    """The smallest N in 1..MAX_TILL_NUMBER for which the sale, return and
+    purchase-order codes are ALL unused. `idx_doc_series_code` is unique on
+    `(doc_type, code)` GLOBALLY across companies, so the check is global too
+    -- otherwise two shops both called "ABD" would collide on till 1. A
+    retired book still holds its code, so it counts as taken. None when every
+    number is taken."""
+    for n in range(1, MAX_TILL_NUMBER + 1):
+        codes = {dt: book_code(branch_code, n, dt) for dt in DOC_SERIES_TYPES}
+        if any(c in reserved for c in codes.values()):
+            continue
+        taken = conn.execute(
+            "SELECT 1 FROM doc_series WHERE (doc_type='sale' AND code=?) "
+            "OR (doc_type='return' AND code=?) OR (doc_type='po' AND code=?) LIMIT 1",
+            (codes['sale'], codes['return'], codes['po']),
+        ).fetchone()
+        if taken is None:
+            return n
+    return None
+
+
+def plan_books(conn, company_id, terminal_uid, branch_code, reserved=()):
+    """The books THIS terminal still needs, as a list of dicts
+    (doc_type, code, label, pad_width) sharing one till number -- one entry
+    per doc type where `resolve_series` finds nothing for the terminal. A
+    terminal that already owns all three gets []; so does a terminal with no
+    identity (it can never own a book, see `resolve_series`) and a branch
+    with no free till number. Pure read: inserting is the caller's job, in
+    its own transaction."""
+    if not terminal_uid:
+        return []
+    missing = [dt for dt in DOC_SERIES_TYPES
+               if resolve_series(conn, company_id, dt, terminal_uid) is None]
+    if not missing:
+        return []
+    n = pick_till_number(conn, branch_code, reserved)
+    if n is None:
+        return []
+    out = []
+    for dt in missing:
+        code = book_code(branch_code, n, dt)
+        out.append({'doc_type': dt, 'code': code,
+                    'label': f"{BOOK_LABEL[dt]} {code}", 'pad_width': READABLE_PAD_WIDTH})
+    return out

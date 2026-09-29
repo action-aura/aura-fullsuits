@@ -1145,42 +1145,13 @@ def _audit(conn, action, entity, entity_id, details=''):
             'audit write FAILED and was swallowed: action=%r entity=%r entity_id=%r',
             action, entity, entity_id)
 
-# feat/audit-log-viewer: server-side half of the same admin-device gate
-# app-shell.js already uses to hide the Admin Center nav entry (GET
-# /api/devices/me -- see commercial_runtime/identity/device_routes.py).
-# list_reorder_requests() above documents that THAT route relies on
-# client-side hiding alone, with no is_admin_device check of its own,
-# because a stale reorder draft isn't sensitive if someone types the URL.
-# audit_log rows include refund/void trails with real user_id attribution
-# for every user in the company, which is a materially more sensitive
-# surface -- worth the extra real enforcement here rather than trusting
-# nav-hiding alone.
-#
-# SECURITY (2026-08-20): this used to call
-# device_context.resolve_local_device(), which is a WRITE -- it upserts the
-# device row, and it also auto-promoted the first device a company ever
-# resolved to admin. So this authorization check GRANTED the privilege it
-# was checking for: the first device to request GET /api/sub/retail/audit-log
-# on a fresh company was made that company's admin device by the act of
-# asking, and then correctly told "yes, you're the admin device" -- 200,
-# full audit trail, every user's refunds and voids. It now goes through
-# device_context.local_device_is_admin(), which is a strict read (no INSERT,
-# no UPDATE, no local_device.json creation) and additionally requires the
-# stored row to match this company and still be 'active'.
-#
-# Fail-closed by design: local_device_is_admin() can raise
-# LocalDeviceStateCorruptError (see device_context.py), and ANY failure to
-# affirmatively establish "this is the admin device" is treated as NOT
-# admin -- never fails open.
-def _is_admin_device(cid):
-    try:
-        conn = _registry_conn()
-        try:
-            return device_context.local_device_is_admin(conn, cid)
-        finally:
-            conn.close()
-    except Exception:
-        return False
+# (`_is_admin_device(cid)` lived here until Phase 1b. Its only caller was
+# GET /audit-log, which now gates on the PERSON (role 'admin') rather than the
+# machine -- see list_audit_log. Kept as a trail, not as code: it was a strict,
+# fail-closed read of device_context.local_device_is_admin(), and before
+# 2026-08-20 it called resolve_local_device(), a WRITE that made the first
+# device to ask the admin device. If a device-axis check is ever needed again,
+# call device_context.local_device_is_admin() directly and keep it fail-closed.)
 
 def _emit(event_type, payload):
     """Best-effort local event emission. In the source monolith this posted
@@ -10421,6 +10392,10 @@ def open_cash_session():
         _audit(conn, 'CASH_SESSION_OPENED', 'cash_session', session_id,
                f'opening_float={opening_float} terminal={_terminal_short(terminal)}')
         conn.commit()
+        # Retail UX P1b item 6: the drawer is open and committed; NOW give a
+        # new shop's till its readable books. Deliberately AFTER the commit and
+        # self-containing every failure, so numbering can never cost a shift.
+        _auto_book_first_shift(conn, cid, bid)
         sess = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
         conn.close()
         return jsonify({'status': 'success', 'data': _cash_session_public(sess, terminal)})
@@ -14710,6 +14685,279 @@ def claim_doc_series(series_id):
     return jsonify({'status': 'success'})
 
 
+# ── Readable per-till numbers (Retail UX P1b item 6) ─────────────────────────
+# A NEW shop's first shift on a till books that till its own sale / return /
+# purchase-order series (`ABD1`, `ABD1-R`, `ABD1-P`), so its receipts read
+# `ABD1-000001` instead of the legacy `SALE-<device>-000001`. The naming rules
+# are pure and live in core/retail/doc_series.py; this block decides WHEN
+# (the flag, the shift-open hook) and lets the owner see / change the branch
+# code (GET/POST /numbering).
+#
+# NO schema change: the branch code and the on/off flag are two ordinary
+# `retail_settings` keys, which already sync last-write-wins.
+#   numbering_readable_enabled   '1' | '0'   (absent = not decided yet)
+#   branch_code:<branches.uid>   2-4 chars A-Z0-9
+#
+# THE FLAG'S DEFAULT is the whole "existing shops keep their numbering" rule:
+# with nothing stored, a shop is ON only if it is brand new (no sale, return,
+# purchase order or numbering book anywhere). A shop with history stays OFF
+# until its owner switches it on, because renumbering a running shop halfway
+# through a month is the owner's call, never ours. The first shift-open on a
+# device PINS whichever answer the shop got, so "new" cannot flip to "not new"
+# under it once the first book exists.
+_NUMBERING_ENABLED_KEY = 'numbering_readable_enabled'
+_BRANCH_CODE_KEY_PREFIX = 'branch_code:'
+
+
+def _reserved_book_prefixes():
+    """The tax-authority sequence's own prefixes. Lazy, route-side only: the
+    numbering module must never import that package (see its docstring), so
+    the set is fetched here and passed IN to the pure helpers."""
+    from commercial_runtime.einvoicing.sequence import RESERVED_LOCAL_PREFIXES
+    return frozenset(RESERVED_LOCAL_PREFIXES)
+
+
+def _read_stored_setting(conn, cid, skey):
+    row = conn.execute(
+        "SELECT svalue FROM retail_settings WHERE company_id=? AND skey=?", (cid, skey)
+    ).fetchone()
+    return None if row is None else row['svalue']
+
+
+def _write_retail_setting(conn, cid, skey, svalue):
+    """Upsert one shop setting AND queue its sync event, the pair every other
+    settings writer in this file performs. The caller commits."""
+    conn.execute(
+        "INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+        "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+        (cid, skey, svalue))
+    _queue_setting_sync_event(conn, skey, svalue)
+
+
+def _shop_is_new_for_numbering(conn, cid):
+    """True when this company has never sold, returned, ordered or numbered
+    anything. Reads real rows, not a counter: a counter can be reset, a row
+    cannot un-happen."""
+    for table in ('sales', 'returns', 'purchase_orders', 'doc_series'):
+        if conn.execute(f"SELECT 1 FROM {table} WHERE company_id=? LIMIT 1", (cid,)).fetchone():
+            return False
+    return True
+
+
+def _numbering_readable_enabled(conn, cid):
+    """(enabled, pinned). A stored '1'/'0' always wins; with nothing stored the
+    answer is the new-shop rule above and `pinned` is False. Never writes."""
+    stored = _read_stored_setting(conn, cid, _NUMBERING_ENABLED_KEY)
+    if stored in ('1', '0'):
+        return stored == '1', True
+    return _shop_is_new_for_numbering(conn, cid), False
+
+
+def _branch_code_info(conn, cid, branch_row):
+    """(branch_code, default_branch_code, is_saved) for one `branches` row.
+    A saved code that is no longer valid (or has since become reserved) is
+    ignored rather than trusted: the default is always a code the create
+    routes accept."""
+    reserved = _reserved_book_prefixes()
+    default = doc_series.default_branch_code(branch_row['name'], reserved)
+    saved = None
+    if branch_row['uid']:
+        saved = doc_series.normalise_branch_code(
+            _read_stored_setting(conn, cid, _BRANCH_CODE_KEY_PREFIX + branch_row['uid']))
+        if saved in reserved:
+            saved = None
+    return (saved or default), default, saved is not None
+
+
+def _auto_book_first_shift(conn, cid, bid):
+    """Called once after a shift-open commits. Gives THIS till its readable
+    books if the shop has readable numbering on and the till has none yet.
+
+    It can never break the shift: the drawer is already open and committed, so
+    every failure here is logged and swallowed, and every skip is logged with
+    its reason (a silent skip and a silent failure are the same to whoever is
+    asking "why does this till still say SALE-..."). Known, accepted gaps,
+    written down instead of left to be found:
+      * It fires on shift-open only. A shop that sells without ever opening a
+        shift keeps the legacy numbering.
+      * A till that owns SOME books but not all (say a sale book made by hand)
+        gets the missing ones under a single new till number, which may differ
+        from the hand-made book's.
+      * Two offline devices can pick the same till number; the second book's
+        create is quarantined on sync (see create_doc_series) rather than
+        wedging it. The `_is_device_behind_on_sync()` check below shrinks the
+        window; it cannot close it.
+    """
+    try:
+        _ensure_credit_schema(conn)
+        terminal = local_terminal_id()
+        if not terminal:
+            log.info('readable numbering skipped: this device has no identity yet')
+            return
+        enabled, pinned = _numbering_readable_enabled(conn, cid)
+        if not pinned:
+            _write_retail_setting(conn, cid, _NUMBERING_ENABLED_KEY, '1' if enabled else '0')
+            conn.commit()
+        if not enabled:
+            log.info('readable numbering skipped: switched off for this shop')
+            return
+        if _is_device_behind_on_sync():
+            log.info('readable numbering skipped: this device is behind on sync')
+            return
+        branch = conn.execute(
+            "SELECT id, name, uid FROM branches WHERE id=? AND company_id=?", (bid, cid)
+        ).fetchone()
+        if branch is None or not branch['uid']:
+            log.info('readable numbering skipped: branch has no wire identity')
+            return
+        reserved = _reserved_book_prefixes()
+        code, _default, _saved = _branch_code_info(conn, cid, branch)
+        plan = doc_series.plan_books(conn, cid, terminal, code, reserved)
+        if not plan:
+            log.info('readable numbering skipped: this till already has its books '
+                     'or no till number is free')
+            return
+        now = now_utc_iso()
+        cur = conn.cursor()
+        for book in plan:
+            series_id = _new_uid()
+            cur.execute("""
+                INSERT INTO doc_series (id, company_id, doc_type, code, label, branch_uid,
+                                        allocator_terminal_uid, claimed_at_utc,
+                                        pad_width, start_no, status, created_at,
+                                        updated_at_utc, row_version)
+                VALUES (?,?,?,?,?,?,?,?,?,1,'active',?,?,1)
+            """, (series_id, cid, book['doc_type'], book['code'], book['label'],
+                  branch['uid'], terminal, now, book['pad_width'], now, now))
+            row = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
+            _queue_sync_event(cur, 'doc_series', series_id, 'create', _doc_series_sync_payload(row))
+            _audit(conn, 'DOC_SERIES_AUTO_CREATED', 'doc_series', series_id,
+                   f"{book['doc_type']}:{book['code']}")
+        conn.commit()
+        _sync_nudge()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        log.warning('readable numbering: a book code was already taken, nothing created: %s', exc)
+    except Exception:
+        conn.rollback()
+        log.exception('readable numbering failed and was swallowed; the shift is open')
+
+
+def _numbering_payload(conn, cid, branch_row):
+    code, default, is_saved = _branch_code_info(conn, cid, branch_row)
+    enabled, _pinned = _numbering_readable_enabled(conn, cid)
+    return {
+        'branch_uid': branch_row['uid'],
+        'branch_code': code,
+        'default_branch_code': default,
+        'branch_code_is_saved': is_saved,
+        'readable_enabled': enabled,
+        'preview': doc_series.preview(code),
+    }
+
+
+def _numbering_branch(conn, cid, explicit_uid):
+    """(branch_row, error_response). An explicit uid must belong to THIS
+    company (the cross-tenant lesson of create_doc_series); none means the
+    caller's working branch."""
+    if explicit_uid:
+        row = conn.execute(
+            "SELECT id, name, uid FROM branches WHERE uid=? AND company_id=?",
+            (str(explicit_uid), cid)).fetchone()
+        if row is None:
+            return None, (jsonify({'status': 'error', 'message': 'Unknown branch.'}), 404)
+        return row, None
+    bid, err = _resolve_working_branch(conn, cid, None)
+    if err:
+        return None, err
+    return conn.execute(
+        "SELECT id, name, uid FROM branches WHERE id=? AND company_id=?", (bid, cid)
+    ).fetchone(), None
+
+
+# GET /api/sub/retail/numbering[?branch_uid=<uid>]   (owner only)
+#   -> {status:'success', data:{branch_uid, branch_code, default_branch_code,
+#        branch_code_is_saved, readable_enabled, preview:{sale, return}}}
+#   `preview` is what till 1 of that branch would print on its first documents.
+# POST /api/sub/retail/numbering   body {branch_uid?, branch_code?, readable_enabled?}
+#   At least one of branch_code / readable_enabled. -> the same body as GET.
+#   400 bad or reserved code / non-boolean flag / empty body, 404 unknown branch.
+# Path segment 'numbering' is the frontend's reachability hook (the
+# route-reachability test keys on the longest literal segment).
+@retail_bp.route('/numbering', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def get_numbering():
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        branch, err = _numbering_branch(conn, cid, request.args.get('branch_uid'))
+        if err:
+            return err
+        return jsonify({'status': 'success', 'data': _numbering_payload(conn, cid, branch)})
+    finally:
+        conn.close()
+
+
+@retail_bp.route('/numbering', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def set_numbering():
+    """Owner only, like every company-wide numbering write. Changing a branch
+    code affects only books created AFTER it; a book that exists keeps its
+    code forever (codes are immutable, see update_doc_series)."""
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
+    data = request.get_json(silent=True) or {}
+    if 'branch_code' not in data and 'readable_enabled' not in data:
+        return jsonify({'status': 'error',
+                        'message': 'Send a branch_code or readable_enabled.'}), 400
+    new_code = None
+    if 'branch_code' in data:
+        new_code = doc_series.normalise_branch_code(data.get('branch_code'))
+        if new_code is None:
+            return jsonify({'status': 'error', 'message':
+                'The branch code must be 2 to 4 letters or digits (A-Z, 0-9).'}), 400
+        if new_code in _reserved_book_prefixes():
+            return jsonify({'status': 'error', 'message':
+                f"{new_code!r} is reserved for Jordan e-invoicing's own numbering and cannot be used here."}), 400
+    new_enabled = None
+    if 'readable_enabled' in data:
+        if not isinstance(data.get('readable_enabled'), bool):
+            return jsonify({'status': 'error', 'message': 'readable_enabled must be true or false.'}), 400
+        new_enabled = data['readable_enabled']
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        branch, err = _numbering_branch(conn, cid, data.get('branch_uid'))
+        if err:
+            return err
+        if new_code is not None and not branch['uid']:
+            return jsonify({'status': 'error', 'message':
+                'This branch has no identity yet, so a code cannot be saved for it.'}), 400
+        if new_code is not None:
+            _write_retail_setting(conn, cid, _BRANCH_CODE_KEY_PREFIX + branch['uid'], new_code)
+            _audit(conn, 'NUMBERING_BRANCH_CODE_SET', 'branch', branch['uid'], new_code)
+        if new_enabled is not None:
+            _write_retail_setting(conn, cid, _NUMBERING_ENABLED_KEY, '1' if new_enabled else '0')
+            _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, '1' if new_enabled else '0')
+        conn.commit()
+        payload = _numbering_payload(conn, cid, branch)
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': payload})
+
+
 # ── Settings (branding) ───────────────────────────────────────────────────────
 # The product owner's ask, verbatim: "Make the system be brandable of
 # whatever institute or coop or foundation bought it -- for the invoice and
@@ -17235,24 +17483,56 @@ def void_payment(pid):
 # accept/decline, returns/refunds, customer/supplier/PO payments, payment
 # voids) since the very first version of this file, with real user_id
 # attribution on every row -- but until this route, nothing ever read it
-# back. Admin-device gated (see _is_admin_device above) rather than visible
-# to every user: this is the one surface in the app that shows what EVERY
-# user in the company did, including reversals of their own sales/refunds.
+# back. This is the one surface in the app that shows what EVERY user in the
+# company did, including reversals of their own sales/refunds.
+#
+# PHASE 1b GATE CHANGE (2026-09-29): the gate is the PERSON, not the machine.
+#   BEFORE: retail.reports AND "this computer is the company's admin device".
+#   NOW:    retail.reports AND session role == 'admin' (the shop owner), on
+#           ANY computer. Everyone else -- cashier, manager, delegated
+#           branch-staff manager -- gets 403.
+# Why: the device gate answered the wrong question. The owner standing at a
+# second computer or on their phone was refused their own shop's trail, while
+# ANY logged-in person with retail.reports (a manager) who happened to sit at
+# the main computer was served everyone's voids and refunds. Who-can-read-it
+# now matches who the log is FOR: whoever answers for the shop.
+#
+# SECURITY REVIEW of the widening/narrowing (who could read it, who can now):
+#   BEFORE: owner on the main computer; a manager holding retail.reports on
+#           the main computer; a cashier granted retail.reports on the main
+#           computer. NOT the owner anywhere else.
+#   NOW:    owner on any computer. NOT a manager, NOT a cashier, on any
+#           computer -- so the set of PEOPLE shrinks (managers lose it), the
+#           set of MACHINES grows (the owner's other devices gain it).
+#   Residual exposure: an owner session on a lower-trust machine (a shared
+#   till). Accepted: the owner's session already reaches every other
+#   owner-only route from there (see EXPECTED_COMPANY_ADMIN_ROUTES), and the
+#   log is scoped to this company_id and this computer's own database, which
+#   is why the screen is titled "Audit log (this computer)": rows written on
+#   other computers appear here only if and when they sync.
+#   The capability check stays as defence in depth: role 'admin' already
+#   satisfies mt_require_capability, so it changes nobody's access today, but
+#   it keeps this route inside the capability matrix's read-gate sweep.
+#
+# P1b-waits: registry v9 (Accountant books.view read-only) -- a read-only
+# Accountant preset would be allowed here as well. Deliberately NOT built:
+# registry v9 needs the partner's agreement. Add the `books.view` branch to the
+# guard below and to test_manager_and_cashier_are_refused when it lands.
 @retail_bp.route('/audit-log', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
-# retail.reports ON TOP OF the admin-device check inside the handler, not
-# instead of it. They are different axes and both are load-bearing: the
-# device check answers "is this the shop's admin terminal?", the capability
-# answers "is this person allowed to read the shop's records?". A manager on
-# the admin device still should not be handed every user's refund and void
-# trail just because of where they are standing.
 @mt_require_capability(CAP_REPORTS)
 def list_audit_log():
+    # _require_company_admin(), not an inline role compare: it is the ONE
+    # spelling of "the shop owner" (see its docstring), it returns the
+    # OWNER_ONLY code the client can key on, and retail_route_capability_
+    # matrix_test.py's EXPECTED_COMPANY_ADMIN_ROUTES pins it by AST -- so
+    # deleting this line fails a test instead of silently opening the log to
+    # every manager holding retail.reports.
+    denied = _require_company_admin()
+    if denied is not None:
+        return denied
     cid = _cid()
-    if not _is_admin_device(cid):
-        return jsonify({'status': 'error',
-                         'message': 'The Audit Log is only visible on this company\'s admin device.'}), 403
 
     conn = get_retail_conn()
     try:
@@ -18510,6 +18790,176 @@ def diagnostics_export():
     }})
     filename = f'aura-retail-diagnostics-{datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")}.json'
     resp.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+# ── Setup checklist (Retail UX P1b item 9, backend half) ─────────────────────
+# GET /api/sub/retail/setup-checklist   (owner only; 403 code OWNER_ONLY else)
+#   -> {status:'success', data:{steps:[{id, done: true|false|null, detail}]}}
+#
+# `done` is DERIVED from real state every call, never remembered: a tick that
+# was true once and is false now (a backup folder emptied, a logo removed) must
+# say so. `null` means "this server cannot know" (a store could not be read, or
+# the thing lives on hardware it cannot see) -- the screen shows it as
+# "can't tell", never as done and never as not done.
+#
+# Deliberately NOT here: `printer_tested` and `whatsapp_desktop`. Whether a
+# printer printed, or a WhatsApp phone is paired, is not stored anywhere this
+# route can read truthfully, and an invented tick is worse than no row.
+# The list is for the OWNER's setup screen only: never render it to a cashier
+# and never as a floating banner over the till.
+#
+# Step ids, in display order:
+#   licence, main_computer, shop_name_logo, default_gst, products,
+#   cashier_invited, readable_numbers, first_backup, jofotara
+# Path segment 'setup-checklist' is the frontend's reachability hook.
+SETUP_CHECKLIST_STEP_IDS = (
+    'licence', 'main_computer', 'shop_name_logo', 'default_gst', 'products',
+    'cashier_invited', 'readable_numbers', 'first_backup', 'jofotara',
+)
+
+
+def _checklist_step(step_id, done, detail):
+    return {'id': step_id, 'done': done, 'detail': detail}
+
+
+def _checklist_licence():
+    from pathlib import Path as _Path
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    from commercial_runtime.licensing_contracts.status_presenter import present_status
+    from commercial_runtime.licensing_contracts.state_machine import ACTIVE_FAMILY
+    try:
+        repo = LicenseStateRepository(_Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+        state = present_status(repo.load()).get('current_state', 'NOT_CONFIGURED')
+    except Exception:
+        return _checklist_step('licence', None, 'The licence could not be read.')
+    ok = state in {s.value for s in ACTIVE_FAMILY}
+    return _checklist_step('licence', ok, state)
+
+
+def _checklist_main_computer(cid):
+    rconn = None
+    try:
+        rconn = _registry_conn()
+        ok = bool(device_context.local_device_is_admin(rconn, cid))
+    except Exception:
+        return _checklist_step('main_computer', None, 'This computer could not be checked.')
+    finally:
+        if rconn is not None:
+            rconn.close()
+    return _checklist_step('main_computer', ok,
+                           'This is the main computer.' if ok else 'This is not the main computer.')
+
+
+def _checklist_shop_and_tax(conn, cid):
+    saved_name = (_read_stored_setting(conn, cid, 'branding_business_name') or '').strip()
+    has_logo = conn.execute(
+        "SELECT 1 FROM retail_settings WHERE company_id=? AND skey=?", (cid, _BRANDING_LOGO_KEY)
+    ).fetchone() is not None
+    if saved_name and has_logo:
+        shop = _checklist_step('shop_name_logo', True, 'Name and logo are saved.')
+    else:
+        missing = []
+        if not saved_name:
+            missing.append('shop name')
+        if not has_logo:
+            missing.append('logo')
+        shop = _checklist_step('shop_name_logo', False, 'Missing: ' + ' and '.join(missing) + '.')
+    rate = (_read_stored_setting(conn, cid, 'default_tax_rate') or '').strip()
+    gst = _checklist_step('default_gst', bool(rate),
+                          'A default tax rate is set.' if rate else 'No default tax rate is set.')
+    return shop, gst
+
+
+def _checklist_cashier(cid):
+    rconn = None
+    try:
+        rconn = _registry_conn()
+        row = rconn.execute(
+            "SELECT 1 FROM users WHERE company_id=? AND role != 'admin' "
+            "AND (status IS NULL OR status='active') LIMIT 1", (cid,)).fetchone()
+    except Exception:
+        return _checklist_step('cashier_invited', None, 'The staff list could not be read.')
+    finally:
+        if rconn is not None:
+            rconn.close()
+    ok = row is not None
+    return _checklist_step('cashier_invited', ok,
+                           'A cashier or manager account exists.' if ok else 'Only the owner can sign in.')
+
+
+def _checklist_numbers(conn, cid):
+    enabled, _pinned = _numbering_readable_enabled(conn, cid)
+    has_book = conn.execute(
+        "SELECT 1 FROM doc_series WHERE company_id=? AND status='active' LIMIT 1", (cid,)
+    ).fetchone() is not None
+    if has_book:
+        return _checklist_step('readable_numbers', True, 'A numbering book is in use.')
+    if enabled:
+        return _checklist_step('readable_numbers', True, 'On. Each till gets its book at its next shift.')
+    return _checklist_step('readable_numbers', False, 'Off. Documents use the long default numbers.')
+
+
+def _checklist_backup():
+    backup_dir = os.environ.get('AURA_BACKUP_DIR') or os.path.join(os.path.dirname(DATABASE_DIR), 'backups')
+    try:
+        if not os.path.isdir(backup_dir):
+            return _checklist_step('first_backup', False, 'No backup has been made yet.')
+        found = any(n.startswith('aura-retail-backup-') and n.endswith('.zip')
+                    for n in os.listdir(backup_dir))
+    except OSError:
+        return _checklist_step('first_backup', None, 'The backup folder could not be read.')
+    return _checklist_step('first_backup', found,
+                           'A backup exists.' if found else 'No backup has been made yet.')
+
+
+def _checklist_jofotara(conn, cid):
+    try:
+        from commercial_runtime.einvoicing import settings as _einv
+        regime = _einv.get_setting(conn, cid, 'tax_regime')
+        provider = _einv.get_setting(conn, cid, 'provider')
+        tin = (_einv.get_setting(conn, cid, 'seller_tin') or '').strip()
+    except Exception:
+        return _checklist_step('jofotara', None, 'The e-invoicing settings could not be read.')
+    if regime != 'jordan':
+        return _checklist_step('jofotara', False, 'Jordan e-invoicing is not switched on.')
+    if provider == 'unconfigured' or not tin:
+        return _checklist_step('jofotara', False, 'Switched on, but the connection is not finished.')
+    return _checklist_step('jofotara', True, 'Connected.')
+
+
+@retail_bp.route('/setup-checklist', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def setup_checklist():
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
+    cid = _cid()
+    by_id = {
+        'licence': _checklist_licence(),
+        'main_computer': _checklist_main_computer(cid),
+        'cashier_invited': _checklist_cashier(cid),
+        'first_backup': _checklist_backup(),
+    }
+    conn = get_retail_conn()
+    try:
+        _ensure_credit_schema(conn)
+        shop, gst = _checklist_shop_and_tax(conn, cid)
+        by_id['shop_name_logo'] = shop
+        by_id['default_gst'] = gst
+        n_products = conn.execute(
+            "SELECT COUNT(*) FROM products WHERE company_id=?", (cid,)).fetchone()[0]
+        by_id['products'] = _checklist_step(
+            'products', n_products > 0,
+            f'{n_products} products.' if n_products else 'No products yet.')
+        by_id['readable_numbers'] = _checklist_numbers(conn, cid)
+        by_id['jofotara'] = _checklist_jofotara(conn, cid)
+    finally:
+        conn.close()
+    steps = [by_id[i] for i in SETUP_CHECKLIST_STEP_IDS]
+    resp = jsonify({'status': 'success', 'data': {'steps': steps}})
     resp.headers['Cache-Control'] = 'no-store'
     return resp
 

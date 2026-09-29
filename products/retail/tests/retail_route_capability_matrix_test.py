@@ -380,6 +380,10 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'update_doc_series': CAP_EMPLOYEES,
     'retire_doc_series': CAP_EMPLOYEES,
     'claim_doc_series': CAP_EMPLOYEES,
+    # Retail UX P1b item 6: the owner's branch-code / readable-numbers switch.
+    # Owner-only on top (see EXPECTED_COMPANY_ADMIN_ROUTES); CAP_EMPLOYEES is
+    # the same tier as every other numbering write above.
+    'set_numbering': CAP_EMPLOYEES,
 
     # ── Customer display relay, P0 item #11(b) (interface I-1): retail.sell
     # ────────────────────────────────────────────────────────────────────
@@ -418,6 +422,9 @@ EXPECTED_READ_CAPABILITIES = {
     'customers_receivables': CAP_REPORTS,
     'suppliers_payables': CAP_REPORTS,
     'supplier_statement': CAP_REPORTS,
+    # Also owner-only since Phase 1b (see EXPECTED_COMPANY_ADMIN_ROUTES): the
+    # capability is kept as a second layer and so the money-disclosure sweep
+    # keeps seeing a gated route.
     'list_audit_log': CAP_REPORTS,
     'inventory_reconciliation': CAP_REPORTS,
     # Stage 7d-i oversell queue (docs/launch-readiness/phase7-offline-ux.md
@@ -749,6 +756,29 @@ EXPECTED_COMPANY_ADMIN_ROUTES = {
     # (a); a branch-staff-delegated manager could still rename or retire ANY
     # branch in the company (not just their own) through these two siblings.
     'update_branch', 'retire_branch',
+
+    # ── Phase 1b item 3 (2026-09-29): the Audit Log gate moves from the
+    # DEVICE ("is this the company's admin computer") to the PERSON (the shop
+    # owner, on any computer). It stays on CAP_REPORTS in
+    # EXPECTED_READ_CAPABILITIES as defence in depth, and ALSO calls
+    # _require_company_admin() -- so a manager holding retail.reports, who
+    # used to be served on the main computer, is now refused. Listing it here
+    # is what makes deleting that one call a red test rather than a silent
+    # widening. P1b-waits: registry v9 adds an Accountant (books.view) branch;
+    # this entry changes then, deliberately.
+    'list_audit_log',
+
+    # ── Phase 1b items 6 and 9 (2026-09-29) ─────────────────────────────────
+    # get_numbering / set_numbering: the branch code and the readable-numbers
+    # switch are company-wide numbering, the same authority as
+    # create_doc_series above. get_numbering is a GET with NO capability on
+    # purpose: the owner check is the whole gate, and listing it here is what
+    # turns deleting that check into a red test.
+    # setup_checklist: the owner's first-run list. It says whether the shop
+    # has products, cashiers, backups and e-invoicing set up -- an owner's
+    # view, never a cashier's. P1b-waits: registry v9 (an Accountant preset
+    # would not see it either).
+    'get_numbering', 'set_numbering', 'setup_checklist',
 }
 
 

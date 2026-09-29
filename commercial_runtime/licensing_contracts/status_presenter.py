@@ -28,12 +28,51 @@ _SAFE_TOP_LEVEL_FIELDS = (
 )
 
 
-def present_status(record: Optional[LicenseStateRecord]) -> dict:
+# The ONLY assertion-payload fields the Plan & devices screen may read, and
+# they are copied out one by one -- the envelope itself (signature, device
+# fingerprint, offline policy) never crosses this module's boundary.
+# Phase 1b (2026-09-29): the Plan & devices screen needs "which plan, until
+# when, how many devices". All three already sit in the PERSISTED signed
+# envelope (assertion_verifier.ALLOWED_PAYLOAD_FIELDS), so this is a read of
+# existing state -- no schema change, no new column, no new network call.
+def _payload_of(record: LicenseStateRecord) -> dict:
+    """The verified assertion's payload, or {} when there is none / it cannot
+    be read. Deliberately forgiving: a licence screen that 500s because one
+    stored blob is malformed would hide the very state the owner came to see.
+    The envelope was signature-verified BEFORE it was persisted; this only
+    reads it back, so a malformed blob is corruption, not an attack."""
+    raw = record.assertion_envelope_json
+    if not raw:
+        return {}
+    try:
+        envelope = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    payload = envelope.get("payload") if isinstance(envelope, dict) else None
+    return payload if isinstance(payload, dict) else {}
+
+
+def present_status(record: Optional[LicenseStateRecord], devices_used: Optional[int] = None) -> dict:
+    """`devices_used` is optional and comes from the CALLER: the licence store
+    does not know how many computers are paired (that is the site-relay's
+    device list). None = unknown, and is surfaced as None -- never as 0, which
+    would read as "no seats used" and be a lie."""
     if record is None:
         return {"current_state": "NOT_CONFIGURED"}
 
     result = {field: getattr(record, field) for field in _SAFE_TOP_LEVEL_FIELDS}
     result["entitlements"] = json.loads(record.entitlements_json) if record.entitlements_json else {}
+
+    payload = _payload_of(record)
+    count = payload.get("allowed_device_count")
+    # bool is an int subclass in Python; a stray True must not read as "1 device".
+    result["allowed_device_count"] = count if isinstance(count, int) and not isinstance(count, bool) else None
+    result["plan_code"] = payload.get("plan_code") if isinstance(payload.get("plan_code"), str) else None
+    result["term"] = {
+        "start": payload.get("term_start") if isinstance(payload.get("term_start"), str) else None,
+        "end": payload.get("term_end") if isinstance(payload.get("term_end"), str) else None,
+    }
+    result["devices_used"] = devices_used if isinstance(devices_used, int) and not isinstance(devices_used, bool) else None
 
     if record.assertion_expires_at:
         result["assertion_expires_at"] = record.assertion_expires_at
