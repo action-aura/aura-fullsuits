@@ -2016,5 +2016,11 @@
   "it uses an account this computer does not have": "تستخدم حسابًا غير موجود على هذا الجهاز",
   "the other computer runs a newer version of Aura than this one": "الجهاز الآخر يشغّل نسخة من Aura أحدث من هذا الجهاز",
   "this computer could not check which version of Aura the other one runs": "تعذّر على هذا الجهاز معرفة نسخة Aura التي يشغّلها الجهاز الآخر",
-  "it could not be added for a reason this screen does not know": "تعذّرت إضافتها لسبب لا تعرفه هذه الشاشة"
+  "it could not be added for a reason this screen does not know": "تعذّرت إضافتها لسبب لا تعرفه هذه الشاشة",
+  "Paper Width": "عرض الورق",
+  "Receipt Printer": "طابعة الإيصالات",
+  "Test Print": "طباعة تجريبية",
+  "The details were saved, but the logo was not: {reason}": "تم حفظ التفاصيل، لكن لم يُحفظ الشعار: {reason}",
+  "The printer device and the cash drawer test are set up by the shop owner or a manager with permission.": "يُعِدّ مالك المتجر أو مدير لديه الصلاحية جهاز الطابعة واختبار درج النقود.",
+  "Uses your Windows-installed printer through the normal print dialog — works with a thermal receipt printer (via its own Windows driver), a regular printer, or a PDF printer. There is no separate USB/Bluetooth thermal protocol implemented.": "يستخدم الطابعة المثبّتة على Windows عبر نافذة الطباعة العادية — يعمل مع طابعة إيصالات حرارية (عبر برنامج تشغيلها على Windows)، أو طابعة عادية، أو طابعة PDF. لا يوجد بروتوكول حراري منفصل عبر USB/Bluetooth."
 }

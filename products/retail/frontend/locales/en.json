@@ -2016,5 +2016,11 @@
   "it uses an account this computer does not have": "it uses an account this computer does not have",
   "the other computer runs a newer version of Aura than this one": "the other computer runs a newer version of Aura than this one",
   "this computer could not check which version of Aura the other one runs": "this computer could not check which version of Aura the other one runs",
-  "it could not be added for a reason this screen does not know": "it could not be added for a reason this screen does not know"
+  "it could not be added for a reason this screen does not know": "it could not be added for a reason this screen does not know",
+  "Paper Width": "Paper Width",
+  "Receipt Printer": "Receipt Printer",
+  "Test Print": "Test Print",
+  "The details were saved, but the logo was not: {reason}": "The details were saved, but the logo was not: {reason}",
+  "The printer device and the cash drawer test are set up by the shop owner or a manager with permission.": "The printer device and the cash drawer test are set up by the shop owner or a manager with permission.",
+  "Uses your Windows-installed printer through the normal print dialog — works with a thermal receipt printer (via its own Windows driver), a regular printer, or a PDF printer. There is no separate USB/Bluetooth thermal protocol implemented.": "Uses your Windows-installed printer through the normal print dialog — works with a thermal receipt printer (via its own Windows driver), a regular printer, or a PDF printer. There is no separate USB/Bluetooth thermal protocol implemented."
 }
