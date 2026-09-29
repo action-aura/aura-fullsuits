@@ -104,6 +104,13 @@ const LEGACY_PHYSICAL_BUDGET = 63;
  *     invisible -- which is the whole point of adding this scan.
  */
 const JS_FILES_DIR = path.join(__dirname, '..', 'frontend');
+/* RE-MEASURED 2026-09-29 with the lexer-based stripJsComments: 31 (subsystem-
+   retail.js 29, app-shell.js 1, employees.js 1). The number is unchanged, but
+   the reading behind it is not: with the old regex stripper the same files read
+   5, because a comment opener inside a string/regex/template started a fake
+   comment and blanked real code. 31 is the true count on correct input, not a
+   loosened budget. The lexer's output was also checked character-for-character
+   against acorn's comment spans on all 15 frontend .js files (0 differences). */
 const LEGACY_JS_PHYSICAL_BUDGET = 31;
 
 function stripComments(css) {
@@ -207,14 +214,154 @@ function testLogicalPropertiesAreActuallyUsed() {
 /* JS comments carry the WORD "margin-left" all over this frontend (they are
    how the physical/logical decision is explained at each site), so they are
    blanked before the scan -- otherwise fixing a site and documenting the fix
-   would RAISE the count. Whole-line `//` comments and `/* */` blocks only:
-   this is a comment-density heuristic matched to how this codebase actually
-   writes comments, not a JS parser, and it errs toward over-counting (a
-   trailing `// note` after code is still scanned) rather than under. */
+   would RAISE the count.
+
+   WHY THIS IS A LEXER AND NOT A REGEX. This function used to be two regexes,
+   and the block-comment one (`/\/\*[\s\S]*?\*\//g`) cannot tell a comment
+   opener from the same two characters INSIDE a string, a template literal or a
+   regex literal -- a glob string, a regex with a slash-star in it, a template
+   holding a quoted slash-star. Each of those opened
+   a FAKE comment that ran on to the next real closer and blanked all the real
+   code in between. Measured 2026-09-29: about 508k of subsystem-retail.js's
+   1.14M non-space characters were blanked (840k of 1.05M at e39fe657), and
+   138k of app-shell.js's 313k. The physical-property count below was therefore
+   measured on a mangled file, and read 5 where a plain grep finds about 30.
+
+   So this walks the source once, tracking whether it is in code, a '...' or
+   "..." string, a `...` template (including nested ${ ... } expressions, which
+   are code again), a regex literal, a // comment or a block comment, and blanks
+   ONLY real comments -- every one of them, whole-line or trailing, because a
+   lexer no longer has to guess. Comments become spaces and every newline is
+   kept, so the line numbers this test reports stay true.
+
+   The one judgement call is `/`: division or the start of a regex? It is a
+   regex when the previous significant token cannot end an expression -- an
+   operator or opening/separating punctuation, the start of the file, or a
+   keyword such as `return`. After an identifier, a number, a string, `)` or
+   `]` it is division. `}` counts as "regex may follow" (a block just ended)
+   even though `({}) / 2` is division: a mis-read there costs at most one
+   regex-shaped span, and only if it also contains a `/*`, which this
+   frontend does not write. */
+const REGEX_MAY_FOLLOW = new Set([...'(,=:[!&|?{};+-*%<>~^']);
+const REGEX_KEYWORDS = new Set([
+  'return', 'typeof', 'case', 'in', 'of', 'delete', 'void', 'throw', 'new', 'else', 'do', 'instanceof',
+]);
+
 function stripJsComments(js) {
-  return js
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/^[ \t]*\/\/.*$/gm, (m) => ' '.repeat(m.length));
+  const out = js.split('');
+  const n = js.length;
+  const blank = (from, to) => {
+    for (let k = from; k < to; k++) if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
+  };
+  const isWordChar = (c) => /[A-Za-z0-9_$]/.test(c) || c > '\x7f';
+
+  // Scans a quoted string starting at the opening quote; returns the index
+  // just past it. A raw newline ends it -- a JS string cannot span lines, so
+  // an unterminated one must not swallow the rest of the file.
+  const skipString = (start) => {
+    const quote = js[start];
+    let k = start + 1;
+    while (k < n && js[k] !== quote && js[k] !== '\n') k += js[k] === '\\' ? 2 : 1;
+    return Math.min(k + 1, n);
+  };
+
+  // Scans template text from `start` (just after a backtick or a closing `}`
+  // of a ${...}). Returns { end, opensExpr }: `end` is the index after the
+  // closing backtick, or after the `${` when an expression opens.
+  const skipTemplateText = (start) => {
+    let k = start;
+    while (k < n) {
+      if (js[k] === '\\') k += 2;
+      else if (js[k] === '`') return { end: k + 1, opensExpr: false };
+      else if (js[k] === '$' && js[k + 1] === '{') return { end: k + 2, opensExpr: true };
+      else k++;
+    }
+    return { end: n, opensExpr: false };
+  };
+
+  // Scans a regex literal starting at its opening `/`; returns the index just
+  // past the closing `/`, or -1 when no closing `/` appears on the line (then
+  // it was not a regex after all). A `/` inside a [...] class does not close it.
+  const skipRegex = (start) => {
+    let k = start + 1;
+    let inClass = false;
+    while (k < n && js[k] !== '\n') {
+      const c = js[k];
+      if (c === '\\') k += 2;
+      else if (c === '[') { inClass = true; k++; }
+      else if (c === ']') { inClass = false; k++; }
+      else if (c === '/' && !inClass) return k + 1;
+      else k++;
+    }
+    return -1;
+  };
+
+  const exprDepths = []; // brace depth at which each open template ${ began
+  let braceDepth = 0;
+  let prev = '';         // last significant character ('w' = an identifier/number, 'v' = a finished value)
+  let prevWord = '';     // the identifier when prev === 'w'
+  let i = 0;
+
+  while (i < n) {
+    const c = js[i];
+    const next = js[i + 1];
+
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+
+    if (c === '/' && next === '/') {
+      let end = js.indexOf('\n', i);
+      if (end === -1) end = n;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      let end = js.indexOf('*/', i + 2);
+      end = end === -1 ? n : end + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (c === '"' || c === "'") { i = skipString(i); prev = 'v'; continue; }
+    if (c === '`') {
+      const t = skipTemplateText(i + 1);
+      i = t.end;
+      if (t.opensExpr) { exprDepths.push(braceDepth); prev = '{'; } else prev = 'v';
+      continue;
+    }
+    if (c === '/') {
+      const regexAllowed = prev === '' || REGEX_MAY_FOLLOW.has(prev) || (prev === 'w' && REGEX_KEYWORDS.has(prevWord));
+      const end = regexAllowed ? skipRegex(i) : -1;
+      if (end !== -1) { i = end; prev = 'v'; } else { i++; prev = '/'; }
+      continue;
+    }
+    if (c === '{') { braceDepth++; prev = '{'; i++; continue; }
+    if (c === '}') {
+      if (exprDepths.length && exprDepths[exprDepths.length - 1] === braceDepth) {
+        // This `}` closes a template's ${ ... }: back into the template text.
+        exprDepths.pop();
+        const t = skipTemplateText(i + 1);
+        i = t.end;
+        if (t.opensExpr) { exprDepths.push(braceDepth); prev = '{'; } else prev = 'v';
+        continue;
+      }
+      braceDepth--;
+      prev = '}';
+      i++;
+      continue;
+    }
+    if (isWordChar(c)) {
+      let k = i + 1;
+      while (k < n && isWordChar(js[k])) k++;
+      prev = 'w';
+      prevWord = js.slice(i, k);
+      i = k;
+      continue;
+    }
+    prev = c; // any other punctuation, including ) and ] (after which `/` is division)
+    i++;
+  }
+  return out.join('');
 }
 
 /* The SAME property list as the stylesheet scan, with one widened boundary:
@@ -228,6 +375,20 @@ const JS_PHYSICAL = PHYSICAL.map(({ re, use }) => ({
   use,
 }));
 
+// Physical-property hits in ALREADY-COMMENT-STRIPPED source, as {line, prop, use}.
+function findJsPhysical(strippedSrc) {
+  const hits = [];
+  for (const { re, use } of JS_PHYSICAL) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(strippedSrc)) !== null) {
+      const line = strippedSrc.slice(0, m.index).split('\n').length;
+      hits.push({ line, prop: m[0].trim().replace(/^["';{]/, '').trim(), use });
+    }
+  }
+  return hits;
+}
+
 function scanJsInlineStyles() {
   const files = fs.readdirSync(JS_FILES_DIR).filter((f) => f.endsWith('.js')).sort();
   assert.ok(files.length >= 5,
@@ -238,14 +399,7 @@ function scanJsInlineStyles() {
   for (const f of files) {
     const src = stripJsComments(fs.readFileSync(path.join(JS_FILES_DIR, f), 'utf8'));
     scanned += src.length;
-    for (const { re, use } of JS_PHYSICAL) {
-      re.lastIndex = 0;
-      let m;
-      while ((m = re.exec(src)) !== null) {
-        const line = src.slice(0, m.index).split('\n').length;
-        hits.push({ file: f, line, prop: m[0].trim().replace(/^["';{]/, '').trim(), use });
-      }
-    }
+    for (const h of findJsPhysical(src)) hits.push({ file: f, ...h });
   }
   assert.ok(scanned > 200000,
     `Only ${scanned} characters of JavaScript were scanned; the frontend is far larger than that, ` +
@@ -272,6 +426,70 @@ function testJsInlineStylePhysicalPropertyCountDoesNotGrow() {
     'ground instead of leaving slack for a regression.'
   );
   console.log(`PASS: JS inline-style physical-property count is ${count}, within the ${LEGACY_JS_PHYSICAL_BUDGET} budget`);
+}
+
+/* THE SCANNER'S OWN TEST. Every JS-side check below trusts stripJsComments; the
+   regex version of it silently blanked half of the two biggest files and this
+   suite stayed green, reading a count of 5 where the truth was about 30. So the
+   stripper is proven on its own, on small sources where the right answer is
+   known by eye, BEFORE anything is measured with it.
+
+   Each "must still count" case puts one trap (a comment opener inside a
+   string / regex / template) in front of a REAL declaration and then a REAL
+   closing comment after it -- the shape that made the regex version eat the
+   declaration. Each trap is its own case so one cannot hide behind another. */
+function testJsCommentStripperIsNotFooledByStringsAndRegexes() {
+  const DECL = "el.style.cssText = 'margin-left:5px';";
+  const REAL_CLOSER = '/* a real block comment that closes the fake one */';
+  const mustCount = [
+    ['a slash-star inside a single-quoted string', "var a = '*/*';"],
+    ['a slash-star inside a double-quoted string', 'var a = "/*";'],
+    ['a slash-star inside a regex literal', 'var re = /\\/*/g;'],
+    ['a slash-star inside a regex character class', 'var re = /[/*]/;'],
+    ['a slash-star inside a template expression', 'var t = `a${\'/*\'}b`;'],
+    ['a slash-star inside plain template text', 'var t = `glob: /*`;'],
+    ['a nested template inside a template expression', 'var t = `x${`y${1}`}z /*`;'],
+    ['a division before a trailing note', 'var d = total / count; // margin-left:4px'],
+  ];
+  for (const [what, trap] of mustCount) {
+    const src = `${trap}\n${DECL}\n${REAL_CLOSER}\n`;
+    const hits = findJsPhysical(stripJsComments(src));
+    // The division case carries a trailing "// margin-left:4px" that must NOT
+    // count, so its expected hit count is the same one (the real DECL).
+    assert.strictEqual(hits.length, 1,
+      `stripJsComments mangled the source after ${what}: expected the real ` +
+      `margin-left declaration to still be counted once, got ${hits.length}.\n` +
+      `source:\n${src}\nstripped:\n${stripJsComments(src)}`);
+    assert.strictEqual(hits[0].line, 2,
+      `the surviving hit after ${what} should be on line 2, not ${hits[0].line}.`);
+  }
+
+  const comments = [
+    '/* margin-left:1px; */',
+    '// margin-left:2px',
+    'var x = 1; // margin-left:3px trailing note',
+    'var y = 2; /* margin-left:4px */ var z = 3;',
+    '/*\n margin-left:5px\n padding-right:6px\n*/',
+  ];
+  for (const c of comments) {
+    const hits = findJsPhysical(stripJsComments(c));
+    assert.strictEqual(hits.length, 0,
+      `a real comment was scanned as code: ${JSON.stringify(c)} -> ${JSON.stringify(hits)}`);
+  }
+
+  // Line numbers survive: same length, and every newline in the same place.
+  const mixed = `/* one\ntwo */\nvar a = '*/*';\n// gone\n${DECL}\n${REAL_CLOSER}\n`;
+  const stripped = stripJsComments(mixed);
+  assert.strictEqual(stripped.length, mixed.length, 'stripping changed the length of the source');
+  for (let k = 0; k < mixed.length; k++) {
+    assert.strictEqual(stripped[k] === '\n', mixed[k] === '\n',
+      `a newline moved at offset ${k}: line numbers would be wrong`);
+  }
+  const line = findJsPhysical(stripped)[0].line;
+  assert.strictEqual(line, mixed.split('\n').findIndex((l) => l.includes('margin-left')) + 1,
+    'the reported line does not match the declaration\'s real line');
+
+  console.log(`PASS: stripJsComments keeps real code and drops real comments (${mustCount.length} traps, ${comments.length} comments, line numbers kept)`);
 }
 
 /* The margins this change actually removed, pinned BY NAME rather than only
@@ -334,6 +552,7 @@ function testRtlStylesheetStillCoversTheChartExceptions() {
    exist, and hides the rest as "not run", which is indistinguishable from
    "passed". */
 const CHECKS = [
+  ['the JS comment stripper is not fooled by strings and regexes', testJsCommentStripperIsNotFooledByStringsAndRegexes],
   ['new code uses logical properties', testNewCodeUsesLogicalProperties],
   ['the legacy physical-property count does not grow', testLegacyPhysicalPropertyCountDoesNotGrow],
   ['logical properties are actually used', testLogicalPropertiesAreActuallyUsed],
