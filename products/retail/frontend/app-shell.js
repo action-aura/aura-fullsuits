@@ -1171,7 +1171,7 @@ const SubsystemApp = {
         // measured 2026-09-12. The four `if (window.AuraRouter)` branches in
         // this file are therefore inert; they are correctly guarded and left in
         // place, but nothing today can take them.)
-        { id: 'stock-accuracy', label: 'Stock Accuracy', icon: '⚖️', ownerOnly: true, capability: 'retail.reports' },
+        { id: 'stock-accuracy', label: 'Stock records check', icon: '⚖️', ownerOnly: true, capability: 'retail.reports' },
         // Launch-readiness 2026-08-29 ("the two exception queues both need
         // ONE screen, not two"): the oversell queue (stock_exceptions,
         // Phase 7 stage 7d-i/ii) and the discarded-catalogue-edit queue
@@ -1187,7 +1187,7 @@ const SubsystemApp = {
         // capability of its own (retail.stock.adjust) -- gated inside
         // _renderExceptions, not here, because that authority varies by
         // ROW section, not by whether the screen is reachable at all.
-        { id: 'exceptions', label: 'Exceptions', icon: '⚠️', capability: 'retail.reports' },
+        { id: 'exceptions', label: 'Needs review', icon: '⚠️', capability: 'retail.reports' },
         // Aseel-parity wave A-PAR (schema v32): "Cheque" has always been a
         // free-text payment-method label with nothing behind it. `capability:
         // 'retail.reports'` matches list_cheques'/get_cheque's own
@@ -3971,15 +3971,15 @@ const SubsystemApp = {
     if (!ok) {
       const holder = body && body.admin_device && (body.admin_device.device_label || body.admin_device.platform);
       this.showToast(
-        holder ? t('Another device is already the admin device:') + ' ' + holder
-               : t('Could not make this the admin device.'),
+        holder ? t('Another computer is already the main computer:') + ' ' + holder
+               : t('Could not make this the main computer.'),
         'error'
       );
       return;
     }
     this.isAdminDevice = true;
     this.canClaimAdminDevice = false;
-    this.showToast(t('This device is now your store\'s admin device.'), 'success');
+    this.showToast(t('This computer is now your shop\'s main computer.'), 'success');
     // Re-render so the Audit Log entry, the 'Main computer' badge and the
     // gear menu's own claim row (now gone -- canClaimAdminDevice is false)
     // all reflect the new state immediately.
