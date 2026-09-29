@@ -8023,7 +8023,7 @@ const RetailSystem = {
              see share.js's own header comment on why. -->
         <div style="display:flex;gap:8px;margin-top:10px" id="rcpt-wa-row">
           <input type="text" id="rcpt-wa-phone" dir="ltr" maxlength="20"
-            placeholder="${this._esc(t('Customer WhatsApp number'))}"
+            placeholder="${this._esc(t('WhatsApp number'))}"
             aria-label="${this._esc(t('Customer WhatsApp number'))}"
             style="flex:1;min-block-size:36px;padding-inline:10px;font-size:13px;border-radius:8px;border:1px solid var(--border-mid);background:var(--input-bg);color:var(--text)" />
           <!-- P1a FINAL F9: a bare "Send" next to a phone box says nothing about
@@ -13645,7 +13645,7 @@ const RetailSystem = {
         // (pre-fix, or a receiving device mid-sync-upgrade) omits the new
         // field, so this never renders 'undefined'.
         const payout = d.data.tender_refund_amount != null ? d.data.tender_refund_amount : d.data.refund_amount;
-        let msg = `${t('Return processed')} — \u2066${d.data.return_number}\u2069 ·${t('Refund')}: ${this._fmt(payout)}`;
+        let msg = `${t('Return processed')} — \u2066${d.data.return_number}\u2069 · ${t('Refund')}: ${this._fmt(payout)}`;
         if (d.data.ar_forgiven_amount > 0.005) {
           msg += ` (+${this._fmt(d.data.ar_forgiven_amount)} ${t('credit forgiven')})`;
         }

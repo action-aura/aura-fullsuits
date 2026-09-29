@@ -1956,6 +1956,7 @@ with sync_playwright() as p:
         # words that will ship, not the English fallback.
         "Send on WhatsApp": "إرسال عبر واتساب",
         "Can't load": "تعذّر التحميل",
+        "WhatsApp number": "رقم واتساب",
     }
 
     def ui_lang(pg, lang):
@@ -2132,6 +2133,48 @@ with sync_playwright() as p:
 
     check("FINAL F9: Arabic receipt number sits in a left-to-right <bdi> with a visible gap from its label; Send says 'إرسال عبر واتساب' and is really clickable",
           final_f9_arabic_receipt_number_is_isolated_and_send_is_translated)
+
+    PLACEHOLDER_FIT_JS = """() => {
+      const inp = document.getElementById('rcpt-wa-phone');
+      const btn = document.getElementById('rcpt-wa-send-btn');
+      const cs = getComputedStyle(inp);
+      const probe = document.createElement('span');
+      probe.textContent = inp.placeholder;
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;left:-9999px;'
+        + 'font:' + cs.font + ';letter-spacing:' + cs.letterSpacing;
+      document.body.appendChild(probe);
+      const need = probe.getBoundingClientRect().width;
+      probe.remove();
+      const avail = inp.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const ir = inp.getBoundingClientRect(), br = btn.getBoundingClientRect();
+      return {placeholder: inp.placeholder, need, avail, sameRow: Math.abs(ir.top - br.top) < 12,
+              inputW: inp.clientWidth};
+    }"""
+
+    def final_n3_receipt_whatsapp_hint_is_fully_readable():
+        for lang in ("en", "ar"):
+            ui_lang(owner, lang)
+            try:
+                go_pos(owner)
+                owner.evaluate("(id) => RetailSystem._addToCart(id)", PID_WIDGET)
+                owner.wait_for_timeout(300)
+                owner.click("#pos-checkout-btn")
+                owner.wait_for_selector("#ret-receipt-dialog", timeout=10000)
+                owner.wait_for_timeout(300)
+                g = owner.evaluate(PLACEHOLDER_FIT_JS)
+                assert g["placeholder"].strip(), f"[{lang}] the WhatsApp box has no hint at all"
+                assert g["sameRow"], f"[{lang}] the Send button wrapped away from the phone box"
+                print(f"      [{lang}] hint {g['placeholder']!r}: needs {g['need']:.0f}px, has {g['avail']:.0f}px (box {g['inputW']}px)")
+                assert g["need"] <= g["avail"], (
+                    f"[{lang}] the hint {g['placeholder']!r} is cut off: it needs {g['need']:.1f}px "
+                    f"but the box only has {g['avail']:.1f}px")
+            finally:
+                owner.evaluate("() => document.querySelectorAll('.ret-modal-overlay').forEach(el => el.remove())")
+                ui_lang(owner, "en")
+                go_pos(owner)
+
+    check("FINAL N3: the receipt's WhatsApp number hint fits its box in English and Arabic, and Send stays on the same row",
+          final_n3_receipt_whatsapp_hint_is_fully_readable)
 
     CUST_SELECT_JS = """(arrow) => {
       const s = document.getElementById('pos-customer');
