@@ -60,6 +60,12 @@ RESULTS: list[tuple[str, bool, str]] = []
 ONLY: set[str] = set()
 EXPECTED_FKEYS = [("F1", "Cash"), ("F2", "Card"), ("F3", "Mobile / CliQ"),
                   ("F4", "Transfer"), ("F5", "Credit"), ("F6", "Voucher")]
+# The card prints ARABIC whatever the screen language (English line beneath).
+# Typed here on purpose, not read from ar.json: reading the dictionary the card
+# reads would agree with any dictionary.
+EXPECTED_FKEYS_AR = ["نقدًا", "بطاقة", "محفظة إلكترونية / كليك", "حوالة مصرفية", "آجل", "قسيمة"]
+# Fixed till keys printed under the F-keys (from _onPOSShortcut).
+EXPECTED_OTHER_KEYS = ["Enter", "X", "Delete", "/", "N *"]
 FAKE_NUMBER = "+962 79-123 4567"
 FAKE_DIGITS = "962791234567"
 
@@ -119,13 +125,24 @@ def wait_context(page):
 
 
 def card_rows(page):
-    """Rows of the card exactly as the print iframe will show them."""
+    """Rows of the card exactly as the print iframe will show them:
+    [key, arabic line, english line]."""
     return page.evaluate("""() => {
       const doc = new DOMParser().parseFromString(AuraHelp.fkeyCardHtml(), 'text/html');
       const card = doc.getElementById('fkey-card');
       if (!card) return null;
-      return [...card.querySelectorAll('tbody tr')].map(tr => [tr.children[0].textContent.trim(), tr.children[1].textContent.trim()]);
+      return [...card.querySelectorAll('tbody tr')].map(tr => {
+        const ar = tr.querySelector('.ar'), en = tr.querySelector('.en');
+        return [tr.children[0].textContent.trim(), ar ? ar.textContent.trim() : '', en ? en.textContent.trim() : ''];
+      });
     }""")
+
+
+def press_fkey_in_till(page, n):
+    """Press F<n> as a real key on the real till; return the method it selected."""
+    page.keyboard.press(f"F{n}")
+    page.wait_for_timeout(120)
+    return page.evaluate("() => RetailSystem._paymentMethod")
 
 
 def main() -> int:
@@ -193,41 +210,92 @@ def main() -> int:
             check("null", "number null: no support link in the dialog or the palette; version and installation id are the server's", null_state)
 
             # ================= CARD =================
+            def open_till():
+                pg.evaluate("() => SubsystemApp._navigate('pos')")
+                pg.wait_for_function("() => SubsystemApp.currentSection === 'pos' && document.querySelectorAll('.pos-pay-btn').length >= 6", timeout=DEFAULT_WAIT_MS)
+                pg.wait_for_timeout(600)
+
             def card_matches_real_keys():
                 rows = card_rows(pg)
-                assert rows == [list(r) for r in EXPECTED_FKEYS], f"card rows {rows} != the till's F1..F6 {EXPECTED_FKEYS}"
-                live = pg.evaluate("() => RetailSystem.POS_PAYMENT_METHODS.map(m => [m.fkey, t(m.label)])")
-                assert rows == live, f"card {rows} disagrees with POS_PAYMENT_METHODS {live}"
+                f_rows = rows[:6]
+                assert [r[0] for r in f_rows] == [k for k, _ in EXPECTED_FKEYS], f"card keys {rows}"
+                assert [r[1] for r in f_rows] == EXPECTED_FKEYS_AR, f"card Arabic lines {[r[1] for r in f_rows]}"
+                assert [r[2] for r in f_rows] == [n for _, n in EXPECTED_FKEYS], f"card English lines {[r[2] for r in f_rows]}"
+                assert [r[0] for r in rows[6:]] == EXPECTED_OTHER_KEYS, f"the other till keys {[r[0] for r in rows[6:]]}"
+                # And against the REAL keyboard: press F1..F6 on the real till and
+                # see which method each selects; the card row of that key must name it.
+                open_till()
+                by_method = pg.evaluate("() => Object.fromEntries(RetailSystem.POS_PAYMENT_METHODS.map(m => [m.method, m.label]))")
+                # The Credit tile is aria-disabled until a credit customer is on the
+                # sale (F5 then only explains itself with a toast). Enable the tile
+                # the way a credit customer would, so F5 is measured, not skipped.
+                pg.evaluate("() => document.querySelectorAll('.pos-pay-btn[data-method=\"credit\"]').forEach(b => b.setAttribute('aria-disabled', 'false'))")
+                for n, (_, english) in enumerate(EXPECTED_FKEYS, start=1):
+                    method = press_fkey_in_till(pg, n)
+                    assert by_method[method] == english == rows[n - 1][2], \
+                        f"F{n} on the real till chose {method!r} ({by_method.get(method)!r}); the card says {rows[n - 1]}"
 
-            check("card", "the F-key card lists F1..F6 with the till's real payment names", card_matches_real_keys)
+            check("card", "the card prints F1..F6 (Arabic + English) that match what the real keys do, plus Enter/X/Delete/ / / N*", card_matches_real_keys)
 
-            def card_follows_the_source():
-                # Mutate the SOURCE in the page: the card must follow. A hand-typed
-                # card would still print the six shipped rows and fail here.
-                rows = pg.evaluate("""() => {
+            def card_follows_the_handler_mapping():
+                # REORDER the source in the page. The till maps F<n> by POSITION
+                # (POS_PAYMENT_METHODS[n-1]); the card must follow the position,
+                # not the entry's own `fkey` text (which we leave stale on purpose:
+                # a card built from m.fkey keeps printing the OLD order and fails).
+                open_till()
+                res = pg.evaluate("""() => {
+                  const saved = RetailSystem.POS_PAYMENT_METHODS;
+                  RetailSystem.POS_PAYMENT_METHODS = saved.slice().reverse();
+                  try {
+                    const doc = new DOMParser().parseFromString(AuraHelp.fkeyCardHtml(), 'text/html');
+                    const card = [...doc.querySelectorAll('#fkey-card tbody tr')].slice(0, 6)
+                      .map(tr => [tr.children[0].textContent.trim(), (tr.querySelector('.en') || {}).textContent]);
+                    return { card, order: RetailSystem.POS_PAYMENT_METHODS.map(m => m.method) };
+                  } finally { RetailSystem.POS_PAYMENT_METHODS = saved; }
+                }""")
+                want = [["F%d" % (i + 1), n] for i, n in enumerate(reversed([n for _, n in EXPECTED_FKEYS]))]
+                assert res["card"] == want, f"the card did not follow the reordered list by position: {res['card']} != {want}"
+                # Real key against the same reordered list: F1 must select the
+                # entry the card now calls F1.
+                pg.evaluate("() => { RetailSystem.POS_PAYMENT_METHODS = RetailSystem.POS_PAYMENT_METHODS.slice().reverse(); }")
+                try:
+                    method = press_fkey_in_till(pg, 1)
+                finally:
+                    pg.evaluate("() => { RetailSystem.POS_PAYMENT_METHODS = RetailSystem.POS_PAYMENT_METHODS.slice().reverse(); }")
+                assert method == res["order"][0], f"F1 selected {method!r}, the reordered list's first is {res['order'][0]!r}"
+
+            check("card", "the card follows the handler's POSITION mapping when the list is reordered (not m.fkey)", card_follows_the_handler_mapping)
+
+            def card_seventh_method_has_no_key():
+                extra = pg.evaluate("""() => {
                   const saved = RetailSystem.POS_PAYMENT_METHODS;
                   RetailSystem.POS_PAYMENT_METHODS = saved.concat([{ method: 'gift', label: 'Gift card', fkey: 'F7' }]);
                   try {
                     const doc = new DOMParser().parseFromString(AuraHelp.fkeyCardHtml(), 'text/html');
-                    return [...doc.querySelectorAll('#fkey-card tbody tr')].map(tr => [tr.children[0].textContent.trim(), tr.children[1].textContent.trim()]);
+                    return [...doc.querySelectorAll('#fkey-card tbody tr')].map(tr => tr.children[0].textContent.trim());
                   } finally { RetailSystem.POS_PAYMENT_METHODS = saved; }
                 }""")
-                assert rows[-1] == ["F7", "Gift card"] and len(rows) == 7, f"card did not follow a changed POS_PAYMENT_METHODS: {rows}"
+                assert "F7" not in extra, "the card printed a key the till does not answer (handler only maps F1..F6)"
 
-            check("card", "the card is generated from POS_PAYMENT_METHODS (a 7th method appears on it)", card_follows_the_source)
+            check("card", "a 7th payment method is NOT printed as F7 (the handler only answers F1..F6)", card_seventh_method_has_no_key)
 
             def card_arabic():
+                # The card prints Arabic whatever the SCREEN language: in English
+                # and in Arabic UI it is byte-identical.
+                html_en = pg.evaluate("() => AuraHelp.fkeyCardHtml()")
                 pg.evaluate("() => AuraI18n.setLang('ar')")
                 pg.wait_for_function("() => AuraI18n.current === 'ar'", timeout=DEFAULT_WAIT_MS)
                 pg.wait_for_timeout(400)
                 html = pg.evaluate("() => AuraHelp.fkeyCardHtml()")
-                assert 'dir="rtl"' in html and 'lang="ar"' in html, "Arabic UI printed a left-to-right card"
-                assert '<td class="k" dir="ltr">F1</td>' in html, "F-key labels must stay left-to-right inside the RTL card"
                 pg.evaluate("() => AuraI18n.setLang('en')")
                 pg.wait_for_function("() => AuraI18n.current === 'en'", timeout=DEFAULT_WAIT_MS)
                 pg.wait_for_timeout(400)
+                assert 'dir="rtl"' in html and 'lang="ar"' in html, "the card is not right-to-left Arabic"
+                assert '<td class="k" dir="ltr">F1</td>' in html, "F-key labels must stay left-to-right inside the RTL card"
+                assert html == html_en, "the card changed with the screen language (it must always print Arabic)"
+                assert html_en.startswith('<!DOCTYPE html><html lang="ar" dir="rtl">'), "an English screen printed a non-Arabic card"
 
-            check("card", "Arabic UI prints an RTL card whose F-key labels stay LTR", card_arabic)
+            check("card", "the card is Arabic + RTL on an English screen AND an Arabic screen, F-key labels stay LTR", card_arabic)
 
             # ================= PRINT =================
             def print_prints_once():
@@ -254,7 +322,8 @@ def main() -> int:
                 assert pg.evaluate("() => window.__printCalls") == 1, "print() was not called exactly once"
                 framed = pg.evaluate("""() => { const f = AuraHelp._lastCardFrame; const d = f && f.contentDocument;
                     return d ? [...d.querySelectorAll('#fkey-card tbody tr')].map(tr => tr.children[0].textContent.trim()) : null; }""")
-                assert framed == [k for k, _ in EXPECTED_FKEYS], f"the printed frame held {framed}"
+                # F1..F6 then the fixed till keys: the whole card, not just a prefix.
+                assert framed == [k for k, _ in EXPECTED_FKEYS] + EXPECTED_OTHER_KEYS, f"the printed frame held {framed}"
                 assert pg.url == url_before and pg.locator("#aura-help-dialog").count() == 1, "printing disturbed the app underneath"
                 close_help(pg)
                 pg.reload(wait_until="domcontentloaded")

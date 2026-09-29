@@ -5330,7 +5330,14 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
 /* ── palette overlay ─────────────────────────────────────────────────────── */
 .aura-palette-overlay {
   position: fixed; inset: 0;
-  z-index: 10000;                       /* above .ret-modal-overlay (9999): it can open over a form */
+  /* Above .ret-modal-overlay (9999) so it can open over a form, AND above the
+     sticky licence / sync banners (99998, set inline by app-shell.js). At 10000
+     the licence bar sat ON TOP of the palette on a phone: elementFromPoint at
+     the search field's centre returned the banner (verifier F2, 390x844,
+     unlicensed install), so the field could not be tapped. 99999 = the same
+     tier as toasts/auth overlays; being appended last it also stacks over
+     them, and the scrim now dims the bar too. */
+  z-index: 99999;
   background: var(--surface-scrim);
   display: flex; align-items: flex-start; justify-content: center;
   padding-block-start: min(14vh, 120px);

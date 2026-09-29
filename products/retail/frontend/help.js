@@ -94,30 +94,71 @@ const AuraHelp = {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   },
 
+  // Arabic for the strings ONLY the printed card uses, so the card is Arabic
+  // even before locales/ar.json carries them (the card ignores the UI language,
+  // see fkeyCardHtml). dicts.ar wins when it has the string.
+  CARD_AR: {
+    'Till keys': 'مفاتيح الصندوق',
+    'Press a key on the till screen to choose how the customer pays.': 'اضغط مفتاحًا على شاشة الصندوق لاختيار طريقة دفع العميل.',
+    'Charge the sale': 'إتمام البيع',
+    'Exact cash: charge at once': 'دفع نقدي بالمبلغ الكامل فورًا',
+    'Remove the last line': 'حذف آخر سطر',
+    'Go to the search box': 'الانتقال إلى مربع البحث',
+    'Quantity of the next item (type 3, then *)': 'كمية الصنف التالي (اكتب 3 ثم *)',
+  },
+
+  _ar(s) {
+    const d = (window.AuraI18n && AuraI18n.dicts && AuraI18n.dicts.ar) || {};
+    return (s in d) ? d[s] : ((s in this.CARD_AR) ? this.CARD_AR[s] : s);
+  },
+
   // The card as a complete standalone HTML document (for the print iframe and
-  // for tests to read). Rows come from POS_PAYMENT_METHODS, in tender-grid
-  // order, labelled through t() so an Arabic UI prints an Arabic card, laid
-  // out right-to-left.
+  // for tests to read).
+  //
+  // WHICH KEY DOES WHAT comes from the SAME place the till's key handler reads:
+  // F1..F6 are POSITIONS in RetailSystem.POS_PAYMENT_METHODS
+  // (`POS_PAYMENT_METHODS[n - 1]` in _onPOSShortcut), NOT the `fkey` text on
+  // each entry. A card built from `m.fkey` agrees with the handler only while
+  // the two happen to match; reorder the list and it prints keys that do
+  // something else (verifier F6). The other rows are the till's fixed keys.
+  //
+  // It is printed in ARABIC whatever the screen language: the card is stuck
+  // next to the till for the cashier, and the shop's language is not the
+  // owner's screen language. An English line under each Arabic one is for the
+  // owner setting it up. Key names stay left-to-right.
   fkeyCardHtml() {
     const methods = (window.RetailSystem && RetailSystem.POS_PAYMENT_METHODS) || [];
-    const rtl = !!(window.AuraI18n && AuraI18n.current === 'ar');
-    const rows = methods.map((m) =>
-      `<tr><td class="k" dir="ltr">${this._esc(m.fkey)}</td><td class="v">${this._esc(t(m.label))}</td></tr>`
-    ).join('');
-    return `<!DOCTYPE html><html lang="${rtl ? 'ar' : 'en'}" dir="${rtl ? 'rtl' : 'ltr'}"><head><meta charset="UTF-8">
-<title>${this._esc(t('Till keys'))}</title>
+    const esc = (s) => this._esc(s);
+    const row = (key, en) => {
+      const ar = this._ar(en);
+      const enLine = ar !== en ? `<small class="en" lang="en" dir="ltr">${esc(en)}</small>` : '';
+      return `<tr><td class="k" dir="ltr">${esc(key)}</td><td class="v"><span class="ar" lang="ar">${esc(ar)}</span>${enLine}</td></tr>`;
+    };
+    // The handler only answers F1..F6 (/^F([1-6])$/), so a 7th method has NO
+    // key and must not be printed as one.
+    const rows = methods.slice(0, 6).map((m, i) => row('F' + (i + 1), m.label)).join('')
+      + [
+        ['Enter', 'Charge the sale'],
+        ['X', 'Exact cash: charge at once'],
+        ['Delete', 'Remove the last line'],
+        ['/', 'Go to the search box'],
+        ['N *', 'Quantity of the next item (type 3, then *)'],
+      ].map(([k, en]) => row(k, en)).join('');
+    return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<title>${esc(this._ar('Till keys'))}</title>
 <style>
   body { font-family: system-ui, 'Segoe UI', Tahoma, sans-serif; margin: 0; padding: 24px; color: #000; background: #fff; }
-  .card { border: 2px solid #000; border-radius: 10px; padding: 18px 22px; inline-size: 340px; }
+  .card { border: 2px solid #000; border-radius: 10px; padding: 18px 22px; inline-size: 360px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   p { margin: 0 0 12px; font-size: 13px; }
   table { border-collapse: collapse; inline-size: 100%; }
   td { padding: 8px 6px; border-block-start: 1px solid #000; font-size: 16px; }
   td.k { font-weight: 700; inline-size: 64px; font-family: ui-monospace, Consolas, monospace; }
+  small.en { display: block; font-size: 11px; color: #333; }
 </style></head><body>
 <div class="card" id="fkey-card">
-  <h1>${this._esc(t('Till keys'))}</h1>
-  <p>${this._esc(t('Press a key on the till screen to choose how the customer pays.'))}</p>
+  <h1>${esc(this._ar('Till keys'))}</h1>
+  <p>${esc(this._ar('Press a key on the till screen to choose how the customer pays.'))}</p>
   <table><tbody>${rows}</tbody></table>
 </div>
 </body></html>`;

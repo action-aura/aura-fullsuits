@@ -1478,7 +1478,10 @@ const SubsystemApp = {
         // so the whole app renders in the user's language from the first paint.
         if (sess.language && window.AuraI18n && AuraI18n.current !== sess.language) {
           AuraI18n.current = sess.language;
-          localStorage.setItem('aura_lang', sess.language);
+          // Guarded: a throwing localStorage here used to abort init() for a
+          // signed-in user (blank shell). AuraI18n.current above is already
+          // set, so nothing is lost by skipping the cache write.
+          try { localStorage.setItem('aura_lang', sess.language); } catch (e) { /* storage blocked */ }
           AuraI18n.apply();
         }
         // Remember who is logged in (role + clinic_role) so the UI can gate
@@ -3701,7 +3704,7 @@ const SubsystemApp = {
                onclick="window.AuraPalette && AuraPalette.open()">
               <span class="sub-palette-trigger-icon" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('search', 15) : '🔍'}</span>
               <span class="sub-palette-trigger-text">${t('Search or jump to…')}</span>
-              <kbd class="sub-palette-trigger-key" dir="ltr" aria-hidden="true">${this._paletteHintLabel()}</kbd>
+              <kbd class="sub-palette-trigger-key" dir="ltr" data-no-i18n translate="no" aria-hidden="true">${this._paletteHintLabel()}</kbd>
             </button>
             <button class="sub-header-btn" id="aura-lang-toggle" onclick="AuraI18n.toggle()" title="Language / اللغة" style="font-size:13px;font-weight:700;">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</button>
             <!-- Theme control. ThemeEngine is the light/dark switch now (the

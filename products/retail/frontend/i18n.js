@@ -25,7 +25,13 @@
         this.dicts.ar = ar || {};
       } catch (e) { /* offline-safe: empty dicts -> everything falls back to English */ }
       // Priority: server (set on session load) -> localStorage -> 'en'
-      this.current = window.__AURA_LANG || localStorage.getItem('aura_lang') || 'en';
+      // localStorage can THROW on access (not just return null): private
+      // windows, blocked site data, some WebViews. Unguarded, that rejected
+      // load() and SubsystemApp.init never ran -- a BLANK PAGE, login screen
+      // included (verifier F9, measured). English is the safe default.
+      let saved = null;
+      try { saved = localStorage.getItem('aura_lang'); } catch (e) { /* storage blocked: default language */ }
+      this.current = window.__AURA_LANG || saved || 'en';
       this._ready = true;
       this.apply();
       this._startObserver();   // keep newly-rendered content translated in Arabic
@@ -131,7 +137,9 @@
     async setLang(lang) {
       if (lang !== 'en' && lang !== 'ar') lang = 'en';
       this.current = lang;
-      localStorage.setItem('aura_lang', lang);
+      // Same rule as load(): a throwing store must not abort the language
+      // switch (the server-side language below still records the choice).
+      try { localStorage.setItem('aura_lang', lang); } catch (e) { /* storage blocked */ }
       this.apply();
       // Immediate feedback while the rebuild below runs; _renderShell() (via
       // launch(), just below) recreates this exact button with the correct

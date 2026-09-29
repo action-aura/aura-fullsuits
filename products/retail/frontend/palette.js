@@ -98,18 +98,42 @@ const AuraPalette = {
   // Every spelling a row can be found under: what the screen shows now, its
   // Arabic, its English (whichever language the UI is currently in), plus
   // explicit keywords (and their Arabic).
-  _variants(label, keywords) {
+  _variants(label, keywords, sub) {
     const ar = this._dict('ar');
     const out = [label, ar[label], this._reverseAr()[label]];
     (keywords || []).forEach((k) => { out.push(k, ar[k]); });
+    // A live row's second line (customer phone; product "sku · barcode") is
+    // what the person is often typing -- the server matched on it, so the
+    // client filter must too (verifier F3: a phone number showed "Nothing
+    // found" while the server had returned the customer). Static rows have
+    // no `sub`, so nothing changes for them.
+    // Digits are compared per part ("sku · barcode"), so the SKU's digits and
+    // the barcode's never run together into a number neither of them holds.
+    if (sub) {
+      out.push(sub);
+      String(sub).split(' · ').forEach((part) => {
+        const d = part.replace(/\D+/g, '');
+        if (d) out.push(this._stripZeros(d));
+      });
+    }
     return out.filter(Boolean).map((v) => this._norm(v));
+  },
+
+  // Phone numbers are typed with and without the trunk zero (0791112233 /
+  // 791112233 / +962 79 111 2233). Compare digits only, leading zeros dropped;
+  // a value with no other digits ("0") is left alone so it cannot become an
+  // empty string that matches every row.
+  _stripZeros(digits) {
+    const s = String(digits || '').replace(/^0+/, '');
+    return s || String(digits || '');
   },
 
   // null = does not match. Lower = better: prefix 0, word start 1, substring
   // 2, matched only by a keyword/other-language variant 3. EVERY whitespace-
   // separated token must be found, in the same variant string.
   _score(entry, q) {
-    const tokens = this._norm(q).split(' ').filter(Boolean);
+    const tokens = this._norm(q).split(' ').filter(Boolean)
+      .map((tok) => (/^\d+$/.test(tok) ? this._stripZeros(tok) : tok));
     if (!tokens.length) return 0;
     let best = null;
     for (const v of entry._variants) {
@@ -158,7 +182,7 @@ const AuraPalette = {
   },
 
   _finish(entry) {
-    entry._variants = this._variants(entry.label, entry.keywords);
+    entry._variants = this._variants(entry.label, entry.keywords, entry.sub);
     return entry;
   },
 
@@ -437,6 +461,12 @@ const AuraPalette = {
     const app = this._app();
     if (this._overlay) { this._input && this._input.focus(); return; }
     if (!app || !app.currentUser || !document.getElementById('aura-palette-trigger')) return;
+    // The Theme picker is a modal panel with a click-away backdrop that is NOT
+    // on the RetailSystem modal-key stack, so nothing else stops Ctrl+K from
+    // stacking a search box on top of it (verifier F7): two overlays, one
+    // Escape, and closing the palette would leave the picker half-open behind
+    // it. Refuse instead -- the picker closes with its own backdrop/Esc.
+    if (document.getElementById('theme-picker-panel')) return;
     // One overlay at a time: an open header dropdown or the phone More sheet
     // would sit half-hidden behind the palette and keep answering Escape.
     try {
@@ -459,13 +489,17 @@ const AuraPalette = {
                  autocomplete="off" autocapitalize="off" spellcheck="false"
                  placeholder="${this._attr(t('Search pages, settings, products, customers…'))}"
                  aria-label="${this._attr(t('Search or jump to…'))}">
-          <button type="button" id="aura-palette-close" class="aura-palette-esc" aria-label="${this._attr(t('Close'))}">Esc</button>
+          <button type="button" id="aura-palette-close" class="aura-palette-esc" data-no-i18n translate="no" aria-label="${this._attr(t('Close'))}">Esc</button>
         </div>
         <div class="aura-palette-list" id="aura-palette-list" role="listbox" aria-label="${this._attr(t('Results'))}"></div>
         <div class="aura-palette-foot" aria-hidden="true">
-          <span><kbd dir="ltr">↑</kbd><kbd dir="ltr">↓</kbd> ${t('to move')}</span>
-          <span><kbd dir="ltr">Enter</kbd> ${t('to open')}</span>
-          <span><kbd dir="ltr">Esc</kbd> ${t('to close')}</span>
+          <!-- Key names are the LABELS PRINTED ON THE KEYBOARD: never translated
+               (the AR text-node sweep in i18n.js would otherwise rewrite
+               "Enter"/"Esc"; data-no-i18n stops it, translate="no" stops the
+               browser's own page translator). -->
+          <span><kbd dir="ltr" data-no-i18n translate="no">↑</kbd><kbd dir="ltr" data-no-i18n translate="no">↓</kbd> ${t('to move')}</span>
+          <span><kbd dir="ltr" data-no-i18n translate="no">Enter</kbd> ${t('to open')}</span>
+          <span><kbd dir="ltr" data-no-i18n translate="no">Esc</kbd> ${t('to close')}</span>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -635,7 +669,21 @@ const AuraPalette = {
     // confirm a candidate with Enter); acting on them would fire a row while
     // the person is still typing the word.
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close({ restoreFocus: true }); return; }
+    // MONEY BUG (verifier F1): every key the palette handles must STOP HERE.
+    // _choose() closes the palette (dropping its modal layer) and moves focus
+    // to a plain <div> while this very keydown is still travelling up. The
+    // till's document-level Enter handler (RetailSystem._onPOSShortcut) then
+    // sees "no modal open, no text field focused, cart not empty" and CHARGES
+    // THE SALE that was sitting in the cart -- measured: sales 0 -> 1 -> 2 -> 3
+    // from three "go to Products" Enters. The till's own guard cannot tell
+    // "closed a moment ago by this same keypress" from "closed long ago", so
+    // the only safe fix is to never let the event leave the palette. Same for
+    // arrows / Tab / Esc: they must not scroll the page or move till state
+    // either. stopImmediatePropagation so a second listener on the same node
+    // cannot see it either.
+    const handled = e.key === 'Escape' || e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab';
+    if (handled) { e.stopPropagation(); if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation(); }
+    if (e.key === 'Escape') { e.preventDefault(); this.close({ restoreFocus: true }); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); this._setActive(this._active + 1); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); this._setActive(this._active - 1); return; }
     if (e.key === 'Enter') { e.preventDefault(); this._choose(this._active); return; }
