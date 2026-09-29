@@ -18749,6 +18749,214 @@ def list_account_quarantine():
     }})
 
 
+# ── Sync review: what other computers sent that could not be added here ──────
+#
+# P1b crew Q. Before this route nothing read retail.db's `sync_apply_quarantine`
+# (the registry-side twin above is a different table). A sale another computer
+# sold, whose receipt number already existed here, was parked there and never
+# reached this computer's takings -- and nobody was told. This is the owner's
+# read-only window onto that table. It writes NOTHING, on purpose: the sync
+# engine already retries every parked row on each pull (`_retry_quarantined_
+# events`), and a row that resolves is deleted by the engine itself.
+#
+# COMPANY SCOPE. The table has NO company column, and the sender's payload
+# `company_id` is the SENDER's value, never valid locally (sync_service.py's
+# module docstring), so filtering on it would be wrong. The scoping is
+# structural instead: every row in this file was parked BY THIS INSTALL, whose
+# one sync company is `local_company_id_from_registry()`. One install can host
+# more than one company, so the guard below refuses to show these rows to the
+# owner of any OTHER company -- the same reasoning `list_account_quarantine`
+# uses for the registry table, plus that explicit comparison so it is testable.
+#
+# NEVER returns the payload. The payload is a whole foreign record. Only a
+# closed set of fields (sale number, amount, source till, time) is lifted out,
+# and the plain-words `kind` / `reason` come from the fixed tables below, so
+# an unknown reason can only ever become a safe generic sentence -- the raw
+# reason/detail text (which can name emails or numbers) is not echoed.
+
+_SYNC_REVIEW_KINDS = {
+    'sale': 'A sale from another computer',
+    'sale_item': 'An item of a sale',
+    'return': 'A return from another computer',
+    'return_item': 'An item of a return',
+    'payment': 'A payment from another computer',
+    'inventory_movement': 'A stock change from another computer',
+    'doc_series': 'A numbering book',
+    'cheque': 'A cheque from another computer',
+    'gl_journal': 'An accounting entry',
+    'gl_journal_line': 'A line of an accounting entry',
+}
+_SYNC_REVIEW_KIND_FALLBACK = 'Something from another computer'
+
+# reason -> (plain sentence, will the sync engine retry it on its own?).
+# `missing_parent:*` rows are retried and usually clear once the missing piece
+# arrives; the others need a person, so the screen says so honestly.
+_SYNC_REVIEW_REASONS = {
+    'duplicate_document_number': ('the same number already exists here', False),
+    'duplicate_series_code': ('a numbering book with the same code already exists here', False),
+    'duplicate_email': ('another person here already uses the same email', False),
+    'duplicate_employee_id': ('another person here already uses the same employee number', False),
+    'missing_parent:sale': ('its sale is missing here', True),
+    'missing_parent:product': ('its product is missing here', True),
+    'missing_parent:return': ('its return is missing here', True),
+    'missing_parent:payment': ('its payment is missing here', True),
+    'missing_parent:user': ('the person it belongs to is missing here', True),
+    'missing_parent:cheque': ('its cheque is missing here', True),
+    'missing_parent:gl_journal': ('its accounting entry is missing here', True),
+    'gl_invalid': ('its accounting lines could not be read', False),
+    'gl_unbalanced': ('its accounting lines do not add up', False),
+    'gl_unknown_account': ('it uses an account this computer does not have', False),
+    'schema_version_too_new': ('the other computer runs a newer version of Aura than this one', False),
+    'schema_version_unverifiable': ('this computer could not check which version of Aura the other one runs', False),
+}
+_SYNC_REVIEW_REASON_SALE_DUPLICATE = 'the same receipt number already exists here'
+_SYNC_REVIEW_REASON_MISSING_OTHER = ('something it belongs to is missing here', True)
+_SYNC_REVIEW_REASON_UNKNOWN = ('it could not be added for a reason this screen does not know', False)
+
+
+def _sync_review_reason(reason, entity_type):
+    """(plain sentence, retries_itself). Closed lookup -- never echoes `reason`."""
+    if reason == 'duplicate_document_number' and entity_type == 'sale':
+        return _SYNC_REVIEW_REASON_SALE_DUPLICATE, False
+    hit = _SYNC_REVIEW_REASONS.get(reason)
+    if hit is not None:
+        return hit
+    if isinstance(reason, str) and reason.startswith('missing_parent:'):
+        return _SYNC_REVIEW_REASON_MISSING_OTHER
+    return _SYNC_REVIEW_REASON_UNKNOWN
+
+
+def _sync_review_money(value):
+    """Decimal at fils precision (3dp), or None when the payload has no
+    readable number. Goes through str() so 12.345 stays 12.345 (never a
+    binary-float sum); bool is rejected because True would read as 1."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        d = Decimal(str(value))
+    except Exception:
+        return None
+    if not d.is_finite():
+        return None
+    return d.quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+
+
+# Which payload key carries the visible number / amount, per entity. Closed
+# list: anything not named here is never lifted out of the payload.
+_SYNC_REVIEW_FIELDS = {
+    'sale': ('sale_number', 'total'),
+    'sale_item': (None, 'line_total'),
+    'return': ('return_number', 'refund_amount'),
+    'payment': ('reference', 'amount'),
+    'doc_series': ('code', None),
+}
+
+
+def _sync_review_view(row):
+    try:
+        p = json.loads(row['payload']) if row['payload'] else {}
+    except (TypeError, ValueError):
+        p = {}
+    if not isinstance(p, dict):
+        p = {}
+    etype = row['entity_type']
+    number_key, amount_key = _SYNC_REVIEW_FIELDS.get(etype, (None, None))
+    number = p.get(number_key) if number_key else None
+    amount = _sync_review_money(p.get(amount_key)) if amount_key else None
+    source = p.get('terminal_id')
+    reason_text, retries = _sync_review_reason(row['reason'], etype)
+    return {
+        'kind_code': etype if etype in _SYNC_REVIEW_KINDS else 'other',
+        'kind': _SYNC_REVIEW_KINDS.get(etype, _SYNC_REVIEW_KIND_FALLBACK),
+        'reason': reason_text,
+        'retries_itself': retries,
+        'number': str(number) if number not in (None, '') else None,
+        'amount': float(amount) if amount is not None else None,
+        'source': str(source) if source not in (None, '') else None,
+        'arrived_at': row['quarantined_at'],
+    }
+
+
+@retail_bp.route('/sync-review', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def list_sync_review():
+    """Owner-only, read-only list of records other computers sent that this
+    one set aside, newest first, plus how many SALES are set aside and their
+    JD total (the money that is not in this computer's takings).
+
+    Query: `limit` (default 50, max 200), `cursor` (the `next_cursor` of the
+    previous page). Response: {items, next_cursor, summary:{waiting_count,
+    sales_count, sales_total}}. The summary covers the whole table, not the
+    page."""
+    # The ONE spelling of "the shop owner" -- pinned by AST in
+    # retail_route_capability_matrix_test.py's EXPECTED_COMPANY_ADMIN_ROUTES.
+    denied = _require_company_admin(verb='open')
+    if denied is not None:
+        return denied
+
+    empty = {'items': [], 'next_cursor': None,
+             'summary': {'waiting_count': 0, 'sales_count': 0, 'sales_total': 0.0}}
+    from commercial_runtime.sync import sync_service as _ss
+    if _ss.local_company_id_from_registry() != _cid():
+        # See COMPANY SCOPE above: these rows belong to this install's sync
+        # company only.
+        return jsonify({'status': 'success', 'data': empty})
+
+    limit = clamp_page_limit(request.args.get('limit', 50), 50, 200)
+    cursor = request.args.get('cursor') or ''
+    where, params = '', []
+    if cursor:
+        try:
+            cur_ts, cur_rowid = cursor.rsplit('|', 1)
+            cur_rowid = int(cur_rowid)
+        except (ValueError, TypeError):
+            return jsonify({'status': 'error', 'message': 'That page marker is not valid.'}), 400
+        where = 'WHERE (quarantined_at < ? OR (quarantined_at = ? AND rowid < ?))'
+        params = [cur_ts, cur_ts, cur_rowid]
+
+    conn = get_retail_conn()
+    try:
+        try:
+            count = conn.execute('SELECT COUNT(*) FROM sync_apply_quarantine').fetchone()[0]
+            sale_rows = conn.execute(
+                "SELECT payload FROM sync_apply_quarantine WHERE entity_type='sale'").fetchall()
+            rows = conn.execute(
+                'SELECT rowid AS rid, entity_type, reason, payload, quarantined_at '
+                f'FROM sync_apply_quarantine {where} '
+                'ORDER BY quarantined_at DESC, rowid DESC LIMIT ?',
+                params + [limit + 1]).fetchall()
+        except sqlite3.OperationalError as exc:
+            if 'no such table' in str(exc).lower():
+                return jsonify({'status': 'success', 'data': empty})
+            raise
+    finally:
+        conn.close()
+
+    sales_total = Decimal('0.000')
+    for r in sale_rows:
+        try:
+            p = json.loads(r['payload'])
+        except (TypeError, ValueError):
+            continue
+        amt = _sync_review_money(p.get('total')) if isinstance(p, dict) else None
+        if amt is not None:
+            sales_total += amt
+
+    page = rows[:limit]
+    next_cursor = None
+    if len(rows) > limit and page:
+        last = page[-1]
+        next_cursor = f"{last['quarantined_at']}|{last['rid']}"
+    return jsonify({'status': 'success', 'data': {
+        'items': [_sync_review_view(r) for r in page],
+        'next_cursor': next_cursor,
+        'summary': {'waiting_count': count, 'sales_count': len(sale_rows),
+                    'sales_total': float(sales_total)},
+    }})
+
+
 # ── Sync health ───────────────────────────────────────────────────────────────
 
 @retail_bp.route('/sync/health', methods=['GET'])

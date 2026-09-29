@@ -450,6 +450,9 @@ EXPECTED_READ_CAPABILITIES = {
     # and also deliberately READ-ONLY (see list_account_quarantine's own
     # docstring).
     'list_account_quarantine': CAP_REPORTS,
+    # P1b: the retail sync quarantine made visible (read-only); same reasoning
+    # as list_account_quarantine above, and owner-only on top (see below).
+    'list_sync_review': CAP_REPORTS,
 
     # ── The drawer's own numbers: retail.cash.close, NOT retail.reports ──────
     # An X report is the full money picture of one till shift: cash sales,
@@ -675,6 +678,9 @@ DELIBERATELY_UNGATED_MONEY_READS = {
 #: a route that loses the call fails, and a route that gains one fails until
 #: somebody writes down why it needs owner authority.
 EXPECTED_COMPANY_ADMIN_ROUTES = {
+    # P1b: sales other computers sent that could not be merged here, with the
+    # money at risk -- the owner's business, read-only.
+    'list_sync_review',
     # Destroys or fabricates the company's entire dataset. Demo builds only
     # (retail_demo_mode_enabled), plus a company-specific confirmation token.
     'demo_wipe',
