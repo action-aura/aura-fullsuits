@@ -191,9 +191,33 @@ from werkzeug.serving import make_server  # noqa: E402
 # colliding -- see contracts.md's port table.
 PORT_BASE = int(os.environ.get("AURA_P0_MODALS_E2E_PORT_BASE", "5750"))
 
+import socket  # noqa: E402
+
+
+def port_is_free(port):
+    """M8 harness-port fix: werkzeug's make_server sets SO_REUSEADDR, which on
+    Windows lets a second listener bind a port another process already holds,
+    so a try/except around make_server "succeeds" on an occupied port and the
+    browser then talks to a stranger's server. Connect probe (is anything
+    listening?) plus a plain bind WITHOUT SO_REUSEADDR (is it held at all?)
+    must both say free first."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.3)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
 server = None
 PORT = None
 for candidate in range(PORT_BASE, PORT_BASE + 5):
+    if not port_is_free(candidate):
+        continue
     try:
         server = make_server("127.0.0.1", candidate, flask_app, threaded=True)
         PORT = candidate

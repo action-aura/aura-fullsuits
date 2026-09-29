@@ -91,7 +91,21 @@ function loadRetailSystem(fetchImpl) {
     setTimeout,
     clearTimeout,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    // FIX ROUND F8: `role: 'admin'` added. P1a item #1 gated
+    // _renderAdminCenter itself (it used to assume it was only ever reached
+    // through app-shell.js's device-level nav filter, and rendered every
+    // card unconditionally) -- this fixture's SubsystemApp stub predates
+    // that gate and had neither `.role` nor `.hasCapability`, so it now
+    // reads as "no owner, no CAP_EMPLOYEES", and _renderAdminCenter
+    // correctly shows the lock panel instead of the real cards. That is
+    // CORRECT new behaviour for a person this fixture represents, not a
+    // bug: this suite is about the Business Day CARD specifically, which is
+    // owner-only (business_day_settings_set calls
+    // _require_company_admin()), so the fixture needs to represent an
+    // owner to keep exercising it at all. `role: 'admin'` is the minimal
+    // change that does that without touching any assertion in this file.
     SubsystemApp: {
+      role: 'admin',
       showToast(msg, kind) { toasts.push({ msg, kind }); },
     },
     document: {

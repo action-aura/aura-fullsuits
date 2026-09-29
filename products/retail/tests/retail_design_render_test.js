@@ -1348,6 +1348,15 @@ function makeStub(over) {
     dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild() {}, getAttribute() { return null; }, setAttribute() {},
+    // A fresh stub has no children, so a DOM-accurate querySelector() on it
+    // returns null, same as querySelectorAll() already returns []  -- added
+    // alongside querySelectorAll (not before it) because it was missing:
+    // subsystem-retail.js's _syncCreditButtonState() legitimately calls
+    // `btn.querySelector('.pos-pay-kbd')` on a real button element, and a
+    // stub missing this method threw "btn.querySelector is not a function"
+    // out of the POS screen's render, taking the whole rendered-tier corpus
+    // down with it -- a harness gap, not a subsystem-retail.js defect.
+    querySelector() { return null; },
     querySelectorAll() { return []; }, addEventListener() {}, removeEventListener() {},
     focus() {}, blur() {}, remove() {}, closest() { return null; },
     getContext() { return {}; },
@@ -1740,8 +1749,20 @@ async function buildCorpus() {
   // gate) -- every OTHER list screen here only ever checks for
   // 'retail.reports' being present, never for 'retail.employees' being
   // absent, so widening this shared grant does not change any of them.
+  //
+  // FIX ROUND F9 (this crew's fixture fix, 2026-09-28): 'retail.stock.adjust'
+  // added for `products` (_renderProducts's own `canAdjust`, gating both the
+  // header Add/Import controls AND each row's Edit/Stock/Delete -- see that
+  // function's own comment on why Products stays reachable read-only either
+  // way). Before this the whole corpus only ever rendered Products in its
+  // read-only shape, so 'the corpus contains the known hazards' silently
+  // stopped reaching the Delete button (.ret-btn-danger, measured 2.70:1) --
+  // not because the hazard was fixed, but because the fixture never granted
+  // the capability the real owner/manager role that measurement was taken
+  // under actually holds. Exceptions (_exqStockRows) already gates on the
+  // same capability and is unaffected: it is not in this shared list.
   for (const [name, render] of listScreens) {
-    const ctx = loadRetailSystem(['retail.reports', 'retail.employees']);
+    const ctx = loadRetailSystem(['retail.reports', 'retail.employees', 'retail.stock.adjust']);
     const content = makeStub();
     await render(ctx.RetailSystem, content);
     await settle();

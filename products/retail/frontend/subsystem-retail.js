@@ -8,21 +8,55 @@
 // which page's API call happens to order it differently (both endpoints
 // sort by revenue, so a positional palette flipped colors between pages for
 // the identical data). Covers all 6 POS payment methods (see pos-pay-btns).
-// Measured 2026-09-13 against every theme's chart-card ground
-// (--surface-panel, #ffffff through #0b111b) with a 3:1 floor, a
-// doughnut slice being a graphical object: cash (#10b981), mobile
-// (#f59e0b) and voucher (#06b6d4) sat at 2.0-2.5:1 on the two LIGHT
-// themes while scoring 6.9-8.8:1 on the three dark ones they were
-// picked against. Replaced with the same hues (0.5-0.6 deg drift)
-// darkened into the narrow band that clears the bar on the lightest
-// AND darkest card at once -- still ONE value per method, because a
-// method that changed colour per theme would defeat the point above.
-// Pairwise separability re-checked: the six stay 39.5-132.8 apart in
-// Lab dE76, so they still tell each other apart in one doughnut.
-// Pinned by retail_chart_series_contrast_test.js.
+//
+// FIX ROUND F4, REPLACED ENTIRELY. The previous palette (cash green
+// #0c8b61, card blue #3b82f6, credit red #ef4444, mobile amber #a96d08)
+// was contrast-safe on every theme card but broke DESIGN.md section 2.2
+// outright: "Green is money in and success; red is money out, refusal and
+// danger; amber is a warning; blue is information. Each meaning has one
+// colour, and no meaning shares a colour with another." Every one of these
+// SIX categories is money coming IN -- there is no "danger" tender, no
+// "warning" tender -- so painting Credit in the exact red a refused sale or
+// a stock-out uses, or Card in the exact blue an info banner uses, actively
+// lies about what those slices mean. The owner's own complaint ("still
+// blue/green/red/amber/purple") named this precisely.
+//
+// THE NEW PALETTE stays OUTSIDE all four meaning-hue families (measured:
+// success ~151-160deg, danger ~0-4deg, warning ~37-38deg, info ~217-221deg
+// across all 5 themes' own state tokens) and lives in the
+// violet-to-magenta arc (189-322deg) instead -- a hue range this product
+// uses nowhere else as a STATE meaning, so a categorical series here cannot
+// collide with one. Two of the six are UNCHANGED from the old palette
+// (transfer's violet #a855f7 and voucher's teal #04859b were never inside
+// a forbidden hue family to begin with -- only cash/card/mobile/credit
+// needed to move). Solved the same way the palette they replace was
+// (`scripts/brand/theme_palettes.py`'s own method, reproduced by hand here
+// against the 5 real `--surface-panel` values): every value clears 3:1
+// against all five themes' chart-card ground AT ONCE, and every pair
+// clears CIE76 Lab dE76 >= 20 (worst pair: cash #6251cd vs transfer
+// #a855f7 at ~29). Pinned by retail_chart_series_contrast_test.js, which
+// this crew now owns (F4) and additionally asserts none of the six equals
+// a state-text token in any theme.
+//
+// FIX ROUND 3 (M3), RE-PICKED. The round-F4 palette above measured well on
+// the two yardsticks it was written against (3:1 and CIE76 dE >= 20) and was
+// still a bad chart: five of six colours sat in one violet-magenta arc, and
+// CIE76 overstates separation between saturated purples. The verifier
+// re-measured with CIEDE2000 -- the metric that models lightness/chroma
+// weighting -- and found pairs the eye merges (mobile #db33cd is also
+// simply too loud for a slice beside a KPI). Two rules replace them:
+//   * EVERY pair >= 15 CIEDE2000 (worst pair now 19.7), not CIE76;
+//   * EVERY colour >= 25 degrees of hue away from EVERY state-text token in
+//     EVERY theme, measured in both CIELCh and HSL so neither definition of
+//     "hue" can put a tender back inside a meaning family; chroma held to
+//     25-66 (moderate) so nothing shouts.
+// Still 3:1 on all five card grounds (worst 3.06:1). Method: exhaustive RGB
+// grid filtered on the constraints, then greedy max-min CIEDE2000 over
+// hundreds of seeds; script kept beside the job (palette_search3.js).
+// The two new pins live in retail_chart_series_contrast_test.js.
 const RETAIL_PAYMENT_METHOD_COLORS = {
-  cash: '#0c8b61', card: '#3b82f6', mobile: '#a96d08',
-  transfer: '#a855f7', credit: '#ef4444', voucher: '#04859b',
+  cash: '#6c9c1e', card: '#0696b4', mobile: '#c06cd8',
+  transfer: '#00726c', credit: '#c01e66', voucher: '#606c42',
 };
 
 // Shared builder for BOTH payment-method charts (dashboard #r-dash-pay and
@@ -61,6 +95,10 @@ const RETAIL_PAYMENT_METHOD_COLORS = {
 // label reads -$57.50, and nothing is hidden, clamped or reordered.
 // Colors stay the same named lookup in both shapes, so a tender keeps its
 // identity across the switch.
+function _chartIsRtl() {
+  try { return !!(window.AuraI18n && AuraI18n.isRTL && AuraI18n.isRTL()); } catch (e) { return false; }
+}
+
 function retailPaymentChartConfig(labels, values, tickColor) {
   const colors = labels.map(m => RETAIL_PAYMENT_METHOD_COLORS[m] || '#94a3b8');
   // P0 item #19: the WORD a reader sees (the legend text, the bar fallback's
@@ -92,7 +130,13 @@ function retailPaymentChartConfig(labels, values, tickColor) {
       type: 'doughnut',
       data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'right', labels: { color: tickColor, font: { size: 12 },
+        // LOW-4: in Arabic the legend mirrors -- swatch on the right of its
+        // text and the block on the reading-start side -- Chart.js's own
+        // `rtl` + `textDirection` legend options, driven by the same switch
+        // (AuraI18n.isRTL, which also sets <html dir>) the rest of the page
+        // follows. English is untouched: both options are simply `false`.
+        plugins: { legend: { position: 'right', rtl: _chartIsRtl(), textDirection: _chartIsRtl() ? 'rtl' : 'ltr',
+          labels: { color: tickColor, font: { size: 12 },
           // Reuses Chart.js's OWN per-slice doughnut legend generator (each
           // item already carries the right fillStyle/hidden/strikethrough
           // state for click-to-toggle) and only overwrites `.text` on each
@@ -157,31 +201,29 @@ function retailPaymentChartConfig(labels, values, tickColor) {
 // while the chart axis directly beside it, for the same figure, read
 // "JD 0.8" -- two precisions for one currency on one screen. A tick with a
 // fractional part now goes through the currency's own decimal count
-// (_currencyDp(), 3 for JOD) so it matches the KPI. A whole-number tick is
-// deliberately NOT run through that same decimal formatting: it is
-// formatted as an integer with thousands separators instead ('JD 1,200',
-// not 'JD 1,200.000'), because padding every large revenue tick with JOD's
-// three zero decimals is unreadable noise, not precision. The separators use
-// toLocaleString('en-US') explicitly, never a bare toLocaleString() -- a bare
-// call renders Eastern Arabic-Indic digits (٠١٢٣) under an Arabic UI locale,
-// and Jordan's shops price in Western digits regardless of UI language.
-function axisMoney(v, ticks) {
+// (_currencyDp(), 3 for JOD) so it matches the KPI.
+//
+// FIX ROUND 3 (LOW-4): EVERY tick now takes the currency's full decimals --
+// the whole-number branch that printed 'JD 1,200' is gone. DESIGN.md section
+// 1 sets the product's money format as "three decimals (JD 12.345)" with no
+// axis exception, and section 5 asks for tabular numerals so a column of
+// figures aligns; an axis that mixes 'JD 400' with 'JD 0.400' by data
+// magnitude is neither. One format for money, everywhere it is drawn. Digits
+// are Western on purpose (toFixed never localises): Jordan's shops price in
+// Western digits regardless of UI language, and a bare toLocaleString() would
+// render Eastern Arabic-Indic digits under an Arabic UI locale.
+function axisMoney(v) {
   try {
     const n = Number(v);
-    // ONE AXIS, ONE PRECISION. Deciding per tick produced "JD 0.800" directly
-    // above "JD 1" on the same axis -- caught by reading the Arabic dashboard.
-    // Chart.js passes the whole tick array, so ask it once: if ANY tick here is
-    // fractional, every tick takes the currency's decimals; if they are all
-    // whole, none do and they get thousands separators instead. A revenue axis
-    // running 0..1,200 reads "JD 400"; one running 0..1 reads "JD 0.400".
-    const all = Array.isArray(ticks) && ticks.length
-      ? ticks.map((t) => Number(t && typeof t === 'object' ? t.value : t))
-      : [n];
-    const anyFractional = all.some((x) => Number.isFinite(x) && !Number.isInteger(x));
-    if (anyFractional) {
-      return RetailSystem._currencyPrefix() + n.toFixed(RetailSystem._currencyDp());
-    }
-    return RetailSystem._currencyPrefix() + n.toLocaleString('en-US');
+    // chart-theme.js's own formatter, so there is ONE place that turns a tick
+    // into text. Falls back to toFixed() with the same decimals exactly when
+    // AuraChartTheme has not loaded (a test harness, or a page without the
+    // <script> tag), so this never regresses an axis that worked before.
+    const dp = RetailSystem._currencyDp();
+    const digits = window.AuraChartTheme
+      ? AuraChartTheme.jdAxisLabel(n, dp)
+      : n.toFixed(dp);
+    return RetailSystem._currencyPrefix() + digits;
   } catch (e) {
     return String(v);
   }
@@ -394,6 +436,29 @@ const RetailSystem = {
   render(sectionId) {
     const c = document.getElementById('sub-content');
     if (!c) return;
+    // FIX (found live while testing P1a's fix round, 2026-09-28): the render
+    // generation guard's own comment above (_beginRender/_isStaleRender)
+    // claims it answers "did the user navigate to a different SCREEN while
+    // this fetch was in flight" -- but the counter was bumped ONLY inside
+    // _renderDashboard, so it only ever caught dashboard-vs-dashboard
+    // staleness (rapid re-visits/re-theme). Navigating from Dashboard to a
+    // DIFFERENT section never bumped it at all, so a still-in-flight
+    // /dashboard/stats fetch that resolved after the user had already left
+    // for e.g. POS would sail through `_isStaleRender` (not stale -- nothing
+    // dashboard-specific had superseded it) and crash writing into r-k-*
+    // ids that no longer exist, once again taking down the screen the user
+    // had already moved on to -- reproduced live: theme-switch twice on
+    // Dashboard (each switch itself re-navigates, per ThemeEngine.apply's
+    // own contract), then navigate to POS before the backlog of stats
+    // fetches drains; POS's own screen gets overwritten by dashboard's
+    // "Failed to load dashboard" error panel. Bumping here, once per
+    // navigation regardless of section, closes the actual gap the comment
+    // already promised: ANY navigation away invalidates an in-flight render,
+    // not just a second dashboard render. _renderDashboard's own
+    // this._beginRender() call still runs right after and is harmless
+    // (bumps the same shared counter again) -- it stays so the file's other
+    // reader of that call site is not left looking orphaned.
+    this._beginRender();
     this._section = sectionId;     // remembered so the scanner can route scans
     this._initScanner();           // idempotent; desktop-only HID listener
     this._initShortcuts();         // idempotent; keyboard shortcuts, all platforms
@@ -1073,6 +1138,22 @@ const RetailSystem = {
     //
     return (v < 0 ? '-' : '') + this._currencyPrefix() + Math.abs(v).toFixed(this._currencyDp());
   },
+  // FIX ROUND 3 (LOW-1): money for a MESSAGE addressed to a customer. _fmt()
+  // translates the currency mark through t(), i.e. the CASHIER's screen
+  // language, so an Arabic-configured shop whose cashier works in English
+  // sent "JD 12.500" inside an otherwise Arabic WhatsApp message (and the
+  // reverse). The mark now follows the message's own language, through the
+  // same explicit-lang catalogue lookup the statement labels use
+  // (_translateForLang). Digits and decimals are unchanged (Western digits,
+  // the currency's own decimal count).
+  _fmtForLang(n, lang) {
+    const v = +(n || 0);
+    const raw = this._currencySymbol || '';
+    const sym = raw ? this._translateForLang(raw, lang) : '';
+    const prefix = !sym ? '' : (sym.length === 1 ? sym : sym + ' ');
+    return (v < 0 ? '-' : '') + prefix + Math.abs(v).toFixed(this._currencyDp());
+  },
+
   // 'en-US', never a bare toLocaleString(). With no locale argument this
   // followed the RUNTIME's locale -- the OS/browser display language, which is
   // not the app's language toggle -- so on a Windows till set to Arabic (an
@@ -1789,11 +1870,11 @@ const RetailSystem = {
   // already 'YYYY-MM-DD' (unlike 'en-US', which is 'M/D/YYYY') -- no manual
   // padStart/getMonth() arithmetic to get wrong.
   //
-  // The identical UTC-slice pattern still exists at four other `toISO`
-  // helpers in this file (Profit & Loss, Party Ledger, Balance Sheet, Cash
-  // Flow) -- P0 item #15d's own text names this exact spot as the one this
-  // crew's items cover and records the rest as a follow-up rather than
-  // silently fixing every call site this pass never actually re-tested.
+  // FIX ROUND 3: the identical UTC-slice pattern that used to live at the
+  // other `toISO` helpers (Backups, Profit & Loss, Balance Sheet, Cash Flow)
+  // and at the cheque list's "today" now goes through this helper too --
+  // measured: at 01:00 Jordan time the Balance Sheet's as-of defaulted to
+  // yesterday and read "Nothing has been posted".
   _localISODate(d) {
     const when = d || new Date();
     try { return when.toLocaleDateString('en-CA'); }
@@ -3012,6 +3093,18 @@ const RetailSystem = {
         // re-renders every 60 s (auto-refresh in app-shell), so a theme
         // toggle is picked up on the next refresh/navigation.
         //
+        // P1a item #9: chart-theme.js's Chart.defaults pass, so a FUTURE
+        // chart on this screen with no explicit colour options of its own
+        // lands on this product's palette instead of Chart.js's stock grey.
+        // Every existing chart below still sets its own tickClr/gridClr
+        // explicitly (kept, not removed -- an explicit option always wins
+        // over a default), so this is additive, not a behaviour change for
+        // hourly/payment. Called here, at the top of every dashboard render,
+        // which is also what makes it "re-theme on every theme switch" --
+        // ThemeManager.apply() (app-shell.js) re-navigates on a real theme
+        // change, and that re-navigate is what re-runs this render.
+        if (window.AuraChartTheme) AuraChartTheme.apply();
+
         // The axis and grid colours used to be a `isLight ? '#51607a' :
         // '#94a3b8'` ternary -- a second, private copy of the palette living
         // in JavaScript, which is precisely how a chart ends up in a colour
@@ -3032,8 +3125,11 @@ const RetailSystem = {
             data: { labels: d.hourly_labels, datasets: [{ label: this._revenueLabel(), data: d.hourly_data,
               backgroundColor: `rgba(${accentRgb},0.5)`, borderColor: `rgb(${accentRgb})`, borderWidth: 1,
               borderRadius: 3 }] },
+            // FIX ROUND F4: "actually USE... shouldShowLegend" -- one
+            // dataset, so this is the same `display:false` the literal
+            // object always gave, now decided by the one shared rule.
             options: { responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{display:false} },
+              plugins:{ legend:{display: window.AuraChartTheme ? AuraChartTheme.shouldShowLegend(1) : false} },
               scales:{ y:{grid:{color:gridClr},ticks:{color:tickClr,callback:(v,i,ticks)=>axisMoney(v,ticks)}},
                        x:{grid:{display:false},ticks:{color:tickClr}} } }
           });
@@ -3237,8 +3333,32 @@ const RetailSystem = {
   // RTL is by construction, not by chase: padding-inline / border-block /
   // border-inline-start / text-align:end / inset-inline throughout, so the
   // mirrored Arabic layout is correct without a single rule in rtl.css.
+  // P1a item #3: the quiet link a cashier without retail.discount sees
+  // instead of the % box. Explains the state rather than doing nothing
+  // silently on click (a button with no feedback at all reads as broken,
+  // not as "not available yet") -- but genuinely does nothing destructive
+  // and starts no flow, per the owner's 2026-09-28 decision that the
+  // manager-PIN override itself is Phase 3 work, not this pass's.
+  _explainDiscountNeedsManager() {
+    SubsystemApp.showToast(t('A manager can apply a discount on this sale. That approval is coming in a future update.'), 'info');
+    this._refocusScan();
+  },
+
   _renderPOS(c) {
     this._injectStyles();
+    // P1a item #3 ("the till shows only what the person can do"): retail.
+    // discount is the SAME code a manual Discount % box already required at
+    // checkout server-side (create_sale clamps/derives discount_pct
+    // per-line, but nothing ever stopped a cashier WITHOUT the grant from
+    // typing a number here and having it silently ride into every line --
+    // see _checkout's own discPct comment). Computed once, before the
+    // template below, so both the input's own render AND _renderCart's
+    // later re-renders of this same row (Round 2 till R2 folded Discount %
+    // onto the Subtotal row -- see that row's own comment) read the same
+    // answer without re-deriving it. Fails OPEN the same way every other
+    // capability check in this file does when no shell exists yet (tests,
+    // early boot) -- see SubsystemApp.hasCapability's own docstring.
+    const canDiscount = !window.SubsystemApp || SubsystemApp.hasCapability('retail.discount');
     c.innerHTML = `
       <style>
         /* block-size:100%, NOT calc(100vh - 120px). The old value measured the
@@ -3533,10 +3653,35 @@ const RetailSystem = {
            styled -- see _renderPOSGrid's own comment. Not just unused: every
            real category name on a real install is Arabic or shop-typed and
            never matches the old English-keyed map, so every real tile showed
-           the SAME 'package' placeholder box. Monogram tiles are Phase 1a. */
-        .pos-card-name { color:var(--text);font-size:13px;font-weight:600;line-height:1.3;
+           the SAME 'package' placeholder box. Monogram tiles are Phase 1a,
+           .pos-card-monogram just below. */
+        /* P1a item #8: a 24px rounded square, small enough it never competes
+           with the name/price for attention -- it is a category CUE, not the
+           tile's headline. Centred with flex, not text-align/line-height
+           tricks, so a two-character Arabic monogram (RTL glyphs, different
+           cap-height/baseline than Latin) centres exactly the same way a
+           Latin one does. FIX ROUND F15: radius 6px -> 8px, DESIGN.md section
+           6's own "Radii: controls 8 px" -- this badge is a control-scale
+           element, not a card, so it takes that step, not the 12px card one.
+           FIX ROUND F12: an uncategorised product (--surface-sunken
+           background, no border) measured nearly invisible against a light
+           theme's own tile background -- a 1px --border-default outline
+           gives every monogram, categorised or not, a visible edge, and for
+           a categorised one it is simply redundant with the already-visible
+           coloured fill. */
+        .pos-card-monogram { display:flex;align-items:center;justify-content:center;
+          inline-size:24px;block-size:24px;border-radius:8px;border:1px solid var(--border-default);
+          font-size:11px;font-weight:700;line-height:1;flex-shrink:0;
+          margin-block-end:2px; }
+        /* P1a item #8: "the product name at 14/600, the largest text on the
+           tile" -- design_system's own wording. 13px -> 14px here. FIX ROUND
+           F15: the PRICE steps to 12px, not 13px -- DESIGN.md section 5's
+           own type scale is "11 / 12 / 14 / 15 / 17 / 22 / 30 / 40 px", and
+           13 is not one of those steps; 12 is both ON the scale and still
+           unambiguously smaller than the 14px name. */
+        .pos-card-name { color:var(--text);font-size:14px;font-weight:600;line-height:1.3;
           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
-        .pos-card-price { color:var(--text);font-weight:700;font-size:15px; }
+        .pos-card-price { color:var(--text);font-weight:700;font-size:12px; }
         .pos-card-stock { font-size:11px;color:var(--text-dim); }
         .pos-card-stock.is-low { color:var(--state-warning-text, var(--text-dim));font-weight:600; }
         .pos-card-stock.is-out { color:var(--state-danger-text, var(--text-dim));font-weight:700; }
@@ -3930,6 +4075,80 @@ const RetailSystem = {
         button.pos-pay-btn:active { transform:scale(0.97); }
         .pos-pay-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);
           color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
+        /* P1a item #3: NOT opacity -- opacity is a GROUP operation (see the
+           AUDIT comment above .pos-card-outofstock, a few hundred lines up
+           in this same file, on the identical mistake made once already on
+           THIS screen): it renders the tile, its icon, its label and its
+           F-key badge into one buffer and composites the whole thing at
+           reduced alpha, dragging foreground and background toward each
+           other at once. retail_design_render_test.js caught this exact
+           rule at opacity:.5 live -- "F1" 8.95:1 -> 2.50:1, "Cash" 8.49:1
+           -> 2.43:1 -- run by this pass, not merely read. Recessed surface
+           (the same .pos-card-outofstock language: a flattened, dead
+           background, not-allowed cursor) plus an EXPLICIT muted text
+           token on each child is the fix: --text-tertiary is the palette's
+           faintest step that still clears AA on a card surface (same
+           reasoning .pos-card-outofstock's own comment gives), and the
+           icon's stroke="currentColor" inherits it for free. Never combined
+           with .active: _syncCreditButtonState always falls the selection
+           back to Cash before this class could ever apply to the
+           currently-selected tender. */
+        /* [aria-disabled="true"], NOT :disabled -- FIX ROUND F7 removed the
+           native disabled attribute from this tile entirely (see
+           _renderPayButtons' own comment) so a real click still reaches
+           _setPayment and can show its own toast; the pseudo-class stopped
+           matching the moment the attribute did. */
+        button.pos-pay-btn[aria-disabled="true"] { cursor:not-allowed;background:var(--surface-active);border-color:var(--border-default); }
+        button.pos-pay-btn[aria-disabled="true"] .pos-pay-icon,
+        button.pos-pay-btn[aria-disabled="true"] .pos-pay-label,
+        button.pos-pay-btn[aria-disabled="true"] .pos-pay-kbd { color:var(--text-tertiary); }
+        button.pos-pay-btn[aria-disabled="true"]:hover { background:var(--surface-active); }
+        /* FIX ROUND F7: the reason text replaces the F-key badge on the
+           disabled Credit tile -- it is genuinely LONGER than "F5", so the
+           badge's own fixed small size/no-wrap treatment would clip or
+           overflow it. Wraps up to 2 lines within the tile's existing
+           footprint instead of growing the tile. */
+        /* FIX ROUND 3 (M6): 9px -> 11px. 9px is below any readable size on a
+           till screen, and this is the ONE place a cashier is told WHY Credit
+           is off. 11px wraps to two lines in a tile this narrow, which would
+           have grown the whole tender row (measured budget: .pos-checkout-
+           footer is already tight at 1366x768). So a tile that is showing a
+           reason lays the icon and the label side by side on ONE row
+           ([data-credit-reason] is set on the button by both _renderPayButtons
+           and _syncCreditButtonState, so no extra JS hook) and gives the
+           freed row to the reason: 16 + 2x13 = 42px of content against the
+           resting tile's 16 + 14 + 15 = 45px, so the tile does not grow. The
+           e2e measures the tile heights, EN and AR, at 1366x768 and 1024. */
+        /* FIX ROUND 3 (M6, measured): the 42px budget above was wrong for a
+           tile this narrow. Measured live at 1366x768 (tile 71px wide, reason
+           box 61px): "Walk-in customer" wraps to TWO lines, so at line-height
+           1.2 + 3px block padding + 1px row gap the tile came to 51.375px
+           against the resting 44px, and the whole tender row grew 7px.
+           Budget that holds with two wrapped lines: 16 (icon/label row) +
+           2 x 12.65 (11px x 1.15) = 41.3 + 2 (border) = 43.3 <= 44, so the
+           tile stays at its 44px floor. That needs zero block padding and no
+           row gap on the tile WHILE it shows a reason (the resting tile keeps
+           its 3px padding); the e2e's tile-height check pins all of it. */
+        /* FIX ROUND 3 (M6, second measurement): the OTHER reason, "Not a
+           credit customer", is longer than "Walk-in customer" and wrapped to
+           THREE lines in the 61px reason box (37.9px tall, tile 55.9px vs 44).
+           Root cause is the box width, so the reason takes the tile's whole
+           inner width while it shows: no inline padding on the reason and
+           1px (not 4px) on the tile, 69px of text room instead of 57. */
+        .pos-pay-reason { display:block;font-size:11px;font-weight:600;white-space:normal;
+          line-height:1.15;max-inline-size:100%;padding-inline:0;text-align:center;
+          color:var(--text-tertiary); }
+        button.pos-pay-btn[data-credit-reason] { display:grid;grid-template-columns:auto auto;
+          justify-content:center;align-content:center;align-items:center;column-gap:4px;row-gap:0;
+          padding-block:0;padding-inline:1px; }
+        button.pos-pay-btn[data-credit-reason] .pos-pay-reason { grid-column:1 / -1; }
+        .pos-pay-reason[hidden] { display:none; }
+        /* M7: visible reason under a disabled Remind / Send Statement button
+           (Receivables rows + statement modal). 11px, secondary text colour. */
+        .ret-btn-reason { font-size:11px;line-height:1.3;margin-top:3px;max-inline-size:220px;
+          color:var(--text-secondary); }
+        /* Reason showing -> the F-key badge steps aside (same 3-row footprint). */
+        .pos-pay-reason:not([hidden]) + .pos-pay-kbd { display:none; }
         /* The icon is an inline AuraIcons SVG now (stroke="currentColor"), not
            an emoji text glyph -- it inherits the button's own colour (dim at
            rest, --text-on-accent when active) automatically, so no colour is
@@ -4408,12 +4627,24 @@ const RetailSystem = {
               <span>${t('Subtotal')}</span>
               <span style="display:flex;gap:10px;align-items:center">
                 <span class="pos-sum-val money" id="pos-sub">${this._esc(this._moneyDigits(0))}</span>
-                <span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-dim)">
+                ${canDiscount ? `<span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-dim)">
                   <input type="number" id="pos-disc" value="0" min="0" max="100" step="0.5"
                     class="pos-mini-input" style="inline-size:64px;padding-inline:8px;font-size:13px"
                     aria-label="${this._esc(t('Discount'))}"
                     oninput="RetailSystem._renderCart()" /> %
-                </span>
+                </span>` : `<!-- P1a item #3: no #pos-disc at all for a cashier without
+                     retail.discount -- not a disabled input (which would still
+                     name a % a cashier cannot use) but a quiet link to the
+                     Phase 3 manager-PIN override, doing nothing destructive
+                     today per the owner's 2026-09-28 decision (contract.md:
+                     "Do not build the PIN flow now"). Every #pos-disc reader
+                     in this file already reads it through
+                     document.getElementById('pos-disc')?.value -- optional
+                     chaining -- so its absence here reads as 0%, the correct
+                     answer for someone who cannot discount at all. -->
+                <button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-disc-link"
+                  style="font-size:11px;padding-block:2px;padding-inline:8px;color:var(--text-dim)"
+                  onclick="RetailSystem._explainDiscountNeedsManager()">${t('Discount… (needs a manager)')}</button>`}
               </span>
             </div>
             <!-- Phase 0 #8 (interface I-2): _recalc used to fold a
@@ -4790,6 +5021,15 @@ const RetailSystem = {
       // retail_api.py. parseFloat('0')=0, parseFloat(undefined)=NaN -> `|| 0`
       // covers both an unopened setting and a malformed value the same way.
       this._loyaltyPointValue = parseFloat(creditSettings && creditSettings.data && creditSettings.data.loyalty_point_value) || 0;
+      // P1a item #3 ("Credit greys out and shows its reason"): the SAME
+      // fallback create_sale (retail_api.py) applies server-side --
+      // `credit_mode = cust['credit_mode'] or settings['default_credit_mode']`
+      // -- mirrored here so a customer whose OWN credit_mode column is
+      // empty (meaning "use the shop default") reads correctly on this
+      // side of the wire too, rather than defaulting to a different answer
+      // than checkout would actually give. 'none' is _DEFAULT_SETTINGS'
+      // own fallback when the shop has never opened Settings > Credit.
+      this._defaultCreditMode = (creditSettings && creditSettings.data && creditSettings.data.default_credit_mode) || 'none';
       const heldCountEl = document.getElementById('pos-held-count');
       if (heldCountEl) heldCountEl.textContent = (held && held.data || []).length;
 
@@ -5081,9 +5321,34 @@ const RetailSystem = {
       const clickAction = variantCount
         ? `RetailSystem._openVariantPicker('${this._esc(p.id)}')`
         : (outOfStock ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')` : `RetailSystem._addToCart('${this._esc(p.id)}')`);
+      // P1a item #8 ("Product tiles: a monogram and a category colour"):
+      // every tile showed the SAME 'package' placeholder box before this
+      // (see .pos-card-icon's own removal note in _injectStyles) -- a
+      // category-coloured monogram plus a 3px leading stripe is the
+      // frontend-only fix design_system calls out for this pass. `toneIdx`
+      // is `null` for an uncategorised product, which _categoryToneIndex
+      // itself never returns (1-8 only) -- the ternaries below read that
+      // `null` as "use the neutral pair", never as tone 0.
+      //
+      // FIX ROUND F12: the STRIPE now paints with --cat-N-ink, not
+      // --cat-N-surface -- the verifier measured the surface tone (a pale
+      // tint, meant for a FILL under readable text, per crew S's own token
+      // naming) against the tile's own near-identical background on light
+      // themes and found it well under the 3:1 non-text-UI floor. The ink
+      // tone (meant for TEXT on that surface, so already contrast-tuned
+      // against it) reads as a real, visible accent line instead. The
+      // monogram badge's own fill is UNCHANGED (still -surface, with -ink
+      // text on it, which is exactly the pairing those two tokens exist
+      // for) -- only the stripe's own colour choice was wrong.
+      const toneIdx = this._categoryToneIndex(p.category_id);
+      const toneSurface = toneIdx ? `var(--cat-${toneIdx}-surface)` : 'var(--surface-sunken)';
+      const toneInk = toneIdx ? `var(--cat-${toneIdx}-ink)` : 'var(--text-secondary)';
+      const monogram = this._esc(this._productMonogram(p.name));
       return `<button type="button" class="pos-card${(outOfStock && !variantCount)?' pos-card-outofstock':''}"
           ${(outOfStock && !variantCount) ? 'aria-disabled="true"' : ''}
+          style="border-inline-start:3px solid ${toneInk}"
           onclick="${clickAction}">
+        <span class="pos-card-monogram" aria-hidden="true" style="background:${toneSurface};color:${toneInk}">${monogram}</span>
         <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
@@ -5091,6 +5356,81 @@ const RetailSystem = {
         </span>`}
       </button>`;
     }).join('');
+  },
+
+  // Deterministic 1-8 bucket from a category id, matching the shared
+  // `--cat-1-*` .. `--cat-8-*` token pairs crew S defines in main.css (see
+  // contract.md's "Category tokens" interface).
+  //
+  // FIX ROUND F15: REPLACED the UUID string-hash this function used to
+  // compute. categories.id is a client-generated TEXT uuid (schema.py:
+  // "categories.id is TEXT (client-generated UUID) since the multi-
+  // device..."), so a plain numeric "categoryId mod 8" (the plan's own
+  // shorthand) was never directly available -- but a hash of a
+  // DEVICE-GENERATED id is the wrong fix for that, not a correct one: two
+  // devices that both created "Beverages" independently (a real,
+  // ordinary case before sync reconciles them, or simply because a shop's
+  // OWN category list differs slightly per branch) mint DIFFERENT uuids for
+  // conceptually the same category and would show DIFFERENT tones for it,
+  // failing the exact "same category, same colour, everywhere" promise this
+  // feature exists for.
+  //
+  // FIX ROUND 3 (M5): the round-2 key was NAME order, and the verifier
+  // measured what that does: adding "Accessories" to a shop whose list
+  // was Beverages/Snacks/Toys slid every later name down one slot and
+  // RECOLOURED all of them -- a shopkeeper's learned "green is drinks"
+  // broke the day they added a category. A colour that moves when an
+  // unrelated row is added is not a colour anyone can learn.
+  //
+  // The key is now CREATION order: (created_at, id). A new category is
+  // always the newest, so it takes the next slot and no existing category
+  // changes tone (tested: adding "Accessories" changes 0 existing tones).
+  // `id` only breaks a same-second tie. Renaming a category no longer
+  // moves it either (name is not in the key).
+  //
+  // KNOWN LIMIT, stated so nobody assumes more than this gives:
+  // `categories.created_at` is NOT in the sync payload (retail_api.py
+  // create_category queues id/name/description/row_version/
+  // updated_at_utc only), so a second device stamps its OWN apply time.
+  // On the device that created the category the order is exact; on
+  // another device it is the order that device applied the events, which
+  // is creation order whenever it pulls in sequence and falls back to
+  // the uuid within one second. `updated_at_utc` was rejected as the key
+  // because a rename rewrites it and would move the tone. Making the
+  // order identical everywhere needs `created_at_utc` added to that
+  // payload (crew D / sync owner) -- reported, not done here. Deleting a
+  // category shifts the ones created after it (the list only holds live
+  // rows).
+  //
+  // Returns `null` for no category, OR for a category id that is not (yet)
+  // in the loaded list -- callers read `null` as "use the neutral pair",
+  // never as tone 0.
+  _categoryToneIndex(categoryId) {
+    if (categoryId == null || categoryId === '') return null;
+    const cats = (this._categories || []);
+    if (!cats.length) return null;
+    const sorted = cats.slice().sort((a, b) => {
+      const an = String((a && a.created_at) || ''), bn = String((b && b.created_at) || '');
+      if (an !== bn) return an < bn ? -1 : 1;
+      const aid = String((a && a.id) || ''), bid = String((b && b.id) || '');
+      return aid < bid ? -1 : (aid > bid ? 1 : 0);
+    });
+    const idx = sorted.findIndex((c) => String(c && c.id) === String(categoryId));
+    if (idx === -1) return null;
+    return (idx % 8) + 1;
+  },
+
+  // Two letters, the same "read at arm's length" job a monogram avatar does
+  // anywhere else: first letter of the first two words when there are two or
+  // more, otherwise the first two characters of the one word/run there is.
+  // Works unchanged on Arabic product names (this operates on Unicode code
+  // points via normal JS string slicing/indexing, not on Latin-only ranges).
+  _productMonogram(name) {
+    const clean = String(name || '').trim();
+    if (!clean) return '?';
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    return clean.slice(0, 2).toUpperCase();
   },
 
   // launch-readiness "product variants, wave 1" (design section 3.7): a
@@ -6293,6 +6633,12 @@ const RetailSystem = {
     const input = document.getElementById('pos-loyalty-redeem');
     if (input) input.value = '0';
     const customerId = document.getElementById('pos-customer')?.value || null;
+    // P1a item #3: Credit's own eligibility depends only on WHICH customer
+    // is selected, never on whether loyalty redemption happens to be on --
+    // so this runs before the loyalty-enabled branch below can return
+    // early, and runs on every path out of this function, not just the one
+    // that reaches the try/catch.
+    this._syncCreditButtonState();
     if (!customerId || !this._loyaltyRedemptionEnabled()) {
       this._loyaltyBalance = 0;
       if (section) section.style.display = 'none';
@@ -6402,14 +6748,135 @@ const RetailSystem = {
   // through _setPayment already toggles -- this render just seeds the state
   // the mount always starts in, it does not change which method is selected
   // by default or any payment logic.
+  //
+  // P1a item #3 ("Credit greys out and shows its reason before the cashier
+  // tries it"): the Credit tile gets an aria-disabled/title pair computed
+  // from _creditGateReason -- see that method's own comment for the two
+  // reasons (walk-in, or a real customer whose credit_mode is 'none').
+  //
+  // FIX ROUND F7: switched from native `disabled` to aria-disabled ONLY --
+  // the verifier found the reason was reachable as a tooltip alone (a mouse
+  // click on a `disabled` button fires nothing at all in a real browser, so
+  // "click it and see what happens" taught a cashier nothing) and asked for
+  // BOTH a visible reason on the tile itself and a click giving the same
+  // toast F5 already does. A real `disabled` button cannot receive that
+  // click, so this now matches the out-of-stock POS tile's own aria-
+  // disabled pattern (_renderPOSGrid) instead of the reasoning this file
+  // used to give for NOT doing that here -- _setPayment below is the one
+  // place that still has to refuse the action (aria-disabled does not
+  // refuse anything on its own), and it now runs for the mouse path too,
+  // not only the F5 accelerator.
+  //
+  // The reason text REPLACES the F-key badge, not adds a fourth line --
+  // the tile's footprint stays 3 rows tall either way.
   _renderPayButtons() {
-    return this.POS_PAYMENT_METHODS.map(({ method, icon, emoji, label, fkey }) => `
+    return this.POS_PAYMENT_METHODS.map(({ method, icon, emoji, label, fkey }) => {
+      const reason = method === 'credit'
+        ? this._creditGateReason(document.getElementById('pos-customer')?.value || null)
+        : null;
+      // The F-key badge is ALWAYS rendered (retail_payment_grid_test.js
+      // asserts every tender prints its key, and that stays true for a
+      // disabled Credit -- F5 still answers with the same toast). The
+      // reason is a SEPARATE element that CSS swaps in for the badge, so the
+      // tile keeps its 3-row footprint and the reason still shows on a
+      // touch-only device where the badge itself is display:none.
+      const reasonEl = method === 'credit'
+        ? `<span class="pos-pay-reason"${reason ? '' : ' hidden'}>${reason ? this._esc(reason) : ''}</span>`
+        : '';
+      return `
       <button class="pos-pay-btn${method === 'cash' ? ' active' : ''}" data-method="${method}"
+        ${reason ? `aria-disabled="true" title="${this._esc(reason)}" data-credit-reason="${this._esc(reason)}"` : ''}
         onclick="RetailSystem._setPayment('${method}',this)">
         <span class="pos-pay-icon" aria-hidden="true">${this._icon(icon, 16, emoji)}</span>
         <span class="pos-pay-label">${t(label)}</span>
-        <span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>
-      </button>`).join('');
+        ${reasonEl}<span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>
+      </button>`;
+    }).join('');
+  },
+
+  // The two reasons a cashier cannot put a sale on Credit, in the exact
+  // order create_sale (retail_api.py) itself checks them -- "no customer at
+  // all" before "this customer specifically" -- so the reason shown here
+  // can never disagree with the 400 the server would have given for the
+  // same state. Returns `null` when Credit is genuinely available (the
+  // caller's own signal to enable the tile), never an empty string, so
+  // `if (reason)` reads correctly at every call site.
+  _creditGateReason(customerId) {
+    if (!customerId) return t('Walk-in customer');
+    const cust = (this._customers || []).find(cu => String(cu.id) === String(customerId));
+    // Mirrors create_sale's own fallback chain exactly: `cust['credit_mode']
+    // or settings['default_credit_mode']` -- an empty/null credit_mode on
+    // the customer row means "use the shop's default", not "no credit".
+    const mode = (cust && cust.credit_mode) || this._defaultCreditMode || 'none';
+    if (mode === 'none') return t('Not a credit customer');
+    return null;
+  },
+
+  // Re-evaluates the Credit tile's disabled/title state without touching
+  // any other tender button -- called from _onCustomerChange (every time
+  // the customer selector changes, including back to Walk-in) and once
+  // customers/settings actually load. A full _renderPayButtons() call would
+  // work too, but would also blow away whichever tender is currently
+  // .active and mid-interaction; this touches only the one button whose
+  // eligibility can change out from under the cashier.
+  _syncCreditButtonState() {
+    const btn = document.querySelector('.pos-pay-btn[data-method="credit"]');
+    if (!btn) return;
+    const customerId = document.getElementById('pos-customer')?.value || null;
+    const reason = this._creditGateReason(customerId);
+    // FIX ROUND F7: aria-disabled only (never the native `disabled`
+    // attribute) -- see _renderPayButtons' own comment for why the tile
+    // must stay real-click-reachable so the SAME toast F5 gives can fire
+    // from a mouse click too. setAttribute, not `.dataset`/`.title =`
+    // property assignment: several existing node-harness fixtures for THIS
+    // file (retail_checkout_cart_sheet_close_test.js, retail_currency_
+    // surface_test.js, retail_loyalty_redemption_ui_test.js, retail_pos_
+    // scale_test.js) hand _renderPOS a minimal element stub built with
+    // setAttribute/getAttribute but no real `.dataset` DOMStringMap --
+    // `btn.dataset.creditReason = reason` threw "Cannot set properties of
+    // undefined" against every one of them, a real regression this pass
+    // found by actually running the existing suites, not by reading the
+    // change.
+    //
+    // Same fixtures also hand back a stub with no `.querySelector` at all
+    // (found the same way, running retail_checkout_cart_sheet_close_test.js
+    // and retail_currency_surface_test.js live: "TypeError: btn.querySelector
+    // is not a function", from _checkout's own _clearCart -> _resetSaleControls
+    // -> _onCustomerChange chain, not merely a standalone call). retail_
+    // design_render_test.js's makeStub() was fixed to add a `querySelector()
+    // { return null; }` fallback for a different call site, but that fixture
+    // is not shared by these others, and adding the method to every minimal
+    // POS-button stub in four separate test files would be the same fragile
+    // fixture-chasing _renderPayButtons' own history already warns against.
+    // Guarding the call here, the same way `cashBtn`/`kbdEl` themselves are
+    // already null-checked two lines down, fixes it once for every caller
+    // instead of four times.
+    const reasonEl = (typeof btn.querySelector === 'function') ? btn.querySelector('.pos-pay-reason') : null;
+    if (reason) {
+      btn.setAttribute('aria-disabled', 'true');
+      btn.setAttribute('title', reason);
+      btn.setAttribute('data-credit-reason', reason);
+      if (reasonEl) {
+        reasonEl.textContent = reason;
+        reasonEl.removeAttribute('hidden');
+      }
+      // A cashier who had Credit selected and then changed the customer
+      // back to Walk-in (or to a non-credit customer) must not be left with
+      // a charge silently still aimed at a tender they can no longer pick --
+      // fall back to Cash, the same default _renderPOS itself seeds.
+      if (this._paymentMethod === 'credit') {
+        const cashBtn = document.querySelector('.pos-pay-btn[data-method="cash"]');
+        if (cashBtn) this._setPayment('cash', cashBtn);
+      }
+    } else {
+      btn.removeAttribute('aria-disabled');
+      btn.removeAttribute('title');
+      btn.removeAttribute('data-credit-reason');
+      if (reasonEl) {
+        reasonEl.textContent = '';
+        reasonEl.setAttribute('hidden', '');
+      }
+    }
   },
 
   // AUDIT (Phase 0 #7d): shows/hides the WHOLE Cash Tendered row
@@ -6429,6 +6896,20 @@ const RetailSystem = {
   },
 
   _setPayment(method, btn) {
+    // FIX ROUND F7: the Credit tile is aria-disabled ONLY, never a native
+    // `disabled` (see _renderPayButtons' own comment) -- so BOTH the mouse
+    // click AND _onPOSShortcut's F5 accelerator (which calls this function
+    // directly, never through a real click event) now reach this same
+    // check, and BOTH get the SAME toast: a click that used to fire nothing
+    // at all now explains itself exactly like F5 already did. Same explain-
+    // don't-just-block posture _explainDiscountNeedsManager gives the
+    // Discount link above.
+    if (method === 'credit' && btn && btn.getAttribute && btn.getAttribute('aria-disabled') === 'true') {
+      const reason = btn.getAttribute('title') || t('Not a credit customer');
+      SubsystemApp.showToast(reason, 'error');
+      this._refocusScan();
+      return;
+    }
     this._paymentMethod = method;
     document.querySelectorAll('.pos-pay-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -7496,13 +7977,141 @@ const RetailSystem = {
           <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)"><span aria-hidden="true">${this._icon('printer', 16, '🖨️')}</span> ${t('Print')}</button>
           <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._closeModalOverlay(this)">${t('New Sale')}</button>
         </div>
+        <!-- P1a item #6 ("Send on WhatsApp"): sent ON REQUEST, not
+             automatically -- switching windows mid-queue is slow, per
+             contract.md's own reasoning, so this never fires on its own.
+             Prefilled from the sale's OWN customer's phone when one was
+             picked at the till (see _showReceipt's own lookup below);
+             empty for a walk-in, same as every other customer-scoped field
+             on this screen. The label says 'Send', never 'automatic' --
+             see share.js's own header comment on why. -->
+        <div style="display:flex;gap:8px;margin-top:10px" id="rcpt-wa-row">
+          <input type="text" id="rcpt-wa-phone" dir="ltr" maxlength="20"
+            placeholder="${this._esc(t('Customer WhatsApp number'))}"
+            aria-label="${this._esc(t('Customer WhatsApp number'))}"
+            style="flex:1;min-block-size:36px;padding-inline:10px;font-size:13px;border-radius:8px;border:1px solid var(--border-mid);background:var(--input-bg);color:var(--text)" />
+          <button type="button" class="ret-btn ret-btn-ghost" id="rcpt-wa-send-btn">${t('Send')}</button>
+        </div>
       </div>`;
     document.body.appendChild(overlay);
+    // P1a item #6: prefill the WhatsApp field from the sale's OWN customer,
+    // when one was picked at the till and this device already has their
+    // phone cached (this._customers, loaded by _loadPOSData) -- best-effort
+    // only, an empty field for a walk-in or an uncached customer is a
+    // correct, not a broken, state.
+    try {
+      const waInput = document.getElementById('rcpt-wa-phone');
+      if (waInput && saleData.customer_id) {
+        const cust = (this._customers || []).find(cu => String(cu.id) === String(saleData.customer_id));
+        if (cust && cust.phone) waInput.value = cust.phone;
+      }
+    } catch (e) { /* prefill only, never blocks the receipt itself */ }
+    // FIX ROUND F2: no inline onclick carrying anything -- wired here
+    // instead, matching the Remind/Statement rewrite's own pattern.
+    const sendBtn = document.getElementById('rcpt-wa-send-btn');
+    if (sendBtn) sendBtn.addEventListener('click', () => this._shareReceiptOnWhatsApp());
     // No backdrop-click listener here -- deliberately: this is the only
     // hand-rolled modal without one, and adding one would change behaviour
     // on the post-sale receipt, which is out of scope for this pass.
     const _closeReceipt = this._wireModalA11y(overlay, 'ret-receipt-dialog');
-    setTimeout(() => _closeReceipt(), 8000);
+    // FIX ROUND F6: the dialog used to close 8s after checkout NO MATTER
+    // WHAT, including while the cashier was still typing a WhatsApp number
+    // -- measured live: a customer reading their number out loud takes
+    // longer than 8s, and the dialog vanished under them. The timer is now
+    // CANCELLED the moment the WhatsApp field gets focus or Send is
+    // pressed -- both are the cashier actively using the one control this
+    // timeout was never meant to interrupt. A fresh receipt still
+    // auto-dismisses at 8s when nobody touches that field, unchanged.
+    //
+    // FIX ROUND 3 (LOW-3): cancelling for good left the dialog open FOREVER
+    // once the cashier tabbed away from the field (or sent and walked off),
+    // holding the till on a finished sale. Now the countdown PAUSES while the
+    // field is focused or being typed in, and RESTARTS a full 8s after the
+    // field loses focus with no further interaction. Typing (input) or
+    // re-focusing pauses it again; a Send press pauses it and, once focus
+    // leaves, it resumes like any other interaction.
+    const waInputEl = document.getElementById('rcpt-wa-phone');
+    const AUTO_CLOSE_MS = 8000;
+    let closeTimer = null;
+    const cancelAutoClose = () => { if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; } };
+    const armAutoClose = () => { cancelAutoClose(); closeTimer = setTimeout(() => _closeReceipt(), AUTO_CLOSE_MS); };
+    armAutoClose();
+    if (waInputEl) {
+      waInputEl.addEventListener('focus', cancelAutoClose);
+      waInputEl.addEventListener('input', cancelAutoClose);
+      waInputEl.addEventListener('blur', armAutoClose);
+    }
+    if (sendBtn) {
+      sendBtn.addEventListener('click', cancelAutoClose);
+      sendBtn.addEventListener('blur', armAutoClose);
+    }
+  },
+
+  // FIX ROUND F13: the message language follows the shop's OWN
+  // `branding_receipt_language` setting, defaulting to ARABIC -- explicitly
+  // NOT the same 'auto' behaviour _receiptTranslator gives the PRINTED
+  // receipt (which follows the cashier's own UI language when unset). A
+  // printed slip is read by whoever is standing at the till; a WhatsApp
+  // message is read by the customer, and design_system's own "Arabic by
+  // constructor default" applies to it even on a till currently running in
+  // English, unless the shop explicitly asked for English receipts.
+  async _shareMessageLang() {
+    const branding = await this._receiptBranding();
+    const setting = branding && branding.branding_receipt_language;
+    return (setting === 'en' || setting === 'ar') ? setting : 'ar';
+  },
+
+  // P1a item #6 ("Send on WhatsApp" -- the receipt): builds the message
+  // through share.js's own pure builder (product names, the total, 'you
+  // saved', the SHORT sale number and the shop name -- see
+  // AuraShare.buildReceiptText's own comment for the exact shape) and hands
+  // it to AuraShare.whatsapp, which opens whatever WhatsApp this COMPUTER is
+  // signed into. Always available regardless of shop-network state -- unlike
+  // Statement/Remind below, a receipt is data this device already has in
+  // full (see contract.md's "Multi-computer honesty" note: "Receipt sending
+  // always works").
+  async _shareReceiptOnWhatsApp() {
+    const saleData = this._lastSaleData;
+    if (!saleData) return;
+    if (!window.AuraShare) {
+      SubsystemApp.showToast(t('WhatsApp sending is not available on this build.'), 'error');
+      return;
+    }
+    const phoneInput = document.getElementById('rcpt-wa-phone');
+    const phone = phoneInput ? phoneInput.value : '';
+    const cartNames = this._lastReceiptCartNames || {};
+    const { promotions: promoAmt, discount: discAmt } = this._saleDiscountBreakdown(saleData);
+    const items = (saleData.lines || []).map((line) => {
+      const { gross, discountAmount } = this._receiptLineFigures(line);
+      return {
+        name: line.name || cartNames[line.product_id] || t('Item'),
+        qty: line.quantity,
+        total: gross - discountAmount,
+      };
+    });
+    const shopName = (window.SubsystemApp && SubsystemApp._shopDisplayName && SubsystemApp._shopDisplayName()) || '';
+    const lang = await this._shareMessageLang();
+    const text = AuraShare.buildReceiptText({
+      shopName,
+      // FIX ROUND F11: the SHORT number (SALE-NNNNNN), never the long
+      // device/company-suffixed internal id -- _docNo() is this file's own
+      // existing "strip the sync-uniqueness fragments" helper (Phase 0
+      // #16), already used everywhere ELSE a sale number reaches a screen.
+      saleNumber: this._docNo(saleData.sale_number).main,
+      items,
+      total: saleData.total,
+      saved: (promoAmt || 0) + (discAmt || 0),
+      currency: this._currencySymbol || 'JD',
+      lang,
+      formatMoney: (n) => this._fmtForLang(n, lang),
+    });
+    const opened = AuraShare.whatsapp(phone, text);
+    if (!opened) {
+      SubsystemApp.showToast(t('That does not look like a WhatsApp number.'), 'error');
+      return;
+    }
+    AuraShare.logShare('receipt', saleData.sale_number);
+    SubsystemApp.showToast(t('Opened WhatsApp — press Send there to finish.'), 'success');
   },
 
   // ══ RECEIPT PRINTING (Wave 1B, Part O/P) ═════════════════════════════════
@@ -7644,6 +8253,38 @@ const RetailSystem = {
       if (text == null || lang === 'en') return text;
       return (text in dict) ? dict[text] : text;
     };
+  },
+
+  // FIX ROUND F13 ("statement lines use translated labels in that
+  // language, not the cashier's UI language"): the SAME lookup
+  // _receiptTranslator uses internally (AuraI18n.dicts.ar, the existing
+  // Arabic catalogue -- 'Credit sale'/'Payment'/etc. already have real
+  // entries there, used everywhere else those labels render), but taking an
+  // EXPLICIT lang rather than reading AuraI18n.current, because a WhatsApp
+  // message's language is the SHOP's chosen receipt language
+  // (_shareMessageLang), never whatever the till happens to be showing
+  // right now.
+  _translateForLang(text, lang) {
+    if (text == null || lang !== 'ar') return text;
+    const dict = (window.AuraI18n && AuraI18n.dicts && AuraI18n.dicts.ar) || {};
+    return (text in dict) ? dict[text] : text;
+  },
+
+  // FIX ROUND F13 ("dates are formatted... not raw timestamps"): the same
+  // 'ar-JO-u-nu-latn' / 'en-US' choice _localeDate() makes, but against an
+  // EXPLICIT lang (a WhatsApp message's language, not the till's live UI
+  // language -- see _shareMessageLang's own comment) and an explicit date
+  // STRING (the server's own `created_at`/event `date`, 'YYYY-MM-DD[
+  // HH:MM:SS]'), not "now". Falls back to the raw string, unparsed, rather
+  // than throwing or showing "Invalid Date" -- a statement line with an
+  // unparsable date is still a real line a customer should see.
+  _formatDateForLang(dateStr, lang) {
+    if (!dateStr) return '';
+    const d = new Date(String(dateStr).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(dateStr);
+    const locale = lang === 'ar' ? 'ar-JO-u-nu-latn' : 'en-US';
+    try { return d.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' }); }
+    catch (e) { return String(dateStr); }
   },
 
   // Cashier/customer lines are pure customisation ON TOP OF the compliant
@@ -7797,14 +8438,27 @@ const RetailSystem = {
   },
 
   // ── PRODUCTS ──────────────────────────────────────────────────────────────
+  // P1a item #3 ("the till shows only what the person can do"): create_
+  // product/update_product/delete_product/adjust_stock (retail_api.py) are
+  // ALL gated CAP_STOCK_ADJUST server-side -- so a person without it could
+  // open Add Product, type a whole new item, press Save, and only THEN
+  // learn the write was never going to succeed. Computed once per render,
+  // same shape _exqStockRows (Exceptions screen) already uses for its own
+  // retail.stock.adjust-gated resolve buttons -- reused rather than a new
+  // one-off convention. Products stays REACHABLE either way (unlike
+  // Promotions/Reports, which swap to a full-screen refusal) because a
+  // cashier still needs to look up a price or a stock count mid-queue --
+  // see _renderProductTable's own comment for what specifically disappears.
   async _renderProducts(c) {
     this._injectStyles();
+    const canAdjust = !window.SubsystemApp || SubsystemApp.hasCapability('retail.stock.adjust');
     c.innerHTML = `
       <div class="ret-hdr">
-        <div style="display:flex;gap:10px">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <input class="ret-search" id="prod-search" data-i18n-ph="Search products…" placeholder="${t('Search products…')}" oninput="RetailSystem._filterProducts()" />
-          <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">${this._icon('upload', 16, '⬆')} Import</button>
-          <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ ${t('Add Product')}</button>
+          ${canAdjust ? `<button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">${this._icon('upload', 16, '⬆')} Import</button>
+          <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ ${t('Add Product')}</button>` :
+          `<span style="color:var(--text-muted);font-size:12px">${t('Stock lookup — read-only. Ask a manager to add, edit or adjust stock.')}</span>`}
         </div>
       </div>
       <!-- P0 item #15e, interface I-6: a header KPI, not a table column --
@@ -7819,8 +8473,8 @@ const RetailSystem = {
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="prod-table">
-            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th class="num">${t('Avg cost')}</th><th class="num">${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody><tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th class="num">${t('Avg cost')}</th><th class="num">${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th>${canAdjust ? '<th>Actions</th>' : ''}</tr></thead>
+            <tbody><tr><td colspan="${canAdjust ? 9 : 8}" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -7902,17 +8556,24 @@ const RetailSystem = {
   _renderProductTable(prods) {
     const tbody = document.querySelector('#prod-table tbody');
     if (!tbody) return;
+    // Same gate as _renderProducts, recomputed here rather than cached: this
+    // is called again by _filterProducts every keystroke, and the grant
+    // cannot change mid-search, but re-deriving it is cheap and keeps this
+    // function correct even if it is ever called from somewhere that skipped
+    // _renderProducts's own render (matching _exqStockRows's identical
+    // per-call-not-per-row reasoning, one level up).
+    const canAdjust = !window.SubsystemApp || SubsystemApp.hasCapability('retail.stock.adjust');
     if (!prods.length) {
       // colspan spans the whole table so the state is centred under the
       // headers rather than crammed into the first column.
-      tbody.innerHTML = `<tr><td colspan="9">${this._emptyState({
+      tbody.innerHTML = `<tr><td colspan="${canAdjust ? 9 : 8}">${this._emptyState({
         icon: 'package',
         title: t('No products yet'),
         hint: t('Add your first product, or import your existing list from a spreadsheet.'),
-        actions: [
+        actions: canAdjust ? [
           { label: t('Add Product'), onclick: 'RetailSystem._openAddProduct()', primary: true },
           { label: t('Import'), onclick: "ImportWizard.open('retail','products')" },
-        ],
+        ] : [],
       })}</td></tr>`;
       return;
     }
@@ -7981,11 +8642,11 @@ const RetailSystem = {
         <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${p.unit||''}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
-        <td onclick="event.stopPropagation()" style="display:flex;gap:6px">
+        ${canAdjust ? `<td onclick="event.stopPropagation()" style="display:flex;gap:6px">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditProduct('${this._esc(p.id)}')">Edit</button>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openStockAdjust('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}',${p.total_stock})">Stock</button>
           <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}')">Delete</button>
-        </td>
+        </td>` : ''}
       </tr>`;
     }).join('');
   },
@@ -8786,8 +9447,8 @@ const RetailSystem = {
         </div>
         <div class="ret-field"><label for="prm-branch">${t('Branch')}</label><select id="prm-branch"><option value="">${t('All branches')}</option>${branchOpts}</select></div>
         <div class="ret-field-row">
-          <div class="ret-field"><label for="prm-start">${t('Start Date')}</label><input type="date" id="prm-start" value="${promo.starts_at ? this._esc(String(promo.starts_at).slice(0,10)) : ''}" /></div>
-          <div class="ret-field"><label for="prm-end">${t('End Date')}</label><input type="date" id="prm-end" value="${promo.ends_at ? this._esc(String(promo.ends_at).slice(0,10)) : ''}" /></div>
+          <div class="ret-field"><label for="prm-start">${t('Start Date')}</label><input type="date" id="prm-start" data-orig="${this._esc(promo.starts_at || '')}" value="${promo.starts_at ? this._esc(String(promo.starts_at).slice(0,10)) : ''}" /></div>
+          <div class="ret-field"><label for="prm-end">${t('End Date')}</label><input type="date" id="prm-end" data-orig="${this._esc(promo.ends_at || '')}" value="${promo.ends_at ? this._esc(String(promo.ends_at).slice(0,10)) : ''}" /></div>
         </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
@@ -8798,6 +9459,25 @@ const RetailSystem = {
     const _closePromotion = this._wireModalA11y(overlay, 'ret-promotion-dialog');
     overlay.addEventListener('click', e => { if(e.target===overlay) _closePromotion(); });
     document.getElementById('prm-name')?.focus();
+  },
+
+  // FIX ROUND 3 (pre-existing money bug): the form used to send the bare
+  // date the <input type="date"> gives ('2026-09-30'). The server decides
+  // whether a promotion is live by a plain text comparison against the sale's
+  // own 'YYYY-MM-DD HH:MM:SS' clock (promotions.load_active_promotions:
+  // `ends_at>=now_local`), and '2026-09-30' sorts BEFORE '2026-09-30
+  // 10:00:00' -- so a promotion "ending on the 30th" silently stopped at the
+  // START of the 30th, and the shop lost its own last day of discount. An end
+  // date is now inclusive through 23:59:59 local, a start date begins at
+  // 00:00:00. If the cashier did not touch the date while editing, the
+  // ORIGINAL stored value (which may carry a deliberate time, e.g. one made
+  // through the API) is sent back unchanged instead of being flattened.
+  _promoBoundary(el, kind) {
+    const v = el && el.value ? String(el.value).slice(0, 10) : '';
+    if (!v) return null;
+    const orig = el.dataset && el.dataset.orig ? String(el.dataset.orig) : '';
+    if (orig && orig.slice(0, 10) === v) return orig;
+    return v + (kind === 'end' ? ' 23:59:59' : ' 00:00:00');
   },
 
   async _savePromotion(pid) {
@@ -8822,8 +9502,8 @@ const RetailSystem = {
       product_id:  productId  || null,
       category_id: categoryId || null,
       branch_id:   document.getElementById('prm-branch')?.value || null,
-      starts_at:   document.getElementById('prm-start')?.value  || null,
-      ends_at:     document.getElementById('prm-end')?.value    || null,
+      starts_at:   this._promoBoundary(document.getElementById('prm-start'), 'start'),
+      ends_at:     this._promoBoundary(document.getElementById('prm-end'), 'end'),
     };
     try {
       const d = pid
@@ -10789,16 +11469,88 @@ const RetailSystem = {
   },
 
   // ── ADMIN CENTER (feat/reorder-automation-foundation) ───────────────────────
-  // Gated at the nav level (app-shell.js's adminOnly filter, resolved once
-  // via GET /api/devices/me at shell init) -- this render function itself
-  // assumes it was only ever reached through that gate, same as e.g.
-  // _renderScannerSettings assumes desktopOnly already filtered Android.
-  // Foundation scope: only the low-stock reorder request queue exists so
-  // far. Future admin-only surfaces land as additional cards on this same
-  // page rather than new top-level nav entries.
+  // P1a item #1 ("Settings follows the person, not the device"): this used
+  // to assume it was reached only through app-shell.js's adminOnly nav
+  // filter (isAdminDevice -- THIS COMPUTER, not this person), which is why
+  // that filter's own docstring on list_reorder_requests (retail_api.py)
+  // says outright "the admin-only gate is client-side" -- a deep link, the
+  // phone's More sheet, or _navigate() called directly from in-app code all
+  // reach this render with NO nav click in between (same reasoning
+  // _renderPromotions' own guard comment gives), and a hidden nav entry is
+  // not an enforcement. It never checked WHO was signed in at all -- a
+  // cashier who typed #admin-center, or the phone More sheet (which does
+  // not consult adminOnly the way the sidebar does), saw every card and a
+  // Save button the server would 403 the instant it was pressed.
+  //
+  // This is the SECOND, real gate, and it now runs BEFORE the nav's --
+  // matching every other capability-restricted render in this file
+  // (_renderPromotions, _renderReports, ...). Two axes decide what a person
+  // sees, and they are genuinely different axes (see _isNavItemVisible's own
+  // comment in app-shell.js for the canonical statement of the split):
+  //   * OWNER (`SubsystemApp.role === 'admin'`) -- every card. Branding,
+  //     Tax and Business Day all call `_require_company_admin()` server-side
+  //     (branding_settings_set/tax_settings_set/business_day_settings_set,
+  //     retail_api.py) ON TOP OF CAP_EMPLOYEES, so nobody else's Save can
+  //     ever succeed regardless of what this screen shows.
+  //   * A DELEGATED BRANCH MANAGER (an employee holding the CAP_EMPLOYEES
+  //     grant via employees.js's delegation toggle, but not the owner role)
+  //     -- the two cards whose OWN backend routes are CAP_EMPLOYEES-only with
+  //     no `_require_company_admin()` call at all: set_device_branch
+  //     ("DELIBERATELY NOT owner-gated ... this route is not their sibling",
+  //     that route's own docstring) and CLAIMING (not creating) a document
+  //     book -- claim_doc_series. FIX ROUND F5, CORRECTING THE PARAGRAPH
+  //     THIS REPLACES: create_doc_series ("New Book") is owner-only after
+  //     all -- verified live against a real delegated-manager session:
+  //     403 "Only the shop owner can change this." The stale claim here said
+  //     create_doc_series "never calls the admin guard"; the card below now
+  //     hides the New Book form from a manager and keeps Claim, matching
+  //     what the server actually enforces rather than what this comment used
+  //     to assume it did. Both device-local halves that DO stay CAP_
+  //     EMPLOYEES-only -- which branch THIS till stands in, which EXISTING
+  //     book THIS till claims -- are exactly the sanctioned "own-terminal
+  //     action" tier, not a hole.
+  //   * Anyone else (no CAP_EMPLOYEES at all) gets the lock panel below and
+  //     this function returns before rendering a single card or firing a
+  //     single request the server would only 403 -- the same
+  //     "_renderCapabilityRestricted instead of a screen full of failures"
+  //     shape _renderPromotionsRestricted/_renderReportsRestricted already
+  //     use, reused rather than a new one-off panel.
+  //
+  // `!window.SubsystemApp` fails OPEN the same way every other capability
+  // check in this file does (see hasCapability's own docstring) -- a test
+  // harness or an early-boot render with no shell object yet must not brick
+  // itself on a screen it will show correctly once the shell exists.
   async _renderAdminCenter(c) {
     this._injectStyles();
+    const isOwner = !window.SubsystemApp || SubsystemApp.role === 'admin';
+    // `typeof ... === 'function'`, not just `window.SubsystemApp &&` --
+    // found live: retail_business_day_settings_test.js's own fixture stubs
+    // a real, truthy `SubsystemApp` (it needs `.showToast` for its own
+    // scenarios) that predates this render path ever calling
+    // `hasCapability` at all, so it never had a reason to stub that method
+    // too. `SubsystemApp && SubsystemApp.hasCapability(...)` still called
+    // `undefined(...)` and threw. This is this file's FIRST capability
+    // check inside _renderAdminCenter, so it is the one that has to be
+    // defensive about a partial shell stub -- every OTHER
+    // `!window.SubsystemApp || SubsystemApp.hasCapability(...)` guard in
+    // this file is unchanged and still relies on a full stub, which is fine
+    // for the render paths those tests actually exercise.
+    const canDeviceSettings = isOwner ||
+      (window.SubsystemApp && typeof SubsystemApp.hasCapability === 'function' &&
+       SubsystemApp.hasCapability('retail.employees'));
+    if (!canDeviceSettings) {
+      return this._renderCapabilityRestricted(c, {
+        icon: 'lock',
+        title: t('Settings'),
+        message: t('Settings is limited to the store owner and delegated managers. Open the till to start ringing sales.'),
+      });
+    }
     c.innerHTML = `
+      ${!isOwner ? `<div class="sub-chart-card" id="admin-center-manager-note" style="background:var(--surface-sunken)">
+        <p style="color:var(--text-secondary);font-size:13px;margin:0">
+          ${t('You can change this till\'s branch and document numbering here. Branding, tax and other shop-wide settings can only be changed by the store owner.')}
+        </p>
+      </div>` : ''}
       <div class="sub-chart-card" id="branding-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Branding')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -10835,6 +11587,23 @@ const RetailSystem = {
         <div class="ret-field" style="margin-top:12px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="brand-show-customer" style="width:auto" />
           <label for="brand-show-customer" style="margin:0;text-transform:none;font-size:14px;color:var(--text)">${t('Show customer name on receipt')}</label>
+        </div>
+        <!-- P1a item #6/interface "Shop WhatsApp contact number" (contract.md):
+             retail_settings key shop_whatsapp_number, stored E.164
+             (+9627XXXXXXXX) -- crew D's _shop_whatsapp_qr_data_uri
+             (retail_api.py) already reads this key raw and renders the idle
+             customer screen's QR from it; this is the only place that value
+             is ever typed or changed. Normalised with the SAME
+             AuraShare.normalizeJoPhone share.js exports for the till's own
+             wa.me buttons, so a shop that reads "07…" on a business card and
+             a cashier's own scanned number resolve through one rule, not
+             two. NOT the till's own wa.me sender (that opens whatever
+             WhatsApp the till is signed into, see share.js) -- this is the
+             number printed on the QR the CUSTOMER scans. -->
+        <div class="ret-field" style="margin-top:12px">
+          <label for="brand-whatsapp">${t("Shop WhatsApp number (for the customer screen QR)")}</label>
+          <input type="text" id="brand-whatsapp" dir="ltr" maxlength="20" placeholder="07XXXXXXXX" />
+          <p style="color:var(--text-muted);font-size:11px;margin:6px 0 0">${t('Shown as a QR on the customer screen so a shopper can message you. Leave empty to show no QR.')}</p>
         </div>
         <div class="ret-field" style="margin-top:12px">
           <label for="brand-logo-file">${t('Logo')}</label>
@@ -10946,6 +11715,18 @@ const RetailSystem = {
         <p style="color:var(--text-muted);font-size:11px;margin:10px 0 0">
           ${t('A gap in a book\'s numbers is not an error -- a voided or returned sale keeps its number, and a retired book\'s unused tail is expected.')}
         </p>
+        <!-- FIX ROUND F5: create_doc_series (retail_api.py) is owner-only
+             ("Only the shop owner can change this." -- 403, verified live
+             against a real delegated manager session) -- a DIFFERENT gate
+             from claim_doc_series/set_device_branch, which stay CAP_
+             EMPLOYEES-only (device-local, a delegated manager CAN claim an
+             EXISTING book onto this till, and the claim control inside
+             doc-series-table's own rows -- _loadDocSeriesCard -- is left
+             exactly as it was). The comment this replaces claimed create_
+             doc_series had "no admin guard at all", which is now wrong on
+             the server; a manager seeing this "New Book" form pressed
+             Create Book and got a 403 the screen never explained. -->
+        ${isOwner ? `
         <h4 style="color:var(--text-primary);margin:20px 0 10px;font-size:13px">${t('New Book')}</h4>
         <div class="ret-field-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
           <div class="ret-field" style="margin:0"><label for="doc-series-new-type">${t('Document Type')}</label>
@@ -10967,8 +11748,9 @@ const RetailSystem = {
             <input id="doc-series-new-start" type="number" dir="ltr" min="1" value="1" /></div>
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:14px" onclick="RetailSystem._createDocSeries()">${t('Create Book')}</button>
+        ` : ''}
       </div>
-      <div class="sub-chart-card">
+      <div class="sub-chart-card" id="reorder-req-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Automatically drafted when a sale drops a product at or below its reorder level. Accept drafts a local purchase order for this device; Decline dismisses it.')}
@@ -11005,27 +11787,50 @@ const RetailSystem = {
           <button class="ret-btn ret-btn-ghost" onclick="location.href='/static/einvoicing.html'">${t('Manage E-Invoicing')}</button>
         </div>
       </div>
-      <div class="sub-chart-card">
+      <div class="sub-chart-card" id="wa-reports-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('WhatsApp Reports')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple phone numbers by role or branch. Off by default.')}
         </p>
         <button class="ret-btn ret-btn-primary" onclick="location.href='/static/whatsapp.html'">${t('Manage WhatsApp Reports')}</button>
       </div>
-      <div class="sub-chart-card">
+      <div class="sub-chart-card" id="shop-network-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Shop Network')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Let your other tills and tablets work together over the shop\'s own wifi, including when the internet is down. One device acts as the hub the others connect to.')}
         </p>
         <button class="ret-btn ret-btn-primary" onclick="location.href='/static/site-relay.html'">${t('Manage Shop Network')}</button>
       </div>`;
-    await this._loadReorderRequests();
-    await this._loadBrandingForm();
-    await this._loadDefaultTaxRateForm();
+    // The two DEVICE-LOCAL cards (Device Branch, Document Numbering) render
+    // and load for everyone who cleared the gate above -- owner or delegated
+    // manager alike, matching what their own backend routes actually allow
+    // (see this function's opening comment). Every other card is removed
+    // from the DOM outright for a non-owner, not merely left unloaded --
+    // a card with no data loaded into it (blank inputs, "Loading…" frozen
+    // forever) would look broken rather than absent, and a manager could
+    // still find its own Save button and press it into a 403 the way the
+    // OLD device-only gate let a cashier do to every card. Removed rather
+    // than never rendered in the first place (a ternary around each of the
+    // six card blocks in the template above) so the one owner-vs-manager
+    // decision lives in ONE place instead of being re-stated at every card
+    // boundary, where a future card could easily be added on the wrong side
+    // of a scattered check.
+    if (!isOwner) {
+      ['branding-card', 'default-tax-card', 'business-day-card', 'reorder-req-card',
+       'einvoicing-card', 'wa-reports-card', 'shop-network-card'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      });
+    }
     await this._loadDeviceBranchForm();
-    await this._loadBusinessDayForm();
     await this._loadDocSeriesCard();
-    await this._loadEinvoicingCard();
+    if (isOwner) {
+      await this._loadReorderRequests();
+      await this._loadBrandingForm();
+      await this._loadDefaultTaxRateForm();
+      await this._loadBusinessDayForm();
+      await this._loadEinvoicingCard();
+    }
   },
 
   // ── E-Invoicing (Admin Center) ──────────────────────────────────────────
@@ -11187,6 +11992,12 @@ const RetailSystem = {
       setVal('brand-phone', b.branding_phone);
       setVal('brand-header', b.branding_receipt_header);
       setVal('brand-footer', b.branding_receipt_footer);
+      // 2026-09-28: crew D confirmed branding_settings_get (retail_api.py)
+      // now returns the raw shop_whatsapp_number under this exact key
+      // (normalised E.164, the same value _shop_whatsapp_qr_data_uri reads
+      // for the customer-screen QR) -- no client-side change needed for
+      // this to prefill correctly once that lands.
+      setVal('brand-whatsapp', b.shop_whatsapp_number);
       // Any value other than exactly 'en'/'ar' (including missing/garbage)
       // renders as 'auto' -- matches _receiptTranslator's own fallback so
       // this dropdown can never show a language the receipt would not
@@ -11223,6 +12034,30 @@ const RetailSystem = {
 
   async _saveBranding() {
     const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    // Shop WhatsApp number: empty is a legitimate "no QR" choice (see the
+    // field's own hint), so only a NON-empty typed value is validated --
+    // refusing an empty field would make "I don't want a QR yet" impossible
+    // to save. A non-empty value that AuraShare.normalizeJoPhone cannot
+    // resolve is rejected client-side with a message BEFORE a round trip,
+    // never silently sent as the raw typed text (which
+    // _shop_whatsapp_qr_data_uri, retail_api.py, would then encode into a
+    // wa.me link that cannot possibly open WhatsApp). The server (crew D,
+    // 2026-09-28) is the AUTHORITATIVE validator -- it normalises again and
+    // 400s its own rejection independently of this client check, owner-only
+    // -- so a gap between this normaliser and the server's own is still
+    // caught, not silently accepted. That server 400's own `message` is
+    // what the generic `resp.status !== 'success'` toast below already
+    // shows; no separate handling needed for this one field.
+    const waRaw = val('brand-whatsapp');
+    let shopWhatsapp = '';
+    if (waRaw) {
+      const normalized = window.AuraShare && AuraShare.normalizeJoPhone(waRaw);
+      if (!normalized) {
+        SubsystemApp.showToast(t('That does not look like a Jordanian WhatsApp number.'), 'error');
+        return;
+      }
+      shopWhatsapp = normalized;
+    }
     const payload = {
       branding_business_name: val('brand-name'),
       branding_address: val('brand-address'),
@@ -11230,6 +12065,11 @@ const RetailSystem = {
       branding_tax_number: val('brand-tax'),
       branding_receipt_header: val('brand-header'),
       branding_receipt_footer: val('brand-footer'),
+      // 2026-09-28: crew D confirmed branding_settings_set (retail_api.py)
+      // now accepts this key, normalises it again server-side, 400s an
+      // invalid number, and writes it owner-only -- the same axis every
+      // other field in this payload is already gated on.
+      shop_whatsapp_number: shopWhatsapp,
       branding_receipt_language: val('brand-receipt-lang') || 'auto',
       // Sent as the literal strings 'true'/'false' (not a JS boolean) --
       // retail_api.py's branding_settings_set stores whatever str() this
@@ -14904,6 +15744,11 @@ const RetailSystem = {
       setEl('rep-tax',    this._fmt(s.tax_collected));
 
       if (window.Chart) {
+        // P1a item #9: same Chart.defaults pass the dashboard's own render
+        // calls -- see that call site's comment for what this does and does
+        // not change. Additive; every chart below still sets its own
+        // tickClr/gridClr explicitly.
+        if (window.AuraChartTheme) AuraChartTheme.apply();
         // Same migration the dashboard's charts already had -- see the
         // "Presentational only: Chart.js cannot consume CSS var() strings"
         // comment above r-dash-hourly's own tickClr/gridClr (~line 1920).
@@ -14934,8 +15779,12 @@ const RetailSystem = {
               { label:t('Revenue'), data:trend.data||[], borderColor:'#2782ab', backgroundColor:'rgba(39,130,171,0.1)', fill:true, tension:.4, yAxisID:'y' },
               { label:t('Transactions'), data:trend.transactions||[], borderColor:'#a855f7', backgroundColor:'transparent', borderDash:[4,4], type:'bar', yAxisID:'y1' }
             ]},
+            // FIX ROUND F4: "actually USE... legendOptions" -- 2 datasets,
+            // so shouldShowLegend(2) is true and this renders the same
+            // legend the manual object below always did; the win is this
+            // now goes through the one shared decision, not a copy of it.
             opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{labels:{color:tickClr}} },
+              plugins:{ legend: (window.AuraChartTheme ? AuraChartTheme.legendOptions(2) : { labels:{color:tickClr} }) },
               scales:{ y:{ticks:{color:tickClr,callback:(v,i,ticks)=>axisMoney(v,ticks)},grid:{color:gridClr}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:tickClr},grid:{display:false}} } }
@@ -14960,7 +15809,7 @@ const RetailSystem = {
               { label:this._revenueLabel(), data:top.revenue||[], backgroundColor:'#0c8b61' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{labels:{color:tickClr}} },
+              plugins:{ legend: (window.AuraChartTheme ? AuraChartTheme.legendOptions(2) : { labels:{color:tickClr} }) },
               scales:{ y:{ticks:{color:tickClr},grid:{color:gridClr}},
                 x:{ticks:{color:tickClr,maxRotation:30},grid:{display:false}} } }
           }],
@@ -14973,7 +15822,7 @@ const RetailSystem = {
               { label:t('Transactions'), data:byBranch.transactions||[], backgroundColor:'#a855f7', yAxisID:'y1' }
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{labels:{color:tickClr}} },
+              plugins:{ legend: (window.AuraChartTheme ? AuraChartTheme.legendOptions(2) : { labels:{color:tickClr} }) },
               scales:{ y:{ticks:{color:tickClr,callback:(v,i,ticks)=>axisMoney(v,ticks)},grid:{color:gridClr}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:tickClr},grid:{display:false}} } }
@@ -15067,7 +15916,7 @@ const RetailSystem = {
     // headline test in this screen's brief.
     const today = new Date();
     const monthAgo = new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000);
-    const toISO = (d) => d.toISOString().slice(0, 10);
+    const toISO = (d) => this._localISODate(d);   // FIX ROUND 3: local, not UTC
 
     c.innerHTML = `
       <div class="sub-chart-card">
@@ -15841,7 +16690,7 @@ const RetailSystem = {
       // Every action button gated on retail.employees, not on the screen's
       // own retail.reports gate above -- see this section's header comment.
       const canManage = !window.SubsystemApp || SubsystemApp.hasCapability('retail.employees');
-      const today = new Date().toISOString().slice(0, 10);
+      const today = this._localISODate();   // FIX ROUND 3: the shop's own day, not UTC
       tbody.innerHTML = rows.map(row => {
         const label = t(this._CHEQUE_STATUS_LABEL[row.status] || row.status);
         const color = this._CHEQUE_STATUS_COLOR[row.status] || 'blue';
@@ -16174,17 +17023,192 @@ const RetailSystem = {
     return this._PARTY_STATEMENT_KIND[kind] || { label: 'Payment', sign: -1 };
   },
 
+  // FIX ROUND 3 (HIGH-1/2): there is no client-side ageing any more. The
+  // till used to run its OWN FIFO over the statement's events (`_fifoAging`)
+  // while the server's `/reports/aging` used a different rule, so one debt
+  // showed two numbers -- and the client copy dropped prepayments (pay 20,
+  // then buy 30: the customer owes 10, the reminder said 30). The server now
+  // owns ONE allocation (retail_api.py `_customer_aging`, computed from the
+  // same events the statement lists) and returns, per customer,
+  // `oldest_unpaid_date`, `oldest_unpaid_amount`, `days_overdue` and
+  // `overdue_amount` on BOTH `/reports/aging` (`customers[]`) and the
+  // customer statement (`data`). Remind, the Statement message and the
+  // Receivables Remind visibility read ONLY those fields. Do not re-derive
+  // them here: a second allocation is exactly how the two numbers appeared.
+  _agingFieldsFrom(src) {
+    const s = src || {};
+    const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+    return {
+      oldestUnpaidDate: s.oldest_unpaid_date || null,
+      oldestUnpaidAmount: s.oldest_unpaid_amount == null ? null : num(s.oldest_unpaid_amount),
+      daysOverdue: Math.max(0, Math.floor(num(s.days_overdue))),
+      overdueAmount: num(s.overdue_amount),
+      // Signed part of the STORED balance that no sale or payment on this
+      // computer explains (an import, an old backfill, a sale synced from
+      // another till). Shown as a note to the shopkeeper only -- it is never
+      // part of any WhatsApp message to a customer.
+      unbookedAmount: num(s.unbooked_amount),
+    };
+  },
+
+  // Small neutral note under a balance when the server says part of it is
+  // not matched to a sale on this computer. '' when |unbooked| is within
+  // half a minor unit (the same epsilon every other money gate here uses).
+  // Text only, no colour that reads as an alarm: it is information, not an
+  // error. Deliberately NOT read by _shareReminderOnWhatsApp or
+  // _shareStatementOnWhatsApp.
+  _unbookedNote(aging) {
+    const amt = aging && aging.unbookedAmount;
+    if (!amt || Math.abs(amt) <= this._halfMinorUnit()) return '';
+    const text = t("{amount} of this balance isn't matched to a sale on this computer")
+      .replace('{amount}', this._fmt(amt));
+    return `<div data-unbooked-note style="font-size:11px;font-weight:400;color:var(--text-muted);margin-top:2px">${this._esc(text)}</div>`;
+  },
+
   // customers/receivables + suppliers/payables live under the plural
   // collection name; <id>/statement and <id>/payments hang off the same
   // base per party type. One base per kind, read once, so a route typo can
   // only happen here instead of at every call site below.
   _partyApiBase(kind) { return kind === 'supplier' ? '/api/sub/retail/suppliers' : '/api/sub/retail/customers'; },
 
+  // P1a item #6, "Multi-computer honesty" (contract.md): customers.
+  // credit_balance is local to THIS device until the sync wave that carries
+  // it (W4b) lands, so a WhatsApp Statement or Remind built from THIS
+  // computer's balance can be wrong the moment a second till exists on the
+  // same shop. Statement/Remind are disabled -- with their reason shown,
+  // never silently -- on a computer that is part of a shop network; a
+  // receipt (item #6's OTHER surface) is unaffected, because a completed
+  // sale's own total is this device's own authoritative fact regardless of
+  // how many other tills exist.
+  //
+  // FIX ROUND (F1): the previous version used SubsystemApp._isJoinedDevice,
+  // which reads a `lic` payload's `installation_id`/needs_setup fields --
+  // fields that are meaningful only during the FIRST-RUN decision
+  // (_openFirstRun in app-shell.js, the ONLY place that predicate is ever
+  // called today) and stay populated/true for the rest of that device's
+  // life regardless of whether a shop network still exists. Verified live:
+  // `shopNetworkActive` read `true` on a perfectly ordinary SINGLE licensed
+  // computer, which meant Statement/Remind were dead on every shop that had
+  // ever finished activation -- not the "part of a network" case this
+  // existed to catch at all.
+  //
+  // THE REAL RULE, from existing endpoints only, both read-only:
+  //   (a) "this computer is a CLIENT of another computer's hub" --
+  //       `SubsystemApp.isAdminDevice` (populated at boot from GET /api/
+  //       devices/me, `is_admin_device`). This is the right signal because
+  //       "admin device" IS this product's existing name for "the one
+  //       computer a shop set up first" -- every OTHER computer on the same
+  //       licence, by construction, reached this company's data by joining
+  //       that first one (through activation or through LAN pairing), so
+  //       `!isAdminDevice` already means "at least one other computer
+  //       shares this shop's data" without this file inventing a second
+  //       concept for the same fact. No network call needed for this half.
+  //   (b) "this computer IS the hub, and >=1 device has paired to it" --
+  //       GET /api/site-relay/status (commercial_runtime/sync/site_relay/
+  //       admin_routes.py), the SAME route app-shell.js's own Connected-
+  //       services poll already classifies (`{enabled, devices:[{revoked}]}`,
+  //       `enabled:false` on a plain 200 when this install is not a hub at
+  //       all -- never a 404, per that route's own comment). "at least one
+  //       non-revoked paired device" mirrors that same poll's own
+  //       `active > 0` reading exactly.
+  //
+  // ERROR HANDLING (F1): "never enable on error" -- a failed site-relay
+  // check answers `{active:true, reason:'error'}`, the SAME disabled state
+  // as a genuine network, just with its own honest reason instead of
+  // silently reporting "not networked" (which the OLD code's fail-open did,
+  // backwards from what a money-adjacent feature should do on an unknown).
+  // FIX ROUND 3 (HIGH-3, "joined must mean joined"): the round-1 rule read
+  // `!isAdminDevice` alone as "this computer is a client of a hub". A SINGLE
+  // licensed computer whose admin-device claim never ran (fresh install, the
+  // owner has not signed up yet, or a database restored without the flag) has
+  // isAdminDevice=false too -- and was therefore treated as joined, which left
+  // Statement/Remind dead on a shop with exactly one till.
+  //
+  // Explicit joined signal: looked for one first. GET /api/devices/me carries
+  // only the device row plus `can_claim_admin`; the join flow persists
+  // `sync_relay_base_url` on the LICENCE record (autojoin.py), but Owner's own
+  // activation writes that same field for the cloud relay, so a lone activated
+  // computer would read "joined" -- the exact bug again. Nothing else the join
+  // flow persists is readable from the browser. So the rule is derived:
+  //   joined  = isAdminDevice === false AND canClaimAdminDevice === false
+  //   (canClaimAdminDevice is the server saying "nobody in this company has
+  //   claimed the admin seat yet" -- if that is true this computer cannot be
+  //   a client of somebody else's hub, so it is NOT joined.)
+  // An unknown answer (either flag not a boolean, e.g. the shell never
+  // finished booting) is never treated as joined-by-default: it falls through
+  // to the site-relay check, which fails CLOSED on error.
+  //
+  // FIX ROUND 3 (M1, stale cache): the answer used to be cached for the life
+  // of the page, so pairing a phone mid-session left Remind enabled until a
+  // reload. It is now re-read (`force`) every time Receivables or a statement
+  // opens, and the cache is dropped on window focus. One call per open, no
+  // polling. Each refresh also re-reads GET /api/devices/me so a claim made
+  // in another window is seen.
+  async _shopNetworkState(force) {
+    if (!force && this._shopNetworkStateCache) return this._shopNetworkStateCache;
+    let isAdmin = window.SubsystemApp ? SubsystemApp.isAdminDevice : undefined;
+    let canClaim = window.SubsystemApp ? SubsystemApp.canClaimAdminDevice : undefined;
+    if (force) {
+      try {
+        const dev = await fetch('/api/devices/me', { credentials: 'include', cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : null));
+        if (dev && dev.success && dev.device) {
+          isAdmin = dev.device.is_admin_device === true;
+          canClaim = dev.can_claim_admin === true;
+        }
+      } catch (e) { /* keep the boot-time values */ }
+    }
+    let result;
+    if (isAdmin === false && canClaim === false) {
+      // Conclusive -- a client of another computer's hub.
+      result = { active: true, reason: null };
+    } else {
+      try {
+        const resp = await fetch('/api/site-relay/status', { credentials: 'include', cache: 'no-store' });
+        if (!resp.ok) throw new Error('site-relay status ' + resp.status);
+        const body = await resp.json();
+        const data = body || {};
+        const hasPeer = !!data.enabled && (data.devices || []).some((d) => !d.revoked);
+        result = { active: hasPeer, reason: null };
+      } catch (e) {
+        result = { active: true, reason: 'error' };
+      }
+    }
+    this._shopNetworkStateCache = result;
+    return result;
+  },
+
+  // M1: drop the cached answer whenever the window regains focus (pairing is
+  // done on another screen/device, then the owner comes back). Bound once.
+  _bindShopNetworkFocus() {
+    if (this._shopNetFocusBound || typeof window === 'undefined' || !window.addEventListener) return;
+    this._shopNetFocusBound = true;
+    window.addEventListener('focus', () => {
+      this._shopNetworkStateCache = null;
+      // If Receivables is on screen right now, repaint it so Remind flips
+      // without the owner having to navigate away and back.
+      if (typeof document !== 'undefined' && document.getElementById && document.getElementById('pl-table-customer')) {
+        this._loadPartyLedger('customer');
+      }
+    });
+  },
+
+  // The reason text for a disabled Statement/Remind control, from
+  // _shopNetworkState()'s own two disabled cases -- kept as one function so
+  // the wording can never drift between the two call sites (Receivables
+  // rows, the statement modal).
+  _shopNetworkDisabledReason(state) {
+    return state.reason === 'error'
+      ? t("Can't check whether your computers share balances right now")
+      : t('Available once customer balances are shared between your computers');
+  },
+
   async _renderReceivables(c) { return this._renderPartyLedger(c, 'customer'); },
   async _renderPayables(c)    { return this._renderPartyLedger(c, 'supplier'); },
 
   async _renderPartyLedger(c, kind) {
     this._injectStyles();
+    this._bindShopNetworkFocus();
     const isSupplier = kind === 'supplier';
     // Same defence-in-depth every other retail.reports screen carries (see
     // _renderCheques'/_renderReports' identical guard immediately above) --
@@ -16223,8 +17247,8 @@ const RetailSystem = {
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="pl-table-${kind}">
-            <thead><tr><th>${t('Name')}</th><th>${t('Phone')}</th><th>${t('Balance')}</th></tr></thead>
-            <tbody><tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+            <thead><tr><th>${t('Name')}</th><th>${t('Phone')}</th><th>${t('Balance')}</th>${isSupplier ? '' : `<th>${t('Remind')}</th>`}</tr></thead>
+            <tbody><tr><td colspan="${isSupplier ? 3 : 4}" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -16262,7 +17286,7 @@ const RetailSystem = {
       const tbody = document.querySelector(`#pl-table-${kind} tbody`);
       if (!tbody) return;
       if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="3">${this._emptyState({
+        tbody.innerHTML = `<tr><td colspan="${isSupplier ? 3 : 4}">${this._emptyState({
           icon: isSupplier ? 'send' : 'wallet',
           title: isSupplier ? t('No outstanding payables') : t('No outstanding receivables'),
           hint: isSupplier
@@ -16271,14 +17295,82 @@ const RetailSystem = {
         })}</td></tr>`;
         return;
       }
-      // Every interpolated value here is escaped (see this._esc): a
-      // customer/supplier name or phone can arrive from another device over
-      // the sync relay, mirroring _loadCustomers' identical note above.
-      tbody.innerHTML = rows.map(row => `<tr onclick="RetailSystem._openPartyStatement('${kind}','${this._esc(row.id)}')">
+      // P1a item #6 ("each overdue row 'Remind'"): checked ONCE per screen
+      // load (_shopNetworkState caches its own answer), not once per row --
+      // the answer cannot change between rows in the same render.
+      const netState = isSupplier ? { active: false, reason: null } : await this._shopNetworkState(true);
+      // FIX ROUND 3 (HIGH-1/2): "is this row overdue" is the SERVER's
+      // answer, read from the `customers[]` list of the aging response this
+      // screen already fetched -- no per-customer statement fetch and no
+      // client FIFO. A row is overdue only when `overdue_amount` clears half
+      // a minor unit (the same epsilon every other money gate here uses).
+      this._partyAgingById = new Map();
+      this._receivablesById = new Map();
+      if (!isSupplier) {
+        rows.forEach((row) => this._receivablesById.set(String(row.id), row));
+        ((agingResp && agingResp.customers) || []).forEach((c) => {
+          this._partyAgingById.set(String(c.id), this._agingFieldsFrom(c));
+        });
+      }
+      // FIX ROUND F2 (stored XSS): NO user-typed value (name, phone) is ever
+      // spliced into an onclick/attribute string again. Every row carries
+      // only its own server-generated id in a data- attribute; name/phone/
+      // amount are looked up back out of this._receivablesById by the click
+      // handlers wired up AFTER innerHTML is set, below. `this._esc(row.id)`
+      // stays only for the id itself (still worth escaping defensively, even
+      // though ids are server UUIDs) and for plain TEXT content, never for
+      // anything that lands inside an onclick="..." string.
+      // M7: a disabled Remind says WHY in visible text under the button
+      // (same pattern as the till's credit tile, F7), not only in a `title`
+      // a keyboard or touch user never sees. `aria-describedby` ties the two.
+      const disabledRemind = (rid, reason) =>
+        `<td onclick="event.stopPropagation()"><button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" disabled
+           aria-describedby="remind-why-${rid}" title="${this._esc(reason)}">${t('Remind')}</button>
+           <div class="ret-btn-reason" id="remind-why-${rid}" data-remind-reason>${this._esc(reason)}</div></td>`;
+      tbody.innerHTML = rows.map(row => {
+        const rid = this._esc(row.id);
+        let remindCell = '';
+        if (!isSupplier) {
+          if (netState.active) {
+            remindCell = disabledRemind(rid, this._shopNetworkDisabledReason(netState));
+          } else {
+            const aging = this._partyAgingById.get(String(row.id)) || { overdueAmount: 0 };
+            if (aging.overdueAmount > this._halfMinorUnit()) {
+              const hasPhone = !!(row.phone && String(row.phone).trim());
+              if (!hasPhone) {
+                remindCell = disabledRemind(rid, t('No WhatsApp number for this customer'));
+              } else {
+                remindCell = `<td onclick="event.stopPropagation()" style="display:flex;gap:4px">
+                  <button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" data-remind-id="${rid}" data-remind-tone="polite">${t('Remind')}</button>
+                  <button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" data-remind-id="${rid}" data-remind-tone="firm" title="${this._esc(t('Send a firmer reminder'))}">${t('Firm')}</button>
+                </td>`;
+              }
+            } else {
+              // Nothing overdue (server said so) -- nothing to remind about.
+              remindCell = '<td onclick="event.stopPropagation()"></td>';
+            }
+          }
+        }
+        return `<tr data-open-statement-kind="${this._esc(kind)}" data-open-statement-id="${rid}">
         <td style="font-weight:600">${this._partyOpenerButton(kind, row.id, row.name, row.phone)}</td>
         <td style="color:var(--text-muted)">${row.phone ? this._esc(row.phone) : '—'}</td>
-        <td style="font-weight:600;color:var(--text-money)">${this._fmt(row.credit_balance)}</td>
-      </tr>`).join('');
+        <td style="font-weight:600;color:var(--text-money)">${this._fmt(row.credit_balance)}${isSupplier ? '' : this._unbookedNote(this._partyAgingById.get(String(row.id)))}</td>
+        ${remindCell}
+      </tr>`;
+      }).join('');
+      // Delegated once per render, not one closure per row -- matches this
+      // file's existing convention for anything wired after innerHTML
+      // (_wireModalA11y and friends).
+      tbody.querySelectorAll('tr[data-open-statement-id]').forEach((tr) => {
+        tr.addEventListener('click', () => {
+          this._openPartyStatement(tr.dataset.openStatementKind, tr.dataset.openStatementId);
+        });
+      });
+      tbody.querySelectorAll('button[data-remind-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          this._shareReminderOnWhatsApp(btn.dataset.remindId, btn.dataset.remindTone || 'polite');
+        });
+      });
     } catch (e) {
       // VISIBLE failure, not a console one. This catch used to be
       // `console.error(e)` alone, which left the table and the aging strip
@@ -16332,11 +17424,22 @@ const RetailSystem = {
       // carries rather than branching on `kind` a second time here.
       const party = resp.customer || resp.supplier || {};
       const events = resp.events || [];
+      // P1a item #6: stored the same way _showReceipt stores _lastSaleData --
+      // the Send-Statement button below reads it by name rather than having
+      // the whole events array (untrusted names/refs relayed from another
+      // device, same reasoning _lastSaleData's own comment gives) spliced
+      // into an inline onclick attribute.
+      this._lastStatementContext = { kind, id, party, events, balance: resp.balance, aging: this._agingFieldsFrom(resp) };
+      const netState = kind === 'supplier' ? { active: false, reason: null } : await this._shopNetworkState(true);
       const overlay = document.createElement('div');
       overlay.className = 'ret-modal-overlay';
       overlay.id = 'ret-statement-modal';
-      overlay.innerHTML = this._partyStatementMarkup(kind, id, party, events, resp.balance);
+      overlay.innerHTML = this._partyStatementMarkup(kind, id, party, events, resp.balance, netState, this._lastStatementContext.aging);
       document.body.appendChild(overlay);
+      // FIX ROUND F2: wired here, not as an inline onclick -- the button
+      // markup below carries no data of its own, id is a plain literal.
+      const sendBtn = document.getElementById('stmt-send-btn');
+      if (sendBtn) sendBtn.addEventListener('click', () => this._shareStatementOnWhatsApp());
       const _closeStatement = this._wireModalA11y(overlay, 'ret-statement-dialog');
       overlay.addEventListener('click', e => { if (e.target === overlay) _closeStatement(); });
     } catch (e) {
@@ -16345,7 +17448,7 @@ const RetailSystem = {
     }
   },
 
-  _partyStatementMarkup(kind, id, party, events, balance) {
+  _partyStatementMarkup(kind, id, party, events, balance, netState, aging) {
     const isSupplier = kind === 'supplier';
     const balanceLabel = isSupplier ? t('You Owe') : t('Owed to You');
     const eventsHtml = events.length ? events.map(e => {
@@ -16402,13 +17505,130 @@ const RetailSystem = {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
           <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Phone')}</div><div style="color:var(--text-primary);font-weight:600">${party.phone ? this._esc(party.phone) : '—'}</div></div>
-          <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${balanceLabel}</div><div style="color:var(--text-money);font-weight:700;font-size:18px">${this._fmt(balance)}</div></div>
+          <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${balanceLabel}</div><div style="color:var(--text-money);font-weight:700;font-size:18px">${this._fmt(balance)}</div>${isSupplier ? '' : this._unbookedNote(aging)}</div>
         </div>
+        <!-- P1a item #6 ("Send on WhatsApp" -- statement): customer only
+             (a supplier statement is what the SHOP owes, not a message the
+             shop sends a customer's phone), disabled with its reason on a
+             computer that is part of a shop network -- see
+             _shopNetworkState's own comment -- and disabled (F16) when this
+             customer has no usable phone number at all. FIX ROUND F2: no
+             onclick carrying anything; wired in _openPartyStatement above. -->
+        ${isSupplier ? '' : (() => {
+          // M7: the reason is visible text under the disabled button, not
+          // only a title (see disabledRemind in _loadPartyLedger).
+          const why = netState.active
+            ? this._shopNetworkDisabledReason(netState)
+            : ((!party.phone || !String(party.phone).trim()) ? t('No WhatsApp number for this customer') : '');
+          if (why) {
+            return `<div style="margin-bottom:16px"><button type="button" class="ret-btn ret-btn-ghost" disabled id="stmt-send-btn-off"
+              aria-describedby="stmt-send-why" title="${this._esc(why)}">${t('Send Statement')}</button>
+              <div class="ret-btn-reason" id="stmt-send-why" data-stmt-reason>${this._esc(why)}</div></div>`;
+          }
+          return `<div style="margin-bottom:16px"><button type="button" class="ret-btn ret-btn-ghost" id="stmt-send-btn">${t('Send Statement')}</button></div>`;
+        })()}
         <table class="ret-table">
           <thead><tr><th>${t('Date')}</th><th>${t('Reference')}</th><th>${t('Description')}</th><th>${t('Amount')}</th><th>${t('Running Balance')}</th></tr></thead>
           <tbody>${eventsHtml}</tbody>
         </table>${paymentBlock}
       </div>`;
+  },
+
+  // P1a item #6 ("Send on WhatsApp" -- customer statement). Reads the
+  // context _openPartyStatement stashed (this._lastStatementContext), the
+  // same "store it, do not re-splice untrusted data into an attribute"
+  // pattern _showReceipt uses for _lastSaleData. The button that calls this
+  // does not exist at all when netState.active was true, or the customer had
+  // no phone (see _partyStatementMarkup) -- this is not a second enforcement
+  // of either gate, just the data plumbing for the allowed case.
+  async _shareStatementOnWhatsApp() {
+    const ctx = this._lastStatementContext;
+    if (!ctx || !window.AuraShare) {
+      SubsystemApp.showToast(t('WhatsApp sending is not available on this build.'), 'error');
+      return;
+    }
+    const events = ctx.events || [];
+    // FIX ROUND 3 (HIGH-1/2): the "oldest unpaid" line is the server's own
+    // FIFO answer for this customer (ctx.aging, read from the same statement
+    // response the balance came from), so the message can never contradict
+    // its own balance line.
+    const aging = ctx.aging || this._agingFieldsFrom(null);
+    // FIX ROUND F3(a): the endpoint's `events` are oldest-first
+    // (customer_statement, retail_api.py: `events.sort(key=lambda e:
+    // e.get('created_at') or '')`) -- verified live, and the OLD code's
+    // `events.slice(0,5)` therefore sent the OLDEST 5 lines, backwards from
+    // "recent activity". `.slice(-5).reverse()` takes the last 5 (newest)
+    // and puts the most recent first, the order a "what's happened lately"
+    // line is actually read in.
+    const lang = await this._shareMessageLang();
+    const recentLines = events.slice(-5).reverse().map(e => ({
+      label: this._translateForLang(this._partyStatementKind(e.kind).label, lang),
+      amount: e.amount,
+      date: this._formatDateForLang(e.date, lang),
+    }));
+    const shopName = (window.SubsystemApp && SubsystemApp._shopDisplayName && SubsystemApp._shopDisplayName()) || '';
+    const text = AuraShare.buildStatementText({
+      shopName,
+      customerName: ctx.party && ctx.party.name,
+      balance: ctx.balance,
+      oldestUnpaid: (aging.oldestUnpaidDate && aging.oldestUnpaidAmount != null && aging.oldestUnpaidAmount > this._halfMinorUnit())
+        ? { amount: aging.oldestUnpaidAmount, date: this._formatDateForLang(aging.oldestUnpaidDate, lang) }
+        : null,
+      recentLines,
+      currency: this._currencySymbol || 'JD',
+      lang,
+      formatMoney: (n) => this._fmtForLang(n, lang),
+    });
+    const phone = ctx.party && ctx.party.phone;
+    const opened = AuraShare.whatsapp(phone, text);
+    if (!opened) {
+      SubsystemApp.showToast(t('That does not look like a WhatsApp number.'), 'error');
+      return;
+    }
+    AuraShare.logShare('statement', ctx.id);
+    SubsystemApp.showToast(t('Opened WhatsApp — press Send there to finish.'), 'success');
+  },
+
+  // P1a item #6 ("each overdue row 'Remind'"). `customerId`/`tone` are the
+  // only two things this needs from the caller -- name/phone come from
+  // this._receivablesById and the server's ageing fields from
+  // this._partyAgingById, BOTH filled once while _loadPartyLedger built the
+  // table (the aging response carries them) -- this reads them back rather
+  // than re-fetching.
+  async _shareReminderOnWhatsApp(customerId, tone) {
+    if (!window.AuraShare) {
+      SubsystemApp.showToast(t('WhatsApp sending is not available on this build.'), 'error');
+      return;
+    }
+    const row = (this._receivablesById && this._receivablesById.get(String(customerId))) || null;
+    const aging = (this._partyAgingById && this._partyAgingById.get(String(customerId)))
+      || this._agingFieldsFrom(null);
+    if (!row) return;
+    // FIX ROUND F3(d): the SENDER picks polite (default) or firm -- never
+    // auto-selected from the day count. `tone` comes straight from which of
+    // the two Remind-cell buttons was pressed (_loadPartyLedger).
+    const useTone = tone === 'firm' ? 'firm' : 'polite';
+    const shopName = (window.SubsystemApp && SubsystemApp._shopDisplayName && SubsystemApp._shopDisplayName()) || '';
+    const lang = await this._shareMessageLang();
+    const text = AuraShare.buildReminderText({
+      customerName: row.name,
+      // The server's `overdue_amount`: every open FIFO remainder that is
+      // past due -- what the customer actually owes late, prepayments
+      // already netted off.
+      amount: aging.overdueAmount,
+      daysOverdue: aging.daysOverdue,
+      currency: this._currencySymbol || 'JD',
+      shopName,
+      lang,
+      formatMoney: (n) => this._fmtForLang(n, lang),
+    }, useTone);
+    const opened = AuraShare.whatsapp(row.phone, text);
+    if (!opened) {
+      SubsystemApp.showToast(t('That does not look like a WhatsApp number.'), 'error');
+      return;
+    }
+    AuraShare.logShare('reminder', customerId);
+    SubsystemApp.showToast(t('Opened WhatsApp — press Send there to finish.'), 'success');
   },
 
   async _submitPartyPayment(kind, id) {
@@ -16875,7 +18095,7 @@ const RetailSystem = {
     // boundaries and never lines up with anything else the shop files).
     const today = new Date();
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const toISO = (d) => d.toISOString().slice(0, 10);
+    const toISO = (d) => this._localISODate(d);   // FIX ROUND 3: local, not UTC
 
     c.innerHTML = `
       <div class="ret-hdr">
@@ -17170,7 +18390,11 @@ const RetailSystem = {
     // reasoning _renderProfitAndLoss's own comment gives for its own
     // month-to-date default.
     const today = new Date();
-    const toISO = (d) => d.toISOString().slice(0, 10);
+    // FIX ROUND 3: LOCAL calendar date, not the UTC slice -- between 00:00
+    // and 03:00 Jordan time the UTC date is still YESTERDAY, so the as-of
+    // control defaulted to a day on which today's sales did not exist yet
+    // and the sheet read "Nothing has been posted". See _localISODate.
+    const toISO = (d) => this._localISODate(d);
 
     c.innerHTML = `
       <div class="ret-hdr">
@@ -17445,7 +18669,8 @@ const RetailSystem = {
     // conventionally read the same way a P&L is, "this month so far".
     const today = new Date();
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const toISO = (d) => d.toISOString().slice(0, 10);
+    // FIX ROUND 3: LOCAL calendar date, not the UTC slice -- see _localISODate.
+    const toISO = (d) => this._localISODate(d);
 
     c.innerHTML = `
       <div class="ret-hdr">
