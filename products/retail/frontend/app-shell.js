@@ -499,6 +499,21 @@ const SubsystemApp = {
     return 'hidden';
   },
 
+  // P1b: "would the sidebar list this as a normal, usable row for this person?"
+  // -- the question the command palette must ask, and the only one. It is
+  // _navItemState === 'visible' PLUS the one extra rule the sidebar applies to
+  // Dashboard on top of the per-item gates: a sell-only cashier's home is the
+  // till, and a Dashboard row would land them on a refusal card (see
+  // dashboardHTML in _renderShell). That rule used to live only inline in the
+  // renderer, so the palette -- which asks _navItemState -- offered a cashier
+  // a Dashboard the sidebar hides (found by retail_p1b_palette_e2e.py's
+  // palette-vs-sidebar set comparison). One rule, asked from both places.
+  _isPageOffered(item) {
+    if (this._navItemState(item) !== 'visible') return false;
+    if (item.id === 'dashboard' && this._isSellOnlyCapabilities()) return false;
+    return true;
+  },
+
   // What a click (or Enter/Space) on a 'main-only' row does: explain, never
   // navigate. The sentence is ALSO printed on the row itself, so this toast is
   // the confirmation of what the row already says, not the only place it lives.
@@ -1098,21 +1113,30 @@ const SubsystemApp = {
         // -- the exact state the promise above is made in. See
         // retail_backup_export_test.js's testWorksUnderRestrictedLicence.
         { id: 'backup-export', label: 'Backup & Export', icon: '💾', ownerOnly: true, capability: 'retail.reports' },
-        // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
-        // above -- refund/void/product-change audit trail carries every
-        // user's attribution, not just this device's, so it's gated the
-        // same way rather than shown to every logged-in user. The backend
-        // route (GET /api/sub/retail/audit-log) also enforces this itself
-        // (see retail_api.py's _is_admin_device) -- unlike Admin Center's
-        // reorder-requests route, this one does NOT rely on nav-hiding alone.
+        // feat/audit-log-viewer, then P1b item 3: the refund/void/product-
+        // change audit trail carries every user's attribution, and it is the
+        // OWNER's tool for checking on staff -- so it is gated on the PERSON
+        // (`ownerOnly`, role admin), not on the DEVICE. It was `adminOnly`
+        // (this computer is the main computer) until P1b: an owner who joined
+        // a second till found the entry missing, or (P1a polish F5) greyed out
+        // with "can only be opened on the main computer" -- a rule about a
+        // machine, put in front of a person who was allowed to see the data
+        // all along. The backend route (GET /api/sub/retail/audit-log) makes
+        // the same call now (role admin on ANY computer; crew B), so the
+        // sidebar and the server cannot disagree about who may open it.
         //
-        // Both axes, because list_audit_log gates on both and its docstring
-        // says why in as many words: the device check answers "is this the
-        // shop's admin terminal", the capability answers "is this person
-        // allowed to read the shop's records". `adminOnly` alone leaves a
-        // cashier standing AT the admin terminal looking at an entry that
-        // 403s -- the identical bug the Reports entry above just had.
-        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true, readOnly: true, capability: 'retail.reports' },
+        // What stays honest is the SCOPE: the log holds this computer's
+        // records, so the screen is titled "Audit log (this computer)" (see
+        // `screenTitle`, read by _navigate) while the sidebar and Ctrl+K keep
+        // the short name "Audit Log". `capability` stays: `ownerOnly` alone
+        // would let a role-admin whose grant list lacks retail.reports see an
+        // entry that 403s, the identical bug the Reports entry above had.
+        //
+        // The device-bound 'main-only' mechanism (`adminOnly` + `readOnly`,
+        // _navItemState / _mainOnlySentence) is deliberately KEPT for the next
+        // screen that really is bound to one machine; retail_p1a_shell_polish_
+        // e2e.py now drives it through a test-only fixture item.
+        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', ownerOnly: true, capability: 'retail.reports', screenTitle: 'Audit log (this computer)' },
         // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md): the stock
         // accuracy report, over GET /api/sub/retail/inventory/reconciliation.
         //
@@ -3369,7 +3393,7 @@ const SubsystemApp = {
     // lands: unknown/null capabilities fail OPEN there (routes to
     // dashboard) and therefore fail OPEN here too (dashboard entry stays
     // visible) -- one rule, not a second copy that could drift.
-    const dashboardHTML = (dashboardItem && this._isNavItemVisible(dashboardItem) && !this._isSellOnlyCapabilities())
+    const dashboardHTML = (dashboardItem && this._isNavItemVisible(dashboardItem) && this._isPageOffered(dashboardItem))
       ? navItemHTML(dashboardItem) : '';
 
     // ── Connected services status dots (P1a item 5) ─────────────────────────
@@ -3533,6 +3557,8 @@ const SubsystemApp = {
           <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();AuraI18n.toggle()">${t('Language')}</button>
           <button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();ThemeEngine.openPicker()">${t('Appearance')}</button>
           ${this.role === 'admin' ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.openLicensing()">${t('Plan & devices')}</button>` : ''}
+          ${this._hasHelp() ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-action="help" onclick="SubsystemApp._closeIdentityMenu();AuraHelp.open()">${t('Help')}</button>` : ''}
+          ${this.role === 'admin' && this._hasSetupGuide() ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-action="setup-guide" onclick="SubsystemApp._closeIdentityMenu();window.AuraSetupGuide.open()">${t('Setup guide')}</button>` : ''}
           <button type="button" class="sub-identity-menu-item is-danger" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.logout()">${t('Log Out')}</button>
         </div>
       </div>
@@ -3663,6 +3689,20 @@ const SubsystemApp = {
             <span class="sub-header-section" id="sub-header-section">${t('Dashboard')}</span>
           </div>
           <div class="sub-header-right">
+            <!-- P1b item 7: the command palette's door. A 36px-tall control on
+                 purpose -- the header's height is padding + its tallest child
+                 (see .sub-identity-chip-btn's own pin), so this must never be
+                 taller than the other header controls or every screen loses a
+                 row of pixels. Below 900px the words and the key hint drop away
+                 and it is a 36px icon button (the aria-label keeps the name). -->
+            <button type="button" class="sub-palette-trigger" id="aura-palette-trigger"
+               aria-haspopup="dialog"
+               title="${t('Search or jump to…')}" aria-label="${t('Search or jump to…')}"
+               onclick="window.AuraPalette && AuraPalette.open()">
+              <span class="sub-palette-trigger-icon" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('search', 15) : '🔍'}</span>
+              <span class="sub-palette-trigger-text">${t('Search or jump to…')}</span>
+              <kbd class="sub-palette-trigger-key" dir="ltr" aria-hidden="true">${this._paletteHintLabel()}</kbd>
+            </button>
             <button class="sub-header-btn" id="aura-lang-toggle" onclick="AuraI18n.toggle()" title="Language / اللغة" style="font-size:13px;font-weight:700;">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</button>
             <!-- Theme control. ThemeEngine is the light/dark switch now (the
                  old accent-palette picker it replaced is documented on the
@@ -3763,6 +3803,21 @@ const SubsystemApp = {
     const label = role === 'admin' ? t('Owner') : role === 'manager' ? t('Manager') : t('Cashier');
     return `<span class="sub-role-pill ${cls}">${label}</span>`;
   },
+
+  // ── P1b: palette / help / setup-guide wiring ───────────────────────────────
+  // Ctrl on Windows/Linux, the command key on a Mac. Only the LABEL differs;
+  // palette.js accepts either modifier (e.ctrlKey || e.metaKey).
+  _paletteHintLabel() {
+    return /Mac|iPhone|iPad/i.test((navigator && navigator.platform) || '') ? '\u2318K' : 'Ctrl K';
+  },
+
+  // Each of these is a script that may not be there: help.js and palette.js
+  // ship with this crew, but the setup guide is a LATER wave's module. An
+  // entry for a thing that does not exist would be a dead button, so every
+  // caller asks first and simply renders nothing when the answer is no -- the
+  // shell never depends on load order, only on what is present at render time.
+  _hasHelp() { return !!(window.AuraHelp && typeof window.AuraHelp.open === 'function'); },
+  _hasSetupGuide() { return !!(window.AuraSetupGuide && typeof window.AuraSetupGuide.open === 'function'); },
 
   // ── Generic dropdown-menu controller (fix round M2) ─────────────────────
   // Both the identity chip's menu and the settings-gear menu (H1) are the
@@ -4266,8 +4321,11 @@ const SubsystemApp = {
     // ONLY title, not a chip next to a separate one).
     const sys = this.systems[this.active];
     const navItem = sys?.nav.find(n => n.id === sectionId);
+    // P1b item 3: `screenTitle` lets a screen wear a longer, more honest
+    // title in the header than the short name the sidebar and Ctrl+K use
+    // ("Audit Log" there, "Audit log (this computer)" here).
     document.getElementById('sub-header-section')?.innerText &&
-      (document.getElementById('sub-header-section').innerText = t(navItem?.label || sectionId));
+      (document.getElementById('sub-header-section').innerText = t(navItem?.screenTitle || navItem?.label || sectionId));
 
     // ── Destroy any existing Chart.js instances before replacing the DOM ──────
     const content = document.getElementById('sub-content');
@@ -4492,6 +4550,19 @@ const SubsystemApp = {
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
               <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('sparkles', 20) : '🤖'}</span>
               <span>${t('AI Assistant')}</span>
+            </button>` : '',
+      // P1b: a phone has no Ctrl+K, and the header's icon button sits in a
+      // crowded wrapped header -- give the palette and Help a labelled row here
+      // too, next to the other "utility" rows.
+      window.AuraPalette ? `
+            <button class="sub-more-row" data-action="palette" onclick="SubsystemApp._closeMoreSheet();AuraPalette.open()">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('search', 20) : '🔍'}</span>
+              <span>${t('Search or jump to…')}</span>
+            </button>` : '',
+      this._hasHelp() ? `
+            <button class="sub-more-row" data-action="help" onclick="SubsystemApp._closeMoreSheet();AuraHelp.open()">
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('circle-help', 20) : '❓'}</span>
+              <span>${t('Help')}</span>
             </button>` : '',
       `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();AuraI18n.toggle()">
@@ -4799,8 +4870,35 @@ const SubsystemApp = {
     } catch (e) { /* never let a cosmetic reflow break the shell */ }
   },
 
+  // P1b item 9 (shell half). A brand-new install (NOT_CONFIGURED is the only
+  // never-licensed state that reaches the shell -- the other pre-activation
+  // states are bounced to licensing.html by _needsActivation) used to greet
+  // its owner with a sticky amber bar on top of every screen, including the
+  // till, saying the device is not licensed. On a first run that is the FIRST
+  // thing the owner sees and it reads as an alarm. The setup checklist has a
+  // 'licence' step that says the same thing calmly and in order, so once that
+  // checklist exists the bar steps aside -- but ONLY:
+  //   * for the owner (role admin): a cashier must never lose the "you cannot
+  //     ring a sale" explanation and is never shown the setup checklist, so a
+  //     cashier keeps the bar exactly as before;
+  //   * while window.AuraSetupGuide really exists: until H's wave 2 lands
+  //     nothing replaces the bar, and removing it would leave a blocked till
+  //     with NO explanation at all -- the very onboarding failure the bar was
+  //     built for.
+  // Every other blocked state (SUSPENDED, EXPIRED, RESTRICTED ...) is not a
+  // first run and keeps its bar for everyone. Nothing here ever floats
+  // anything over the till: this only ever REMOVES a banner.
+  FIRST_RUN_LICENSE_STATES: ['NOT_CONFIGURED'],
+
+  _setupGuideOwnsFirstRun(state) {
+    return this.role === 'admin'
+      && this._hasSetupGuide()
+      && this.FIRST_RUN_LICENSE_STATES.includes(state);
+  },
+
   _renderLicenseBanner(state) {
-    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);
+    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)
+      && !this._setupGuideOwnsFirstRun(state);
     if (!blocked) {
       // Explicitly null, not merely "leave whatever it was" -- the very
       // first call this shell ever makes (a healthy ACTIVATE_ONLINE install,

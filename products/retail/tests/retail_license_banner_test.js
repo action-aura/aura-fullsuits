@@ -311,11 +311,13 @@ function testHarnessDistinguishesPresenceFromAbsence() {
  * actually catch a build that silently stopped rendering the banner. */
 async function testMutationRemovingTheBannerRenderIsCaught() {
   const mutated = mutate(SHELL_SRC, [[
+    // P1b: the condition grew a second line (`&& !this._setupGuideOwnsFirstRun`)
+    // so the anchor is the head of the function only. Mutation intent unchanged.
     `  _renderLicenseBanner(state) {
-    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);`,
+    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)`,
     `  _renderLicenseBanner(state) {
     return; // MUTATION: banner render removed entirely
-    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);`,
+    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)`,
   ]]);
   const msg = await provesMutation(
     'test 1 (a blocked state renders the banner) survived a mutant that removes the banner render entirely',
@@ -335,7 +337,10 @@ async function testMutationRemovingTheBannerRenderIsCaught() {
  * healthy, paying customer's till. */
 async function testMutationAlwaysRenderingIsCaught() {
   const mutated = mutate(SHELL_SRC, [[
-    `    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state);`,
+    // P1b: replaces the WHOLE two-line condition, including the setup-guide
+    // exemption, so this mutant still means "ignore state entirely".
+    `    const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)
+      && !this._setupGuideOwnsFirstRun(state);`,
     `    const blocked = true; // MUTATION: renders unconditionally, ignoring state`,
   ]]);
   const msg = await provesMutation(
@@ -349,8 +354,66 @@ async function testMutationAlwaysRenderingIsCaught() {
   console.log('PASS: ' + msg);
 }
 
+/* ═══ P1b: the first-run bar hands over to the setup guide -- for OWNERS only,
+ * and only while the guide actually exists. Three directions, because this
+ * guard both DENIES the bar and must still ALLOW it:
+ *   a. owner + guide present + NOT_CONFIGURED -> no bar (the checklist owns it)
+ *   b. owner + guide ABSENT                   -> bar stays (nothing replaces it)
+ *   c. cashier + guide present                -> bar stays (a cashier never
+ *      sees the checklist, so the bar is the only thing telling them)
+ *   d. owner + guide present + a NON-first-run blocked state (SUSPENDED) -> bar
+ *      stays: the guide is an onboarding aid, not a substitute for a warning. */
+function testSetupGuideOwnsFirstRunForOwnersOnly() {
+  const render = (role, hasGuide, state) => {
+    const { app, sandbox } = bootShell();
+    app.role = role;
+    if (hasGuide) sandbox.AuraSetupGuide = { open() {} };
+    app._renderLicenseBanner(state);
+    return !!app._licenseBannerEl;
+  };
+  assert.strictEqual(render('admin', true, 'NOT_CONFIGURED'), false, 'owner + guide + NOT_CONFIGURED still shows the bar');
+  assert.strictEqual(render('admin', false, 'NOT_CONFIGURED'), true, 'owner WITHOUT the guide lost the bar -- nothing replaces it');
+  assert.strictEqual(render('cashier', true, 'NOT_CONFIGURED'), true, 'a cashier lost the bar');
+  assert.strictEqual(render('admin', true, 'SUSPENDED'), true, 'owner + guide lost the SUSPENDED warning');
+  console.log('PASS: the first-run bar yields to the setup guide for owners only (4 directions)');
+}
+
+async function testSetupGuideGuardMutationsAreCaught() {
+  const nl = nlFor(SHELL_SRC);
+  const guard = nl(`    return this.role === 'admin'
+      && this._hasSetupGuide()
+      && this.FIRST_RUN_LICENSE_STATES.includes(state);`);
+  assert.strictEqual(SHELL_SRC.split(guard).length - 1, 1, 'guard anchor moved -- re-anchor this proof');
+  const noRole = SHELL_SRC.replace(guard, nl(`    return true // MUTATION: role check dropped
+      && this._hasSetupGuide()
+      && this.FIRST_RUN_LICENSE_STATES.includes(state);`));
+  const noGuide = SHELL_SRC.replace(guard, nl(`    return this.role === 'admin'
+      && true // MUTATION: guide-present check dropped
+      && this.FIRST_RUN_LICENSE_STATES.includes(state);`));
+  const noState = SHELL_SRC.replace(guard, nl(`    return this.role === 'admin'
+      && this._hasSetupGuide()
+      && true; // MUTATION: first-run-state check dropped`));
+  const run = (src, role, hasGuide, state) => {
+    const { app, sandbox } = bootShell(src);
+    app.role = role;
+    if (hasGuide) sandbox.AuraSetupGuide = { open() {} };
+    app._renderLicenseBanner(state);
+    return !!app._licenseBannerEl;
+  };
+  const msgs = [];
+  msgs.push(await provesMutation('cashier-keeps-the-bar survived a mutant that drops the role check',
+    async () => assert.strictEqual(run(noRole, 'cashier', true, 'NOT_CONFIGURED'), true, 'cashier lost the bar')));
+  msgs.push(await provesMutation('owner-without-guide-keeps-the-bar survived a mutant that drops the guide-present check',
+    async () => assert.strictEqual(run(noGuide, 'admin', false, 'NOT_CONFIGURED'), true, 'owner without guide lost the bar')));
+  msgs.push(await provesMutation('suspended-keeps-the-bar survived a mutant that drops the first-run-state check',
+    async () => assert.strictEqual(run(noState, 'admin', true, 'SUSPENDED'), true, 'SUSPENDED lost the bar')));
+  for (const m of msgs) console.log('PASS: ' + m);
+}
+
 (async () => {
   const tests = [
+    testSetupGuideOwnsFirstRunForOwnersOnly,
+    testSetupGuideGuardMutationsAreCaught,
     testBlockedStateRendersBanner,
     testActiveStateRendersNoBanner,
     testEveryDerivedBlockedStateRendersTheBanner,

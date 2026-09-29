@@ -621,8 +621,9 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # and that DEVICE flag is what unlocked Settings (the OLD `adminOnly`
     # gate on the 'admin-center' nav entry). The device-claim half of that
     # story (_autoClaimAdminOnSignup, POST /api/devices/me/claim-admin) is
-    # UNCHANGED and still proved below -- it still matters for the Audit Log
-    # entry and T's device-bound Admin Center sections. What is inverted is
+    # UNCHANGED and still proved below -- it still matters for T's device-bound
+    # Admin Center sections (P1b: the Audit Log entry is OWNER-gated now, no
+    # longer device-bound). What is inverted is
     # the SETTINGS half: the 'admin-center' nav entry now reads a capability
     # (retail.employees, which every owner/admin holds by default -- see
     # that entry's own comment in app-shell.js) instead of the device flag,
@@ -658,8 +659,8 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             "retail.employees by default, independent of any device claim"
         )
         # The device claim itself is separate, real functionality
-        # (_autoClaimAdminOnSignup, unchanged by P1a) that the Audit Log nav
-        # entry and T's device-bound Admin Center sections still read --
+        # (_autoClaimAdminOnSignup, unchanged by P1a) that T's device-bound
+        # Admin Center sections still read (P1b: no longer the Audit Log) --
         # still worth proving it did not regress, via the same real
         # GET /api/devices/me app-shell.js's init() reads.
         dev = page.evaluate(
@@ -668,8 +669,8 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         assert dev.get("success") and dev.get("device", {}).get("is_admin_device") is True, (
             f"GET /api/devices/me did not report is_admin_device:true for the "
             f"signup computer -- got {dev!r}. This device-claim flag is separate "
-            f"from Settings visibility now, but it still gates the Audit Log entry "
-            f"and device-bound Admin Center sections, so it must still resolve true here."
+            f"from Settings visibility now, but it still gates the "
+            f"device-bound Admin Center sections, so it must still resolve true here."
         )
         report.shot(page, shots, "04_signup_computer_settings_visible")
 

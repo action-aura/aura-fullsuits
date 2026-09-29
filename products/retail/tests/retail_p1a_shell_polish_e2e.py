@@ -5,7 +5,8 @@ in a REAL browser against a REAL backend. STANDALONE SCRIPT, NOT A PYTEST FILE.
     C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe ^
         products/retail/tests/retail_p1a_shell_polish_e2e.py
 
-F5  a device-bound item (Audit Log, adminOnly) is SHOWN, DISABLED, with the
+F5  a device-bound item (adminOnly; since P1b a runtime-injected FIXTURE, see the
+    P1b RETARGET note below -- the real Audit Log is owner-gated now) is SHOWN, DISABLED, with the
     sentence "This can only be changed on the main computer" printed on the row,
     on a computer that is not the main one -- in the sidebar AND the phone More
     sheet. Clicking explains and never navigates. On the main computer it works.
@@ -28,7 +29,7 @@ Last round (polish re-verifier):
 G1  table cells stay table cells under body.rtl -- the customer statement and the
     owner's Products table, 1366, EN and AR: every value sits under its own header.
 N2  the system default branch "Main Branch" is shown translated on the Arabic chip.
-N5  Audit Log (read-only) says "opened", not "changed"; editable items keep "changed".
+N5  a read-only device-bound item says "opened", not "changed"; editable items keep "changed".
 
 Reachability rule (contract 6b): every "can a person click it" goes through
 human_click (box inside viewport, elementFromPoint at the centre is the element,
@@ -60,7 +61,7 @@ except Exception:
     pass
 
 SENTENCE = "This can only be changed on the main computer"
-# N5: Audit Log is read-only, so its row/toast must not promise an edit.
+# N5: a read-only device-bound item must not promise an edit in its row/toast.
 OPENED = "This can only be opened on the main computer"
 OWNER_EMAIL = "tareq@polish.test"
 OWNER_PASSWORD = "PolishOwner_123!"
@@ -82,6 +83,39 @@ AR_OVERLAY = {
 BARE_VERB_OFF = "إيقاف"
 
 RESULTS: list[tuple[str, bool, str]] = []
+
+# P1b RETARGET -- WHAT THIS FILE CAN NO LONGER CATCH.
+# The real Audit Log used to be the only device-bound (adminOnly) entry, so F5
+# was proved against it. Phase 1b made the Audit Log OWNER-gated instead
+# (ownerOnly + screenTitle): an owner on a non-main computer now sees it ENABLED,
+# because the log is a per-company, per-computer view of the local database, not
+# something that is only true on the main till. Every F5 check below therefore
+# runs against a runtime-injected FIXTURE item that carries exactly the old
+# audit-log flags (adminOnly + readOnly + capability). The device-bound
+# MECHANISM (disabled row, printed sentence, explaining toast, no navigation,
+# deep-link redirect, More-sheet row) is still fully exercised. What these
+# checks can NOT prove any more: that the real Audit Log entry itself is (or is
+# not) device-bound. That is now proved by retail_p1b_palette_e2e.py (owner on a
+# non-main computer sees Audit Log enabled and can open it; a cashier has none).
+FIXTURE_ID = "p1b-device-fixture"
+FIXTURE_LABEL = "Device fixture"
+FIXTURE_JS = """(spec) => {
+  const sys = SubsystemApp.systems.retail;
+  if (!sys.nav.some((n) => n.id === spec.id)) {
+    sys.nav.push({ id: spec.id, label: spec.label, icon: '📜', adminOnly: true, readOnly: true,
+                   capability: 'retail.reports' });
+    const reports = sys.navGroups.find((g) => g.items.includes('audit-log'));
+    reports.items.push(spec.id);
+  }
+  SubsystemApp.launch('retail', 'dashboard');
+}"""
+
+
+def inject_fixture(page):
+    """Add the device-bound fixture item to the running shell and repaint."""
+    page.evaluate(FIXTURE_JS, {"id": FIXTURE_ID, "label": FIXTURE_LABEL})
+    page.locator("#sub-header-section").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+    page.wait_for_timeout(500)
 
 
 def check(name, fn):
@@ -122,6 +156,7 @@ def open_page(browser, base, viewport, *, email=OWNER_EMAIL, password=OWNER_PASS
     page.goto(base, wait_until="domcontentloaded")
     page.locator("#sub-header-section").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
     page.wait_for_timeout(600)
+    inject_fixture(page)
     set_lang(page, lang)
     return ctx, page
 
@@ -226,8 +261,14 @@ def main() -> int:
                 human_click(pg, '.sub-nav-item[data-section="audit-log"]', "Audit Log (main)")
                 pg.wait_for_timeout(1200)
                 assert state_of(pg)["section"] == "audit-log", f"main computer: click did not navigate: {state_of(pg)}"
+                # P1b: the device-bound FIXTURE is also normal on the main computer.
+                open_group_of(pg, FIXTURE_ID)
+                fx = pg.evaluate("(id) => { const e = document.querySelector(`.sub-nav-item[data-section=\"${id}\"]`);"
+                                 " return {cls: e.className, dis: e.getAttribute('aria-disabled'), txt: e.innerText}; }", FIXTURE_ID)
+                assert "is-main-only" not in fx["cls"] and fx["dis"] is None, f"main computer shows the fixture disabled: {fx}"
+                assert SENTENCE not in fx["txt"] and OPENED not in fx["txt"], f"main computer prints a main-only sentence on the fixture: {fx}"
 
-            check("F5 main computer: Audit Log is normal and a click opens it", main_audit_log_works)
+            check("F5 main computer: Audit Log is normal and a click opens it (and the device-bound fixture is enabled)", main_audit_log_works)
 
             # =================================================================
             # F6 -- identity chip. Real /api/devices/me, patched to add D's fields.
@@ -536,19 +577,19 @@ def main() -> int:
                 c, p = open_page(browser, backend.base_url, VIEWPORT)
                 try:
                     assert state_of(p)["admin"] is False, "restart did not produce a non-main computer"
-                    open_group_of(p, "audit-log")
-                    info = p.evaluate("""() => { const e = document.querySelector('.sub-nav-item[data-section="audit-log"]');
+                    open_group_of(p, FIXTURE_ID)
+                    info = p.evaluate("""() => { const e = document.querySelector('.sub-nav-item[data-section="p1b-device-fixture"]');
                         const h = e.querySelector('.sub-nav-hint'); const hr = h.getBoundingClientRect();
                         const c = document.elementFromPoint(hr.left + hr.width/2, hr.top + hr.height/2);
                         return {cls: e.className, dis: e.getAttribute('aria-disabled'), label: e.querySelector('.sub-nav-label').innerText,
                                 hint: h.innerText, hintHit: !!(c && e.contains(c)), hintW: hr.width, hintH: hr.height, hintClipped: h.scrollWidth > h.clientWidth + 1,
                                 aria: e.getAttribute('aria-label')}; }""")
                     assert "is-main-only" in info["cls"] and info["dis"] == "true", f"not shown disabled: {info}"
-                    assert info["hint"].strip() == OPENED, f"visible sentence wrong (Audit Log is read-only: 'opened'): {info['hint']!r}"
+                    assert info["hint"].strip() == OPENED, f"visible sentence wrong (the fixture is read-only: 'opened'): {info['hint']!r}"
                     assert info["hintHit"] and info["hintW"] > 0 and not info["hintClipped"], f"sentence not readable on the row: {info}"
-                    assert OPENED in info["aria"] and SENTENCE not in info["aria"] and "Audit Log" in info["aria"], f"aria-label lacks name+reason: {info['aria']!r}"
+                    assert OPENED in info["aria"] and SENTENCE not in info["aria"] and FIXTURE_LABEL in info["aria"], f"aria-label lacks name+reason: {info['aria']!r}"
                     before = state_of(p)
-                    human_click(p, '.sub-nav-item[data-section="audit-log"]', "Audit Log (joined)")
+                    human_click(p, f'.sub-nav-item[data-section="{FIXTURE_ID}"]', "device fixture (joined)")
                     p.wait_for_timeout(600)
                     assert any(OPENED in t for t in toast_texts(p)) and not any(SENTENCE in t for t in toast_texts(p)), f"click gave no explaining toast: {toast_texts(p)}"
                     after = state_of(p)
@@ -558,41 +599,41 @@ def main() -> int:
                 finally:
                     c.close()
 
-            check("F5 joined computer sidebar: Audit Log disabled, sentence visible, click explains, no navigation", joined_sidebar)
+            check("F5 joined computer sidebar: device-bound item disabled, sentence visible, click explains, no navigation", joined_sidebar)
 
             def joined_deeplink():
                 c, p = open_page(browser, backend.base_url, VIEWPORT)
                 try:
-                    p.evaluate("() => SubsystemApp._navigate('audit-log')")
+                    p.evaluate("(id) => SubsystemApp._navigate(id)", FIXTURE_ID)
                     p.wait_for_timeout(1200)
                     st = state_of(p)
-                    assert st["section"] != "audit-log", f"deep link opened the device-bound screen on a joined computer: {st}"
+                    assert st["section"] != FIXTURE_ID, f"deep link opened the device-bound screen on a joined computer: {st}"
                     assert any(OPENED in t for t in toast_texts(p)), f"deep link gave no explanation: {toast_texts(p)}"
                     body = p.evaluate("() => (document.getElementById('sub-content')||document.body).innerText.slice(0,400)")
-                    assert "Audit Log" not in body.split("\n")[0], f"Audit Log screen rendered: {body!r}"
+                    assert FIXTURE_LABEL not in body.split("\n")[0], f"device-bound screen rendered: {body!r}"
                 finally:
                     c.close()
 
-            check("F5 joined computer: deep link _navigate('audit-log') is redirected home with the explanation", joined_deeplink)
+            check("F5 joined computer: deep link _navigate(<device-bound id>) is redirected home with the explanation", joined_deeplink)
 
             def joined_phone_more_sheet():
                 c, p = open_page(browser, backend.base_url, {"width": 390, "height": 844}, coarse=True)
                 try:
                     human_click(p, "#sub-tab-more", "More tab")
                     p.wait_for_timeout(500)
-                    row_sel = '.sub-more-row[data-section="audit-log"]'
+                    row_sel = f'.sub-more-row[data-section="{FIXTURE_ID}"]'
                     human_click_probe = probe(p, row_sel)
-                    assert human_click_probe["found"], "Audit Log row absent from the More sheet on a joined computer"
-                    p.evaluate("() => document.querySelector('.sub-more-row[data-section=\"audit-log\"]').scrollIntoView({block:'nearest'})")
+                    assert human_click_probe["found"], "device-bound row absent from the More sheet on a joined computer"
+                    p.evaluate("() => document.querySelector('.sub-more-row[data-section=\"p1b-device-fixture\"]').scrollIntoView({block:'nearest'})")
                     p.wait_for_timeout(120)
-                    info = p.evaluate("""() => { const e = document.querySelector('.sub-more-row[data-section="audit-log"]');
+                    info = p.evaluate("""() => { const e = document.querySelector('.sub-more-row[data-section="p1b-device-fixture"]');
                         const h = e.querySelector('.sub-more-row-hint'); const hr = h.getBoundingClientRect();
                         return {cls: e.className, dis: e.getAttribute('aria-disabled'), hint: h.innerText.trim(), hintInside: hr.left >= 0 && hr.right <= innerWidth && hr.top >= 0 && hr.bottom <= innerHeight,
                                 clipped: h.scrollWidth > h.clientWidth + 1}; }""")
                     assert "is-main-only" in info["cls"] and info["dis"] == "true", f"More row not disabled: {info}"
                     assert info["hint"] == OPENED and info["hintInside"] and not info["clipped"], f"sentence not readable in the sheet: {info}"
                     before = state_of(p)
-                    human_click(p, row_sel, "Audit Log More row", scroll_list=True)
+                    human_click(p, row_sel, "device fixture More row", scroll_list=True)
                     p.wait_for_timeout(500)
                     assert any(OPENED in t for t in toast_texts(p)), f"tap gave no explaining toast: {toast_texts(p)}"
                     assert state_of(p)["section"] == before["section"], "tap navigated"
@@ -606,10 +647,10 @@ def main() -> int:
             def joined_ar():
                 c, p = open_page(browser, backend.base_url, VIEWPORT, lang="ar")
                 try:
-                    open_group_of(p, "audit-log")
-                    hint = p.evaluate("() => document.querySelector('.sub-nav-item[data-section=\"audit-log\"] .sub-nav-hint').innerText.trim()")
+                    open_group_of(p, FIXTURE_ID)
+                    hint = p.evaluate("() => document.querySelector('.sub-nav-item[data-section=\"p1b-device-fixture\"] .sub-nav-hint').innerText.trim()")
                     assert hint == AR_OVERLAY[OPENED], f"AR sentence not shown on the row: {hint!r}"
-                    m = probe(p, '.sub-nav-item[data-section="audit-log"]')
+                    m = probe(p, f'.sub-nav-item[data-section="{FIXTURE_ID}"]')
                     assert m["inside"] and m["hit"], f"AR disabled row not reachable: {m}"
                 finally:
                     c.close()
@@ -621,18 +662,20 @@ def main() -> int:
                 try:
                     got = p.evaluate("""() => ({
                         editable: SubsystemApp._mainOnlySentence({id: 'x', label: 'X', adminOnly: true}),
-                        audit: SubsystemApp._mainOnlySentence('audit-log')})""")
+                        audit: SubsystemApp._mainOnlySentence('p1b-device-fixture')})""")
                     assert got["editable"] == SENTENCE, f"an editable device-bound item lost 'changed': {got}"
-                    assert got["audit"] == OPENED, f"Audit Log (read-only) does not say 'opened': {got}"
+                    assert got["audit"] == OPENED, f"a read-only device-bound item does not say 'opened': {got}"
                 finally:
                     c.close()
 
-            check("N5 editable device-bound items keep 'changed'; Audit Log says 'opened'", n5_editable_keeps_changed)
+            check("N5 editable device-bound items keep 'changed'; read-only ones say 'opened'", n5_editable_keeps_changed)
 
             def cashier_sees_nothing():
                 c, p = open_page(browser, backend.base_url, VIEWPORT, email=cashier_email, password=cashier_pw)
                 try:
-                    n = p.evaluate("() => document.querySelectorAll('[data-section=\"audit-log\"]').length")
+                    # audit-log (real, ownerOnly) AND the device-bound fixture (capability
+                    # retail.reports): a cashier has neither.
+                    n = p.evaluate("() => document.querySelectorAll('[data-section=\"audit-log\"],[data-section=\"p1b-device-fixture\"]').length")
                     t = p.evaluate("() => document.body.innerText.includes(%s) || document.body.innerText.includes(%s)" % (json.dumps(SENTENCE), json.dumps(OPENED)))
                     assert n == 0 and not t, f"a cashier sees the device-bound entry ({n}) or the sentence ({t})"
                 finally:
@@ -657,12 +700,12 @@ def main() -> int:
                 try:
                     st = state_of(p)
                     assert st["admin"] is False, f"expected an unclaimed (non-main) computer: {st}"
-                    open_group_of(p, "audit-log")
-                    cls = p.evaluate("() => document.querySelector('.sub-nav-item[data-section=\"audit-log\"]').className")
-                    assert "is-main-only" in cls, f"unclaimed computer: Audit Log not shown disabled ({cls})"
-                    human_click(p, '.sub-nav-item[data-section="audit-log"]', "Audit Log (unclaimed)")
+                    open_group_of(p, FIXTURE_ID)
+                    cls = p.evaluate("() => document.querySelector('.sub-nav-item[data-section=\"p1b-device-fixture\"]').className")
+                    assert "is-main-only" in cls, f"unclaimed computer: device-bound item not shown disabled ({cls})"
+                    human_click(p, f'.sub-nav-item[data-section="{FIXTURE_ID}"]', "device fixture (unclaimed)")
                     p.wait_for_timeout(500)
-                    assert state_of(p)["section"] != "audit-log", "unclaimed computer navigated to the device-bound screen"
+                    assert state_of(p)["section"] != FIXTURE_ID, "unclaimed computer navigated to the device-bound screen"
                 finally:
                     c.close()
 

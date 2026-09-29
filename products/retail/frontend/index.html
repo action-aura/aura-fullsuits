@@ -67,6 +67,12 @@
   </script>
   <link rel="stylesheet" href="/static/css/main.css">
   <link rel="stylesheet" href="/static/css/rtl.css">
+  <!-- P1b: the settings hub's own stylesheet (crew H creates it). Linked after
+       main.css/rtl.css so its rules can rely on the shared tokens; a 404 on a
+       stylesheet is harmless (the page renders unstyled hub markup only if the
+       file is truly missing), so linking it here does not depend on load order
+       between crews. -->
+  <link rel="stylesheet" href="/static/css/settings-hub.css">
   <style>
     /* OPERATIONAL CALM: this rule used to set a hardcoded near-black page
        background with plain white body text, under a document that defaults to
@@ -117,6 +123,19 @@
        before app-shell.js, which is what boots the shell and can navigate
        straight into the section. -->
   <script src="/static/employees.js"></script>
+  <!-- P1b (crews H, B, P). Order matters only in one way: everything the shell
+       consults at RENDER time must exist before app-shell.js boots -- the
+       header/chip/More-sheet ask `window.AuraPalette` / `window.AuraHelp`
+       whether to draw their entries, and the palette asks `window.SettingsHub`
+       for its sections. Each of these modules is also tolerated ABSENT at use
+       time (the shell and palette check before calling), so a missing file
+       degrades to fewer entries, never to an exception. All four come after
+       subsystem-retail.js because they call RetailSystem (modal key stack,
+       POS_PAYMENT_METHODS, the products/customers screens). -->
+  <script src="/static/settings-hub.js"></script>
+  <script src="/static/plan-devices.js"></script>
+  <script src="/static/palette.js"></script>
+  <script src="/static/help.js"></script>
   <script src="/static/app-shell.js"></script>
   <script>
     AuraI18n.load().then(() => SubsystemApp.init());

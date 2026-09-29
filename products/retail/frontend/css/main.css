@@ -3036,6 +3036,15 @@ button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-
   border-bottom: 1px solid var(--border-hairline);
   background: var(--surface-raised); backdrop-filter: blur(10px);
   flex-shrink: 0;
+  /* P1b: THE ACCOUNT MENU WAS PAINTED UNDER THE PAGE. The identity menu (z-index
+     400) is a child of this header, and backdrop-filter makes the header its
+     own stacking context at z-index auto -- so that 400 only ranks inside the
+     header, and any LATER `position: relative` block in the page (measured:
+     Reports' .ret-kpi cards) paints over the menu's Help row. Found by a real
+     click: elementFromPoint at the row's centre was the KPI card. Giving the
+     header its own layer above page content (and below every modal overlay,
+     which are body-level) lets the dropdown rank against the page as intended. */
+  position: relative; z-index: 30;
 }
 .sub-header-left { display: flex; align-items: baseline; gap: 14px; flex: 1 1 auto; min-inline-size: 0; }
 /* This IS the header's title now -- the old separate .sub-header-title <h2>
@@ -5262,3 +5271,198 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
   }
 }
 /*                                                        [operational-calm:end] */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P1b -- COMMAND PALETTE (palette.js), HELP DIALOG (help.js), HEADER TRIGGER.
+
+   Token-only on purpose (themes are token-only: light/sand/dark/night/dusk all
+   ride the same keys) and logical-property-only (RTL is ratcheted by
+   retail_design_rtl_test.js). The accent colour appears on ACTIONS only -- the
+   active row's marker and the focus ring -- never as decoration; the row hint
+   and group headings stay neutral because they carry no state.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* The door in the header. 36px tall = the height of every other header
+   control (.sub-header-btn, the identity chip), so adding it costs the header
+   no pixels. It looks like the search FIELD it opens, not like a button. */
+.sub-palette-trigger {
+  display: inline-flex; align-items: center; gap: 8px;
+  block-size: 36px; box-sizing: border-box;
+  padding-inline: 10px 8px;
+  min-inline-size: 0; max-inline-size: 260px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  font: inherit; font-size: 13px; line-height: 1;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+}
+.sub-palette-trigger:hover { background: var(--surface-hover); color: var(--text-primary); }
+.sub-palette-trigger:focus-visible {
+  background: var(--surface-hover); color: var(--text-primary);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.sub-palette-trigger:active { transform: scale(0.98); }
+.sub-palette-trigger-icon { display: inline-flex; flex: none; }
+.sub-palette-trigger-text {
+  flex: 1 1 auto; min-inline-size: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: start;
+}
+.sub-palette-trigger-key {
+  flex: none;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  padding: 3px 6px; border-radius: 5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-tertiary);
+}
+
+/* Tablet / narrow: words and key hint go, the 36px icon square stays. The
+   aria-label keeps the name for assistive tech. */
+@media (max-width: 920px) {
+  .sub-palette-trigger { inline-size: 36px; padding-inline: 0; justify-content: center; }
+  .sub-palette-trigger-text, .sub-palette-trigger-key { display: none; }
+}
+
+/* ── palette overlay ─────────────────────────────────────────────────────── */
+.aura-palette-overlay {
+  position: fixed; inset: 0;
+  z-index: 10000;                       /* above .ret-modal-overlay (9999): it can open over a form */
+  background: var(--surface-scrim);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-block-start: min(14vh, 120px);
+  padding-inline: 16px; box-sizing: border-box;
+}
+.aura-palette-overlay[hidden] { display: none; }
+.aura-palette {
+  inline-size: 100%; max-inline-size: 640px;
+  max-block-size: min(72vh, 560px);
+  display: flex; flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+  box-shadow: var(--elevation-modal);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+.aura-palette-field {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-block-end: 1px solid var(--border-hairline);
+}
+.aura-palette-field-icon { display: inline-flex; flex: none; color: var(--text-tertiary); }
+.aura-palette-input {
+  flex: 1 1 auto; min-inline-size: 0;
+  background: transparent; border: 0; outline: none;
+  color: var(--text-primary);
+  font: inherit; font-size: 16px;
+  min-block-size: 28px;
+}
+.aura-palette-input::placeholder { color: var(--text-tertiary); }
+/* The field is a text input inside a ringed container: the container shows
+   the focus ring (the input's own outline is off), so the ring is never lost. */
+.aura-palette-field:focus-within {
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--focus-ring-color);
+}
+.aura-palette-esc {
+  flex: none;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  padding: 5px 8px; border-radius: 5px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.aura-palette-esc:hover { background: var(--surface-hover); color: var(--text-primary); }
+.aura-palette-esc:focus-visible {
+  background: var(--surface-hover); color: var(--text-primary);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.aura-palette-list { flex: 1 1 auto; overflow-y: auto; padding: 6px; min-block-size: 0; }
+.aura-palette-group {
+  padding: 10px 10px 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.aura-palette-row {
+  display: flex; align-items: center; gap: 10px;
+  min-block-size: var(--touch-target-min);
+  padding: 6px 10px; box-sizing: border-box;
+  border-radius: var(--radius-control);
+  border-inline-start: 3px solid transparent;   /* the active marker lives here: no layout shift when it appears */
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.aura-palette-row:hover { background: var(--surface-hover); }
+/* Rows are never tabbed to (focus stays in the input; the active row is
+   announced through aria-activedescendant), so this ring is a guard rather
+   than a look: if a row ever does take focus, it is visible. It also satisfies
+   the every-:hover-has-a-:focus-visible ratchet. */
+.aura-palette-row:focus-visible {
+  background: var(--surface-hover);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(var(--focus-ring-offset) * -1);
+}
+.aura-palette-row[aria-selected="true"] {
+  background: var(--surface-hover);
+  border-inline-start-color: var(--accent-action);
+}
+.aura-palette-row-icon { display: inline-flex; flex: none; inline-size: 22px; justify-content: center; color: var(--text-secondary); }
+.aura-palette-row-label { flex: 1 1 auto; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aura-palette-row-sub { color: var(--text-tertiary); font-size: 12px; margin-inline-start: 6px; }
+.aura-palette-row-hint { flex: none; font-size: 11px; color: var(--text-tertiary); }
+.aura-palette-empty { padding: 18px 12px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+.aura-palette-foot {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 8px 14px;
+  border-block-start: 1px solid var(--border-hairline);
+  font-size: 12px; color: var(--text-tertiary);
+}
+.aura-palette-foot kbd {
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 1px 5px; margin-inline-end: 3px; border-radius: 4px;
+  background: var(--surface-sunken); border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+}
+@media (max-width: 560px) {
+  .aura-palette-overlay { padding-block-start: 8px; padding-inline: 8px; }
+  .aura-palette-foot { display: none; }             /* no keyboard hints on a phone */
+  .aura-palette-row-hint { display: none; }
+}
+
+/* ── help dialog (rides .ret-modal-overlay / .ret-modal from subsystem-retail.js) ── */
+.aura-help-head { display: flex; align-items: center; justify-content: space-between; margin-block-end: 18px; }
+.aura-help-head h3 { margin: 0; }
+.aura-help-actions { display: flex; flex-direction: column; gap: 10px; }
+.aura-help-action {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  inline-size: 100%; box-sizing: border-box;
+  min-block-size: var(--touch-target-min);
+  padding: 12px 14px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font: inherit; text-align: start; text-decoration: none;
+  cursor: pointer;
+}
+.aura-help-action:hover { background: var(--surface-hover); }
+.aura-help-action:focus-visible {
+  background: var(--surface-hover);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.aura-help-action-title { font-weight: 600; font-size: 14px; }
+.aura-help-action-sub { font-size: 12px; color: var(--text-secondary); }
+.aura-help-about {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 14px;
+  margin: 20px 0 0; padding-block-start: 14px;
+  border-block-start: 1px solid var(--border-hairline);
+  font-size: 12px; color: var(--text-secondary);
+}
+.aura-help-about dt { color: var(--text-tertiary); }
+.aura-help-about dd { margin: 0; font-family: var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
