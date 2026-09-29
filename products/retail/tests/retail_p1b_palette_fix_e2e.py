@@ -63,8 +63,13 @@ MANAGER_EMAIL = "mgr@palettefix.test"
 MANAGER_PASSWORD = "PaletteFixManager_123!"
 PHONE = {"width": 390, "height": 844}
 XSS_NAME = "<img src=x onerror=window.__p=1>"
-THROW_ALL = ("Object.defineProperty(window, 'localStorage', { configurable: true, "
-             "get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } });")
+# Both stores throw, as they do together when a browser blocks site data:
+# sessionStorage's demo-mode reads in app-shell.js (boot, auth, activation
+# gate) were unguarded too, and a test that blocks only localStorage cannot
+# see them (orchestrator, after crew P's out-of-scope note).
+THROW_ALL = ("for (const k of ['localStorage', 'sessionStorage']) { "
+             "Object.defineProperty(window, k, { configurable: true, "
+             "get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } }); }")
 
 
 def open_page(browser, base, *, email=None, password=None, **kw):

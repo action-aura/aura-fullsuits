@@ -37,6 +37,14 @@
 // always can.
 const THEME_NAMES = Object.freeze(['light', 'sand', 'dark', 'night', 'dusk']);
 
+// sessionStorage can THROW (blocked site data, some privacy modes), not just
+// return null. Four boot/auth paths read the demo flag; an unguarded read there
+// aborted init the same way the unguarded localStorage reads in i18n.js did
+// (fixed in P1b, 9f3fc21a). A throwing store simply means "not demo mode".
+function _demoModeFlag() {
+  try { return sessionStorage.getItem('demo_mode') === 'true'; } catch (e) { return false; }
+}
+
 // Sidebar brand lockup's second word ("Aura" + this), keyed by systemId --
 // deliberately NOT sys.name ("Retail & POS"/"Clinic..."): the lockup is a
 // two-word brand mark next to the Aura mark icon, not the nav's full product
@@ -1388,7 +1396,7 @@ const SubsystemApp = {
     // license key itself (see showSetupModal()), so a fresh install skips
     // this old pre-login gate entirely and goes straight there instead.
     let needsSetup = false;
-    if (!window.isDemoMode && sessionStorage.getItem('demo_mode') !== 'true') {
+    if (!window.isDemoMode && !_demoModeFlag()) {
       try {
         const status = await fetch('/api/onboarding/status', { cache: 'no-store' }).then(r => r.json());
         needsSetup = !!status.needs_setup;
@@ -1448,7 +1456,7 @@ const SubsystemApp = {
   // On first launch (no admin exists) → show account setup.
   // On returning launch (admin exists, no session) → show login form.
   // Skip entirely in demo mode — the demo session is managed by /api/demo/start.
-    if (!window.isDemoMode && sessionStorage.getItem('demo_mode') !== 'true') {
+    if (!window.isDemoMode && !_demoModeFlag()) {
       try {
         const sess = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' })
           .then(r => r.json()).catch(() => ({}));
@@ -1786,7 +1794,7 @@ const SubsystemApp = {
   // That is the mirror image of the re-ask bug this whole area is about: the
   // key asked ZERO times rather than once.
   async _enforceActivationGate() {
-    if (window.isDemoMode || sessionStorage.getItem('demo_mode') === 'true') return false;
+    if (window.isDemoMode || _demoModeFlag()) return false;
     try {
       const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
       if (this._needsActivation(lic)) {
@@ -1955,7 +1963,7 @@ const SubsystemApp = {
 
   // ── Called on 401 from any API: shows setup on first launch, login otherwise ─
   async checkAuthAndSetup(errorMsg) {
-    if (window.isDemoMode || sessionStorage.getItem('demo_mode') === 'true') return;
+    if (window.isDemoMode || _demoModeFlag()) return;
     if (this._authModalOpen) return;
     this._authModalOpen = true;
     // Consumed ONCE, up front, regardless of which branch below actually
