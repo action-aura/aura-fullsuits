@@ -45,7 +45,7 @@
     SUSPENDED: { text: 'Suspended', cls: 'state-restricted' },
     REVOKED: { text: 'Revoked', cls: 'state-restricted' },
     EXPIRED: { text: 'Expired', cls: 'state-restricted' },
-    DEVICE_DEACTIVATED: { text: 'Device deactivated', cls: 'state-neutral' },
+    DEVICE_DEACTIVATED: { text: 'Computer deactivated', cls: 'state-neutral' },
     CLOCK_REVIEW_REQUIRED: { text: 'Clock review required', cls: 'state-warning' },
     LOCAL_STATE_CORRUPT: { text: 'Local state needs reset', cls: 'state-restricted' },
   };
@@ -55,7 +55,7 @@
     ACTIVATION_REJECTED: 'This license key could not be activated. Double-check the key and try again, or contact support.',
     PRODUCT_MISMATCH: 'This license key is not valid for Aura Retail.',
     PLATFORM_NOT_ALLOWED: 'This license key is not valid for a Windows installation.',
-    DEVICE_LIMIT_REACHED: 'This license has reached its device limit. Deactivate another device or contact support to add capacity.',
+    DEVICE_LIMIT_REACHED: 'This license has reached its computer limit. Deactivate another computer or contact support to add capacity.',
     RATE_LIMITED: 'Too many attempts. Please wait a moment and try again.',
     NETWORK_UNAVAILABLE: 'Could not reach the licensing service. Check your internet connection and try again.',
     REQUEST_TIMED_OUT: 'The request timed out. Please try again.',
@@ -63,7 +63,7 @@
     SERVICE_TEMPORARILY_UNAVAILABLE: 'The licensing service is temporarily unavailable. Please try again shortly.',
     SIGNING_KEY_UNAVAILABLE: 'The licensing service is temporarily unavailable. Please try again shortly.',
     MALFORMED_RESPONSE: 'Received an unexpected response from the licensing service. Please try again.',
-    DEVICE_KEY_UNAVAILABLE: 'This device is not yet set up for activation. Please try again.',
+    DEVICE_KEY_UNAVAILABLE: 'This computer is not yet set up for activation. Please try again.',
     // Reachable for the first time now that Owner refuses to re-activate a
     // terminal installation (owner activation.py's DEACTIVATED/REPLACED
     // guard). This is what a DECLINED activation looks like from here, and
@@ -72,9 +72,9 @@
     // wrong advice for it: the key is fine, the decision was not about the
     // key, and retrying can only ever produce the same answer.
     INSTALLATION_DEACTIVATED: 'This installation was not approved, or has since been deactivated by Action Aura. '
-      + 'Re-entering the same key will not change that — please contact support to have this device re-enabled.',
-    INSTALLATION_REPLACED: 'This installation has been replaced by another device. '
-      + 'Please contact support if this device still needs access.',
+      + 'Re-entering the same key will not change that — please contact support to have this computer re-enabled.',
+    INSTALLATION_REPLACED: 'This installation has been replaced by another computer. '
+      + 'Please contact support if this computer still needs access.',
   };
 
   // Client-LOCAL failures produced entirely on this device, AFTER Owner
@@ -130,7 +130,7 @@
   // seeded once and never refreshed. Keep in step with LicensingMessages.kt
   // and app-shell.js::_activationFailureMessage.
   const LOCAL_VERIFICATION_MESSAGE = 'Action Aura approved this activation, but this computer could not verify '
-    + 'the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not '
+    + 'the signed license it received, so it has not been applied yet. Your license key is not the problem — do not '
     + 'replace it. Check that this computer’s date and time are correct; if they are, contact support.';
 
   // Everything else needs support, and gets the reason code to quote -- the
@@ -138,7 +138,7 @@
   // out of a database by hand.
   function localVerificationMessage(reason) {
     if (CLOCK_FIXABLE_REASON_CODES[reason]) return t(LOCAL_VERIFICATION_MESSAGE);
-    return t('Action Aura approved this activation, but this computer could not verify the signed licence it '
+    return t('Action Aura approved this activation, but this computer could not verify the signed license it '
       + 'received, so it has not been applied yet. Your license key is not the problem — do not replace it, and '
       + 're-entering it cannot help. Please contact support and quote this code:') + ' ' + (reason || 'UNKNOWN') + '.';
   }
@@ -343,8 +343,9 @@
   // page cannot call that (or SubsystemApp.confirm in app-shell.js): it is a
   // standalone document with no shared shell (see the file header), so this
   // mirrors the SAME Promise<boolean> contract locally instead -- true on
-  // Confirm (click or Enter), false on Cancel, Escape, or a click on the
-  // overlay itself. Built with el()/textContent only, matching this file's
+  // Confirm (click, or Enter while Confirm has focus), false on Cancel (click,
+  // or Enter while Cancel has focus), Escape, or a click on the overlay itself.
+  // Focus STARTS on Cancel: a stray Enter must never be a deactivation. Built with el()/textContent only, matching this file's
   // no-innerHTML policy (see header): there is no XSS-sink here either.
   //
   // This page has no shared SubsystemApp shell (see the file header), but it
@@ -379,15 +380,19 @@
       };
 
       const onKeydown = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
-        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+        // Enter is deliberately NOT handled here. It used to resolve true no
+        // matter which button had focus, and focus started on the destructive
+        // one, so pressing Enter deactivated the computer. The browser already
+        // turns Enter on a focused <button> into that button's click, which is
+        // exactly "Enter does what the focused button says".
       };
       document.addEventListener('keydown', onKeydown, true);
 
       overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
       cancelBtn.addEventListener('click', () => finish(false));
       okBtn.addEventListener('click', () => finish(true));
-      okBtn.focus();
+      cancelBtn.focus();
     });
   }
 
@@ -945,7 +950,7 @@
 
     const dl = el('dl');
     addStatusRow(dl, t('Product'), productName(status.product_code));
-    addStatusRow(dl, t('Device'), t('This computer'));
+    addStatusRow(dl, t('Used on'), t('This computer'));
     addStatusRow(dl, t('Last check-in'), formatWhen(status.last_successful_checkin_at));
     content.appendChild(dl);
 
@@ -1008,7 +1013,7 @@
   async function onDeactivateClicked() {
     const ok = await confirmDialog({
       title: t('Deactivate this computer?'),
-      message: t('This computer will stop being licensed. To use Aura Shop on it again you will need to enter a licence key. Your sales and records are not deleted.'),
+      message: t('This computer will stop being licensed. To use Aura Shop on it again you will need to enter a license key. Your sales and records are not deleted.'),
       confirmLabel: t('Deactivate'),
       danger: true,
     });
@@ -1024,7 +1029,7 @@
         // form rather than an awaiting-approval screen for a submission that
         // is no longer relevant to this device.
         clearActivationPending();
-        showMessage(t('This device has been deactivated.'), 'info');
+        showMessage(t('This computer has been deactivated.'), 'info');
       } else {
         showMessage(t(REASON_MESSAGES[body.reason_code] || REASON_MESSAGES.ACTIVATION_REJECTED), 'error');
       }

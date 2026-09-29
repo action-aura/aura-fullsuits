@@ -1028,7 +1028,7 @@ def _scenario_licensing_page_plain_words(results: Results, browser, shots: Path)
             _click_centre(lp, "#deactivate-btn", "Deactivate button")
             lp.wait_for_selector(".confirm-overlay", timeout=DEFAULT_WAIT_MS)
             msg = lp.evaluate("document.querySelector('.confirm-message').textContent")
-            assert "not deleted" in msg and "licence key" in msg, f"confirm must say plainly what happens: {msg!r}"
+            assert "not deleted" in msg and "license key" in msg, f"confirm must say plainly what happens: {msg!r}"
             _assert_seen(lp, ".confirm-card button", "confirm Cancel", nth=0)
             _assert_seen(lp, ".confirm-card button", "confirm OK", nth=1)
             before = len(posts)
@@ -1041,6 +1041,77 @@ def _scenario_licensing_page_plain_words(results: Results, browser, shots: Path)
             )
 
         results.run("F3 licensing: Deactivate asks first, and Cancel sends nothing (POST count = 0)", check_cancel_sends_nothing)
+
+        def check_title_and_wording():
+            # One name for the page: the h1 and the tab title both say
+            # "License & devices" (the gear entry's own label), not
+            # "Aura Retail Licensing" beside a row that says "Aura Shop".
+            got = lp.evaluate("() => ({h1: document.querySelector('h1').textContent.trim(), title: document.title})")
+            assert got["h1"] == "License & devices", f"h1 must match the gear entry: {got}"
+            assert got["title"] == "License & devices", f"tab title must match the h1: {got}"
+            # The status rows say "computer", and "license" is the one spelling.
+            visible = lp.evaluate("() => document.getElementById('content').innerText")
+            assert "This computer" in visible, f"the page must call this machine a computer: {visible!r}"
+            assert "device" not in visible.lower() and "licence" not in visible.lower(), (
+                f"visible status text must say computer / license, never device / licence: {visible!r}"
+            )
+
+        results.run("F3 licensing: one page name, 'computer' and 'License' wording", check_title_and_wording)
+
+        # Keyboard direction of the confirm. The deactivate route is STUBBED, so
+        # a key press that does deactivate is counted, never actually applied,
+        # and the later real-click checks still see a live licence.
+        stub_hits = []
+
+        def _stub_deactivate(route):
+            stub_hits.append(route.request.url)
+            route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+
+        lp.route("**/api/licensing/deactivate", _stub_deactivate)
+
+        def _focused_label():
+            return lp.evaluate(
+                "() => { const a = document.activeElement; "
+                "return {inCard: !!(a && a.closest && a.closest('.confirm-card')), text: a ? a.textContent.trim() : null, "
+                "danger: !!(a && a.classList && a.classList.contains('danger'))}; }"
+            )
+
+        def check_enter_on_default_focus_does_not_deactivate():
+            lp.reload(wait_until="domcontentloaded")
+            lp.wait_for_selector("#deactivate-btn", timeout=DEFAULT_WAIT_MS)
+            stub_hits.clear()
+            _click_centre(lp, "#deactivate-btn", "Deactivate button")
+            lp.wait_for_selector(".confirm-overlay", timeout=DEFAULT_WAIT_MS)
+            f = _focused_label()
+            assert f["inCard"] and not f["danger"] and f["text"] == "Cancel", (
+                f"the dialog must open with focus on Cancel, focus is {f}"
+            )
+            lp.keyboard.press("Enter")
+            lp.wait_for_selector(".confirm-overlay", state="detached", timeout=DEFAULT_WAIT_MS)
+            lp.wait_for_timeout(600)
+            assert len(stub_hits) == 0, f"Enter on the default (Cancel) focus sent {len(stub_hits)} deactivation POST(s)"
+
+        results.run("F3 licensing: Enter on the dialog's default focus (Cancel) sends 0 POSTs", check_enter_on_default_focus_does_not_deactivate)
+
+        def check_enter_on_deactivate_still_deactivates():
+            # The allow half: a person who Tabs to Deactivate on purpose and
+            # presses Enter must still be able to confirm from the keyboard.
+            lp.reload(wait_until="domcontentloaded")
+            lp.wait_for_selector("#deactivate-btn", timeout=DEFAULT_WAIT_MS)
+            stub_hits.clear()
+            _click_centre(lp, "#deactivate-btn", "Deactivate button")
+            lp.wait_for_selector(".confirm-overlay", timeout=DEFAULT_WAIT_MS)
+            lp.keyboard.press("Tab")
+            f = _focused_label()
+            assert f["inCard"] and f["danger"], f"Tab from Cancel must land on the Deactivate button, focus is {f}"
+            lp.keyboard.press("Enter")
+            lp.wait_for_selector(".confirm-overlay", state="detached", timeout=DEFAULT_WAIT_MS)
+            lp.wait_for_timeout(600)
+            assert len(stub_hits) == 1, f"Tab then Enter on Deactivate must send exactly 1 POST, saw {len(stub_hits)}"
+
+        results.run("F3 licensing: Tab to Deactivate then Enter sends exactly 1 POST", check_enter_on_deactivate_still_deactivates)
+
+        lp.unroute("**/api/licensing/deactivate", _stub_deactivate)
 
         def check_arabic_rtl():
             page.evaluate("() => localStorage.setItem('aura_lang', 'ar')")
