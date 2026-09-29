@@ -52,11 +52,13 @@ def _payload_of(record: LicenseStateRecord) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def present_status(record: Optional[LicenseStateRecord], devices_used: Optional[int] = None) -> dict:
-    """`devices_used` is optional and comes from the CALLER: the licence store
-    does not know how many computers are paired (that is the site-relay's
-    device list). None = unknown, and is surfaced as None -- never as 0, which
-    would read as "no seats used" and be a lie."""
+def present_status(record: Optional[LicenseStateRecord]) -> dict:
+    """No seat COUNT here, on purpose. The licence store does not know how many
+    computers are paired (that is the site-relay's device list), and a
+    `devices_used` field that no caller ever filled in would ship as a
+    permanent null that looks like data. The Plan & devices screen counts from
+    the relay list it already fetches; `allowed_device_count` below is the only
+    seat figure the licence itself carries."""
     if record is None:
         return {"current_state": "NOT_CONFIGURED"}
 
@@ -72,7 +74,6 @@ def present_status(record: Optional[LicenseStateRecord], devices_used: Optional[
         "start": payload.get("term_start") if isinstance(payload.get("term_start"), str) else None,
         "end": payload.get("term_end") if isinstance(payload.get("term_end"), str) else None,
     }
-    result["devices_used"] = devices_used if isinstance(devices_used, int) and not isinstance(devices_used, bool) else None
 
     if record.assertion_expires_at:
         result["assertion_expires_at"] = record.assertion_expires_at

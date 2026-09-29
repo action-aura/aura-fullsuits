@@ -65,22 +65,46 @@
     { key: 'digital_receipts_enabled', label: 'Digital receipts on WhatsApp' }
   ];
 
+  // Keys are the REAL LicenseState names (commercial_runtime/licensing_contracts/
+  // state_machine.py) -- every member of that enum has a row, and
+  // tests/retail_p1b_plan_devices_e2e.py walks each one in a real browser. An
+  // earlier draft invented names (CHECKIN_DUE_SOON, OFFLINE_GRACE, DEACTIVATED)
+  // that the licence never emits, so WARNING / GRACE_PERIOD / DEVICE_DEACTIVATED
+  // all fell through to "Not configured" on a licensed shop.
   var STATE_LABELS = {
     ACTIVE_ONLINE: ['Active', 'ok'],
     ACTIVE_OFFLINE: ['Active (offline)', 'ok'],
-    CHECKIN_DUE_SOON: ['Check-in needed soon', 'warn'],
-    OFFLINE_GRACE: ['Offline grace period', 'warn'],
+    WARNING: ['Check-in needed soon', 'warn'],
+    GRACE_PERIOD: ['Offline grace period', 'warn'],
     CLOCK_REVIEW_REQUIRED: ['Clock review required', 'warn'],
     RESTRICTED: ['Restricted', 'bad'],
     SUSPENDED: ['Suspended', 'bad'],
     REVOKED: ['Revoked', 'bad'],
     EXPIRED: ['Expired', 'bad'],
     LOCAL_STATE_CORRUPT: ['Local state needs reset', 'bad'],
+    DEVICE_DEACTIVATED: ['Computer deactivated', 'bad'],
+    DEVICE_REPLACED: ['Computer replaced', 'bad'],
     NOT_CONFIGURED: ['Not configured', 'neutral'],
     ACTIVATION_REQUIRED: ['Activation required', 'neutral'],
-    ACTIVATING: ['Activating…', 'neutral'],
-    DEACTIVATED: ['Computer deactivated', 'bad']
+    ACTIVATING: ['Activating…', 'neutral']
   };
+
+  // A state this screen does not know (a newer licence engine, or a status
+  // that could not be read at all) is said to be unknown. It must never be
+  // dressed up as a real state -- least of all as "Not configured".
+  var UNKNOWN_STATE = ['Status unavailable', 'neutral'];
+
+  // States in which this computer has no usable licence and the way forward is
+  // to ACTIVATE it, not to "connect to the internet and wait".
+  var NEEDS_ACTIVATION = {
+    NOT_CONFIGURED: true, ACTIVATION_REQUIRED: true, ACTIVATING: true,
+    DEVICE_DEACTIVATED: true, DEVICE_REPLACED: true
+  };
+
+  function stateLabel(state) {
+    return typeof state === 'string' && Object.prototype.hasOwnProperty.call(STATE_LABELS, state)
+      ? STATE_LABELS[state] : UNKNOWN_STATE;
+  }
 
   var CSS = [
     '.pd-root{font-family:var(--font-base);color:var(--text-primary);display:flex;flex-direction:column;gap:var(--space-base);max-inline-size:44rem}',
@@ -202,10 +226,11 @@
     return relay.devices.filter(function (d) { return d && !d.revoked; });
   }
 
-  // used: a number, or null when this computer cannot know.
+  // used: a number, or null when this computer cannot know. The count comes
+  // only from what this screen can see itself: the site-relay's device list.
+  // (The licence status carries no seat count; an earlier `devices_used` field
+  // on it was never filled in by any caller and has been removed.)
   function seatsUsed(data) {
-    var n = data.lic.devices_used;
-    if (typeof n === 'number') return n;
     if (data.relay && data.relay.enabled) return 1 + activeRelayDevices(data.relay).length;
     if (isJoinedClient(data.me)) return null;
     if (data.relay && data.relay.enabled === false) return 1;
@@ -226,9 +251,10 @@
     var row = el('div', 'pd-row');
     var name = planName(lic.plan_code);
     row.appendChild(el('span', 'pd-plan', name || t('Aura Shop')));
-    var pair = STATE_LABELS[lic.current_state] || STATE_LABELS.NOT_CONFIGURED;
+    var pair = stateLabel(lic.current_state);
     var badge = el('span', 'pd-badge ' + pair[1], t(pair[0]));
     badge.setAttribute('data-pd', 'state');
+    badge.setAttribute('data-pd-state', typeof lic.current_state === 'string' ? lic.current_state : '');
     row.appendChild(badge);
     card.appendChild(row);
 
@@ -297,7 +323,17 @@
     }
 
     if (allowed === null) {
-      card.appendChild(el('p', 'pd-muted', t('This computer has not received the number of devices your license includes yet. Connect to the internet and it will appear here.')));
+      // An unactivated computer is not waiting for a network: it is waiting
+      // for the owner to activate it. Telling it to "connect to the internet"
+      // sends the person to the wrong fix.
+      var stateNow = data.lic.current_state;
+      var needsActivation = typeof stateNow === 'string' && NEEDS_ACTIVATION[stateNow] === true;
+      var why = needsActivation
+        ? t('This computer is not activated yet. Activate it with your license key and the number of devices it includes will appear here.')
+        : t('This computer has not received the number of devices your license includes yet. Connect to the internet and it will appear here.');
+      var whyNode = el('p', 'pd-muted', why);
+      whyNode.setAttribute('data-pd', needsActivation ? 'needs-activation' : 'needs-internet');
+      card.appendChild(whyNode);
     } else if (used === null) {
       card.appendChild(el('p', 'pd-muted', t('This computer is connected to the shop’s main computer, so it cannot count the other computers. Open this screen on the main computer.')));
     } else if (used > allowed) {
@@ -306,9 +342,18 @@
       card.appendChild(el('p', 'pd-muted', t('Every device your license includes is in use. To add another, request an extra device below.')));
     }
 
-    var incl = el('p', 'pd-body', t('Your license includes a manager’s phone and one till.'));
-    incl.setAttribute('data-pd', 'included');
-    card.appendChild(incl);
+    // The "manager's phone and one till" wording is the shape of a 2-device
+    // licence and is only true for one. Any other count is stated plainly from
+    // the licence itself; an unknown count says nothing rather than guess.
+    if (allowed !== null) {
+      var inclText;
+      if (allowed === 2) inclText = t('Your license includes a manager’s phone and one till.');
+      else if (allowed === 1) inclText = t('Your license includes 1 device.');
+      else inclText = fill(t('Your license includes {n} devices.'), { n: allowed });
+      var incl = el('p', 'pd-body', inclText);
+      incl.setAttribute('data-pd', 'included');
+      card.appendChild(incl);
+    }
 
     var joined = isJoinedClient(data.me);
     var errNode = el('p', 'pd-err');

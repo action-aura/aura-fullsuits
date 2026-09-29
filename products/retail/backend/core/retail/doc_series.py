@@ -208,18 +208,22 @@ def peek_next_no(conn, series_row) -> str:
 
 
 # ── Readable per-till books (Retail UX P1b item 6) ───────────────────────────
-# A NEW shop's first shift on a till books that till its own sale / return /
-# purchase-order series automatically, coded from the branch and the till's
-# position: sale `ABD1`, return `ABD1-R`, purchase order `ABD1-P`, so the
-# receipt reads `ABD1-000001` instead of the legacy `SALE-<device>-000001`.
+# A till the OWNER has switched on (per computer, with an explicit till number)
+# gets its own sale / return / purchase-order series at its next shift, coded
+# from the branch and the till number: sale `ABD1`, return `ABD1-R`, purchase
+# order `ABD1-P`, so the receipt reads `ABD1-000001` instead of the legacy
+# `SALE-<device>-000001`. NOTHING switches this on by itself -- see
+# retail_api.py's numbering block for why (a number picked automatically on
+# two computers that have not heard from each other collides silently).
 # Everything below is PURE (no Flask, no settings, no sync): retail_api.py
-# decides WHEN (the flag, the hook, the routes); this module decides WHAT the
-# codes are, so the naming rules live in one testable place.
+# decides WHEN (the per-till switch, the hook, the routes); this module decides
+# WHAT the codes are and WHETHER a till number is free, so the naming rules
+# live in one testable place.
 #
 # `reserved` is always passed IN by the caller (the route derives it from the
-# tax-authority sequence module's own prefix table). It is deliberately a
-# parameter and not an import here -- see this module's opening docstring for
-# why nothing in this file may reach for that package.
+# tax-authority sequence module's own prefix table plus REF_PREFIX). It is
+# deliberately a parameter and not an import here -- see this module's opening
+# docstring for why nothing in this file may reach for that package.
 
 #: The suffix each doc type's book code carries after `<branch><till>`. A
 #: sale book has none, so the everyday receipt is the shortest one.
@@ -228,17 +232,19 @@ BOOK_SUFFIX = {'sale': '', 'return': '-R', 'po': '-P'}
 #: Shop-facing label prefix for the settings card ("Sales ABD1").
 BOOK_LABEL = {'sale': 'Sales', 'return': 'Returns', 'po': 'Purchases'}
 
-#: Branch codes are 2-4 upper-case letters/digits, so `<code><till 1-99>-R`
-#: always fits `_DOC_SERIES_CODE_RE`'s 12-character ceiling.
-_BRANCH_CODE_RE = re.compile(r'^[A-Z0-9]{2,4}$')
-_ASCII_ALNUM_RE = re.compile(r'[A-Za-z0-9]')
+#: Branch codes are 2-4 upper-case LETTERS, nothing else. Why letters only, and
+#: why NO separator between the letters and the till number (`ABD1`, not
+#: `ABD-1`): a code made of letters followed by digits reads back in exactly one
+#: way -- `ABD12` is branch ABD, till 12, never branch AB, till D12 -- so two
+#: different (branch, till) pairs can never spell the same book code, and the
+#: receipt stays as short as the plan's own example `ABD1-000124`. A branch code
+#: that could itself end in a digit ("AB1" + till 2 = "AB12" = "AB" + till 12)
+#: would break that, which is the only reason digits are not allowed. The
+#: ceiling is `_DOC_SERIES_CODE_RE`'s 12 characters: 4 letters + 2 digits + '-R'.
+_BRANCH_CODE_RE = re.compile(r'^[A-Z]{2,4}$')
+_ASCII_LETTER_RE = re.compile(r'[A-Za-z]')
 
-#: What a branch falls back to when its name gives no usable Latin letters
-#: (an Arabic-only name), or when the derived code would be a reserved one.
-FALLBACK_BRANCH_CODE = 'BR'
-
-#: A shop with more tills than this on one branch keeps the legacy numbering
-#: for the extras rather than minting 3-digit till numbers.
+#: The highest till number an owner can choose; keeps `<code><till>-R` short.
 MAX_TILL_NUMBER = 99
 
 #: The pad width a readable book uses; `ABD1-000001`.
@@ -247,7 +253,7 @@ READABLE_PAD_WIDTH = 6
 
 def normalise_branch_code(raw):
     """`raw` stripped and upper-cased if it is a valid branch code (2-4 ASCII
-    letters/digits), else None. Never raises on a non-string."""
+    letters), else None. Never raises on a non-string."""
     if not isinstance(raw, str):
         return None
     code = raw.strip().upper()
@@ -255,15 +261,16 @@ def normalise_branch_code(raw):
 
 
 def default_branch_code(name, reserved=()):
-    """The code a branch gets before its owner chooses one: the first up to
-    three ASCII letters/digits of its name, upper-cased ("Abdoun" -> "ABD").
-    A name with fewer than two usable characters (Arabic-only, empty) gives
-    FALLBACK_BRANCH_CODE, and so does a result the caller lists as reserved --
-    an owner-visible default must never be a code the create route refuses."""
-    chars = _ASCII_ALNUM_RE.findall(name if isinstance(name, str) else '')
-    code = ''.join(chars[:3]).upper()
+    """The code offered for a branch before its owner chooses one: its first up
+    to three ASCII LETTERS, upper-cased ("Abdoun" -> "ABD"). None -- never a
+    made-up fallback -- when the name gives fewer than two letters (an
+    Arabic-only name, empty) or the result is a reserved prefix: a silent
+    "BR" on every such branch would give two branches the same code and hide
+    that the owner has never been asked. The screen asks instead."""
+    letters = _ASCII_LETTER_RE.findall(name if isinstance(name, str) else '')
+    code = ''.join(letters[:3]).upper()
     if len(code) < 2 or code in reserved:
-        return FALLBACK_BRANCH_CODE
+        return None
     return code
 
 
@@ -272,55 +279,86 @@ def book_code(branch_code, till_number, doc_type):
     return f"{branch_code}{int(till_number)}{BOOK_SUFFIX[doc_type]}"
 
 
-def preview(branch_code, till_number=1, pad_width=READABLE_PAD_WIDTH):
-    """What the first documents of a till would read, for the settings card."""
-    return {
-        dt: f"{book_code(branch_code, till_number, dt)}-{1:0{pad_width}d}"
-        for dt in ('sale', 'return')
-    }
+def till_codes(branch_code, till_number):
+    """{doc_type: code} for one till: the three codes that must ALL be free (or
+    already this terminal's own) before that till number is usable."""
+    return {dt: book_code(branch_code, till_number, dt) for dt in DOC_SERIES_TYPES}
 
 
-def pick_till_number(conn, branch_code, reserved=()):
-    """The smallest N in 1..MAX_TILL_NUMBER for which the sale, return and
-    purchase-order codes are ALL unused. `idx_doc_series_code` is unique on
-    `(doc_type, code)` GLOBALLY across companies, so the check is global too
-    -- otherwise two shops both called "ABD" would collide on till 1. A
-    retired book still holds its code, so it counts as taken. None when every
-    number is taken."""
-    for n in range(1, MAX_TILL_NUMBER + 1):
-        codes = {dt: book_code(branch_code, n, dt) for dt in DOC_SERIES_TYPES}
-        if any(c in reserved for c in codes.values()):
-            continue
-        taken = conn.execute(
-            "SELECT 1 FROM doc_series WHERE (doc_type='sale' AND code=?) "
-            "OR (doc_type='return' AND code=?) OR (doc_type='po' AND code=?) LIMIT 1",
-            (codes['sale'], codes['return'], codes['po']),
-        ).fetchone()
-        if taken is None:
-            return n
-    return None
+def inspect_till_books(conn, company_id, terminal_uid, branch_code, till_number):
+    """Where THIS terminal stands against one (branch code, till number). Pure
+    read; inserting / reactivating is the caller's job, in its own
+    transaction. Returns a dict:
 
+      codes        {doc_type: code} -- the three codes this till would use
+      have         [row] this terminal's own ACTIVE book with exactly that code
+      reactivate   [row] this terminal's own RETIRED book with exactly that code
+                   (switched off earlier; the counter is untouched, so turning
+                   it back on continues the numbers instead of repeating them)
+      create       [doc_type] no book anywhere has that code
+      conflicts    [{doc_type, code}] a book with that code exists but is NOT
+                   this terminal's (another computer's, another company's, or
+                   an unclaimed one). `idx_doc_series_code` is unique on
+                   (doc_type, code) GLOBALLY, so this check is global too.
+      other_active [{doc_type, code}] this terminal already numbers a document
+                   type with some OTHER active book -- a hand-made one, or a
+                   readable one under a different till number. Two active
+                   books for one (terminal, doc_type) would make
+                   `resolve_series` alternate, so the caller refuses.
 
-def plan_books(conn, company_id, terminal_uid, branch_code, reserved=()):
-    """The books THIS terminal still needs, as a list of dicts
-    (doc_type, code, label, pad_width) sharing one till number -- one entry
-    per doc type where `resolve_series` finds nothing for the terminal. A
-    terminal that already owns all three gets []; so does a terminal with no
-    identity (it can never own a book, see `resolve_series`) and a branch
-    with no free till number. Pure read: inserting is the caller's job, in
-    its own transaction."""
-    if not terminal_uid:
-        return []
-    missing = [dt for dt in DOC_SERIES_TYPES
-               if resolve_series(conn, company_id, dt, terminal_uid) is None]
-    if not missing:
-        return []
-    n = pick_till_number(conn, branch_code, reserved)
-    if n is None:
-        return []
-    out = []
-    for dt in missing:
-        code = book_code(branch_code, n, dt)
-        out.append({'doc_type': dt, 'code': code,
-                    'label': f"{BOOK_LABEL[dt]} {code}", 'pad_width': READABLE_PAD_WIDTH})
+    A terminal with no identity can never own a book (see `resolve_series`):
+    every code is then reported as a conflict-free `create` but the callers
+    refuse earlier, on the missing identity."""
+    codes = till_codes(branch_code, till_number)
+    out = {'codes': codes, 'have': [], 'reactivate': [], 'create': [],
+           'conflicts': [], 'other_active': []}
+    for dt, code in codes.items():
+        row = conn.execute(
+            "SELECT * FROM doc_series WHERE doc_type=? AND code=?", (dt, code)).fetchone()
+        if row is None:
+            out['create'].append(dt)
+        elif row['company_id'] == company_id and terminal_uid and row['allocator_terminal_uid'] == terminal_uid:
+            (out['have'] if row['status'] == 'active' else out['reactivate']).append(row)
+        else:
+            out['conflicts'].append({'doc_type': dt, 'code': code})
+    if terminal_uid:
+        for row in conn.execute(
+                "SELECT doc_type, code FROM doc_series WHERE company_id=? AND "
+                "allocator_terminal_uid=? AND status='active'", (company_id, terminal_uid)):
+            if row['doc_type'] in codes and row['code'] != codes[row['doc_type']]:
+                out['other_active'].append({'doc_type': row['doc_type'], 'code': row['code']})
     return out
+
+
+def new_book_spec(doc_type, code):
+    """(label, pad_width) for a readable book the hook is about to create."""
+    return f"{BOOK_LABEL[doc_type]} {code}", READABLE_PAD_WIDTH
+
+
+def preview_next(conn, inspected):
+    """The receipts this till prints NEXT, {'sale': ..., 'return': ...}: the
+    real counter of a book that exists (`peek_next_no`, so a till that has sold
+    124 times says `ABD1-000125`), else the first number of a book still to be
+    created. Never consumes a number."""
+    existing = {r['doc_type']: r for r in inspected['have'] + inspected['reactivate']}
+    out = {}
+    for dt in ('sale', 'return'):
+        row = existing.get(dt)
+        out[dt] = (peek_next_no(conn, row) if row is not None
+                   else f"{inspected['codes'][dt]}-{1:0{READABLE_PAD_WIDTH}d}")
+    return out
+
+
+def till_numbers_in_use(conn, branch_code):
+    """Sorted till numbers for which a SALE book coded `<branch_code><N>`
+    already exists anywhere on this computer (any company, any status, any
+    owner): the numbers the owner cannot pick. The letters-then-digits code
+    shape is what makes this a plain prefix parse."""
+    pat = re.compile(r'^' + re.escape(branch_code) + r'(\d{1,2})$')
+    used = set()
+    for row in conn.execute("SELECT code FROM doc_series WHERE doc_type='sale' AND code LIKE ?",
+                            (branch_code + '%',)):
+        m = pat.match(row['code'])
+        if m:
+            used.add(int(m.group(1)))
+    return sorted(used)

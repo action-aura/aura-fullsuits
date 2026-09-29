@@ -598,6 +598,112 @@ def _scenario_standalone_variants(results: Results, browser, shots: Path) -> Non
 
         results.run("F non-owner sees only the owner-only line and requests no licence/relay data", cashier_sees_only_the_owner_line)
 
+        # ── G: every REAL licence state, and the seat wording (fix round F7/F11)
+        # The licence status is stubbed at the network layer so each of the 15
+        # states the licence engine can really emit is walked in a real browser.
+        # The expected table below is written out by hand from
+        # commercial_runtime/licensing_contracts/state_machine.py's LicenseState,
+        # NOT read back from plan-devices.js -- a table copied from the code under
+        # test could never catch that code drifting.
+        real_states = [
+            ("ACTIVE_ONLINE", "Active", "ok"),
+            ("ACTIVE_OFFLINE", "Active (offline)", "ok"),
+            ("WARNING", "Check-in needed soon", "warn"),
+            ("GRACE_PERIOD", "Offline grace period", "warn"),
+            ("CLOCK_REVIEW_REQUIRED", "Clock review required", "warn"),
+            ("RESTRICTED", "Restricted", "bad"),
+            ("SUSPENDED", "Suspended", "bad"),
+            ("REVOKED", "Revoked", "bad"),
+            ("EXPIRED", "Expired", "bad"),
+            ("LOCAL_STATE_CORRUPT", "Local state needs reset", "bad"),
+            ("DEVICE_DEACTIVATED", "Computer deactivated", "bad"),
+            ("DEVICE_REPLACED", "Computer replaced", "bad"),
+            ("NOT_CONFIGURED", "Not configured", "neutral"),
+            ("ACTIVATION_REQUIRED", "Activation required", "neutral"),
+            ("ACTIVATING", "Activating…", "neutral"),
+            # not a state the engine emits: must say so, never pose as one
+            ("SOMETHING_NEWER", "Status unavailable", "neutral"),
+            ("constructor", "Status unavailable", "neutral"),   # inherited property names are not states
+            ("__proto__", "Status unavailable", "neutral"),
+        ]
+        lic_stub = {"body": {}}
+
+        def licence_status(route):
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(lic_stub["body"]))
+
+        page.route("**/api/licensing/status", licence_status)
+
+        def _mount_with_licence(body: dict) -> None:
+            lic_stub["body"] = body
+            _mount(page, backend, standalone=True)
+
+        for raw_state, label, kind in real_states:
+            def one_state(raw_state=raw_state, label=label, kind=kind):
+                _mount_with_licence({"current_state": raw_state, "plan_code": "RETAIL_STANDARD", "allowed_device_count": 2,
+                                     "term": {"start": None, "end": TERM_END}})
+                got = page.evaluate(
+                    "() => { const b = document.querySelector('[data-pd=state]'); "
+                    "return {t: b.textContent.trim(), c: b.className, s: b.getAttribute('data-pd-state')}; }")
+                assert got["t"] == label, f"{raw_state}: badge says {got['t']!r}, expected {label!r}"
+                assert got["c"].split() == ["pd-badge", kind], f"{raw_state}: class {got['c']!r}, expected pd-badge {kind}"
+                assert got["s"] == raw_state, f"{raw_state}: data-pd-state is {got['s']!r}"
+                if label != "Not configured":
+                    body = page.evaluate("document.getElementById('pd-host').innerText")
+                    assert "Not configured" not in body, f"{raw_state}: a licensed shop is shown 'Not configured'"
+                _assert_seen(page, "[data-pd=state]", f"state badge ({raw_state})")
+
+            results.run(f"G1 licence state {raw_state}: badge reads {label!r} ({kind})", one_state)
+
+        def a_missing_state_is_unavailable_not_not_configured():
+            _mount_with_licence({"allowed_device_count": 2})
+            assert _text(page, "[data-pd=state]") == "Status unavailable", _text(page, "[data-pd=state]")
+            _mount_with_licence({"current_state": None, "allowed_device_count": 2})
+            assert _text(page, "[data-pd=state]") == "Status unavailable", _text(page, "[data-pd=state]")
+
+        results.run("G2 no current_state at all reads 'Status unavailable', never 'Not configured'", a_missing_state_is_unavailable_not_not_configured)
+
+        def included_line_follows_the_real_count():
+            cases = [
+                (2, "Your license includes a manager’s phone and one till."),
+                (1, "Your license includes 1 device."),
+                (5, "Your license includes 5 devices."),
+                (3, "Your license includes 3 devices."),
+            ]
+            for allowed, want in cases:
+                _mount_with_licence({"current_state": "ACTIVE_ONLINE", "allowed_device_count": allowed})
+                got = _text(page, "[data-pd=included]")
+                assert got == want, f"allowed={allowed}: {got!r}, expected {want!r}"
+                assert "manager" not in got or allowed == 2, f"the 2-device sentence shown for allowed={allowed}: {got!r}"
+            _mount_with_licence({"current_state": "ACTIVE_ONLINE"})
+            assert _count(page, "[data-pd=included]") == 0, "an unknown seat count must state no 'includes' sentence at all"
+            assert _text(page, "#pd-seat-figure") == "—", _text(page, "#pd-seat-figure")
+
+        results.run("G3 'includes' line: manager's phone only for 2, plain count for others, nothing when unknown", included_line_follows_the_real_count)
+
+        def activation_wording_only_for_states_that_need_activation():
+            needs = ("NOT_CONFIGURED", "ACTIVATION_REQUIRED", "ACTIVATING", "DEVICE_DEACTIVATED", "DEVICE_REPLACED")
+            for st in needs:
+                _mount_with_licence({"current_state": st})
+                assert _count(page, "[data-pd=needs-activation]") == 1 and _count(page, "[data-pd=needs-internet]") == 0, st
+                assert "Activate it with your license key" in _text(page, "[data-pd=needs-activation]"), st
+                assert "internet" not in _text(page, "[data-pd=needs-activation]"), st
+            for st in ("ACTIVE_ONLINE", "GRACE_PERIOD", "WARNING", "EXPIRED"):
+                _mount_with_licence({"current_state": st})
+                assert _count(page, "[data-pd=needs-internet]") == 1 and _count(page, "[data-pd=needs-activation]") == 0, st
+                assert "Connect to the internet" in _text(page, "[data-pd=needs-internet]"), st
+            _assert_seen(page, "[data-pd=needs-internet]", "the internet sentence")
+
+        results.run("G4 unactivated states get activation wording; other states without a count get the internet wording", activation_wording_only_for_states_that_need_activation)
+
+        def no_seat_count_is_read_from_the_licence():
+            # A licence status that carries a stray `devices_used` must not move
+            # the meter: the count comes from the relay list only.
+            _mount_with_licence({"current_state": "ACTIVE_ONLINE", "allowed_device_count": 4, "devices_used": 4})
+            assert _text(page, "#pd-seat-figure") == "1 of 4 devices", _text(page, "#pd-seat-figure")
+
+        results.run("G5 the seat count ignores any devices_used on the licence status (relay list only)", no_seat_count_is_read_from_the_licence)
+        page.unroute("**/api/licensing/status")
+
         # ── E: Remove flow (relay list + revoke are stubbed) ───────────────
         state = {"revoked": False, "posts": []}
 

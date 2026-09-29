@@ -292,6 +292,10 @@ def test_manager_and_cashier_are_refused_even_holding_retail_reports_and_even_on
         r = c.get('/api/sub/retail/audit-log')
         assert r.status_code == 403, (who, r.get_json())
         assert r.get_json().get('code') == 'OWNER_ONLY', (who, r.get_json())
+        # A READ route says "open", not "change" (Phase 1b fix round F12): a
+        # person refused a screen was told they could not change something.
+        assert r.get_json().get('message') == 'Only the shop owner can open this.', (who, r.get_json())
+        assert r.get_json().get('error') == r.get_json().get('message'), (who, r.get_json())
 
     assert client.get('/api/sub/retail/audit-log').status_code == 200
 

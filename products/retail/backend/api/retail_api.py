@@ -10395,7 +10395,7 @@ def open_cash_session():
         # Retail UX P1b item 6: the drawer is open and committed; NOW give a
         # new shop's till its readable books. Deliberately AFTER the commit and
         # self-containing every failure, so numbering can never cost a shift.
-        _auto_book_first_shift(conn, cid, bid)
+        _book_till_at_shift_open(conn, cid, bid)
         sess = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
         conn.close()
         return jsonify({'status': 'success', 'data': _cash_session_public(sess, terminal)})
@@ -14686,35 +14686,61 @@ def claim_doc_series(series_id):
 
 
 # ── Readable per-till numbers (Retail UX P1b item 6) ─────────────────────────
-# A NEW shop's first shift on a till books that till its own sale / return /
-# purchase-order series (`ABD1`, `ABD1-R`, `ABD1-P`), so its receipts read
+# A till the OWNER switches on gets its own sale / return / purchase-order
+# series (`ABD1`, `ABD1-R`, `ABD1-P`) at its next shift, so its receipts read
 # `ABD1-000001` instead of the legacy `SALE-<device>-000001`. The naming rules
 # are pure and live in core/retail/doc_series.py; this block decides WHEN
-# (the flag, the shift-open hook) and lets the owner see / change the branch
-# code (GET/POST /numbering).
+# (the per-till switch, the shift-open hook) and lets the owner see / change
+# the branch code and the switch (GET/POST /numbering).
 #
-# NO schema change: the branch code and the on/off flag are two ordinary
-# `retail_settings` keys, which already sync last-write-wins.
-#   numbering_readable_enabled   '1' | '0'   (absent = not decided yet)
-#   branch_code:<branches.uid>   2-4 chars A-Z0-9
+# NOTHING SWITCHES THIS ON BY ITSELF, for a new shop or an old one. The first
+# design booked every new shop's tills automatically and picked the smallest
+# free till number. An adversarial run with two REAL computers (separate
+# databases, the repo's own relay harness) broke it: two tills that had not
+# heard from each other both took "till 1", printed the same receipt number
+# for two different sales, and one sale was quarantined on the other computer.
+# A fresh computer could also flip a whole shop's shared "on" flag. Choosing a
+# unique till number safely across computers needs a device registry that
+# syncs (Track S, waiting on the owner and the partner). Until then the choice
+# is made by a person, on the computer it is about.
 #
-# THE FLAG'S DEFAULT is the whole "existing shops keep their numbering" rule:
-# with nothing stored, a shop is ON only if it is brand new (no sale, return,
-# purchase order or numbering book anywhere). A shop with history stays OFF
-# until its owner switches it on, because renumbering a running shop halfway
-# through a month is the owner's call, never ours. The first shift-open on a
-# device PINS whichever answer the shop got, so "new" cannot flip to "not new"
-# under it once the first book exists.
-_NUMBERING_ENABLED_KEY = 'numbering_readable_enabled'
+# NO schema change. Two kinds of ordinary `retail_settings` rows:
+#   branch_code:<branches.uid>    2-4 LETTERS (A-Z). SHOP-WIDE, synced
+#                                 last-write-wins like every other shop setting:
+#                                 a branch's code is a fact about the branch.
+#   numbering_till:<terminal_uid> JSON {"on", "till", "branch_uid", "series_ids"}
+#                                 DEVICE-LOCAL. Written by `_write_local_setting`
+#                                 WITHOUT `_queue_setting_sync_event`; the sync
+#                                 engine only ever ships queued events (see
+#                                 sync_service.py's `retail_setting` branch), so
+#                                 this row never leaves the computer it was
+#                                 written on. That is the point: "this computer
+#                                 is till 2" is a fact about one computer, and a
+#                                 shop-wide flag another computer can flip (P2/
+#                                 P3 of the verifier's run) is exactly wrong for
+#                                 it. It is keyed by the terminal uid, so a
+#                                 database copied onto another computer does not
+#                                 make that computer a till it never was.
+#
+# REMAINING WINDOW, written down: two computers that are BOTH offline can still
+# be given the same till number by their owners. The second is refused (409)
+# when it already knows the first's books; when it does not, the second book's
+# create is quarantined on sync exactly as before. That quarantine is still
+# INVISIBLE to the owner: no screen reads retail `sync_apply_quarantine` (a
+# recorded pre-existing gap). What changed is that it now needs a person to
+# type the same number twice, instead of happening to every new shop.
 _BRANCH_CODE_KEY_PREFIX = 'branch_code:'
+_TILL_STATE_KEY_PREFIX = 'numbering_till:'
 
 
 def _reserved_book_prefixes():
-    """The tax-authority sequence's own prefixes. Lazy, route-side only: the
-    numbering module must never import that package (see its docstring), so
-    the set is fetched here and passed IN to the pure helpers."""
+    """Branch codes no owner may use: the tax-authority sequence's own prefixes
+    (lazy, route-side only -- the numbering module must never import that
+    package, see its docstring) PLUS every prefix this app already mints
+    documents under (SALE, RET, PO, REC, ...). A branch called "PO" would
+    otherwise print `PO1-000001` next to the legacy `PO-...` numbers."""
     from commercial_runtime.einvoicing.sequence import RESERVED_LOCAL_PREFIXES
-    return frozenset(RESERVED_LOCAL_PREFIXES)
+    return frozenset(RESERVED_LOCAL_PREFIXES) | frozenset(doc_series.REF_PREFIX.values())
 
 
 def _read_stored_setting(conn, cid, skey):
@@ -14734,31 +14760,54 @@ def _write_retail_setting(conn, cid, skey, svalue):
     _queue_setting_sync_event(conn, skey, svalue)
 
 
-def _shop_is_new_for_numbering(conn, cid):
-    """True when this company has never sold, returned, ordered or numbered
-    anything. Reads real rows, not a counter: a counter can be reset, a row
-    cannot un-happen."""
-    for table in ('sales', 'returns', 'purchase_orders', 'doc_series'):
-        if conn.execute(f"SELECT 1 FROM {table} WHERE company_id=? LIMIT 1", (cid,)).fetchone():
-            return False
-    return True
+def _write_local_setting(conn, cid, skey, svalue):
+    """Upsert one DEVICE-LOCAL row in `retail_settings`: the same table, but
+    deliberately NO `_queue_setting_sync_event`, so it never leaves this
+    computer (see the block comment above). The caller commits. Every reader of
+    this key must live in this block; do not add it to any settings list."""
+    conn.execute(
+        "INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+        "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+        (cid, skey, svalue))
 
 
-def _numbering_readable_enabled(conn, cid):
-    """(enabled, pinned). A stored '1'/'0' always wins; with nothing stored the
-    answer is the new-shop rule above and `pinned` is False. Never writes."""
-    stored = _read_stored_setting(conn, cid, _NUMBERING_ENABLED_KEY)
-    if stored in ('1', '0'):
-        return stored == '1', True
-    return _shop_is_new_for_numbering(conn, cid), False
+def _read_till_state(conn, cid, terminal):
+    """This computer's numbering switch: {'on': bool, 'till': int|None,
+    'branch_uid': str|None, 'series_ids': [str]}. Missing, unreadable or
+    malformed state is "off" -- the safe answer is always the legacy numbers,
+    never a guess -- and a malformed one is logged so it is not silent."""
+    off = {'on': False, 'till': None, 'branch_uid': None, 'series_ids': []}
+    if not terminal:
+        return off
+    raw = _read_stored_setting(conn, cid, _TILL_STATE_KEY_PREFIX + terminal)
+    if raw is None:
+        return off
+    try:
+        state = json.loads(raw)
+        till = state.get('till')
+        if (state.get('on') is True and isinstance(till, int) and not isinstance(till, bool)
+                and 1 <= till <= doc_series.MAX_TILL_NUMBER):
+            return {'on': True, 'till': till, 'branch_uid': state.get('branch_uid'),
+                    'series_ids': [s for s in (state.get('series_ids') or []) if isinstance(s, str)]}
+        if state.get('on') is False:
+            return off
+    except (ValueError, AttributeError, TypeError):
+        pass
+    log.warning('readable numbering: the switch stored for this computer is unreadable; treated as off')
+    return off
 
 
-def _branch_code_info(conn, cid, branch_row):
-    """(branch_code, default_branch_code, is_saved) for one `branches` row.
-    A saved code that is no longer valid (or has since become reserved) is
-    ignored rather than trusted: the default is always a code the create
-    routes accept."""
-    reserved = _reserved_book_prefixes()
+def _write_till_state(conn, cid, terminal, on, till, branch_uid, series_ids):
+    _write_local_setting(conn, cid, _TILL_STATE_KEY_PREFIX + terminal, json.dumps(
+        {'on': bool(on), 'till': till, 'branch_uid': branch_uid, 'series_ids': list(series_ids)}))
+
+
+def _effective_branch_code(conn, cid, branch_row, reserved):
+    """(code, default, is_saved) for one `branches` row. `code` is the saved
+    code when it is valid and not reserved, else the default, else None (an
+    Arabic-only name with nothing saved: the screen asks, we never invent one).
+    A saved code that has since become invalid or reserved is ignored rather
+    than trusted."""
     default = doc_series.default_branch_code(branch_row['name'], reserved)
     saved = None
     if branch_row['uid']:
@@ -14769,24 +14818,94 @@ def _branch_code_info(conn, cid, branch_row):
     return (saved or default), default, saved is not None
 
 
-def _auto_book_first_shift(conn, cid, bid):
+def _branch_code_info(conn, cid, branch_row):
+    """(code, default, is_saved, taken_by): `_effective_branch_code` plus the
+    NAME of another branch of this company whose effective code is the same
+    (None when nobody else has it). Two branches sharing a code would mint the
+    same book codes, so the routes refuse to save or switch on a shared one."""
+    reserved = _reserved_book_prefixes()
+    code, default, saved = _effective_branch_code(conn, cid, branch_row, reserved)
+    taken_by = None
+    if code:
+        for other in conn.execute(
+                "SELECT id, name, uid FROM branches WHERE company_id=? AND id != ? ORDER BY id",
+                (cid, branch_row['id'])).fetchall():
+            if _effective_branch_code(conn, cid, other, reserved)[0] == code:
+                taken_by = other['name']
+                break
+    return code, default, saved, taken_by
+
+
+def _apply_till_books(conn, cid, terminal, branch, inspected):
+    """Create the missing books and reactivate this terminal's own retired ones
+    for one inspected till. Writes + sync events + audit rows, NO commit (the
+    caller commits, so it stays atomic). Returns (all_series_ids, changed)."""
+    now = now_utc_iso()
+    cur = conn.cursor()
+    ids = [r['id'] for r in inspected['have']]
+    changed = False
+    for row in inspected['reactivate']:
+        cur.execute(
+            "UPDATE doc_series SET status='active', row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=?", (now, row['id'], cid))
+        updated = conn.execute("SELECT * FROM doc_series WHERE id=?", (row['id'],)).fetchone()
+        _queue_sync_event(cur, 'doc_series', row['id'], 'update',
+                          _doc_series_sync_payload(updated, changed_fields=['status']))
+        _audit(conn, 'DOC_SERIES_AUTO_REACTIVATED', 'doc_series', row['id'],
+               f"{row['doc_type']}:{row['code']}")
+        ids.append(row['id'])
+        changed = True
+    for dt in inspected['create']:
+        code = inspected['codes'][dt]
+        label, pad_width = doc_series.new_book_spec(dt, code)
+        series_id = _new_uid()
+        cur.execute("""
+            INSERT INTO doc_series (id, company_id, doc_type, code, label, branch_uid,
+                                    allocator_terminal_uid, claimed_at_utc,
+                                    pad_width, start_no, status, created_at,
+                                    updated_at_utc, row_version)
+            VALUES (?,?,?,?,?,?,?,?,?,1,'active',?,?,1)
+        """, (series_id, cid, dt, code, label, branch['uid'], terminal, now, pad_width, now, now))
+        row = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
+        _queue_sync_event(cur, 'doc_series', series_id, 'create', _doc_series_sync_payload(row))
+        _audit(conn, 'DOC_SERIES_AUTO_CREATED', 'doc_series', series_id, f"{dt}:{code}")
+        ids.append(series_id)
+        changed = True
+    return ids, changed
+
+
+def _why_till_cannot_be_numbered(inspected, till):
+    """A plain sentence when this (code, till number) cannot be used on this
+    computer, else None. One home for the words so the route's 409 and the
+    hook's log line cannot drift apart."""
+    if inspected['conflicts']:
+        return (f"Till number {till} is already used by another computer or book "
+                f"({', '.join(c['code'] for c in inspected['conflicts'])}). Pick a different number.")
+    if inspected['other_active']:
+        return ("This computer already numbers its documents with "
+                f"{', '.join(c['code'] for c in inspected['other_active'])}. "
+                "Switch that off (or retire it) first, then choose a number.")
+    return None
+
+
+def _book_till_at_shift_open(conn, cid, bid):
     """Called once after a shift-open commits. Gives THIS till its readable
-    books if the shop has readable numbering on and the till has none yet.
+    books if, and only if, the owner switched readable numbers on for THIS
+    computer (`numbering_till:<terminal>`), with an explicit till number.
+    Nothing here ever picks a number: the number was chosen by a person.
 
     It can never break the shift: the drawer is already open and committed, so
     every failure here is logged and swallowed, and every skip is logged with
     its reason (a silent skip and a silent failure are the same to whoever is
     asking "why does this till still say SALE-..."). Known, accepted gaps,
     written down instead of left to be found:
-      * It fires on shift-open only. A shop that sells without ever opening a
+      * It fires on shift-open only. A till that sells without ever opening a
         shift keeps the legacy numbering.
-      * A till that owns SOME books but not all (say a sale book made by hand)
-        gets the missing ones under a single new till number, which may differ
-        from the hand-made book's.
-      * Two offline devices can pick the same till number; the second book's
-        create is quarantined on sync (see create_doc_series) rather than
-        wedging it. The `_is_device_behind_on_sync()` check below shrinks the
-        window; it cannot close it.
+      * Two computers that are both offline can be given the same till number
+        by their owners; the second book's create is quarantined on sync (see
+        create_doc_series), which no screen shows yet. The
+        `_is_device_behind_on_sync()` check below shrinks the window; it
+        cannot close it.
     """
     try:
         _ensure_credit_schema(conn)
@@ -14794,12 +14913,9 @@ def _auto_book_first_shift(conn, cid, bid):
         if not terminal:
             log.info('readable numbering skipped: this device has no identity yet')
             return
-        enabled, pinned = _numbering_readable_enabled(conn, cid)
-        if not pinned:
-            _write_retail_setting(conn, cid, _NUMBERING_ENABLED_KEY, '1' if enabled else '0')
-            conn.commit()
-        if not enabled:
-            log.info('readable numbering skipped: switched off for this shop')
+        state = _read_till_state(conn, cid, terminal)
+        if not state['on']:
+            log.info('readable numbering skipped: not switched on for this computer')
             return
         if _is_device_behind_on_sync():
             log.info('readable numbering skipped: this device is behind on sync')
@@ -14810,29 +14926,23 @@ def _auto_book_first_shift(conn, cid, bid):
         if branch is None or not branch['uid']:
             log.info('readable numbering skipped: branch has no wire identity')
             return
-        reserved = _reserved_book_prefixes()
-        code, _default, _saved = _branch_code_info(conn, cid, branch)
-        plan = doc_series.plan_books(conn, cid, terminal, code, reserved)
-        if not plan:
-            log.info('readable numbering skipped: this till already has its books '
-                     'or no till number is free')
+        if branch['uid'] != state['branch_uid']:
+            log.info('readable numbering skipped: this shift is on a different branch '
+                     'than the one this computer was switched on for')
             return
-        now = now_utc_iso()
-        cur = conn.cursor()
-        for book in plan:
-            series_id = _new_uid()
-            cur.execute("""
-                INSERT INTO doc_series (id, company_id, doc_type, code, label, branch_uid,
-                                        allocator_terminal_uid, claimed_at_utc,
-                                        pad_width, start_no, status, created_at,
-                                        updated_at_utc, row_version)
-                VALUES (?,?,?,?,?,?,?,?,?,1,'active',?,?,1)
-            """, (series_id, cid, book['doc_type'], book['code'], book['label'],
-                  branch['uid'], terminal, now, book['pad_width'], now, now))
-            row = conn.execute("SELECT * FROM doc_series WHERE id=?", (series_id,)).fetchone()
-            _queue_sync_event(cur, 'doc_series', series_id, 'create', _doc_series_sync_payload(row))
-            _audit(conn, 'DOC_SERIES_AUTO_CREATED', 'doc_series', series_id,
-                   f"{book['doc_type']}:{book['code']}")
+        code, _default, _saved = _effective_branch_code(conn, cid, branch, _reserved_book_prefixes())
+        if not code:
+            log.info('readable numbering skipped: the branch has no code')
+            return
+        inspected = doc_series.inspect_till_books(conn, cid, terminal, code, state['till'])
+        why = _why_till_cannot_be_numbered(inspected, state['till'])
+        if why:
+            log.info('readable numbering skipped: %s', why)
+            return
+        ids, changed = _apply_till_books(conn, cid, terminal, branch, inspected)
+        if not changed and sorted(ids) == sorted(state['series_ids']):
+            return
+        _write_till_state(conn, cid, terminal, True, state['till'], state['branch_uid'], ids)
         conn.commit()
         _sync_nudge()
     except sqlite3.IntegrityError as exc:
@@ -14843,16 +14953,77 @@ def _auto_book_first_shift(conn, cid, bid):
         log.exception('readable numbering failed and was swallowed; the shift is open')
 
 
-def _numbering_payload(conn, cid, branch_row):
-    code, default, is_saved = _branch_code_info(conn, cid, branch_row)
-    enabled, _pinned = _numbering_readable_enabled(conn, cid)
+def _tracked_books(conn, cid, terminal, state):
+    """{doc_type: row} of THIS terminal's ACTIVE books that its switch tracks.
+    The single definition of "the books this till is numbering with" -- the
+    preview reads it, and switching off retires exactly these."""
+    out = {}
+    for sid in state['series_ids']:
+        row = conn.execute(
+            "SELECT * FROM doc_series WHERE id=? AND company_id=? AND status='active' "
+            "AND allocator_terminal_uid=?", (sid, cid, terminal)).fetchone()
+        if row is not None:
+            out[row['doc_type']] = row
+    return out
+
+
+def _numbering_payload(conn, cid, branch_row, preview_till=None):
+    """The GET / POST body. `readable_enabled` and `till_number` are about THIS
+    computer, not the shop. `preview` is what the next receipts read: the real
+    counter when the books exist, else the first number of the books the next
+    shift will create; for a till not yet chosen it is an example for
+    `preview_till` (or till 1) and `preview_is_example` says so."""
+    code, default, is_saved, taken_by = _branch_code_info(conn, cid, branch_row)
+    terminal = local_terminal_id()
+    state = _read_till_state(conn, cid, terminal)
+    on_here = bool(state['on'] and state['branch_uid'] == branch_row['uid'])
+    till = state['till'] if on_here else None
+    own = _tracked_books(conn, cid, terminal, state) if on_here else {}
+    preview = None
+    is_example = True
+    note = None
+    books_ready = False
+    branch_note = ("A new code applies only to tills switched on afterwards. "
+                   "Books that already exist keep their code.")
+    if on_here and 'sale' in own and 'return' in own:
+        # The till's REAL books decide what it prints next -- not whatever the
+        # branch code says today (a code changed after the books were made must
+        # not make the preview lie about the receipts).
+        preview = {dt: doc_series.peek_next_no(conn, own[dt]) for dt in ('sale', 'return')}
+        is_example = False
+        books_ready = True
+        note = "Each document on this computer prints the next number of these books."
+        if code and own['sale']['code'] != doc_series.till_codes(code, till)['sale']:
+            branch_note = (f"This computer keeps numbering with its current books "
+                           f"({own['sale']['code']}). The new branch code applies only "
+                           "to tills switched on afterwards.")
+    elif code:
+        show_till = till or preview_till or 1
+        inspected = doc_series.inspect_till_books(conn, cid, terminal, code, show_till)
+        preview = doc_series.preview_next(conn, inspected)
+        is_example = not on_here
+        if on_here:
+            note = "The books are created when this computer opens its next shift."
+        else:
+            note = (f"An example for till {show_till}. This computer is not switched on, "
+                    "so it still uses the long numbers.")
     return {
         'branch_uid': branch_row['uid'],
+        'branch_name': branch_row['name'],
         'branch_code': code,
         'default_branch_code': default,
         'branch_code_is_saved': is_saved,
-        'readable_enabled': enabled,
-        'preview': doc_series.preview(code),
+        'branch_code_taken_by': taken_by,
+        'branch_code_note': branch_note,
+        'readable_enabled': on_here,
+        'till_number': till,
+        'books_ready': books_ready,
+        'has_identity': bool(terminal),
+        'max_till_number': doc_series.MAX_TILL_NUMBER,
+        'till_numbers_in_use': doc_series.till_numbers_in_use(conn, code) if code else [],
+        'preview': preview,
+        'preview_is_example': is_example,
+        'preview_note': note,
     }
 
 
@@ -14876,29 +15047,57 @@ def _numbering_branch(conn, cid, explicit_uid):
 
 
 # GET /api/sub/retail/numbering[?branch_uid=<uid>]   (owner only)
-#   -> {status:'success', data:{branch_uid, branch_code, default_branch_code,
-#        branch_code_is_saved, readable_enabled, preview:{sale, return}}}
-#   `preview` is what till 1 of that branch would print on its first documents.
-# POST /api/sub/retail/numbering   body {branch_uid?, branch_code?, readable_enabled?}
+#   also ?till_number=<1-99> (only to size the example while this computer is off)
+#   -> {status:'success', data:{
+#        branch_uid, branch_name,
+#        branch_code            2-4 letters or null (null: Arabic-only name and
+#                               nothing saved -- the screen must ASK, never guess)
+#        default_branch_code    the suggestion, or null
+#        branch_code_is_saved, branch_code_taken_by (name of another branch that
+#                               has the same code, else null),
+#        branch_code_note       plain sentence: a code change applies only to
+#                               tills switched on afterwards
+#        readable_enabled       THIS COMPUTER's switch (device-local, never synced)
+#        till_number            this computer's chosen number, null when off
+#        books_ready            true once this till's books exist and are active
+#        has_identity, max_till_number (99),
+#        till_numbers_in_use    [int] sale books "<code><N>" known on this computer
+#        preview                {sale, return}: the REAL next numbers when the
+#                               books exist, else the first number of the books
+#                               the next shift creates, or an example
+#        preview_is_example     true when this computer is off (an example)
+#        preview_note}}         plain sentence saying which of the above it is
+# POST /api/sub/retail/numbering
+#   body {branch_uid?, branch_code?, readable_enabled?, till_number?}
 #   At least one of branch_code / readable_enabled. -> the same body as GET.
-#   400 bad or reserved code / non-boolean flag / empty body, 404 unknown branch.
+#   readable_enabled true REQUIRES till_number (int 1-99): the number is never
+#   picked for the owner. readable_enabled false retires this till's books.
+#   400 bad / reserved / no code, 404 unknown branch,
+#   409 code used by another branch / till number already used / this computer
+#   already numbers with other books / this computer has no identity.
+#   Nothing is written on a refusal (one transaction).
 # Path segment 'numbering' is the frontend's reachability hook (the
 # route-reachability test keys on the longest literal segment).
 @retail_bp.route('/numbering', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def get_numbering():
-    admin_guard = _require_company_admin()
+    admin_guard = _require_company_admin(verb='open')
     if admin_guard is not None:
         return admin_guard
     cid = _cid()
+    preview_till = None
+    raw_till = request.args.get('till_number')
+    if raw_till is not None and raw_till.isdigit() and 1 <= int(raw_till) <= doc_series.MAX_TILL_NUMBER:
+        preview_till = int(raw_till)
     conn = get_retail_conn()
     try:
         _ensure_credit_schema(conn)
         branch, err = _numbering_branch(conn, cid, request.args.get('branch_uid'))
         if err:
             return err
-        return jsonify({'status': 'success', 'data': _numbering_payload(conn, cid, branch)})
+        return jsonify({'status': 'success',
+                        'data': _numbering_payload(conn, cid, branch, preview_till)})
     finally:
         conn.close()
 
@@ -14911,7 +15110,11 @@ def get_numbering():
 def set_numbering():
     """Owner only, like every company-wide numbering write. Changing a branch
     code affects only books created AFTER it; a book that exists keeps its
-    code forever (codes are immutable, see update_doc_series)."""
+    code forever (codes are immutable, see update_doc_series).
+
+    `readable_enabled` here is about THIS computer only and needs an explicit
+    `till_number`. Every refusal is decided BEFORE the first write, and the
+    writes share one transaction, so a refused request changes nothing."""
     admin_guard = _require_company_admin()
     if admin_guard is not None:
         return admin_guard
@@ -14924,15 +15127,25 @@ def set_numbering():
         new_code = doc_series.normalise_branch_code(data.get('branch_code'))
         if new_code is None:
             return jsonify({'status': 'error', 'message':
-                'The branch code must be 2 to 4 letters or digits (A-Z, 0-9).'}), 400
+                'The branch code must be 2 to 4 letters (A-Z).'}), 400
         if new_code in _reserved_book_prefixes():
             return jsonify({'status': 'error', 'message':
-                f"{new_code!r} is reserved for Jordan e-invoicing's own numbering and cannot be used here."}), 400
+                f"{new_code!r} is already used at the start of other document numbers "
+                "(sales, returns, purchases, e-invoicing) and cannot be a branch code."}), 400
     new_enabled = None
+    new_till = None
     if 'readable_enabled' in data:
         if not isinstance(data.get('readable_enabled'), bool):
             return jsonify({'status': 'error', 'message': 'readable_enabled must be true or false.'}), 400
         new_enabled = data['readable_enabled']
+        if new_enabled:
+            raw_till = data.get('till_number')
+            if (not isinstance(raw_till, int) or isinstance(raw_till, bool)
+                    or not 1 <= raw_till <= doc_series.MAX_TILL_NUMBER):
+                return jsonify({'status': 'error', 'message':
+                    f"Choose this computer's till number, from 1 to {doc_series.MAX_TILL_NUMBER}. "
+                    "It is never picked for you."}), 400
+            new_till = raw_till
 
     cid = _cid()
     conn = get_retail_conn()
@@ -14944,14 +15157,71 @@ def set_numbering():
         if new_code is not None and not branch['uid']:
             return jsonify({'status': 'error', 'message':
                 'This branch has no identity yet, so a code cannot be saved for it.'}), 400
+        reserved = _reserved_book_prefixes()
+        if new_code is not None:
+            for other in conn.execute(
+                    "SELECT id, name, uid FROM branches WHERE company_id=? AND id != ? ORDER BY id",
+                    (cid, branch['id'])).fetchall():
+                if _effective_branch_code(conn, cid, other, reserved)[0] == new_code:
+                    return jsonify({'status': 'error', 'code': 'BRANCH_CODE_TAKEN', 'message':
+                        f"{new_code} is already the code of {other['name']}. "
+                        "Each branch needs its own code."}), 409
+
+        terminal = local_terminal_id()
+        state = _read_till_state(conn, cid, terminal)
+        enable_inspected = None
+        if new_enabled:
+            if not terminal:
+                return jsonify({'status': 'error', 'message':
+                    "This computer has no identity yet, so it cannot have its own numbers."}), 409
+            if not branch['uid']:
+                return jsonify({'status': 'error', 'message':
+                    'This branch has no identity yet, so its tills cannot be numbered.'}), 400
+            if new_code is not None:
+                code = new_code
+            else:
+                code, _d, _s, taken_by = _branch_code_info(conn, cid, branch)
+                if code and taken_by:
+                    return jsonify({'status': 'error', 'code': 'BRANCH_CODE_TAKEN', 'message':
+                        f"{code} is also the code of {taken_by}. Give this branch its own code first."}), 409
+            if not code:
+                return jsonify({'status': 'error', 'message':
+                    'This branch has no code yet. Choose 2 to 4 letters for it first.'}), 400
+            enable_inspected = doc_series.inspect_till_books(conn, cid, terminal, code, new_till)
+            why = _why_till_cannot_be_numbered(enable_inspected, new_till)
+            if why:
+                return jsonify({'status': 'error', 'code': 'TILL_NUMBER_TAKEN', 'message': why}), 409
+
         if new_code is not None:
             _write_retail_setting(conn, cid, _BRANCH_CODE_KEY_PREFIX + branch['uid'], new_code)
             _audit(conn, 'NUMBERING_BRANCH_CODE_SET', 'branch', branch['uid'], new_code)
-        if new_enabled is not None:
-            _write_retail_setting(conn, cid, _NUMBERING_ENABLED_KEY, '1' if new_enabled else '0')
-            _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, '1' if new_enabled else '0')
+        if new_enabled is True:
+            ids = [r['id'] for r in enable_inspected['have']]
+            _write_till_state(conn, cid, terminal, True, new_till, branch['uid'], ids)
+            _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, f"1:till {new_till}")
+        elif new_enabled is False and terminal:
+            # Switching OFF really stops it: the books this till numbers with are
+            # retired (the counter stays, so switching on again continues the
+            # numbers instead of repeating them), and `resolve_series` -- which
+            # only matches active books -- falls back to the legacy numbers.
+            now = now_utc_iso()
+            cur = conn.cursor()
+            for row in _tracked_books(conn, cid, terminal, state).values():
+                cur.execute(
+                    "UPDATE doc_series SET status='retired', row_version=row_version+1, "
+                    "updated_at_utc=? WHERE id=? AND company_id=?", (now, row['id'], cid))
+                updated = conn.execute("SELECT * FROM doc_series WHERE id=?", (row['id'],)).fetchone()
+                _queue_sync_event(cur, 'doc_series', row['id'], 'update',
+                                  _doc_series_sync_payload(updated, changed_fields=['status']))
+                _audit(conn, 'DOC_SERIES_RETIRED', 'doc_series', row['id'],
+                       f"{row['doc_type']}:{row['code']} (readable numbers switched off)")
+            _write_till_state(conn, cid, terminal, False, None, None, [])
+            _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, '0')
         conn.commit()
         payload = _numbering_payload(conn, cid, branch)
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     _sync_nudge()
@@ -17529,7 +17799,7 @@ def list_audit_log():
     # matrix_test.py's EXPECTED_COMPANY_ADMIN_ROUTES pins it by AST -- so
     # deleting this line fails a test instead of silently opening the log to
     # every manager holding retail.reports.
-    denied = _require_company_admin()
+    denied = _require_company_admin(verb='open')
     if denied is not None:
         return denied
     cid = _cid()
@@ -17649,8 +17919,15 @@ def _require_retail_demo_mode():
     return None
 
 
-def _require_company_admin():
+def _require_company_admin(verb='change'):
     """The shop OWNER, not a delegated manager -- interface I-10 (P0 item #2).
+
+    `verb` is the only word in the 403 sentence a caller may pick: writes keep
+    the default ("...can change this."), READ routes (audit log, GET
+    /numbering, GET /setup-checklist) pass 'open' so a manager who taps a
+    screen he cannot see is not told he tried to "change" something. The
+    `code` stays OWNER_ONLY either way -- the client keys on that, not on the
+    sentence.
 
     `code: 'OWNER_ONLY'` was added to the existing 403 body (the message
     itself is unchanged, so demo_wipe/demo_seed/inventory_reconciliation's
@@ -17703,7 +17980,8 @@ def _require_company_admin():
     i18n merge in `i18n-R3-backend.json` rather than called here.
     """
     if session.get('mt_role') != 'admin':
-        _msg = 'Only the shop owner can change this.'
+        _msg = ('Only the shop owner can open this.' if verb == 'open'
+                else 'Only the shop owner can change this.')
         return jsonify({'status': 'error', 'error': _msg, 'message': _msg, 'code': 'OWNER_ONLY'}), 403
     return None
 
@@ -18873,12 +19151,17 @@ def _checklist_shop_and_tax(conn, cid):
 
 
 def _checklist_cashier(cid):
+    """A cashier is "invited" when an ACTIVE account with the cashier role
+    ('employee' is the legacy alias `normalize_role` reads as cashier) has a
+    till PIN set: an account without a PIN cannot use the till the way the
+    step promises. Owners and managers do not count -- the step is about the
+    person who sells."""
     rconn = None
     try:
         rconn = _registry_conn()
         row = rconn.execute(
-            "SELECT 1 FROM users WHERE company_id=? AND role != 'admin' "
-            "AND (status IS NULL OR status='active') LIMIT 1", (cid,)).fetchone()
+            "SELECT 1 FROM users WHERE company_id=? AND role IN ('cashier','employee') "
+            "AND (status IS NULL OR status='active') AND pin_hash IS NOT NULL LIMIT 1", (cid,)).fetchone()
     except Exception:
         return _checklist_step('cashier_invited', None, 'The staff list could not be read.')
     finally:
@@ -18886,45 +19169,78 @@ def _checklist_cashier(cid):
             rconn.close()
     ok = row is not None
     return _checklist_step('cashier_invited', ok,
-                           'A cashier or manager account exists.' if ok else 'Only the owner can sign in.')
+                           'A cashier with a PIN is ready.' if ok
+                           else 'No cashier has a PIN yet. Add one in Staff.')
 
 
 def _checklist_numbers(conn, cid):
-    enabled, _pinned = _numbering_readable_enabled(conn, cid)
-    has_book = conn.execute(
-        "SELECT 1 FROM doc_series WHERE company_id=? AND status='active' LIMIT 1", (cid,)
-    ).fetchone() is not None
-    if has_book:
-        return _checklist_step('readable_numbers', True, 'A numbering book is in use.')
-    if enabled:
-        return _checklist_step('readable_numbers', True, 'On. Each till gets its book at its next shift.')
-    return _checklist_step('readable_numbers', False, 'Off. Documents use the long default numbers.')
+    """Per-computer: "on" means THIS computer's switch is on (the state is
+    device-local, see the numbering block). The books may not exist until the
+    next shift, and the detail says so."""
+    terminal = local_terminal_id()
+    state = _read_till_state(conn, cid, terminal)
+    if not state['on']:
+        return _checklist_step('readable_numbers', False,
+                               'Off on this computer. Documents use the long default numbers.')
+    if _tracked_books(conn, cid, terminal, state):
+        return _checklist_step('readable_numbers', True,
+                               f"On for this computer (till {state['till']}).")
+    return _checklist_step('readable_numbers', True,
+                           f"On for this computer (till {state['till']}). "
+                           "The books are created when it opens its next shift.")
 
 
 def _checklist_backup():
+    """Done only when a backup file is a readable zip holding what a backup
+    must hold (manifest + both databases). A file that merely has the right
+    name -- an empty file, a half-copied zip -- is not a backup."""
+    import zipfile
+    from commercial_runtime.backup import service as _backup
     backup_dir = os.environ.get('AURA_BACKUP_DIR') or os.path.join(os.path.dirname(DATABASE_DIR), 'backups')
+    needed = {_backup.MANIFEST_NAME, _backup.REGISTRY_DB_NAME, 'retail.db'}
     try:
         if not os.path.isdir(backup_dir):
             return _checklist_step('first_backup', False, 'No backup has been made yet.')
-        found = any(n.startswith('aura-retail-backup-') and n.endswith('.zip')
-                    for n in os.listdir(backup_dir))
+        names = [n for n in os.listdir(backup_dir)
+                 if n.startswith('aura-retail-backup-') and n.endswith('.zip')]
     except OSError:
         return _checklist_step('first_backup', None, 'The backup folder could not be read.')
-    return _checklist_step('first_backup', found,
-                           'A backup exists.' if found else 'No backup has been made yet.')
+    for name in names:
+        try:
+            with zipfile.ZipFile(os.path.join(backup_dir, name)) as zf:
+                if needed.issubset(zf.namelist()) and zf.testzip() is None:
+                    return _checklist_step('first_backup', True, 'A backup exists and can be opened.')
+        except (OSError, zipfile.BadZipFile):
+            continue
+    if names:
+        return _checklist_step('first_backup', False,
+                               'A backup file exists but it cannot be opened. Make a new backup.')
+    return _checklist_step('first_backup', False, 'No backup has been made yet.')
 
 
-def _checklist_jofotara(conn, cid):
+def _checklist_jofotara():
+    """Mirrors `/api/einvoicing/status` EXACTLY by calling that very view (it
+    is a closure over the wired provider, so the only way to agree with it is
+    to ask it -- a second copy of its rules would drift). Done only when the
+    feature is really on (`enabled` already folds in AURA_EINVOICING_DISABLED
+    and the kill switch) AND the wired provider can actually reach the tax
+    authority AND neither the chosen nor the wired provider is 'unconfigured'."""
+    view = current_app.view_functions.get('einvoicing_api._status')
+    if view is None:
+        return _checklist_step('jofotara', None, 'E-invoicing is not part of this build.')
     try:
-        from commercial_runtime.einvoicing import settings as _einv
-        regime = _einv.get_setting(conn, cid, 'tax_regime')
-        provider = _einv.get_setting(conn, cid, 'provider')
-        tin = (_einv.get_setting(conn, cid, 'seller_tin') or '').strip()
+        resp = view()
+        if isinstance(resp, tuple):
+            return _checklist_step('jofotara', None, 'The e-invoicing status could not be read.')
+        data = (resp.get_json() or {}).get('data') or {}
     except Exception:
-        return _checklist_step('jofotara', None, 'The e-invoicing settings could not be read.')
-    if regime != 'jordan':
+        return _checklist_step('jofotara', None, 'The e-invoicing status could not be read.')
+    if os.environ.get('AURA_EINVOICING_DISABLED') == '1' or (data.get('killswitch') or {}).get('disabled'):
+        return _checklist_step('jofotara', False, 'E-invoicing is paused on this computer.')
+    if not data.get('enabled'):
         return _checklist_step('jofotara', False, 'Jordan e-invoicing is not switched on.')
-    if provider == 'unconfigured' or not tin:
+    if (data.get('provider') == 'unconfigured' or data.get('provider_in_use') == 'unconfigured'
+            or not data.get('provider_configured')):
         return _checklist_step('jofotara', False, 'Switched on, but the connection is not finished.')
     return _checklist_step('jofotara', True, 'Connected.')
 
@@ -18933,7 +19249,7 @@ def _checklist_jofotara(conn, cid):
 @mt_login_required
 @mt_require_subsystem('retail')
 def setup_checklist():
-    admin_guard = _require_company_admin()
+    admin_guard = _require_company_admin(verb='open')
     if admin_guard is not None:
         return admin_guard
     cid = _cid()
@@ -18955,7 +19271,7 @@ def setup_checklist():
             'products', n_products > 0,
             f'{n_products} products.' if n_products else 'No products yet.')
         by_id['readable_numbers'] = _checklist_numbers(conn, cid)
-        by_id['jofotara'] = _checklist_jofotara(conn, cid)
+        by_id['jofotara'] = _checklist_jofotara()
     finally:
         conn.close()
     steps = [by_id[i] for i in SETUP_CHECKLIST_STEP_IDS]

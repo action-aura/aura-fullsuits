@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from commercial_runtime.licensing_contracts.state_repository import (
     LICENSING_SCHEMA_VERSION,
     LicenseStateRecord,
@@ -81,7 +83,6 @@ def test_no_envelope_means_unknown_not_zero():
     assert result["allowed_device_count"] is None
     assert result["plan_code"] is None
     assert result["term"] == {"start": None, "end": None}
-    assert result["devices_used"] is None
 
 
 def test_a_malformed_envelope_does_not_break_the_status():
@@ -99,8 +100,15 @@ def test_wrongly_typed_payload_values_are_unknown_not_echoed():
     assert result["term"] == {"start": None, "end": None}
 
 
-def test_devices_used_is_passed_through_only_when_a_real_int():
-    assert present_status(_record(), devices_used=1)["devices_used"] == 1
-    assert present_status(_record(), devices_used=0)["devices_used"] == 0
-    assert present_status(_record(), devices_used=None)["devices_used"] is None
-    assert present_status(_record(), devices_used=True)["devices_used"] is None
+def test_the_status_carries_no_seat_count_only_what_the_licence_allows():
+    """A `devices_used` field nothing ever filled in shipped as a permanent null
+    that read like data (Phase 1b fix round F11). The seat COUNT belongs to the
+    site-relay's device list; the licence status carries only the allowed
+    number. DENY half: no key of that name, and a caller that still passes one
+    fails loudly instead of being silently ignored. ALLOW half: the allowed
+    number is still there."""
+    result = present_status(_record(assertion_envelope_json=_envelope(allowed_device_count=3)))
+    assert "devices_used" not in result
+    assert result["allowed_device_count"] == 3
+    with pytest.raises(TypeError):
+        present_status(_record(), devices_used=1)

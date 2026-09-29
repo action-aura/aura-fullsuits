@@ -437,6 +437,19 @@ def main() -> None:
                 conn.close()
             results.append({"open": row is not None, "session": dict(row) if row else None})
 
+        elif op == "numbering_get":
+            # Phase 1b fix round: the readable-numbers switch is per COMPUTER,
+            # so the two-device regression test must drive it over the real
+            # route on each device (GET /numbering), not poke settings rows.
+            qs = "&".join(f"{k}={action[k]}" for k in ("branch_uid", "till_number") if action.get(k) is not None)
+            r = client.get(f"{API}/numbering" + (f"?{qs}" if qs else ""))
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "numbering_set":
+            payload = {k: action[k] for k in ("branch_uid", "branch_code", "readable_enabled", "till_number") if k in action}
+            r = client.post(f"{API}/numbering", json=payload)
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
         else:
             raise ValueError(f"unknown device action op: {op!r}")
 
