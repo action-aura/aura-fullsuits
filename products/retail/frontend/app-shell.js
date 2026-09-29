@@ -502,8 +502,25 @@ const SubsystemApp = {
   // What a click (or Enter/Space) on a 'main-only' row does: explain, never
   // navigate. The sentence is ALSO printed on the row itself, so this toast is
   // the confirmation of what the row already says, not the only place it lives.
-  _explainMainOnly() {
-    this.showToast(t('This can only be changed on the main computer'), 'info');
+  //
+  // N5: WHICH sentence depends on the screen. A read-only screen (Audit Log:
+  // you look at it, you cannot change anything in it) said "changed", which
+  // promised an edit that does not exist. `readOnly: true` on the nav item
+  // picks "opened"; anything editable keeps "changed". The argument is the
+  // nav item or its id (an inline onclick can only carry a string).
+  _mainOnlySentence(itemOrId) {
+    let item = itemOrId;
+    if (typeof itemOrId === 'string') {
+      const sys = this.systems && this.systems[this.active];
+      item = sys && (sys.nav || []).find((i) => i.id === itemOrId);
+    }
+    return item && item.readOnly
+      ? t('This can only be opened on the main computer')
+      : t('This can only be changed on the main computer');
+  },
+
+  _explainMainOnly(itemOrId) {
+    this.showToast(this._mainOnlySentence(itemOrId), 'info');
     return false;
   },
 
@@ -1095,7 +1112,7 @@ const SubsystemApp = {
         // allowed to read the shop's records". `adminOnly` alone leaves a
         // cashier standing AT the admin terminal looking at an entry that
         // 403s -- the identical bug the Reports entry above just had.
-        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true, capability: 'retail.reports' },
+        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true, readOnly: true, capability: 'retail.reports' },
         // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md): the stock
         // accuracy report, over GET /api/sub/retail/inventory/reconciliation.
         //
@@ -3309,14 +3326,14 @@ const SubsystemApp = {
       // the Till route's 64px rail the visible label and hint are hidden and
       // the icon alone would otherwise carry no name at all.
       if (this._navItemState(item) === 'main-only') {
-        const why = t('This can only be changed on the main computer');
+        const why = this._mainOnlySentence(item);
         const named = this._esc(`${t(item.label)}. ${why}`);
         return `
             <a class="sub-nav-item is-main-only"
                data-section="${item.id}"
                tabindex="0" role="button" aria-disabled="true"
                title="${named}" aria-label="${named}"
-               onclick="return SubsystemApp._explainMainOnly()">
+               onclick="return SubsystemApp._explainMainOnly('${item.id}')">
               <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
               <span class="sub-nav-text">
                 <span class="sub-nav-label">${t(item.label)}</span>
@@ -3703,8 +3720,19 @@ const SubsystemApp = {
   // computer actually knows. Absent parts are skipped, never rendered as
   // "null" or an empty separator. Returned as ONE string so the header can
   // ellipsize it as a unit and the chip's title can carry it in full.
+  //
+  // N2: every shop's system default branch is created by the server with the
+  // English name "Main Branch" (retail_api._default_branch), so an Arabic chip
+  // printed one English phrase between Arabic words. When the name is EXACTLY
+  // that system default, show the translated word; a name the owner typed
+  // (even "main branch" in another case) is theirs and is shown untouched.
+  _branchDisplayName() {
+    const n = this.branchName;
+    return n === 'Main Branch' ? t('Main Branch') : n;
+  },
+
   _identityPlace() {
-    return [this.branchName, this.deviceLabel].filter((p) => p && String(p).trim()).join(' · ');
+    return [this._branchDisplayName(), this.deviceLabel].filter((p) => p && String(p).trim()).join(' · ');
   },
 
   // Two letters, uppercased. An email local-part usually has no spaces to
@@ -4124,7 +4152,7 @@ const SubsystemApp = {
     const navSys = this.systems && this.systems[this.active];
     const navEntry = navSys && (navSys.nav || []).find((i) => i.id === sectionId);
     if (navEntry && this._navItemState(navEntry) === 'main-only') {
-      this._explainMainOnly();
+      this._explainMainOnly(navEntry);
       sectionId = this._isSellOnlyCapabilities() ? 'pos' : 'dashboard';
     }
     this.currentSection = sectionId;
@@ -4365,13 +4393,13 @@ const SubsystemApp = {
       // F5, same as the sidebar: shown disabled with the reason as visible
       // text; a tap explains and never navigates (and leaves the sheet open --
       // the person is still choosing).
-      const why = t('This can only be changed on the main computer');
+      const why = this._mainOnlySentence(item);
       const named = this._esc(`${t(item.label)}. ${why}`);
       return `
             <a class="sub-more-row is-main-only" data-section="${item.id}"
                tabindex="0" role="button" aria-disabled="true"
                title="${named}" aria-label="${named}"
-               onclick="return SubsystemApp._explainMainOnly()">
+               onclick="return SubsystemApp._explainMainOnly('${item.id}')">
               <span class="sub-more-row-icon">${icon(item.icon)}</span>
               <span class="sub-more-row-text">
                 <span>${t(item.label)}</span>

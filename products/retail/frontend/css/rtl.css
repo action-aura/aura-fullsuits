@@ -47,6 +47,22 @@ body.rtl .iw-modal { text-align: right; }
 /* --- Numeric cells / money should remain LTR so figures read correctly ----- */
 body.rtl .num, body.rtl .money, body.rtl .iw-num { direction: ltr; display: inline-block; }
 
+/* ...but a TABLE CELL must stay a table cell (2026-09-29). The rule above is
+   right for a <span class="money"> inside a sentence, and wrong for
+   <td class="num"> / <th class="num">: `display:inline-block` pulls the cell
+   out of the table, so it becomes an anonymous-cell inline box. Measured in a
+   real Arabic session at 1366: the customer statement's Amount and Running
+   balance values stacked in ONE column, the Running balance header sat over
+   an empty column, every row was double height, and the Products table's
+   Avg cost / Price cells broke the same way. Everything else about the rule
+   (direction:ltr so figures read correctly, tabular numerals from main.css)
+   still applies to cells; only the display type is restored. Higher
+   specificity (:is() takes the most specific argument, and the tag adds one)
+   beats the rule above without !important. */
+body.rtl :is(td, th).num,
+body.rtl :is(td, th).money,
+body.rtl :is(td, th).iw-num { display: table-cell; }
+
 /* --- AI Assistant chat bubble "tail" corner (2026-08-13) -------------------
    main.css's .ai-msg-bubble/.ai-msg.user rules give each bubble a small
    4px corner radius ("tail") on the side facing its own avatar --

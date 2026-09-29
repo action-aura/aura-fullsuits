@@ -1021,7 +1021,11 @@ def main() -> int:
                     assert word["width"] > 0, f"[{lang}] the collapsed header's status word is {word['width']}px wide -- nothing is painted"
                     assert_reachable(pg, hdr + " .sub-nav-status-word", f"[{lang}] collapsed header status word")
                     assert_reachable(pg, hdr + " .status-dot", f"[{lang}] collapsed header status dot")
-                    wanted = pg.evaluate("() => window.t('Failing')")
+                    # The header paints the CONTEXT key ('Failing (status)') when the
+                    # catalogue has it (F8: the bare word is ambiguous in Arabic), else
+                    # the plain word. Expect the same rule, not the bare-word entry --
+                    # the merged catalogue translates the two differently on purpose.
+                    wanted = pg.evaluate("() => { const c = window.t('Failing (status)'); return c !== 'Failing (status)' ? c : window.t('Failing'); }")
                     painted = pg.evaluate("(s) => document.querySelector(s + ' .sub-nav-status-word').textContent.trim()", hdr)
                     assert painted == wanted, f"[{lang}] the collapsed header reads {painted!r}, expected {wanted!r} (Failing)"
                     dot_cls = pg.evaluate("(s) => document.querySelector(s + ' .status-dot').className", hdr)
@@ -1121,13 +1125,31 @@ def main() -> int:
                     for k in keys:
                         pg.evaluate("(k) => SubsystemApp._toggleSidebarGroup(k)", k)
                         pg.wait_for_timeout(120)
-                        heights = pg.evaluate(
+                        rows = pg.evaluate(
                             "(k) => [...document.querySelectorAll(`.sub-nav-group-items[data-group-items=\"${k}\"] .sub-nav-item`)]"
-                            ".map(e => e.getBoundingClientRect().height)", k)
-                        assert heights, f"[{lang}] group {k!r} has no rows"
-                        assert all(37.5 <= x <= 38.5 for x in heights), (
-                            f"[{lang}, '{k}' open] mouse rows must be 38px, measured {sorted(set(round(x, 1) for x in heights))}"
+                            ".map(e => { const l = e.querySelector('.sub-nav-label');"
+                            " return {sec: e.dataset.section, h: e.getBoundingClientRect().height,"
+                            " lines: l ? Math.round(l.getBoundingClientRect().height / parseFloat(getComputedStyle(l).lineHeight || 19)) : 1,"
+                            " clipped: e.scrollHeight > e.clientHeight + 1}; })", k)
+                        assert rows, f"[{lang}] group {k!r} has no rows"
+                        # A row whose LABEL fits on one line is the 38px this test guards (the
+                        # 40px icon line-height bug). A row whose translated label genuinely
+                        # needs a second line (Arabic 'Email Notifications' beside its status
+                        # word in a 219px sidebar) is allowed to be taller -- 'a longer
+                        # translated label must still be able to wrap without clipping' is the
+                        # designed behaviour in main.css -- but must not clip and must stay
+                        # within one extra line. What this can no longer catch: a 40px
+                        # regression on a row that ALSO wraps; the single-line rows in the
+                        # same run still catch the regression itself.
+                        one = [r for r in rows if r["lines"] <= 1]
+                        assert one, f"[{lang}, '{k}' open] no single-line rows to measure"
+                        assert all(37.5 <= r["h"] <= 38.5 for r in one), (
+                            f"[{lang}, '{k}' open] mouse rows must be 38px, measured {sorted(set(round(r['h'], 1) for r in one))}"
                         )
+                        for r in rows:
+                            if r["lines"] > 1:
+                                assert r["h"] <= 38 + 20 * (r["lines"] - 1) and not r["clipped"], (
+                                    f"[{lang}, '{k}' open] wrapped row {r['sec']} is {r['h']:.0f}px / clipped={r['clipped']}")
 
             for lg in ("en", "ar"):
                 check(f"mouse 1366x768: every sidebar row is 38px tall in every group ({lg})",

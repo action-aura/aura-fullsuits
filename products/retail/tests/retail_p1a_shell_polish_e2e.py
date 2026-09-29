@@ -24,6 +24,12 @@ F8  the Arabic status word for Off is "متوقّف", not the verb "إيقاف" 
     ar.json in the route handler, because the coordinator merges i18n-S.json
     into the catalogue -- the shell must work with either catalogue.
 
+Last round (polish re-verifier):
+G1  table cells stay table cells under body.rtl -- the customer statement and the
+    owner's Products table, 1366, EN and AR: every value sits under its own header.
+N2  the system default branch "Main Branch" is shown translated on the Arabic chip.
+N5  Audit Log (read-only) says "opened", not "changed"; editable items keep "changed".
+
 Reachability rule (contract 6b): every "can a person click it" goes through
 human_click (box inside viewport, elementFromPoint at the centre is the element,
 then a raw mouse click).
@@ -54,6 +60,8 @@ except Exception:
     pass
 
 SENTENCE = "This can only be changed on the main computer"
+# N5: Audit Log is read-only, so its row/toast must not promise an edit.
+OPENED = "This can only be opened on the main computer"
 OWNER_EMAIL = "tareq@polish.test"
 OWNER_PASSWORD = "PolishOwner_123!"
 LOCALES = BACKEND_DIR.parent / "frontend" / "locales"
@@ -62,6 +70,8 @@ THEMES = ("light", "sand", "dark", "night", "dusk")
 # The F8 keys, exactly as they sit in i18n-S.json for the coordinator to merge.
 AR_OVERLAY = {
     SENTENCE: "يمكن تغيير هذا من الجهاز الرئيسي فقط",
+    OPENED: "يمكن فتح هذا من الجهاز الرئيسي فقط",
+    "Main Branch": "الفرع الرئيسي",
     "Off (status)": "متوقّف",
     "Connected (status)": "متصل",
     "Needs attention (status)": "يحتاج إلى انتباه",
@@ -212,7 +222,7 @@ def main() -> int:
                 it = pg.evaluate("() => { const e = document.querySelector('[data-section=\"audit-log\"]');"
                                  " return {cls: e.className, dis: e.getAttribute('aria-disabled'), txt: e.innerText}; }")
                 assert "is-main-only" not in it["cls"] and it["dis"] is None, f"main computer shows Audit Log disabled: {it}"
-                assert SENTENCE not in it["txt"], f"main computer prints the main-only sentence on Audit Log: {it}"
+                assert SENTENCE not in it["txt"] and OPENED not in it["txt"], f"main computer prints a main-only sentence on Audit Log: {it}"
                 human_click(pg, '.sub-nav-item[data-section="audit-log"]', "Audit Log (main)")
                 pg.wait_for_timeout(1200)
                 assert state_of(pg)["section"] == "audit-log", f"main computer: click did not navigate: {state_of(pg)}"
@@ -384,6 +394,137 @@ def main() -> int:
             check("F8 an Arabic catalogue without the new keys never shows '(status)'", f8_old_catalogue_degrades)
 
             # =================================================================
+            # N2 -- the system default branch is shown translated
+            # =================================================================
+            def n2_default_branch_translated():
+                want_ar = AR_OVERLAY["Main Branch"]
+                c, p = open_page(browser, backend.base_url, VIEWPORT, lang="ar",
+                                 devices_patch={"branch_name": "Main Branch", "device_name": "Front till"})
+                try:
+                    txt = chip_text(p)
+                    assert want_ar in txt, f"AR chip does not show the translated default branch: {txt!r}"
+                    assert "Main Branch" not in txt, f"AR chip still prints the English default branch: {txt!r}"
+                    title = p.evaluate("() => document.getElementById('sub-identity-chip-btn').getAttribute('title')")
+                    assert want_ar in title and "Main Branch" not in title, f"chip tooltip not translated: {title!r}"
+                finally:
+                    c.close()
+                # a name the owner typed is theirs -- never translated, even in Arabic
+                for typed in ("Amman Branch", "Main branch", "Main Branch 2"):
+                    c, p = open_page(browser, backend.base_url, VIEWPORT, lang="ar",
+                                     devices_patch={"branch_name": typed})
+                    try:
+                        txt = chip_text(p)
+                        assert typed in txt and want_ar not in txt, f"owner-typed branch {typed!r} was rewritten: {txt!r}"
+                    finally:
+                        c.close()
+                # English keeps the name as it is
+                c, p = open_page(browser, backend.base_url, VIEWPORT, lang="en",
+                                 devices_patch={"branch_name": "Main Branch"})
+                try:
+                    assert "Main Branch" in chip_text(p), f"EN chip lost the default branch: {chip_text(p)!r}"
+                finally:
+                    c.close()
+
+            check("N2 chip (Arabic): the system default 'Main Branch' is translated; typed names and English untouched",
+                  n2_default_branch_translated)
+
+            # =================================================================
+            # G1 -- table cells stay table cells under body.rtl (statement + Products)
+            # =================================================================
+            GEOM_JS = """(sel) => {
+              const t = document.querySelector(sel);
+              if (!t) return {found:false};
+              const box = (e) => { const r = e.getBoundingClientRect(); return {l: r.left, r: r.right, top: r.top, bottom: r.bottom, h: r.height}; };
+              const ths = [...t.querySelectorAll('thead th')].map(th => Object.assign({text: th.innerText.trim(), num: th.classList.contains('num'),
+                  disp: getComputedStyle(th).display}, box(th)));
+              const rows = [...t.querySelectorAll('tbody tr')].map(tr => [...tr.children].map(td => Object.assign({
+                  text: td.innerText.trim(), num: td.classList.contains('num'), disp: getComputedStyle(td).display,
+                  dir: getComputedStyle(td).direction, fvn: getComputedStyle(td).fontVariantNumeric, span: td.colSpan}, box(td))));
+              return {found:true, ths, rows};
+            }"""
+
+            def assert_cells_under_headers(m, tag, max_row_h=None):
+                assert m["found"], f"{tag} table not found"
+                ths, rows = m["ths"], m["rows"]
+                real = [r for r in rows if len(r) == len(ths)]
+                assert real, f"{tag} no data row with one cell per header (headers {len(ths)}, rows {[len(r) for r in rows]})"
+                n_num = 0
+                for ri, row in enumerate(real):
+                    tops = [c["top"] for c in row]
+                    # 3px: baseline alignment shifts a tall cell by 1px; a stacked value is a whole line (>15px) off
+                    assert max(tops) - min(tops) <= 3, f"{tag} row {ri} is not one line of cells (tops {[round(t) for t in tops]}): values stacked/inline: {[c['text'] for c in row]}"
+                    # only where a row is known to be single-line (the Products Actions cell legitimately stacks 3 buttons in EN)
+                    assert max_row_h is None or row[0]["h"] <= max_row_h, f"{tag} row {ri} is {row[0]['h']:.0f}px tall (double height)"
+                    for ci, (th, td) in enumerate(zip(ths, row)):
+                        # display is asserted for the .num cells this rule governs; other cells (Products' Actions
+                        # td is deliberately display:flex inline) only have to sit under their header
+                        assert not td["num"] or td["disp"] == "table-cell", f"{tag} row {ri} col {ci} ({th['text']!r}) computed display is {td['disp']!r}, not table-cell"
+                        assert abs(td["l"] - th["l"]) <= 2 and abs(td["r"] - th["r"]) <= 2, \
+                            f"{tag} row {ri} col {ci}: value {td['text']!r} box [{td['l']:.0f},{td['r']:.0f}] is not under its header {th['text']!r} [{th['l']:.0f},{th['r']:.0f}]"
+                        if td["num"]:
+                            n_num += 1
+                            assert td["dir"] == "ltr" or tag.startswith("[en"), f"{tag} num cell lost direction:ltr ({td['dir']})"
+                            assert "tabular-nums" in td["fvn"], f"{tag} num cell lost tabular numerals ({td['fvn']!r})"
+                for th in ths:
+                    assert th["disp"] == "table-cell", f"{tag} header {th['text']!r} display is {th['disp']!r}, not table-cell"
+                assert n_num >= 2 * len(real), f"{tag} expected numeric cells to be measured (got {n_num})"
+
+            STMT_EVENTS = [
+                {"kind": "charge", "date": "2026-09-01", "ref": "S-1001", "amount": 120.5, "running_balance": 120.5},
+                {"kind": "payment", "date": "2026-09-05", "ref": "P-2001", "amount": 20, "running_balance": 100.5},
+                {"kind": "charge", "date": "2026-09-09", "ref": "S-1002", "amount": 33.25, "running_balance": 133.75},
+            ]
+
+            def g1_statement_geometry():
+                for lang in ("en", "ar"):
+                    c, p = open_page(browser, backend.base_url, VIEWPORT, lang=lang)
+                    try:
+                        def _stmt(route, _req=None):
+                            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                                "status": "ok",
+                                "data": {"customer": {"name": "Ali", "phone": "0791234567"},
+                                         "events": STMT_EVENTS, "balance": 133.75}}))
+                        p.route("**/api/sub/retail/customers/*/statement", _stmt)
+                        p.evaluate("() => SubsystemApp._navigate('receivables')")
+                        p.wait_for_timeout(1500)
+                        p.evaluate("() => RetailSystem._openPartyStatement('customer', 'cust-geom-1')")
+                        p.wait_for_selector("#ret-statement-modal table tbody tr td.num", timeout=DEFAULT_WAIT_MS)
+                        p.wait_for_timeout(500)
+                        m = p.evaluate(GEOM_JS, "#ret-statement-modal table")
+                        assert_cells_under_headers(m, f"[{lang}/statement]", max_row_h=64)
+                        p.locator("#ret-statement-modal").first.screenshot(path=str(shots / f"g1_statement_{lang}.png"))
+                    finally:
+                        c.close()
+
+            check("G1 customer statement (1366, EN+AR): every Amount / Running balance value sits under its own header, display table-cell",
+                  g1_statement_geometry)
+
+            def g1_products_geometry():
+                c0, p0 = open_page(browser, backend.base_url, VIEWPORT)
+                try:
+                    for i, (nm, cost, price) in enumerate((("Geometry Tea", 1.25, 2.5), ("Geometry Coffee", 3.5, 7.75))):
+                        res = p0.evaluate("""(b) => fetch('/api/sub/retail/products', {method:'POST', credentials:'include',
+                            headers:{'Content-Type':'application/json'}, body: JSON.stringify(b)}).then(r => r.status)""",
+                            {"name": nm, "sku": f"GEO-{i}", "sell_price": price, "cost_price": cost, "unit": "pcs"})
+                        assert res in (200, 201), f"could not seed product {nm}: HTTP {res}"
+                finally:
+                    c0.close()
+                for lang in ("en", "ar"):
+                    c, p = open_page(browser, backend.base_url, VIEWPORT, lang=lang)
+                    try:
+                        p.evaluate("() => SubsystemApp._navigate('products')")
+                        p.wait_for_selector("#prod-table tbody tr td.num", timeout=DEFAULT_WAIT_MS)
+                        p.wait_for_timeout(500)
+                        m = p.evaluate(GEOM_JS, "#prod-table")
+                        assert_cells_under_headers(m, f"[{lang}/products]")
+                        p.screenshot(path=str(shots / f"g1_products_{lang}.png"))
+                    finally:
+                        c.close()
+
+            check("G1 owner's Products table (1366, EN+AR): Avg cost / Price values sit under their headers, display table-cell",
+                  g1_products_geometry)
+
+            # =================================================================
             # JOINED COMPUTER (F5 disabled + explain). Restart technique.
             # =================================================================
             fake = str(uuid.uuid4())
@@ -403,13 +544,13 @@ def main() -> int:
                                 hint: h.innerText, hintHit: !!(c && e.contains(c)), hintW: hr.width, hintH: hr.height, hintClipped: h.scrollWidth > h.clientWidth + 1,
                                 aria: e.getAttribute('aria-label')}; }""")
                     assert "is-main-only" in info["cls"] and info["dis"] == "true", f"not shown disabled: {info}"
-                    assert info["hint"].strip() == SENTENCE, f"visible sentence wrong: {info['hint']!r}"
+                    assert info["hint"].strip() == OPENED, f"visible sentence wrong (Audit Log is read-only: 'opened'): {info['hint']!r}"
                     assert info["hintHit"] and info["hintW"] > 0 and not info["hintClipped"], f"sentence not readable on the row: {info}"
-                    assert SENTENCE in info["aria"] and "Audit Log" in info["aria"], f"aria-label lacks name+reason: {info['aria']!r}"
+                    assert OPENED in info["aria"] and SENTENCE not in info["aria"] and "Audit Log" in info["aria"], f"aria-label lacks name+reason: {info['aria']!r}"
                     before = state_of(p)
                     human_click(p, '.sub-nav-item[data-section="audit-log"]', "Audit Log (joined)")
                     p.wait_for_timeout(600)
-                    assert any(SENTENCE in t for t in toast_texts(p)), f"click gave no explaining toast: {toast_texts(p)}"
+                    assert any(OPENED in t for t in toast_texts(p)) and not any(SENTENCE in t for t in toast_texts(p)), f"click gave no explaining toast: {toast_texts(p)}"
                     after = state_of(p)
                     assert after["section"] == before["section"] and after["hash"] == before["hash"], \
                         f"click on a disabled item NAVIGATED: {before} -> {after}"
@@ -426,7 +567,7 @@ def main() -> int:
                     p.wait_for_timeout(1200)
                     st = state_of(p)
                     assert st["section"] != "audit-log", f"deep link opened the device-bound screen on a joined computer: {st}"
-                    assert any(SENTENCE in t for t in toast_texts(p)), f"deep link gave no explanation: {toast_texts(p)}"
+                    assert any(OPENED in t for t in toast_texts(p)), f"deep link gave no explanation: {toast_texts(p)}"
                     body = p.evaluate("() => (document.getElementById('sub-content')||document.body).innerText.slice(0,400)")
                     assert "Audit Log" not in body.split("\n")[0], f"Audit Log screen rendered: {body!r}"
                 finally:
@@ -449,11 +590,11 @@ def main() -> int:
                         return {cls: e.className, dis: e.getAttribute('aria-disabled'), hint: h.innerText.trim(), hintInside: hr.left >= 0 && hr.right <= innerWidth && hr.top >= 0 && hr.bottom <= innerHeight,
                                 clipped: h.scrollWidth > h.clientWidth + 1}; }""")
                     assert "is-main-only" in info["cls"] and info["dis"] == "true", f"More row not disabled: {info}"
-                    assert info["hint"] == SENTENCE and info["hintInside"] and not info["clipped"], f"sentence not readable in the sheet: {info}"
+                    assert info["hint"] == OPENED and info["hintInside"] and not info["clipped"], f"sentence not readable in the sheet: {info}"
                     before = state_of(p)
                     human_click(p, row_sel, "Audit Log More row", scroll_list=True)
                     p.wait_for_timeout(500)
-                    assert any(SENTENCE in t for t in toast_texts(p)), f"tap gave no explaining toast: {toast_texts(p)}"
+                    assert any(OPENED in t for t in toast_texts(p)), f"tap gave no explaining toast: {toast_texts(p)}"
                     assert state_of(p)["section"] == before["section"], "tap navigated"
                     assert p.evaluate("() => !!document.getElementById('sub-more-sheet')"), "sheet closed on a refused tap (person is still choosing)"
                     p.screenshot(path=str(shots / "f5_joined_more_sheet.png"))
@@ -467,7 +608,7 @@ def main() -> int:
                 try:
                     open_group_of(p, "audit-log")
                     hint = p.evaluate("() => document.querySelector('.sub-nav-item[data-section=\"audit-log\"] .sub-nav-hint').innerText.trim()")
-                    assert hint == AR_OVERLAY[SENTENCE], f"AR sentence not shown on the row: {hint!r}"
+                    assert hint == AR_OVERLAY[OPENED], f"AR sentence not shown on the row: {hint!r}"
                     m = probe(p, '.sub-nav-item[data-section="audit-log"]')
                     assert m["inside"] and m["hit"], f"AR disabled row not reachable: {m}"
                 finally:
@@ -475,11 +616,24 @@ def main() -> int:
 
             check("F5 joined computer (Arabic): sentence translated on the row", joined_ar)
 
+            def n5_editable_keeps_changed():
+                c, p = open_page(browser, backend.base_url, VIEWPORT)
+                try:
+                    got = p.evaluate("""() => ({
+                        editable: SubsystemApp._mainOnlySentence({id: 'x', label: 'X', adminOnly: true}),
+                        audit: SubsystemApp._mainOnlySentence('audit-log')})""")
+                    assert got["editable"] == SENTENCE, f"an editable device-bound item lost 'changed': {got}"
+                    assert got["audit"] == OPENED, f"Audit Log (read-only) does not say 'opened': {got}"
+                finally:
+                    c.close()
+
+            check("N5 editable device-bound items keep 'changed'; Audit Log says 'opened'", n5_editable_keeps_changed)
+
             def cashier_sees_nothing():
                 c, p = open_page(browser, backend.base_url, VIEWPORT, email=cashier_email, password=cashier_pw)
                 try:
                     n = p.evaluate("() => document.querySelectorAll('[data-section=\"audit-log\"]').length")
-                    t = p.evaluate("() => document.body.innerText.includes(%s)" % json.dumps(SENTENCE))
+                    t = p.evaluate("() => document.body.innerText.includes(%s) || document.body.innerText.includes(%s)" % (json.dumps(SENTENCE), json.dumps(OPENED)))
                     assert n == 0 and not t, f"a cashier sees the device-bound entry ({n}) or the sentence ({t})"
                 finally:
                     c.close()
