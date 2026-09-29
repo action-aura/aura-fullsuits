@@ -54,8 +54,11 @@ says everything a `mode='manual'` column would have, for zero extra state.
 """
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
+
+_log = logging.getLogger(__name__)
 
 #: MOVED here verbatim from retail_api.py's own module-level `_REF_PREFIX`
 #: dict, not copied -- retail_api.py now does `_REF_PREFIX =
@@ -143,6 +146,35 @@ def resolve_series(conn, company_id, doc_type, terminal_uid):
     ).fetchone()
 
 
+#: Where each doc type's number lives. All three columns carry a BARE UNIQUE
+#: index (not company-scoped), so "taken" is checked across the whole table.
+NUMBER_COLUMNS = {
+    'sale': ('sales', 'sale_number'),
+    'return': ('returns', 'return_number'),
+    'po': ('purchase_orders', 'po_number'),
+}
+
+
+def number_is_taken(conn, doc_type, number) -> bool:
+    """True when `number` already exists in the document table for
+    `doc_type` on THIS database (ours, or pulled from another computer)."""
+    spot = NUMBER_COLUMNS.get(doc_type)
+    if spot is None:
+        return False
+    table, column = spot
+    try:
+        return conn.execute(
+            f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (number,)
+        ).fetchone() is not None
+    except sqlite3.OperationalError as exc:
+        # A database that has no such document table (a bare test fixture, a
+        # book created before the sales schema) cannot hold a taken number.
+        # ONLY that case is answered "free"; any other failure must surface.
+        if 'no such table' in str(exc):
+            return False
+        raise
+
+
 def allocate(conn, series_row) -> str:
     """Mints the next number in `series_row`'s own book. Structurally
     identical to retail_api.py's pre-existing `_next_ref()` and to Aura's
@@ -174,15 +206,37 @@ def allocate(conn, series_row) -> str:
         "INSERT OR IGNORE INTO doc_series_counter (series_id, last_no) VALUES (?,?)",
         (series_row['id'], seed),
     )
-    conn.execute(
-        "UPDATE doc_series_counter SET last_no = last_no + 1 WHERE series_id=?",
-        (series_row['id'],),
-    )
-    n = conn.execute(
-        "SELECT last_no FROM doc_series_counter WHERE series_id=?",
-        (series_row['id'],),
-    ).fetchone()[0]
-    return f"{series_row['code']}-{int(n):0{series_row['pad_width']}d}"
+    skipped = 0
+    while True:
+        conn.execute(
+            "UPDATE doc_series_counter SET last_no = last_no + 1 WHERE series_id=?",
+            (series_row['id'],),
+        )
+        n = conn.execute(
+            "SELECT last_no FROM doc_series_counter WHERE series_id=?",
+            (series_row['id'],),
+        ).fetchone()[0]
+        number = f"{series_row['code']}-{int(n):0{series_row['pad_width']}d}"
+        # NEVER HAND OUT A NUMBER THAT ALREADY EXISTS HERE. The counter is
+        # device-local, but the document tables it feeds are not: a sale
+        # pulled from another computer can already carry the very number this
+        # counter is about to mint (two computers that held the same book
+        # code, or a book re-created after a restore). Before this loop that
+        # was a permanent wedge -- every later sale on this till died with
+        # `UNIQUE constraint failed: sales.sale_number` (re-verifier B2, X4),
+        # because the counter rolled back with the failed sale and offered the
+        # same taken number again forever. Advancing past it is inside the
+        # caller's own transaction, so the skipped counter values are
+        # committed together with the document that finally takes a free
+        # number, or rolled back together with it.
+        if not number_is_taken(conn, series_row['doc_type'], number):
+            break
+        skipped += 1
+    if skipped:
+        _log.warning(
+            "doc_series %s (%s): skipped %d number(s) already present locally, "
+            "next free is %s", series_row['id'], series_row['code'], skipped, number)
+    return number
 
 
 def peek_next_no(conn, series_row) -> str:
@@ -204,7 +258,14 @@ def peek_next_no(conn, series_row) -> str:
         (series_row['id'],),
     ).fetchone()
     last_no = row['last_no'] if row is not None else max(series_row['start_no'] - 1, 0)
-    return f"{series_row['code']}-{int(last_no) + 1:0{series_row['pad_width']}d}"
+    # Mirror `allocate`'s skip-past-taken rule so the card never promises a
+    # number the next document will not actually carry.
+    nxt = int(last_no) + 1
+    while True:
+        number = f"{series_row['code']}-{nxt:0{series_row['pad_width']}d}"
+        if not number_is_taken(conn, series_row['doc_type'], number):
+            return number
+        nxt += 1
 
 
 # ── Readable per-till books (Retail UX P1b item 6) ───────────────────────────

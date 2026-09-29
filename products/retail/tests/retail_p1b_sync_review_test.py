@@ -387,7 +387,13 @@ def test_real_two_computer_quarantine_rows_read_back_through_the_route(tmp_path,
     TA, TB = 'q-till-a-0000-0000-000000000001', 'q-till-b-0000-0000-000000000002'
 
     def dev(d, relay, acts):
-        return run_accept_device(py, d, relay, acts, timeout=240)
+        # Round 3: the shipped build refuses to switch readable numbers on (409
+        # READABLE_NEEDS_DEVICE_REGISTRY). This test needs the underlying
+        # two-computer clash to make the engine park REAL rows, so the flag is
+        # flipped inside each device process (its own op), exactly as
+        # retail_p1b_numbering_twodevice_test.py's `readable_available` does.
+        flip = {"op": "set_readable_available", "value": True}
+        return run_accept_device(py, d, relay, [flip] + list(acts), timeout=240)[1:]
 
     a, b, relay = tmp_path / 'a', tmp_path / 'b', tmp_path / 'relay.db'
     [shop] = dev(a, relay, [{"op": "create_shop", "price": 5.0, "initial_stock": 100}])
@@ -453,3 +459,17 @@ def test_real_two_computer_quarantine_rows_read_back_through_the_route(tmp_path,
         assert abs(data['summary']['sales_total'] - want) < 0.0005
         assert all(i['reason'] == 'the same receipt number already exists here'
                    for i in data['items'] if i['kind_code'] == 'sale')
+        # Round 3 point 3, on rows the ENGINE really wrote: every parked sale is
+        # flagged as having had its stock and books applied; a parked sale's
+        # items/payments (if the engine parked any) are permanent, not "retrying".
+        for i in data['items']:
+            if i['kind_code'] == 'sale':
+                assert i['stock_and_books_applied'] is True and i['note'], i
+        parked_uids = {json.loads(r["payload"]).get("uid") for r in real_sales}
+        kids = [r for r in real if r["entity_type"] in ("sale_item", "payment")
+                and json.loads(r["payload"]).get("sale_uid") in parked_uids]
+        if kids:
+            got = [i for i in data['items'] if i['kind_code'] in ('sale_item', 'payment')
+                   and i['parent_parked']]
+            assert len(got) == len(kids), (len(got), len(kids))
+            assert all(i['retries_itself'] is False and i['note'] for i in got), got

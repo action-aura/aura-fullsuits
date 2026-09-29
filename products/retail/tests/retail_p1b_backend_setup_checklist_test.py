@@ -120,7 +120,9 @@ def _make_shop():
     return client, company_id
 
 
-def _make_staff(company_id, role, capabilities=None, status='active', pin=False):
+def _make_staff(company_id, role, capabilities=None, status='active', pin=False, pin_hash=None):
+    """`pin_hash` (when not None) is stored verbatim, so a test can plant the
+    exact stored shapes a real registry holds ('' after a cleared PIN)."""
     email = f"p1bchk-{role}-{uuid.uuid4().hex[:10]}@test.local"
     password = "P1bChecklistPW1"
     user_id = str(uuid.uuid4())
@@ -130,7 +132,7 @@ def _make_staff(company_id, role, capabilities=None, status='active', pin=False)
             "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change, pin_hash) "
             "VALUES (?,?,?,?,?,?,?,0,?)",
             (user_id, company_id, f"EMP-{uuid.uuid4().hex[:6]}", email, hash_password(password), role, status,
-             hash_password('4821') if pin else None))
+             pin_hash if pin_hash is not None else (hash_password('4821') if pin else None)))
         conn.execute(
             "INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?)",
             (str(uuid.uuid4()), user_id, "retail", "full"))
@@ -376,6 +378,46 @@ def test_cashier_step_counts_only_an_active_cashier_with_a_pin_of_this_shop():
     assert _steps(b)['cashier_invited']['done'] is True         # b has its own valid cashier
 
 
+def test_cashier_step_a_blank_pin_is_no_pin_f6():
+    """F6. `pin_hash=''` is what a cleared PIN leaves behind; `IS NOT NULL`
+    read it as "has a PIN" and ticked the step for a cashier who cannot log in
+    to the till. Deny half: '' and whitespace do not tick. Allow half: a real
+    hash on the SAME kind of account does."""
+    a, cid = _make_shop()
+    _make_staff(cid, 'cashier', pin_hash='')
+    assert _steps(a)['cashier_invited']['done'] is False, "an empty PIN is not a PIN"
+    _make_staff(cid, 'cashier', pin_hash='   ')
+    assert _steps(a)['cashier_invited']['done'] is False, "a whitespace PIN is not a PIN"
+    _make_staff(cid, 'cashier', pin=True)
+    assert _steps(a)['cashier_invited']['done'] is True
+
+
+def test_cashier_step_reads_the_role_the_way_normalize_role_does_f6():
+    """F6. The role is matched case-insensitively (and 'employee' is the legacy
+    cashier alias), exactly like `normalize_role`; an admin/manager with a PIN
+    never counts. Each account is added ALONE in its own shop so a tick can only
+    come from that one account."""
+    for role, expected in (('Cashier', True), ('CASHIER', True), (' cashier ', True),
+                           ('employee', True), ('Employee', True),
+                           ('admin', False), ('Manager', False), ('ADMIN', False),
+                           # `normalize_role` reads any value it cannot interpret as the
+                           # LEAST privileged role, cashier -- the step agrees with it
+                           # rather than keeping its own list.
+                           ('viewer', True)):
+        c, cid = _make_shop()
+        _make_staff(cid, role, pin=True)
+        assert _steps(c)['cashier_invited']['done'] is expected, (role, expected)
+
+
+def test_cashier_step_status_is_case_insensitive_f6():
+    c, cid = _make_shop()
+    _make_staff(cid, 'cashier', status='Active', pin=True)
+    assert _steps(c)['cashier_invited']['done'] is True
+    d, cid_d = _make_shop()
+    _make_staff(cid_d, 'cashier', status='Disabled', pin=True)
+    assert _steps(d)['cashier_invited']['done'] is False
+
+
 def test_cashier_step_is_null_when_the_staff_list_cannot_be_read(monkeypatch):
     c, cid = _make_shop()
     _make_staff(cid, 'cashier')
@@ -409,10 +451,37 @@ def _steps_at(client, terminal):
         return _steps(client)
 
 
-def test_readable_numbers_is_off_until_the_owner_switches_this_computer_on():
-    """Nothing turns readable numbers on for the owner (orchestrator decision):
-    a brand-new shop reads OFF, and a shop that is asked for a till number and
-    given none stays OFF."""
+def test_readable_numbers_step_is_unavailable_by_default_and_enabling_is_refused():
+    """Round 3: readable numbers are UNAVAILABLE until the device registry syncs
+    (READABLE_NUMBERS_AVAILABLE=False). The step can never tick, and says why in
+    plain words; a request to switch it on is refused with a 409 and changes
+    nothing."""
+    c, cid = _make_shop()
+    s = _steps_at(c, TILL_A)['readable_numbers']
+    assert s['done'] is False and 'multi-computer support' in s['detail'], s
+    r = _numbering(c, TILL_A, {'readable_enabled': True, 'till_number': 3, 'branch_code': _unique_code()})
+    assert r.status_code == 409 and r.get_json()['code'] == 'READABLE_NEEDS_DEVICE_REGISTRY', r.get_json()
+    assert _steps_at(c, TILL_A)['readable_numbers']['done'] is False
+
+
+def test_readable_numbers_step_reads_unavailable_even_over_a_stored_on_switch(monkeypatch):
+    """A computer switched ON while the feature was available must not tick the
+    step once it is not: the step reads the flag, not just the stored switch."""
+    c, cid = _make_shop()
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
+    assert _numbering(c, TILL_A, {'readable_enabled': True, 'till_number': 3,
+                                  'branch_code': _unique_code()}).status_code == 200
+    assert _steps_at(c, TILL_A)['readable_numbers']['done'] is True
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', False)
+    s = _steps_at(c, TILL_A)['readable_numbers']
+    assert s['done'] is False and 'multi-computer support' in s['detail'], s
+
+
+def test_readable_numbers_is_off_until_the_owner_switches_this_computer_on(monkeypatch):
+    """Kept path (flag on, for Track S): nothing turns readable numbers on for
+    the owner: a brand-new shop reads OFF, and a shop that is asked for a till
+    number and given none stays OFF."""
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
     c, cid = _make_shop()
     s = _steps_at(c, TILL_A)['readable_numbers']
     assert s['done'] is False and 'Off on this computer' in s['detail'], s
@@ -421,7 +490,8 @@ def test_readable_numbers_is_off_until_the_owner_switches_this_computer_on():
     assert _steps_at(c, TILL_A)['readable_numbers']['done'] is False
 
 
-def test_readable_numbers_on_for_this_computer_before_and_after_the_books_exist():
+def test_readable_numbers_on_for_this_computer_before_and_after_the_books_exist(monkeypatch):
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
     c, cid = _make_shop()
     r = _numbering(c, TILL_A, {'readable_enabled': True, 'till_number': 3, 'branch_code': _unique_code()})
     assert r.status_code == 200, r.get_json()
@@ -438,7 +508,8 @@ def test_readable_numbers_on_for_this_computer_before_and_after_the_books_exist(
     assert s['done'] is False and 'Off on this computer' in s['detail'], s
 
 
-def test_readable_numbers_tick_is_per_computer_and_ignores_another_shops_books():
+def test_readable_numbers_tick_is_per_computer_and_ignores_another_shops_books(monkeypatch):
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
     a, cid_a = _make_shop()
     b, cid_b = _make_shop()
     assert _numbering(b, TILL_B, {'readable_enabled': True, 'till_number': 4,
@@ -522,21 +593,72 @@ def test_first_backup_cut_short_mid_copy_does_not_count(tmp_path):
     assert _steps(c)['first_backup']['done'] is True
 
 
-def test_first_backup_with_a_damaged_member_does_not_count(tmp_path):
+def test_first_backup_never_reads_every_byte_of_a_backup_f7(monkeypatch):
+    """F7. The checklist loads often; `ZipFile.testzip()` reads and CRC-checks
+    every byte, which on a 300 MB backup is a multi-second disk read per load.
+    The step now only proves the zip opens and lists the expected members.
+
+    WHAT THIS REPLACES: the old `..._with_a_damaged_member_does_not_count` test
+    flipped one byte INSIDE a member and demanded `done is False`. That
+    expectation is withdrawn on purpose (orchestrator decision 6): bit-rot inside
+    an otherwise well-formed zip is no longer caught HERE. A half-copied or empty
+    file (no central directory) is still refused -- see
+    `test_first_backup_cut_short_mid_copy_does_not_count`. The restore path is
+    what verifies contents before using a backup."""
+    calls = []
+    real = zipfile.ZipFile.testzip
+    monkeypatch.setattr(zipfile.ZipFile, 'testzip',
+                        lambda self: calls.append(1) or real(self))
+    retail_api._BACKUP_CHECK_CACHE.clear()
+    c, cid = _make_shop()
+    backups = Path(os.environ['AURA_BACKUP_DIR'])
+    backups.mkdir(parents=True)
+    _write_zip(backups / BACKUP_NAME, REAL_MEMBERS)
+    assert _steps(c)['first_backup']['done'] is True
+    assert calls == [], 'the checklist must not CRC-scan the whole backup'
+
+
+def test_first_backup_verdict_is_cached_per_path_size_and_mtime_f7(monkeypatch):
+    """F7. The second load of an unchanged file does not open it again; a
+    replaced file (new size/mtime) is looked at again, both ways."""
+    opened = []
+    real_init = zipfile.ZipFile.__init__
+
+    def counting(self, file, *a, **k):
+        opened.append(str(file))
+        return real_init(self, file, *a, **k)
+    monkeypatch.setattr(zipfile.ZipFile, '__init__', counting)
+    retail_api._BACKUP_CHECK_CACHE.clear()
     c, cid = _make_shop()
     backups = Path(os.environ['AURA_BACKUP_DIR'])
     backups.mkdir(parents=True)
     target = backups / BACKUP_NAME
-    with zipfile.ZipFile(target, 'w', zipfile.ZIP_STORED) as zf:
-        for n in REAL_MEMBERS:
-            zf.writestr(n, 'x' * 200)
+
+    def mine():
+        return [o for o in opened if o.endswith(BACKUP_NAME)]
+
+    _write_zip(target, REAL_MEMBERS)
+    opened.clear()        # _write_zip itself opens the file for writing
     assert _steps(c)['first_backup']['done'] is True
-    raw = bytearray(target.read_bytes())
-    at = raw.index(b'x' * 50)
-    raw[at + 10] = ord('y')                                      # data no longer matches its CRC
-    target.write_bytes(bytes(raw))
-    s = _steps(c)['first_backup']
-    assert s['done'] is False, s
+    assert len(mine()) == 1
+    assert _steps(c)['first_backup']['done'] is True
+    assert len(mine()) == 1, 'an unchanged file must be answered from the cache'
+    _write_zip(target, ('manifest.json',))                      # replaced by a worse file
+    opened.clear()
+    assert _steps(c)['first_backup']['done'] is False
+    assert len(mine()) == 1, 'a changed file must be looked at again'
+    _write_zip(target, REAL_MEMBERS)                             # and a better one again
+    assert _steps(c)['first_backup']['done'] is True
+
+    # Same SIZE, different content: only the mtime tells the two files apart.
+    # (Round-3 mutation proof found the size-only key stayed green without this.)
+    same_size_bad = tuple(n[:-1] + 'X' for n in REAL_MEMBERS)   # same lengths, wrong names
+    st_good = os.stat(target)
+    _write_zip(target, same_size_bad)
+    assert os.stat(target).st_size == st_good.st_size, 'test setup: sizes must match'
+    os.utime(target, ns=(st_good.st_atime_ns, st_good.st_mtime_ns + 5_000_000_000))
+    assert _steps(c)['first_backup']['done'] is False, \
+        'a same-size replacement (new mtime) must not be answered from the old verdict'
 
 
 def test_first_backup_is_null_when_the_folder_cannot_be_read(monkeypatch):
@@ -640,6 +762,15 @@ def test_jofotara_done_only_when_the_status_endpoint_is_enabled_and_the_wired_pr
     _wire_provider(monkeypatch, MockProvider())
     _set_einv(cid, tax_regime='jordan', provider='mock')
     assert _steps(c)['jofotara']['done'] is True
+
+
+def test_jofotara_docstring_is_honest_that_the_mock_provider_reads_connected_f5():
+    """F5. The mock provider reads "Connected" (asserted just above); the step's
+    own docstring must say so and confine it to dev builds, so nobody reads
+    "Connected" as "the tax authority answered". A wording pin: it cannot tell
+    whether the sentence is TRUE, only that it has not been dropped."""
+    doc = ' '.join((retail_api._checklist_jofotara.__doc__ or '').split())
+    assert 'mock provider' in doc and 'dev' in doc.lower() and 'live call' in doc, doc
 
 
 def test_jofotara_a_wired_provider_that_says_it_is_not_configured_is_not_done(monkeypatch, _killswitch_clean):

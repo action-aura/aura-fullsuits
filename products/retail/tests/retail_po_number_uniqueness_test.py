@@ -85,6 +85,7 @@ app.config["PROPAGATE_EXCEPTIONS"] = False
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
+from core.retail import doc_series  # noqa: E402
 
 
 def teardown_module(module):
@@ -242,7 +243,7 @@ def test_a_purchase_order_number_is_still_human_readable_and_sequential(client_a
 # 4. The containment -- Half 2, the most valuable test in this file
 # ═════════════════════════════════════════════════════════════════════════
 
-def test_a_failed_purchase_order_insert_does_not_wedge_later_writes(client_and_company):
+def test_a_failed_purchase_order_insert_does_not_wedge_later_writes(client_and_company, monkeypatch):
     """Forces a REAL `sqlite3.IntegrityError` out of create_purchase_order's
     own INSERT (not a monkeypatched stand-in) by predicting the exact
     po_number the SECOND call will mint -- the sequential part increments
@@ -287,7 +288,19 @@ def test_a_failed_purchase_order_insert_does_not_wedge_later_writes(client_and_c
     seed_conn.commit()
     seed_conn.close()
 
+    # Since P1b round 3 the mint path SKIPS a number that already exists
+    # locally (`doc_series.number_is_taken`), so the planted row above no longer
+    # reaches the INSERT -- the number is healed, not collided. The containment
+    # this test guards is what happens when the INSERT DOES fail, and that can
+    # still happen for real: a sync pull can commit the clashing row on another
+    # connection AFTER the check and BEFORE the insert. This patch recreates
+    # exactly that window (the check answers "free", the row is there), so
+    # sqlite raises its own genuine IntegrityError. What this test can no
+    # longer catch: the skip itself -- that is pinned by
+    # retail_p1b_number_collision_test.py, mutation-proved on its own.
+    monkeypatch.setattr(doc_series, 'number_is_taken', lambda *a, **k: False)
     second = _create_po(c, pid)
+    monkeypatch.undo()
     assert second.status_code == 409, second.get_data(as_text=True)
     assert second.is_json, "the UI parses this with .json(); an HTML error page is the bug"
     body = second.get_json()

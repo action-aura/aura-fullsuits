@@ -450,6 +450,28 @@ def main() -> None:
             r = client.post(f"{API}/numbering", json=payload)
             results.append({"status_code": r.status_code, "body": r.get_json()})
 
+        elif op == "set_readable_available":
+            # Round 3: readable numbers are UNAVAILABLE in the shipped build
+            # (retail_api.READABLE_NUMBERS_AVAILABLE=False) until the device
+            # registry syncs (Track S). The route therefore refuses to switch a
+            # computer on. Tests that must still exercise the UNDERLYING window
+            # (what Track S will have to close) flip the flag inside this ONE
+            # device process, exactly as Track S's own code will one day flip it
+            # for real. Never used by a test that claims to test the shipped build.
+            retail_api_module.READABLE_NUMBERS_AVAILABLE = bool(action["value"])
+            results.append({"ok": True, "value": retail_api_module.READABLE_NUMBERS_AVAILABLE})
+
+        elif op == "raw_exec":
+            # Direct write for tests that must plant a state no route can now
+            # create (e.g. a computer left switched ON by an older build).
+            conn = get_retail_conn()
+            try:
+                conn.execute(action["sql"], action.get("params", []))
+                conn.commit()
+            finally:
+                conn.close()
+            results.append({"ok": True})
+
         else:
             raise ValueError(f"unknown device action op: {op!r}")
 

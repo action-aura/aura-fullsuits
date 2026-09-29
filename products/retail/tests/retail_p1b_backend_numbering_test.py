@@ -82,6 +82,19 @@ def teardown_module(module):
 
 
 @pytest.fixture(autouse=True)
+def _readable_numbers_available(request, monkeypatch):
+    """Readable numbers are UNAVAILABLE in the shipped build until the device
+    registry syncs (`retail_api.READABLE_NUMBERS_AVAILABLE`, re-verifier B2 round
+    3). Every test in this file except the ones marked `readable_unavailable`
+    runs the KEPT code with that one switch flipped on -- which is exactly how
+    Track S will run it -- so sections A-E still prove the whole feature. The
+    marked tests (section F) run the real shipped default."""
+    on = request.node.get_closest_marker('readable_unavailable') is None
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', on)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_device_cache():
     device_context._cached_device = None
     yield
@@ -506,6 +519,40 @@ def test_a_saved_branch_code_is_stored_read_back_audited_and_synced():
     assert ev, "the branch code is a fact about the branch: it must travel to the shop's other computers"
 
 
+def test_two_companies_save_different_branch_codes_and_each_only_ever_reads_its_own():
+    """F8 (restored). The branch code is stored per company, so one shop's
+    choice must never colour another shop's screen or books. Both save a
+    DIFFERENT code; each read returns its own and nothing of the other's; the
+    stored rows are company-scoped, not merely echoed back."""
+    a, cid_a, buid_a, default_a = _make_shop()
+    b, cid_b, buid_b, default_b = _make_shop()
+    assert default_a != default_b, "the fixture must give the two shops different default codes"
+    # A stray row in company B that happens to use A's branch key (a restored
+    # database, a hand edit). It is inserted FIRST, so a read that forgot the
+    # company filter would return it before A's own row.
+    stray = get_retail_conn()
+    try:
+        stray.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?)",
+                      (cid_b, 'branch_code:' + buid_a, 'ZZZ'))
+        stray.commit()
+    finally:
+        stray.close()
+    assert _post(a, {'branch_code': 'AAX'}).status_code == 200
+    assert _post(b, {'branch_code': 'BBX'}).status_code == 200
+    da, db = _get(a).get_json()['data'], _get(b).get_json()['data']
+    assert da['branch_code'] == 'AAX' and da['preview']['sale'] == 'AAX1-000001', da
+    assert db['branch_code'] == 'BBX' and db['preview']['sale'] == 'BBX1-000001', db
+    assert 'BBX' not in str(da) and 'AAX' not in str(db)
+    assert _setting(cid_a, 'branch_code:' + buid_a) == 'AAX'
+    assert _setting(cid_b, 'branch_code:' + buid_b) == 'BBX'
+    # a company can never see the other's row, even by key
+    assert _setting(cid_a, 'branch_code:' + buid_b) is None
+    assert _setting(cid_b, 'branch_code:' + buid_a) == 'ZZZ', "A's save touched company B's row"
+    # changing one later leaves the other alone
+    assert _post(a, {'branch_code': 'AAY'}).status_code == 200
+    assert _get(b).get_json()['data']['branch_code'] == 'BBX'
+
+
 def test_an_arabic_only_branch_name_has_no_code_until_the_owner_chooses_one():
     """F10: never invent a code. The screen asks; enabling without one is a 400."""
     c, cid, buid, _ = _make_shop('عبدون')
@@ -556,7 +603,8 @@ def test_enabling_stores_a_device_local_switch_and_creates_no_books_yet():
     assert d['preview_is_example'] is False
     assert d['preview'] == {'sale': code + '3-000001', 'return': code + '3-R-000001'}
     assert 'next shift' in d['preview_note']
-    assert _till_state(cid, TILL_1) == {'on': True, 'till': 3, 'branch_uid': buid, 'series_ids': []}
+    assert _till_state(cid, TILL_1) == {'on': True, 'till': 3, 'branch_uid': buid, 'series_ids': [],
+                                        'withdrawn': False}
     assert _books(cid) == [], 'the books are made at the next shift, not by the switch'
     assert [a['details'] for a in _audit_rows(cid, 'NUMBERING_READABLE_SET')] == ['1:till 3']
     # the switch is DEVICE-LOCAL: it must not have been queued for sync
@@ -761,7 +809,8 @@ def test_switching_off_retires_the_books_and_the_next_sale_is_the_legacy_number(
     assert d['preview_is_example'] is True
     assert {b['status'] for b in _books(cid)} == {'retired'} and {b['id'] for b in _books(cid)} == made
     assert LEGACY.match(_sale_number(c, pid, TILL_1)), 'after OFF the till must be back on the legacy number'
-    assert _till_state(cid, TILL_1) == {'on': False, 'till': None, 'branch_uid': None, 'series_ids': []}
+    assert _till_state(cid, TILL_1) == {'on': False, 'till': None, 'branch_uid': None, 'series_ids': [],
+                                        'withdrawn': False}
     assert [a['details'] for a in _audit_rows(cid, 'NUMBERING_READABLE_SET')] == ['1:till 3', '0']
     assert len(_audit_rows(cid, 'DOC_SERIES_RETIRED')) == 3
     # the retirement travels, so the shop's other computers see the books as retired
@@ -1089,3 +1138,138 @@ def test_the_computers_switch_never_reaches_the_sync_outbox_but_the_branch_code_
     assert any('branch_code:' + buid in p for p in payloads), 'the branch code must sync'
     assert not any('numbering_till' in p for p in payloads), 'the per-computer switch must never sync'
     assert _rows("SELECT 1 FROM sync_outbox WHERE payload LIKE '%numbering_till%'") == []
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# F. UNAVAILABLE until the device registry syncs (re-verifier B2, round 3)
+#    The tests below run the SHIPPED default (READABLE_NUMBERS_AVAILABLE False).
+#    Why: two computers that have not heard from each other can pick the same
+#    till number (offline, and online when the second is switched on before the
+#    first's first shift). See the pin in retail_p1b_parked_sale_children_test.py
+#    for what that does to the books.
+# ═════════════════════════════════════════════════════════════════════════
+
+_UNAVAILABLE = retail_api._READABLE_UNAVAILABLE_REASON
+_WITHDRAWN = retail_api._READABLE_WITHDRAWN_REASON
+
+
+@pytest.mark.readable_unavailable
+def test_the_shipped_default_is_unavailable_and_says_so_plainly():
+    """The constant itself, not just the routes: a build that flipped it would
+    silently re-open the collision."""
+    assert retail_api.READABLE_NUMBERS_AVAILABLE is False
+    c, cid, buid, code = _make_shop()
+    d = _get(c).get_json()['data']
+    assert d['available'] is False
+    assert d['unavailable_reason'] == _UNAVAILABLE
+    assert 'until multi-computer support arrives' in d['unavailable_reason']
+    assert d['readable_enabled'] is False and d['readable_switched_off_by_update'] is False
+    assert d['branch_code'] == code   # the read still works in full
+
+
+@pytest.mark.readable_unavailable
+def test_switching_on_is_refused_with_a_409_code_and_writes_nothing():
+    """The enable is refused, and the same request carrying a branch code
+    stores neither (the refusal is before any write)."""
+    c, cid, buid, code = _make_shop()
+    r = _enable(c, 3)
+    assert r.status_code == 409, r.get_json()
+    body = r.get_json()
+    assert body['status'] == 'error' and body['code'] == 'READABLE_NEEDS_DEVICE_REGISTRY'
+    assert body['message'] == _UNAVAILABLE
+    assert _till_state(cid, TILL_1) is None
+    assert _audit_rows(cid, 'NUMBERING_READABLE_SET') == []
+    assert _books(cid) == []
+    r = _enable(c, 3, branch_code='ZZZ')
+    assert r.status_code == 409
+    assert _setting(cid, 'branch_code:' + buid) is None, 'a refused request must change nothing'
+    assert _get(c).get_json()['data']['readable_enabled'] is False
+
+
+@pytest.mark.readable_unavailable
+def test_bad_input_is_still_a_400_not_a_409():
+    """The 409 must not swallow the input checks: a missing till number is the
+    caller's mistake and stays a 400 with the old message."""
+    c, cid, buid, code = _make_shop()
+    r = _post(c, {'readable_enabled': True})
+    assert r.status_code == 400 and 'never picked' in r.get_json()['message']
+    assert _post(c, {'readable_enabled': 'yes'}).status_code == 400
+
+
+@pytest.mark.readable_unavailable
+def test_the_branch_code_can_still_be_set_and_switching_off_is_still_allowed():
+    c, cid, buid, code = _make_shop()
+    r = _post(c, {'branch_code': 'abc'})
+    assert r.status_code == 200 and r.get_json()['data']['branch_code'] == 'ABC'
+    assert _setting(cid, 'branch_code:' + buid) == 'ABC'
+    r = _disable(c)
+    assert r.status_code == 200 and r.get_json()['data']['readable_enabled'] is False
+
+
+def _switched_on_by_an_earlier_build(c, cid, monkeypatch, with_books):
+    """A computer that was switched on (and optionally already has its books)
+    before this build: made with the code available, then the switch is taken
+    away exactly as an update would."""
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', True)
+    assert _enable(c, 3).status_code == 200
+    if with_books:
+        assert _open_shift(c, TILL_1).status_code == 200
+        _close_shift(c, TILL_1)
+    monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', False)
+
+
+@pytest.mark.readable_unavailable
+def test_an_already_on_computer_reads_off_at_once_and_says_an_update_switched_it_off(monkeypatch):
+    c, cid, buid, code = _make_shop()
+    _switched_on_by_an_earlier_build(c, cid, monkeypatch, with_books=True)
+    d = _get(c).get_json()['data']
+    assert d['readable_enabled'] is False and d['till_number'] is None
+    assert d['available'] is False and d['readable_switched_off_by_update'] is True
+    assert d['unavailable_reason'] == _WITHDRAWN
+    assert 'switched off until multi-computer support arrives' in d['unavailable_reason']
+    # GET is a pure read: the books are retired at the next shift, not here
+    assert {b['status'] for b in _books(cid)} == {'active'}
+
+
+@pytest.mark.readable_unavailable
+def test_the_next_shift_of_an_already_on_computer_retires_its_books_and_audits_it(monkeypatch):
+    c, cid, buid, code = _make_shop()
+    pid = _product(c)
+    _switched_on_by_an_earlier_build(c, cid, monkeypatch, with_books=True)
+    made = {b['id'] for b in _books(cid)}
+    assert len(made) == 3
+    assert _open_shift(c, TILL_1).status_code == 200
+    books = _books(cid)
+    assert {b['id'] for b in books} == made, 'nothing new is created'
+    assert {b['status'] for b in books} == {'retired'}
+    assert LEGACY.match(_sale_number(c, pid, TILL_1)), 'the till is back on the long numbers'
+    assert len(_audit_rows(cid, 'DOC_SERIES_RETIRED')) == 3
+    assert 'unavailable' in _audit_rows(cid, 'DOC_SERIES_RETIRED')[0]['details']
+    assert [a['details'] for a in _audit_rows(cid, 'NUMBERING_READABLE_WITHDRAWN')] == [
+        'till 3: unavailable until the device registry syncs']
+    st = _till_state(cid, TILL_1)
+    assert st['on'] is False and st['withdrawn'] is True and st['series_ids'] == []
+    upd = {u['entity_id'] for u in _rows(
+        "SELECT entity_id FROM sync_outbox WHERE entity_type='doc_series' AND event_type='update'")}
+    assert made <= upd, "the retirement travels so the shop's other computers see it"
+    d = _get(c).get_json()['data']
+    assert d['readable_switched_off_by_update'] is True and d['unavailable_reason'] == _WITHDRAWN
+    # and it happens ONCE: the next shift audits nothing more
+    _close_shift(c, TILL_1)
+    assert _open_shift(c, TILL_1).status_code == 200
+    assert len(_audit_rows(cid, 'NUMBERING_READABLE_WITHDRAWN')) == 1
+
+
+@pytest.mark.readable_unavailable
+def test_an_already_on_computer_without_books_yet_gets_none_at_its_next_shift(monkeypatch):
+    """The other half of 'the next shift must NOT create books': the switch was
+    on but the books were never made. Without the withdrawal the hook would
+    create them now."""
+    c, cid, buid, code = _make_shop()
+    pid = _product(c)
+    _switched_on_by_an_earlier_build(c, cid, monkeypatch, with_books=False)
+    assert _open_shift(c, TILL_1).status_code == 200
+    assert _books(cid) == []
+    assert LEGACY.match(_sale_number(c, pid, TILL_1))
+    assert len(_audit_rows(cid, 'NUMBERING_READABLE_WITHDRAWN')) == 1
+    assert _audit_rows(cid, 'DOC_SERIES_RETIRED') == []

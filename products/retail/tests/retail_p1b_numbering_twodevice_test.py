@@ -30,9 +30,22 @@ number the owner types. This file pins that from the outside, over the real
       future change that hides or "fixes" it must update this test on purpose.
       The lasting fix is the device registry (Track S).
 
+  T6  ROUND 3: in the shipped build readable numbers are UNAVAILABLE until the
+      device registry syncs (Track S), so the very same opt-in is refused
+      (409 READABLE_NEEDS_DEVICE_REGISTRY) on both computers and nothing is
+      written. T3-T5 above can only be reached by flipping
+      `retail_api.READABLE_NUMBERS_AVAILABLE` inside each device process (the
+      `readable_available` fixture); they are kept as a PIN of the underlying
+      window Track S has to close, and CANNOT be reached through the route as
+      shipped.
+  T7  ROUND 3: a computer an earlier build left switched ON: its next shift
+      creates no books, its sale keeps the long default number, GET says it was
+      switched off, and the readable books it made are retired and audited.
+
 The harness is `_accept_harness` + `FileRelay`, the same one the acceptance
-pass uses; the only addition is the `numbering_get` / `numbering_set` ops in
-`_accept_device.py`.
+pass uses; the additions in `_accept_device.py` are `numbering_get` /
+`numbering_set` (route drivers), `set_readable_available` (flips the flag inside
+one device process) and `raw_exec` (plants a state no route can create now).
 """
 from __future__ import annotations
 
@@ -50,7 +63,26 @@ TA = 'p1b-till-a-0000-0000-000000000001'
 TB = 'p1b-till-b-0000-0000-000000000002'
 
 
+# Round 3: the shipped build refuses to switch readable numbers on (see the
+# module docstring). The tests below that pin the UNDERLYING two-computer window
+# for Track S flip retail_api.READABLE_NUMBERS_AVAILABLE inside every device
+# process they start (a flag lives only as long as its process), via the
+# `readable_available` fixture. The tests WITHOUT that fixture run against the
+# shipped build unchanged.
+_READABLE = {"on": False}
+
+
+@pytest.fixture()
+def readable_available():
+    _READABLE["on"] = True
+    yield
+    _READABLE["on"] = False
+
+
 def dev(d, relay, acts):
+    if _READABLE["on"]:
+        flip = {"op": "set_readable_available", "value": True}
+        return run_accept_device(PY, d, relay, [flip] + list(acts), timeout=240)[1:]
     return run_accept_device(PY, d, relay, acts, timeout=240)
 
 
@@ -155,7 +187,7 @@ def test_t2_an_existing_shop_that_never_opted_in_stays_on_the_old_numbers(tmp_pa
     assert till_rows(a, relay) == [] and till_rows(b, relay) == []
 
 
-def test_t3_the_switch_lives_on_one_computer_only(two):
+def test_t3_the_switch_lives_on_one_computer_only(two, readable_available):
     """Owner opts in on A with till 1. B must never receive that switch."""
     [_, _, on] = dev(two["a"], two["relay"], login(TA, two["shop"]) + [
         {"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}])
@@ -183,7 +215,7 @@ def _numbering(t, who, term, acts):
     return dev(t[who], t["relay"], login(term, t["shop" if who == "a" else "boot"]) + acts)[-len(acts):]
 
 
-def test_t4_a_known_till_number_is_refused_and_a_free_one_works(two):
+def test_t4_a_known_till_number_is_refused_and_a_free_one_works(two, readable_available):
     """A takes till 1 and syncs. B has heard of A's books, so B choosing till 1
     is refused with TILL_NUMBER_TAKEN and NOTHING is written; till 2 works."""
     [on] = _numbering(two, "a", TA, [{"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}])
@@ -204,7 +236,7 @@ def test_t4_a_known_till_number_is_refused_and_a_free_one_works(two):
     assert book_codes(two["a"], two["relay"]) == book_codes(two["b"], two["relay"])
 
 
-def test_t5_the_offline_window_still_ends_in_quarantine_and_the_owner_is_not_told(two):
+def test_t5_the_offline_window_still_ends_in_quarantine_and_the_owner_is_not_told(two, readable_available):
     """Both computers choose till 1 while offline from each other. The tool
     cannot know. Pinned so it can never get quieter or louder by accident."""
     for who, term, acts in (("a", TA, [{"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}]),
@@ -222,3 +254,71 @@ def test_t5_the_offline_window_still_ends_in_quarantine_and_the_owner_is_not_tol
     for d in ("a", "b"):
         rows = sel(two[d], two["relay"], "SELECT code, COUNT(*) AS n FROM doc_series GROUP BY doc_type, code HAVING n > 1")
         assert rows == [], f"{d}: duplicate book codes reached the shop's books"
+
+
+def test_t6_the_shipped_build_refuses_to_switch_readable_numbers_on(two):
+    """Round 3 decision 1, from the outside on two real computers: the opt-in
+    that T3-T5 exercise (with the flag flipped) is REFUSED in the shipped build,
+    with a plain sentence, and nothing is written on either computer -- so the
+    two-computer window they pin cannot be entered at all."""
+    for who, term in (("a", TA), ("b", TB)):
+        [r] = _numbering(two, who, term, [
+            {"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}])
+        assert r["status_code"] == 409, r
+        assert r["body"]["code"] == "READABLE_NEEDS_DEVICE_REGISTRY", r["body"]
+        assert r["body"]["message"], r["body"]
+        assert till_rows(two[who], two["relay"]) == [], "a refused request still wrote the switch"
+    [view] = _numbering(two, "a", TA, [{"op": "numbering_get"}])
+    d = view["body"]["data"]
+    assert d["available"] is False and d["readable_enabled"] is False, d
+    assert d["unavailable_reason"], d
+    assert d["readable_switched_off_by_update"] is False, d
+    # both first shifts and sales stay on the long default numbers, sync clean
+    _, sale_a = open_and_sell_a(two)
+    _, sale_b = open_and_sell_b(two)
+    assert sale_number(sale_a).startswith("SALE-") and sale_number(sale_b).startswith("SALE-")
+    sync_both(two)
+    for d_ in ("a", "b"):
+        assert sel(two[d_], two["relay"], "SELECT 1 FROM sync_apply_quarantine") == []
+        assert book_codes(two[d_], two["relay"]) == []
+
+
+def test_t7_a_computer_left_on_by_an_earlier_build_is_switched_off_and_its_books_retired(two):
+    """Round 3 decision 1, the already-ON computer. Process 1 has the flag flipped
+    on and opts in (the state an earlier build left behind), then a shift opens
+    and the books exist. Process 2 is the shipped build."""
+    _READABLE["on"] = True
+    try:
+        [on] = _numbering(two, "a", TA, [
+            {"op": "numbering_set", "branch_code": "AAA", "readable_enabled": True, "till_number": 1}])
+        assert on["status_code"] == 200, on
+        [shift] = dev(two["a"], two["relay"], login(TA, two["shop"]) + [
+            {"op": "cash_session_open", "branch_id": two["shop"]["branch_id"]}])[-1:]
+        assert shift["status_code"] == 200, shift
+        session_id = shift["session_id"]
+    finally:
+        _READABLE["on"] = False
+    active = sel(two["a"], two["relay"], "SELECT code FROM doc_series WHERE status='active'")
+    assert active, "setup failed: the earlier build's books were not created"
+    [closed] = dev(two["a"], two["relay"], login(TA, two["shop"]) + [
+        {"op": "cash_session_close", "session_id": session_id, "closing_float_counted": 100.0}])[-1:]
+    assert closed["status_code"] == 200, closed
+    # the shipped build reads the stored ON switch as off, plainly, before anything else
+    [view] = _numbering(two, "a", TA, [{"op": "numbering_get"}])
+    d = view["body"]["data"]
+    assert d["available"] is False and d["readable_enabled"] is False, d
+    assert d["readable_switched_off_by_update"] is True, d
+    assert "multi-computer support" in d["unavailable_reason"], d
+    # the NEXT shift creates nothing, retires the books, sells on the long number
+    [shift2] = dev(two["a"], two["relay"], login(TA, two["shop"]) + [
+        {"op": "cash_session_open", "branch_id": two["shop"]["branch_id"]}])[-1:]
+    assert shift2["status_code"] == 200, shift2
+    assert sel(two["a"], two["relay"], "SELECT code FROM doc_series WHERE status='active'") == [],         "the readable books are still active after the withdrawal"
+    retired = sel(two["a"], two["relay"], "SELECT code FROM doc_series WHERE status='retired'")
+    assert sorted(r["code"] for r in retired) == sorted(r["code"] for r in active)
+    audited = sel(two["a"], two["relay"],
+                  "SELECT COUNT(*) AS n FROM audit_log WHERE action='NUMBERING_READABLE_WITHDRAWN'")
+    assert audited[0]["n"] == 1, audited
+    sale = dev(two["a"], two["relay"], login(TA, two["shop"]) + [
+        {"op": "sell", "product_id": two["shop"]["product_id"], "quantity": 1}])[-1]
+    assert sale_number(sale).startswith("SALE-"), sale_number(sale)
