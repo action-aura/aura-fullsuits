@@ -111,6 +111,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { codeLines } = require('./_js_source');
 
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
 
@@ -126,10 +127,20 @@ function frontendFiles() {
 /* Anti-vacuity floor. The checks below are regexes over source text, so the
    failure that matters is matching NOTHING and sweeping an empty set. There
    were 32 in subsystem-retail.js + 5 in cash-drawer.js + 2 in
-   import-wizard.js + 1 (unwired) in employees.js = 40 when this was widened;
-   the floor sits comfortably below that so the check only trips if the scan
-   itself stops matching how the product builds modals. */
-const MIN_OVERLAYS_TOTAL = 35;
+   import-wizard.js + 1 in employees.js = 40 when this was widened, and 40 is
+   still the true count on 2026-09-29 (a plain grep for the className
+   assignment agrees).
+
+   The floor was 35 ("comfortably below") until 2026-09-29, when the old
+   regex comment stripper silently lost 6 real sites and the scan read 34 --
+   the floor caught it, but only by a single site. A floor 5 under the truth
+   lets a scanner lose 5 sites unnoticed, and a lost site is a modal that is
+   no longer checked at all. So it is now the true count: the scan must find
+   every builder. The cost is deliberate -- REMOVING a modal from the product
+   trips this, and the fix is to lower this number in the same commit, which
+   is a reviewed decision rather than silent slack. Adding a modal raises the
+   real count and needs no change here. */
+const MIN_OVERLAYS_TOTAL = 40;
 
 /* Per file, how many of its own `.ret-modal-overlay` builders are exempt from
    calling _wireModalA11y because they carry their own equivalent
@@ -139,16 +150,15 @@ const MIN_OVERLAYS_TOTAL = 35;
 const SELF_WIRED_OVERLAYS = { 'subsystem-retail.js': 1 };
 
 /* Comments in these files quote the patterns below while explaining them, so
-   scanning raw text would count the documentation as code. */
-function stripBlockComments(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
-}
+   scanning raw text would count the documentation as code.
 
-function codeLines(src) {
-  return stripBlockComments(src)
-    .split('\n')
-    .map((line) => line.replace(/\/\/.*$/, ''));
-}
+   They are stripped with the shared lexer (./_js_source.js), NOT with regexes.
+   This file used to strip with `/\/\*[\s\S]*?\*\//g` plus
+   `line.replace(/\/\/.*$/, '')`. The second cuts a line at the `//` of any
+   'https://...' string literal, and the first opens a fake comment at a
+   slash-star inside a string; the WhatsApp code added 2026-09 has such URLs, and
+   the scan silently lost 6 of the 40 real overlay build sites (34 found, floor
+   35) -- a count that was wrong, not a product that regressed. */
 
 function readCode(file) {
   return codeLines(fs.readFileSync(path.join(FRONTEND_DIR, file), 'utf8'));
