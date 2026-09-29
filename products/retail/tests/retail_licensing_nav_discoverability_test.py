@@ -94,4 +94,8 @@ def test_licensing_page_itself_is_still_served():
     client = app.test_client()
     r = client.get('/static/licensing.html')
     assert r.status_code == 200
-    assert b'Aura Retail Licensing' in r.data
+    # P1a renamed the page (title and h1) to the gear entry that opens it,
+    # "License & devices"; the old anchor was the retired "Aura Retail
+    # Licensing" title. Same question: is the real licensing page served?
+    assert b'<title>License &amp; devices</title>' in r.data
+    assert b'licensing.js' in r.data
