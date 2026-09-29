@@ -903,7 +903,11 @@
   };
 
   function productName(code) {
-    return t(PRODUCT_NAMES[code] || 'Aura');
+    // The bare brand is written in Latin letters in every language (the
+    // catalogue already says "Aura" inside Arabic sentences), so it is not a
+    // translation key: a catalogue entry "Aura" -> "Aura" would be the
+    // byte-identical, untranslated pair the parity test exists to refuse.
+    return PRODUCT_NAMES[code] ? t(PRODUCT_NAMES[code]) : 'Aura';
   }
 
   // Fixed YYYY-MM-DD HH:MM in local time; same reasoning as site-relay.js's
