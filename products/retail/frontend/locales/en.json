@@ -1763,5 +1763,18 @@
   "Can't check (status)": "Can't check (status)",
   "Checking… (status)": "Checking… (status)",
   "Send on WhatsApp": "Send on WhatsApp",
-  "Can't load": "Can't load"
+  "Can't load": "Can't load",
+  "This computer will stop being licensed. To use Aura Shop on it again you will need to enter a license key. Your sales and records are not deleted.": "This computer will stop being licensed. To use Aura Shop on it again you will need to enter a license key. Your sales and records are not deleted.",
+  "Computer deactivated": "Computer deactivated",
+  "This license has reached its computer limit. Deactivate another computer or contact support to add capacity.": "This license has reached its computer limit. Deactivate another computer or contact support to add capacity.",
+  "This computer is not yet set up for activation. Please try again.": "This computer is not yet set up for activation. Please try again.",
+  "This installation was not approved, or has since been deactivated by Action Aura. Re-entering the same key will not change that — please contact support to have this computer re-enabled.": "This installation was not approved, or has since been deactivated by Action Aura. Re-entering the same key will not change that — please contact support to have this computer re-enabled.",
+  "This installation has been replaced by another computer. Please contact support if this computer still needs access.": "This installation has been replaced by another computer. Please contact support if this computer still needs access.",
+  "This computer has been deactivated.": "This computer has been deactivated.",
+  "Used on": "Used on",
+  "Action Aura approved this activation, but this computer could not verify the signed license it received, so it has not been applied yet. Your license key is not the problem — do not replace it. Check that this computer’s date and time are correct; if they are, contact support.": "Action Aura approved this activation, but this computer could not verify the signed license it received, so it has not been applied yet. Your license key is not the problem — do not replace it. Check that this computer’s date and time are correct; if they are, contact support.",
+  "Action Aura approved this activation, but this computer could not verify the signed license it received, so it has not been applied yet. Your license key is not the problem — do not replace it, and re-entering it cannot help. Please contact support and quote this code:": "Action Aura approved this activation, but this computer could not verify the signed license it received, so it has not been applied yet. Your license key is not the problem — do not replace it, and re-entering it cannot help. Please contact support and quote this code:",
+  "Main Branch": "Main Branch",
+  "This can only be opened on the main computer": "This can only be opened on the main computer",
+  "WhatsApp number": "WhatsApp number"
 }
