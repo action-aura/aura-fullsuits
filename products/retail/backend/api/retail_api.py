@@ -15660,8 +15660,13 @@ def customer_statement(cust_id):
     # allocation, three readers. Additive: the wire shape Android's
     # StatementEvent parses is untouched.
     boundary = metrics.business_day(conn, cid)
-    aging = _aging_fields(_customer_aging_from_events(events, cust['credit_balance'], boundary),
-                          cust['credit_balance'], _eps, _shop_today(conn, cid), currency)
+    view = _customer_aging_from_events(events, cust['credit_balance'], boundary)
+    aging = _aging_fields(view, cust['credit_balance'], _eps, _shop_today(conn, cid), currency)
+    # The part of the stored balance no event on THIS computer explains
+    # (imports, pre-v36 backfill, sales synced from another till). /reports/aging
+    # already returned it per customer; the statement modal needs the same
+    # number so it can say so instead of silently disagreeing with its own list.
+    aging['unbooked_amount'] = _money(float(view['unbooked']), currency)
     conn.close()
     return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency), **aging}})
 

@@ -485,6 +485,9 @@ def test_a_balance_nobody_booked_is_surfaced_and_buckets_still_add_up():
 
     _aging_all, row, stmt = _assert_reconciles(client, c, 14.5, unbooked=4.5)
     assert row['unbooked_amount'] == 4.5
+    # The statement modal must report the SAME unexplained amount the aging
+    # row does (the till shows it on both); it was missing from the statement.
+    assert stmt['unbooked_amount'] == 4.5
     assert row['buckets']['1_30'] == 10.0 and row['buckets']['current'] == 4.5
     assert row['oldest_unpaid_date'] == _iso(20)
     assert row['oldest_unpaid_amount'] == 10.0
@@ -844,6 +847,7 @@ def test_a_synced_sale_the_balance_never_booked_does_not_shorten_the_oldest_debt
 
     _aging_all, row, stmt = _assert_reconciles(client, c, 10.0, unbooked=-20.0)
     assert row['unbooked_amount'] == -20.0
+    assert stmt['unbooked_amount'] == -20.0
     assert row['buckets'] == {'current': 0.0, '1_30': 0.0, '31_60': 0.0, '61_90': 10.0, '90_plus': 0.0}
     assert row['oldest_unpaid_date'] == _iso(80) and row['days_overdue'] == 80
     assert row['oldest_unpaid_amount'] == 10.0 and row['overdue_amount'] == 10.0
