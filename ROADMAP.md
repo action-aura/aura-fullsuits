@@ -6505,3 +6505,34 @@ pre-activation company_id (converge skips until rebind); AuraLab `desktop`
 has three branches with NULL uids and company_id "1" (legacy fixture).
 Readable numbers were never switched on anywhere (doc_series empty); zero
 quarantine rows (these snapshots hold no paired sync history).
+
+## 2026-09-29 — AUDIT-033: sync trusts WHO sent an authority event (open, next wave "S-AUTH")
+
+Found by the security review of registry v9 (commit 86eb5718), and older than
+it: the receiving side of sync applies `user` (role, password_hash, status,
+session_version), `user_permission`, `admin_device` and `device` events from
+any computer holding the shop's licence, gated only by row_version / epoch.
+Nothing checks that the SENDER had the authority to say it. The licence
+authenticates a device, not the authority of what that device says; the
+"users is an admin-device single-writer table" rule is enforced on the
+sending side only.
+
+What an insider can do today: someone with the licence and write access to a
+till's registry.db inserts one sync_outbox row and every till applies it -
+grant themselves cash.approve, set role admin, replace the owner's
+password_hash, or seize / brick the main computer.
+
+Mitigated in the P2S fix round (not solved): impossible admin_device epochs
+and far-future times are quarantined instead of applied or crashing the
+stream; the main can never be revoked by a received event and can always be
+recovered by the guarded takeover; the cash-pair rule (AUDIT-032) is checked
+at the point of use (close/approve) and re-checked after every received
+permission, fail-closed.
+
+The real fix, next wave "S-AUTH" (not started, no schema number claimed):
+authority events are signed on the sending side and verified on receipt -
+user / user_permission / admin_device / other-device status accepted only
+from the computer the receiver believes is main (or the owner), with the
+sender identity taken from a signature, never from a self-declared field.
+The Ed25519 machinery in licensing_contracts is the likely base. Until it
+lands, treat every licensed till as trusted with the whole shop.
