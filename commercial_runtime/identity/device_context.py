@@ -535,6 +535,13 @@ def announce_local_device(conn, company_id: str, *, device_label: str = None,
         registry_schema_version=registry_schema_version,
         force=bool(force) if force is not None else (reason == "boot"),
     )
+    admin_announced = False
     if announced:
         invalidate_cache()
-    return {"device": row, "announced": announced}
+        # Item 12: the main computer also re-states WHICH computer is main.
+        # `announced` is already the right cadence -- always on boot, on a
+        # change, and on a heartbeat only once the period has elapsed -- so
+        # the assignment rides it and is sent at most once per heartbeat
+        # period without a second clock of its own.
+        admin_announced = device_registry.announce_admin_assignment(conn, company_id, device_id)
+    return {"device": row, "announced": announced, "admin_announced": admin_announced}

@@ -1068,9 +1068,23 @@ def create_employee():
     byte-identical (§9 point 3).
     """
     data = request.json or {}
+    # L5 (2026-09-29 review): a body of the wrong SHAPE used to reach
+    # `.strip()` / `.items()` and come back as a 500. It is a client mistake,
+    # so it is a 400 -- and it is refused before any lock is taken.
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Request body must be an object.'}), 400
+    if not isinstance(data.get('email') or '', str):
+        return jsonify({'error': 'Email required'}), 400
     email = (data.get('email') or '').strip().lower()
     perms = data.get('permissions', {})
-    clinic_role = (data.get('clinic_role') or '').strip().lower()
+    if perms is None:
+        perms = {}
+    if not isinstance(perms, dict) or any(not isinstance(v, str) for v in perms.values()):
+        return jsonify({'error': 'permissions must be an object.'}), 400
+    if not isinstance(data.get('preset') or '', str):
+        return jsonify({'error': 'Unknown preset.'}), 400
+    clinic_role = data.get('clinic_role') or ''
+    clinic_role = clinic_role.strip().lower() if isinstance(clinic_role, str) else ''
     if clinic_role not in ('', 'doctor', 'secretary'):
         clinic_role = ''
 
@@ -1121,6 +1135,16 @@ def create_employee():
             return jsonify({'error': 'Role does not match the chosen preset.'}), 400
         role = _accounts.PRESET_BASE_ROLE[preset]
 
+    # Item 16: the ADMIN arm may name the branch at creation (optional; the
+    # delegated arm ignores it and stamps its own scope -- G3). A
+    # branch_manager preset needs one; see update_preset for the reason.
+    raw_scope = data.get('branch_scope_uid')
+    admin_scope_uid = raw_scope.strip() if isinstance(raw_scope, str) and raw_scope.strip() else None
+    if (session.get('mt_role') == 'admin' and preset == _accounts.PRESET_BRANCH_MANAGER
+            and admin_scope_uid is None):
+        return jsonify({'error': BRANCH_SCOPE_REQUIRED_MESSAGE,
+                        'code': 'BRANCH_SCOPE_REQUIRED'}), 400
+
     is_admin = session.get('mt_role') == 'admin'
 
     conn = get_conn()
@@ -1130,7 +1154,7 @@ def create_employee():
         # docstring.
         conn.execute("BEGIN IMMEDIATE")
 
-        scope_uid = None
+        scope_uid = admin_scope_uid if is_admin else None
         if not is_admin:
             # ── D1 delegated gate (design §4.1 G1/G2/G3/G6) ────────────────
             # G6: read fresh, from registry.db, inside this transaction --
@@ -1567,7 +1591,7 @@ def update_role(user_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, role FROM users WHERE id=? AND company_id=?",
+            "SELECT id, role, role_preset FROM users WHERE id=? AND company_id=?",
             (user_id, session['company_id']),
         ).fetchone()
         # Scoped by company_id, so a row belonging to another tenant is
@@ -1575,6 +1599,7 @@ def update_role(user_id):
         # sibling routes' UPDATE ... WHERE company_id=? already enforces.
         if not row:
             return jsonify({'error': 'User not found.'}), 404
+        stored_preset = row['role_preset']
 
         # The owner account is not demotable, and nothing is promotable INTO
         # it. `create_admin` is gated on "no valid admin exists yet", so this
@@ -1607,8 +1632,20 @@ def update_role(user_id):
         #
         # AUDIT-032: raises CashSelfApprovalError if the target grants would
         # breach it (no shipped default does) -- answered as a refusal, not a 500.
+        #
+        # 2026-09-29 (verifier, item 14): a stored preset whose BASE role is the
+        # role being asked for is RE-APPLIED, not replaced. An Accountant is a
+        # manager underneath; PUT /role {"role":"manager"} on one used to reset
+        # them to the plain manager preset -- twelve rows and the label gone --
+        # because a role change was treated as "apply the preset named like the
+        # role". Nothing about the role changed, so nothing about the person
+        # should. A change to a DIFFERENT base role (manager -> cashier) still
+        # applies that role's defaults and clears the label.
+        target_preset = role
+        if stored_preset and _accounts.PRESET_BASE_ROLE.get(stored_preset) == role:
+            target_preset = stored_preset
         try:
-            _accounts.apply_preset(conn, user_id, role, emit_sync=True)
+            _accounts.apply_preset(conn, user_id, target_preset, emit_sync=True)
         except _accounts.CashSelfApprovalError as exc:
             conn.rollback()
             return jsonify({'error': str(exc)}), 400
@@ -1650,7 +1687,7 @@ def update_role(user_id):
         except Exception:
             _audit_write_failed('UPDATE_ROLE', 'USER', user_id)
         conn.commit()
-        return jsonify({'success': True, 'role': role})
+        return jsonify({'success': True, 'role': role, 'role_preset': target_preset})
     finally:
         conn.close()
 
@@ -1856,6 +1893,14 @@ def update_perms(user_id):
 
     conn = get_conn()
     try:
+        # H3 (2026-09-29 review): the AUDIT-032 pair check below READS the
+        # person's current grants and the DELETE/INSERT WRITES the new one.
+        # Without a lock across the two, a synced permission event landing
+        # (or a second admin request) between them made the check judge a set
+        # that was already stale, and both halves of the pair could be
+        # written. BEGIN IMMEDIATE takes the write lock first, so the read
+        # and the write see one state -- the same idiom create_employee uses.
+        conn.execute("BEGIN IMMEDIATE")
         # Establishes tenant ownership BEFORE either write below touches
         # anything -- `user_permissions` has no `company_id` column of its
         # own (nothing in this schema does; see account_schema.py), so this
@@ -1917,6 +1962,16 @@ def update_perms(user_id):
         conn.close()
 
 
+#: Fixed literal, translated by whole-sentence lookup.
+BRANCH_SCOPE_REQUIRED_MESSAGE = 'Choose a branch for this person before making them a branch manager.'
+
+
+def _has_branch_scope(conn, user_id) -> bool:
+    """True when the user row carries a non-blank `branch_scope_uid`."""
+    row = conn.execute("SELECT branch_scope_uid FROM users WHERE id=?", (user_id,)).fetchone()
+    return bool(row and row[0] is not None and str(row[0]).strip())
+
+
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/preset', methods=['PUT'])
 @mt_login_required
 @require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
@@ -1952,6 +2007,17 @@ def update_preset(user_id):
             return jsonify({'error': 'User not found.'}), 404
         if _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
             return jsonify({'error': "The owner account's role cannot be changed."}), 409
+        # Item 16 (verifier, 2026-09-29): a branch manager is a manager who may
+        # invite cashiers FOR ONE BRANCH -- the delegated gate in create_employee
+        # needs `branch_scope_uid` non-NULL. Without a scope the preset would
+        # hand out retail.employees (the right to invite staff) to a person the
+        # delegated gate then refuses anyway, i.e. a label promising a job the
+        # account cannot do plus a capability nobody meant to give. Refused
+        # here, before anything is written; choose the branch first.
+        if preset == _accounts.PRESET_BRANCH_MANAGER and not _has_branch_scope(conn, user_id):
+            conn.rollback()
+            return jsonify({'error': BRANCH_SCOPE_REQUIRED_MESSAGE,
+                            'code': 'BRANCH_SCOPE_REQUIRED'}), 400
         try:
             result = _accounts.apply_preset(conn, user_id, preset, emit_sync=True)
         except _accounts.CashSelfApprovalError as exc:
@@ -2004,6 +2070,17 @@ def update_name(user_id):
             (name, _accounts.now_utc_iso(), user_id, session['company_id']),
         )
         _accounts._queue_user_sync_event(conn, user_id, 'update')
+        # L5: a rename changes what every till and every report calls a person,
+        # so it leaves a trail like every other admin edit. Best effort, like
+        # UPDATE_PRESET: a full audit table must not undo the rename.
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), session['company_id'], session['mt_user_id'],
+                 'UPDATE_NAME', 'USER', user_id, json.dumps({'display_name': name})),
+            )
+        except Exception:
+            _audit_write_failed('UPDATE_NAME', 'USER', user_id)
         conn.commit()
         return jsonify({'success': True, 'display_name': name})
     finally:

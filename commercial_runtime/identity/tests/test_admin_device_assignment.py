@@ -217,7 +217,14 @@ def test_apply_lower_epoch_changes_nothing(conn):
     claim_admin_device_with_assignment(conn, CO, "d1")
     transfer_admin_device_with_assignment(conn, CO, "d2")   # epoch 2
     assert apply_admin_assignment(conn, CO, {"device_id": "d1", "epoch": 1,
-                                             "assigned_at_utc": "2020-01-01T00:00:00+00:00"}) is False
+                                             "assigned_at_utc": "2025-01-01T00:00:00+00:00"}) is False
+    # 2026-09-29: was "2020-01-01". apply now refuses a pre-2024 timestamp as
+    # implausible (test_fix_round_devices.py pins that refusal), so this old
+    # fixture date would never reach the epoch comparison it exists to test.
+    # The moved date changes nothing about WHAT is asserted (a lower epoch
+    # loses whatever its timestamp says); it just can no longer double as a
+    # check that a pre-2024 stamp is tolerated -- deliberately, that is now
+    # the opposite rule.
     assert _flagged(conn) == ["d2"] and get_assignment(conn, CO)["epoch"] == 2
 
 
@@ -243,12 +250,29 @@ def test_apply_malformed_payload_raises_and_stores_nothing(conn, bad):
 
 
 def test_recompute_does_not_flag_a_revoked_assigned_device(conn):
+    # 2026-09-29 (item 1): apply now REFUSES an assignment naming an already
+    # revoked device (admin_target_ineligible), so the old way of building this
+    # state -- revoke first, then apply -- is no longer reachable through apply.
+    # The recompute rule still matters for a device revoked AFTER the fact
+    # (a pre-fix store, or a row edited locally), so build that state instead.
+    upsert_local_device(conn, "d1", CO)
+    apply_admin_assignment(conn, CO, {"device_id": "d1", "epoch": 1,
+                                      "assigned_at_utc": "2026-09-01T00:00:00+00:00"})
+    assert _flagged(conn) == ["d1"]
+    conn.execute("UPDATE devices SET status='revoked' WHERE id='d1'")
+    conn.commit()
+    device_registry.recompute_admin_flag(conn, CO)
+    assert _flagged(conn) == []
+
+
+def test_apply_refuses_an_assignment_naming_a_revoked_device(conn):
     upsert_local_device(conn, "d1", CO)
     conn.execute("UPDATE devices SET status='revoked' WHERE id='d1'")
     conn.commit()
-    apply_admin_assignment(conn, CO, {"device_id": "d1", "epoch": 1,
-                                      "assigned_at_utc": "2026-09-01T00:00:00+00:00"})
-    assert _flagged(conn) == []
+    with pytest.raises(ValueError, match="admin_target_ineligible"):
+        apply_admin_assignment(conn, CO, {"device_id": "d1", "epoch": 1,
+                                          "assigned_at_utc": "2026-09-01T00:00:00+00:00"})
+    assert get_assignment(conn, CO) is None
 
 
 # ── label / revoke helpers ───────────────────────────────────────────────────
@@ -293,8 +317,8 @@ def test_revoke_of_the_main_computer_is_refused_and_changes_nothing(conn):
 # ── is_joined_device: both arms, both directions ─────────────────────────────
 
 def _with_shop_tables(conn):
-    conn.execute("CREATE TABLE audit_logs (id INTEGER PRIMARY KEY, company_id TEXT, action TEXT)")
-    conn.execute("CREATE TABLE company_settings (company_id TEXT PRIMARY KEY, country TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY, company_id TEXT, action TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS company_settings (company_id TEXT PRIMARY KEY, country TEXT)")
     conn.commit()
 
 
@@ -307,30 +331,41 @@ def test_joined_arm_a_assignment_names_another_device(conn):
     assert is_joined_device(conn, CO, "boss") is False
 
 
-def test_joined_arm_b_no_founding_audit_row_and_null_country(conn):
+def test_joined_arm_b_no_founding_audit_row_is_joined_whatever_the_settings_say(conn):
+    # 2026-09-29 (item 13): arm (b) is now "no ADMIN_CREATED audit row", full
+    # stop. The old test pinned "NULL country AND no audit row"; it can no
+    # longer catch a regression to the country test, and that is on purpose --
+    # the country is an operator-typed field, not evidence of anything.
     _with_shop_tables(conn)
     conn.execute("INSERT INTO company_settings VALUES (?, NULL)", (CO,))
     conn.commit()
     assert is_joined_device(conn, CO, "me") is True
 
 
-def test_arm_b_allow_directions(conn):
+def test_arm_b_allow_and_deny_directions_fail_closed(conn):
     _with_shop_tables(conn)
-    # No settings row at all -> not joined.
-    assert is_joined_device(conn, CO, "me") is False
-    # Country filled in (an older founder that lost its audit row) -> not joined.
+    # No settings row, no audit row -> JOINED (used to read "not joined": the
+    # escape the verifier used to claim the main role on a joined device).
+    assert is_joined_device(conn, CO, "me") is True
+    # Country typed in, still no founding row -> STILL joined (verifier's P3).
     conn.execute("INSERT INTO company_settings VALUES (?, 'JO')", (CO,))
     conn.commit()
-    assert is_joined_device(conn, CO, "me") is False
-    # Founding audit row present although country is NULL -> not joined.
+    assert is_joined_device(conn, CO, "me") is True
+    # Founding audit row present -> not joined, whatever the country says.
     conn.execute("UPDATE company_settings SET country=NULL")
     conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'ADMIN_CREATED')", (CO,))
     conn.commit()
     assert is_joined_device(conn, CO, "me") is False
+    # The seeder's positive marker beats a founding row: this install was
+    # seeded as a joiner, so it is joined.
+    conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'JOINED_DEVICE_SEEDED')", (CO,))
+    conn.commit()
+    assert is_joined_device(conn, CO, "me") is True
 
 
-def test_missing_tables_read_as_not_joined(conn):
-    assert is_joined_device(conn, CO, "me") is False
+def test_missing_audit_table_reads_as_joined(conn):
+    # Fail closed: no audit table means no proof of founding.
+    assert is_joined_device(conn, CO, "me") is True
 
 
 # ── routes ───────────────────────────────────────────────────────────────────
@@ -377,7 +412,15 @@ def client(rdb, app_data, monkeypatch, conn):
     return c
 
 
-def _this_device(conn, platform="WINDOWS"):
+def _this_device(conn, platform="WINDOWS", founded=True):
+    """`founded=True` (default) gives the shop a founding ADMIN_CREATED audit
+    row: since item 13 the claim FAILS CLOSED, so a device with no such row is
+    treated as a joiner and every claim-route test would be refused for the
+    wrong reason. Pass founded=False to test the joiner arm."""
+    if founded:
+        _with_shop_tables(conn)
+        conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'ADMIN_CREATED')", (CO,))
+        conn.commit()
     did = device_context.local_device_uuid()
     upsert_local_device(conn, did, CO, platform=platform)
     device_context._cached_device = None
@@ -397,12 +440,19 @@ def test_claim_route_refuses_a_joined_device_with_the_joined_code(client, conn):
 
 
 def test_claim_route_arm_b_joined_refusal_and_founder_allowed(client, conn):
-    did = _this_device(conn)
+    did = _this_device(conn, founded=False)
     _with_shop_tables(conn)
     conn.execute("INSERT INTO company_settings VALUES (?, NULL)", (CO,))
     conn.commit()
     refused = client.post("/api/devices/me/claim-admin")
     assert refused.get_json()["code"] == "JOINED_DEVICE_CANNOT_CLAIM"
+    # Typing a country in (verifier P3) must not turn a joined device into a
+    # claimant. The old test had no such step.
+    conn.execute("UPDATE company_settings SET country='JO'")
+    conn.commit()
+    still = client.post("/api/devices/me/claim-admin")
+    assert still.get_json()["code"] == "JOINED_DEVICE_CANNOT_CLAIM"
+    assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 0
     # Same device, but the founding audit row exists -> the claim goes through.
     conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'ADMIN_CREATED')", (CO,))
     conn.commit()

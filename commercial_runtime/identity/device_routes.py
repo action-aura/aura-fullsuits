@@ -109,6 +109,15 @@ DEVICE_CLASH_MESSAGE = (
 )
 DEVICE_NAME_TOO_LONG_MESSAGE = 'Name must be 60 characters or fewer.'
 DEVICE_NAME_REQUIRED_MESSAGE = 'Enter a name for this computer.'
+DEVICE_NOT_REMOVED_MESSAGE = 'That computer is not removed, so there is nothing to bring back.'
+# The registry helpers refuse with a machine-readable ValueError text; the
+# person sees this sentence and the raw text rides along as `reason`.
+DEVICE_NOT_ELIGIBLE_MESSAGE = (
+    'That computer cannot be the main computer. It was removed from the shop, '
+    'or it is not a Windows computer.'
+)
+# Fields a non-admin never sees in GET /api/devices (L2).
+NON_ADMIN_HIDDEN_DEVICE_FIELDS = ('device_fingerprint', 'owner_installation_id')
 
 
 def _platform_can_be_main(platform) -> bool:
@@ -178,9 +187,18 @@ def list_devices_route():
         this_id = device_context.peek_local_device_uuid()
     except device_context.LocalDeviceStateCorruptError:
         this_id = None
+    # L2 (2026-09-29 review): the hardware fingerprint and the install id are
+    # what makes one computer "the same" computer to the sync engine. They are
+    # an admin's business; a cashier's device list needs a name, a platform and
+    # a status. `mt_role == 'admin'` (and not a demo session) is the same test
+    # _require_admin_role applies.
+    is_admin = session.get('mt_role') == 'admin' and not session.get('is_demo_mode')
     out = []
     for d in devices:
         s = _serialize_device(d)
+        if not is_admin:
+            for hidden in NON_ADMIN_HIDDEN_DEVICE_FIELDS:
+                s.pop(hidden, None)
         s['is_this_device'] = bool(this_id) and d['id'] == this_id
         out.append(s)
 
@@ -351,6 +369,17 @@ def claim_admin_device_route():
         # bootstraps itself into the main computer, and only a Windows
         # computer can be main. Both are refusals of a decision the user
         # asked for, so they name the reason in plain words.
+        # A shop that already has a main computer that is not this one answers
+        # first with the holder's name (actionable), not with the generic
+        # "you joined" message: both are true, only one tells the owner where
+        # to go.
+        holder = device_registry.admin_device(conn, company_id)
+        if holder and holder.get('id') != device['id']:
+            return jsonify({
+                'error': 'Another device is already this company\'s admin device.',
+                'code': 'ADMIN_DEVICE_ALREADY_CLAIMED',
+                'admin_device': _serialize_device(holder),
+            }), 409
         if device_registry.is_joined_device(conn, company_id, device['id']):
             return jsonify({'error': JOINED_DEVICE_MESSAGE,
                             'code': 'JOINED_DEVICE_CANNOT_CLAIM'}), 409
@@ -369,7 +398,8 @@ def claim_admin_device_route():
     except ValueError as exc:
         # claim_admin_device's "not an active device for this company"
         # refusal -- reachable if this install's device row was revoked.
-        return jsonify({'error': str(exc), 'code': 'DEVICE_NOT_ELIGIBLE'}), 409
+        return jsonify({'error': DEVICE_NOT_ELIGIBLE_MESSAGE, 'code': 'DEVICE_NOT_ELIGIBLE',
+                        'reason': str(exc)}), 409
     finally:
         conn.close()
 
@@ -435,10 +465,19 @@ def transfer_admin_device_route(device_id):
             return jsonify({'error': DEVICE_CLASH_MESSAGE,
                             'code': 'DEVICE_IDENTITY_CLASH'}), 409
         # Clear-then-set + epoch+1 + `admin_device` event, one transaction.
-        updated = device_registry.transfer_admin_device_with_assignment(
-            conn, company_id, device_id,
-            by_user_uid=_session_user_uid(conn),
-            by_device_id=device_context.peek_local_device_uuid())
+        # The helper now enforces "not revoked / Windows if known / epoch in
+        # range" itself (item 18), so the checks above are a friendlier first
+        # answer and this catch is the second line: a ValueError is a refusal
+        # (409), never a 500.
+        try:
+            updated = device_registry.transfer_admin_device_with_assignment(
+                conn, company_id, device_id,
+                by_user_uid=_session_user_uid(conn),
+                by_device_id=device_context.peek_local_device_uuid())
+        except ValueError as exc:
+            conn.rollback()
+            return jsonify({'error': DEVICE_NOT_ELIGIBLE_MESSAGE, 'code': 'DEVICE_NOT_ELIGIBLE',
+                            'reason': str(exc)}), 409
     finally:
         conn.close()
 
@@ -473,12 +512,21 @@ def label_device_route(device_id):
     if err:
         return err
     body = request.get_json(silent=True) or {}
-    label = body.get('label')
-    label = label.strip() if isinstance(label, str) else ''
+    raw_label = body.get('label')
+    if isinstance(raw_label, str) and len(raw_label.strip()) > device_registry.DEVICE_LABEL_MAX * 4:
+        # Refuse absurd input before spending any work on it.
+        return jsonify({'error': DEVICE_NAME_TOO_LONG_MESSAGE, 'code': 'DEVICE_NAME_TOO_LONG'}), 400
+    try:
+        # L3: the same rule the apply side uses (Cc/Cf stripped, line breaks
+        # refused), so a name typed here and a name received over sync can
+        # never disagree about what is allowed.
+        label = device_registry.clean_device_label(raw_label) if isinstance(raw_label, str) else None
+    except ValueError as exc:
+        if 'characters or fewer' in str(exc):
+            return jsonify({'error': DEVICE_NAME_TOO_LONG_MESSAGE, 'code': 'DEVICE_NAME_TOO_LONG'}), 400
+        return jsonify({'error': str(exc), 'code': 'DEVICE_NAME_INVALID'}), 400
     if not label:
         return jsonify({'error': DEVICE_NAME_REQUIRED_MESSAGE, 'code': 'DEVICE_NAME_REQUIRED'}), 400
-    if len(label) > device_registry.DEVICE_LABEL_MAX:
-        return jsonify({'error': DEVICE_NAME_TOO_LONG_MESSAGE, 'code': 'DEVICE_NAME_TOO_LONG'}), 400
 
     conn = get_conn()
     try:
@@ -526,6 +574,45 @@ def revoke_device_route(device_id):
     return jsonify({'success': True, 'device': _serialize_device(updated)})
 
 
+@device_bp.route('/<device_id>/reinstate', methods=['POST'])
+@mt_login_required
+def reinstate_device_route(device_id):
+    """POST /api/devices/<device_id>/reinstate -- bring a removed computer
+    back (status 'revoked' -> 'active'). Admin role, from the main computer
+    only, and only for a computer that IS revoked.
+
+    2026-09-29 review (H2d): this is the ONE way out of 'revoked'. The sync
+    apply side refuses revoked -> active from any ordinary `device` event and
+    accepts it only when the event carries `reinstated_by_device_id` equal to
+    the main computer that receiver already knows -- so a forged "active"
+    event cannot quietly resurrect a computer the owner removed."""
+    company_id, err = _tenant_context()
+    if err:
+        return err
+    err = _require_admin_role()
+    if err:
+        return err
+
+    conn = get_conn()
+    try:
+        err = _require_main_device(conn, company_id)
+        if err:
+            return err
+        try:
+            updated = device_registry.reinstate_device_synced(
+                conn, company_id, device_id,
+                by_device_id=device_context.peek_local_device_uuid())
+        except ValueError:
+            return jsonify({'error': DEVICE_NOT_REMOVED_MESSAGE,
+                            'code': 'DEVICE_NOT_REVOKED'}), 409
+        if updated is None:
+            return jsonify({'error': 'Device not found.', 'code': 'DEVICE_NOT_FOUND'}), 404
+    finally:
+        conn.close()
+    device_context.invalidate_cache()
+    return jsonify({'success': True, 'device': _serialize_device(updated)})
+
+
 # ==== LOCAL TAKEOVER (option b) -- BEGIN ====================================
 # One removable unit; see device_takeover.py's docstring for the why, the
 # guards, and what to delete if the owner picks Owner-CC reset (option a)
@@ -536,7 +623,6 @@ import logging as _logging
 import uuid as _uuid
 
 from commercial_runtime.identity import device_takeover
-from commercial_runtime.identity.mt_auth import authenticate_registry_user
 
 _takeover_log = _logging.getLogger('aura.security.identity')
 
@@ -551,9 +637,9 @@ def take_over_main_route():
       1. company admin (not a demo session)             403 ADMIN_ROLE_REQUIRED
       2. the typed phrase is exact                      400 TAKEOVER_CONFIRM_REQUIRED
          (before the password, so a typo never burns a login attempt)
-      3. the admin's own password, through the SAME
-         throttled check the login uses                 403 TAKEOVER_PASSWORD_INCORRECT
-                                                        429 when that account is locked
+      3. the admin's own password, counted on the
+         takeover's OWN lockout (never the login's)     403 TAKEOVER_PASSWORD_INCORRECT
+                                                        429 TAKEOVER_LOCKED after 3 misses
       4. this computer may be main at all (Windows, no
          identity clash)                                409
       5. device_takeover: current main silent >= 7 days,
@@ -570,21 +656,34 @@ def take_over_main_route():
         return jsonify({'error': device_takeover.TAKEOVER_CONFIRM_MESSAGE,
                         'code': 'TAKEOVER_CONFIRM_REQUIRED'}), 400
 
-    # The password must belong to the person who is signed in RIGHT NOW: an
-    # admin's password typed into another admin's session is not consent from
-    # this session's user, so the returned user id has to match.
-    auth = authenticate_registry_user(session.get('email'), body.get('password'))
-    if auth.get('locked'):
-        return jsonify({'error': auth['error'], 'code': 'TAKEOVER_LOCKED'}), 429
-    if not auth.get('ok') or (auth.get('user') or {}).get('id') != session.get('mt_user_id'):
-        return jsonify({'error': device_takeover.TAKEOVER_PASSWORD_MESSAGE,
-                        'code': 'TAKEOVER_PASSWORD_INCORRECT'}), 403
-
     conn = get_conn()
     try:
         device, err = _resolve_or_error(conn, company_id)
         if err:
             return err
+        # M2 (2026-09-29 review): the password is checked against the SIGNED-IN
+        # user's own hash (so another admin's password typed here is not
+        # consent from this session) with the takeover's OWN counter -- 3 free
+        # misses, then a lock that doubles from 15 minutes. It deliberately no
+        # longer goes through authenticate_registry_user: that bumped the
+        # login screen's failed_login_count, so anyone at an unlocked till
+        # could lock the owner out of signing in by guessing here.
+        user_id = session.get('mt_user_id')
+        locked, retry_after = device_takeover.takeover_lock_state(conn, user_id, device['id'])
+        if locked:
+            return jsonify({'error': device_takeover.TAKEOVER_LOCKED_MESSAGE,
+                            'code': 'TAKEOVER_LOCKED',
+                            'retry_after_seconds': retry_after}), 429
+        if not device_takeover.password_matches(conn, user_id, body.get('password')):
+            lock_seconds = device_takeover.record_takeover_failure(conn, user_id, device['id'])
+            if lock_seconds:
+                return jsonify({'error': device_takeover.TAKEOVER_LOCKED_MESSAGE,
+                                'code': 'TAKEOVER_LOCKED',
+                                'retry_after_seconds': lock_seconds}), 429
+            return jsonify({'error': device_takeover.TAKEOVER_PASSWORD_MESSAGE,
+                            'code': 'TAKEOVER_PASSWORD_INCORRECT'}), 403
+        device_takeover.clear_takeover_failures(conn, user_id, device['id'])
+
         if not _platform_can_be_main(device.get('platform')):
             return jsonify({'error': MAIN_MUST_BE_WINDOWS_MESSAGE,
                             'code': 'MAIN_MUST_BE_WINDOWS'}), 409

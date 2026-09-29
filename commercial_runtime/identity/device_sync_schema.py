@@ -1,6 +1,9 @@
 """registry.db v9 (part 2 of 2) -- devices become a synced entity.
 
-ROADMAP.md's "registry v9 CLAIMED" entry (Track S). Two changes:
+ROADMAP.md's "registry v9 CLAIMED" entry (Track S). Two changes, plus two small additions
+from the 2026-09-29 security review (the `takeover` column on the assignment
+row, and the device-local `takeover_lockout` table; both explained where they
+are created below):
 
 1. `devices` gains five columns so a peer can tell how current a device row is
    and which build it runs:
@@ -72,6 +75,39 @@ def apply_device_sync_schema(conn: sqlite3.Connection) -> None:
             assigned_at_utc       TEXT NOT NULL,
             assigned_by_user_uid  TEXT,
             assigned_by_device_id TEXT
+        )
+        """
+    )
+
+    # 2026-09-29 security review (M1): a takeover is now marked on the wire, so
+    # every receiver can write a WARNING audit row "the main was taken over"
+    # instead of seeing an assignment indistinguishable from a hand-over.
+    # Additive, PRAGMA-guarded like every other column here. 0 = ordinary
+    # claim/transfer, 1 = written by a guarded takeover.
+    assignment_cols = {row[1] for row in conn.execute(
+        "PRAGMA table_info(admin_device_assignment)").fetchall()}
+    if "takeover" not in assignment_cols:
+        conn.execute("ALTER TABLE admin_device_assignment ADD COLUMN takeover INTEGER NOT NULL DEFAULT 0")
+
+    # 2026-09-29 security review (M2): the takeover password prompt used to
+    # spend the SAME failed_login_count as the login screen, so anyone at an
+    # unlocked till could lock the owner out of signing in by guessing here,
+    # and the takeover had no back-off of its own. This table is the takeover's
+    # own counter: keyed per user AND per device (a lock describes THIS till
+    # being attacked -- the same reasoning as failed_login_count, which is why
+    # it is deliberately not synced and no sync payload names this table).
+    #   failed_count      consecutive wrong passwords since the last success
+    #   locked_until_utc  NULL until the 3rd miss; then a delay that doubles
+    #                     from 15 minutes on each further miss
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS takeover_lockout (
+            user_id           TEXT NOT NULL,
+            device_id         TEXT NOT NULL,
+            failed_count      INTEGER NOT NULL DEFAULT 0,
+            locked_until_utc  TEXT,
+            last_failed_utc   TEXT,
+            PRIMARY KEY (user_id, device_id)
         )
         """
     )

@@ -188,13 +188,33 @@ def test_applying_the_accountant_preset_moves_everything_together(admin, db_path
     assert perm.count('create') == 12
 
 
-def test_a_plain_role_change_replaces_the_previous_preset_label(admin, db_path):
+def test_a_role_change_to_the_same_base_role_keeps_the_preset_and_its_books(admin, db_path):
+    """REWRITTEN ON PURPOSE 2026-09-29 (verifier item 14). The old test
+    (`..._replaces_the_previous_preset_label`) pinned that PUT /role manager on
+    an Accountant relabelled them plain 'manager' and took their books away.
+    Accountant IS a manager (PRESET_BASE_ROLE), so a "change" to manager is not
+    a demotion -- silently stripping the twelve rows was the defect, and the
+    old assertion is exactly what enforced it. What the old test can no longer
+    catch: a role change that lands on the SAME base role resetting the
+    preset. What replaces it: that path must keep the preset and every row,
+    and a change to a DIFFERENT base role must still drop the books."""
     uid = _make(admin, role='cashier')
     assert admin.put(f'/api/admin/employees/{uid}/preset', json={'preset': 'accountant'}).status_code == 200
+    held_before = _held(db_path, uid)
+    r = admin.put(f'/api/admin/employees/{uid}/role', json={'role': 'manager'})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['role_preset'] == 'accountant'
     assert _rows(db_path, "SELECT role_preset FROM users WHERE id=?", (uid,))[0][0] == 'accountant'
-    assert admin.put(f'/api/admin/employees/{uid}/role', json={'role': 'manager'}).status_code == 200
-    assert _rows(db_path, "SELECT role_preset FROM users WHERE id=?", (uid,))[0][0] == 'manager'
-    # And the books are gone again: the ex-accountant does not keep them.
+    assert _held(db_path, uid) == held_before == set(ua.ROLE_PRESETS['accountant'])
+    assert set(c for c in _caps(db_path, uid) if c in ua.CAPABILITY_CODES) == set(ua.CAPABILITY_CODES)
+
+
+def test_a_role_change_to_another_base_role_replaces_the_preset_label(admin, db_path):
+    uid = _make(admin, role='cashier')
+    assert admin.put(f'/api/admin/employees/{uid}/preset', json={'preset': 'accountant'}).status_code == 200
+    assert admin.put(f'/api/admin/employees/{uid}/role', json={'role': 'cashier'}).status_code == 200
+    assert _rows(db_path, "SELECT role_preset FROM users WHERE id=?", (uid,))[0][0] == 'cashier'
+    # Deny-half: the ex-accountant does not keep the books.
     assert not _held(db_path, uid) & set(ua.BOOKS_CAPABILITY_CODES)
 
 

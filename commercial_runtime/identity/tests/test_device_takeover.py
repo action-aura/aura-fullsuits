@@ -81,6 +81,18 @@ def conn(tmp_path):
     c.close()
 
 
+def _settle_me(conn):
+    """upsert_local_device stamps 'me' with the REAL clock, but these tests judge
+    silence against the fixed NOW. Since the M1 clock guard (2026-09-29) a
+    takeover is refused when NOW is earlier than the newest stamp on record, so
+    'me' must be dated just before NOW like a computer that was online a minute
+    ago. This changes nothing the tests assert about the MAIN's silence."""
+    stamp = (NOW - timedelta(minutes=1)).isoformat()
+    conn.execute("UPDATE devices SET last_seen_at=?, first_seen_at=?, updated_at_utc=? WHERE id='me'",
+                 (stamp, stamp, stamp))
+    conn.commit()
+
+
 def _shop(conn, *, main_seen, main_updated=None, assigned_at=None):
     """A shop whose main is 'boss' and whose other computer is 'me'. Times are
     written straight into the rows so the test controls what 'silent' means."""
@@ -92,6 +104,7 @@ def _shop(conn, *, main_seen, main_updated=None, assigned_at=None):
     conn.execute("UPDATE admin_device_assignment SET assigned_at_utc=? WHERE company_id=?",
                  (assigned_at or main_seen, CO))
     conn.commit()
+    _settle_me(conn)
 
 
 def _outbox(conn):
@@ -132,33 +145,72 @@ def test_a_role_handed_over_recently_counts_as_seen(conn):
 
 
 def test_a_main_whose_clock_runs_ahead_is_seen_recently_not_long_silent(conn):
-    _shop(conn, main_seen=(NOW + timedelta(days=40)).isoformat())
+    """A main a few minutes ahead of us is 'heard just now' (a NEGATIVE gap must
+    refuse like any recent sighting, never read as long silence). One 40 days
+    ahead is refused earlier, by the M1 clock guard (our clock looks behind the
+    records) -- still a refusal, with the more useful sentence."""
+    _shop(conn, main_seen=(NOW + timedelta(minutes=5)).isoformat())
     assert _code(conn) == "TAKEOVER_MAIN_SEEN_RECENTLY"
-
-
-def test_a_main_this_computer_knows_nothing_about_is_refused(conn):
-    upsert_local_device(conn, "me", CO)
-    apply_admin_assignment(conn, CO, {"device_id": "ghost", "epoch": 3,
-                                      "assigned_at_utc": _ago(days=90)})
+    conn.execute("UPDATE devices SET last_seen_at=?, first_seen_at=?, updated_at_utc=? WHERE id='boss'",
+                 ((NOW + timedelta(days=40)).isoformat(),) * 3)
     conn.commit()
-    assert _code(conn) == "TAKEOVER_MAIN_UNKNOWN"
+    assert _code(conn) == "TAKEOVER_CLOCK_BEHIND"
+
+
+def _forge_assignment(conn, device_id, at):
+    """An assignment row naming `device_id`, written straight to the table: the
+    apply path (rightly) refuses to store one naming a device of another
+    company, but a poisoned or legacy registry can still hold one."""
+    conn.execute("DELETE FROM admin_device_assignment WHERE company_id=?", (CO,))
+    conn.execute("INSERT INTO admin_device_assignment (company_id, device_id, epoch, assigned_at_utc)"
+                 " VALUES (?,?,3,?)", (CO, device_id, at))
+    conn.commit()
+
+
+def test_a_ghost_main_is_judged_by_the_assignment_time_alone(conn):
+    """2026-09-29 review, ghost main. The assignment names a computer this one
+    never heard of. It used to answer 'unknown' and refuse FOREVER, so a single
+    orphaned or forged assignment made the shop unrecoverable. Now the
+    assignment time is the only evidence: silent for 7 days means a takeover is
+    allowed, 6 days 23 hours means it is not (the M5b boundary). The CLAIM door
+    stays shut -- that is asserted in test_fix_round_devices.py."""
+    upsert_local_device(conn, "me", CO)
+    _settle_me(conn)
+    apply_admin_assignment(conn, CO, {"device_id": "ghost", "epoch": 3,
+                                      "assigned_at_utc": _ago(days=6, hours=23)}, now=NOW)
+    conn.commit()
+    assert _code(conn) == "TAKEOVER_MAIN_SEEN_RECENTLY"                   # DENY half, M5b
+    conn.execute("UPDATE admin_device_assignment SET assigned_at_utc=?", (_ago(days=90),))
+    conn.commit()
+    check_takeover_allowed(conn, CO, "me", now=NOW)                       # ALLOW half
 
 
 def test_a_main_row_that_belongs_to_another_shop_is_not_evidence(conn):
     """The assignment names a device id, but the row under that id is filed
-    under a DIFFERENT company (a leftover, or a clash). Its old stamps must not
-    be read as 'our main went quiet' -- that would let a takeover through on
-    another shop's evidence. It is unknown, and unknown refuses. Guards the
-    company check in main_last_heard_from (the fixture's other tests always
-    file the main under the right company, so they cannot see it go)."""
+    under a DIFFERENT company (a leftover, or a clash) and was heard from
+    yesterday. Its stamps must not be read as 'our main is alive' -- that would
+    let one foreign row veto a takeover forever. Only the assignment time (90
+    days) counts, so the takeover is allowed. Guards the company check in
+    main_last_heard_from: with it removed the foreign row's fresh stamp turns
+    this into TAKEOVER_MAIN_SEEN_RECENTLY."""
     upsert_local_device(conn, "me", CO)
+    _settle_me(conn)
     upsert_local_device(conn, "ghost", "some-other-company", platform="WINDOWS")
     conn.execute("UPDATE devices SET last_seen_at=?, first_seen_at=?, updated_at_utc=? WHERE id='ghost'",
-                 (_ago(days=90), _ago(days=90), _ago(days=90)))
-    apply_admin_assignment(conn, CO, {"device_id": "ghost", "epoch": 3,
-                                      "assigned_at_utc": _ago(days=90)})
+                 (_ago(days=1), _ago(days=1), _ago(days=1)))
+    _forge_assignment(conn, "ghost", _ago(days=90))
+    check_takeover_allowed(conn, CO, "me", now=NOW)
+
+
+def test_a_revoked_main_row_is_not_evidence_either(conn):
+    """A removed computer's fresh stamps are not a sign the main is alive (a
+    revoke of the main is refused everywhere now, so such a row arrived out of
+    order or from a forger). Same shape as the foreign-shop row above."""
+    _shop(conn, main_seen=_ago(days=90))
+    conn.execute("UPDATE devices SET status='revoked', last_seen_at=?, updated_at_utc=? WHERE id='boss'",
+                 (_ago(days=1), _ago(days=1)))
     conn.commit()
-    assert _code(conn) == "TAKEOVER_MAIN_UNKNOWN"
+    check_takeover_allowed(conn, CO, "me", now=NOW)
 
 
 def test_a_main_with_unreadable_timestamps_is_refused_not_assumed_dead(conn):
@@ -344,6 +396,15 @@ def _failed_count(db_path):
         c.close()
 
 
+def _takeover_failures(db_path):
+    c = _db(db_path)
+    try:
+        row = c.execute("SELECT SUM(failed_count) FROM takeover_lockout").fetchone()
+        return row[0] or 0
+    finally:
+        c.close()
+
+
 def _take(client, password=OWNER_PW, confirm=TAKEOVER_CONFIRM_PHRASE, **extra):
     return client.post("/api/devices/me/take-over",
                        json={"password": password, "confirm": confirm, **extra})
@@ -393,10 +454,17 @@ def test_route_wrong_password_is_refused_counted_and_writes_nothing(admin, db_pa
     before = _state(db_path)
     r = _take(admin, password="not-the-password")
     assert r.status_code == 403 and r.get_json()["code"] == "TAKEOVER_PASSWORD_INCORRECT"
-    assert _failed_count(db_path) == 1          # went through the throttled login check
+    # M2 (2026-09-29): the takeover has its OWN counter. A wrong guess here must
+    # NOT count against the owner's login (it used to, so a cashier at an
+    # unlocked till could lock the owner out of signing in).
+    assert _failed_count(db_path) == 0
+    assert _takeover_failures(db_path) == 1
     assert _state(db_path) == before
-    assert _take(admin, password="").get_json()["code"] == "TAKEOVER_PASSWORD_INCORRECT"
+    # A missing password is a miss too. Only TWO misses before the allow twin:
+    # the third would (correctly) start the takeover lock, which the next test
+    # covers. "" is exercised at unit level in test_fix_round_devices.py.
     assert _take(admin, password=None).get_json()["code"] == "TAKEOVER_PASSWORD_INCORRECT"
+    assert _takeover_failures(db_path) == 2
     assert _state(db_path) == before
     # allow twin: the right password on the same shop goes through.
     assert _take(admin).status_code == 200
@@ -405,11 +473,12 @@ def test_route_wrong_password_is_refused_counted_and_writes_nothing(admin, db_pa
 def test_route_repeated_wrong_passwords_lock_the_account_and_the_right_one_then_fails_too(admin, db_path):
     _shop_on_disk(db_path, main_seen=LONG_AGO)
     before = _state(db_path)
-    for _ in range(mt_auth.MAX_FAILED_ATTEMPTS):
+    for _ in range(device_takeover.TAKEOVER_FREE_ATTEMPTS):
         _take(admin, password="wrong")
     r = _take(admin, password=OWNER_PW)
     assert r.status_code == 429 and r.get_json()["code"] == "TAKEOVER_LOCKED"
     assert _state(db_path) == before
+    assert _failed_count(db_path) == 0          # the owner can still sign in
 
 
 def test_route_password_of_someone_else_than_the_signed_in_user_does_not_count(admin, db_path):

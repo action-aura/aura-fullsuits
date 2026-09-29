@@ -482,6 +482,21 @@ def seed_company_settings_for_joining_device(conn, new_company_id):
         return False
     conn.execute("INSERT INTO company_settings (id, company_id) VALUES (?, ?)",
                  (str(uuid.uuid4()), new_company_id))
+    # 2026-09-29 review (item 13): leave a durable "this install JOINED" mark.
+    # device_registry.is_joined_device now fails closed on the ABSENCE of an
+    # ADMIN_CREATED row; this is the positive form of the same fact, so a
+    # joined device stays refused even if that absence is ever explained away.
+    # Best effort like every audit write here: a failure must not undo the
+    # seeding this function exists to do (the join cannot proceed without it).
+    try:
+        conn.execute(
+            "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), new_company_id, None, 'JOINED_DEVICE_SEEDED',
+             'company_settings', new_company_id),
+        )
+    except sqlite3.Error:
+        pass
     return True
 
 

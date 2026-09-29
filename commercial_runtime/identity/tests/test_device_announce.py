@@ -306,12 +306,21 @@ def test_apply_arrival_of_the_assigned_device_sets_the_flag(conn):
     assert get_device(conn, "peer")["is_admin_device"] == 1
 
 
-def test_apply_revoke_of_the_assigned_device_clears_the_flag(conn):
+def test_apply_revoke_of_the_assigned_device_is_refused_and_the_flag_stays(conn):
+    # REWRITTEN ON PURPOSE (2026-09-29, H2a). This test used to pin that a
+    # `revoked` event for the assigned device CLEARS the main flag -- which is
+    # exactly the forgery the security review found: one forged device event
+    # removed the main computer of a whole shop. The main can only be moved by
+    # a transfer/takeover (an epoch-guarded admin_device event) and is never
+    # revoked in place, so the flag now STAYS. What the old assertion can no
+    # longer catch: "a revoke clears the flag" -- deliberately, that is the bug.
     apply_admin_assignment(conn, CO, {"device_id": "peer", "epoch": 1, "assigned_at_utc": T0})
     apply_device_event(conn, CO, _inc(device_id="peer", row_version=1))
     assert get_device(conn, "peer")["is_admin_device"] == 1
-    apply_device_event(conn, CO, _inc(device_id="peer", row_version=2, status="revoked"))
-    assert get_device(conn, "peer")["is_admin_device"] == 0
+    with pytest.raises(ValueError, match="cannot_revoke_main"):
+        apply_device_event(conn, CO, _inc(device_id="peer", row_version=2, status="revoked"))
+    row = get_device(conn, "peer")
+    assert row["is_admin_device"] == 1 and row["status"] == "active"
 
 
 def test_apply_row_under_another_company_is_quarantined_and_untouched(conn):

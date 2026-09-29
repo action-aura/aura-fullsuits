@@ -77,6 +77,15 @@ def db_path(tmp_path):
         ")"
     )
     apply_identity_device_schema(conn)
+    # 2026-09-29 (item 13): a claim now FAILS CLOSED -- a device is a founder
+    # only when the shop has a founding `ADMIN_CREATED` audit row (what
+    # create_admin writes on the founding install); with no such row it is
+    # treated as a joiner and every claim below would be refused for the wrong
+    # reason. The fixture therefore models a founded shop. The joiner arm
+    # itself is tested in test_admin_device_assignment.py.
+    conn.execute("CREATE TABLE audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                 "company_id TEXT, action TEXT)")
+    conn.execute("INSERT INTO audit_logs (company_id, action) VALUES ('company-1', 'ADMIN_CREATED')")
     conn.commit()
     conn.close()
     return path
@@ -502,7 +511,11 @@ def test_claim_admin_refuses_a_revoked_local_device(app_data, client, db_path):
     r = client.post("/api/devices/me/claim-admin")
 
     assert r.status_code == 409
-    assert r.get_json()["code"] == "DEVICE_NOT_ELIGIBLE"
+    body = r.get_json()
+    assert body["code"] == "DEVICE_NOT_ELIGIBLE"
+    # The person reads a plain sentence; the machine text rides along as reason.
+    assert body["error"] == device_routes.DEVICE_NOT_ELIGIBLE_MESSAGE
+    assert "not an active device" in body["reason"]
 
 
 # ── POST /api/devices/<device_id>/admin (transfer) ───────────────────────

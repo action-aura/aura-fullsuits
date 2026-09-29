@@ -71,11 +71,13 @@ Three things live here.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import unicodedata
 import uuid
 from datetime import datetime, timezone
 
+from commercial_runtime.identity import text_safety
 from commercial_runtime.security.passwords import (
     PasswordPolicyError,
     hash_password,
@@ -621,7 +623,125 @@ def books_codes_reset_plan(new_role) -> dict:
     return {code: (ACCESS_FULL if code in granted else ACCESS_NONE) for code in BOOKS_CAPABILITY_CODES}
 
 
-def user_sync_apply_plan(incoming: dict, local_role) -> dict:
+def enforce_cash_pair_after_apply(conn: sqlite3.Connection, company_id: str, user_uid,
+                                  source: str = 'receipt') -> bool:
+    """H3 (2026-09-29 security review): AUDIT-032 on the RECEIVING side.
+
+    `cash_self_approval_conflict` is enforced where a permission is WRITTEN by
+    a person (update_perms, apply_preset, create_employee) but a synced
+    `user_permission` event arrives through sync_service's apply, which never
+    called it. Two events -- cash.close, then cash.approve, or one device's
+    edit racing another's -- could leave a non-admin holding BOTH on a till
+    that never saw the conflicting request. Call this after applying a
+    permission (or a user) event for `user_uid`.
+
+    When the person is a NON-ADMIN holding both `retail.cash.close` and
+    `retail.cash.approve` at a non-'none' level, set cash.approve to 'none'
+    on THIS device only and return True; otherwise change nothing and return
+    False. The choice of which half to drop is fixed (approve): it is the
+    authority that can hide a shortfall, and dropping it is the fail-closed
+    reading.
+
+    Deliberately NO sync emit. Every device that receives the same two events
+    reaches the same answer by running this same rule, so there is nothing to
+    tell anyone -- and emitting would let two devices' repairs ping-pong.
+    Writes a `CASH_PAIR_REVOKED_ON_RECEIPT` audit row (best effort, never
+    raises). Never commits: the caller owns the transaction. Only ever
+    NARROWS access, so it can be called speculatively."""
+    if not user_uid:
+        return False
+    row = conn.execute("SELECT id, role FROM users WHERE uid=?", (user_uid,)).fetchone()
+    if row is None:
+        return False
+    return _revoke_cash_approve_if_paired(conn, company_id, row[0], row[1], user_uid, source)
+
+
+def _revoke_cash_approve_if_paired(conn, company_id, user_id, role, user_uid, source) -> bool:
+    """The rule itself, keyed by the local user id so the boot sweep also
+    reaches an account that has no `uid` (a legacy row)."""
+    if normalize_role(role) == ROLE_ADMIN:
+        return False
+    if not cash_self_approval_conflict(role, granted_capability_codes(conn, user_id)):
+        return False
+    conn.execute(
+        "UPDATE user_permissions SET access_level=? WHERE user_id=? AND subsystem=?",
+        (ACCESS_NONE, user_id, CAP_CASH_APPROVE),
+    )
+    try:
+        conn.execute(
+            "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, "
+            "entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), company_id, user_id, 'CASH_PAIR_REVOKED_ON_RECEIPT',
+             'USER', user_id,
+             json.dumps({'severity': 'WARNING', 'revoked': CAP_CASH_APPROVE,
+                         'kept': CAP_CASH_CLOSE, 'user_uid': user_uid,
+                         'source': source})),
+        )
+    except Exception:  # the audit table may be absent on a minimal registry
+        logging.getLogger('aura.security.identity').exception(
+            'CASH_PAIR_REVOKED_ON_RECEIPT audit row was not written')
+    return True
+
+
+def enforce_cash_pair_all(conn: sqlite3.Connection, company_id: str) -> list:
+    """Item 15 (verifier, 2026-09-29): the BOOT SWEEP for AUDIT-032.
+
+    `enforce_cash_pair_after_apply` only sees a person whose event arrives
+    from now on. A shop that ALREADY holds a non-admin with both
+    `retail.cash.close` and `retail.cash.approve` -- written by a build before
+    the guard, by two racing events, or by hand -- would never be looked at
+    again. Call this once at boot (sync_service / app startup): it walks every
+    non-admin user of `company_id`, and for each one who holds the pair sets
+    cash.approve to 'none' (the same fail-closed half the per-event rule
+    drops) with the same `CASH_PAIR_REVOKED_ON_RECEIPT` audit row (its JSON
+    says `source: boot_sweep`).
+
+    Returns the list of user uids it changed ([] when the books were already
+    clean, which is the normal case). Never commits, never emits sync (every
+    device runs the same sweep and reaches the same answer; emitting would let
+    two devices' repairs ping-pong). Only ever NARROWS access, so it is safe to
+    run on every boot and safe to run twice."""
+    fixed = []
+    rows = conn.execute(
+        "SELECT id, role, uid FROM users WHERE company_id=?", (company_id,)
+    ).fetchall()
+    for r in rows:
+        if _revoke_cash_approve_if_paired(conn, company_id, r[0], r[1], r[2], 'boot_sweep'):
+            fixed.append(r[2] or r[0])
+    return fixed
+
+
+def sanitize_synced_user_fields(payload):
+    """L3: the text rule applied to a `user` event on RECEIPT, so a hostile or
+    corrupt peer cannot store what the local routes would refuse. Returns a
+    COPY; never raises (raising would drop the whole event, and a name is not
+    worth losing a password change over).
+
+      display_name -- Cc/Cf stripped except U+200C/U+200D, each line break
+        turned into a space, NFC, trimmed, cut to DISPLAY_NAME_MAX; empty or
+        non-text becomes None ("clear it", the key is still PRESENT).
+      role_preset  -- must be a key of ROLE_PRESETS. Anything else (an unknown
+        name from a newer build, junk, a non-string) is treated as ABSENT: the
+        key is removed, so the receiver keeps its own value. A present None
+        stays None (an explicit clear).
+    Other keys pass through untouched."""
+    out = dict(payload) if isinstance(payload, dict) else {}
+    if 'display_name' in out:
+        raw = out['display_name']
+        if isinstance(raw, str):
+            spaced = ''.join(' ' if ch in text_safety._LINE_BREAKS else ch for ch in raw)
+            text = unicodedata.normalize('NFC', text_safety.strip_control_and_format(spaced)).strip()
+            out['display_name'] = text[:DISPLAY_NAME_MAX].strip() or None
+        else:
+            out['display_name'] = None
+    if 'role_preset' in out:
+        preset = out['role_preset']
+        if preset is not None and (not isinstance(preset, str) or preset not in ROLE_PRESETS):
+            del out['role_preset']
+    return out
+
+
+def user_sync_apply_plan(incoming: dict, local_role, local_role_preset=None) -> dict:
     """How a receiver of a `user` sync event must treat the two v9 keys.
 
     `incoming` is the event payload dict; `local_role` the receiver's stored
@@ -641,12 +761,31 @@ def user_sync_apply_plan(incoming: dict, local_role) -> dict:
         `books_codes_reset_plan(incoming role)` WITHOUT emitting -- every
         device reaches the same answer from the same event, so there is
         nothing to tell anyone.
+
+    `local_role_preset` (optional, L1 of the 2026-09-29 review) is the
+    receiver's stored preset for this uid. An old sender demoting an
+    Accountant to Manager sends role 'manager' -- the SAME string the
+    Accountant already has locally (its base role), so "role changed" was
+    False and the four books rows survived: the ex-Accountant kept books
+    access. When the local preset is set and is NOT the role's plain default
+    (i.e. anything but 'manager' on a manager / 'cashier' on a cashier), the
+    old sender's event cannot be told apart from that demotion, so books are
+    reset there too. Cost, stated plainly: an old build's unrelated edit
+    (a PIN change) of an Accountant also resets their books rows until the
+    owner re-applies the preset -- fail closed, and the fix is upgrading the
+    old build. Omitted, behaviour is exactly what it was.
     """
     has_display_name = 'display_name' in incoming
     has_role_preset = 'role_preset' in incoming
     reset_books = False
     if not has_role_preset and local_role is not None and 'role' in incoming:
-        reset_books = normalize_role(incoming.get('role')) != normalize_role(local_role)
+        incoming_role = normalize_role(incoming.get('role'))
+        local_normal = normalize_role(local_role)
+        reset_books = incoming_role != local_normal
+        if (not reset_books and local_role_preset
+                and local_role_preset != local_normal
+                and incoming_role != ROLE_ADMIN):
+            reset_books = True
     return {
         'has_display_name': has_display_name,
         'has_role_preset': has_role_preset,
@@ -664,15 +803,17 @@ def normalize_display_name(raw):
     None when it is empty/whitespace (caller decides whether that is "no
     name" or an error). Raises ValueError when longer than DISPLAY_NAME_MAX
     -- measured AFTER normalisation, so a decomposed Arabic or accented name
-    is judged by what a reader sees, not by its code points."""
+    is judged by what a reader sees, not by its code points.
+
+    L3 (2026-09-29 security review): control and format characters are
+    stripped (bidi overrides like U+202E, zero-width U+200B, NUL) except the
+    Arabic joiners U+200C/U+200D, and a line break is refused -- see
+    text_safety.py. Length is judged AFTER stripping. Raises ValueError with
+    'Name must be a single line.' for a line break."""
     if raw is None:
         return None
-    text = unicodedata.normalize('NFC', str(raw)).strip()
-    if not text:
-        return None
-    if len(text) > DISPLAY_NAME_MAX:
-        raise ValueError('Name must be 60 characters or fewer.')
-    return text
+    return text_safety.clean_single_line(
+        raw if isinstance(raw, str) else str(raw), max_len=DISPLAY_NAME_MAX, what='Name')
 
 
 # ── PINs ─────────────────────────────────────────────────────────────────────
