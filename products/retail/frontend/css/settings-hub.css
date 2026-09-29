@@ -42,7 +42,11 @@
   border-color: var(--border-default);
 }
 
-.sh-main { min-inline-size: 0; }
+/* .sh-main is a size container: the form/preview split below asks how wide the
+ * HUB'S MAIN COLUMN is, not how wide the window is. At 1024 the window is wide
+ * but the app sidebar (240) and the hub nav (220) leave the main column ~470px,
+ * and a viewport-only media query left the form crushed to ~100px (P1b verifier F1). */
+.sh-main { min-inline-size: 0; container-type: inline-size; container-name: sh-main; }
 .sh-pane { display: flex; flex-direction: column; gap: var(--space-comfy); min-inline-size: 0; }
 /* .sh-pane sets display:flex, which would beat the browser's [hidden] rule:
  * without this line every section would show at once. */
@@ -143,6 +147,86 @@
 }
 .sh-num-preview bdi { font-weight: var(--text-weight-semibold); color: var(--text-primary); }
 
+/* Receipt numbers: the fields on one side, the example NEXT TO them (not under
+ * the checkbox), so typing a code shows its answer without scrolling. */
+.sh-num-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: var(--space-comfy);
+  align-items: start;
+}
+.sh-num-fields { display: flex; flex-direction: column; gap: var(--space-base); min-inline-size: 0; }
+.sh-num-fields .ret-field { margin: 0; }
+/* The switch row. subsystem-retail.js injects `.ret-field input {width:100%;
+ * min-block-size:44px}` and `.ret-field label {display:block; uppercase}` AFTER
+ * this file, at the same specificity, so a bare `.sh-num-switch input` lost: the
+ * box stretched to the whole row and squeezed its words to a sliver at the edge
+ * (seen on the 1024 and 1366 screenshots). Two classes beat that without !important. */
+.sh-num-fields .sh-num-switch { display: flex; align-items: center; justify-content: flex-start; gap: var(--space-base); }
+.sh-num-fields .sh-num-switch input {
+  inline-size: 1.5rem; block-size: 1.5rem; min-block-size: 0; padding: 0;
+  flex: 0 0 auto; accent-color: var(--sub-accent);
+}
+.sh-num-fields .sh-num-switch label {
+  flex: 1 1 auto; inline-size: auto; min-block-size: var(--touch-target-min);
+  display: flex; align-items: center;
+  margin: 0; text-transform: none; letter-spacing: normal;
+  font-size: var(--text-size-body); color: var(--text-primary);
+}
+.sh-num-example {
+  position: sticky;
+  inset-block-start: 0;
+  padding: var(--space-comfy);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+}
+.sh-num-example-title { margin: 0 0 var(--space-tight); font-size: var(--text-size-meta); color: var(--text-tertiary); font-weight: var(--text-weight-semibold); }
+.sh-num-example .sh-num-preview { margin: 0 0 var(--space-base); padding: 0; background: transparent; line-height: 1.8; }
+.sh-num-empty { color: var(--text-tertiary); }
+.sh-num-error {
+  margin: 0;
+  padding: var(--space-base);
+  font-size: var(--text-size-body);
+  color: var(--state-danger-text);
+  background: var(--state-danger-surface);
+  border: 1px solid var(--state-danger-border);
+  border-radius: var(--radius-control);
+}
+.sh-num-error[hidden] { display: none; }
+/* Why the readable-numbers switch is greyed out: a fact, not an error. */
+.sh-num-unavailable {
+  margin: 0;
+  padding: var(--space-base);
+  font-size: var(--text-size-body);
+  color: var(--state-info-text);
+  background: var(--state-info-surface);
+  border: 1px solid var(--state-info-border);
+  border-radius: var(--radius-control);
+}
+@container sh-main (max-width: 700px) {
+  .sh-num-split { grid-template-columns: minmax(0, 1fr); }
+  .sh-num-example { position: static; }
+}
+
+/* "Advanced" fold inside a card: closed by default, the shop owner opens it. */
+.sh-advanced { margin-block-start: var(--space-comfy); border-block-start: 1px solid var(--border-default); padding-block-start: var(--space-base); }
+.sh-advanced > summary {
+  min-block-size: var(--touch-target-min);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: var(--text-size-body);
+  font-weight: var(--text-weight-semibold);
+  color: var(--text-secondary);
+}
+.sh-advanced > summary:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.sh-advanced[open] > summary { margin-block-end: var(--space-base); }
+.sh-embedded { margin: 0; box-shadow: none; }
+
 /* The unsaved bar: sticky at the bottom of the pane, present only when
  * something changed. [hidden] must win over display:flex. */
 .sh-savebar {
@@ -161,8 +245,35 @@
   border-radius: var(--radius-card);
 }
 .sh-savebar[hidden] { display: none; }
+/* While the bar is up, anything scrolled into view (a field being tabbed to, the
+ * example beside it) is kept clear of it instead of landing underneath. */
+#sub-content:has(#sh-savebar:not([hidden])) { scroll-padding-block-end: 6rem; }
 .sh-savebar-msg { font-size: var(--text-size-body); font-weight: var(--text-weight-semibold); color: var(--text-primary); }
 .sh-savebar-actions { display: flex; gap: var(--space-base); }
+/* Names the sections that still hold unsaved changes (P1b F6); each name opens it. */
+.sh-savebar-where { flex: 1 1 auto; font-size: var(--text-size-meta); color: var(--text-secondary); }
+.sh-savebar-where:empty { display: none; }
+.sh-savebar-link {
+  min-block-size: var(--touch-target-min);
+  padding-inline: var(--space-tight);
+  font: inherit;
+  color: var(--text-primary);
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.sh-savebar-link:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Form column needs >= 360px beside a 280px paper and the gap: below ~700px of
+ * main-column width, stack the paper under the form. */
+@container sh-main (max-width: 700px) {
+  .sh-split { grid-template-columns: minmax(0, 1fr); }
+  .sh-preview { position: static; }
+}
 
 @media (max-width: 900px) {
   .settings-hub { grid-template-columns: minmax(0, 1fr); }

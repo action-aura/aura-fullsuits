@@ -236,6 +236,15 @@ _CAP_PHRASE = {
     user_accounts.CAP_CASH_CLOSE: 'close their own drawer',
     user_accounts.CAP_CASH_APPROVE: 'approve',
     user_accounts.CAP_EMPLOYEES: 'employee',
+    # Registry v9 (2026-09-29) added the four books codes. Neither role this
+    # screen assigns holds any of them (only the owner and the Accountant
+    # preset do), so all four share one word that must appear in NEITHER
+    # clause -- the "and no others" half below then fails if the explainer
+    # ever starts promising a cashier or a manager the books.
+    user_accounts.CAP_BOOKS_VIEW: 'books',
+    user_accounts.CAP_BOOKS_RECORD: 'books',
+    user_accounts.CAP_BOOKS_APPROVE: 'books',
+    user_accounts.CAP_BOOKS_CLOSE: 'books',
 }
 
 

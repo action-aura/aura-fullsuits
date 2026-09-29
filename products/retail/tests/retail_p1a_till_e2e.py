@@ -606,6 +606,13 @@ with sync_playwright() as p:
         # (retail_p1b_hub_e2e.py covers the hub's own layout).
         owner.wait_for_selector('#sh-root .sh-nav-item[data-sh="tills"]', timeout=8000)
         owner.click('#sh-root .sh-nav-item[data-sh="tills"]')
+        # P1b numbering merge: for the OWNER the numbering books now sit under the
+        # "Advanced" fold of the Receipt numbers card (closed by default), so open it
+        # like a person would before waiting for the card to be visible. What this can
+        # no longer catch: "the books list is on the first screen of the Tills section";
+        # it is two clicks away now (the hub e2e covers the fold's own behaviour).
+        owner.wait_for_selector("#numbering-advanced > summary", timeout=8000)
+        owner.click("#numbering-advanced > summary")
         owner.wait_for_selector("#doc-series-card", timeout=8000)
         assert owner.query_selector('button:has-text("Create Book")') is not None, \
             "the owner must see the Create Book button"

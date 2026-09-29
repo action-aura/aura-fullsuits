@@ -2936,6 +2936,8 @@ const RetailSystem = {
         </div>
       </div>
 
+      <div id="setup-guide-mount"></div>
+
       <section class="rdash-answer">
         <div class="rdash-answer-label">${t('Today so far')}</div>
         <div class="rdash-answer-figure">
@@ -3013,6 +3015,16 @@ const RetailSystem = {
         </div>
       </div>
       </div>`;
+
+    // "Get your shop ready" (Phase 1b item 5). setup-guide.js draws a card in
+    // the mount point ABOVE for the owner only, and clears it at 100%. Not
+    // awaited on purpose: the sales figures below must never wait for the
+    // checklist, and a missing script or a failing route just leaves the slot
+    // empty.
+    if (window.AuraSetupGuide && typeof window.AuraSetupGuide.mount === 'function') {
+      const guideSlot = document.getElementById('setup-guide-mount');
+      if (guideSlot) Promise.resolve(window.AuraSetupGuide.mount(guideSlot)).catch(() => {});
+    }
 
     try {
       const d = (await this._get('/api/sub/retail/dashboard/stats')).data || {};
@@ -9164,6 +9176,9 @@ const RetailSystem = {
           icon: 'users',
           title: t('No customers yet'),
           hint: t('Customers you add at the till will appear here, with what they owe and what they have spent.'),
+          // A teaching empty state says what to do next AND offers the doing
+          // (the header's own button, repeated where the eye already is).
+          actions: [{ label: t('Add Customer'), onclick: 'RetailSystem._openAddCustomer()', primary: true }],
         })}</td></tr>`;
         return;
       }
@@ -11767,7 +11782,7 @@ const RetailSystem = {
           ${t('No timezone is declared. Until you set one, each device files sales on its own clock -- so two tills whose clocks differ can put the same evening on different days.')}
         </div>
         <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-          <div class="ret-field" style="margin:0"><label for="business-day-tz">${t('Timezone')}</label>
+          <div class="ret-field" style="margin:0"><label for="business-day-tz">${t('Your shop\'s time zone')}</label>
             <input type="text" id="business-day-tz" dir="ltr" list="business-day-tz-list" maxlength="64" placeholder="Asia/Amman" />
             <datalist id="business-day-tz-list">
               <option value="Asia/Amman"></option>
@@ -12066,7 +12081,10 @@ const RetailSystem = {
       SubsystemApp.showToast(t('Error'), 'error');
     }
     if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
-    await this._loadEinvoicingCard();
+    // Reload only on success: after a refusal the hub keeps the choice the
+    // person made (the bar is still up) instead of snapping the select back to
+    // the saved regime and dropping the bar (P1b verifier F8).
+    if (ok || !window.SettingsHub) await this._loadEinvoicingCard();
     return ok;
   },
 
@@ -12171,6 +12189,7 @@ const RetailSystem = {
       branding_receipt_show_cashier: String(!!document.getElementById('brand-show-cashier')?.checked),
       branding_receipt_show_customer: String(!!document.getElementById('brand-show-customer')?.checked),
     };
+    this._brandingSaveState = 'failed'; // read by the Settings hub after a false answer
     try {
       const resp = await this._post('/api/sub/retail/settings/branding', payload);
       if (!resp || resp.status !== 'success') {
@@ -12178,8 +12197,35 @@ const RetailSystem = {
         return false;
       }
       const fileInput = document.getElementById('brand-logo-file');
+      this._brandingSaveState = 'saved';
       if (fileInput && fileInput.files && fileInput.files[0]) {
-        await this._uploadBrandingLogo(fileInput.files[0]);
+        const up = await this._uploadBrandingLogo(fileInput.files[0]);
+        if (!up.ok) {
+          // The text half IS saved; the logo half was refused. Report a
+          // failure (so the hub keeps the branding group dirty), say both
+          // halves in one toast, and put the thumbnail back to what the
+          // SERVER has -- not the refused file.
+          this._brandingSaveState = 'logo-refused';
+          const preview = document.getElementById('brand-logo-preview');
+          let serverHasLogo = false;
+          try {
+            const cur = await this._get('/api/sub/retail/settings/branding');
+            serverHasLogo = !!(cur && cur.data && cur.data.has_logo);
+            this._brandingLoaded = Object.assign({}, this._brandingLoaded || {}, (cur && cur.data) || {});
+          } catch (e) { /* keep going: the toast below is the important part */ }
+          if (preview && !serverHasLogo) { preview.style.display = 'none'; preview.removeAttribute('src'); }
+          if (preview && serverHasLogo) {
+            // The server keeps its OLD logo: show that one, not the refused file.
+            try {
+              const lr = await this._get('/api/sub/retail/settings/branding/logo');
+              const uri = lr && lr.data && lr.data.logo;
+              if (uri) { preview.src = uri; preview.style.display = ''; }
+            } catch (e) { /* best effort */ }
+          }
+          SubsystemApp.showToast(
+            t('The details were saved, but the logo was not: {reason}').replace('{reason}', up.message), 'error');
+          return false;
+        }
       }
       SubsystemApp.showToast(t('Branding saved.'), 'success');
       // Every saver on this screen answers true/false so the Settings hub's
@@ -12390,6 +12436,19 @@ const RetailSystem = {
   // Category/Branch/Supplier already cross, so every value below goes
   // through `this._esc` before it reaches the DOM, matching those
   // screens' own rendering discipline.
+  // The empty list's button: open whatever folds the form away (the hub keeps
+  // this card inside an Advanced disclosure), bring the form into view and put
+  // the cursor in its first field. It does not create anything by itself.
+  _focusNewDocSeries() {
+    const code = document.getElementById('doc-series-new-code');
+    if (!code) return;
+    for (let n = code.parentElement; n; n = n.parentElement) {
+      if (n.tagName === 'DETAILS') n.open = true;
+    }
+    code.scrollIntoView({ block: 'center' });
+    code.focus();
+  },
+
   async _loadDocSeriesCard() {
     try {
       const [seriesResp, branchesResp] = await Promise.all([
@@ -12411,7 +12470,17 @@ const RetailSystem = {
       const tbody = document.querySelector('#doc-series-table tbody');
       if (tbody) {
         if (!rows.length) {
-          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:20px">${t('No numbering books configured yet -- sales use the default receipt number until you create one.')}</td></tr>`;
+          // Teaching empty state. The button exists only when the "New Book"
+          // form does (owner only -- create_doc_series is owner-only on the
+          // server), so a manager is told what a book is but not offered a
+          // button that would answer 403.
+          const canCreate = !!document.getElementById('doc-series-new-code');
+          tbody.innerHTML = `<tr><td colspan="8">${this._emptyState({
+            icon: 'receipt',
+            title: t('No numbering books yet'),
+            hint: t('No numbering books configured yet -- sales use the default receipt number until you create one.'),
+            actions: canCreate ? [{ label: t('Create Book'), onclick: 'RetailSystem._focusNewDocSeries()', primary: true }] : [],
+          })}</td></tr>`;
         } else {
           tbody.innerHTML = rows.map(r => {
             const branchName = r.branch_uid ? (this._docSeriesBranchByUid[r.branch_uid] || t('Unknown branch')) : t('Any branch');
@@ -12495,14 +12564,14 @@ const RetailSystem = {
     try {
       const resp = await this._post(`/api/sub/retail/doc-series/${encodeURIComponent(id)}/allocator-claim`, {});
       if (!resp || resp.status !== 'success') {
-        SubsystemApp.showToast((resp && resp.message) || t('Could not claim this book.'), 'error');
+        SubsystemApp.showToast((resp && resp.message) || t('Could not use this book on this till.'), 'error');
         return;
       }
       SubsystemApp.showToast(t('This till now uses that book.'), 'success');
       await this._loadDocSeriesCard();
     } catch (e) {
       console.error(e);
-      SubsystemApp.showToast(t('Could not claim this book.'), 'error');
+      SubsystemApp.showToast(t('Could not use this book on this till.'), 'error');
     }
   },
 
@@ -12545,16 +12614,21 @@ const RetailSystem = {
     });
   },
 
+  // Answers {ok, message}. It no longer toasts by itself: _saveBranding is the
+  // one place that knows whether the TEXT half was saved, and the toast has to
+  // say both halves honestly (P1b verifier F4: a refused 340 KB logo used to
+  // end in "Branding saved." with the refused logo still in the preview).
   async _uploadBrandingLogo(file) {
     try {
       const dataUri = await this._readFileAsDataURL(file);
       const resp = await this._post('/api/sub/retail/settings/branding/logo', { logo: dataUri });
       if (!resp || resp.status !== 'success') {
-        SubsystemApp.showToast((resp && resp.message) || t('Could not save the logo.'), 'error');
+        return { ok: false, message: (resp && resp.message) || t('Could not save the logo.') };
       }
+      return { ok: true, message: '' };
     } catch (e) {
       console.error(e);
-      SubsystemApp.showToast(t('Could not save the logo.'), 'error');
+      return { ok: false, message: t('Could not save the logo.') };
     }
   },
 
@@ -12621,6 +12695,11 @@ const RetailSystem = {
       const d = await this._post(`/api/sub/retail/reorder-requests/${rid}/accept`, {});
       if (d && d.status === 'success') {
         SubsystemApp.showToast(d.data && d.data.po_number ? `${t('Purchase order drafted')}: \u2066${d.data.po_number}\u2069` : t('Request accepted'), 'success');
+        // The request just became a draft PO. The PO list sits on the same
+        // screen (Purchasing) and was loaded BEFORE the accept, so without this
+        // it kept saying "No purchase orders yet" right under a success toast
+        // (P1b verifier F5). Missing #po-table (older host screens) is a no-op.
+        await this._loadPurchaseOrders();
       } else {
         SubsystemApp.showToast((d && d.message) || t('Could not accept this request.'), 'error');
       }
@@ -12727,14 +12806,21 @@ const RetailSystem = {
         <button class="ret-btn ret-btn-primary" style="margin-top:12px" id="email-send-report-btn" onclick="RetailSystem._sendReportEmail()">${t('Queue Report Email')}</button>
       </div>
       <div class="sub-chart-card">
-        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Advanced (Retry Settings)')}</h3>
-        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('For whoever installed this system. A shopkeeper does not need to change these.')}</p>
-        <div class="ret-field-row">
-          <div class="ret-field" style="margin:0"><label for="email-max-attempts">${t('Max Attempts')}</label>
-            <input type="number" min="1" id="email-max-attempts" /></div>
-          <div class="ret-field" style="margin:0"><label for="email-submit-interval">${t('Retry Interval (Seconds)')}</label>
-            <input type="number" min="1" id="email-submit-interval" /></div>
-        </div>
+        <!-- P1b item 6: the retry numbers are for whoever installed the
+             system, so they sit behind a closed disclosure. The inputs stay
+             in the DOM (a closed <details> keeps its children), so
+             _saveEmailNotifications still reads them and Save still sends
+             them whether or not it was ever opened. -->
+        <details id="email-advanced">
+          <summary style="cursor:pointer;color:var(--text-primary);font-size:15px;font-weight:600">${t('Advanced')}</summary>
+          <p style="color:var(--text-muted);font-size:13px;margin:12px 0 16px">${t('For whoever installed this system. A shopkeeper does not need to change these.')}</p>
+          <div class="ret-field-row">
+            <div class="ret-field" style="margin:0"><label for="email-max-attempts">${t('Max Attempts')}</label>
+              <input type="number" min="1" id="email-max-attempts" /></div>
+            <div class="ret-field" style="margin:0"><label for="email-submit-interval">${t('Retry Interval (Seconds)')}</label>
+              <input type="number" min="1" id="email-submit-interval" /></div>
+          </div>
+        </details>
       </div>
       <button class="ret-btn ret-btn-primary" id="email-save-btn" onclick="RetailSystem._saveEmailNotifications()">${t('Save')}</button>
       <div class="sub-chart-card" style="margin-top:20px">
@@ -13373,6 +13459,7 @@ const RetailSystem = {
         icon: 'undo-2',
         title: t('No returns yet'),
         hint: t('Refunds you process at the till appear here, with what came back and how it was paid out.'),
+        actions: [{ label: t('Process Return'), onclick: 'RetailSystem._openCreateReturn()', primary: true }],
       })}</td></tr>`;
         return;
       }
@@ -14378,7 +14465,7 @@ const RetailSystem = {
     if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
       return this._renderCapabilityRestricted(c, {
         icon: '⚠️',
-        title: t('Exceptions'),
+        title: t('Needs review'),
         message: t('The exception queues are limited to managers and the store owner. Open the till to start ringing sales.'),
       });
     }
@@ -14393,7 +14480,13 @@ const RetailSystem = {
       conflicts: { state: 'checking', rows: [], error: '' },
       registry: { state: 'checking', rows: [], error: '' },
     };
+    // Sales from other computers that could not be added here (crew Q's
+    // sync-review.js). OWNER ONLY, at the TOP: its route is owner-only, so a
+    // manager who can reach this screen never gets a mount point at all.
+    const syncReviewHost = (window.SubsystemApp && SubsystemApp.role === 'admin' && window.SyncReview)
+      ? '<div id="exq-sync-review" style="margin:0 0 28px"></div>' : '';
     c.innerHTML = `
+      ${syncReviewHost}
       <p style="color:var(--text-muted);font-size:13px;margin:0 0 22px;max-width:780px;line-height:1.7">
         ${t('Three queues for things the software could not resolve on its own. A human decides what happens next.')}
       </p>
@@ -14418,6 +14511,8 @@ const RetailSystem = {
         </p>
         <div id="exq-registry-body">${this._exqRegistryPanel()}</div>
       </section>`;
+    const reviewEl = syncReviewHost ? c.querySelector('#exq-sync-review') : null;
+    if (reviewEl) window.SyncReview.render(reviewEl);
     await Promise.all([
       this._loadExceptionStock(), this._loadExceptionConflicts(), this._loadExceptionRegistry(),
     ]);
@@ -15000,7 +15095,7 @@ const RetailSystem = {
     if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
       return this._renderCapabilityRestricted(c, {
         icon: '⚖️',
-        title: t('Stock Accuracy'),
+        title: t('Stock records check'),
         message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
       });
     }
@@ -15018,7 +15113,7 @@ const RetailSystem = {
     if (window.SubsystemApp && SubsystemApp.role && SubsystemApp.role !== 'admin') {
       return this._renderCapabilityRestricted(c, {
         icon: '⚖️',
-        title: t('Stock Accuracy'),
+        title: t('Stock records check'),
         message: t('Comparing the whole catalogue against the stock ledger is limited to the store owner.'),
       });
     }
@@ -15034,7 +15129,7 @@ const RetailSystem = {
                 onclick="RetailSystem._loadStockAccuracy()">${t('Run the check again')}</button>
       </div>
       <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;max-width:780px;line-height:1.7">
-        ${t('Every stock figure in this product is a cached total. This compares each one against the movement ledger it is supposed to be a cache of, and lists the ones that disagree.')}
+        ${t('Does each item\'s total match its recorded movements?')}
       </p>
       <div id="stka-body">${this._stockAccuracyPanel()}</div>`;
     await this._loadStockAccuracy();
@@ -15081,7 +15176,7 @@ const RetailSystem = {
       if (!res || res.status !== 'success' || !res.data) {
         s.state = 'failed';
         s.data = null;
-        s.error = (res && (res.message || res.error)) || t('Could not check stock accuracy.');
+        s.error = (res && (res.message || res.error)) || t('Could not check the stock records.');
       } else {
         s.data = res.data;
         s.error = '';
@@ -15098,7 +15193,7 @@ const RetailSystem = {
       if (this._isStaleOp('stockAccuracy', opToken)) return;
       s.state = 'failed';
       s.data = null;
-      s.error = t('Could not check stock accuracy.');
+      s.error = t('Could not check the stock records.');
     }
     this._paintStockAccuracy();
   },
@@ -15258,7 +15353,7 @@ const RetailSystem = {
     return `
       <div class="sub-chart-card" data-sa-state="failed" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
         <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('triangle-alert', '⚠️')}</div>
-        <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('The stock accuracy check did not run.')}</h3>
+        <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('The stock records check did not run.')}</h3>
         <p style="color:var(--text);font-size:13px;margin:0 0 8px;line-height:1.7">${this._esc(s.error || '')}</p>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('This is not the same as finding no problems. Nothing was compared, so nothing is known.')}</p>
         <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._loadStockAccuracy()">${t('Try the check again')}</button>
@@ -16305,8 +16400,8 @@ const RetailSystem = {
             <label for="sc-mode">Input Mode</label>
             <select id="sc-mode">
               <option value="auto"     ${cfg.inputMode === 'auto' ? 'selected' : ''}>${t('Auto Detect (recommended)')}</option>
-              <option value="keyboard" ${cfg.inputMode === 'keyboard' ? 'selected' : ''}>${t('Keyboard HID')}</option>
-              <option value="serial" disabled>${t('Serial / COM — coming soon')}</option>
+              <option value="keyboard" ${cfg.inputMode === 'keyboard' ? 'selected' : ''}>${t('USB scanner')}</option>
+              <option value="serial" disabled>${t('Serial scanner — coming soon')}</option>
             </select>
           </div>
 
@@ -16353,27 +16448,43 @@ const RetailSystem = {
   // now a method so the Settings hub (settings-hub.js, section `hardware`)
   // can mount it; the scanner screen only keeps a pointer (_printerMovedNote).
   // Markup is byte-for-byte the old card plus id="printer-card".
+  // F12 (P1b verifier): the printer/drawer server routes are CAP_EMPLOYEES, so a
+  // cashier or a plain manager who sees the buttons gets a 403 toast on every
+  // click. Same two axes as the Settings hub's own canDevice().
+  _canUsePrinterServer() {
+    const app = window.SubsystemApp;
+    if (!app) return true; // no shell (standalone fixtures): fail open like the hub
+    return app.role === 'admin' ||
+      (typeof app.hasCapability === 'function' && !!app.hasCapability('retail.employees'));
+  },
+
   _printerCardHtml() {
+    const canServer = this._canUsePrinterServer();
     return `
         <!-- Receipt Printer (Wave 1B, Part O/P/Q) -->
         <div class="sub-chart-card" id="printer-card">
-          <div class="sub-chart-title" style="margin-bottom:14px">${this._icon('printer', 18, '🖨️')} Receipt Printer</div>
+          <div class="sub-chart-title" style="margin-bottom:14px">${this._icon('printer', 18, '🖨️')} ${this._esc(t('Receipt Printer'))}</div>
           <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px">
-            Uses your Windows-installed printer through the normal print dialog — works with a
-            thermal receipt printer (via its own Windows driver), a regular printer, or a PDF
-            printer. There is no separate USB/Bluetooth thermal protocol implemented.
+            ${this._esc(t('Uses your Windows-installed printer through the normal print dialog — works with a thermal receipt printer (via its own Windows driver), a regular printer, or a PDF printer. There is no separate USB/Bluetooth thermal protocol implemented.'))}
           </p>
           <div class="ret-field">
-            <label for="pr-width">Paper Width</label>
+            <label for="pr-width">${this._esc(t('Paper Width'))}</label>
             <select id="pr-width">
               <option value="80mm" ${(this._printerCfg().paperWidth !== '58mm') ? 'selected' : ''}>${t('80mm (standard)')}</option>
               <option value="58mm" ${(this._printerCfg().paperWidth === '58mm') ? 'selected' : ''}>${t('58mm (compact)')}</option>
             </select>
           </div>
           <div style="display:flex;gap:10px;margin-top:6px">
-            <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._savePrinterSettings()">Save</button>
-            <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._testPrint()">Test Print</button>
+            <button class="ret-btn ret-btn-ghost" style="flex:1" id="pr-save-btn" onclick="RetailSystem._savePrinterSettings()">${this._esc(t('Save'))}</button>
+            <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._testPrint()">${this._esc(t('Test Print'))}</button>
           </div>
+          ${canServer ? this._printerHardwareHtml() : `<p id="pr-hw-readonly-note" style="border-top:1px solid var(--border-default);margin:16px 0 0;padding-top:14px;color:var(--text-muted);font-size:12px">${this._esc(t('The printer device and the cash drawer test are set up by the shop owner or a manager with permission.'))}</p>`}
+        </div>
+`;
+  },
+
+  _printerHardwareHtml() {
+    return `
 
           <!-- Hardware (ESC/POS) printer -- Wave 1B follow-up, escpos_receipt.py
                /escpos_transport.py (commit f606739). Separate from the Paper
@@ -16438,18 +16549,20 @@ const RetailSystem = {
               <label for="pr-auto-kick" style="margin:0;text-transform:none;font-size:13px;color:var(--text-primary)">${this._esc(t('Open the drawer automatically on a cash sale'))}</label>
             </div>
           </div>
-        </div>
 `;
   },
 
   // Mounts the printer card into `host` and fills the device list. Every
   // helper it drives (_savePrinterSettings/_testPrint/_testEscPosPrint) reads
   // its inputs by id, so it works wherever the card sits.
+  // Answers the device-list load, so the Settings hub can take its baseline
+  // only AFTER the device select holds the saved printer (else the bar would
+  // flash "unsaved" while the list loads).
   _mountPrinterCard(host) {
-    if (!host) return;
+    if (!host) return Promise.resolve();
     this._injectStyles();
     host.innerHTML = this._printerCardHtml();
-    this._loadPrinterDevices();
+    return this._loadPrinterDevices();
   },
 
   // The scanner screen no longer hosts the printer/drawer test. Say where it
@@ -16555,22 +16668,31 @@ const RetailSystem = {
     // merge semantics of its own), so every field this screen owns has to
     // be included explicitly here or a save from this button would erase
     // whatever _testEscPosPrint's device select had already remembered.
-    const device = document.getElementById('pr-device')?.value || '';
+    //
+    // P1b F12: a person who may not use the printer server (cashier, plain
+    // manager) is not shown the device / host / port / drawer fields at all, so
+    // a Save from them must KEEP what is stored, not overwrite it with blanks.
+    const stored = this._printerCfg();
+    const has = (id) => !!document.getElementById(id);
+    const device = has('pr-device') ? (document.getElementById('pr-device').value || '') : (stored.printer || '');
     // retail-hardware-viewports: the auto-kick-on-cash-sale toggle lives in
     // this SAME blob (see _printerCfg's own comment) -- same reasoning as
     // `device` above, or a Save here would silently turn it back off.
-    const autoKick = !!document.getElementById('pr-auto-kick')?.checked;
+    const autoKick = has('pr-auto-kick') ? !!document.getElementById('pr-auto-kick').checked : !!stored.autoKick;
     // retail-hardware-viewports: the network printer host/port live in this
     // SAME blob (see _printerCfg's own comment) -- same reasoning as
     // `device`/`autoKick` above, or a Save here would silently erase them.
     // An out-of-range or non-numeric port falls back to 9100 rather than
     // saving garbage a later kick/test would just fail on with a confusing
     // error -- matches escpos_transport.send_to_network's own default.
-    const host = (document.getElementById('pr-host')?.value || '').trim();
-    const portRaw = +(document.getElementById('pr-port')?.value);
+    const host = has('pr-host') ? (document.getElementById('pr-host').value || '').trim() : (stored.host || '');
+    const portRaw = has('pr-port') ? +(document.getElementById('pr-port').value) : +(stored.port);
     const port = (Number.isInteger(portRaw) && portRaw >= 1 && portRaw <= 65535) ? portRaw : 9100;
     this.savePrinterCfg({ paperWidth: width, printer: device, autoKick, host, port });
     SubsystemApp.showToast(t('Printer settings saved'), 'success');
+    // The Settings hub's one Save bar reads this (it is a device-local save:
+    // localStorage, no server round trip, so it cannot be refused).
+    return true;
   },
 
   // Uses clearly-marked synthetic data (never a real sale) so testing the
@@ -16583,6 +16705,16 @@ const RetailSystem = {
       lines: [{ name: 'Test Product (sample)', quantity: 1, line_total: 10 }],
       subtotal: 10, discount_amount: 0, tax_amount: 0, total: 10, amount_paid: 10, change: 0,
     });
+    // A receipt really went to the browser's print dialog: that closes the
+    // setup checklist's "Send a test receipt" step (browser-only knowledge).
+    this._tickSetupStep('printer_tested');
+  },
+
+  // Tell the setup checklist a client-only step is done. Never throws: the
+  // checklist is optional (its script may not be loaded) and a print test must
+  // not fail because of it.
+  _tickSetupStep(id) {
+    try { if (window.AuraSetupGuide && typeof window.AuraSetupGuide.tick === 'function') window.AuraSetupGuide.tick(id, true); } catch (e) { /* the checklist is optional */ }
   },
 
   // ── Hardware (ESC/POS) printer -- Wave 1B follow-up ─────────────────────────
@@ -16654,6 +16786,9 @@ const RetailSystem = {
             kick ? t('Drawer kick sent to the printer') : t('Test receipt sent to the printer'),
             'success',
           );
+          // Only a real receipt counts for the setup checklist: a file written
+          // (no printer chosen) or a drawer kick is not a test of the printer.
+          if (!kick) this._tickSetupStep('printer_tested');
         } else {
           // No printer selected -- a file was written instead. This is the
           // pipeline working as designed for a shop with no printer

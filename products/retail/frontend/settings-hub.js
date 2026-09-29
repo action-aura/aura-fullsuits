@@ -69,10 +69,20 @@
     numbering: null,     // last GET /numbering data
     ready: false,        // true once the baseline is taken; refreshBar records only then
     carry: null,         // unsaved values to bring back across a theme / language re-render
+    holding: {},         // group name -> true while its fields are still loading (never "dirty")
   };
 
+  // `section` says which left-hand section a group's fields live in, so the bar
+  // can name (and link to) the section that still has unsaved changes (F6).
+  //
+  // Tax mode and the default tax rate are SEPARATE groups on purpose (F3): they
+  // are two different server calls, so one can be saved while the other is
+  // refused, and each needs its own baseline. As one group, "mode saved, rate
+  // refused, Discard" put the OLD mode back on screen while the server held the
+  // new one.
   const GROUPS = {
     brand: {
+      section: 'shop-receipt',
       fields: ['brand-name', 'brand-tax', 'brand-address', 'brand-phone', 'brand-header', 'brand-footer',
         'brand-receipt-lang', 'brand-show-cashier', 'brand-show-customer', 'brand-whatsapp', 'brand-logo-file'],
       save: () => R()._saveBranding().then(async (ok) => {
@@ -82,47 +92,62 @@
           const f = $('brand-logo-file');
           if (f) f.value = '';
           await R()._loadBrandingForm();
+          return true;
         }
-        return ok;
+        if (R()._brandingSaveState === 'logo-refused') {
+          // The details went through and the LOGO did not. Re-base every text
+          // field (the server has them now) but keep the old picker baseline, so
+          // the group stays dirty on the logo alone: the bar stays up, the
+          // refused file stays chosen, and the preview shows the server's logo
+          // (the saver put it back). Discard then clears the picker.
+          const keepFile = (S.baseline.brand || {})['brand-logo-file'];
+          const snap = snapGroup('brand');
+          snap['brand-logo-file'] = keepFile === undefined ? '' : keepFile;
+          S.baseline.brand = snap;
+          schedulePreview(0);
+        }
+        return false;
       }),
     },
-    tax: {
-      fields: ['tax-mode', 'tax-default-rate'],
+    taxMode: {
+      section: 'tax',
+      fields: ['tax-mode'],
       save: async () => {
-        const now = snapGroup('tax');
-        const was = S.baseline.tax || {};
-        let ok = true;
-        if ('tax-mode' in now && now['tax-mode'] !== was['tax-mode']) {
-          try {
-            const resp = await R()._post('/api/sub/retail/settings/tax', { tax_calculation_mode: now['tax-mode'] });
-            if (!resp || resp.status !== 'success') {
-              toast((resp && resp.message) || t('Could not save the tax setting.'), 'error');
-              ok = false;
-            } else {
-              toast(t('Tax setting saved.'), 'success');
-            }
-          } catch (e) {
-            console.error(e);
-            toast(t('Could not save the tax setting.'), 'error');
-            ok = false;
+        try {
+          const resp = await R()._post('/api/sub/retail/settings/tax', { tax_calculation_mode: $('tax-mode').value });
+          if (!resp || resp.status !== 'success') {
+            toast((resp && resp.message) || t('Could not save the tax setting.'), 'error');
+            return false;
           }
+          toast(t('Tax setting saved.'), 'success');
+          return true;
+        } catch (e) {
+          console.error(e);
+          toast(t('Could not save the tax setting.'), 'error');
+          return false;
         }
-        if ('tax-default-rate' in now && now['tax-default-rate'] !== was['tax-default-rate']) {
-          if (!(await R()._saveDefaultTaxRate())) ok = false;
-        }
-        return ok;
       },
     },
+    taxRate: { section: 'tax', fields: ['tax-default-rate'], save: () => R()._saveDefaultTaxRate() },
     credit: {
+      section: 'credit',
       fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty'],
       save: () => saveCredit(),
     },
-    deviceBranch: { fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
-    businessDay: { fields: ['business-day-tz', 'business-day-hour'], save: () => R()._saveBusinessDay() },
-    numbering: { fields: ['num-branch-code', 'num-readable'], save: () => saveNumbering() },
-    einvoice: { fields: ['einvoicing-regime'], save: () => R()._saveEinvoicingRegime() },
+    deviceBranch: { section: 'tills', fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
+    businessDay: { section: 'tills', fields: ['business-day-tz', 'business-day-hour'], save: () => R()._saveBusinessDay() },
+    numbering: { section: 'tills', fields: ['num-branch-code', 'num-readable', 'num-till'], save: () => saveNumbering() },
+    einvoice: { section: 'tax', fields: ['einvoicing-regime'], save: () => R()._saveEinvoicingRegime() },
+    // Device-local (F7): saved to this computer's localStorage, not the server,
+    // so it cannot be refused. It joins the one bar instead of keeping a Save
+    // button of its own.
+    printer: {
+      section: 'hardware',
+      fields: ['pr-width', 'pr-device', 'pr-host', 'pr-port', 'pr-auto-kick'],
+      save: async () => !!R()._savePrinterSettings(),
+    },
   };
-  const GROUP_ORDER = ['brand', 'tax', 'credit', 'deviceBranch', 'businessDay', 'numbering', 'einvoice'];
+  const GROUP_ORDER = ['brand', 'taxMode', 'taxRate', 'credit', 'deviceBranch', 'businessDay', 'numbering', 'einvoice', 'printer'];
 
   function fieldValue(el) {
     return el.type === 'checkbox' ? !!el.checked : String(el.value == null ? '' : el.value);
@@ -140,15 +165,38 @@
   function rebaselineAll() { GROUP_ORDER.forEach(rebaseline); }
   function dirtyGroups() {
     return GROUP_ORDER.filter((g) => {
+      if (S.holding[g]) return false; // still loading: its fields are not real values yet
       const now = snapGroup(g);
       if (!Object.keys(now).length) return false;
       return !sameSnap(now, S.baseline[g] || {});
     });
   }
+
+  // The sections that still hold unsaved changes, in left-hand order, so the bar
+  // can name them (F6). After a multi-section Save where one section was refused,
+  // the person is otherwise looking at a bar with no hint of WHERE.
+  function dirtySections(groups) {
+    const seen = [];
+    (groups || dirtyGroups()).forEach((g) => { const s = GROUPS[g].section; if (seen.indexOf(s) === -1) seen.push(s); });
+    return SECTION_ORDER.filter((s) => seen.indexOf(s) !== -1);
+  }
+  function drawWhere(groups) {
+    const box = $('sh-savebar-where');
+    if (!box) return;
+    const labels = {};
+    sections().forEach((s) => { labels[s.id] = s.label; });
+    const ids = dirtySections(groups);
+    box.innerHTML = ids.length
+      ? esc(t('Unsaved in:')) + ' ' + ids.map((id) =>
+        `<button type="button" class="sh-savebar-link" data-sh-goto="${esc(id)}">${esc(labels[id] || id)}</button>`).join(', ')
+      : '';
+  }
   function refreshBar() {
     const bar = $('sh-savebar');
     if (!bar) return;
-    bar.hidden = dirtyGroups().length === 0;
+    const groups = dirtyGroups();
+    bar.hidden = groups.length === 0;
+    drawWhere(groups);
     liftToasts(!bar.hidden);
     recordCarry();
   }
@@ -162,13 +210,28 @@
   // They come back ONLY when the re-render was caused by such a switch: the
   // stamp differs from the one recorded, and it happens within moments. A plain
   // navigation away and back leaves the stamp unchanged, so it starts clean --
-  // this is NOT a leave guard (navigating away still loses unsaved changes; that
-  // guard waits for the shell to offer a hook).
+  // this is NOT the leave guard (hubLeaveGuard below asks before leaving; this
+  // only survives the re-render a theme / language switch causes).
+  //
+  // P1b verifier F2: the first version brought stale values back too eagerly --
+  // type, navigate AWAY, switch the theme elsewhere, come back within 15 s, and
+  // the abandoned name was there (and a Save would have stored it); and an
+  // owner's unsaved choice appeared in the NEXT signed-in user's hub. So a
+  // carry now also needs ALL of:
+  //   * the same signed-in person that typed it (whoAmI);
+  //   * the hub still on screen when the theme / language switch happened --
+  //     watchHubLeft() drops the carry the moment the hub is taken off the page
+  //     for any reason other than that switch;
+  //   * it is used once (takeCarry empties it) and expires after 15 s.
   const CARRY_MAX_AGE_MS = 15000;
   const CARRY_SKIP = ['brand-logo-file']; // a file input cannot be filled from script
   function envStamp() {
     return (document.documentElement.getAttribute('data-theme') || '') + '|' +
       ((window.AuraI18n && AuraI18n.current) || '');
+  }
+  function whoAmI() {
+    const u = (window.SubsystemApp && SubsystemApp.currentUser) || {};
+    return String(u.id != null ? u.id : (u.email || u.username || u.name || ''));
   }
   function recordCarry() {
     if (!S.ready) return; // before the baseline exists every field looks dirty
@@ -181,14 +244,69 @@
       });
     });
     S.carry = Object.keys(values).length
-      ? { values, section: S.current, env: envStamp(), at: Date.now() }
+      ? { values, section: S.current, env: envStamp(), at: Date.now(), who: whoAmI() }
       : null;
   }
   function takeCarry() {
     const c = S.carry;
     S.carry = null;
-    if (!c || c.env === envStamp() || Date.now() - c.at > CARRY_MAX_AGE_MS) return null;
+    if (!c || c.env === envStamp() || c.who !== whoAmI() || Date.now() - c.at > CARRY_MAX_AGE_MS) return null;
     return c;
+  }
+  // The hub leaving the page for a reason that is NOT a theme / language switch
+  // (navigating to another section, signing out, a relogin) forgets the carry.
+  // The check runs in a microtask after the DOM change, by which time the
+  // theme/language attribute has already changed if a switch caused it -- in
+  // that case the carry is exactly what the next hub render is about to take.
+  let watchedRoot = null;
+  let leaveObserver = null;
+
+  // ── the "Discard unsaved changes?" leave warning ───────────────────────────
+  // Every way out of the hub (sidebar, phone tabs, More sheet, Ctrl+K, sign
+  // out) goes through app-shell's _navigate / logout, which ask the guards
+  // registered here first. The hub registers ONE guard while it is on screen
+  // and drops it the moment it is not (a guard left behind would question the
+  // person on every other screen). Answering Yes puts the saved values back and
+  // lets them go; No keeps them on the screen with every typed value and the
+  // Save bar exactly as they were. Sections inside the hub are not "leaving".
+  let dropLeaveGuard = null;
+  function unregisterHubGuard() {
+    if (dropLeaveGuard) { try { dropLeaveGuard(); } catch (e) { /* nothing to undo */ } }
+    dropLeaveGuard = null;
+  }
+  async function hubLeaveGuard() {
+    // A guard that outlived its screen must not ask about a screen that is gone.
+    if (!S.root || !S.root.isConnected) { unregisterHubGuard(); return true; }
+    if (!dirtyGroups().length) return true;
+    const leave = await R()._confirm({
+      title: t('Discard unsaved changes?'),
+      message: t('You changed some settings and did not save them. If you leave now, they are lost.'),
+      confirmLabel: t('Discard'),
+      cancelLabel: t('Keep editing'),
+      danger: true,
+    });
+    if (!leave) return false;
+    await discard(); // also empties the carry, so a quick return does not bring the edits back
+    S.carry = null;
+    return true;
+  }
+  function registerHubGuard() {
+    unregisterHubGuard(); // a re-render must not stack a second copy
+    const shell = window.SubsystemApp;
+    if (!shell || typeof shell.registerLeaveGuard !== 'function') return;
+    dropLeaveGuard = shell.registerLeaveGuard(hubLeaveGuard);
+  }
+
+  function watchHubLeft(root) {
+    watchedRoot = root;
+    if (leaveObserver || typeof MutationObserver === 'undefined') return;
+    leaveObserver = new MutationObserver(() => {
+      if (!watchedRoot || watchedRoot.isConnected) return;
+      watchedRoot = null;
+      unregisterHubGuard();
+      if (S.carry && S.carry.env === envStamp()) S.carry = null;
+    });
+    leaveObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
   }
   function applyCarry(c) {
     Object.keys(c.values).forEach((id) => {
@@ -401,17 +519,22 @@
     if (btn) btn.disabled = true;
     let done = 0;
     let failed = 0;
+    const failedNames = []; // P1b F13: the status names WHICH products were left alone
     for (let i = 0; i < products.length; i += 1) {
       say(t('Updating {done} of {n}…').replace('{done}', String(done)).replace('{n}', String(products.length)));
       try {
         const r = await R()._patch('/api/sub/retail/products/' + encodeURIComponent(products[i].id), { tax_rate: rate });
-        if (r && r.status === 'success') done += 1; else failed += 1;
-      } catch (e) { failed += 1; }
+        if (r && r.status === 'success') done += 1; else { failed += 1; failedNames.push(products[i].name || String(products[i].id)); }
+      } catch (e) { failed += 1; failedNames.push(products[i].name || String(products[i].id)); }
     }
     if (btn) btn.disabled = false;
     if (failed) {
-      say(t('Changed {done} of {n} products. {failed} could not be changed; press the button again to retry.')
-        .replace('{done}', String(done)).replace('{n}', String(products.length)).replace('{failed}', String(failed)));
+      const SHOWN = 5;
+      let names = failedNames.slice(0, SHOWN).join(', ');
+      if (failedNames.length > SHOWN) names += ' ' + t('and {more} more').replace('{more}', String(failedNames.length - SHOWN));
+      say(t('Changed {done} of {n} products. {failed} could not be changed: {names}. Press the button again to retry.')
+        .replace('{done}', String(done)).replace('{n}', String(products.length)).replace('{failed}', String(failed))
+        .replace('{names}', names));
       toast(t('Some products could not be changed.'), 'error');
     } else {
       say(t('Changed the tax rate of {n} products.').replace('{n}', String(done)));
@@ -419,31 +542,259 @@
     }
   }
 
-  // ── numbering: branch code + readable receipt numbers ─────────────────────
-  // Built against crew B's documented shape (numbering-shapes.md):
-  //   GET  /numbering -> {branch_uid, branch_code, default_branch_code,
-  //                       branch_code_is_saved, readable_enabled,
-  //                       preview:{sale, return}}
-  //   POST /numbering {branch_code?, readable_enabled?} -> same body
-  // Owner-only on the server. If the route is missing or refuses, the card
-  // says so plainly instead of showing fields that cannot save.
-  function numberingExample(code) {
-    const n = S.numbering;
-    if (!n || !n.preview) return null;
-    const cut = (s) => (s.indexOf(n.branch_code) === 0 ? code + s.slice(n.branch_code.length) : s);
-    return { sale: cut(String(n.preview.sale || '')), ret: cut(String(n.preview.return || '')) };
+  // ── numbering: readable receipt numbers for THIS computer + the branch code ──
+  // Crew B's route (retail_api.py, /numbering, owner-only):
+  //   GET  ?branch_uid&till_number -> {branch_uid, branch_name,
+  //          branch_code (null when the branch name has no Latin letters and
+  //            nothing is saved -- the field is then EMPTY and asks; a code is
+  //            never guessed here), branch_code_is_saved, branch_code_taken_by,
+  //          branch_code_note, readable_enabled, till_number, books_ready,
+  //          max_till_number, till_numbers_in_use, preview:{sale,return}|null,
+  //          preview_is_example, preview_note}
+  //   POST {branch_uid, branch_code?, readable_enabled?, till_number?} -> same
+  //          body. `readable_enabled:true` needs a till_number; the server never
+  //          picks one.
+  // The two notes come from the server in English; they are shown through t()
+  // with that exact English as the key, so an Arabic shop reads Arabic.
+  //
+  // MIRROR of the server's reserved list (retail_api._reserved_book_prefixes()).
+  // The server stays the authority and answers 400 for a code on it; the client
+  // copy only saves a round trip and lets the message be plain. If the server's
+  // list grows, a code missing here is still refused there (and mapped to a
+  // translated sentence by numberingErrorText) -- it just costs one round trip.
+  const RESERVED_CODES = ['CHQR', 'GS', 'HOLD', 'INC', 'PAY', 'PO', 'QUO', 'REC', 'RET', 'SALE'];
+  const CODE_RE = /^[A-Z]{2,4}$/;
+  const NOTE_KEEPS = 'This computer keeps numbering with its current books ({code}). The new branch code applies only to tills switched on afterwards.';
+  const NOTE_EXAMPLE = 'An example for till {n}. This computer is not switched on, so it still uses the long numbers.';
+
+  // `{slot}` fill without String.replace: a value such as "$&" must stay literal.
+  function fill(s, vars) {
+    let out = String(s);
+    Object.keys(vars).forEach((k) => { out = out.split('{' + k + '}').join(String(vars[k])); });
+    return out;
   }
+  function tillMax() { return (S.numbering && Number(S.numbering.max_till_number)) || 99; }
+
+  function serverNote(note, shownTill) {
+    if (!note) return '';
+    let m = /^This computer keeps numbering with its current books \((.*)\)\. The new branch code applies only to tills switched on afterwards\.$/.exec(note);
+    if (m) return fill(t(NOTE_KEEPS), { code: m[1] });
+    m = /^An example for till (\d+)\. This computer is not switched on, so it still uses the long numbers\.$/.exec(note);
+    if (m) return fill(t(NOTE_EXAMPLE), { n: shownTill != null ? shownTill : m[1] });
+    return t(note);
+  }
+
+  // Every 400 / 409 the route can answer, as a sentence in the person's own
+  // language. The 400s carry no `code`, only English `message`, so they are
+  // recognised by their wording; anything unrecognised gets the generic
+  // sentence -- never the raw English.
+  function numberingErrorText(resp) {
+    const msg = String((resp && resp.message) || '');
+    const kind = resp && resp.code;
+    let m;
+    if (kind === 'BRANCH_CODE_TAKEN') {
+      m = /^([A-Za-z]+) is already the code of (.+)\. Each branch needs its own code\.$/.exec(msg) ||
+        /^([A-Za-z]+) is also the code of (.+)\. Give this branch its own code first\.$/.exec(msg);
+      return m
+        ? fill(t('The code {code} already belongs to {name}. Each branch needs its own code.'), { code: m[1].toUpperCase(), name: m[2] })
+        : t('That branch code already belongs to another branch. Each branch needs its own code.');
+    }
+    if (kind === 'READABLE_NEEDS_DEVICE_REGISTRY') {
+      return t('Readable receipt numbers arrive with multi-computer support.');
+    }
+    if (kind === 'TILL_NUMBER_TAKEN') {
+      m = /^Till number (\d+) is already used/.exec(msg);
+      if (m) return fill(t('Till number {n} is already used by another computer. Choose a different number.'), { n: m[1] });
+      if (/^This computer already numbers its documents with/.test(msg)) {
+        return t('This computer already has readable numbers. Switch them off first, then choose a number.');
+      }
+      return t('That till number cannot be used. Choose a different number.');
+    }
+    if (/^The branch code must be 2 to 4 letters/.test(msg)) return t('The branch code must be 2 to 4 letters (A to Z).');
+    m = /^'?([A-Za-z]+)'? is already used at the start of other document numbers/.exec(msg);
+    if (m) return fill(t('"{code}" is already used at the start of other document numbers. Choose another code.'), { code: m[1].toUpperCase() });
+    if (/^Choose this computer's till number/.test(msg)) return fill(t("Choose this till's number, from 1 to {max}."), { max: tillMax() });
+    if (/no code yet/.test(msg)) return t('Choose a branch code first: 2 to 4 letters.');
+    if (/^This computer has no identity yet/.test(msg)) return t('This computer has no identity yet, so it cannot have its own numbers.');
+    if (/^This branch has no identity yet/.test(msg)) return t('This branch has no identity yet, so a code cannot be saved for it.');
+    if (/^Unknown branch/.test(msg)) return t('This branch was not found.');
+    return t('Could not save the receipt numbering.');
+  }
+
+  function showNumberingError(msg) {
+    const box = $('num-error');
+    if (!box) return;
+    box.textContent = msg || '';
+    box.hidden = !msg;
+  }
+
+  function parseTill(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!/^\d{1,2}$/.test(s)) return null;
+    const n = parseInt(s, 10);
+    return n >= 1 && n <= tillMax() ? n : null;
+  }
+
+  // What is wrong with the numbers as typed right now, in the person's words, or
+  // ''. `atSave` adds the "you switched it on but left something empty" checks
+  // that would only nag while the person is still typing.
+  function numberingProblem(atSave) {
+    const input = $('num-branch-code');
+    const cb = $('num-readable');
+    const till = $('num-till');
+    if (!input || !cb || !till) return '';
+    const n = S.numbering || {};
+    const raw = input.value.trim().toUpperCase();
+    const baseCode = (S.baseline.numbering || {})['num-branch-code'];
+    if (raw && !CODE_RE.test(raw)) return t('The branch code must be 2 to 4 letters (A to Z).');
+    if (atSave && !raw && baseCode) return t('The branch code must be 2 to 4 letters (A to Z).');
+    if (RESERVED_CODES.indexOf(raw) !== -1) {
+      return fill(t('"{code}" is already used at the start of other document numbers. Choose another code.'), { code: raw });
+    }
+    const turningOn = cb.checked && !n.readable_enabled;
+    if (atSave && turningOn) {
+      if (!raw) return t('Choose a branch code first: 2 to 4 letters.');
+      if (parseTill(till.value) == null) return fill(t("Choose this till's number, from 1 to {max}."), { max: tillMax() });
+    }
+    return '';
+  }
+
+  // The example, next to the fields. While this computer is switched on it is the
+  // server's REAL next number (the books decide, not today's code). Otherwise it
+  // is worked out from what is typed: <code><till>-000001, the same shape the
+  // server's own example has (doc_series.preview_next), so typing a code shows the
+  // answer at once instead of after a Save.
   function drawNumberingExample() {
     const box = $('num-preview');
     const input = $('num-branch-code');
     if (!box || !input) return;
-    const code = input.value.trim().toUpperCase();
-    const valid = /^[A-Z0-9]{2,4}$/.test(code);
-    const ex = numberingExample(valid ? code : (S.numbering && S.numbering.branch_code) || '');
-    if (!ex) { box.textContent = ''; return; }
-    box.innerHTML = `${esc(t('Sale'))}: <bdi dir="ltr">${esc(ex.sale)}</bdi> &nbsp; ${esc(t('Return'))}: <bdi dir="ltr">${esc(ex.ret)}</bdi>` +
-      (valid ? '' : `<br>${esc(t('Use 2 to 4 letters or digits.'))}`);
+    const n = S.numbering || {};
+    const noteBox = $('num-preview-note');
+    const bdi = (s) => `<bdi dir="ltr">${esc(s)}</bdi>`;
+    const line = (a, b) => `${esc(t('Sale'))}: ${bdi(a)}<br>${esc(t('Return'))}: ${bdi(b)}`;
+    let shownTill = null;
+    if (n.preview && n.preview_is_example === false) {
+      box.innerHTML = line(String(n.preview.sale || ''), String(n.preview.return || ''));
+    } else {
+      const raw = input.value.trim().toUpperCase();
+      const ok = CODE_RE.test(raw) && RESERVED_CODES.indexOf(raw) === -1;
+      const code = ok ? raw : (raw ? '' : (n.branch_code || ''));
+      const cb = $('num-readable');
+      const typed = parseTill($('num-till') && $('num-till').value);
+      shownTill = (cb && cb.checked && typed != null) ? typed : (typed != null ? typed : (n.till_number || 1));
+      if (!code) {
+        box.innerHTML = `<span class="sh-num-empty">${esc(t('Type a branch code to see an example.'))}</span>`;
+      } else {
+        const stem = `${code}${shownTill}`;
+        box.innerHTML = line(`${stem}-000001`, `${stem}-R-000001`);
+      }
+    }
+    if (noteBox) noteBox.textContent = serverNote(n.preview_note, shownTill);
   }
+
+  function drawTillNote() {
+    const note = $('num-till-note');
+    const n = S.numbering;
+    if (!note || !n) return;
+    const on = !!n.readable_enabled;
+    const parts = [on
+      ? t('This computer keeps this number while readable numbers are on. To change it, switch them off first.')
+      : fill(t('A number from 1 to {max}. It is never picked for you.'), { max: tillMax() })];
+    const used = (n.till_numbers_in_use || []).filter((x) => !(on && x === n.till_number));
+    if (used.length) parts.push(fill(t('Already used: {list}'), { list: used.join(', ') }));
+    const typed = parseTill($('num-till') && $('num-till').value);
+    // A hint only: the server is the authority on a taken number (409), so the
+    // person is told early but Save still asks the server.
+    if (!on && typed != null && used.indexOf(typed) !== -1) {
+      parts.push(fill(t('Till number {n} is already used.'), { n: typed }));
+    }
+    note.textContent = parts.join(' ');
+  }
+
+  // Fields that only make sense together: the till number shows once the switch
+  // is on, is fixed while the server has it on, and a number typed and then
+  // abandoned (switch turned off again) is cleared so it cannot leave the bar up.
+  function syncNumberingFields() {
+    const cb = $('num-readable');
+    const till = $('num-till');
+    const wrap = $('num-till-wrap');
+    const n = S.numbering;
+    if (!cb || !till || !wrap || !n) return;
+    if (!cb.checked && !n.readable_enabled) till.value = '';
+    wrap.hidden = !cb.checked;
+    till.readOnly = !!n.readable_enabled;
+    drawTillNote();
+  }
+
+  // The Save bar is sticky at the bottom of the window. Editing raises it, and it
+  // must never sit on top of the example the person is looking at while typing.
+  function keepExampleClear() {
+    const ex = $('num-example-card');
+    const bar = $('sh-savebar');
+    if (!ex || !bar || bar.hidden) return;
+    const eb = ex.getBoundingClientRect();
+    const bb = bar.getBoundingClientRect();
+    if (eb.bottom <= bb.top || eb.top >= bb.bottom) return;
+    ex.style.scrollMarginBlockEnd = Math.ceil(bb.height + 16) + 'px';
+    ex.scrollIntoView({ block: 'nearest' });
+  }
+
+  function renderNumberingBody(d) {
+    const host = $('numbering-codes-body');
+    if (!host) return;
+    const hasCode = !!d.branch_code;
+    const codeNote = !hasCode
+      ? t('This branch has no code yet. Choose 2 to 4 letters (A to Z) for it.')
+      : (d.branch_code_is_saved
+        ? t('2 to 4 letters (A to Z).')
+        : t('2 to 4 letters (A to Z). Filled in from the branch name until you change it.'));
+    // Readable numbers are UNAVAILABLE (the server says so with `available:false`)
+    // until multi-computer support can hand out till numbers safely. Everything
+    // that turns them ON stays in this file, behind `readableAvailable`, so
+    // enabling them later is the server flipping one answer, not a rewrite.
+    const readableAvailable = d.available !== false;
+    const reason = readableAvailable ? '' : (d.readable_switched_off_by_update
+      ? t('This computer was using readable numbers. An update switched them off until multi-computer support arrives, so it uses the long numbers again.')
+      : t('Readable receipt numbers arrive with multi-computer support.'));
+    host.innerHTML = `
+      <div class="sh-num-split">
+        <div class="sh-num-fields">
+          <div class="ret-field sh-num-switch">
+            <input type="checkbox" id="num-readable" ${readableAvailable ? '' : 'disabled aria-describedby="num-unavailable"'} />
+            <label for="num-readable">${esc(t('Readable receipt numbers on this computer'))}</label>
+          </div>
+          ${readableAvailable
+    ? `<p class="sh-note">${esc(t('Off keeps the numbering you have now. Turning it on only changes tills that open a new shift afterwards. Books already in use keep going.'))}</p>`
+    : `<p class="sh-num-unavailable" id="num-unavailable">${esc(reason)}</p>`}
+          <div class="ret-field" id="num-till-wrap" hidden>
+            <label for="num-till">${esc(t("This till's number"))}</label>
+            <input type="number" id="num-till" min="1" max="${esc(tillMax())}" step="1" inputmode="numeric" dir="ltr" />
+            <p class="sh-note" id="num-till-note"></p>
+          </div>
+          <div class="ret-field">
+            <label for="num-branch-code">${esc(t('Branch code'))}</label>
+            <input type="text" id="num-branch-code" dir="ltr" maxlength="4" autocapitalize="characters" autocomplete="off"
+              placeholder="${esc(t('For example ABD'))}" />
+            <p class="sh-note" id="num-code-note">${esc(codeNote)}</p>
+            <p class="sh-note" id="num-code-server-note">${esc(serverNote(d.branch_code_note))}</p>
+          </div>
+          <p class="sh-num-error" id="num-error" role="alert" hidden></p>
+        </div>
+        <aside class="sh-num-example" id="num-example-card" aria-label="${esc(t('Example'))}">
+          <h4 class="sh-num-example-title">${esc(t('Example'))}</h4>
+          <p class="sh-num-preview" id="num-preview"></p>
+          <p class="sh-note" id="num-preview-note"></p>
+        </aside>
+      </div>`;
+    $('num-branch-code').value = d.branch_code || '';
+    // While unavailable the switch always shows OFF, whatever the row still says.
+    $('num-readable').checked = readableAvailable && !!d.readable_enabled;
+    $('num-till').value = readableAvailable && d.readable_enabled && d.till_number != null ? String(d.till_number) : '';
+    if (!readableAvailable) $('num-till').disabled = true;
+    syncNumberingFields();
+    drawNumberingExample();
+  }
+
   async function loadNumbering() {
     const host = $('numbering-codes-body');
     if (!host) return;
@@ -458,58 +809,60 @@
       return;
     }
     S.numbering = d;
-    host.innerHTML = `
-      <div class="sh-row">
-        <div class="ret-field" style="margin:0">
-          <label for="num-branch-code">${esc(t('Branch code'))}</label>
-          <input type="text" id="num-branch-code" dir="ltr" maxlength="4" autocapitalize="characters" autocomplete="off" />
-          <p class="sh-note">${esc(t('2 to 4 letters or digits. Filled in from the branch name until you change it.'))}</p>
-        </div>
-      </div>
-      <div class="ret-field" style="margin-top:12px;display:flex;align-items:center;gap:10px">
-        <input type="checkbox" id="num-readable" style="width:auto" />
-        <label for="num-readable" style="margin:0;text-transform:none;font-size:14px;color:var(--text-primary)">${esc(t('Readable receipt numbers'))}</label>
-      </div>
-      <p class="sh-note">${esc(t('Off keeps the numbering you have now. Turning it on only changes tills that open a new shift afterwards. Books already in use keep going.'))}</p>
-      <p class="sh-num-preview" id="num-preview"></p>`;
-    $('num-branch-code').value = d.branch_code || '';
-    $('num-readable').checked = !!d.readable_enabled;
+    renderNumberingBody(d);
     rebaseline('numbering');
-    drawNumberingExample();
   }
+
   async function saveNumbering() {
     const input = $('num-branch-code');
     const cb = $('num-readable');
-    if (!input || !cb) return true;
+    const till = $('num-till');
+    if (!input || !cb || !till) return true;
+    const n = S.numbering || {};
     const base = S.baseline.numbering || {};
-    const code = input.value.trim().toUpperCase();
-    const body = {};
-    if (input.value !== base['num-branch-code']) {
-      if (!/^[A-Z0-9]{2,4}$/.test(code)) {
-        toast(t('The branch code must be 2 to 4 letters or digits.'), 'error');
-        return false;
-      }
-      body.branch_code = code;
+    // Refused HERE, before anything is sent: a reserved code or a non-letter
+    // never costs a round trip, and the person reads it in plain words.
+    const problem = numberingProblem(true);
+    if (problem) {
+      showNumberingError(problem);
+      toast(problem, 'error');
+      return false;
     }
-    if (cb.checked !== base['num-readable']) body.readable_enabled = cb.checked;
-    if (!Object.keys(body).length) return true;
+    // The switch is disabled while unavailable, so this only fires if the page was
+    // tampered with; it still must not send a request the server will refuse.
+    if (cb.checked && n.available === false && !n.readable_enabled) {
+      const msg = t('Readable receipt numbers arrive with multi-computer support.');
+      showNumberingError(msg);
+      toast(msg, 'error');
+      return false;
+    }
+    const body = { branch_uid: n.branch_uid };
+    if (input.value !== base['num-branch-code']) body.branch_code = input.value.trim().toUpperCase();
+    if (cb.checked !== !!base['num-readable']) {
+      body.readable_enabled = cb.checked;
+      if (cb.checked) body.till_number = parseTill(till.value);
+    }
+    if (Object.keys(body).length === 1) return true;
     try {
       const resp = await R()._post('/api/sub/retail/numbering', body);
       if (!resp || resp.status !== 'success') {
-        toast((resp && resp.message) || t('Could not save the receipt numbering.'), 'error');
+        const msg = numberingErrorText(resp);
+        showNumberingError(msg);
+        toast(msg, 'error');
         return false;
       }
+      showNumberingError('');
       if (resp.data) {
         S.numbering = resp.data;
-        input.value = resp.data.branch_code || code;
-        cb.checked = !!resp.data.readable_enabled;
-        drawNumberingExample();
+        renderNumberingBody(resp.data);
       }
       toast(t('Receipt numbering saved.'), 'success');
       return true;
     } catch (e) {
       console.error(e);
-      toast(t('Could not save the receipt numbering.'), 'error');
+      const msg = t('Could not save the receipt numbering.');
+      showNumberingError(msg);
+      toast(msg, 'error');
       return false;
     }
   }
@@ -520,24 +873,53 @@
   // receipt's own label translator. `sampleSale()` carries no `__preview`: the
   // very same object can be handed to a real print, which is how the tests
   // prove the preview and the printed receipt say the same thing.
-  function sampleSale(lang) {
+  // The sample's tax follows the SELECTED tax mode, worked out the way the server
+  // works it out. MIRROR of core/retail/pricing.py::calculate_line (the only
+  // place the two formulas are written; create_sale() calls it per line):
+  //   after_discount : taxable = gross - discount ; tax = round(taxable * rate)
+  //   before_discount: taxable = gross            ; tax = round(gross   * rate)
+  //   total = gross - discount + tax   (both modes; tax is rounded once per line)
+  // Rounding is R()._roundMoney, the till's own half-up mirror of the server's
+  // ROUND_HALF_UP at the currency's minor unit. The sample used to hard-code
+  // tax 1.12 / total 8.12, which is right for after_discount only (P1b F14).
+  const SAMPLE_TAX_RATE = 16; // percent: Jordan's general sales tax, an invented shop
+  function sampleLineFigures(gross, discount, mode) {
+    const rnd = (v) => R()._roundMoney(v);
+    const taxable = mode === 'before_discount' ? gross : gross - discount;
+    const tax = rnd(taxable * SAMPLE_TAX_RATE / 100);
+    return { tax, total: rnd(gross - discount + tax) };
+  }
+  function sampleSale(lang, taxMode) {
     const L = lang === 'ar' ? 'ar' : 'en';
+    const mode = taxMode === 'before_discount' ? 'before_discount' : 'after_discount';
     const tr = (s) => R()._translateForLang(s, L);
+    const lines = [
+      { name: tr('Sample item'), quantity: 2, unit_price: 1.5, discount_amount: 0, applied_promotion: null },
+      { name: tr('Sample item with offer'), quantity: 1, unit_price: 4.25, discount_amount: 0.25, applied_promotion: 'PREVIEW' },
+    ];
+    let subtotal = 0;
+    let tax = 0;
+    let total = 0;
+    lines.forEach((l) => {
+      const gross = R()._roundMoney(l.unit_price * l.quantity);
+      const f = sampleLineFigures(gross, l.discount_amount, mode);
+      subtotal += gross;
+      tax += f.tax;
+      total += f.total;
+    });
+    const amountPaid = 10;
     return {
       sale_number: 'A-000124',
       created_at: '2026-01-15 14:32:00',
       employee_name: tr('Sample cashier'),
       customer_id: 1,
       customer_name: tr('Sample customer'),
-      lines: [
-        { name: tr('Sample item'), quantity: 2, unit_price: 1.5, discount_amount: 0, applied_promotion: null },
-        { name: tr('Sample item with offer'), quantity: 1, unit_price: 4.25, discount_amount: 0.25, applied_promotion: 'PREVIEW' },
-      ],
-      subtotal: 7.25,
-      tax_amount: 1.12,
-      total: 8.12,
-      amount_paid: 10,
-      change: 1.88,
+      lines,
+      subtotal: R()._roundMoney(subtotal),
+      tax_amount: R()._roundMoney(tax),
+      total: R()._roundMoney(total),
+      amount_paid: amountPaid,
+      change: R()._roundMoney(amountPaid - total),
     };
   }
 
@@ -574,7 +956,8 @@
     // told to use it, so what is drawn is exactly what a shop set to that
     // language prints.
     branding.branding_receipt_language = S.pvLang;
-    const sale = sampleSale(S.pvLang);
+    const modeEl = $('tax-mode');
+    const sale = sampleSale(S.pvLang, modeEl ? modeEl.value : 'after_discount');
     sale.__preview = {
       branding,
       logo: currentLogo(),
@@ -694,10 +1077,19 @@
         num.id = 'numbering-codes-card';
         num.innerHTML = `<h3 class="sh-card-title">${esc(t('Receipt numbers'))}</h3>
           <p class="sh-card-lead">${esc(t('Start every receipt number with a short code for the branch, so a paper receipt tells you where it was printed.'))}</p>
-          <div id="numbering-codes-body"><p class="sh-pane-loading">${esc(t('Loading…'))}</p></div>`;
+          <div id="numbering-codes-body"><p class="sh-pane-loading">${esc(t('Loading…'))}</p></div>
+          <details class="sh-advanced" id="numbering-advanced">
+            <summary>${esc(t('Advanced'))}</summary>
+            <div id="numbering-advanced-body"></div>
+          </details>`;
         tills.appendChild(num);
+        // The numbering books list lives under Advanced: most shops never open it.
+        moveCard('doc-series-card', num.querySelector('#numbering-advanced-body'));
+        const ds = $('doc-series-card');
+        if (ds) ds.classList.add('sh-embedded');
+      } else {
+        moveCard('doc-series-card', tills);
       }
-      moveCard('doc-series-card', tills);
       moveCard('business-day-card', tills);
       moveCard('shop-network-card', tills);
     }
@@ -744,7 +1136,17 @@
       await loadCredit();
     } else if (id === 'hardware') {
       host.innerHTML = `<p class="sh-note">${esc(t('These settings belong to this computer only.'))}</p><div id="sh-printer-slot"></div>`;
-      R()._mountPrinterCard($('sh-printer-slot'));
+      // The printer fields join the one bar as the device-local `printer` group.
+      // The card's own Save button goes (one bar, one Save), and the group is
+      // "holding" until the device list has filled the select -- else the bar
+      // would flash "unsaved" while the saved printer name is still loading.
+      S.holding.printer = true;
+      try { await R()._mountPrinterCard($('sh-printer-slot')); } catch (e) { console.error(e); }
+      if (!alive()) return;
+      const own = $('pr-save-btn');
+      if (own) own.remove();
+      rebaseline('printer');
+      delete S.holding.printer;
     } else if (id === 'team') {
       if (window.RetailEmployees && typeof RetailEmployees.render === 'function') await RetailEmployees.render(host);
     } else if (id === 'data-backup') {
@@ -829,6 +1231,7 @@
           ${visible.map((s) => `<section class="sh-pane" data-sh-pane="${esc(s.id)}" aria-label="${esc(s.label)}" hidden>${paneShell(s.label)}</section>`).join('')}
           <div class="sh-savebar" id="sh-savebar" role="region" aria-label="${esc(t('Unsaved changes'))}" hidden>
             <span class="sh-savebar-msg">${esc(t('Unsaved changes'))}</span>
+            <span class="sh-savebar-where" id="sh-savebar-where"></span>
             <span class="sh-savebar-actions">
               <button type="button" class="ret-btn ret-btn-ghost" id="sh-discard">${esc(t('Discard'))}</button>
               <button type="button" class="ret-btn ret-btn-primary" id="sh-save">${esc(t('Save'))}</button>
@@ -837,6 +1240,9 @@
         </div>
       </div>`;
     S.root = $('sh-root');
+    S.holding = {};
+    watchHubLeft(S.root);
+    registerHubGuard();
 
     // One delegated listener set: the moved Admin Center cards keep their own
     // inline markup, so the hub listens at the root instead of at each field.
@@ -888,10 +1294,22 @@
     const t0 = ev.target;
     if (!t0) return;
     if (t0.id === 'credit-mode') syncCreditLimitVisibility();
-    if (t0.id === 'num-branch-code') {
-      const up = t0.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      if (up !== t0.value) t0.value = up;
+    // The sample receipt's tax follows the selected mode (F14).
+    if (t0.id === 'tax-mode') schedulePreview();
+    if (t0.id && t0.id.indexOf('num-') === 0) {
+      if (t0.id === 'num-branch-code') {
+        // Letters only (A-Z): the server refuses digits, so they never get typed in.
+        const up = t0.value.toUpperCase().replace(/[^A-Z]/g, '');
+        if (up !== t0.value) t0.value = up;
+      }
+      syncNumberingFields();
       drawNumberingExample();
+      // Live, plain, before Save: reserved code / wrong length. Nothing is sent.
+      showNumberingError(numberingProblem(false));
+      // refreshBar() below raises the Save bar; keep the example clear of it.
+      refreshBar();
+      keepExampleClear();
+      return;
     }
     if (t0.id === 'brand-logo-file') {
       const f = t0.files && t0.files[0];
@@ -911,6 +1329,7 @@
     const el = ev.target && ev.target.closest ? ev.target.closest('button') : null;
     if (!el) return;
     if (el.dataset.sh) { showSection(el.dataset.sh); return; }
+    if (el.dataset.shGoto) { showSection(el.dataset.shGoto); return; }
     if (el.id === 'sh-save') { save(); return; }
     if (el.id === 'sh-discard') { discard(); return; }
     if (el.id === 'tax-cat-apply') { applyCategoryRate(); return; }
