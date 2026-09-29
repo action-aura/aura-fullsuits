@@ -261,7 +261,11 @@ async function testTheReceiptFallsBackSensiblyWhenNothingIsConfigured(src) {
   const html = await printReceipt({ source: src, branding: UNCONFIGURED_BRANDING_OK });
   assert.ok(html.indexOf('Aura Retail') !== -1,
     `an unbranded install must still print a legible header (fallback to the product name); got:\n${html}`);
-  assert.ok(html.indexOf('Receipt #' + SALE.sale_number) !== -1,
+  // P1a (63a83624) isolates the printed number in <bdi dir="ltr"> so an Arabic
+  // receipt cannot reorder "#SALE-0042" against the label; the old anchor was
+  // the unisolated "Receipt #SALE-0042". Same question (did the number line
+  // render?), now also asserting the isolation that fix exists for.
+  assert.ok(html.indexOf('Receipt <bdi dir="ltr">#' + SALE.sale_number + '</bdi>') !== -1,
     `the receipt number line is missing entirely -- the receipt did not render at all:\n${html}`);
   assert.ok(html.indexOf('Tax #:') === -1,
     'an empty tax number must not print an empty "Tax #:" line.');
