@@ -35,7 +35,7 @@ const SCRIPT_PATH = path.resolve(
     __dirname, '..', 'frontend', 'site-relay.js');
 
 const ELEMENT_IDS = [
-    'message', 'card-disabled', 'card-status', 'card-connect', 'card-devices',
+    'message', 'card-disabled', 'card-alone', 'card-status', 'card-connect', 'card-devices',
     'fact-addresses', 'fact-port', 'fact-pin', 'btn-pair', 'btn-pair-done',
     'pairing-output', 'pairing-qr', 'pairing-text', 'pairing-countdown',
     'devices-table', 'devices-body', 'devices-empty',
@@ -69,7 +69,7 @@ function makeElement(tag) {
     return el;
 }
 
-function makeHarness({ statusBody, pairBody }) {
+function makeHarness({ statusBody, pairBody, meBody, meFails }) {
     const elements = {};
     ELEMENT_IDS.forEach((id) => { elements[id] = makeElement('div'); });
 
@@ -79,7 +79,11 @@ function makeHarness({ statusBody, pairBody }) {
     const fetchImpl = (url, options) => {
         fetchCalls.push({ url, options: options || {} });
         let body = { success: true };
-        if (url.endsWith('/status')) { body = statusBody; }
+        if (url.endsWith('/devices/me')) {
+            if (meFails) { return Promise.reject(new Error('offline')); }
+            body = meBody || { success: true };
+        }
+        else if (url.endsWith('/status')) { body = statusBody; }
         else if (url.endsWith('/pair-code')) { body = pairBody || { success: true }; }
         return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
     };
@@ -127,19 +131,67 @@ function makeHarness({ statusBody, pairBody }) {
 function flush() {
     // Two turns of the microtask queue: the status fetch resolves, then its
     // .then chain renders.
-    return new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+    // (Not-a-hub adds a second fetch, /api/devices/me, so wait a few turns.)
+    return new Promise((resolve) => setImmediate(() => setImmediate(
+        () => setImmediate(() => setImmediate(resolve)))));
 }
 
-async function testNonHubShowsNothingOperational() {
-    const h = makeHarness({ statusBody: { success: true, enabled: false } });
-    await flush();
+const JOINED_ME = { success: true, device: { is_admin_device: false }, can_claim_admin: false };
+const LONE_ADMIN_ME = { success: true, device: { is_admin_device: true }, can_claim_admin: false };
+const LONE_UNCLAIMED_ME = { success: true, device: { is_admin_device: false }, can_claim_admin: true };
+const ALONE_TEXT = 'Shop network is off. This computer works on its own.';
 
-    assert.strictEqual(h.elements['card-disabled'].hidden, false,
-        'a non-hub install must be told it is not the hub');
+function assertNothingOperational(h) {
     assert.strictEqual(h.elements['card-connect'].hidden, true,
         'a non-hub install must NOT offer "Connect a device"');
     assert.strictEqual(h.elements['card-devices'].hidden, true,
         'a non-hub install must not show a device list');
+    assert.strictEqual(h.elements['card-status'].hidden, true);
+}
+
+async function testNonHubShowsNothingOperational() {
+    // Joined client of another computer's hub: told it is not the hub.
+    const h = makeHarness({ statusBody: { success: true, enabled: false }, meBody: JOINED_ME });
+    await flush();
+
+    assert.strictEqual(h.elements['card-disabled'].hidden, false,
+        'a joined client must be told it is not the hub');
+    assert.strictEqual(h.elements['card-alone'].hidden, true,
+        'a joined client must not get the lone-computer wording');
+    assertNothingOperational(h);
+}
+
+async function testLoneComputerIsToldItWorksOnItsOwnNotThatAnotherIsTheHub() {
+    // F4: the "another computer is most likely the hub" card is a false claim
+    // on a shop with one till. Every non-joined shape must get the alone card
+    // and NEVER the other-computer card. Count the check: /me was asked.
+    const shapes = [
+        ['lone admin computer', { meBody: LONE_ADMIN_ME }],
+        ['lone computer that can still claim the admin seat', { meBody: LONE_UNCLAIMED_ME }],
+        ['/me answered without a device', { meBody: { success: true } }],
+        ['/me unreachable (fails safe, makes no claim)', { meFails: true }],
+    ];
+    for (const [label, extra] of shapes) {
+        const h = makeHarness(Object.assign(
+            { statusBody: { success: true, enabled: false } }, extra));
+        await flush();
+        assert.strictEqual(h.elements['card-alone'].hidden, false, `${label}: alone card must show`);
+        assert.strictEqual(h.elements['card-disabled'].hidden, true,
+            `${label}: must NOT say another computer is the hub`);
+        assertNothingOperational(h);
+        assert.ok(h.fetchCalls.some((c) => c.url === '/api/devices/me'),
+            `${label}: the joined check must actually have asked /api/devices/me`);
+    }
+}
+
+function testAloneWordingIsInThePage() {
+    const html = fs.readFileSync(path.resolve(__dirname, '..', 'frontend', 'site-relay.html'), 'utf8');
+    const block = html.match(/id="card-alone"[\s\S]*?<\/div>/);
+    assert.ok(block, 'card-alone must exist in site-relay.html');
+    assert.ok(block[0].includes(`data-i18n="${ALONE_TEXT}"`),
+        'the alone card must carry the exact t() key');
+    assert.ok(!/another one already is/i.test(block[0]),
+        'the alone card must never claim another computer is the hub');
 }
 
 async function testRunningHubShowsItsDetails() {
@@ -281,6 +333,8 @@ async function testPairingCodeIsShownWithItsQrAndCopyText() {
 async function main() {
     const tests = [
         testNonHubShowsNothingOperational,
+        testLoneComputerIsToldItWorksOnItsOwnNotThatAnotherIsTheHub,
+        testAloneWordingIsInThePage,
         testRunningHubShowsItsDetails,
         testMissingAddressesIsExplainedNotBlank,
         testDeviceLabelsAreNeverRenderedAsMarkup,

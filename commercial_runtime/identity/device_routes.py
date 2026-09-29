@@ -59,6 +59,38 @@ from commercial_runtime.identity.registry_db import get_conn
 
 device_bp = Blueprint('devices', __name__, url_prefix='/api/devices')
 
+# P1a FINAL polish F6: GET /me also names the BRANCH this computer stands in,
+# so the app header can read "Branch . This computer". That name lives in
+# retail.db's `branches` table -- a different product's database. This module
+# is shared with Clinic and imported eagerly on Android, and
+# branch_scope_schema.py records the same rule for the same reason: identity
+# stays product-agnostic and never reaches into retail.db. So the lookup is
+# INJECTED: the product that owns branches registers a resolver
+# `fn(company_id) -> str | None`; a product that has none (Clinic) leaves it
+# unset and `branch_name` is simply null. A resolver that raises is treated as
+# "unknown" (null) -- a header label must never turn GET /me into a 500, the
+# route the whole admin-device flow hangs off.
+_branch_name_resolver = None
+
+
+def register_branch_name_resolver(fn):
+    """Install (or, with None, clear) the product's `fn(company_id)` that
+    returns this device's branch display name, or None."""
+    global _branch_name_resolver
+    _branch_name_resolver = fn
+
+
+def _resolve_branch_name(company_id):
+    fn = _branch_name_resolver
+    if fn is None:
+        return None
+    try:
+        name = fn(company_id)
+    except Exception:
+        return None
+    name = (name or '').strip() if isinstance(name, str) else None
+    return name or None
+
 
 def _serialize_device(device: dict) -> dict:
     """Normalizes a device_registry row dict for JSON responses -- casts
@@ -192,7 +224,17 @@ def my_device_route():
     finally:
         conn.close()
 
-    return jsonify({'success': True, 'device': _serialize_device(device),
+    # F6, additive only: two display fields beside the existing row. Nothing
+    # existing is renamed or removed, and neither is written anywhere.
+    #   device_name -- the operator-given name (`devices.device_label`);
+    #                  null when nobody has named this till.
+    #   branch_name -- this device's branch for THIS company, via the
+    #                  product-registered resolver (see top of file).
+    serialized = _serialize_device(device)
+    label = serialized.get('device_label')
+    serialized['device_name'] = (label.strip() or None) if isinstance(label, str) else None
+    serialized['branch_name'] = _resolve_branch_name(company_id)
+    return jsonify({'success': True, 'device': serialized,
                      'can_claim_admin': bool(can_claim)})
 
 

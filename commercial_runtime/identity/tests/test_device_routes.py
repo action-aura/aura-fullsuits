@@ -283,6 +283,95 @@ def test_my_device_reflects_admin_flag_as_bool_true(app_data, client, db_path):
     assert isinstance(device["is_admin_device"], bool)
 
 
+# ── GET /api/devices/me : branch_name / device_name (P1a FINAL polish F6) ──
+# Additive display fields for the app-header chip. The branch lives in a
+# product's own database, so identity only exposes an injection point; these
+# tests pin the contract of that point from both directions (name flows out
+# when a resolver is registered, null -- never an error -- when it is absent,
+# raises, or returns junk).
+
+def test_my_device_branch_and_device_name_are_null_without_a_resolver(app_data, client, db_path, monkeypatch):
+    monkeypatch.setattr(device_routes, "_branch_name_resolver", None)
+    _insert_user(db_path, "user-1")
+    _login(client, "user-1", "company-1")
+
+    body = client.get("/api/devices/me").get_json()
+
+    device = body["device"]
+    assert device["branch_name"] is None
+    assert device["device_name"] is None
+    # Additive only: every field that existed before is still there.
+    for key in ("id", "company_id", "is_admin_device", "device_label", "platform", "status"):
+        assert key in device, f"F6 must not remove {key}"
+    assert body["can_claim_admin"] is True
+
+
+def test_my_device_branch_name_comes_from_the_registered_resolver_for_this_company(app_data, client, db_path, monkeypatch):
+    calls = []
+
+    def resolver(company_id):
+        calls.append(company_id)
+        return "Downtown"
+
+    monkeypatch.setattr(device_routes, "_branch_name_resolver", resolver)
+    _insert_user(db_path, "user-1")
+    _login(client, "user-1", "company-1")
+
+    device = client.get("/api/devices/me").get_json()["device"]
+
+    assert device["branch_name"] == "Downtown"
+    # Count the check, not the outcome: the resolver ran exactly once and was
+    # handed the SESSION's company (the tenant boundary), not something else.
+    assert calls == ["company-1"]
+
+
+@pytest.mark.parametrize("junk", [None, "", "   ", 42, ["x"]])
+def test_my_device_branch_name_junk_from_resolver_becomes_null(app_data, client, db_path, monkeypatch, junk):
+    monkeypatch.setattr(device_routes, "_branch_name_resolver", lambda cid: junk)
+    _insert_user(db_path, "user-1")
+    _login(client, "user-1", "company-1")
+
+    r = client.get("/api/devices/me")
+
+    assert r.status_code == 200
+    assert r.get_json()["device"]["branch_name"] is None
+
+
+def test_my_device_resolver_failure_never_breaks_the_route(app_data, client, db_path, monkeypatch):
+    def boom(company_id):
+        raise RuntimeError("retail.db is locked")
+
+    monkeypatch.setattr(device_routes, "_branch_name_resolver", boom)
+    _insert_user(db_path, "user-1")
+    _login(client, "user-1", "company-1")
+
+    r = client.get("/api/devices/me")
+
+    assert r.status_code == 200, "a header label must never turn GET /me into a 500"
+    body = r.get_json()
+    assert body["success"] is True
+    assert body["device"]["branch_name"] is None
+    assert body["can_claim_admin"] is True
+
+
+def test_my_device_device_name_is_the_operator_given_label(app_data, client, db_path, monkeypatch):
+    monkeypatch.setattr(device_routes, "_branch_name_resolver", None)
+    _insert_user(db_path, "user-1")
+    _login(client, "user-1", "company-1")
+    client.get("/api/devices/me")  # resolve once so the row exists
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("UPDATE devices SET device_label=? WHERE company_id=?", ("  Front till ", "company-1"))
+    conn.commit()
+    conn.close()
+    device_context._cached_device = None
+
+    device = client.get("/api/devices/me").get_json()["device"]
+
+    assert device["device_name"] == "Front till"
+    assert device["device_label"] == "  Front till ", "the raw column stays untouched (additive)"
+
+
 # ── POST /api/devices/me/claim-admin ─────────────────────────────────────
 # The setter that makes `is_admin_device` a flag something can actually
 # hold. Before 2026-08-20 the only writer was an auto-promotion inside

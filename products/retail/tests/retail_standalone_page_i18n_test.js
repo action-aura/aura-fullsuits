@@ -381,7 +381,7 @@ function findHardcodedProseFieldLiterals(src, excludedSpans) {
 
 const TRANSLATION_SOURCE_CONSTS = {
   'einvoicing.js': ['OUTBOX_STATE_LABELS', 'PROVIDER_LABELS'],
-  'licensing.js': ['STATE_LABELS', 'REASON_MESSAGES', 'LOCAL_VERIFICATION_MESSAGE'],
+  'licensing.js': ['STATE_LABELS', 'REASON_MESSAGES', 'LOCAL_VERIFICATION_MESSAGE', 'PRODUCT_NAMES'],
   'whatsapp.js': ['REPORT_TYPES', 'OUTBOX_STATE_LABELS'],
 };
 

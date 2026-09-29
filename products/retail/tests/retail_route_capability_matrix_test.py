@@ -190,6 +190,15 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # default, so this restricts nobody the feature is for; it satisfies the
     # structural rule without inventing a real restriction that was never
     # part of the design.
+    #
+    # FINAL polish F13: the DECORATOR tier stays CAP_SELL (the receipt kind),
+    # but kind=statement and kind=reminder are additionally refused inline
+    # unless the session holds CAP_REPORTS (the Statement/Remind screens'
+    # own gate). This matrix compares the decorator only, so it CANNOT see
+    # the per-kind inline check -- that direction is owned by
+    # retail_share_audit_test.py (cashier statement/reminder -> 403 with zero
+    # rows; owner and reports-granted cashier -> 200). Nothing in this map
+    # was loosened; the entry is unchanged and this comment records the gap.
     'share_log': CAP_SELL,
 
     # ── Reversing money already taken: retail.refund ─────────────────────────

@@ -178,7 +178,13 @@ def test_signed_in_cashier_writes_exactly_one_row_naming_them(shop):
     cashier, cashier_id = _make_user('cashier', company_id)
     before = _audit_rows(company_id)
 
-    r = _share(cashier, kind='statement', ref='CUST-42')
+    # FINAL polish F13: this used to share a STATEMENT as the cashier. The
+    # Statement screen is gated on retail.reports, which a cashier does not
+    # hold, so that case is now a 403 (test below). The cashier's real share
+    # is a RECEIPT, which is what this test now drives. What this test can no
+    # longer catch: "a cashier can write a statement row" -- deliberately
+    # gone; the two tests below own that direction.
+    r = _share(cashier, kind='receipt', ref='CUST-42')
     assert r.status_code == 200, r.get_json()
 
     after = _audit_rows(company_id)
@@ -190,8 +196,59 @@ def test_signed_in_cashier_writes_exactly_one_row_naming_them(shop):
     # too, not just whichever path happens to be exercised first.
     assert new_row['user_id'] == cashier_id
     assert new_row['user_id'] != _owner_id
-    assert 'statement' in (new_row['details'] or '')
+    assert 'receipt' in (new_row['details'] or '')
     assert 'CUST-42' in (new_row['details'] or '')
+
+
+# FINAL polish F13: statement + reminder need retail.reports (the same gate as
+# the Statement / Remind screens); receipt keeps CAP_SELL. DENY half: a
+# cashier is refused with 403 AND zero rows are written (count the write, not
+# just the status). ALLOW half: the same cashier's receipt (above) and an
+# owner's statement/reminder (below, plus the reminder test further up) still
+# work, so the fix cannot be "deny everything".
+@pytest.mark.parametrize('kind', ['statement', 'reminder'])
+def test_cashier_cannot_share_a_statement_or_reminder_and_no_row_is_written(shop, kind):
+    company_id, _owner, _owner_id = shop
+    cashier, _cashier_id = _make_user('cashier', company_id)
+    before = _audit_rows(company_id)
+
+    r = _share(cashier, kind=kind, ref='CUST-42')
+    assert r.status_code == 403, r.get_json()
+
+    assert _audit_rows(company_id) == before, (
+        f"a refused {kind} share must write ZERO audit rows"
+    )
+
+
+def test_cashier_who_was_granted_reports_can_share_a_reminder(shop):
+    # The gate is the CAPABILITY, not the role name: a cashier an owner has
+    # explicitly granted retail.reports reaches the Remind screen, so the
+    # audit route must let them through too.
+    company_id, _owner, _owner_id = shop
+    cashier, cashier_id = _make_user('cashier', company_id, capabilities={'retail.reports': 'full'})
+    before = _audit_rows(company_id)
+
+    r = _share(cashier, kind='reminder', ref='CUST-9')
+    assert r.status_code == 200, r.get_json()
+    assert len(_audit_rows(company_id)) == len(before) + 1
+
+
+def test_owner_can_share_a_statement(shop):
+    company_id, owner, owner_id = shop
+    before = _audit_rows(company_id)
+    r = _share(owner, kind='statement', ref='CUST-5')
+    assert r.status_code == 200, r.get_json()
+    after = _audit_rows(company_id)
+    assert len(after) == len(before) + 1
+    assert [x for x in after if x not in before][0]['user_id'] == owner_id
+
+
+def test_bad_kind_from_a_cashier_is_400_not_403(shop):
+    # Validation runs before the capability check, so a malformed request is
+    # still reported as malformed to everyone.
+    company_id, _owner, _owner_id = shop
+    cashier, _ = _make_user('cashier', company_id)
+    assert _share(cashier, kind='invoice').status_code == 400
 
 
 # Fix round F5 (verifier finding): 'reminder' -- the third of the three

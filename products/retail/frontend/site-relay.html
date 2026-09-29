@@ -104,7 +104,12 @@
 
   <div id="message" class="message" hidden></div>
 
-  <!-- ── Not a hub ────────────────────────────────────────────────────── -->
+  <!-- ── Hub off, and this computer is on its own ─────────────────────── -->
+  <div class="card" id="card-alone" hidden>
+    <h2 data-i18n="Shop network is off. This computer works on its own.">Shop network is off. This computer works on its own.</h2>
+  </div>
+
+  <!-- ── Not the hub, and joined to another computer's hub ───────────── -->
   <div class="card" id="card-disabled" hidden>
     <h2 data-i18n="This device is not the shop hub">This device is not the shop hub</h2>
     <p class="empty" data-i18n="One device in the shop — normally the main till, the one with the cash drawer — acts as the hub that the others connect to. This device is not set up as the hub, so nothing is being shared over the network.">

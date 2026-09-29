@@ -416,7 +416,13 @@
   }
 
   function stateBadge(state) {
-    const info = STATE_LABELS[state] || { text: state, cls: 'state-neutral' };
+    // FINAL polish F3: an unrecognised state used to print its raw code
+    // (e.g. "SOME_NEW_STATE") as the badge. The code is not for the shop
+    // owner; it still reaches support through the Technical details block.
+    const info = STATE_LABELS[state];
+    if (!info) {
+      return el('span', { className: 'state-badge state-neutral', text: t('Status unknown') });
+    }
     return el('span', { className: 'state-badge ' + info.cls, text: t(info.text) });
   }
 
@@ -558,11 +564,8 @@
 
     const installationId = (status && status.installation_id)
       || (pending && pending.installation_id);
-    if (installationId) {
-      const dl = el('dl');
-      addStatusRow(dl, t('Installation'), installationId);
-      content.appendChild(dl);
-    }
+    // F3: the id is for support, not for the shop owner -- collapsed block.
+    appendTechnicalDetails([[t('Installation ID'), installationId]]);
 
     const row = el('div', { className: 'row' });
 
@@ -889,6 +892,45 @@
     dl.appendChild(el('dd', { text: value }));
   }
 
+  // FINAL polish F3. The screen used to print the product code
+  // ("AURA_RETAIL"), the installation id and the raw licence status straight
+  // into the visible list. A shop owner reads "Aura Shop", "This computer" and
+  // a plain date; the raw values that support may ask for live in a collapsed
+  // "Technical details" block instead of being deleted.
+  const PRODUCT_NAMES = {
+    AURA_RETAIL: 'Aura Shop',
+    AURA_CLINIC: 'Aura Clinic',
+  };
+
+  function productName(code) {
+    return t(PRODUCT_NAMES[code] || 'Aura');
+  }
+
+  // Fixed YYYY-MM-DD HH:MM in local time; same reasoning as site-relay.js's
+  // formatWhen (a bare toLocaleString() follows the OS locale, not the app
+  // language). An unreadable value says so instead of echoing an ISO string.
+  function formatWhen(value) {
+    if (!value) return t('Not yet');
+    const d = new Date(/(Z|[+-]\d\d:?\d\d)$/.test(value) ? value : value + 'Z');
+    if (isNaN(d.getTime())) return t('Not yet');
+    const p = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+      + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  // rows: [[label, value], ...]. Empty values are skipped; nothing is added
+  // when there is nothing to show. Built with el()/textContent only.
+  function appendTechnicalDetails(rows) {
+    const shown = rows.filter((r) => r[1]);
+    if (!shown.length) return;
+    const details = el('details', { id: 'technical-details', className: 'tech-details' });
+    details.appendChild(el('summary', { text: t('Technical details') }));
+    const dl = el('dl');
+    shown.forEach((r) => addStatusRow(dl, r[0], String(r[1])));
+    details.appendChild(dl);
+    content.appendChild(details);
+  }
+
   function renderLicenseStatus(status) {
     stopAwaitingPoll();   // screen entry point: never leave a timer behind
     const state = status.current_state;
@@ -898,10 +940,9 @@
     content.appendChild(el('div', {}, [stateBadge(state)]));
 
     const dl = el('dl');
-    addStatusRow(dl, t('Product'), status.product_code || '—');
-    if (status.installation_id) addStatusRow(dl, t('Installation'), status.installation_id);
-    if (status.license_status) addStatusRow(dl, t('License status'), status.license_status);
-    if (status.last_successful_checkin_at) addStatusRow(dl, t('Last check-in'), status.last_successful_checkin_at);
+    addStatusRow(dl, t('Product'), productName(status.product_code));
+    addStatusRow(dl, t('Device'), t('This computer'));
+    addStatusRow(dl, t('Last check-in'), formatWhen(status.last_successful_checkin_at));
     content.appendChild(dl);
 
     if (state === 'RESTRICTED' || state === 'GRACE_PERIOD' || state === 'WARNING') {
@@ -921,11 +962,21 @@
     row.appendChild(checkinBtn);
 
     if (canDeactivate) {
-      const deactivateBtn = el('button', { id: 'deactivate-btn', className: 'danger', text: t('Deactivate This Device') });
+      // Secondary, outlined danger button (not a filled red one): it sits
+      // next to Check Now, and the confirm dialog below is what carries the
+      // weight of the decision.
+      const deactivateBtn = el('button', { id: 'deactivate-btn', className: 'secondary danger', text: t('Deactivate this computer') });
       deactivateBtn.addEventListener('click', onDeactivateClicked);
       row.appendChild(deactivateBtn);
     }
     content.appendChild(row);
+
+    appendTechnicalDetails([
+      [t('Product code'), status.product_code],
+      [t('Installation ID'), status.installation_id],
+      [t('License status'), status.license_status],
+      [t('State code'), state],
+    ]);
   }
 
   async function onCheckInClicked(btn) {
@@ -952,8 +1003,8 @@
 
   async function onDeactivateClicked() {
     const ok = await confirmDialog({
-      title: t('Deactivate this device?'),
-      message: t('You will need to reactivate with a license key to use commercial features again.'),
+      title: t('Deactivate this computer?'),
+      message: t('This computer will stop being licensed. To use Aura Shop on it again you will need to enter a licence key. Your sales and records are not deleted.'),
       confirmLabel: t('Deactivate'),
       danger: true,
     });

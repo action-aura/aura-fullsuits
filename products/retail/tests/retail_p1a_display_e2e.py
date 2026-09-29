@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -367,6 +368,8 @@ def _run_all(results: Results, screenshots_dir: Path) -> None:
                  lambda: _scenario_exactly_four_report_cards_en_and_ar(results, browser)),
                 ("Item 2: a 20-second promotion hides itself with no sale",
                  lambda: _scenario_promotion_hides_itself_after_its_own_deadline(results, browser, screenshots_dir)),
+                ("FINAL F3 licence & devices page in plain words",
+                 lambda: _scenario_licensing_page_plain_words(results, browser, screenshots_dir)),
             ]
             # Each top-level scenario owns/tears down its OWN Backend, so one
             # scenario's setup failure (e.g. a slow sign-up under machine
@@ -575,7 +578,7 @@ def _scenario_standalone_page_theme_matches_shell(results: Results, browser, sho
             page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
             shell_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
 
-            for pg, wait_sel in (("whatsapp", "#status-content"), ("einvoicing", "#status-content"), ("site-relay", ".back-link")):
+            for pg, wait_sel in (("whatsapp", "#status-content"), ("einvoicing", "#status-content"), ("site-relay", ".back-link"), ("licensing", "#content .state-badge")):
                 def check(theme=theme, pg=pg, wait_sel=wait_sel, shell_bg=shell_bg):
                     sp = context.new_page()
                     sp.set_default_timeout(DEFAULT_WAIT_MS)
@@ -928,6 +931,167 @@ def _scenario_promotion_hides_itself_after_its_own_deadline(results: Results, br
             display.screenshot(path=str(shots / "item2_promo_hidden_after_deadline.png"))
 
         results.run("Item 2: a 20-second promotion hides itself with no sale (real wall-clock wait)", check)
+    finally:
+        backend.stop()
+        backend.cleanup()
+
+
+# ── FINAL polish F3: the licence page speaks plain words ────────────────────
+
+#: A raw machine code: SHOUTING_SNAKE (AURA_RETAIL, ACTIVE_ONLINE ...) or the
+#: bare state word ACTIVE. The human badge says "Active" -- capital A only.
+_RAW_CODE_RE = re.compile(r"[A-Z]{3,}(?:_[A-Z]+)+|\bACTIVE\b")
+
+_TEXT_OUTSIDE_DETAILS_JS = (
+    "() => { const c = document.body.cloneNode(true); "
+    "c.querySelectorAll('#technical-details, script').forEach(n => n.remove()); "
+    "return c.textContent; }"
+)
+
+
+def _click_centre(page, selector: str, what: str, nth: int = 0) -> None:
+    """Rule 6b click: prove a person could see it, then click the pixel at its
+    centre with the real mouse (not element.click(), which skips hit-testing)."""
+    probe = _assert_seen(page, selector, what, nth=nth, scroll=True)
+    page.mouse.click(probe["cx"], probe["cy"])
+
+
+def _scenario_licensing_page_plain_words(results: Results, browser, shots: Path) -> None:
+    backend = Backend()
+    try:
+        backend.start()
+        context = browser.new_context(viewport=VIEWPORT, reduced_motion="reduce")
+        page = context.new_page()
+        page.set_default_timeout(DEFAULT_WAIT_MS)
+        _sign_up_and_license(page, backend, "P1a Licence Page Co")
+
+        status = _api(page, "GET", "/api/licensing/status") or {}
+        installation_id = status.get("installation_id") or ""
+        product_code = status.get("product_code") or ""
+
+        lp = context.new_page()
+        lp.set_default_timeout(DEFAULT_WAIT_MS)
+        posts = []
+        lp.on("request", lambda r: posts.append(r.url) if r.method == "POST" and r.url.endswith("/api/licensing/deactivate") else None)
+        lp.goto(f"{backend.base_url}/static/licensing.html", wait_until="domcontentloaded")
+        lp.wait_for_selector("#deactivate-btn", timeout=DEFAULT_WAIT_MS)
+
+        def check_no_raw_codes():
+            # The check must be able to fail: the seeded licence really has a
+            # product code, and it really appears in the DOM (inside details).
+            assert product_code, f"harness: seeded licence has no product_code in /status: {status}"
+            outside = lp.evaluate(_TEXT_OUTSIDE_DETAILS_JS)
+            m = _RAW_CODE_RE.search(outside)
+            assert not m, f"raw machine code {m.group(0)!r} is visible outside Technical details: {outside!r}"
+            assert product_code not in outside, f"product code {product_code!r} leaks outside Technical details"
+            if installation_id:
+                assert installation_id not in outside, "installation id leaks outside Technical details"
+            assert "Aura Shop" in outside and "This computer" in outside, (
+                f"the plain labels are missing (a page that shows nothing would pass the checks above): {outside!r}"
+            )
+
+        results.run("F3 licensing: no raw status/product/installation code outside Technical details", check_no_raw_codes)
+
+        def check_details_hold_the_raw_values():
+            det = lp.evaluate(
+                "() => { const d = document.getElementById('technical-details'); "
+                "return d ? {open: d.open, text: d.textContent} : null; }"
+            )
+            assert det is not None, "no #technical-details block"
+            assert det["open"] is False, "Technical details must start collapsed"
+            assert product_code in det["text"], "raw product code was deleted, not moved into Technical details"
+            if installation_id:
+                assert installation_id in det["text"], "installation id was deleted, not moved into Technical details"
+
+        results.run("F3 licensing: raw ids live in a collapsed Technical details block", check_details_hold_the_raw_values)
+
+        def check_human_reach_and_summary_opens():
+            _assert_seen(lp, ".back-link", "back link")
+            _assert_seen(lp, "#deactivate-btn", "Deactivate button")
+            _click_centre(lp, "#technical-details summary", "Technical details summary")
+            lp.wait_for_function("document.getElementById('technical-details').open === true")
+            _assert_seen(lp, "#technical-details dd", "first technical value", nth=0, scroll=True)
+
+        results.run("F3 licensing: a real mouse can see and open Technical details", check_human_reach_and_summary_opens)
+
+        def check_deactivate_is_outline():
+            css = lp.evaluate(
+                "() => { const s = getComputedStyle(document.getElementById('deactivate-btn')); "
+                "return {bg: s.backgroundColor, border: s.borderTopColor, color: s.color}; }"
+            )
+            assert css["bg"] in ("rgba(0, 0, 0, 0)", "transparent"), f"Deactivate must be an outline, bg={css['bg']!r}"
+            assert css["border"] == css["color"] and css["border"] != "rgba(0, 0, 0, 0)", f"outline border must match danger text: {css}"
+
+        results.run("F3 licensing: Deactivate is a secondary danger-outline button", check_deactivate_is_outline)
+
+        def check_cancel_sends_nothing():
+            _click_centre(lp, "#deactivate-btn", "Deactivate button")
+            lp.wait_for_selector(".confirm-overlay", timeout=DEFAULT_WAIT_MS)
+            msg = lp.evaluate("document.querySelector('.confirm-message').textContent")
+            assert "not deleted" in msg and "licence key" in msg, f"confirm must say plainly what happens: {msg!r}"
+            _assert_seen(lp, ".confirm-card button", "confirm Cancel", nth=0)
+            _assert_seen(lp, ".confirm-card button", "confirm OK", nth=1)
+            before = len(posts)
+            _click_centre(lp, ".confirm-card button", "confirm Cancel", nth=0)
+            lp.wait_for_selector(".confirm-overlay", state="detached", timeout=DEFAULT_WAIT_MS)
+            lp.wait_for_timeout(500)
+            assert len(posts) == before == 0, f"Cancel must send no deactivation, saw {len(posts)} POST(s)"
+            assert (_api(lp, "GET", "/api/licensing/status") or {}).get("current_state") == status.get("current_state"), (
+                "Cancel changed the licence state"
+            )
+
+        results.run("F3 licensing: Deactivate asks first, and Cancel sends nothing (POST count = 0)", check_cancel_sends_nothing)
+
+        def check_arabic_rtl():
+            page.evaluate("() => localStorage.setItem('aura_lang', 'ar')")
+            ap = context.new_page()
+            ap.set_default_timeout(DEFAULT_WAIT_MS)
+            ap.goto(f"{backend.base_url}/static/licensing.html", wait_until="domcontentloaded")
+            ap.wait_for_function("document.documentElement.getAttribute('dir') === 'rtl'", timeout=DEFAULT_WAIT_MS)
+            ap.wait_for_selector("#content .state-badge", timeout=DEFAULT_WAIT_MS)
+            ap.wait_for_timeout(800)
+            r = ap.evaluate(
+                "() => { const r = document.querySelector('.back-link').getBoundingClientRect(); "
+                "return {left: r.left, right: r.right, vw: innerWidth}; }"
+            )
+            assert (r["left"] + r["right"]) / 2 > r["vw"] / 2, f"in RTL the back link must sit on the visual RIGHT: {r}"
+            _assert_seen(ap, ".back-link", "Arabic back link")
+            # The back link lands on the right from dir=rtl ALONE, so the
+            # position check above cannot tell whether css/rtl.css or the
+            # page's own arrow-flip rule is present. Count those two directly:
+            # rtl.css is what sets body.rtl{text-align:right} (computed value
+            # 'right'; without it the value stays 'start'), and the page-local
+            # rule is what mirrors the "<-" glyph.
+            css = ap.evaluate(
+                "() => ({align: getComputedStyle(document.body).textAlign, "
+                "bodyRtl: document.body.classList.contains('rtl'), "
+                "arrow: getComputedStyle(document.querySelector('.i18n-arrow')).transform})"
+            )
+            assert css["bodyRtl"], f"i18n.js did not put body.rtl on the page: {css}"
+            assert css["align"] == "right", f"css/rtl.css is not applied (body text-align={css['align']!r})"
+            assert css["arrow"] == "matrix(-1, 0, 0, 1, 0, 0)", f"the back arrow is not mirrored in RTL: {css['arrow']!r}"
+            ap.close()
+            page.evaluate("() => localStorage.setItem('aura_lang', 'en')")
+
+        results.run("F3 licensing: Arabic gives dir=rtl and the back link mirrors right", check_arabic_rtl)
+
+        def check_confirm_sends_exactly_one():
+            lp.reload(wait_until="domcontentloaded")
+            lp.wait_for_selector("#deactivate-btn", timeout=DEFAULT_WAIT_MS)
+            before = len(posts)
+            _click_centre(lp, "#deactivate-btn", "Deactivate button")
+            lp.wait_for_selector(".confirm-overlay", timeout=DEFAULT_WAIT_MS)
+            _click_centre(lp, ".confirm-card button", "confirm OK", nth=1)
+            lp.wait_for_selector(".confirm-overlay", state="detached", timeout=DEFAULT_WAIT_MS)
+            lp.wait_for_timeout(800)
+            assert len(posts) - before == 1, f"confirming must send exactly one deactivation, saw {len(posts) - before}"
+
+        results.run("F3 licensing: confirming sends exactly one deactivation (POST count = 1)", check_confirm_sends_exactly_one)
+
+        try:
+            lp.screenshot(path=str(shots / "f3_licensing.png"))
+        except Exception:
+            pass
     finally:
         backend.stop()
         backend.cleanup()

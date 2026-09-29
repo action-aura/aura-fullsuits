@@ -66,6 +66,7 @@ from commercial_runtime.identity.onboarding_routes import (
     get_device_branch_uid as _onboarding_get_device_branch_uid,
     set_device_branch_uid as _onboarding_set_device_branch_uid,
 )
+from commercial_runtime.identity import device_routes as _device_routes
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
@@ -1651,6 +1652,51 @@ def delete_category(category_id):
 
 # ── Products ──────────────────────────────────────────────────────────────────
 
+# FINAL polish 4b/F2 (whole-P1a acceptance check): GET /products used to hand
+# EVERY signed-in retail user the shop's purchase costs (`cost_price`, the
+# moving `avg_cost`, and the derived `cost_basis`) because the row is
+# `SELECT p.*`. A cashier's till never shows or uses them, yet they sat in the
+# network response -- a cashier reading the Network tab could work out the
+# owner's margin on every item. So cost is withheld from a session that holds
+# NEITHER authority that legitimately works with cost:
+#   * retail.reports      -- the authority `/products/stock-value` (the shelf's
+#                            worth at cost) is gated on; reading cost.
+#   * retail.stock.adjust -- the authority to create/edit a product and to build
+#                            or receive a purchase order. The Products edit
+#                            modal PRE-FILLS its "Cost Price" box from this
+#                            field and saves it back, and the PO builder reads
+#                            it as the default unit cost: withholding it from
+#                            these users would make an ordinary edit silently
+#                            save cost 0. The coordinator's brief named only
+#                            retail.reports; this second authority is added
+#                            because measuring the client showed it depends on
+#                            the field (see the finding in the round report).
+# Sell, refund, returns, quotations and the barcode scan never read these
+# three fields (measured: the only client uses are subsystem-retail.js's
+# Products cost cell -- itself gated `canAdjust` -- the product modal and the
+# PO builder; the native Android app only reads cost_price in its product
+# edit dialog). Both directions are pinned in retail_products_cost_visibility_test.py.
+# `lookup_product` (the scan route) returns the SAME row shape, so it goes
+# through the same filter -- a cashier would otherwise just scan to read cost.
+_PRODUCT_COST_FIELDS = ('cost_price', 'avg_cost', 'cost_basis')
+
+
+def _product_rows_for_session(rows):
+    """dict-ify product rows, dropping the cost fields unless this session may
+    see cost. Always returns fresh dicts (never mutates the sqlite rows)."""
+    may_see_cost = (
+        session_has_capability(CAP_REPORTS) or session_has_capability(CAP_STOCK_ADJUST)
+    )
+    out = []
+    for r in rows:
+        d = dict(r)
+        if not may_see_cost:
+            for f in _PRODUCT_COST_FIELDS:
+                d.pop(f, None)
+        out.append(d)
+    return out
+
+
 @retail_bp.route('/products', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -1771,7 +1817,7 @@ def list_products():
         params.append(limit)
     rows = conn.execute(sql, params).fetchall()
     conn.close()
-    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+    return jsonify({'status': 'success', 'data': _product_rows_for_session(rows)})
 
 # Launch-readiness "the POS scale fix" (ROADMAP.md's 2026-08-29 v21 entry).
 # The server-side counterpart to the client-side scan `_findByCode`
@@ -1917,7 +1963,7 @@ def lookup_product():
     conn.close()
     if row is None:
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
-    return jsonify({'status': 'success', 'data': dict(row)})
+    return jsonify({'status': 'success', 'data': _product_rows_for_session([row])[0]})
 
 def _validate_parent_product(conn, cid, parent_product_id, self_id=None):
     """Validates a `parent_product_id` a create/update product request wants
@@ -11810,6 +11856,18 @@ def customer_display_status():
 _SHARE_LOG_CHANNELS = ('whatsapp',)
 _SHARE_LOG_KINDS = ('receipt', 'statement', 'reminder')
 _SHARE_LOG_REF_MAX_LEN = 64
+# FINAL polish F13 (whole-P1a acceptance check): the route-level gate above
+# is CAP_SELL because a RECEIPT is handed over at the till by anyone who can
+# sell. A STATEMENT or a REMINDER is not a till action: the screens that
+# produce them (Statement, Remind) sit behind retail.reports in the app, and
+# a cashier (ROLE_CASHIER holds only sell/refund/cash-close) can never reach
+# them. Leaving the audit route wider than the screens meant a cashier could
+# still write "statement shared" / "reminder shared" rows for a customer's
+# money position they are not allowed to look at -- a forged audit line about
+# a screen they cannot open. So those two kinds additionally need
+# CAP_REPORTS, checked inline (the decorator cannot vary by request body);
+# the decorator stays CAP_SELL so the structural matrix rule still holds.
+_SHARE_LOG_KINDS_NEEDING_REPORTS = ('statement', 'reminder')
 
 @retail_bp.route('/share-log', methods=['POST'])
 @mt_login_required
@@ -11846,6 +11904,12 @@ def share_log():
         return jsonify({'status': 'error', 'message': (
             f'ref is required and must be a string of at most {_SHARE_LOG_REF_MAX_LEN} characters.'
         )}), 400
+    # F13: after validation (a malformed request is still a 400, not a 403)
+    # and BEFORE any write (a refused request writes zero rows).
+    if kind in _SHARE_LOG_KINDS_NEEDING_REPORTS and not session_has_capability(CAP_REPORTS):
+        return jsonify({'status': 'error', 'message': (
+            f'Sharing a {kind} needs the reports permission.'
+        )}), 403
 
     conn = get_retail_conn()
     try:
@@ -13896,6 +13960,39 @@ def get_device_branch():
         'branch_id': row['id'] if row else None,
         'branch_name': row['name'] if row else None,
     }})
+
+
+def _device_branch_name_for_header(company_id):
+    """P1a FINAL polish F6: the branch name GET /api/devices/me reports for the
+    app-header chip. Registered into identity's device_routes (identity cannot
+    import retail.db -- see the note beside `_branch_name_resolver` there).
+
+    Same resolution a sale uses, WITHOUT its side effects: the pinned branch
+    (config.json uid) when this till is pinned, else the company's first
+    ACTIVE branch (`_default_branch`'s SELECT). Deliberately never calls
+    `_default_branch` itself -- that self-heals (INSERTs) a branch, and a
+    header label must not create data as a side effect of loading a page.
+    Every query is company_id-scoped; a pin that does not resolve locally
+    yet falls back to the default rather than showing a foreign or blank
+    name."""
+    conn = get_retail_conn()
+    try:
+        pinned_uid = _onboarding_get_device_branch_uid()
+        if pinned_uid:
+            row = conn.execute(
+                "SELECT name FROM branches WHERE uid=? AND company_id=?",
+                (pinned_uid, company_id)).fetchone()
+            if row and row['name']:
+                return row['name']
+        row = conn.execute(
+            "SELECT name FROM branches WHERE company_id=? AND COALESCE(status,'active')='active' "
+            "ORDER BY id LIMIT 1", (company_id,)).fetchone()
+        return row['name'] if row else None
+    finally:
+        conn.close()
+
+
+_device_routes.register_branch_name_resolver(_device_branch_name_for_header)
 
 
 @retail_bp.route('/device/branch', methods=['POST'])

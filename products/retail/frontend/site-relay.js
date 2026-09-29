@@ -82,15 +82,44 @@
            ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
 
+  // FINAL polish F4. Hub off used to ALWAYS say "another computer is most
+  // likely the hub" -- a claim about a computer that, on a shop with exactly
+  // one till, does not exist. A computer may say that only when it really is a
+  // CLIENT of somebody else's hub. Same rule subsystem-retail.js's networked-
+  // shop check settled on (its "joined must mean joined" fix round): this
+  // computer is not the admin device AND the server says the admin seat is
+  // no longer up for claiming, i.e. another computer holds it. A lone main
+  // computer is the admin device (or can still claim the seat), so it is not
+  // joined.
+  //
+  // UNKNOWN (the /me call failed, or a flag is not a real boolean) is
+  // deliberately NOT joined: the alone wording makes no claim about any other
+  // computer, so it is the safe thing to say when we do not know.
+  function isJoinedClient(me) {
+    if (!me || !me.device) { return false; }
+    return me.device.is_admin_device === false && me.can_claim_admin === false;
+  }
+
+  function renderNotHub(joined) {
+    show(els.cardAlone, !joined);
+    show(els.cardDisabled, joined);
+    show(els.cardStatus, false);
+    show(els.cardConnect, false);
+    show(els.cardDevices, false);
+  }
+
   function renderStatus(body) {
     if (!body.enabled) {
-      show(els.cardDisabled, true);
-      show(els.cardStatus, false);
-      show(els.cardConnect, false);
-      show(els.cardDevices, false);
-      return;
+      // Hidden first so neither wording flashes while /me is in flight.
+      renderNotHub(false);
+      show(els.cardAlone, false);
+      return fetch('/api/devices/me', { credentials: 'same-origin' })
+        .then(function (resp) { return resp.json(); })
+        .catch(function () { return null; })
+        .then(function (me) { renderNotHub(isJoinedClient(me)); });
     }
 
+    show(els.cardAlone, false);
     show(els.cardDisabled, false);
     show(els.cardStatus, true);
     show(els.cardConnect, true);
@@ -259,6 +288,7 @@
     els = {
       message: $('message'),
       cardDisabled: $('card-disabled'),
+      cardAlone: $('card-alone'),
       cardStatus: $('card-status'),
       cardConnect: $('card-connect'),
       cardDevices: $('card-devices'),
