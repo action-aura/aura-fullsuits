@@ -38,6 +38,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -593,3 +594,554 @@ def test_the_start_hour_is_applied_on_the_shops_clock_not_on_utc():
     assert row['oldest_unpaid_date'] == '2026-05-16'
     assert row['days_overdue'] == 30
     assert row['buckets']['1_30'] == 12.0
+
+
+# =============================================================================
+# ROUND 7 -- the verifier's findings on this allocation (F1-F5). Evidence:
+# jobs/c5a4f4c4/tmp/p1a/V/AGING (probes p2, p4, p4b, p4c, p7, p11, p13, p14b).
+# =============================================================================
+
+# -- helpers for rows the routes will not write for us ------------------------
+
+def _plant_sale(rconn, company_id, branch_id, customer_id, total, days):
+    """A completed credit sale written by raw INSERT, like a sync-applied one:
+    it moves NO credit_balance."""
+    created_at, created_at_utc = _stamp(_days_ago(days))
+    return rconn.execute(
+        "INSERT INTO sales (company_id, sale_number, branch_id, customer_id, subtotal, total, amount_paid, "
+        "payment_method, status, created_at, created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (company_id, f'PL-{uuid.uuid4().hex[:10]}', branch_id, customer_id, total, total, 0,
+         'credit', 'completed', created_at, created_at_utc)).lastrowid
+
+
+def _plant_payment(rconn, company_id, party_type, party_id, direction, amount, days, related_type=None):
+    created_at, _utc = _stamp(_days_ago(days))
+    return rconn.execute(
+        "INSERT INTO payments (company_id, reference, party_type, party_id, direction, amount, currency, fx_rate, "
+        "method, status, related_type, created_at) VALUES (?,?,?,?,?,?,?,1,?,?,?,?)",
+        (company_id, f'PLP-{uuid.uuid4().hex[:10]}', party_type, party_id, direction, amount, 'JOD',
+         'cash', 'active', related_type, created_at)).lastrowid
+
+
+def _plant_return(rconn, company_id, branch_id, sale_id, ar_forgiven, store_credit, days=3):
+    created_at, created_at_utc = _stamp(_days_ago(days))
+    return rconn.execute(
+        "INSERT INTO returns (company_id, return_number, sale_id, branch_id, refund_amount, status, created_at, "
+        "created_at_utc, ar_forgiven_amount, store_credit_amount, tender_refund_amount) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+        (company_id, f'PLR-{uuid.uuid4().hex[:10]}', sale_id, branch_id, ar_forgiven + store_credit,
+         'completed', created_at, created_at_utc, ar_forgiven, store_credit)).lastrowid
+
+
+def _set_balance(customer_id, value):
+    rconn = get_retail_conn()
+    rconn.execute("UPDATE customers SET credit_balance=? WHERE id=?", (value, customer_id))
+    rconn.commit(); rconn.close()
+
+
+def _cheque(client, customer_id, amount, number='CHQ-1'):
+    """A real customer cheque through the real route (this writes the cheque,
+    its 'created' event and the money leg: a payment 'in', crossing 0)."""
+    r = client.post(f"{API}/cheques", json={
+        'direction': 'in', 'party_id': customer_id, 'amount': amount,
+        'due_date': '2026-07-01', 'cheque_number': number})
+    assert r.status_code == 201, r.get_json()
+    rconn = get_retail_conn()
+    cheque_id = rconn.execute("SELECT id FROM cheques WHERE party_id=? AND cheque_number=?",
+                              (customer_id, number)).fetchone()[0]
+    rconn.close()
+    return cheque_id
+
+
+def _cheque_action(client, cheque_id, action, **body):
+    r = client.post(f"{API}/cheques/{cheque_id}/{action}", json=body)
+    assert r.status_code == 200, r.get_json()
+
+
+def _restamp_crossing(cheque_id, k, days):
+    """Date the money leg of crossing `k` (payments carry only a wall-clock
+    `created_at`), so a test never depends on the real date the suite runs."""
+    uid = retail_api_module.cheque_engine.money_uid(cheque_id, k)
+    rconn = get_retail_conn()
+    n = rconn.execute("UPDATE payments SET created_at=? WHERE uid=?", (_stamp(_days_ago(days))[0], uid)).rowcount
+    rconn.commit(); rconn.close()
+    assert n == 1, f"crossing {k} of cheque {cheque_id} wrote {n} payment rows, expected exactly 1"
+
+
+def _payment_row(pid):
+    rconn = get_retail_conn()
+    row = rconn.execute("SELECT * FROM payments WHERE id=?", (pid,)).fetchone()
+    rconn.close()
+    return dict(row)
+
+
+def _cheque_payment_id(cheque_id, k):
+    uid = retail_api_module.cheque_engine.money_uid(cheque_id, k)
+    rconn = get_retail_conn()
+    pid = rconn.execute("SELECT id FROM payments WHERE uid=?", (uid,)).fetchone()[0]
+    rconn.close()
+    return pid
+
+
+def _void(client, pid, reason='r7 test'):
+    return client.post(f"{API}/payments/{pid}/void", json={'reason': reason})
+
+
+# -- F1: the report is set-based ----------------------------------------------
+
+def _seed_debtors(company_id, branch_id, n):
+    """`n` debtors, each: 6 credit sales of 10 (120,100,...,20 days old), 3
+    payments of 5 (100/70/40 days), one 2.0 forgiven return (15 days). Every
+    one owes 43 and is bucketed {1_30: 10, 31_60: 20, 61_90: 10, 90_plus: 3}
+    (worked by hand in the timing test below). Raw INSERTs -- the point is
+    the shape of the data, not the routes that would have written it."""
+    rconn = get_retail_conn()
+    ids = []
+    for i in range(n):
+        c = str(uuid.uuid4())
+        rconn.execute("INSERT INTO customers (id,company_id,name,credit_mode,credit_limit,credit_balance) "
+                      "VALUES (?,?,?,'unlimited',0,0)", (c, company_id, f'Perf {i}'))
+        sale_ids = [_plant_sale(rconn, company_id, branch_id, c, 10.0, 120 - j * 20) for j in range(6)]
+        for j in range(3):
+            _plant_payment(rconn, company_id, 'customer', c, 'in', 5.0, 100 - j * 30)
+        _plant_return(rconn, company_id, branch_id, sale_ids[-1], 2.0, 0.0, days=15)
+        rconn.execute("UPDATE customers SET credit_balance=? WHERE id=?", (43.0, c))
+        ids.append(c)
+    rconn.commit(); rconn.close()
+    return ids
+
+
+def _seed_noise(company_id, branch_id, n_sales):
+    """`n_sales` walk-in cash sales, every 7th with a tender-refund return --
+    the rest of a real shop's tables that the debtors' queries must not scan
+    once per debtor."""
+    rconn = get_retail_conn()
+    for k in range(n_sales):
+        created_at, created_at_utc = _stamp(_days_ago(k % 300))
+        cur = rconn.execute(
+            "INSERT INTO sales (company_id, sale_number, branch_id, customer_id, subtotal, total, amount_paid, "
+            "payment_method, status, created_at, created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (company_id, f'NS-{uuid.uuid4().hex[:10]}', branch_id, None, 3.0, 3.0, 3.0, 'cash', 'completed',
+             created_at, created_at_utc))
+        if k % 7 == 0:
+            rconn.execute(
+                "INSERT INTO returns (company_id, return_number, sale_id, branch_id, refund_amount, status, "
+                "created_at, created_at_utc, ar_forgiven_amount, store_credit_amount, tender_refund_amount) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (company_id, f'NR-{uuid.uuid4().hex[:10]}', cur.lastrowid, branch_id, 3.0, 'completed',
+                 created_at, created_at_utc, 0, 0, 3.0))
+    rconn.commit(); rconn.close()
+
+
+def test_the_report_over_500_debtors_20k_sales_and_3k_returns_is_fast_and_exact():
+    """F1. The report ran the four ledger queries once PER DEBTOR; the returns
+    UNION scans `returns` from the top each time: 1.45 s for 500 debtors, 4.0 s
+    once a busy shop's returns were in. The verifier's dataset, and the
+    milliseconds are PRINTED (run with -s). The ceiling is deliberately loose
+    (a slow CI box must not flake it) -- the query-count test below is the
+    machine-independent guard; this one guards the real end-to-end figure.
+
+    Hand-worked allocation for each debtor (charges 10 @120,100,80,60,40,20d;
+    pays 5 @100,70,40d; forgive 2 @15d): open = 3 @100d, 10 @80d, 10 @60d,
+    10 @40d, 10 @20d -> 90_plus 3, 61_90 10, 31_60 20 (60d is the top of that
+    bucket), 1_30 10 -- 43 in all."""
+    client, cid, bid = _make_shop()
+    _seed_debtors(cid, bid, 500)
+    _seed_noise(cid, bid, 20000)
+    rconn = get_retail_conn()
+    n_returns = rconn.execute("SELECT COUNT(*) FROM returns WHERE company_id=?", (cid,)).fetchone()[0]
+    rconn.close()
+    assert n_returns > 3000, n_returns
+    _aging(client)                       # warm: schema check, zone database, page cache
+    timings = []
+    for _ in range(3):
+        started = time.perf_counter()
+        aging = _aging(client)
+        timings.append(round((time.perf_counter() - started) * 1000))
+    print(f"\nAGING_MS 500 debtors / 20k sales / {n_returns} returns: {timings} ms (best {min(timings)})")
+
+    assert len(aging['customers']) == 500
+    assert aging['data'] == {'current': 0.0, '1_30': 5000.0, '31_60': 10000.0, '61_90': 5000.0, '90_plus': 1500.0}
+    assert all(r['buckets'] == {'current': 0.0, '1_30': 10.0, '31_60': 20.0, '61_90': 10.0, '90_plus': 3.0}
+               and r['unbooked_amount'] == 0.0 and r['oldest_unpaid_amount'] == 3.0
+               and r['days_overdue'] == 100 for r in aging['customers'])
+    assert min(timings) < 1000, f"aging report took {timings} ms over 500 debtors"
+
+
+def _statements_run(client, n_debtors):
+    """The SQL statements one aging report issues for a fresh shop with
+    `n_debtors` debtors (after a warm-up call)."""
+    _c, cid, bid = None, None, None
+    client, cid, bid = _make_shop()
+    _seed_debtors(cid, bid, n_debtors)
+    _aging(client)
+    seen = []
+    original = retail_api_module.get_retail_conn
+
+    def counting():
+        conn = original()
+        conn.set_trace_callback(seen.append)
+        return conn
+
+    retail_api_module.get_retail_conn = counting
+    try:
+        _aging(client)
+    finally:
+        retail_api_module.get_retail_conn = original
+    return seen
+
+
+def test_the_report_issues_a_fixed_number_of_queries_however_many_debtors_there_are():
+    """F1, machine-independent. A per-debtor loop is the defect; its signature
+    is a statement count that grows with the debtor count and a `returns`
+    scan per debtor. 4 debtors and 40 debtors must cost the SAME number of
+    statements, and `returns` is read by exactly one of them."""
+    few = _statements_run(None, 4)
+    many = _statements_run(None, 40)
+    print(f"\nAGING_STATEMENTS 4 debtors: {len(few)}, 40 debtors: {len(many)}")
+    assert len(few) == len(many), (len(few), len(many))
+    assert sum(1 for s in many if 'FROM returns' in s) == 1, [s[:80] for s in many if 'FROM returns' in s]
+
+
+# -- F2: a balance LOWER than its events -------------------------------------
+
+def test_fifo_unit_a_negative_unbooked_amount_comes_off_the_newest_charge_never_the_oldest():
+    d_old, d_new = TODAY - timedelta(days=80), TODAY - timedelta(days=5)
+    # events say 30 owed, the column says 10: 20 is missing. It cannot be the
+    # 80-day debt that vanished -- the newest charge is the one not on the books.
+    open_, credit, unbooked = retail_api_module._fifo_open_charges(
+        [_ev(1, 10.0, day=d_old, ref='old'), _ev(1, 20.0, day=d_new, ref='new')], 10.0)
+    assert [(r['ref'], r['date'], r['amount']) for r in open_] == [('old', d_old, Decimal('10'))]
+    assert credit == 0 and unbooked == Decimal('-20')
+
+
+def test_fifo_unit_a_negative_unbooked_amount_spills_backwards_and_the_rest_is_credit():
+    d1, d2 = TODAY - timedelta(days=80), TODAY - timedelta(days=5)
+    open_, credit, unbooked = retail_api_module._fifo_open_charges(
+        [_ev(1, 10.0, day=d1, ref='a'), _ev(1, 20.0, day=d2, ref='b')], 4.0)
+    # 26 missing: all of 'b' (20) then 6 of 'a' -> 4 left of the OLDEST, which is right:
+    # what survives is the oldest, everything newer is what "isn't on the books".
+    assert [(r['ref'], r['amount']) for r in open_] == [('a', Decimal('4'))]
+    assert credit == 0 and unbooked == Decimal('-26')
+    open_, credit, _u = retail_api_module._fifo_open_charges(
+        [_ev(1, 10.0, day=d1, ref='a'), _ev(1, 20.0, day=d2, ref='b')], -5.0)
+    assert open_ == [] and credit == Decimal('5')     # more missing than owed: the rest is credit
+
+
+def test_a_synced_sale_the_balance_never_booked_does_not_shorten_the_oldest_debt():
+    """F2 / probe p14b. A sale that ARRIVED BY SYNC moves no `credit_balance`
+    on the receiving device (same INSERT shape as sync_service). Local 10.0
+    charged 80 days ago is really owed; a synced 20.0 from 5 days ago is in
+    the events but not in the balance (10.0). The old code took the 20 off the
+    OLDEST charge first and reported the 80-day debt gone -- ageing 10 owed at
+    5 days instead of 80. It must stay in 61_90, and the buckets still add
+    up to the balance."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 10.0, 80)
+    rconn = get_retail_conn()
+    _plant_sale(rconn, cid, bid, c, 20.0, 5)
+    rconn.commit(); rconn.close()
+
+    _aging_all, row, stmt = _assert_reconciles(client, c, 10.0, unbooked=-20.0)
+    assert row['unbooked_amount'] == -20.0
+    assert row['buckets'] == {'current': 0.0, '1_30': 0.0, '31_60': 0.0, '61_90': 10.0, '90_plus': 0.0}
+    assert row['oldest_unpaid_date'] == _iso(80) and row['days_overdue'] == 80
+    assert row['oldest_unpaid_amount'] == 10.0 and row['overdue_amount'] == 10.0
+    _same_four(row, stmt)
+
+
+# -- F3: the guards that had no test -----------------------------------------
+
+def test_another_companys_rows_naming_this_customers_id_never_reach_their_ledger():
+    """F3 / M5, probe p7. Every event query keeps its own `company_id` filter
+    (the debtors subselect is a narrowing, not a tenant guard). Plant, for
+    company B, one row per table that NAMES company A's customer id -- the
+    shape a sync or import mis-map would leave -- plus BOTH return shapes on
+    each side of the JOIN (`r.company_id` and `s.company_id` are separate
+    filters, and each UNION half has its own copy). Every planted return
+    carries BOTH an ar_forgiven and a store-credit amount, so dropping any one
+    of the four settlement filters shows up. Buckets alone would NOT catch a
+    leak (a phantom event just moves `unbooked_amount`), so the assertion is
+    the event LIST and `unbooked_amount == 0`."""
+    client_a, cid_a, bid_a = _make_shop()
+    client_b, cid_b, bid_b = _make_shop()
+    a1 = _customer(cid_a, 'A1')
+    sale_a = _credit_sale(client_a, cid_a, bid_a, a1, 11.0, 15)
+    rconn = get_retail_conn()
+    b_sale = _plant_sale(rconn, cid_b, bid_b, a1, 999.0, 200)          # charges: sales.company_id
+    _plant_payment(rconn, cid_b, 'customer', a1, 'in', 5.0, 100)        # receipts: payments.company_id
+    _plant_return(rconn, cid_b, bid_b, sale_a['id'], 3.0, 2.0)          # settlements: returns.company_id
+    _plant_return(rconn, cid_a, bid_a, b_sale, 3.0, 2.0)                # settlements: sales.company_id
+    rconn.commit(); rconn.close()
+
+    _aging_all, row, stmt = _assert_reconciles(client_a, a1, 11.0)
+    assert [e['kind'] for e in stmt['events']] == ['charge'], stmt['events']
+    assert row['unbooked_amount'] == 0.0
+    assert row['buckets'] == {'current': 0.0, '1_30': 11.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+    assert all(r['id'] != a1 for r in _aging(client_b)['customers'])
+
+
+def test_a_return_that_paid_out_as_store_credit_settles_the_debt_and_stays_on_the_ledger():
+    """F3 / M4b, probe p2. The settlements query is a UNION of two halves:
+    `ar_forgiven_amount` and `store_credit_amount`. The earlier cases only
+    ever forgave debt, so dropping the store-credit half went unnoticed.
+    Sale 10, then 15 paid (the customer is 5 in credit), then the 10 sale is
+    returned: nothing is owed on it, so the whole 10 goes back as STORE CREDIT
+    (a `return_credit` event, no payments row, the balance moves to -15). A
+    new 20 charge then leaves 5 owed. The ledger must carry the credit event:
+    with the half missing the statement closes 10 higher than the column."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    sale = _credit_sale(client, cid, bid, c, 10.0, 0, stamp=False)
+    _pay(client, c, 15.0, 0, at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    ret = _return_one(client, sale)
+    assert ret['ar_forgiven_amount'] == 0 and ret['store_credit_amount'] == 10.0, ret
+    _stamp_row('sales', 'id', sale['id'], _days_ago(50))
+    _stamp_row('returns', 'id', ret['id'], _days_ago(40))
+    rconn = get_retail_conn()
+    rconn.execute("UPDATE payments SET created_at=? WHERE party_id=?", (_stamp(_days_ago(45))[0], c))
+    rconn.commit(); rconn.close()
+    _credit_sale(client, cid, bid, c, 20.0, 5)
+
+    _aging_all, row, stmt = _assert_reconciles(client, c, 5.0)
+    kinds = [e['kind'] for e in stmt['events']]
+    assert kinds == ['charge', 'payment', 'return_credit', 'charge'], kinds
+    assert row['unbooked_amount'] == 0.0
+    assert row['buckets'] == {'current': 0.0, '1_30': 5.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+    assert row['oldest_unpaid_date'] == _iso(5) and row['days_overdue'] == 5
+    _same_four(row, stmt)
+
+
+def test_overdue_starts_at_one_full_shop_day_not_at_a_calendar_edge():
+    """F3 / M6, probe p11. 'now' is 15:00 on 15 June in Amman. A charge at
+    23:59 on the 14th is ONE day old (overdue, `1_30`); one at 00:01 on the
+    15th is today's (`current`, not overdue). `_AGING_CURRENT_MAX_DAYS = 1`
+    would fold the first into `current` as well; the 12 non-boundary cases
+    above never sit on either side of that edge."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 1.0, 0, at=datetime(2026, 6, 14, 20, 59, tzinfo=timezone.utc))   # 23:59 Amman
+    _credit_sale(client, cid, bid, c, 2.0, 0, at=datetime(2026, 6, 14, 21, 1, tzinfo=timezone.utc))    # 00:01 Amman
+
+    _aging_all, row, stmt = _assert_reconciles(client, c, 3.0)
+    assert row['buckets'] == {'current': 2.0, '1_30': 1.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+    assert row['oldest_unpaid_date'] == '2026-06-14' and row['days_overdue'] == 1
+    assert row['overdue_amount'] == 1.0
+    _same_four(row, stmt)
+
+
+# -- F4: a bounced cheque UNDOES the payment ----------------------------------
+
+def test_fifo_unit_a_reversal_that_names_its_payment_cancels_both_rows():
+    d1, d2 = TODAY - timedelta(days=80), TODAY - timedelta(days=10)
+    events = [_ev(1, 50.0, day=d1, ref='a'), _ev(1, 20.0, day=d2, ref='b'),
+              dict(_ev(-1, 50.0, day=TODAY, ref='chq'), uid='u-pay'),
+              dict(_ev(1, 50.0, day=TODAY, ref='chq-back'), uid='u-rev', undoes='u-pay')]
+    open_, credit, unbooked = retail_api_module._fifo_open_charges(events, 70.0)
+    assert [(r['ref'], r['date'], r['amount']) for r in open_] == [
+        ('a', d1, Decimal('50')), ('b', d2, Decimal('20'))]
+    assert credit == 0 and unbooked == 0
+
+
+def test_fifo_unit_a_reversal_whose_payment_is_not_in_the_set_stays_an_ordinary_charge():
+    """No target row -> nothing to cancel: the reversal is a +50 dated where it
+    happened (the only honest reading of a row that names nothing we hold)."""
+    d1 = TODAY - timedelta(days=80)
+    events = [_ev(1, 50.0, day=d1, ref='a'), dict(_ev(1, 50.0, day=TODAY, ref='rev'), uid='u-rev', undoes='gone')]
+    open_, _credit, _u = retail_api_module._fifo_open_charges(events, 100.0)
+    assert [(r['ref'], r['amount']) for r in open_] == [('a', Decimal('50')), ('rev', Decimal('50'))]
+
+
+def test_a_bounced_cheque_takes_the_payment_back_it_does_not_open_a_charge_dated_on_the_bounce():
+    """F4 / probe p4. 50 charged 80 days ago, 20 charged 10 days ago, then a
+    50 cheque is taken and bounces. The bounce takes the cheque's payment
+    back: the customer owes exactly what they did before the cheque -- the 50
+    at ITS OWN 80 days, and the 20 at 10. The old reading kept the payment
+    (eating the 80-day charge) and added a NEW 50 dated on the bounce day, so
+    the 80-day debt read as brand new."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 50.0, 80)
+    _credit_sale(client, cid, bid, c, 20.0, 10)
+    chq = _cheque(client, c, 50.0)
+    _restamp_crossing(chq, 0, 6)
+
+    _a, row, _s = _assert_reconciles(client, c, 20.0)          # while the cheque stands: paid the 80-day one
+    assert row['buckets'] == {'current': 0.0, '1_30': 20.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+
+    _cheque_action(client, chq, 'bounce', reason='NSF')
+    _restamp_crossing(chq, 1, 2)
+    _aging_all, row, stmt = _assert_reconciles(client, c, 70.0)
+    assert row['buckets'] == {'current': 0.0, '1_30': 20.0, '31_60': 0.0, '61_90': 50.0, '90_plus': 0.0}
+    assert row['oldest_unpaid_date'] == _iso(80) and row['oldest_unpaid_amount'] == 50.0
+    assert row['days_overdue'] == 80 and row['overdue_amount'] == 70.0
+    assert row['unbooked_amount'] == 0.0
+    # the LEDGER still tells the truth: both money rows are listed, just not allocated
+    assert [e['kind'] for e in stmt['events']] == ['charge', 'charge', 'payment', 'reversal']
+    _same_four(row, stmt)
+
+
+def test_a_reversal_that_names_no_cheque_we_hold_is_still_a_charge_and_the_books_still_add_up():
+    """F4 fallback. Sever the reversal's link (its uid no longer derives from
+    any cheque of this company -- a peer's row, a cheque never synced here).
+    The engine must not guess: the row is an ordinary +50 dated when it was
+    written, and the buckets still add up to the balance."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 50.0, 80)
+    _credit_sale(client, cid, bid, c, 20.0, 10)
+    chq = _cheque(client, c, 50.0)
+    _restamp_crossing(chq, 0, 6)
+    _cheque_action(client, chq, 'bounce', reason='NSF')
+    _restamp_crossing(chq, 1, 2)
+    rconn = get_retail_conn()
+    n = rconn.execute("UPDATE payments SET uid=? WHERE uid=?",
+                      (str(uuid.uuid4()), retail_api_module.cheque_engine.money_uid(chq, 1))).rowcount
+    rconn.commit(); rconn.close()
+    assert n == 1
+
+    _aging_all, row, _stmt = _assert_reconciles(client, c, 70.0)
+    # 50@80d is eaten by the cheque payment, then the unlinked reversal opens 50 on day -2
+    assert row['buckets'] == {'current': 0.0, '1_30': 70.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+    assert row['oldest_unpaid_date'] == _iso(10)
+
+
+def test_a_cheque_reinstated_and_bounced_again_still_undoes_each_payment_with_its_own_reversal():
+    """F4. A cheque crossing 4 times writes 4 money rows: in(k0), out(k1),
+    in(k2), out(k3). Each reversal cancels the payment just before it: after
+    the reinstatement only k2 stands (the customer is 20 in debt), and after
+    the second bounce nothing does (70 again, the 80-day charge still 80)."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 50.0, 80)
+    _credit_sale(client, cid, bid, c, 20.0, 10)
+    chq = _cheque(client, c, 50.0)
+    _restamp_crossing(chq, 0, 6)
+    _cheque_action(client, chq, 'bounce', reason='NSF')
+    _restamp_crossing(chq, 1, 5)
+    _cheque_action(client, chq, 'reinstate')
+    _restamp_crossing(chq, 2, 4)
+
+    _aging_all, row, _stmt = _assert_reconciles(client, c, 20.0)
+    assert row['buckets'] == {'current': 0.0, '1_30': 20.0, '31_60': 0.0, '61_90': 0.0, '90_plus': 0.0}
+
+    _cheque_action(client, chq, 'bounce', reason='NSF again')
+    _restamp_crossing(chq, 3, 3)
+    _aging_all, row, _stmt = _assert_reconciles(client, c, 70.0)
+    assert row['buckets'] == {'current': 0.0, '1_30': 20.0, '31_60': 0.0, '61_90': 50.0, '90_plus': 0.0}
+    assert row['oldest_unpaid_date'] == _iso(80) and row['days_overdue'] == 80
+
+
+# -- F5: void_payment and cheque money rows -----------------------------------
+
+def test_a_cheque_bounce_reversal_row_cannot_be_voided_it_would_double_count_the_debt():
+    """F5 / probe p4b (PRE-EXISTING defect). `void_payment` ADDED the amount
+    for every customer row. The bounce's 'out' reversal had already raised the
+    debt by 50; voiding it added 50 again -- 100 owed on a 50 charge."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 50.0, 80)
+    chq = _cheque(client, c, 50.0)
+    _cheque_action(client, chq, 'bounce', reason='NSF')
+    rev = _cheque_payment_id(chq, 1)
+    assert _payment_row(rev)['direction'] == 'out' and _credit_balance(c) == 50.0
+
+    r = _void(client, rev)
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json()['code'] == 'CHEQUE_PAYMENT_NOT_VOIDABLE'
+    assert _credit_balance(c) == 50.0
+    assert _payment_row(rev)['status'] == 'active'
+
+
+def test_a_cheque_receipt_cannot_be_voided_and_then_bounced_that_took_the_money_back_twice():
+    """F5 / probe p4c (PRE-EXISTING defect). Void the cheque's 'in' row (the
+    customer owes 50 again), then bounce the still-live cheque: the bounce
+    reverses a payment that was already gone -> 100 owed on a 50 charge."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 50.0, 80)
+    chq = _cheque(client, c, 50.0)
+    receipt = _cheque_payment_id(chq, 0)
+    assert _payment_row(receipt)['direction'] == 'in' and _credit_balance(c) == 0.0
+
+    r = _void(client, receipt)
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json()['code'] == 'CHEQUE_PAYMENT_NOT_VOIDABLE'
+    assert _credit_balance(c) == 0.0 and _payment_row(receipt)['status'] == 'active'
+    _cheque_action(client, chq, 'bounce', reason='NSF')
+    assert _credit_balance(c) == 50.0, "50 was charged, 50 owed -- never 100"
+
+
+def test_an_ordinary_account_payment_still_voids_and_puts_the_debt_back():
+    """F5, the ALLOW half: refusing cheque rows must not cost the till its own
+    correction. A customer 'in' payment voids -> the debt is back."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 30.0, 40)
+    _pay(client, c, 10.0, 20)
+    rconn = get_retail_conn()
+    pid = rconn.execute("SELECT id FROM payments WHERE party_id=? AND direction='in'", (c,)).fetchone()[0]
+    rconn.close()
+    assert _credit_balance(c) == 20.0
+
+    r = _void(client, pid)
+    assert r.status_code == 200, r.get_json()
+    _aging_all, row, _stmt = _assert_reconciles(client, c, 30.0)
+    assert row['buckets']['31_60'] == 30.0 and sum(row['buckets'].values()) == 30.0
+
+
+def test_the_void_sign_follows_the_rows_direction_for_a_customer_row_that_raised_the_balance():
+    """F5, direction. A customer row with direction 'out' (that is not a
+    cheque) moved the balance UP when it was written -- a peer's synced row,
+    say. Voiding it must take it back DOWN. The old hardcoded +amount added it
+    a second time (30 owed + 8 written = 38; the void made 46, not 30)."""
+    client, cid, bid = _make_shop()
+    c = _customer(cid)
+    _credit_sale(client, cid, bid, c, 30.0, 40)
+    rconn = get_retail_conn()
+    pid = _plant_payment(rconn, cid, 'customer', c, 'out', 8.0, 10)
+    rconn.execute("UPDATE customers SET credit_balance=38.0 WHERE id=?", (c,))
+    rconn.commit(); rconn.close()
+
+    r = _void(client, pid)
+    assert r.status_code == 200, r.get_json()
+    assert _credit_balance(c) == 30.0
+
+
+def _supplier(cid, balance):
+    rconn = get_retail_conn()
+    sid = str(uuid.uuid4())
+    rconn.execute("INSERT INTO suppliers (id,company_id,name,credit_balance) VALUES (?,?,?,?)",
+                  (sid, cid, f'Sup {sid[:6]}', balance))
+    rconn.commit(); rconn.close()
+    return sid
+
+
+def _supplier_balance(sid):
+    rconn = get_retail_conn()
+    bal = rconn.execute("SELECT credit_balance FROM suppliers WHERE id=?", (sid,)).fetchone()[0]
+    rconn.close()
+    return bal
+
+
+def test_a_supplier_payment_still_voids_and_reopens_the_payable_and_the_opposite_row_goes_down():
+    """F5, direction on the supplier side. An ordinary supplier payment is
+    'out' and REDUCED the payable: voiding reopens it (+). A supplier row with
+    direction 'in' is the other polarity and raised it: voiding takes it down."""
+    client, cid, _bid = _make_shop()
+    sid = _supplier(cid, 40.0)
+    r = client.post(f"{API}/suppliers/{sid}/payments", json={'amount': 15.0, 'method': 'cash'})
+    assert r.status_code == 200, r.get_json()
+    assert _supplier_balance(sid) == 25.0
+    rconn = get_retail_conn()
+    pid = rconn.execute("SELECT id FROM payments WHERE party_type='supplier' AND party_id=?", (sid,)).fetchone()[0]
+    rconn.close()
+    assert _void(client, pid).status_code == 200
+    assert _supplier_balance(sid) == 40.0
+
+    rconn = get_retail_conn()
+    odd = _plant_payment(rconn, cid, 'supplier', sid, 'in', 8.0, 3)
+    rconn.execute("UPDATE suppliers SET credit_balance=48.0 WHERE id=?", (sid,))
+    rconn.commit(); rconn.close()
+    assert _void(client, odd).status_code == 200
+    assert _supplier_balance(sid) == 40.0

@@ -12424,6 +12424,24 @@ def _money(x, currency=None):
         return 0.0
 
 
+def _money_for(currency=None):
+    """`_money` with the currency's quantum resolved ONCE -- same result for
+    the same input, for a report that formats thousands of amounts in one
+    currency (the aging report: `_money` resolved the quantum per call, ~40 ms
+    of a 500-debtor report)."""
+    try:
+        quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
+    except Exception:
+        return lambda x: 0.0
+
+    def money(x):
+        try:
+            return float(Decimal(str(x or 0)).quantize(quant, rounding=ROUND_HALF_UP))
+        except Exception:
+            return 0.0
+    return money
+
+
 #: Half the currency's own minor unit -- the only correct slack for a gate
 #: that asks "is this amount really zero / is this really a debt".
 #:
@@ -15111,11 +15129,20 @@ def customers_receivables():
 #      consumed by the next charge -- never dropped. Dropping it is exactly the
 #      "pay 20, buy 30, owe 30" bug.
 #   3. A `reversal` (a bounced cheque putting debt back on the books) is a +1
-#      row that is NOT a charge. It is treated as a NEW charge at its own date.
-#      That is a modelling choice, not a fact: the money it restores was
-#      really owed since the ORIGINAL charge it had settled, and FIFO cannot
-#      know which one that was. It errs toward "younger", i.e. it never
-#      overstates how long the shop has been waiting.
+#      row that is NOT a charge. ROUND 7 (verifier probe p4): it used to be
+#      booked as a NEW charge at the bounce date, which made a 50-JOD debt that
+#      had really been owed for 80 days read "1 day old" the moment its cheque
+#      bounced -- the overdue view forgot the debt existed. A bounce now UNDOES
+#      the cheque's payment: the payment row and its reversal are both dropped
+#      from the timeline, so FIFO allocates exactly as if that cheque had never
+#      been taken, and the original charges keep their real ages. The link is
+#      the cheque's own deterministic money uid (`cheque_engine.money_uid`:
+#      crossing k-1 is the payment, crossing k the reversal), resolved by
+#      `_link_cheque_reversals`, not by amount or date guessing. A reversal
+#      whose payment is NOT in the events (a voided pre-fix payment, or a
+#      peer's row that has not synced) has nothing to undo and falls back to
+#      the old rule: a new charge at its own date -- the younger answer, so it
+#      never overstates how long the shop has been waiting.
 #
 # THE INVARIANT, and what closes the last gap. sum(open remainders) minus the
 # carried-forward credit equals `customers.credit_balance` -- exactly, because
@@ -15126,12 +15153,22 @@ def customers_receivables():
 # return backfilled by `_migrate_add_return_settlement_split`. There is no
 # customer opening-balance writer in this codebase (only the GL's
 # `opening_balance` journal). Rather than fudge that, the difference between the
-# stored balance and the events' net is applied as ONE undated pseudo-event at
-# the END of the timeline (a charge if positive, a payment if negative) and is
-# SURFACED as `unbooked_amount`. An undated remainder buckets as `current` --
-# the same age-0 answer the old report gave a debtor it could not date -- and
-# is excluded from `oldest_unpaid_*` / `overdue_amount`: the shop cannot claim
-# a debt is late when nothing says when it began.
+# stored balance and the events' net is SURFACED as `unbooked_amount` and
+# applied on the one side that cannot hide debt (ROUND 7, verifier probe p14b):
+#   * POSITIVE (stored balance above the events): an undated charge at the END
+#     of the timeline. An undated remainder buckets as `current` -- the same
+#     age-0 answer the old report gave a debtor it could not date -- and is
+#     excluded from `oldest_unpaid_*` / `overdue_amount`: the shop cannot claim
+#     a debt is late when nothing says when it began.
+#   * NEGATIVE (stored balance BELOW the events -- e.g. a peer's synced sales
+#     whose AR never reached this device's `credit_balance`): it used to be
+#     applied as a payment at the end, which FIFO spent on the OLDEST charge,
+#     so a real 80-day debt vanished from the overdue view because of a row
+#     nobody could date. It is now taken off the NEWEST open charges first
+#     (the most recent debt is the likeliest to be the one the missing money
+#     covered), and only what is left over becomes carried credit. It can
+#     therefore never shorten the oldest debt.
+# Either way sum(open remainders) - carried credit == credit_balance.
 #
 # THE THRESHOLD. The aging report's "current" bucket is age <= 0 days, so the
 # "due" line is 0 days: a remainder is OVERDUE from its first full day
@@ -15162,7 +15199,13 @@ def _aging_bucket(age_days):
     return '90_plus'
 
 
+from functools import lru_cache as _lru_cache
+
+
+@_lru_cache(maxsize=8192)
 def _fifo_dec(value):
+    # Pure and Decimals are immutable, so memoising is safe; a shop's amounts
+    # repeat (same prices, same instalments) across thousands of events.
     return Decimal(str(value or 0)).quantize(_FIFO_QUANT, rounding=ROUND_HALF_UP)
 
 
@@ -15203,17 +15246,30 @@ def _shop_today(conn, cid):
 def _fifo_open_charges(events, credit_balance):
     """Pure FIFO allocation. `events` are the statement's events, oldest first,
     each with `amount`, `sign`, `ref` and a `date` (a business date or None).
+    An event may also carry `uid` (its own wire identity) and `undoes` (the uid
+    of the payment it reverses -- a bounced cheque's reversal row). When the
+    payment named by `undoes` is present, BOTH rows are dropped: the cheque is
+    allocated as if it had never been taken (see rule 3 in the block above).
     Returns (open_remainders, carried_credit, unbooked): the still-unpaid part
     of each charge oldest first, the credit a payment left over with no charge
     to meet, and the signed difference between the stored `credit_balance` and
     what the events add up to. Decimal throughout -- exact, so no epsilon is
     needed inside the allocation itself."""
+    # Fast path: almost no statement has a cheque reversal, so skip the three
+    # passes that pair them up (this ran once per debtor in the report).
+    undoers = [e for e in events if e.get('undoes')]
+    if undoers:
+        uids = {e['uid'] for e in events if e.get('uid')}
+        cancelled = {e['undoes'] for e in undoers if e['undoes'] in uids}
+        kept = [e for e in events if e.get('uid') not in cancelled and e.get('undoes') not in cancelled]
+    else:
+        kept = events
     timeline = [(1 if int(e.get('sign', 1)) > 0 else -1, _fifo_dec(e['amount']), e.get('ref'), e.get('date'))
-                for e in events]
+                for e in kept]
     net = sum((s * a for s, a, _r, _d in timeline), Decimal('0'))
     unbooked = _fifo_dec(credit_balance) - net
-    if unbooked != 0:
-        timeline.append((1 if unbooked > 0 else -1, abs(unbooked), None, None))
+    if unbooked > 0:
+        timeline.append((1, unbooked, None, None))
     open_, credit = [], Decimal('0')
     for sign, amt, ref, day in timeline:
         if amt <= 0:
@@ -15233,20 +15289,36 @@ def _fifo_open_charges(events, credit_balance):
                 if head['amount'] <= 0:
                     open_.pop(0)
             credit += amt
+    if unbooked < 0:
+        # NEWEST first, never `open_[0]` -- see the block above (probe p14b).
+        missing = -unbooked
+        while missing > 0 and open_:
+            tail = open_[-1]
+            take = min(tail['amount'], missing)
+            tail['amount'] -= take
+            missing -= take
+            if tail['amount'] <= 0:
+                open_.pop()
+        credit += missing
     return open_, credit, unbooked
 
 
-def _customer_aging(conn, cid, cust_id, credit_balance, eps, boundary):
-    """One customer's FIFO allocation, from the statement's own events."""
-    return _customer_aging_from_events(_customer_statement_events(conn, cid, cust_id, eps), credit_balance, boundary)
-
-
-def _customer_aging_from_events(events, credit_balance, boundary):
-    """Same allocation for a caller that already holds the statement's events
-    (customer_statement does), so it neither re-queries nor risks reading a
-    different set than the list it prints. Copies each event: the caller's
-    rows are not touched."""
-    dated = [dict(e, date=_event_business_date(e, boundary)) for e in events]
+def _customer_aging_from_events(events, credit_balance, boundary, date_cache=None):
+    """The FIFO allocation for a caller that already holds the statement's
+    events (customer_statement, aging_report), so it neither re-queries nor
+    risks reading a different set than the list it prints. Copies each event:
+    the caller's rows are not touched. `date_cache` (a dict the caller shares
+    across customers) memoises the timestamp-to-business-date conversion --
+    it was 0.58 s of a 1.45 s report over 500 debtors, and a shop's events
+    repeat the same instants."""
+    if date_cache is None:
+        date_cache = {}
+    dated = []
+    for e in events:
+        key = (e.get('created_at_utc'), e.get('created_at'))
+        if key not in date_cache:
+            date_cache[key] = _event_business_date(e, boundary)
+        dated.append(dict(e, date=date_cache[key]))
     open_, credit, unbooked = _fifo_open_charges(dated, credit_balance)
     return {'open': open_, 'carried_credit': credit, 'unbooked': unbooked}
 
@@ -15255,33 +15327,56 @@ def _remainder_age(remainder, today):
     return 0 if remainder['date'] is None else max((today - remainder['date']).days, 0)
 
 
-def _aging_fields(view, credit_balance, eps, today, currency):
+def _aging_fields(view, credit_balance, eps, today, currency, money=None):
     """`oldest_unpaid_date` / `oldest_unpaid_amount` / `days_overdue` /
     `overdue_amount` for one customer -- the four fields the till's Remind
     button and the statement read. A customer in credit (balance not above
     epsilon) has none: `oldest_unpaid_*` are None and the rest 0."""
+    if money is None:
+        money = _money_for(currency)
     fields = {'oldest_unpaid_date': None, 'oldest_unpaid_amount': None, 'days_overdue': 0, 'overdue_amount': 0.0}
     if float(credit_balance or 0) <= eps:
         return fields
     dated = [r for r in view['open'] if r['date'] is not None]
-    oldest = next((r for r in dated if r['amount'] > Decimal(str(eps))), None)
+    eps_dec = Decimal(str(eps))
+    oldest = next((r for r in dated if r['amount'] > eps_dec), None)
     if oldest is not None:
         fields['oldest_unpaid_date'] = oldest['date'].isoformat()
-        fields['oldest_unpaid_amount'] = _money(oldest['amount'], currency)
+        fields['oldest_unpaid_amount'] = money(oldest['amount'])
         fields['days_overdue'] = _remainder_age(oldest, today)
-    fields['overdue_amount'] = _money(
-        sum((r['amount'] for r in dated if _remainder_age(r, today) > _AGING_CURRENT_MAX_DAYS), Decimal('0')),
-        currency)
+    fields['overdue_amount'] = money(
+        sum((r['amount'] for r in dated if _remainder_age(r, today) > _AGING_CURRENT_MAX_DAYS), Decimal('0')))
     return fields
 
 
 def _customer_statement_events(conn, cid, cust_id, _eps):
-    """Every ledger event that moved one customer's `credit_balance`, oldest
-    first, each carrying its own `sign`. The ONE source both `customer_statement`
-    (the running-balance list) and the FIFO ageing below read, so the two cannot
-    disagree about what happened. Rows from `sales`/`returns` also carry
-    `created_at_utc` (the true instant) for the ageing's shop-date conversion;
-    the statement's response never exposes it."""
+    """Every ledger event that moved ONE customer's `credit_balance`, oldest
+    first, each carrying its own `sign`. See `_statement_events`."""
+    return _statement_events(conn, cid, cust_id, _eps).get(str(cust_id), [])
+
+
+def _statement_events(conn, cid, cust_id, _eps):
+    """Every ledger event that moved a customer's `credit_balance`, oldest
+    first per customer, each carrying its own `sign`, as `{str(customer_id):
+    [events]}`. The ONE source both `customer_statement` (the running-balance
+    list) and the FIFO ageing read, so the two cannot disagree about what
+    happened. Rows from `sales`/`returns` also carry `created_at_utc` (the true
+    instant) for the ageing's shop-date conversion; the statement's response
+    never exposes it.
+
+    `cust_id` names one customer (the statement route), or is None for EVERY
+    debtor at once (the aging report). ROUND 7, verifier finding F1: the report
+    used to call this once PER debtor, and the settlements UNION scans
+    `returns` from the top each time -- 1.45 s for 500 debtors, 4.0 s with
+    3.4k returns. The all-debtors form is the same four queries run once,
+    scoped by a subselect, then grouped in Python: a fixed number of queries
+    however many debtors there are. EVERY query keeps its own `company_id`
+    filter in both forms; the subselect is a narrowing, not a tenant guard."""
+    if cust_id is not None:
+        scope, scope_params = "= ?", (cust_id,)
+    else:
+        scope = "IN (SELECT id FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>?)"
+        scope_params = (cid, _eps)
     # THE CHARGE IS THE AR THIS SALE ACTUALLY CREATED -- term for term the
     # figure create_sale credited: `balance_due = amount_due_after_points -
     # paid`, where `amount_due_after_points = total - points_redeemed_amount`
@@ -15311,11 +15406,11 @@ def _customer_statement_events(conn, cid, cust_id, _eps):
     # 0.005 (half a CENT, in a currency whose minor unit is a fil) until the
     # epsilon sweep moved every such gate at once.
     charges = conn.execute(
-        "SELECT sale_number AS ref, created_at, created_at_utc, "
+        "SELECT sale_number AS ref, created_at, created_at_utc, customer_id AS cust, "
         "(total - COALESCE(points_redeemed_amount,0) - amount_paid) AS amount, 'charge' AS kind, 1 AS sign "
-        "FROM sales WHERE company_id=? AND customer_id=? "
-        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > ?",
-        (cid, cust_id, _eps)).fetchall()
+        "FROM sales WHERE company_id=? AND customer_id " + scope + " "
+        "AND (total - COALESCE(points_redeemed_amount,0) - amount_paid) > ? ORDER BY id",
+        (cid, *scope_params, _eps)).fetchall()
     # Aseel-parity wave A-PAR (schema v32) FORCED FIX, not a new feature: a
     # cheque bounce writes the OPPOSITE `direction` on purpose (see
     # _apply_cheque_event's own "THE MONEY LEG" comment -- a NEW row, never
@@ -15362,13 +15457,18 @@ def _customer_statement_events(conn, cid, cust_id, _eps):
     # `credit_balance` behind this statement's back. That refusal was
     # verified before choosing this shape over the alternative of billing the
     # whole sale and keeping the tender line.
+    #
+    # `uid` and `related_type` ride along ONLY so the FIFO ageing can pair a
+    # bounced cheque's reversal with the cheque payment it undoes
+    # (`_link_cheque_reversals`); the statement's response never exposes them.
     receipts = conn.execute(
         "SELECT id, reference AS ref, created_at, NULL AS created_at_utc, amount, direction, "
+        "party_id AS cust, uid, related_type, "
         "CASE WHEN direction='in' THEN 'payment' ELSE 'reversal' END AS kind, "
         "CASE WHEN direction='in' THEN -1 ELSE 1 END AS sign "
-        "FROM payments WHERE company_id=? AND party_type='customer' AND party_id=? "
-        "AND COALESCE(status,'active')='active' AND COALESCE(related_type,'') <> 'sale'",
-        (cid, cust_id)).fetchall()
+        "FROM payments WHERE company_id=? AND party_type='customer' AND party_id " + scope + " "
+        "AND COALESCE(status,'active')='active' AND COALESCE(related_type,'') <> 'sale' ORDER BY id",
+        (cid, *scope_params)).fetchall()
     # THIRD DEFECT FIXED HERE -- the one this route's own closing NOTE has
     # named in writing since the A-PAR wave, and ffa221a5's commit message
     # left "for its own pass": create_return settles a refund across three
@@ -15401,21 +15501,64 @@ def _customer_statement_events(conn, cid, cust_id, _eps):
     # the only status create_return ever writes, and the same filter its own
     # prior-claims query applies.
     settlements = conn.execute(
-        "SELECT r.return_number AS ref, r.created_at AS created_at, r.created_at_utc AS created_at_utc, "
+        "SELECT * FROM ("
+        "SELECT r.id AS rid, 0 AS half, r.return_number AS ref, r.created_at AS created_at, "
+        "r.created_at_utc AS created_at_utc, s.customer_id AS cust, "
         "COALESCE(r.ar_forgiven_amount,0) AS amount, 'return_forgiven' AS kind, -1 AS sign "
         "FROM returns r JOIN sales s ON s.id = r.sale_id "
-        "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
+        "WHERE r.company_id=? AND s.company_id=? AND s.customer_id " + scope + " AND r.status='completed' "
         "AND COALESCE(r.ar_forgiven_amount,0) > ? "
         "UNION ALL "
-        "SELECT r.return_number AS ref, r.created_at AS created_at, r.created_at_utc AS created_at_utc, "
+        "SELECT r.id AS rid, 1 AS half, r.return_number AS ref, r.created_at AS created_at, "
+        "r.created_at_utc AS created_at_utc, s.customer_id AS cust, "
         "COALESCE(r.store_credit_amount,0) AS amount, 'return_credit' AS kind, -1 AS sign "
         "FROM returns r JOIN sales s ON s.id = r.sale_id "
-        "WHERE r.company_id=? AND s.company_id=? AND s.customer_id=? AND r.status='completed' "
-        "AND COALESCE(r.store_credit_amount,0) > ?",
-        (cid, cid, cust_id, _eps, cid, cid, cust_id, _eps)).fetchall()
-    events = [dict(r) for r in charges] + [dict(r) for r in receipts] + [dict(r) for r in settlements]
-    events.sort(key=lambda e: e.get('created_at') or '')
-    return events
+        "WHERE r.company_id=? AND s.company_id=? AND s.customer_id " + scope + " AND r.status='completed' "
+        "AND COALESCE(r.store_credit_amount,0) > ?) ORDER BY rid, half",
+        (cid, cid, *scope_params, _eps, cid, cid, *scope_params, _eps)).fetchall()
+    by_customer = {}
+    for group in (charges, receipts, settlements):
+        for r in group:
+            by_customer.setdefault(str(r['cust']), []).append(dict(r))
+    for events in by_customer.values():
+        events.sort(key=lambda e: e.get('created_at') or '')
+    _link_cheque_reversals(conn, cid, by_customer)
+    return by_customer
+
+
+def _link_cheque_reversals(conn, cid, by_customer):
+    """Stamp `undoes` on every bounce/cancel REVERSAL row that came from a
+    cheque, naming the payment row it takes back (probe p4, ROUND 7).
+
+    A cheque's money legs are deterministic: crossing k writes a payment whose
+    uid is `cheque_engine.money_uid(cheque_id, k)`, even k a payment ('in'),
+    odd k the reversal ('out') of crossing k-1. The payment row does not name
+    its cheque (`payments.related_id` is an opaque device-local INTEGER, and a
+    cheque id is text), so the link is rebuilt the way the writer built it:
+    for each of this company's customer cheques, derive the uid of every
+    possible odd crossing and match it against the reversal rows in hand. A
+    cheque cannot cross more often than it has events, so `n` events bound k.
+    Only runs when a cheque reversal exists at all -- a shop that never bounced
+    a cheque pays nothing. Company-scoped like every other read here."""
+    wanted = {}
+    for events in by_customer.values():
+        for e in events:
+            if e.get('kind') == 'reversal' and e.get('related_type') == 'cheque' and e.get('uid'):
+                wanted[e['uid']] = e
+    if not wanted:
+        return
+    parties = sorted(by_customer)
+    for i in range(0, len(parties), 400):
+        chunk = parties[i:i + 400]
+        rows = conn.execute(
+            "SELECT c.id AS id, COUNT(ev.id) AS n FROM cheques c LEFT JOIN cheque_events ev ON ev.cheque_id = c.id "
+            "WHERE c.company_id=? AND c.party_type='customer' AND c.party_id IN (%s) GROUP BY c.id"
+            % ','.join('?' * len(chunk)), (cid, *chunk)).fetchall()
+        for row in rows:
+            for k in range(1, int(row['n']) + 1, 2):
+                hit = wanted.get(cheque_engine.money_uid(row['id'], k))
+                if hit is not None:
+                    hit['undoes'] = cheque_engine.money_uid(row['id'], k - 1)
 
 
 @retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
@@ -15438,7 +15581,7 @@ def customer_statement(cust_id):
         conn.close(); return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
     _eps = _money_epsilon(_company_currency(conn, cid))
     # The three event queries, and every comment explaining why each one reads
-    # the way it does, live in `_customer_statement_events` above -- moved, not
+    # the way it does, live in `_statement_events` above -- moved, not
     # rewritten, so the FIFO ageing reads the SAME events as this statement.
     events = _customer_statement_events(conn, cid, cust_id, _eps)
     # Read ONCE, applied to every figure this statement returns -- same rule
@@ -16444,7 +16587,7 @@ def daily_cash():
 @mt_require_capability(CAP_REPORTS)
 def aging_report():
     """Aging. RECEIVABLE is a per-customer FIFO allocation (see the block above
-    `_customer_statement_events`): payments and return settlements are applied
+    `_statement_events`): payments and return settlements are applied
     oldest charge first, a payment with nothing to pay is carried forward as
     credit, and each OPEN REMAINDER lands in its own age bucket, aged in the
     shop's business days. `data` is unchanged -- the pure bucket map -- and
@@ -16469,21 +16612,28 @@ def aging_report():
             (cid, _eps)).fetchall()
         totals = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
         rows = []
+        # SET-BASED (ROUND 7, F1): every debtor's events in one fixed set of
+        # company-scoped queries, then FIFO per customer in Python. The old
+        # per-debtor query loop scanned `returns` once per debtor.
+        events_by = _statement_events(conn, cid, None, _eps)
+        date_cache = {}
+        money = _money_for(currency)
         for d in debtors:
-            view = _customer_aging(conn, cid, d['id'], d['credit_balance'], _eps, boundary)
+            view = _customer_aging_from_events(events_by.get(str(d['id']), []), d['credit_balance'],
+                                               boundary, date_cache)
             mine = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
             for r in view['open']:
                 mine[_aging_bucket(_remainder_age(r, today))] += r['amount']
             for k in _AGING_BUCKET_KEYS:
                 totals[k] += mine[k]
             rows.append({'id': d['id'], 'name': d['name'], 'phone': d['phone'],
-                         'balance': _money(d['credit_balance'], currency),
-                         'buckets': {k: _money(v, currency) for k, v in mine.items()},
-                         'unbooked_amount': _money(view['unbooked'], currency),
-                         **_aging_fields(view, d['credit_balance'], _eps, today, currency)})
+                         'balance': money(d['credit_balance']),
+                         'buckets': {k: money(v) for k, v in mine.items()},
+                         'unbooked_amount': money(view['unbooked']),
+                         **_aging_fields(view, d['credit_balance'], _eps, today, currency, money)})
         conn.close()
         return jsonify({'status': 'success', 'type': kind,
-                        'data': {k: _money(v, currency) for k, v in totals.items()},
+                        'data': {k: money(v) for k, v in totals.items()},
                         'customers': rows})
     today = datetime.now()
     # One epsilon for both halves of this report and for BOTH of its queries:
@@ -16851,6 +17001,29 @@ def void_payment(pid):
                          'message': 'This receipt belongs to a sale. Process a return against that sale '
                                     'instead -- a return reverses the stock and the money together.'}), 409
 
+    # ROADMAP-STYLE NOTE -- PRE-EXISTING BUG, found by the ROUND 7 verifier of
+    # the FIFO ageing (probes p4b and p4c), fixed here. Every cheque money leg
+    # is a `payments` row with related_type='cheque' whose life belongs to the
+    # cheque's own state machine (`_apply_cheque_event`: crossing k writes the
+    # row, `_adjust_credit` moves the balance, and the deterministic money uid
+    # makes a second device's copy collapse into it). This route knew none of
+    # that, and always ADDED the amount back:
+    #   * p4b -- voiding a bounce's 'out' REVERSAL row added +amount to a
+    #     balance the bounce had already raised by +amount: AR double-counted.
+    #   * p4c -- voiding a cheque's 'in' receipt and then bouncing the still-live
+    #     cheque took the receipt back twice: AR double-counted again.
+    # Neither is a statement/ageing problem -- the balance itself was wrong. A
+    # cheque is undone only by a cheque event (bounce, cancel, ...), so refuse
+    # the row outright and name the screen that does it. No frontend calls this
+    # route (see the sale refusal above); the Android statement's Void button
+    # on a cheque receipt will now read this 409.
+    if p['related_type'] == 'cheque':
+        conn.close()
+        return jsonify({'status': 'error',
+                         'message': 'This payment belongs to a cheque. Handle it through the cheque '
+                                    'screen (bounce, cancel or reinstate the cheque) instead.',
+                         'code': 'CHEQUE_PAYMENT_NOT_VOIDABLE'}), 409
+
     # AUDIT: the authority to reverse must equal the authority to create --
     # the same principle retail.discount is enforced under in create_sale
     # and update_customer above. The decorator above this handler is only
@@ -16914,7 +17087,16 @@ def void_payment(pid):
             # call's delta -- or the same loss reappears one layer down (see
             # _adjust_credit's own docstring for the identical fix there).
             void_currency = _company_currency(conn, cid)
-            _adjust_credit(conn, table, p['party_id'], cid, _money(p['amount'], void_currency), void_currency)
+            # THE SIGN FOLLOWS THE ROW'S DIRECTION (ROUND 7). A customer 'in' /
+            # supplier 'out' row is the ordinary one and reduced the balance,
+            # so voiding adds it back. Any other combination moved the balance
+            # UP when it was written (today only a cheque bounce writes one,
+            # and cheques are refused above; a peer's synced row could still
+            # carry one), so voiding must take it back DOWN -- a hardcoded
+            # +amount doubled it instead.
+            reduced = (p['party_type'] == 'customer') == (p['direction'] == 'in')
+            void_amt = _money(p['amount'], void_currency)
+            _adjust_credit(conn, table, p['party_id'], cid, void_amt if reduced else -void_amt, void_currency)
         _audit(conn, 'PAYMENT_VOIDED', 'payment', pid, data.get('reason', ''))
         # AUDIT-032A fix (DEFECT 2): this route mutates `payments.status` in
         # place -- the ONE documented exception to Phase 5's "money is an
