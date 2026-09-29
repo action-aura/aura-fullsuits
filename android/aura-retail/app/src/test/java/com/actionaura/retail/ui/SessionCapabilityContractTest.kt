@@ -119,7 +119,9 @@ class SessionCapabilityContractTest {
 
     @Test
     fun an_admin_body_still_gets_everything_the_server_grants_an_admin() {
-        // _capabilities_for_session() returns all eight codes for role=admin,
+        // _capabilities_for_session() returns all twelve codes for role=admin
+        // (the eight originals plus the four registry-v9 books codes; the count
+        // is pinned against user_accounts.py by the twelve-codes test below),
         // deliberately reading the ROLE rather than the permission table. A
         // resolution that only worked for the restricted case would hide the
         // reports screen from the one account that certainly may see it.
@@ -225,6 +227,86 @@ class SessionCapabilityContractTest {
             user = User(role = "cashier", capabilities = listOf("retail.sell")),
         )
         assertThat(sessionCapabilities(both)).containsExactly(CAP_REPORTS)
+    }
+
+    // ── Registry v9: the books codes and the books-only routing decision ─────
+
+    private val userAccountsPy: String get() {
+        val f = File(suiteRoot, "commercial_runtime/identity/user_accounts.py")
+        assumeTrue("user_accounts.py not reachable from this run context", f.exists())
+        return f.readText()
+    }
+
+    private fun serverConst(name: String): String {
+        val m = Regex("""(?m)^$name = '([^']+)'""").find(userAccountsPy)
+        assertThat(m).isNotNull()
+        return m!!.groupValues[1]
+    }
+
+    @Test
+    fun the_books_and_sell_codes_are_spelled_exactly_as_the_server_spells_them() {
+        // A drifted string does not fail loudly: it hides the books from the
+        // one person hired to read them, or routes a cashier to a screen that
+        // only 403s. Read from the Python, never restated.
+        assertThat(CAP_SELL).isEqualTo(serverConst("CAP_SELL"))
+        assertThat(CAP_BOOKS_VIEW).isEqualTo(serverConst("CAP_BOOKS_VIEW"))
+        assertThat(CAP_BOOKS_RECORD).isEqualTo(serverConst("CAP_BOOKS_RECORD"))
+        assertThat(CAP_BOOKS_APPROVE).isEqualTo(serverConst("CAP_BOOKS_APPROVE"))
+        assertThat(CAP_BOOKS_CLOSE).isEqualTo(serverConst("CAP_BOOKS_CLOSE"))
+        assertThat(BOOKS_CAPABILITIES).containsExactly(
+            serverConst("CAP_BOOKS_VIEW"), serverConst("CAP_BOOKS_RECORD"),
+            serverConst("CAP_BOOKS_APPROVE"), serverConst("CAP_BOOKS_CLOSE"))
+    }
+
+    @Test
+    fun the_server_registry_has_twelve_codes_and_the_books_four_are_among_them() {
+        // Confirms the "twelve" this file's admin comment now says: the tuple is
+        // parsed out of user_accounts.py, so a thirteenth code makes this fail.
+        val tuple = userAccountsPy.substringAfter("\nCAPABILITY_CODES = (").substringBefore(")")
+        val names = tuple.lines().map { it.trim().trimEnd(',') }.filter { it.startsWith("CAP_") }
+        assertThat(names).hasSize(12)
+        assertThat(names).containsAtLeast(
+            "CAP_BOOKS_VIEW", "CAP_BOOKS_RECORD", "CAP_BOOKS_APPROVE", "CAP_BOOKS_CLOSE")
+    }
+
+    @Test
+    fun an_accountant_body_is_books_only_and_every_other_shape_is_not() {
+        val accountant = listOf(CAP_BOOKS_VIEW, CAP_BOOKS_RECORD, CAP_REPORTS, "retail.cash.approve")
+        assertThat(isBooksOnly(accountant)).isTrue()
+        // Holds sell: belongs at the till, books or not (the manager preset).
+        assertThat(isBooksOnly(accountant + CAP_SELL)).isFalse()
+        assertThat(isBooksOnly(listOf(CAP_SELL, "retail.refund"))).isFalse()
+        // No books code at all: nothing to route to.
+        assertThat(isBooksOnly(listOf(CAP_REPORTS))).isFalse()
+        assertThat(isBooksOnly(emptyList())).isFalse()
+        // Unknown yet: keep the normal shell (fail toward it, never strand).
+        assertThat(isBooksOnly(null)).isFalse()
+    }
+
+    @Test
+    fun the_session_says_books_only_for_an_accountant_and_never_for_the_owner() {
+        val accountantBody = """
+            {"authenticated": true,
+             "capabilities": ["retail.books.view", "retail.books.record", "retail.reports", "retail.cash.approve"],
+             "is_mt": true, "language": "en",
+             "user": {"id": "u-7", "role": "manager", "role_preset": "accountant", "email": "acc@shop.test"}}
+        """.trimIndent()
+        try {
+            RetailSession.adopt(gson.fromJson(accountantBody, SessionResponse::class.java))
+            assertThat(RetailSession.isBooksOnly).isTrue()
+            assertThat(homeRouteFor(RetailSession.isBooksOnly)).isEqualTo(ROUTE_BOOKS_HOME)
+
+            RetailSession.reset()
+            assertThat(RetailSession.isBooksOnly).isFalse()
+
+            // A malformed list on the OWNER must not strand them off the till.
+            val ownerBody = accountantBody.replace("\"manager\"", "\"admin\"")
+            RetailSession.adopt(gson.fromJson(ownerBody, SessionResponse::class.java))
+            assertThat(RetailSession.isAdmin).isTrue()
+            assertThat(RetailSession.isBooksOnly).isFalse()
+        } finally {
+            RetailSession.reset()
+        }
     }
 
     @Test

@@ -770,9 +770,43 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "تبقى حسابات الموظفين على هذا الجهاز حتى يتم تفعيل مزامنة الحسابات.",
     "Add employee" to "إضافة موظف",
     "Work email" to "بريد العمل",
-    "The account is identified by this email and an ID the app assigns " +
-        "(EMP-0001, EMP-0002…). There is no separate name field." to
-        "يُعرَّف الحساب بهذا البريد وبمعرّف يخصصه التطبيق (EMP-0001، EMP-0002…). لا يوجد حقل اسم منفصل.",
+    // Registry v9 (Track S): a person can carry a display name and a named job
+    // (preset). The old "no separate name field" sentence is gone with the field.
+    "Name" to "الاسم",
+    "Name (optional)" to "الاسم (اختياري)",
+    "Name must be 1 to 60 characters." to "يجب أن يتكوّن الاسم من 1 إلى 60 حرفًا.",
+    "Save name" to "حفظ الاسم",
+    "Name saved" to "تم حفظ الاسم",
+    "Branch manager" to "مدير فرع",
+    "Accountant" to "محاسب",
+    "Everything a cashier can do, plus discounts, stock changes and reports." to
+        "كل ما يستطيعه أمين الصندوق، إضافة إلى الخصومات وتعديل المخزون والتقارير.",
+    "A manager who can also add and manage staff, for one branch only." to
+        "مدير يستطيع أيضًا إضافة الموظفين وإدارتهم، لفرع واحد فقط.",
+    "Reads reports and the books, records entries and approves cash differences. Cannot sell at the till." to
+        "يقرأ التقارير والدفاتر، ويسجّل القيود، ويعتمد فروقات النقد. لا يستطيع البيع على جهاز البيع.",
+    "Can sell, refund against a sale and close their own drawer." to
+        "يستطيع البيع والاسترداد مقابل عملية بيع وإغلاق صندوقه الخاص.",
+    "Choose a branch for this person before making them a branch manager." to
+        "اختر فرعًا لهذا الشخص قبل تعيينه مدير فرع.",
+    "Change job?" to "تغيير الوظيفة؟",
+    "Change job" to "تغيير الوظيفة",
+    "Job updated" to "تم تحديث الوظيفة",
+    // Books-only home (Accountant): AppRoot.kt BooksHomeScreen.
+    "Books" to "الدفاتر",
+    "You can read the books and reports here. Selling at the till is not part of this account." to
+        "يمكنك هنا قراءة الدفاتر والتقارير. البيع على جهاز البيع ليس من صلاحيات هذا الحساب.",
+    "Every account, debits against credits." to "كل الحسابات، المدين مقابل الدائن.",
+    "Income minus cost and expenses for a period." to "الإيراد ناقص التكلفة والمصروفات لفترة معيّنة.",
+    "What the business owns and owes." to "ما يملكه النشاط وما عليه.",
+    "Sales and stock reports." to "تقارير المبيعات والمخزون.",
+    "What customers owe." to "ما يدين به العملاء.",
+    "What the shop owes suppliers." to "ما يدين به المتجر للموردين.",
+    "Daily cash in and out." to "النقد الداخل والخارج يوميًا.",
+    "How overdue each balance is." to "مدى تأخر كل رصيد.",
+    "This resets their permissions to that job's defaults, including " +
+        "any exception you granted them before." to
+        "يعيد هذا ضبط صلاحياته إلى الإعدادات الافتراضية لتلك الوظيفة، بما في ذلك أي استثناء منحته له سابقًا.",
     "Send invite" to "إرسال الدعوة",
     // One fixed sentence covering both roles, not a per-role pair -- kept
     // character-for-character identical (English key) to the desktop

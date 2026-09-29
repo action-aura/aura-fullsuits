@@ -8,6 +8,8 @@ import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -23,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -31,6 +34,8 @@ import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.CreateEmployeeRequest
 import com.actionaura.retail.net.Employee
 import com.actionaura.retail.net.SetEmployeePinRequest
+import com.actionaura.retail.net.UpdateEmployeeNameRequest
+import com.actionaura.retail.net.UpdateEmployeePresetRequest
 import com.actionaura.retail.net.UpdateEmployeeRoleRequest
 import com.actionaura.retail.net.UpdateEmployeeStatusRequest
 import com.actionaura.retail.net.apiErrorMessage
@@ -44,7 +49,9 @@ import com.actionaura.retail.ui.i18n.normalizePin
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
+import com.google.gson.JsonParser
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  EMPLOYEES -- the owner's account-management screen (Phase 1, design §3)
@@ -67,6 +74,75 @@ import kotlinx.coroutines.launch
  *  design -- one owner account per install, so "promote to admin" is not an
  *  operation that exists. */
 private val ASSIGNABLE_ROLES = listOf("manager", "cashier")
+
+/**
+ * The four Registry v9 presets an owner may pick (`user_accounts.ROLE_PRESETS`).
+ * A preset decides the base role AND the twelve capability rows in one go, so a
+ * user who HAS a `role_preset` is changed through `PUT .../preset` and NEVER
+ * through `PUT .../role`: the role route re-seeds capabilities from the bare
+ * role and would silently strip an accountant of the books rows the preset
+ * gave them. `ASSIGNABLE_ROLES` above stays only for legacy rows whose
+ * `role_preset` is null.
+ */
+internal val ASSIGNABLE_PRESETS = listOf("cashier", "manager", "branch_manager", "accountant")
+
+/** `user_accounts.PRESET_BASE_ROLE`. Sent as `role` on create so the request
+ *  agrees with its own preset; the server refuses a mismatch with a 400. */
+internal val PRESET_BASE_ROLE = mapOf(
+    "cashier" to "cashier",
+    "manager" to "manager",
+    "branch_manager" to "manager",
+    "accountant" to "manager",
+)
+
+/** The server's `code` for a branch_manager preset sent without a branch. */
+internal const val BRANCH_SCOPE_REQUIRED_CODE = "BRANCH_SCOPE_REQUIRED"
+
+/** `user_accounts.DISPLAY_NAME_MAX`. The server is the authority; this only
+ *  keeps the Save button honest. */
+internal const val DISPLAY_NAME_MAX = 60
+
+internal fun presetLabel(preset: String?): String = when (preset?.trim()?.lowercase()) {
+    "cashier" -> tr("Cashier")
+    "manager" -> tr("Manager")
+    "branch_manager" -> tr("Branch manager")
+    "accountant" -> tr("Accountant")
+    else -> preset.orEmpty()
+}
+
+/** One fixed sentence per preset, transcribed from `ROLE_PRESETS`. */
+private fun presetExplainer(preset: String?): String = when (preset) {
+    "manager" -> tr("Everything a cashier can do, plus discounts, stock changes and reports.")
+    "branch_manager" -> tr("A manager who can also add and manage staff, for one branch only.")
+    "accountant" -> tr("Reads reports and the books, records entries and approves cash differences. Cannot sell at the till.")
+    else -> tr("Can sell, refund against a sale and close their own drawer.")
+}
+
+/** Name length as a reader counts it, trimmed. Blank is 0. */
+internal fun nameLength(raw: String): Int = raw.trim().let { it.codePointCount(0, it.length) }
+
+/** True when a body is the server's `BRANCH_SCOPE_REQUIRED` refusal. Reads the
+ *  `code` field, never the sentence, so a reworded message cannot break it. */
+internal fun isBranchScopeRequiredBody(raw: String?): Boolean = runCatching {
+    !raw.isNullOrBlank() && JsonParser.parseString(raw).asJsonObject
+        .get("code")?.takeUnless { it.isJsonNull }?.asString == BRANCH_SCOPE_REQUIRED_CODE
+}.getOrDefault(false)
+
+/**
+ * The plain sentence for a `BRANCH_SCOPE_REQUIRED` 400, or null for any other
+ * failure so the caller falls through to the shared `apiErrorMessage`.
+ *
+ * Reads the body with `peek()`, which does NOT consume it. `apiErrorMessage`
+ * reads the same one-shot error body afterwards; a plain `string()` here would
+ * leave every OTHER 400 with an empty body and a generic message.
+ */
+internal fun branchScopeMessage(e: Throwable): String? {
+    if (e !is HttpException || e.code() != 400) return null
+    val raw = runCatching { e.response()?.errorBody()?.source()?.peek()?.readUtf8() }.getOrNull()
+    return if (isBranchScopeRequiredBody(raw))
+        tr("Choose a branch for this person before making them a branch manager.")
+    else null
+}
 
 /**
  * How often this screen re-reads the staff list while it is open.
@@ -352,7 +428,20 @@ private fun EmployeeRow(e: Employee, onClick: () -> Unit) {
             Avatar(e.email)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(e.email ?: "—", fontWeight = FontWeight.Bold, maxLines = 1)
+                // The name leads when the owner has given one; the email is
+                // still shown under it because it is what the person signs in with.
+                Text(
+                    e.display_name?.takeIf { it.isNotBlank() } ?: e.email ?: "—",
+                    fontWeight = FontWeight.Bold, maxLines = 1,
+                )
+                if (!e.display_name.isNullOrBlank()) {
+                    Text(
+                        e.email ?: "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         e.employee_id ?: "",
@@ -377,7 +466,10 @@ private fun EmployeeRow(e: Employee, onClick: () -> Unit) {
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    roleLabel(e.effective_role ?: e.role),
+                    // The preset label when there is one ("Accountant" says more
+                    // than the base role "Manager" it rides on).
+                    if (e.role_preset.isNullOrBlank()) roleLabel(e.effective_role ?: e.role)
+                    else presetLabel(e.role_preset),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = if (owner) MaterialTheme.colorScheme.primary
@@ -406,7 +498,9 @@ private fun CreateEmployeeDialog(
     snackbar: SnackbarHostState,
 ) {
     var email by remember { mutableStateOf("") }
-    var role by remember { mutableStateOf(ASSIGNABLE_ROLES.first()) }
+    var name by remember { mutableStateOf("") }
+    // A preset, not a bare role: it decides the role AND the capability rows.
+    var preset by remember { mutableStateOf(ASSIGNABLE_PRESETS.first()) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -424,29 +518,25 @@ private fun CreateEmployeeDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                // Says out loud that the account has no display name. `users`
-                // has an email and a server-assigned EMP-0001 and nothing else
-                // (registry_db.py:113-131), so a "Full name" box here would be
-                // a field the server drops on the floor -- the owner would type
-                // it, see it vanish, and reasonably conclude the app lost data.
-                Text(
-                    tr("The account is identified by this email and an ID the app assigns " +
-                        "(EMP-0001, EMP-0002…). There is no separate name field."),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Registry v9 gave `users` a display name, so this box is now
+                // real: the server keeps it (NFC, 1-60 chars) and every till
+                // shows it. Optional on create -- the invite can go out before
+                // the owner knows the name; blank simply means "no name yet".
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it; error = null },
+                    label = { Text(tr("Name (optional)")) },
+                    singleLine = true,
+                    isError = nameLength(name) > DISPLAY_NAME_MAX,
+                    supportingText = {
+                        if (nameLength(name) > DISPLAY_NAME_MAX)
+                            Text(tr("Name must be 1 to 60 characters."))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
                 )
 
                 Text(tr("Role"), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    ASSIGNABLE_ROLES.forEachIndexed { i, r ->
-                        SegmentedButton(
-                            selected = role == r,
-                            onClick = { role = r },
-                            shape = SegmentedButtonDefaults.itemShape(i, ASSIGNABLE_ROLES.size),
-                        ) { Text(roleLabel(r)) }
-                    }
-                }
-                Text(roleExplainer(), style = MaterialTheme.typography.labelSmall,
+                PresetPicker(selected = preset, enabled = !busy, onPick = { preset = it; error = null })
+                Text(presetExplainer(preset), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                 error?.let {
@@ -457,13 +547,18 @@ private fun CreateEmployeeDialog(
         },
         confirmButton = {
             Button(
-                enabled = !busy && email.isNotBlank(),
+                enabled = !busy && email.isNotBlank() && nameLength(name) <= DISPLAY_NAME_MAX,
                 onClick = {
                     busy = true; error = null
                     scope.launch {
                         try {
                             val r = ApiClient.get().createEmployee(
-                                CreateEmployeeRequest(email.trim().lowercase(), role))
+                                CreateEmployeeRequest(
+                                    email.trim().lowercase(),
+                                    PRESET_BASE_ROLE.getValue(preset),
+                                    name = name.trim().ifEmpty { null },
+                                    preset = preset,
+                                ))
                             // The route answers 200 with {"success": true,
                             // "setup_link": ...}. A 200 that carries neither is
                             // not something to celebrate silently, so the
@@ -472,11 +567,12 @@ private fun CreateEmployeeDialog(
                             else error = tr(r.error ?: "The invite could not be created.")
                         } catch (e: Exception) {
                             // A duplicate email is a 400 whose body carries
-                            // "Email already registered." and an unassignable
-                            // role is a 400 carrying "Role must be manager or
-                            // cashier." -- apiErrorMessage surfaces the
-                            // server's own sentence for both, translated.
-                            error = apiErrorMessage(e)
+                            // "Email already registered." -- apiErrorMessage
+                            // surfaces the server's own sentence, translated.
+                            // A branch_manager sent without a branch is a 400
+                            // with code BRANCH_SCOPE_REQUIRED: this screen has
+                            // no branch picker, so say what to do in plain words.
+                            error = branchScopeMessage(e) ?: apiErrorMessage(e)
                         } finally { busy = false }
                     }
                 },
@@ -509,6 +605,29 @@ private fun CreateEmployeeDialog(
  */
 private fun roleExplainer(): String =
     tr("A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.")
+
+/** Four presets as a radio list: a segmented row of four labels does not fit
+ *  a phone in Arabic. */
+@Composable
+private fun PresetPicker(selected: String?, enabled: Boolean, onPick: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().selectableGroup()) {
+        ASSIGNABLE_PRESETS.forEach { p ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .selectable(
+                        selected = selected == p, enabled = enabled,
+                        role = Role.RadioButton, onClick = { onPick(p) },
+                    )
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = selected == p, onClick = null, enabled = enabled)
+                Spacer(Modifier.width(10.dp))
+                Text(presetLabel(p))
+            }
+        }
+    }
+}
 
 // ── Invite ───────────────────────────────────────────────────────────────────
 
@@ -585,7 +704,12 @@ private fun ManageEmployeeSheet(
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var confirmRole by remember { mutableStateOf<String?>(null) }
+    var confirmPreset by remember { mutableStateOf<String?>(null) }
+    var nameDraft by remember { mutableStateOf(employee.display_name.orEmpty()) }
     val current = (employee.effective_role ?: employee.role)?.trim()?.lowercase() ?: "cashier"
+    // Non-null for every account created or edited since registry v9. Such an
+    // account is edited through /preset only; see ASSIGNABLE_PRESETS.
+    val currentPreset = employee.role_preset?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
     val isDisabled = employee.status?.lowercase() == "disabled"
 
     /**
@@ -608,7 +732,10 @@ private fun ManageEmployeeSheet(
                 else tr(r.error ?: "The change could not be saved.")
             } catch (e: Exception) {
                 busy = false
-                apiErrorMessage(e)
+                // BRANCH_SCOPE_REQUIRED (a branch_manager preset with no
+                // branch) gets its plain sentence; everything else keeps the
+                // shared mapping.
+                branchScopeMessage(e) ?: apiErrorMessage(e)
             }
             snackbar.showSnackbar(message)
         }
@@ -622,9 +749,14 @@ private fun ManageEmployeeSheet(
                 Avatar(employee.email)
                 Spacer(Modifier.width(12.dp))
                 Column {
-                    Text(employee.email ?: "—", fontWeight = FontWeight.Bold)
                     Text(
-                        "${employee.employee_id ?: ""}  ·  ${roleLabel(current)}  ·  ${statusLabel(employee.status)}",
+                        employee.display_name?.takeIf { it.isNotBlank() } ?: employee.email ?: "—",
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "${employee.employee_id ?: ""}  ·  " +
+                            "${if (currentPreset != null) presetLabel(currentPreset) else roleLabel(current)}" +
+                            "  ·  ${statusLabel(employee.status)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -632,22 +764,59 @@ private fun ManageEmployeeSheet(
             }
             HorizontalDivider()
 
+            // Name. 1-60 characters: a rename cannot clear the name from this
+            // box (the create box is where "no name yet" is allowed).
+            OutlinedTextField(
+                value = nameDraft, onValueChange = { nameDraft = it },
+                label = { Text(tr("Name")) },
+                singleLine = true,
+                enabled = !busy,
+                isError = nameDraft.isNotEmpty() && nameLength(nameDraft) !in 1..DISPLAY_NAME_MAX,
+                supportingText = {
+                    if (nameDraft.isNotEmpty() && nameLength(nameDraft) !in 1..DISPLAY_NAME_MAX)
+                        Text(tr("Name must be 1 to 60 characters."))
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(
+                enabled = !busy && nameLength(nameDraft) in 1..DISPLAY_NAME_MAX &&
+                    nameDraft.trim() != employee.display_name.orEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    run({ ApiClient.get().updateEmployeeName(
+                        employee.id, UpdateEmployeeNameRequest(nameDraft.trim())) },
+                        tr("Name saved"))
+                },
+            ) { Text(tr("Save name")) }
+
+            HorizontalDivider()
+
             Text(tr("Role"), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                ASSIGNABLE_ROLES.forEachIndexed { i, r ->
-                    SegmentedButton(
-                        selected = current == r,
-                        enabled = !busy,
-                        // Confirmed, not applied on tap: the change resets this
-                        // person's permissions, and a segmented control is one
-                        // stray thumb away from doing that by accident.
-                        onClick = { if (current != r) confirmRole = r },
-                        shape = SegmentedButtonDefaults.itemShape(i, ASSIGNABLE_ROLES.size),
-                    ) { Text(roleLabel(r)) }
+            if (currentPreset != null) {
+                // A preset account: pick a preset, confirmed, sent to /preset.
+                PresetPicker(
+                    selected = currentPreset, enabled = !busy,
+                    onPick = { if (currentPreset != it) confirmPreset = it },
+                )
+                Text(presetExplainer(currentPreset), style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    ASSIGNABLE_ROLES.forEachIndexed { i, r ->
+                        SegmentedButton(
+                            selected = current == r,
+                            enabled = !busy,
+                            // Confirmed, not applied on tap: the change resets this
+                            // person's permissions, and a segmented control is one
+                            // stray thumb away from doing that by accident.
+                            onClick = { if (current != r) confirmRole = r },
+                            shape = SegmentedButtonDefaults.itemShape(i, ASSIGNABLE_ROLES.size),
+                        ) { Text(roleLabel(r)) }
+                    }
                 }
+                Text(roleExplainer(), style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(roleExplainer(), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             HorizontalDivider()
 
@@ -710,7 +879,7 @@ private fun ManageEmployeeSheet(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(roleExplainer())
                     // Says the destructive part BEFORE the tap. The route
-                    // deletes this user's eight capability rows and re-seeds
+                    // deletes this user's twelve capability rows and re-seeds
                     // them from the new role, so any per-person exception the
                     // owner granted earlier is gone.
                     Text(
@@ -739,6 +908,41 @@ private fun ManageEmployeeSheet(
             },
             dismissButton = {
                 TextButton(onClick = { confirmRole = null }, enabled = !busy) { Text(tr("Cancel")) }
+            },
+        )
+    }
+
+    // A preset account is changed through PUT .../preset and NEVER through
+    // /role: /role would set the base role and clear role_preset, leaving the
+    // person labelled by a role that no longer matches their twelve rows.
+    confirmPreset?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) confirmPreset = null },
+            title = { Text(tr("Change job?")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(presetExplainer(target))
+                    Text(
+                        tr("This resets their permissions to that job's defaults, including " +
+                            "any exception you granted them before."),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !busy,
+                    onClick = {
+                        confirmPreset = null
+                        run({ ApiClient.get().updateEmployeePreset(
+                            employee.id, UpdateEmployeePresetRequest(target)) },
+                            tr("Job updated"))
+                    },
+                ) { Text(tr("Change job")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPreset = null }, enabled = !busy) { Text(tr("Cancel")) }
             },
         )
     }

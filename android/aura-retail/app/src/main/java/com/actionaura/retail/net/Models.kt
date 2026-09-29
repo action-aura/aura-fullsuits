@@ -1007,10 +1007,10 @@ data class RestoreBackupResponse(
  * label that lies, and the admin choosing whether to promote someone needs
  * the behaviour, not the spelling.
  *
- * There is deliberately no `name`: `users` has no name column (registry_db.py
- * :113-131). A person is identified by their email and the server-assigned
- * `employee_id` (EMP-0001), and inventing a name field the server would drop
- * on the floor would be a form that lies about what it saved.
+ * `display_name` (registry v9) is the person's name when the owner gave one;
+ * before v9 `users` had no name column, and this model deliberately carried
+ * none rather than invent a field the server would drop. It is null until set,
+ * and the row then falls back to the email and `employee_id` as before.
  */
 data class Employee(
     val id: String = "",
@@ -1023,6 +1023,14 @@ data class Employee(
     val created_at: String? = null,
     // Presence only -- the server never sends the PIN hash (see get_employees).
     val has_pin: Boolean = false,
+    // Registry v9 (Track S). Both nullable ON PURPOSE: an older server sends
+    // neither, and a pre-v9 row carries NULL for both -- "absent" must stay
+    // distinguishable, and Gson writes explicit nulls into non-null fields.
+    // role_preset is the named bundle (cashier / manager / branch_manager /
+    // accountant) or null for a legacy row. A row WITH a preset is edited
+    // through PUT .../preset, never PUT .../role.
+    val display_name: String? = null,
+    val role_preset: String? = null,
 )
 
 data class EmployeesResponse(
@@ -1031,7 +1039,14 @@ data class EmployeesResponse(
     val employees: List<Employee> = emptyList(),
 )
 
-data class CreateEmployeeRequest(val email: String, val role: String)
+// name / preset are Registry v9 and OPTIONAL server-side; Gson omits nulls on
+// write, so a request that sets neither is byte-identical to the pre-v9 one.
+data class CreateEmployeeRequest(
+    val email: String,
+    val role: String,
+    val name: String? = null,
+    val preset: String? = null,
+)
 
 /**
  * `setup_link` is built server-side as `{request.host_url}/#setup/{token}`.
@@ -1049,6 +1064,8 @@ data class CreateEmployeeResponse(
 )
 
 data class UpdateEmployeeRoleRequest(val role: String)
+data class UpdateEmployeePresetRequest(val preset: String)
+data class UpdateEmployeeNameRequest(val name: String)
 data class UpdateEmployeeStatusRequest(val status: String)
 data class SetEmployeePinRequest(val pin: String)
 
@@ -1058,4 +1075,6 @@ data class AdminActionResponse(
     val error: String? = null,
     val role: String? = null,
     val has_pin: Boolean = false,
+    val role_preset: String? = null,
+    val display_name: String? = null,
 )

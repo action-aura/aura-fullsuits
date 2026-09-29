@@ -82,6 +82,67 @@ const val CAP_STOCK_ADJUST = "retail.stock.adjust"
 const val CAP_DISCOUNT = "retail.discount"
 
 /**
+ * "Ring a sale at the till" -- `commercial_runtime/identity/user_accounts.py::
+ * CAP_SELL` (`'retail.sell'`). Spelled here for one reason only: it is what
+ * separates a person who belongs at the till from a books-only person (the
+ * Accountant preset holds the books codes and NOT this one), see
+ * [isBooksOnly]. Same drift hazard as [CAP_REPORTS]; pinned against the server
+ * string by SessionCapabilityContractTest.
+ */
+const val CAP_SELL = "retail.sell"
+
+/**
+ * The four registry-v9 "books" capabilities, spelled exactly as
+ * `user_accounts.py` spells them (CAP_BOOKS_VIEW .. CAP_BOOKS_CLOSE). View and
+ * record are what the Accountant preset grants; approve and close are held by
+ * the owner and manager presets. A code that drifts from the server's does not
+ * fail loudly -- it hides the books from the one person hired to read them, or
+ * routes a cashier to a screen that only 403s. Pinned against the server by
+ * SessionCapabilityContractTest.
+ */
+const val CAP_BOOKS_VIEW = "retail.books.view"
+const val CAP_BOOKS_RECORD = "retail.books.record"
+const val CAP_BOOKS_APPROVE = "retail.books.approve"
+const val CAP_BOOKS_CLOSE = "retail.books.close"
+
+/** Every books code, in one place so [isBooksOnly] cannot forget one. */
+val BOOKS_CAPABILITIES: List<String> =
+    listOf(CAP_BOOKS_VIEW, CAP_BOOKS_RECORD, CAP_BOOKS_APPROVE, CAP_BOOKS_CLOSE)
+
+/**
+ * True for a person who holds at least one books code and does NOT hold
+ * [CAP_SELL] -- the Accountant. Such a person must not land on the till: the
+ * server would refuse every sale they rang (403), and a till screen that
+ * refuses everything is a broken first impression for the one user who was
+ * never meant to see it.
+ *
+ * Fails CLOSED to "not books-only" on null (capabilities not known yet):
+ * the unknown state keeps the normal shell, exactly as [holdsCapability]'s
+ * fail-open default keeps every gate inert until the session resolves. An
+ * EMPTY list is a resolved "holds nothing" and is not books-only either --
+ * there is no books access to route to. This is routing advice only; every
+ * books route keeps its own server-side gate.
+ */
+fun isBooksOnly(capabilities: List<String>?): Boolean {
+    if (capabilities == null) return false
+    if (capabilities.contains(CAP_SELL)) return false
+    return capabilities.any { it in BOOKS_CAPABILITIES }
+}
+
+/** Route names shared by AppRoot.kt's nav graph and the routing contract test. */
+const val ROUTE_DASHBOARD = "dashboard"
+const val ROUTE_BOOKS_HOME = "books_home"
+
+/**
+ * The route the signed-in shell opens on: the read-only books home for a
+ * books-only person, the dashboard (which sits beside the till) for everyone
+ * else. One decision, one place, so the tab bar and the NavHost's start
+ * destination cannot disagree about it.
+ */
+fun homeRouteFor(booksOnly: Boolean): String =
+    if (booksOnly) ROUTE_BOOKS_HOME else ROUTE_DASHBOARD
+
+/**
  * True if `capabilities` grants `code`.
  *
  * RENDERING ADVICE ONLY, and a deliberate mirror of app-shell.js's
@@ -188,6 +249,15 @@ object RetailSession {
     }
 
     fun hasCapability(code: String): Boolean = holdsCapability(capabilities, code)
+
+    /**
+     * Books-only Accountant: routed to a read-only home instead of the till.
+     * An admin is never books-only whatever the list says (the owner's own
+     * grants always include selling; this is belt and braces against a
+     * malformed list stranding the owner away from the till).
+     */
+    val isBooksOnly: Boolean
+        get() = !isAdmin && com.actionaura.retail.ui.isBooksOnly(capabilities)
 
     fun reset() {
         isAdmin = false

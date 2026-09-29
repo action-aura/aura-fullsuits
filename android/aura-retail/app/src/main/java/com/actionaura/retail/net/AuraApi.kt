@@ -374,6 +374,15 @@ interface AuraApi {
     @PUT("api/admin/employees/{id}/role")
     suspend fun updateEmployeeRole(@Path("id") id: String, @Body body: UpdateEmployeeRoleRequest): AdminActionResponse
 
+    // Registry v9. A user WITH a role_preset is changed here, never through
+    // /role (which is the legacy two-role path). 400 BRANCH_SCOPE_REQUIRED for
+    // branch_manager when the person has no branch.
+    @PUT("api/admin/employees/{id}/preset")
+    suspend fun updateEmployeePreset(@Path("id") id: String, @Body body: UpdateEmployeePresetRequest): AdminActionResponse
+
+    @PUT("api/admin/employees/{id}/name")
+    suspend fun updateEmployeeName(@Path("id") id: String, @Body body: UpdateEmployeeNameRequest): AdminActionResponse
+
     @PUT("api/admin/employees/{id}/status")
     suspend fun updateEmployeeStatus(@Path("id") id: String, @Body body: UpdateEmployeeStatusRequest): AdminActionResponse
 

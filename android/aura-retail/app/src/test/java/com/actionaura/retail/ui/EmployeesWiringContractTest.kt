@@ -2,10 +2,20 @@ package com.actionaura.retail.ui
 
 import com.actionaura.retail.net.Employee
 import com.actionaura.retail.ui.i18n.normalizePin
+import com.actionaura.retail.ui.screens.ASSIGNABLE_PRESETS
+import com.actionaura.retail.ui.screens.DISPLAY_NAME_MAX
+import com.actionaura.retail.ui.screens.PRESET_BASE_ROLE
+import com.actionaura.retail.ui.screens.branchScopeMessage
 import com.actionaura.retail.ui.screens.inviteTokenOf
+import com.actionaura.retail.ui.screens.nameLength
+import com.actionaura.retail.ui.screens.presetLabel
 import com.google.common.truth.Truth.assertThat
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
 import java.io.File
 
 /**
@@ -372,6 +382,159 @@ class EmployeesWiringContractTest {
         val catalog = literalRuns(codeOnly(
             source("src/main/java/com/actionaura/retail/ui/i18n/Strings.kt"))).toSet()
         assertThat(catalog).containsAtLeast("Employees", "Team", "Accounts, roles & till PINs")
+    }
+
+    // ── Registry v9: presets, names, branch scope ────────────────────────────
+
+    private val branchSentence =
+        "Choose a branch for this person before making them a branch manager."
+
+    private fun httpException(code: Int, body: String): HttpException =
+        HttpException(Response.error<Any>(code, body.toResponseBody("application/json".toMediaType())))
+
+    @Test
+    fun a_preset_user_is_edited_through_preset_and_never_through_role() {
+        val src = codeOnly(employeesScreen)
+        // The preset path exists and is reachable from the manage sheet...
+        assertThat(src).contains("updateEmployeePreset(")
+        assertThat(src).contains("UpdateEmployeePresetRequest(target)")
+        // ...and the legacy /role call is fenced behind role_preset == null, so
+        // a preset user can never reach it. /role would clear role_preset and
+        // leave the person labelled by a job their twelve rows no longer match.
+        // The only thing that can arm the /role confirmation is `confirmRole = r`
+        // (the legacy segmented control), and it sits in the ELSE arm of
+        // `if (currentPreset != null) {`. Any other assignment of a non-null
+        // value to confirmRole would be a second door to /role.
+        val assigns = Regex("""confirmRole\s*=\s*(\w+)""").findAll(src).map { it.groupValues[1] }.toList()
+        assertThat(assigns.filter { it != "null" }).containsExactly("r")
+        val ifPreset = src.indexOf("if (currentPreset != null) {")
+        val armRole = src.indexOf("confirmRole = r")
+        assertThat(ifPreset).isAtLeast(0)
+        assertThat(armRole).isGreaterThan(ifPreset)
+        assertThat(src.substring(ifPreset, armRole)).contains("} else {")
+        // ...and the preset arm never arms the role dialog
+        assertThat(src.substring(ifPreset, src.indexOf("} else {", ifPreset)))
+            .doesNotContain("confirmRole")
+        // exactly one call site of each, so no third path sneaks a /role in
+        assertThat(Regex("""updateEmployeeRole\(""").findAll(src).count()).isEqualTo(1)
+        assertThat(Regex("""updateEmployeePreset\(""").findAll(src).count()).isEqualTo(1)
+    }
+
+    @Test
+    fun the_four_presets_and_their_base_roles_match_the_server_table() {
+        val f = File(File("../../.."), "commercial_runtime/identity/user_accounts.py")
+        assumeTrue("user_accounts.py not reachable from this run context", f.exists())
+        val py = f.readText()
+        // The base-role table is keyed by the PRESET_* constants; read their
+        // values (not a restated list) and require the table to cover exactly
+        // those, so a fifth server preset fails here instead of being invisible.
+        val server = Regex("""(?m)^PRESET_[A-Z_]+\s*=\s*'(\w+)'""").findAll(py).map { it.groupValues[1] }.toList()
+        assertThat(server).hasSize(4)
+        val tableKeys = Regex("""PRESET_[A-Z_]+(?=:\s*ROLE_)""").findAll(
+            py.substringAfter("PRESET_BASE_ROLE = {").substringBefore("}")).count()
+        assertThat(tableKeys).isEqualTo(4)
+        assertThat(ASSIGNABLE_PRESETS).containsExactlyElementsIn(server)
+        // base role for each: cashier stays cashier, the other three are manager
+        assertThat(PRESET_BASE_ROLE["cashier"]).isEqualTo("cashier")
+        for (p in listOf("manager", "branch_manager", "accountant")) {
+            assertThat(PRESET_BASE_ROLE[p]).isEqualTo("manager")
+        }
+    }
+
+    @Test
+    fun the_row_shows_the_preset_label_and_falls_back_to_the_role_for_legacy_rows() {
+        val src = codeOnly(employeesScreen)
+        assertThat(src).contains("presetLabel(e.role_preset)")
+        assertThat(src).contains("e.role_preset.isNullOrBlank()")
+        assertThat(presetLabel("accountant")).isEqualTo("Accountant")
+        assertThat(presetLabel("branch_manager")).isEqualTo("Branch manager")
+        assertThat(presetLabel(null)).isEmpty()
+    }
+
+    @Test
+    fun a_name_field_exists_on_create_and_edit_and_edit_uses_the_name_endpoint() {
+        val src = codeOnly(employeesScreen)
+        assertThat(src).contains("updateEmployeeName(")
+        assertThat(src).contains("UpdateEmployeeNameRequest(nameDraft.trim())")
+        // create carries the name too (optional, sent only when typed)
+        assertThat(src).contains("name = name.trim().ifEmpty { null }")
+        // The boxes themselves exist and are bound to the state that is sent.
+        // Without these two lines the sends above could stay wired to a
+        // variable no field ever fills (found by mutation: relabelling the
+        // create box left every other assertion here green).
+        assertThat(src).contains(
+            "value = name, onValueChange = { name = it; error = null }, " +
+                "label = { Text(tr(\"Name (optional)\")) }")
+        assertThat(src).contains("value = nameDraft, onValueChange = { nameDraft = it }")
+        assertThat(DISPLAY_NAME_MAX).isEqualTo(60)
+        assertThat(nameLength("  Sara  ")).isEqualTo(4)
+        assertThat(nameLength("   ")).isEqualTo(0)
+        assertThat(nameLength("a".repeat(61))).isGreaterThan(DISPLAY_NAME_MAX)
+    }
+
+    @Test
+    fun the_name_limit_matches_the_server() {
+        val f = File(File("../../.."), "commercial_runtime/identity/user_accounts.py")
+        assumeTrue("user_accounts.py not reachable from this run context", f.exists())
+        val m = Regex("""(?m)^DISPLAY_NAME_MAX\s*=\s*(\d+)""").find(f.readText())
+        assertThat(m).isNotNull()
+        assertThat(DISPLAY_NAME_MAX).isEqualTo(m!!.groupValues[1].toInt())
+    }
+
+    @Test
+    fun the_branch_scope_refusal_becomes_the_plain_sentence() {
+        val e = httpException(400, """{"error":"server wording","code":"BRANCH_SCOPE_REQUIRED"}""")
+        assertThat(branchScopeMessage(e)).isEqualTo(branchSentence)
+        // keyed on the CODE, not the wording: a reworded server message still maps
+        val reworded = httpException(400, """{"error":"totally different","code":"BRANCH_SCOPE_REQUIRED"}""")
+        assertThat(branchScopeMessage(reworded)).isEqualTo(branchSentence)
+    }
+
+    @Test
+    fun any_other_failure_falls_through_to_the_shared_mapping() {
+        // Other 400s, other codes, non-400s and non-HTTP failures all return
+        // null so the caller's `?: apiErrorMessage(e)` runs.
+        assertThat(branchScopeMessage(httpException(400, """{"error":"Email required"}"""))).isNull()
+        assertThat(branchScopeMessage(httpException(400, """{"code":"SOMETHING_ELSE"}"""))).isNull()
+        assertThat(branchScopeMessage(httpException(403, """{"code":"BRANCH_SCOPE_REQUIRED"}"""))).isNull()
+        assertThat(branchScopeMessage(httpException(400, "not json"))).isNull()
+        assertThat(branchScopeMessage(java.io.IOException("offline"))).isNull()
+    }
+
+    @Test
+    fun peeking_the_body_leaves_it_readable_for_the_shared_mapping() {
+        // The real hazard: errorBody() is one-shot. If branchScopeMessage
+        // consumed it, every OTHER 400 would then reach apiErrorMessage with an
+        // empty body and lose the server's own sentence.
+        val e = httpException(400, """{"error":"Email required"}""")
+        assertThat(branchScopeMessage(e)).isNull()
+        assertThat(com.actionaura.retail.net.apiErrorMessage(e)).isEqualTo("Email required")
+        // and the reverse order still gives the branch sentence on a fresh one
+        val b = httpException(400, """{"error":"x","code":"BRANCH_SCOPE_REQUIRED"}""")
+        assertThat(branchScopeMessage(b)).isEqualTo(branchSentence)
+        assertThat(branchScopeMessage(b)).isEqualTo(branchSentence)
+    }
+
+    @Test
+    fun every_failure_path_that_can_hit_the_branch_refusal_asks_branchScopeMessage_first() {
+        val src = codeOnly(employeesScreen)
+        val catches = Regex("""catch\s*\(\s*\w+\s*:\s*Exception\s*\)""").findAll(src).toList()
+        // create dialog and the manage sheet's run() are the two writers that can
+        // be refused; both must try the branch sentence before the generic one.
+        val withBranch = catches.count {
+            src.substring(it.range.last, minOf(src.length, it.range.last + 120))
+                .contains("branchScopeMessage(e) ?: apiErrorMessage(e)")
+        }
+        assertThat(withBranch).isAtLeast(2)
+    }
+
+    @Test
+    fun the_new_strings_have_arabic_entries() {
+        val catalog = literalRuns(codeOnly(
+            source("src/main/java/com/actionaura/retail/ui/i18n/Strings.kt"))).toSet()
+        assertThat(catalog).contains(branchSentence)
+        assertThat(catalog).containsAtLeast(
+            "Accountant", "Branch manager", "Change job", "Job updated", "Save name")
     }
 
     @Test

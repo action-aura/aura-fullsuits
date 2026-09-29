@@ -405,17 +405,72 @@ private data class Dest(val route: String, val label: String, val icon: ImageVec
 //     app's only remaining overflow surface after the drawer was deleted.
 //   * `People` for Customers, matching MoreScreen's own entry for it.
 private val retailTabs = listOf(
-    Dest("dashboard", "Dashboard", Icons.Default.Home),
+    Dest(ROUTE_DASHBOARD, "Dashboard", Icons.Default.Home),
     Dest("products", "Products", Icons.Default.Inventory2),
     Dest("pos", "POS", Icons.Default.PointOfSale),
     Dest("customers", "Customers", Icons.Default.People),
     Dest("more", "More", Icons.Default.Apps),
 )
 
+// The books-only shell (the Accountant preset: books codes, no retail.sell).
+// Two slots -- the read-only Books home and More (for Settings, Sync and Log
+// out) -- and NO POS: a person who cannot sell must not open on, or be one tap
+// from, a till that would refuse everything they rang. Which shell renders is
+// decided by ONE call, RetailSession.isBooksOnly, which fails toward the normal
+// shell when capabilities are not known yet. AccountantHomeContractTest pins
+// the choice, the start destination and the absence of "pos" here.
+private val booksOnlyTabs = listOf(
+    Dest(ROUTE_BOOKS_HOME, "Books", Icons.Default.AccountBalance),
+    Dest("more", "More", Icons.Default.Apps),
+)
+
+private data class BooksEntry(val route: String, val title: String, val hint: String, val needs: String)
+
+// Read-only destinations only. Every one of these screens is a viewer; the
+// server keeps its own gate on each route, this list is just the front door.
+private val booksEntries = listOf(
+    BooksEntry("trial_balance", "Trial Balance", "Every account, debits against credits.", CAP_BOOKS_VIEW),
+    BooksEntry("profit_and_loss", "Profit and Loss", "Income minus cost and expenses for a period.", CAP_BOOKS_VIEW),
+    BooksEntry("balance_sheet", "Balance Sheet", "What the business owns and owes.", CAP_BOOKS_VIEW),
+    BooksEntry("reports", "Reports", "Sales and stock reports.", CAP_REPORTS),
+    BooksEntry("receivables", "Receivables", "What customers owe.", CAP_REPORTS),
+    BooksEntry("payables", "Payables", "What the shop owes suppliers.", CAP_REPORTS),
+    BooksEntry("cash_summary", "Cash Summary", "Daily cash in and out.", CAP_REPORTS),
+    BooksEntry("aging", "Aging", "How overdue each balance is.", CAP_REPORTS),
+)
+
+@Composable
+private fun BooksHomeScreen(onNavigate: (String) -> Unit) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Text(tr("Books"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(
+                tr("You can read the books and reports here. Selling at the till is not part of this account."),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        items(booksEntries.filter { RetailSession.hasCapability(it.needs) }) { e ->
+            Card(onClick = { onNavigate(e.route) }, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(tr(e.title), fontWeight = FontWeight.Bold)
+                    Text(tr(e.hint), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainShell(onLogout: () -> Unit) {
-    val tabs = retailTabs
+    val booksOnly = RetailSession.isBooksOnly
+    val tabs = if (booksOnly) booksOnlyTabs else retailTabs
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
@@ -519,7 +574,7 @@ private fun MainShell(onLogout: () -> Unit) {
         ) { padding ->
             NavHost(
                 navController = nav,
-                startDestination = tabs.first().route,
+                startDestination = homeRouteFor(booksOnly),
                 modifier = Modifier.padding(padding).fillMaxSize(),
                 enterTransition = { fadeIn(tween(260)) + slideInHorizontally(tween(260)) { it / 14 } },
                 exitTransition = { fadeOut(tween(180)) },
@@ -687,7 +742,8 @@ private fun AiTurnBubble(t: AiTurn) {
 }
 
 private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavController, snackbar: SnackbarHostState, onLogout: () -> Unit) {
-    b.composable("dashboard") { DashboardScreen(onNavigate = { r -> nav.navigate(r) }) }
+    b.composable(ROUTE_DASHBOARD) { DashboardScreen(onNavigate = { r -> nav.navigate(r) }) }
+    b.composable(ROUTE_BOOKS_HOME) { BooksHomeScreen(onNavigate = { r -> nav.navigate(r) }) }
     b.composable("pos") { PosScreen(snackbar) }
     b.composable("products") { ProductsScreen(snackbar) }
     b.composable("categories") { CategoriesScreen(snackbar) }
