@@ -6318,3 +6318,102 @@ Skills that do not fit (and would have hurt):
 Audit caveat: the React-patterns crew read the MAIN checkout's stale
 2,080-line `subsystem-retail.js` instead of this worktree's; its line numbers
 are wrong, and only its two transferable ideas above are kept.
+
+## 2026-09-29 — Retail UX P1a cashed in (feat/retail-ux-p0), no schema change
+
+"Everyone in their place, and WhatsApp you can find." Built by three
+crews on disjoint files (S shell, T till, D display/pages/backend), each
+round checked by adversarial verifiers on the real app, then one
+whole-product acceptance pass walking the owner's and cashier's journeys
+with human clicks (bbox in viewport + elementFromPoint + mouse click).
+Not pushed, not merged.
+
+What landed (commits after e39fe657; each message says why):
+- Shell: Settings follows the person (gear for anyone with a Settings
+  section, never a cashier, on any computer); claim bar gone, "Make this
+  the main computer" in the gear for an unclaimed install; identity chip;
+  7 collapsible sidebar groups that fit 1366x768 (mouse and touch);
+  Connected services with dot-plus-word status; sell-only cashier lands on
+  the till and never reaches the refusal sentence.
+- Till: lock panel for Admin Center; Discount box / Credit / Products
+  follow capabilities (each re-checked server-side by direct API calls);
+  Send on WhatsApp for receipt, statement and Remind (wa.me, audit line
+  per send, shop's receipt language); tile monograms; chart palette off the
+  state colours.
+- Display/pages: WhatsApp, e-invoicing, shop network (and licence) pages in
+  the shop's theme; idle customer screen with shop name, the current offer
+  WITH its scope, and a WhatsApp QR for the shop's contact number.
+- Money: ONE server-side FIFO for "how late is this debt"
+  (/reports/aging + statement), carrying prepayments forward, business-date
+  ages, bounced cheques undo their payment, set-based (3.06 s -> 0.28 s at
+  500 debtors / 20k sales). Invariant tested three ways: buckets ==
+  credit_balance == statement closing; unexplained balance surfaced as
+  unbooked_amount and shown on screen.
+
+Pre-existing bugs found and fixed on the way: Balance Sheet defaulted to
+the UTC date (00:00-03:00 Amman showed "nothing posted"); promotion end
+dates ended at the START of their last day; void_payment accepted cheque
+rows (double-counted a bounced cheque); a dashboard fetch after navigation
+wrote into a null DOM; e2e harnesses bound ports another server held
+(werkzeug SO_REUSEADDR); two source-scanning tests measured mangled input
+(regex comment strippers) -- one shared lexer in tests/_js_source.js.
+
+Measured, not asserted (2026-09-29):
+- Canonical suite `products/run_all_tests.py retail`, final run on the
+  final tree: 309 files passed, 3 failed. Two were ours and are fixed since
+  (a licensing sanity check anchored on the retired page title, eb63c95c;
+  the release-version consistency check, tripped by a test-copy installer
+  label that was reverted -- the version stays 1.0.0-rc.8 in all 8 sites).
+  The third, `retail_payment_requantize_migration_test.py` ("written
+  against v40; constant is 41"), fails identically on the P0 baseline.
+- Real-browser suites (system Python), all on the P1a tree: smoke 15/15,
+  p1a_shell 32/32, p1a_shell_polish 17/17, p1a_till 55/55, p1a_display
+  31/31, p0_till 45/45 (R3-15c, the UTC Balance Sheet, now passes),
+  p0_modals 49/49, p0_shell_css 4/4.
+- Acceptance pass (human clicks, EN/AR, 5 themes, 1366x768): exit
+  criteria 1, 3, 4, 5, 6, 7 MET; 2 PARTIAL (right codes from real requests,
+  second computer simulated on one machine); 8 (owner's week-7 test on the
+  built exe) NOT YET -- the owner's to do. A re-verification of the final
+  polish found every fix holding and one regression (Arabic statement
+  columns), fixed at its root in rtl.css (ca914dfd).
+- Packaged app: PyInstaller + Inno Setup build of this tree
+  (dist/installers/AuraRetail-Setup-1.0.0-rc.8-p1a-test.exe, SHA256
+  D4ABFD1C...C750ABF4F7, local only, NOT published: the repo is public).
+  The built AuraRetail.exe, launched with every AURA_* variable stripped
+  and a never-existing data dir: ready in 2.84 s, retail.db migrated v0 to
+  v41 with its pre-migration backup, GET / 200, the new licensing page and
+  share.js served. The installer itself was not run: this laptop still
+  registers an old rc.7 test install under the same AppId in a stale job
+  folder, and a test install would have taken over that registration.
+- Performance at 500 debtors: Receivables all rows 0.67-0.74 s, dashboard
+  0.46 s, till 0.39-0.48 s, /reports/aging 0.24-0.28 s.
+
+Owner decisions honoured: one Action Aura WhatsApp number (no per-shop
+numbers, no env names on screen); sign out every shift; manager PIN is
+Phase 3 (discount yes, refund no).
+
+Owner decisions still open: product name "Aura Retail" vs "Aura Shop"
+(both appear); who builds sync (Q9); add-on prices before the website's
+"no subscription, ever" can be reworded.
+
+Recorded gaps (decisions or later work, not forgotten):
+- A joined computer cannot name its hub (needs a hub-name field on the
+  hub's identity response, Track S).
+- LicensingMessages.kt and app-shell.js keep "licence" copies of two
+  LOCAL_VERIFICATION messages that licensing.js now spells "license".
+- Week-7 owner test on the built exe on two real lab computers: owed.
+  The second computer was simulated on one machine.
+- Touch group headers 32px (above WCAG's 24px, below 44).
+- categories.created_at is not in the sync payload: tile tone order is
+  exact only on the creating computer.
+- --cat-* tokens missing from Android Color.kt; the Android payment Void
+  button still shows on cheque receipts and swallows the new 409.
+- A cashier's GET /customers returns every credit_balance (pre-existing,
+  needed for credit sales -- see the round's report).
+- Payments/reversals are dated by the device wall clock (no UTC instant).
+- Test debt: six more tests keep home-made JS comment strippers that
+  blank ~150k chars of the big frontend files (correct today).
+- retail_payment_requantize_migration_test.py still asserts schema v40
+  (constant is 41) -- pre-existing, fails on the P0 baseline too.
+- Sync accepts any retail_settings key from a paired device without
+  normalising (pre-existing trust model).
