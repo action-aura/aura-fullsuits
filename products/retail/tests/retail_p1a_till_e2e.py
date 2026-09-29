@@ -599,11 +599,22 @@ with sync_playwright() as p:
     # =========================================================================
     def f5_manager_does_not_see_create_book_owner_does():
         go(owner, "admin-center")
+        # P1b: the numbering card now lives in the hub's "Tills & numbering" section, and
+        # a hub section that is not on screen is hidden. Click the nav item like a person,
+        # then wait for the card to be VISIBLE (unchanged from before). It can no longer
+        # catch "the card is on the first screen of Settings": it is one click away now
+        # (retail_p1b_hub_e2e.py covers the hub's own layout).
+        owner.wait_for_selector('#sh-root .sh-nav-item[data-sh="tills"]', timeout=8000)
+        owner.click('#sh-root .sh-nav-item[data-sh="tills"]')
         owner.wait_for_selector("#doc-series-card", timeout=8000)
         assert owner.query_selector('button:has-text("Create Book")') is not None, \
             "the owner must see the Create Book button"
 
         go(manager, "admin-center")
+        # P1b: same as above -- a delegated manager's hub opens on Tills & numbering
+        # (their first section), but click it anyway so this does not lean on that order.
+        manager.wait_for_selector('#sh-root .sh-nav-item[data-sh="tills"]', timeout=8000)
+        manager.click('#sh-root .sh-nav-item[data-sh="tills"]')
         manager.wait_for_selector("#doc-series-card", timeout=8000)
         manager.wait_for_timeout(300)
         assert manager.query_selector('button:has-text("Create Book")') is None, \

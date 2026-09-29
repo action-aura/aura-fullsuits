@@ -502,7 +502,13 @@ const RetailSystem = {
       // monkey-patching this object from there, so the section list stays
       // readable in one place.
       case 'employees': return RetailEmployees.render(c);
-      case 'admin-center': return this._renderAdminCenter(c);
+      // P1b (crew H): Settings is the hub (settings-hub.js). The old
+      // one-long-page _renderAdminCenter stays as the fallback (a shell that
+      // did not load the hub script) and as the card factory the hub reuses.
+      case 'admin-center':
+        return (window.SettingsHub && typeof window.SettingsHub.render === 'function')
+          ? window.SettingsHub.render(c)
+          : this._renderAdminCenter(c);
       // ci-hardening-w0.3 continuation ("the doorway", second one on this
       // branch): see app-shell.js's nav entry comment and
       // _renderEmailNotifications below for the full story --
@@ -8382,7 +8388,16 @@ const RetailSystem = {
     const printDiscBreakdown = this._saleDiscountBreakdown(saleData);
     const printHalfMinorUnit = this._halfMinorUnit();
     const cfg = this._printerCfg();
-    const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
+    // P1b (crew H, Settings hub "live receipt preview"): the hub previews the
+    // receipt by calling THIS function -- not a second template -- with a
+    // per-call `saleData.__preview = {sink, branding, logo, widthMm}`. A
+    // preview drawn by any other renderer could drift from what a customer is
+    // handed and prove nothing. `pv` is read from the argument (never a
+    // field on `this`), so two overlapping previews and a real print cannot
+    // see each other's overrides. Absent on every real print: the two
+    // `pv && ...` branches below are then never taken.
+    const pv = saleData.__preview || null;
+    const widthMm = (pv && pv.widthMm) || (cfg.paperWidth === '58mm' ? 58 : 80);
     // AUDIT (Phase 0 #6): same fallback chain and nowrap fix as
     // _showReceipt's own line-render -- see that function's comment.
     const lines = (saleData.lines || []).map(i => `
@@ -8391,8 +8406,11 @@ const RetailSystem = {
         <span class="rcpt-amt" style="white-space:nowrap">${this._receiptLineAmountHTML(i)}</span>
       </div>`).join('');
     const einvoiceBlock = await this._einvoiceReceiptBlock(saleData);
-    const branding = await this._receiptBranding();
-    const logoDataUri = await this._receiptLogoDataUri(branding);
+    // A preview supplies the branding as it is typed RIGHT NOW (unsaved), so
+    // the shopkeeper sees the receipt before committing; a real print reads
+    // what is saved.
+    const branding = (pv && pv.branding) || await this._receiptBranding();
+    const logoDataUri = (pv && pv.branding) ? (pv.logo || '') : await this._receiptLogoDataUri(branding);
     const brandingBlock = this._brandingReceiptBlock(branding, logoDataUri);
     const footerLine = branding.branding_receipt_footer
       ? `<div class="rcpt-center" style="font-size:11px">${this._esc(branding.branding_receipt_footer)}</div>` : '';
@@ -8461,6 +8479,10 @@ const RetailSystem = {
       ${footerLine}
       ${einvoiceBlock}
       </body></html>`;
+
+    // Preview: hand the finished document to the caller and stop -- no print
+    // frame is touched and window.print() is never reached.
+    if (pv && typeof pv.sink === 'function') { pv.sink(html); return; }
 
     let frame = document.getElementById('ret-print-frame');
     if (!frame) {
@@ -9943,8 +9965,28 @@ const RetailSystem = {
             <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
+      </div>
+      <!-- P1b (crew H): the low-stock reorder requests used to sit in
+           Settings (Admin Center), which is the wrong room -- accepting one
+           drafts a purchase order, so the person doing it is standing at
+           Purchasing, not Settings. Same ids, same loaders; only the room
+           changed. The two routes behind Accept/Decline are CAP_STOCK_ADJUST
+           (not owner-only), so this is open to whoever can already act on
+           them, which the old owner-only placement was narrower than. -->
+      <div class="sub-chart-card" id="reorder-req-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Automatically drafted when a sale drops a product at or below its reorder level. Accept drafts a local purchase order for this device; Decline dismisses it.')}
+        </p>
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="reorder-req-table">
+            <thead><tr><th>${t('Product')}</th><th>${t('Branch')}</th><th>${t('Note')}</th><th>${t('Requested')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
       </div>`;
     await this._loadPurchaseOrders();
+    await this._loadReorderRequests();
   },
 
   async _loadPurchaseOrders() {
@@ -11751,9 +11793,9 @@ const RetailSystem = {
         <button class="ret-btn ret-btn-primary" style="margin-top:16px" onclick="RetailSystem._saveBusinessDay()">${t('Save')}</button>
       </div>
       <div class="sub-chart-card" id="doc-series-card">
-        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Document Numbering')}</h3>
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Numbering')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
-          ${t('Give your sales, returns or purchase orders their own clean numbering "books" (like A-000001) instead of the default receipt number. A book belongs to exactly one till at a time -- claim it here to start numbering from it.')}
+          ${t('Give your sales, returns or purchase orders their own clean numbering "books" (like A-000001) instead of the default receipt number. A book belongs to exactly one till at a time -- press "Use on this till" to start numbering from it.')}
         </p>
         <div id="doc-series-identity-line" style="margin-bottom:12px;font-size:13px;color:var(--text-secondary)"></div>
         <div id="doc-series-no-identity-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
@@ -11809,18 +11851,6 @@ const RetailSystem = {
         <button class="ret-btn ret-btn-primary" style="margin-top:14px" onclick="RetailSystem._createDocSeries()">${t('Create Book')}</button>
         ` : ''}
       </div>
-      <div class="sub-chart-card" id="reorder-req-card">
-        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
-        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
-          ${t('Automatically drafted when a sale drops a product at or below its reorder level. Accept drafts a local purchase order for this device; Decline dismisses it.')}
-        </p>
-        <div style="overflow-x:auto">
-          <table class="ret-table" id="reorder-req-table">
-            <thead><tr><th>${t('Product')}</th><th>${t('Branch')}</th><th>${t('Note')}</th><th>${t('Requested')}</th><th>${t('Actions')}</th></tr></thead>
-            <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
-          </table>
-        </div>
-      </div>
       <div class="sub-chart-card" id="einvoicing-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Jordan E-Invoicing (JoFotara)')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -11875,7 +11905,7 @@ const RetailSystem = {
     // boundary, where a future card could easily be added on the wrong side
     // of a scattered check.
     if (!isOwner) {
-      ['branding-card', 'default-tax-card', 'business-day-card', 'reorder-req-card',
+      ['branding-card', 'default-tax-card', 'business-day-card',
        'einvoicing-card', 'wa-reports-card', 'shop-network-card'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.remove();
@@ -11884,7 +11914,6 @@ const RetailSystem = {
     await this._loadDeviceBranchForm();
     await this._loadDocSeriesCard();
     if (isOwner) {
-      await this._loadReorderRequests();
       await this._loadBrandingForm();
       await this._loadDefaultTaxRateForm();
       await this._loadBusinessDayForm();
@@ -12021,10 +12050,12 @@ const RetailSystem = {
     const select = document.getElementById('einvoicing-regime');
     const value = select ? select.value : 'none';
     if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    let ok = false;
     try {
       const d = await this._post('/api/einvoicing/settings', { tax_regime: value });
       if (d && d.status === 'success') {
         SubsystemApp.showToast(t('Settings saved.'), 'success');
+        ok = true;
       } else {
         // Surfaced VERBATIM, same convention as _saveEmailNotifications'
         // 400 handling -- the server's own message (routes.py) is written
@@ -12036,6 +12067,7 @@ const RetailSystem = {
     }
     if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
     await this._loadEinvoicingCard();
+    return ok;
   },
 
   // ── Branding (Admin Center) ─────────────────────────────────────────────
@@ -12113,7 +12145,7 @@ const RetailSystem = {
       const normalized = window.AuraShare && AuraShare.normalizeJoPhone(waRaw);
       if (!normalized) {
         SubsystemApp.showToast(t('That does not look like a Jordanian WhatsApp number.'), 'error');
-        return;
+        return false;
       }
       shopWhatsapp = normalized;
     }
@@ -12143,16 +12175,21 @@ const RetailSystem = {
       const resp = await this._post('/api/sub/retail/settings/branding', payload);
       if (!resp || resp.status !== 'success') {
         SubsystemApp.showToast((resp && resp.message) || t('Could not save branding.'), 'error');
-        return;
+        return false;
       }
       const fileInput = document.getElementById('brand-logo-file');
       if (fileInput && fileInput.files && fileInput.files[0]) {
         await this._uploadBrandingLogo(fileInput.files[0]);
       }
       SubsystemApp.showToast(t('Branding saved.'), 'success');
+      // Every saver on this screen answers true/false so the Settings hub's
+      // single Save bar (settings-hub.js) can tell "saved" from "refused" and
+      // keep the Unsaved bar up on a refusal. The per-card buttons ignore it.
+      return true;
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save branding.'), 'error');
+      return false;
     }
   },
 
@@ -12185,6 +12222,7 @@ const RetailSystem = {
     // an error" posture for its own timezone field.
     const payload = { default_tax_rate: raw === '' ? null : parseFloat(raw) };
     if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    let ok = false;
     try {
       const resp = await this._post('/api/sub/retail/settings/tax', payload);
       if (!resp || resp.status !== 'success') {
@@ -12195,13 +12233,17 @@ const RetailSystem = {
         SubsystemApp.showToast((resp && resp.message) || t('Could not save the default tax rate.'), 'error');
       } else {
         SubsystemApp.showToast(t('Default tax rate saved.'), 'success');
+        ok = true;
       }
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save the default tax rate.'), 'error');
     }
     this._restoreSaveButton(btn, t('Save'));
-    await this._loadDefaultTaxRateForm();
+    // Reload only on success: after a refusal the hub keeps what the person
+    // typed (the Unsaved bar is still up) instead of snapping the field back.
+    if (ok || !window.SettingsHub) await this._loadDefaultTaxRateForm();
+    return ok;
   },
 
   // ── This device's branch pin (Admin Center) ─────────────────────────────
@@ -12238,13 +12280,15 @@ const RetailSystem = {
       const resp = await this._post('/api/sub/retail/device/branch', { branch_uid: uid || null });
       if (!resp || resp.status !== 'success') {
         SubsystemApp.showToast((resp && resp.message) || t('Could not save this device\'s branch.'), 'error');
-        return;
+        return false;
       }
       SubsystemApp.showToast(t('Device branch saved.'), 'success');
       await this._loadDeviceBranchForm();
+      return true;
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save this device\'s branch.'), 'error');
+      return false;
     }
   },
 
@@ -12326,13 +12370,15 @@ const RetailSystem = {
         // timezone database (503), and those need different actions from
         // different people.
         SubsystemApp.showToast((resp && resp.message) || t('Could not save the business day.'), 'error');
-        return;
+        return false;
       }
       SubsystemApp.showToast(t('Business day saved.'), 'success');
       await this._loadBusinessDayForm();
+      return true;
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save the business day.'), 'error');
+      return false;
     }
   },
 
@@ -12377,7 +12423,7 @@ const RetailSystem = {
               : (r.is_mine ? '—' : `<span style="color:var(--text-muted)">${t('not this till')}</span>`);
             const actions = [];
             if (r.status === 'active' && !r.allocator_terminal_uid) {
-              actions.push(`<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._claimDocSeries('${this._esc(r.id)}')">${t('Claim for this till')}</button>`);
+              actions.push(`<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._claimDocSeries('${this._esc(r.id)}')">${t('Use on this till')}</button>`);
             }
             if (r.status === 'active') {
               actions.push(`<button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._retireDocSeries('${this._esc(r.id)}')">${t('Retire')}</button>`);
@@ -12408,7 +12454,7 @@ const RetailSystem = {
       if (identityLine) {
         identityLine.textContent = mySale
           ? t('This till numbers its sales {number} next.').replace('{number}', mySale.next_no)
-          : t('This till uses the default receipt numbering. Claim a book above to give it its own series.');
+          : t('This till uses the default receipt numbering. Use a book from the list on this till to give it its own series.');
       }
     } catch (e) { console.error(e); }
   },
@@ -12452,7 +12498,7 @@ const RetailSystem = {
         SubsystemApp.showToast((resp && resp.message) || t('Could not claim this book.'), 'error');
         return;
       }
-      SubsystemApp.showToast(t('Book claimed for this till.'), 'success');
+      SubsystemApp.showToast(t('This till now uses that book.'), 'success');
       await this._loadDocSeriesCard();
     } catch (e) {
       console.error(e);
@@ -16289,8 +16335,28 @@ const RetailSystem = {
           </div>
         </div>
 
+        ${this._printerMovedNote()}
+      </div>`;
+
+    // Live status refresh while the page is open.
+    this._refreshScannerStatus();
+    clearInterval(this._scStatusTimer);
+    this._scStatusTimer = setInterval(() => {
+      if (!document.getElementById('sc-status-text')) { clearInterval(this._scStatusTimer); return; }
+      this._refreshScannerStatus();
+    }, 1000);
+  },
+
+  // P1b (crew H): the receipt printer + cash-drawer card used to be built
+  // inline in _renderScannerSettings, so a shopkeeper looking for "why does
+  // the drawer not open" had to know it lived under Barcode Scanner. It is
+  // now a method so the Settings hub (settings-hub.js, section `hardware`)
+  // can mount it; the scanner screen only keeps a pointer (_printerMovedNote).
+  // Markup is byte-for-byte the old card plus id="printer-card".
+  _printerCardHtml() {
+    return `
         <!-- Receipt Printer (Wave 1B, Part O/P/Q) -->
-        <div class="sub-chart-card">
+        <div class="sub-chart-card" id="printer-card">
           <div class="sub-chart-title" style="margin-bottom:14px">${this._icon('printer', 18, '🖨️')} Receipt Printer</div>
           <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px">
             Uses your Windows-installed printer through the normal print dialog — works with a
@@ -16373,18 +16439,46 @@ const RetailSystem = {
             </div>
           </div>
         </div>
-      </div>`;
+`;
+  },
 
-    // Live status refresh while the page is open.
-    this._refreshScannerStatus();
-    clearInterval(this._scStatusTimer);
-    this._scStatusTimer = setInterval(() => {
-      if (!document.getElementById('sc-status-text')) { clearInterval(this._scStatusTimer); return; }
-      this._refreshScannerStatus();
-    }, 1000);
-    // One-shot: the printer list doesn't change while this screen is open,
-    // unlike scanner status above, which polls a live capture.
+  // Mounts the printer card into `host` and fills the device list. Every
+  // helper it drives (_savePrinterSettings/_testPrint/_testEscPosPrint) reads
+  // its inputs by id, so it works wherever the card sits.
+  _mountPrinterCard(host) {
+    if (!host) return;
+    this._injectStyles();
+    host.innerHTML = this._printerCardHtml();
     this._loadPrinterDevices();
+  },
+
+  // The scanner screen no longer hosts the printer/drawer test. Say where it
+  // went, but only to someone who can actually open that section -- a pointer
+  // to a screen they cannot see is a dead end.
+  //
+  // No hub script on the page at all (a standalone render, an old index.html):
+  // the card stays HERE rather than vanishing, or that page would have no
+  // printer test anywhere. Only a page that HAS the hub can send the person
+  // elsewhere, and only if their role can open Hardware.
+  _printerMovedNote() {
+    const hub = window.SettingsHub;
+    if (!hub || typeof hub.sections !== 'function') {
+      setTimeout(() => { this._loadPrinterDevices(); }, 0);
+      return this._printerCardHtml();
+    }
+    const can = hub.sections().some((s) => s.id === 'hardware' && s.visible);
+    if (!can) {
+      // Hardware is an owner-only section, but a delegated manager (and the
+      // printer routes are CAP_EMPLOYEES, not owner-only) used to test the
+      // printer from this screen. Removing the card would silently take that
+      // away, so anyone who cannot open Hardware keeps the card here.
+      setTimeout(() => { this._loadPrinterDevices(); }, 0);
+      return this._printerCardHtml();
+    }
+    return `<div class="sub-chart-card" id="printer-moved-note">
+          <p style="color:var(--text-secondary);font-size:13px;margin:0 0 10px">${this._esc(t('The receipt printer and cash drawer test now lives in Settings, under Hardware.'))}</p>
+          <button class="ret-btn ret-btn-ghost" id="printer-moved-btn" onclick="SettingsHub.open('hardware')">${this._esc(t('Open printer settings'))}</button>
+        </div>`;
   },
 
   _refreshScannerStatus() {

@@ -309,6 +309,16 @@ with sync_playwright() as p:
     })
     assert r2_promo_body.get("status") == "success", f"R2 layout-matrix promotion was not created: {r2_promo_body}"
 
+    # Phase 1b item 6 (2026-09-29): a NEW shop's first shift now books its till
+    # (MAI1-000001 style numbers) unless the owner switched readable numbers
+    # off. Every #16 scenario below is about the LEGACY SALE-NNNNNN-<co>-<dev>
+    # shape (that is Phase 0's contract), so this shop is pinned to legacy the
+    # way an owner would do it -- through the real endpoint, BEFORE the first
+    # shift. WHAT THIS CAN NO LONGER CATCH: nothing in this file proves the
+    # readable numbers render on the receipt; that is retail_p1b_backend_
+    # numbering_test.py (server) and the Phase 1b e2e (screen).
+    _, num_body = api(page, "POST", "/api/sub/retail/numbering", {"readable_enabled": False})
+    assert num_body.get("status") == "success", f"could not pin legacy numbering: {num_body}"
     api(page, "POST", "/api/sub/retail/cash-sessions/open", {"opening_float": 50})
 
     go_pos(page)
@@ -2314,14 +2324,21 @@ with sync_playwright() as p:
 
         # (c) The Settings card itself: loads the persisted value, and Save
         # writes a new one through the real UI (not the API shortcut above).
+        # P1b (Settings hub): the card now lives in the hub's "Tax" section and
+        # its own Save button is gone -- the hub's sticky "Unsaved changes" bar
+        # (#sh-save) saves it. Anchor moved only; the assertion is unchanged: the
+        # value must reach the SERVER through the real UI click (the GET below).
         go(page, "admin-center")
-        page.wait_for_selector("#default-tax-card", timeout=10000)
+        page.wait_for_selector("#sh-root", timeout=10000)
+        page.evaluate("() => SettingsHub.open('tax')")
+        page.wait_for_selector("#default-tax-card", state="visible", timeout=10000)
         page.wait_for_timeout(500)
         loaded_val = page.eval_on_selector("#tax-default-rate", "el => el.value")
         assert loaded_val == "16", f"the Settings field did not load the persisted default (16), got {loaded_val!r}"
 
         page.fill("#tax-default-rate", "8")
-        page.click("#tax-default-rate-save-btn")
+        page.wait_for_selector("#sh-savebar:not([hidden])", timeout=4000)
+        page.click("#sh-save")
         page.wait_for_timeout(700)
         _, verify_body = api(page, "GET", "/api/sub/retail/settings/tax")
         saved_rate = (verify_body.get("data") or {}).get("default_tax_rate")

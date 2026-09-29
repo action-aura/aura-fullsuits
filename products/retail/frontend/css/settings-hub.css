@@ -1,0 +1,173 @@
+/* Settings hub (P1b, crew H). Tokens and logical properties only: no colour
+ * literals, nothing left/right, so the same file serves sand, night and RTL.
+ * Accent colour is reserved for actions (the Save button is a .ret-btn-primary);
+ * the selected nav item is a neutral surface, not an accent wash. */
+
+.settings-hub {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: var(--space-roomy);
+  align-items: start;
+}
+
+.sh-nav {
+  position: sticky;
+  inset-block-start: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-tight);
+}
+
+.sh-nav-item {
+  min-block-size: var(--touch-target-min);
+  padding-inline: var(--space-base);
+  text-align: start;
+  font: inherit;
+  font-size: var(--text-size-body);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.sh-nav-item:hover { background: var(--surface-hover); }
+.sh-nav-item:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.sh-nav-item[aria-current="page"] {
+  color: var(--text-primary);
+  font-weight: var(--text-weight-semibold);
+  background: var(--surface-active);
+  border-color: var(--border-default);
+}
+
+.sh-main { min-inline-size: 0; }
+.sh-pane { display: flex; flex-direction: column; gap: var(--space-comfy); min-inline-size: 0; }
+/* .sh-pane sets display:flex, which would beat the browser's [hidden] rule:
+ * without this line every section would show at once. */
+.sh-pane[hidden] { display: none; }
+.sh-pane > .sub-chart-card { margin: 0; }
+.sh-split > .sh-pane { min-inline-size: 0; }
+.sh-pane-loading { color: var(--text-tertiary); padding: var(--space-roomy) 0; }
+.sh-pane:focus { outline: none; }
+
+.sh-note {
+  margin: 0;
+  font-size: var(--text-size-meta);
+  color: var(--text-tertiary);
+}
+.sh-card-title {
+  margin: 0 0 var(--space-base);
+  font-size: var(--text-size-body-lg);
+  color: var(--text-primary);
+}
+.sh-card-lead {
+  margin: 0 0 var(--space-comfy);
+  font-size: var(--text-size-body);
+  color: var(--text-tertiary);
+}
+.sh-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-comfy);
+}
+.sh-inline-actions { display: flex; flex-wrap: wrap; gap: var(--space-base); align-items: end; }
+
+/* Shop & receipt: the form on one side, the paper on the other. */
+.sh-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  gap: var(--space-comfy);
+  align-items: start;
+}
+.sh-preview {
+  position: sticky;
+  inset-block-start: 0;
+  padding: var(--space-comfy);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-card);
+}
+.sh-preview-bar { display: flex; flex-wrap: wrap; gap: var(--space-base); margin-block-end: var(--space-base); }
+.sh-seg { display: inline-flex; border: 1px solid var(--border-default); border-radius: var(--radius-control); overflow: hidden; }
+.sh-seg button {
+  min-block-size: var(--touch-target-min);
+  padding-inline: var(--space-base);
+  font: inherit;
+  font-size: var(--text-size-meta);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.sh-seg button + button { border-inline-start: 1px solid var(--border-default); }
+.sh-seg button[aria-pressed="true"] {
+  color: var(--text-primary);
+  font-weight: var(--text-weight-semibold);
+  background: var(--surface-active);
+}
+.sh-seg button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(var(--focus-ring-width) * -1);
+}
+/* The paper. Its width is the real paper width (--paper-mm), so 58 mm looks
+ * narrower than 80 mm; the receipt document draws its own white page. */
+.sh-preview-stage { overflow: auto; max-block-size: 70vh; padding-block: var(--space-snug); }
+.sh-preview-frame {
+  display: block;
+  inline-size: calc(var(--paper-mm, 80) * 1mm + 16px);
+  min-block-size: 360px;
+  margin-inline: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+}
+
+/* The printer card's "open the drawer automatically" row: the checkbox and its
+ * label sat at opposite ends of the card. Keep them together. */
+#printer-card .ret-field:has(> #pr-auto-kick) { justify-content: flex-start; }
+#printer-card #pr-auto-kick { flex: 0 0 auto; inline-size: auto; }
+#printer-card #pr-auto-kick + label { flex: 0 1 auto; inline-size: auto; }
+
+/* Category tax. */
+.sh-cat-status { min-block-size: 1.4em; margin: var(--space-snug) 0 0; font-size: var(--text-size-meta); color: var(--text-secondary); }
+
+/* Numbering extras. */
+.sh-num-preview {
+  margin: var(--space-base) 0 0;
+  padding: var(--space-base);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-control);
+  font-size: var(--text-size-body);
+  color: var(--text-secondary);
+}
+.sh-num-preview bdi { font-weight: var(--text-weight-semibold); color: var(--text-primary); }
+
+/* The unsaved bar: sticky at the bottom of the pane, present only when
+ * something changed. [hidden] must win over display:flex. */
+.sh-savebar {
+  position: sticky;
+  inset-block-end: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-base);
+  margin-block-start: var(--space-comfy);
+  padding: var(--space-base) var(--space-comfy);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+}
+.sh-savebar[hidden] { display: none; }
+.sh-savebar-msg { font-size: var(--text-size-body); font-weight: var(--text-weight-semibold); color: var(--text-primary); }
+.sh-savebar-actions { display: flex; gap: var(--space-base); }
+
+@media (max-width: 900px) {
+  .settings-hub { grid-template-columns: minmax(0, 1fr); }
+  .sh-nav { position: static; flex-direction: row; overflow-x: auto; padding-block-end: var(--space-tight); }
+  .sh-nav-item { flex: 0 0 auto; white-space: nowrap; }
+  .sh-split { grid-template-columns: minmax(0, 1fr); }
+  .sh-preview { position: static; }
+}
