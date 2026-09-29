@@ -6536,3 +6536,16 @@ from the computer the receiver believes is main (or the owner), with the
 sender identity taken from a signature, never from a self-declared field.
 The Ed25519 machinery in licensing_contracts is the likely base. Until it
 lands, treat every licensed till as trusted with the whole shop.
+
+## 2026-09-29 — owner decision: a lost main computer is recovered locally (option b)
+
+Asked in plain words: if the main computer is lost, (a) reset it from the
+Owner Control Center, or (b) the owner takes over from another computer with
+their password. Owner answer: **B**.
+
+So the guarded local takeover shipped in 86eb5718 stays (device_takeover.py,
+the LOCAL TAKEOVER BEGIN/END block in device_routes.py): owner password, the
+typed words TAKE OVER, the current main silent for at least 7 days, epoch+1,
+audit row. Option (a) is NOT built and is not planned. The security fix round
+hardens (b): separate takeover lockout, clock checks, a MAIN_TAKEN_OVER warning
+on every receiver, and the ghost-main / revoked-main dead ends removed.
