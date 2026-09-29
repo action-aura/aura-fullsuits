@@ -6458,3 +6458,50 @@ Recorded from the owner, 2026-09-29, in plain words:
 - **Approved:** the Settings hub's "Discard unsaved changes?" leave warning,
   which needs `SubsystemApp.registerLeaveGuard` in app-shell.js (the edit the
   permission system had refused without the owner's say-so).
+
+## 2026-09-29 — registry schema v9 CLAIMED (ACCOUNTS + DEVICE-SYNC) and retail schema v42 CLAIMED (DEFAULT-BRANCH-UID + TILL-ALLOC)
+
+Claimed before any builder starts (single-writer resources; owner decision
+2026-09-29: Claude builds Track S and registry v9). Checked first on every
+local and origin ref (fetched): highest REGISTRY_SCHEMA_VERSION is 8, highest
+RETAIL_SCHEMA_VERSION is 41, and no entry mentions registry v9 or retail v42.
+The W2a loyalty wave, previously expected at v42, claims its own number later
+(v43+). Full plan: job c5a4f4c4 tmp/p2s/plan.md.
+
+**Registry v9** (registry.db, shared with Clinic):
+- `users.display_name`, `users.role_preset` (both nullable, no default).
+- CAPABILITY_CODES 8 -> 12: `retail.books.view/.record/.approve/.close`,
+  appended; seeded by the re-run v3 step (admin full, everyone else none;
+  never emitted).
+- `devices.row_version/updated_at_utc/app_version/retail_schema_version/
+  registry_schema_version`; new `admin_device_assignment` (one row per
+  company, epoch-ordered). New registry sync entities `device`, `admin_device`.
+- Mixed builds: v8 ignores the new keys, codes and entity types; v9 keeps
+  display_name/role_preset when a payload lacks the key, and resets books
+  grants fail-closed when an old build changes a role.
+- If DEVICE-SYNC slips it is re-claimed as v10 and ACCOUNTS ships alone.
+
+**Retail v42**:
+- New `branch_uid_aliases`, `till_allocations` (+2 partial unique indexes).
+- Data step `converge_default_branch_uid`: rewrites exactly one self-healed
+  default branch's uid to uuid5(licence) and records an alias; touches no
+  money table; ambiguous states are skipped and flagged, never merged.
+- New retail sync entities `branch_alias`, `till_allocation`. Readable
+  numbers, branch codes, book creation and book assignment become
+  main-computer-only. Children of a parked sale (stock movements, GL
+  journals) are parked with it.
+- ROLLOUT: upgrade every till on a licence together (v41 peers park all v42
+  events until upgraded).
+
+**Census of the lab databases (read-only copies, 2026-09-29):** every
+two-computer shop (Lab Proof Shop 2 A2/B2, Aura Demo Shop, the owner's
+Windows install + phone) holds DIFFERENT default-branch uids today, each with
+exactly one 'Main Branch' that is the lowest-id active branch (the converge's
+eligible case). No device anywhere holds is_admin_device=1 (the DBs predate
+the auto-promote fix), so after v9 two computers of one shop may each claim
+main: the deterministic double-main rule decides and sync-review surfaces it.
+Not eligible, left alone: the owner's Windows install still carries its
+pre-activation company_id (converge skips until rebind); AuraLab `desktop`
+has three branches with NULL uids and company_id "1" (legacy fixture).
+Readable numbers were never switched on anywhere (doc_series empty); zero
+quarantine rows (these snapshots hold no paired sync history).
