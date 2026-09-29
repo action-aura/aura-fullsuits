@@ -87,8 +87,18 @@
     return n.toFixed(dp);
   }
 
-  function shouldShowLegend(datasetCount) {
-    return (Number(datasetCount) || 0) > 1;
+  // FINAL polish F15: a doughnut or pie ALWAYS has exactly one dataset, and
+  // what its legend lists is the SLICES (data.labels), not datasets. Counting
+  // datasets therefore hid the legend for every pie -- and the payment donut,
+  // which never asked, showed a one-entry legend ("Cash") beside a full ring
+  // that says nothing else. So for chart types 'doughnut'/'pie' the number
+  // that matters is the slice count; every other type still counts datasets.
+  // The third argument is only read for those two types, so every existing
+  // two-argument-or-fewer caller is unchanged.
+  function shouldShowLegend(datasetCount, chartType, sliceCount) {
+    var isSliceChart = chartType === 'doughnut' || chartType === 'pie';
+    var n = isSliceChart ? sliceCount : datasetCount;
+    return (Number(n) || 0) > 1;
   }
 
   function legendOptions(datasetCount, extra) {

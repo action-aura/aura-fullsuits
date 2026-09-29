@@ -269,6 +269,35 @@ test('doughnut legend mirrors in Arabic (rtl) and is untouched in English', () =
   assert.strictEqual(cfgAr.options.plugins.legend.textDirection, 'rtl');
 });
 
+// FINAL polish F15 -- the payment donut showed a legend with ONE entry.
+// A doughnut/pie always has one dataset; its legend lists SLICES.
+test('shouldShowLegend: a doughnut/pie counts SLICES, not datasets (one slice hides, two show)', () => {
+  // slice charts: the third argument decides, the dataset count is irrelevant
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'doughnut', 1), false, 'one slice: no legend');
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'doughnut', 2), true, 'two slices: legend');
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'pie', 1), false);
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'pie', 4), true);
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'doughnut', 0), false);
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'doughnut'), false, 'missing slice count is not "many"');
+  // allow-half: every other type is still decided by datasets, ignoring slices
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(2, 'bar', 1), true);
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1, 'bar', 5), false, 'a one-series bar with many labels stays legendless');
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(2), true, 'old one-argument callers unchanged');
+  assert.strictEqual(AuraChartTheme.shouldShowLegend(1), false);
+});
+
+test('payment donut config: legend hidden for one tender, shown for two (the caller really asks)', () => {
+  const sb = loadSubsystem();
+  const one = sb.retailPaymentChartConfig(['cash'], [50], '#000');
+  const two = sb.retailPaymentChartConfig(['cash', 'card'], [50, 20], '#000');
+  assert.strictEqual(one.type, 'doughnut');
+  assert.strictEqual(two.type, 'doughnut');
+  assert.strictEqual(one.options.plugins.legend.display, false, 'one slice must not print a one-entry legend');
+  assert.strictEqual(two.options.plugins.legend.display, true, 'two slices must keep the legend');
+  // the two-slice legend still carries its translated-label generator
+  assert.strictEqual(typeof two.options.plugins.legend.labels.generateLabels, 'function');
+});
+
 let failed = 0;
 for (const [name, fn] of cases) {
   try {

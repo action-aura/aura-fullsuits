@@ -135,7 +135,13 @@ function retailPaymentChartConfig(labels, values, tickColor) {
         // `rtl` + `textDirection` legend options, driven by the same switch
         // (AuraI18n.isRTL, which also sets <html dir>) the rest of the page
         // follows. English is untouched: both options are simply `false`.
-        plugins: { legend: { position: 'right', rtl: _chartIsRtl(), textDirection: _chartIsRtl() ? 'rtl' : 'ltr',
+        // FINAL polish F15: a one-slice ring gets no legend (it listed the
+        // single tender beside a full circle). The decision is the shared
+        // AuraChartTheme rule, counting SLICES not datasets.
+        plugins: { legend: { display: window.AuraChartTheme
+            ? AuraChartTheme.shouldShowLegend(1, 'doughnut', labels.length)
+            : labels.length > 1,
+          position: 'right', rtl: _chartIsRtl(), textDirection: _chartIsRtl() ? 'rtl' : 'ltr',
           labels: { color: tickColor, font: { size: 12 },
           // Reuses Chart.js's OWN per-slice doughnut legend generator (each
           // item already carries the right fillStyle/hidden/strikethrough
@@ -3219,6 +3225,18 @@ const RetailSystem = {
   // network request at all -- there is nothing on this screen gated on a
   // capability the caller might lack, which is the whole point.
   _renderCashierLanding(c) {
+    // FINAL polish F12: a person who can SELL must never be shown a refusal --
+    // "limited to managers" told a working cashier she was not allowed
+    // something on the very screen the app sent her to. The shell already
+    // lands sell-only people on the till; this is for every OTHER way in
+    // (a stale #dashboard hash, _navigate('dashboard'), the 60 s refresh
+    // tick). For them: no refusal sentence, and once the panel is written we
+    // hand over to the till through the shell's own _navigate (which also
+    // moves the nav highlight and the header -- rendering the till in place
+    // here would leave the shell believing it is on 'dashboard', and its
+    // 60 s dashboard refresh would then re-render the till over a live
+    // basket). The panel stays as the fallback for hosts with no shell.
+    const canSell = !!(window.SubsystemApp && SubsystemApp.hasCapability('retail.sell'));
     c.innerHTML = `
       <div class="ret-hdr">
         <div>
@@ -3238,9 +3256,9 @@ const RetailSystem = {
              token trap for the Recent Transactions table; the same trap was
              still live here. --text-dim is theme-aware (#51607a light, ~6.4:1
              on a white card) and readable in both themes. -->
-        <p style="color:var(--text-dim);font-size:14px;margin-block:0 24px;line-height:1.7;max-inline-size:440px;margin-inline:auto">
+        ${canSell ? '<div style="margin-block-end:24px"></div>' : `<p style="color:var(--text-dim);font-size:14px;margin-block:0 24px;line-height:1.7;max-inline-size:440px;margin-inline:auto">
           ${t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.')}
-        </p>
+        </p>`}
         <!-- 2026-08-22: this button read "🛒 Open POS", a bare literal, and had
              done since the panel shipped. Three defects in one string, all of
              them silent:
@@ -3266,6 +3284,9 @@ const RetailSystem = {
         <button class="sub-btn-primary" style="min-block-size:48px;padding-inline:24px;font-size:15px"
           onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">${this._icon('shopping-cart', 16, '🛒')}</span> <span>${t('Point of Sale')}</span></button>
       </div>`;
+    if (canSell && typeof SubsystemApp._navigate === 'function' && SubsystemApp.currentSection !== 'pos') {
+      SubsystemApp._navigate('pos');
+    }
   },
 
   // ── POS ───────────────────────────────────────────────────────────────────
@@ -3430,7 +3451,12 @@ const RetailSystem = {
            Letting the title truncate with an ellipsis instead means the
            row's total width no longer depends on the item count at all. */
         .pos-pane-title { margin:0;color:var(--text);font-size:15px;font-weight:700;letter-spacing:-0.01em;
-          min-inline-size:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+          /* P1a FINAL F10: flex:1 1 0 -- the title is the row's ONLY
+             flexible child, so the customer select next to it keeps a
+             readable width and the title gives way (ellipsis). Its floor
+             keeps a few letters + the ellipsis. */
+          flex:1 1 0;min-inline-size:56px;
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
         /* Round 2, till R2: Void Sale's own single-child wrapper -- see its
            own markup comment in _renderPOS for why it cannot share a parent
            with the select+Hold group (retail_surface_pos_test.js's
@@ -3925,7 +3951,12 @@ const RetailSystem = {
         .pos-hold-btn:active { transform:scale(0.97); }
         .pos-cust-select { min-block-size:var(--touch-target-min, 44px);background:var(--input-bg);border:1px solid var(--border-mid);
           border-radius:10px;color:var(--text);padding-inline:12px;font-size:13px;font-family:inherit;outline:none;
-          max-inline-size:190px;transition:border-color .15s ease; }
+          /* P1a FINAL F10: the chosen customer must be READABLE, not just
+             pickable. A floor (min-inline-size) keeps "Walk-in customer" /
+             "عميل عابر" whole; the ceiling + ellipsis only ever bites on a
+             really long name. The old short-till override pinned this at
+             56px and the acceptance check measured "Wall▾" at 1366. */
+          min-inline-size:120px;max-inline-size:190px;text-overflow:ellipsis;transition:border-color .15s ease; }
         .pos-cust-select:focus { border-color:var(--focus-ring-color, var(--sub-accent)); }
 
         /* ── Summary + the total ─────────────────────────────────────────── */
@@ -4398,14 +4429,19 @@ const RetailSystem = {
              DESKTOP-width till picking a real, phone-numbered customer --
              at short-till heights this is the single largest control in
              the row and the one most responsible for the residual
-             wrap this correction describes. 190px -> 96px: still wide
+             wrap this correction describes. 190px -> 148px (P1a FINAL F10
+             raised the floor to 120px so a name stays readable): still wide
              enough to read a short name (the browser truncates the
              SELECTED option's own text with its native ellipsis once it
              overflows -- this file does not control that rendering, only
              the box it happens in), and it is a LIST the cashier opens to
              pick from, not a field they read a full name off continuously
              the way the cart or the receipt is. */
-          .pos-cust-select { inline-size:56px;max-inline-size:56px;min-inline-size:0; }
+          /* P1a FINAL F10: 56px -> a readable box. The room comes from the
+             TITLE (it is now the row's flexible child, see .pos-pane-title),
+             not from squeezing the control the cashier reads the customer
+             off. */
+          .pos-cust-select { min-inline-size:120px;max-inline-size:148px; }
           /* Hold's/Void's own labels never need the same 16px breathing
              room a normal-height till affords them -- 8px still clears
              their own 44px touch floor untouched (padding is inline, not
@@ -6027,7 +6063,7 @@ const RetailSystem = {
         if (discInput) discInput.value = 0;
         const tenderedInput = document.getElementById('pos-tendered');
         if (tenderedInput) tenderedInput.value = '';
-        SubsystemApp.showToast(`${t('Sale held')} — ${data.data.hold_number}`, 'success');
+        SubsystemApp.showToast(`${t('Sale held')} — \u2066${data.data.hold_number}\u2069`, 'success');
         this._refreshHeldCount();
       } else {
         SubsystemApp.showToast(data.message || 'Could not hold sale', 'error');
@@ -6148,7 +6184,7 @@ const RetailSystem = {
       // also runs the trailing _recalc() for us.
       await this._onCustomerChange();
       this._refreshHeldCount();
-      SubsystemApp.showToast(`${t('Resumed')} ${snap.hold_number}`, 'success');
+      SubsystemApp.showToast(`${t('Resumed')} \u2066${snap.hold_number}\u2069`, 'success');
     } catch (e) { /* _fetch already surfaces auth errors via toast/redirect */ }
   },
 
@@ -7909,7 +7945,7 @@ const RetailSystem = {
              _docNoHtml() (Phase 0 #16) is what actually builds that <bdi>
              now -- see its own comment for why the legacy company/device
              fragments are dropped from the PROMINENT number here. -->
-        <p style="color:var(--text-muted);margin:0 0 20px">${t('Receipt #')}${this._docNoHtml(saleData.sale_number)}</p>
+        <p style="color:var(--text-muted);margin:0 0 20px">${t('Receipt #')} ${this._docNoHtml(saleData.sale_number)}</p>
         <div style="background:var(--surface-sunken);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
           <!-- AUDIT (Phase 0 #6): fallback chain is server name -> this
                cart's OWN captured name (cartNames, before _clearCart() ran)
@@ -7990,7 +8026,9 @@ const RetailSystem = {
             placeholder="${this._esc(t('Customer WhatsApp number'))}"
             aria-label="${this._esc(t('Customer WhatsApp number'))}"
             style="flex:1;min-block-size:36px;padding-inline:10px;font-size:13px;border-radius:8px;border:1px solid var(--border-mid);background:var(--input-bg);color:var(--text)" />
-          <button type="button" class="ret-btn ret-btn-ghost" id="rcpt-wa-send-btn">${t('Send')}</button>
+          <!-- P1a FINAL F9: a bare "Send" next to a phone box says nothing about
+               WHERE it sends. The verb names the channel. -->
+          <button type="button" class="ret-btn ret-btn-ghost" id="rcpt-wa-send-btn" style="white-space:nowrap">${t('Send on WhatsApp')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -8405,7 +8443,7 @@ const RetailSystem = {
         .rcpt-bold { font-weight: bold; }
       </style></head><body>
       ${brandingBlock}
-      <div class="rcpt-center">${rt('Receipt')} #${saleData.sale_number}</div>
+      <div class="rcpt-center">${rt('Receipt')} <bdi dir="ltr">#${this._esc(saleData.sale_number)}</bdi></div>
       <div class="rcpt-center">${saleData.created_at || this._fixedDateTime(new Date())}</div>
       ${identityBlock}
       <div class="rcpt-hr"></div>
@@ -8452,6 +8490,9 @@ const RetailSystem = {
   async _renderProducts(c) {
     this._injectStyles();
     const canAdjust = !window.SubsystemApp || SubsystemApp.hasCapability('retail.stock.adjust');
+    // P1a FINAL F1: the stock-value route is gated retail.reports
+    // (retail_api.py product_stock_value). Same client mirror, same code.
+    const canSeeStockValue = !window.SubsystemApp || SubsystemApp.hasCapability('retail.reports');
     c.innerHTML = `
       <div class="ret-hdr">
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -8467,14 +8508,20 @@ const RetailSystem = {
            docstring), not a per-row amount, so it belongs beside the search
            bar the way every other screen's KPI strip in this file sits above
            its table, never inside it. -->
-      <div class="ret-kpi-grid" id="prod-stock-value-kpi" style="grid-template-columns:minmax(200px,280px);margin-bottom:16px">
+      <!-- P1a FINAL F1: rendered ONLY for someone the route will answer
+           (retail.reports -- the server gate, product_stock_value). A
+           cashier used to get this card showing "JD 0.000" (real value
+           2,079.650): the 403 was read as a number. A refusal is not a
+           number, and a card the person can never fill has no business
+           being on their screen. -->
+      ${canSeeStockValue ? `<div class="ret-kpi-grid" id="prod-stock-value-kpi" style="grid-template-columns:minmax(200px,280px);margin-bottom:16px">
         <div class="ret-kpi"><div class="ret-kpi-label">${t('Stock value at cost')}</div><div class="ret-kpi-value money num" id="prod-stock-value">—</div></div>
-      </div>
+      </div>` : ''}
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="prod-table">
-            <thead><tr><th>SKU</th><th>Name</th><th>Category</th><th class="num">${t('Avg cost')}</th><th class="num">${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th>${canAdjust ? '<th>Actions</th>' : ''}</tr></thead>
-            <tbody><tr><td colspan="${canAdjust ? 9 : 8}" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+            <thead><tr><th>SKU</th><th>Name</th><th>Category</th>${canAdjust ? `<th class="num">${t('Avg cost')}</th>` : ''}<th class="num">${t('Price')}</th><th>Stock</th><th>${t('Reorder')}</th><th>Status</th>${canAdjust ? '<th>Actions</th>' : ''}</tr></thead>
+            <tbody><tr><td colspan="${canAdjust ? 9 : 7}" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -8507,11 +8554,20 @@ const RetailSystem = {
   async _loadProductStockValue() {
     const el = document.getElementById('prod-stock-value');
     if (!el) return;
+    // P1a FINAL F1: a REFUSAL MUST NEVER DISPLAY AS A NUMBER. _get hands
+    // back the JSON of a 403/500 too, so `resp.value || 0` turned "you may
+    // not see this" into "JD 0.000" for a cashier (real value 2,079.650).
+    // Only a finite numeric `value` is a figure; anything else is "Can't
+    // load", never 0. A genuine zero-value shop still shows 0.000 because
+    // 0 is a finite number the server actually sent.
+    const cantLoad = () => { el.textContent = t("Can't load"); };
     try {
       const resp = await this._get('/api/sub/retail/products/stock-value');
-      this._setMoney(el, (resp && resp.value) || 0);
+      const v = resp && resp.value;
+      if (typeof v !== 'number' || !isFinite(v)) { cantLoad(); return; }
+      this._setMoney(el, v);
     } catch (e) {
-      el.textContent = '—';
+      cantLoad();
     }
   },
 
@@ -8566,7 +8622,7 @@ const RetailSystem = {
     if (!prods.length) {
       // colspan spans the whole table so the state is centred under the
       // headers rather than crammed into the first column.
-      tbody.innerHTML = `<tr><td colspan="${canAdjust ? 9 : 8}">${this._emptyState({
+      tbody.innerHTML = `<tr><td colspan="${canAdjust ? 9 : 7}">${this._emptyState({
         icon: 'package',
         title: t('No products yet'),
         hint: t('Add your first product, or import your existing list from a spreadsheet.'),
@@ -8619,7 +8675,10 @@ const RetailSystem = {
              and with the PO picker's own prefill two lines below
              (p.avg_cost || p.cost_price || 0). '|| p.cost_price' matches
              that same fallback chain rather than inventing a third one. -->
-        <td class="num" title="${this._esc(t('Typed cost price'))}: ${this._fmt(p.cost_price)}">${this._fmt(p.avg_cost || p.cost_price)}</td>
+        <!-- P1a FINAL F2: cost is a manager's number. The read-only Stock
+             lookup a cashier gets carries NO cost cell, and no cost in a
+             title attribute either (a hover tooltip is still a display). -->
+        ${canAdjust ? `<td class="num" title="${this._esc(t('Typed cost price'))}: ${this._fmt(p.cost_price)}">${this._fmt(p.avg_cost || p.cost_price)}</td>` : ''}
         <!-- AUDIT -- these two cells carried style="color:#10b981" / "#ef4444"
              INLINE, which beats every stylesheet in the product: no token, no
              override and no :hover rule can reach an inline declaration, so
@@ -10865,7 +10924,7 @@ const RetailSystem = {
           actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelQuotation('${this._esc(q.id)}')">${t('Cancel')}</button>`;
         }
         return `<tr>
-          <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(q.doc_number)}</td>
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(q.doc_number)}</td>
           <td>${this._esc(q.customer_name || t('Walk-in'))}</td>
           <td>${this._badge(label, statusColor[q.status]||'blue')}</td>
           <td style="color:var(--text-muted)">${this._esc(q.valid_until || '—')}</td>
@@ -11145,7 +11204,7 @@ const RetailSystem = {
       overlay.innerHTML = `
         <div class="ret-modal ret-modal-wide" id="qt-print-area" role="dialog" aria-modal="true" aria-labelledby="ret-quotation-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 id="ret-quotation-view-dialog-title" style="margin:0">${this._esc(q.doc_kind === 'order' ? t('Sales Order') : t('Quotation'))}: ${this._esc(q.doc_number)}</h3>
+            <h3 id="ret-quotation-view-dialog-title" style="margin:0">${this._esc(q.doc_kind === 'order' ? t('Sales Order') : t('Quotation'))}: ${this._bdi(q.doc_number)}</h3>
             <div class="qt-no-print">
               <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="window.print()">${t('Print')}</button>
               <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
@@ -12515,7 +12574,7 @@ const RetailSystem = {
     try {
       const d = await this._post(`/api/sub/retail/reorder-requests/${rid}/accept`, {});
       if (d && d.status === 'success') {
-        SubsystemApp.showToast(d.data && d.data.po_number ? `${t('Purchase order drafted')}: ${d.data.po_number}` : t('Request accepted'), 'success');
+        SubsystemApp.showToast(d.data && d.data.po_number ? `${t('Purchase order drafted')}: \u2066${d.data.po_number}\u2069` : t('Request accepted'), 'success');
       } else {
         SubsystemApp.showToast((d && d.message) || t('Could not accept this request.'), 'error');
       }
@@ -13586,7 +13645,7 @@ const RetailSystem = {
         // (pre-fix, or a receiving device mid-sync-upgrade) omits the new
         // field, so this never renders 'undefined'.
         const payout = d.data.tender_refund_amount != null ? d.data.tender_refund_amount : d.data.refund_amount;
-        let msg = `${t('Return processed')} — ${d.data.return_number} · ${t('Refund')}: ${this._fmt(payout)}`;
+        let msg = `${t('Return processed')} — \u2066${d.data.return_number}\u2069 ·${t('Refund')}: ${this._fmt(payout)}`;
         if (d.data.ar_forgiven_amount > 0.005) {
           msg += ` (+${this._fmt(d.data.ar_forgiven_amount)} ${t('credit forgiven')})`;
         }
@@ -16704,7 +16763,7 @@ const RetailSystem = {
         return `<tr>
           <td${isPastDue ? ' style="color:var(--state-danger-text);font-weight:600"' : ''}>${this._esc(row.due_date || '—')}${isPastDue ? ` · ${t('Past due')}` : ''}</td>
           <td style="font-weight:600">${this._esc(partyMap[row.party_id] || row.party_id || '—')}</td>
-          <td style="font-family:monospace">${this._esc(row.cheque_number || '—')}</td>
+          <td style="font-family:monospace">${this._bdi(row.cheque_number || '—')}</td>
           <td>${this._esc(row.bank_name || '—')}</td>
           <td>${this._esc(row.drawer_name || '—')}</td>
           <td class="num">${this._money(row.amount)}</td>
@@ -16935,7 +16994,7 @@ const RetailSystem = {
       overlay.innerHTML = `
         <div class="ret-modal ret-modal-wide" id="ret-cheque-view-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-cheque-view-dialog-title">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-            <h3 id="ret-cheque-view-dialog-title" style="margin:0">${t('Cheque')} ${this._esc(cheque.cheque_number || '')}</h3>
+            <h3 id="ret-cheque-view-dialog-title" style="margin:0">${t('Cheque')} ${this._bdi(cheque.cheque_number || '')}</h3>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._closeModalOverlay(this)" title="${this._esc(t('Close'))}" aria-label="${this._esc(t('Close'))}">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
@@ -16946,7 +17005,7 @@ const RetailSystem = {
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Bank')}</div><div style="color:var(--text-muted)">${this._esc(cheque.bank_name || '—')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Drawer')}</div><div style="color:var(--text-muted)">${this._esc(cheque.drawer_name || '—')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Account Number')}</div><div style="color:var(--text-muted)">${this._esc(cheque.account_number || '—')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Account Number')}</div><div style="color:var(--text-muted)">${this._bdi(cheque.account_number || '—')}</div></div>
           </div>
           <div style="margin:16px 0 8px;color:var(--text-primary);font-weight:600">${t('Timeline')}</div>
           <table class="ret-table">
@@ -17458,9 +17517,15 @@ const RetailSystem = {
       return `<tr>
         <td style="color:var(--text-muted)">${this._bdi(e.date || '—')}</td>
         <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(e.ref || '—')}</td>
-        <td>${t(meta.label)}</td>
-        <td style="font-weight:600;color:${color}">${sign}${this._fmt(e.amount)}</td>
-        <td style="font-weight:600">${this._fmt(e.running_balance)}</td>
+        <!-- P1a FINAL F11: in Arabic the amount wrapped ("-د.أ" / "20.000")
+             and the kind wrapped ("بيع" / "آجل") -- a figure split from its
+             currency reads as two figures. Money cells take the .num
+             convention (nowrap + tabular) and the kind column gets a floor
+             wide enough for a two-word label on one line. The sign is
+             inside the same nowrap cell, so it cannot be left behind. -->
+        <td style="min-inline-size:110px">${t(meta.label)}</td>
+        <td class="num" style="font-weight:600;color:${color}">${sign}${this._fmt(e.amount)}</td>
+        <td class="num" style="font-weight:600">${this._fmt(e.running_balance)}</td>
       </tr>`;
     }).join('') : `<tr><td colspan="5">${this._emptyState({ icon: 'scroll-text', title: t('No activity yet') })}</td></tr>`;
 
@@ -17528,7 +17593,7 @@ const RetailSystem = {
           return `<div style="margin-bottom:16px"><button type="button" class="ret-btn ret-btn-ghost" id="stmt-send-btn">${t('Send Statement')}</button></div>`;
         })()}
         <table class="ret-table">
-          <thead><tr><th>${t('Date')}</th><th>${t('Reference')}</th><th>${t('Description')}</th><th>${t('Amount')}</th><th>${t('Running Balance')}</th></tr></thead>
+          <thead><tr><th>${t('Date')}</th><th>${t('Reference')}</th><th>${t('Description')}</th><th class="num">${t('Amount')}</th><th class="num">${t('Running Balance')}</th></tr></thead>
           <tbody>${eventsHtml}</tbody>
         </table>${paymentBlock}
       </div>`;

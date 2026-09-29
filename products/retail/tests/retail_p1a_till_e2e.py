@@ -1946,6 +1946,323 @@ with sync_playwright() as p:
           unbooked_never_in_a_customer_message)
 
     # =========================================================================
+    # FINAL polish round (whole-P1a acceptance check). Every check is named
+    # "FINAL Fn:" so `P1A_ONLY="FINAL F1:"` runs exactly one of them, which is
+    # how the mutation proofs drive them.
+    # =========================================================================
+    FINAL_AR = {
+        # Pending in i18n-T.json (the catalog owner merges them into ar.json);
+        # merged into the live dictionary here so the Arabic pass measures the
+        # words that will ship, not the English fallback.
+        "Send on WhatsApp": "إرسال عبر واتساب",
+        "Can't load": "تعذّر التحميل",
+    }
+
+    def ui_lang(pg, lang):
+        pg.evaluate("(d) => { Object.assign(AuraI18n.dicts.ar, d); }", FINAL_AR)
+        pg.evaluate("(l) => { AuraI18n.current = l; localStorage.setItem('aura_lang', l); AuraI18n.apply(); }", lang)
+        assert pg.evaluate("() => document.documentElement.getAttribute('lang')") == lang, \
+            f"the page did not switch to {lang}"
+
+    STOCK_VALUE_URL = "**/api/sub/retail/products/stock-value"
+
+    def open_products_and_read_stock_value(pg):
+        """Returns (text of #prod-stock-value or None if the card is absent)."""
+        go(pg, "products")
+        pg.wait_for_selector("#prod-table tbody tr", timeout=8000)
+        if pg.locator("#prod-stock-value").count() == 0:
+            pg.wait_for_timeout(600)
+            return None
+        pg.wait_for_function(
+            "() => document.getElementById('prod-stock-value').textContent.trim() !== '—'", timeout=8000)
+        return pg.locator("#prod-stock-value").inner_text().strip()
+
+    def final_f1_cashier_never_sees_a_stock_value():
+        # The route is gated retail.reports; a cashier does not hold it. The
+        # old screen sent the request anyway, read the 403 body as a number,
+        # and printed "JD 0.000" (real value 2,079.650).
+        calls = []
+        cashier.on("request", lambda r: calls.append(r.url) if "/products/stock-value" in r.url else None)
+        go(cashier, "products")
+        cashier.wait_for_selector("#prod-table tbody tr", timeout=8000)
+        cashier.wait_for_timeout(700)
+        assert cashier.locator("#prod-stock-value-kpi").count() == 0, "a cashier was given the stock-value card"
+        assert cashier.locator("#prod-stock-value").count() == 0, "a cashier was given a stock-value figure element"
+        body = cashier.locator("#sub-content").inner_text()
+        assert "Stock value at cost" not in body, "the label 'Stock value at cost' is on a cashier's Products screen"
+        assert not calls, f"a cashier's screen still asked for the stock value: {calls}"
+        # Positive control (the allow half): the OWNER has the card and the route is really asked.
+        owner_calls = []
+        owner.on("request", lambda r: owner_calls.append(r.url) if "/products/stock-value" in r.url else None)
+        shown = open_products_and_read_stock_value(owner)
+        assert shown is not None, "the owner has no stock-value card"
+        assert re.search(r"\d", shown) and shown != "Can't load", \
+            f"the owner's real stock value did not load as a number: {shown!r}"
+        assert owner_calls, "the owner's screen never asked for the stock value"
+
+    check("FINAL F1: a cashier's Products screen has no stock-value card and never asks for it; the owner has it",
+          final_f1_cashier_never_sees_a_stock_value)
+
+    def final_f1_a_refusal_or_error_never_displays_as_a_number():
+        cases = [
+            ("403 refusal", 403, '{"status":"error","message":"forbidden"}'),
+            ("500 error", 500, '{"status":"error","message":"boom"}'),
+            ("200 without a value", 200, '{"status":"success","data":{}}'),
+            ("200 with value null", 200, '{"value":null,"currency":"JOD"}'),
+            ("200 with a string value", 200, '{"value":"lots","currency":"JOD"}'),
+        ]
+        for label, status, body in cases:
+            owner.route(STOCK_VALUE_URL, _fulfil(body, status=status))
+            try:
+                shown = open_products_and_read_stock_value(owner)
+            finally:
+                owner.unroute(STOCK_VALUE_URL)
+            assert shown is not None, f"[{label}] the owner's card vanished"
+            assert not re.search(r"\d", shown), f"[{label}] a failure was displayed as a number: {shown!r}"
+            assert shown == "Can't load", f"[{label}] expected \"Can't load\", got {shown!r}"
+        # Arabic: the same failure says it in Arabic, still no digits.
+        ui_lang(owner, "ar")
+        try:
+            owner.route(STOCK_VALUE_URL, _fulfil('{"status":"error"}', status=403))
+            try:
+                shown = open_products_and_read_stock_value(owner)
+            finally:
+                owner.unroute(STOCK_VALUE_URL)
+            assert shown == FINAL_AR["Can't load"], f"[ar] expected the Arabic can't-load text, got {shown!r}"
+        finally:
+            ui_lang(owner, "en")
+        # The allow half: a REAL zero is a number the server sent, and shows as 0.000; a real figure shows as itself.
+        owner.route(STOCK_VALUE_URL, _fulfil('{"value":0,"currency":"JOD"}'))
+        try:
+            zero = open_products_and_read_stock_value(owner)
+        finally:
+            owner.unroute(STOCK_VALUE_URL)
+        assert re.sub(r"[^\d.]", "", zero) == "0.000", f"a genuine zero must show as 0.000, got {zero!r}"
+        owner.route(STOCK_VALUE_URL, _fulfil('{"value":1234.5,"currency":"JOD"}'))
+        try:
+            real = open_products_and_read_stock_value(owner)
+        finally:
+            owner.unroute(STOCK_VALUE_URL)
+        assert re.sub(r"[^\d.]", "", real) == "1234.500", f"a real figure must show as itself, got {real!r}"
+
+    check("FINAL F1: 403 / 500 / missing / null / non-number stock value shows \"Can't load\" (EN + AR), never a number; a real 0 and a real figure still show",
+          final_f1_a_refusal_or_error_never_displays_as_a_number)
+
+    def final_f2_no_cost_values_for_a_cashier_but_the_owner_has_them():
+        go(cashier, "products")
+        cashier.wait_for_selector("#prod-table tbody tr", timeout=8000)
+        cashier.wait_for_timeout(500)
+        heads = cashier.eval_on_selector_all("#prod-table thead th", "els => els.map(e => e.textContent.trim())")
+        assert "Avg cost" not in heads, f"a cashier sees the Avg cost column header: {heads}"
+        assert len(heads) == 7, f"the read-only Stock lookup should have 7 columns, has {len(heads)}: {heads}"
+        assert cashier.locator("#prod-table [title*='cost' i]").count() == 0, \
+            "a cashier's product table still carries a cost tooltip"
+        assert cashier.locator("#sub-content").inner_text().count("Typed cost price") == 0
+        rows = cashier.eval_on_selector_all(
+            "#prod-table tbody tr", "els => els.map(e => ({t: e.innerText, n: e.children.length}))")
+        widget = [r for r in rows if "Aura Test Widget" in r["t"]]
+        gadget = [r for r in rows if "Aura Test Gadget" in r["t"]]
+        assert widget and gadget, "positive control: the fixture products must be listed"
+        assert "5.000" not in widget[0]["t"], f"the Widget's cost (5.000) is on a cashier's row: {widget[0]['t']!r}"
+        assert "2.500" not in gadget[0]["t"], f"the Gadget's cost (2.500) is on a cashier's row: {gadget[0]['t']!r}"
+        assert "10.000" in widget[0]["t"], f"positive control: the Widget's PRICE must still show: {widget[0]['t']!r}"
+        assert all(r["n"] == 7 for r in rows), "a cashier's row has the wrong number of cells (header/row out of step)"
+
+        go(owner, "products")
+        owner.wait_for_selector("#prod-table tbody tr", timeout=8000)
+        oheads = owner.eval_on_selector_all("#prod-table thead th", "els => els.map(e => e.textContent.trim())")
+        assert "Avg cost" in oheads, f"the owner lost the Avg cost column: {oheads}"
+        orows = owner.eval_on_selector_all(
+            "#prod-table tbody tr", "els => els.map(e => ({t: e.innerText, n: e.children.length}))")
+        ow = [r for r in orows if "Aura Test Widget" in r["t"]]
+        assert ow and "5.000" in ow[0]["t"], f"the owner must see the Widget's cost 5.000: {ow}"
+        assert owner.locator("#prod-table td[title*='Typed cost price']").count() >= 1, \
+            "the owner's cost cells lost their tooltip"
+        assert all(r["n"] == len(oheads) for r in orows), "an owner row is out of step with its header"
+
+    check("FINAL F2: a cashier sees no cost value, header or tooltip anywhere on Products (7 columns); the owner has Avg cost",
+          final_f2_no_cost_values_for_a_cashier_but_the_owner_has_them)
+
+    RECEIPT_GEOM_JS = """() => {
+      const dlg = document.getElementById('ret-receipt-dialog');
+      const p = Array.from(dlg.querySelectorAll('p')).find(x => x.querySelector('bdi'));
+      if (!p) return {found: false};
+      const bdi = p.querySelector('bdi');
+      const tn = Array.from(p.childNodes).find(n => n.nodeType === 3 && n.textContent.trim());
+      const txt = tn.textContent;
+      const lead = txt.length - txt.trimStart().length, end = txt.trimEnd().length;
+      const rg = document.createRange(); rg.setStart(tn, lead); rg.setEnd(tn, end);
+      const lr = rg.getBoundingClientRect(), br = bdi.getBoundingClientRect();
+      return {found: true, label: txt.trim(), number: bdi.textContent, bdiDir: bdi.getAttribute('dir'),
+              gap: Math.max(br.left - lr.right, lr.left - br.right), sameLine: Math.abs(lr.top - br.top) < 8,
+              paraDir: getComputedStyle(p).direction, sendText: (document.getElementById('rcpt-wa-send-btn') || {}).textContent};
+    }"""
+
+    def final_f9_arabic_receipt_number_is_isolated_and_send_is_translated():
+        ui_lang(owner, "ar")
+        try:
+            go_pos(owner)
+            owner.evaluate("() => { window.__lastOpenedUrl = null; window.open = (u) => { window.__lastOpenedUrl = u; return null; }; }")
+            owner.evaluate("(id) => RetailSystem._addToCart(id)", PID_WIDGET)
+            owner.wait_for_timeout(300)
+            owner.click("#pos-checkout-btn")
+            owner.wait_for_selector("#ret-receipt-dialog", timeout=10000)
+            owner.wait_for_timeout(300)
+            g = owner.evaluate(RECEIPT_GEOM_JS)
+            assert g["found"], "the receipt dialog has no document-number line with a <bdi>"
+            assert g["paraDir"] == "rtl", f"positive control: the receipt must be rendering right-to-left, got {g['paraDir']}"
+            assert g["label"] == "رقم الفاتورة", f"the label should be the Arabic 'Receipt #', got {g['label']!r}"
+            assert g["bdiDir"] == "ltr", f"the document number is not pinned left-to-right: dir={g['bdiDir']!r}"
+            assert re.match(r"^[A-Za-z0-9-]+", g["number"]), f"the number looks wrong: {g['number']!r}"
+            assert g["sameLine"], "the label and the number are on different lines"
+            assert g["gap"] >= 2, (f"the label and the number touch ({g['gap']:.1f}px apart): "
+                                   f"the receipt would read 'رقم الفاتورة{g['number']}'")
+            assert g["sendText"] == FINAL_AR["Send on WhatsApp"], \
+                f"the Send button did not say the Arabic 'Send on WhatsApp': {g['sendText']!r}"
+            owner.fill("#rcpt-wa-phone", "0791234567")
+            real_click(owner, owner.locator("#rcpt-wa-send-btn"), "Arabic receipt Send button")
+            owner.wait_for_timeout(300)
+            url = owner.evaluate("() => window.__lastOpenedUrl")
+            assert url and url.startswith("https://wa.me/962791234567?text="), f"the Send button did not open wa.me: {url!r}"
+            print(f"      Arabic receipt: label={g['label']!r} number={g['number']!r} gap={g['gap']:.1f}px send={g['sendText']!r}")
+        finally:
+            owner.evaluate("() => document.querySelectorAll('.ret-modal-overlay').forEach(el => el.remove())")
+            ui_lang(owner, "en")
+            go_pos(owner)
+
+    check("FINAL F9: Arabic receipt number sits in a left-to-right <bdi> with a visible gap from its label; Send says 'إرسال عبر واتساب' and is really clickable",
+          final_f9_arabic_receipt_number_is_isolated_and_send_is_translated)
+
+    CUST_SELECT_JS = """(arrow) => {
+      const s = document.getElementById('pos-customer');
+      const cs = getComputedStyle(s);
+      const opt = s.options[s.selectedIndex];
+      const cv = document.createElement('canvas').getContext('2d');
+      cv.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+      const full = opt.textContent;
+      const name = full.replace(/\\s*\\(\\+?[\\d ]+\\)\\s*$/, '');
+      const avail = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - arrow;
+      const rc = (el) => { const r = el.getBoundingClientRect(); return {l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height}; };
+      const hold = document.querySelector('.pos-hold-btn'), voidb = document.querySelector('.pos-clear-btn');
+      const title = document.getElementById('pos-pane-title'), hdr = document.querySelector('.pos-pane-hdr');
+      return {full, name, nameW: cv.measureText(name).width, avail, selW: s.clientWidth,
+              sel: rc(s), hold: rc(hold), voidb: rc(voidb), hdr: rc(hdr),
+              titleW: title.clientWidth, titleClipped: title.scrollWidth > title.clientWidth + 1};
+    }"""
+
+    def final_f10_the_chosen_customer_is_readable_at_1366():
+        problems, seen = [], []
+        try:
+            for lang in ("en", "ar"):
+                ui_lang(cashier, lang)
+                cashier.set_viewport_size({"width": 1366, "height": 768})
+                go_pos(cashier)
+                for label, val in (("Walk-in", ""), ("Old Payer", OLD_PAYER_ID), ("No Phone At All", NOPHONE_ID)):
+                    cashier.select_option("#pos-customer", val)
+                    cashier.wait_for_timeout(250)
+                    g = cashier.evaluate(CUST_SELECT_JS, 24)
+                    seen.append(f"[{lang}] {label!r}: name {g['nameW']:.0f}px in {g['avail']:.0f}px (select {g['selW']}px, title {g['titleW']}px)")
+                    if g["nameW"] > g["avail"]:
+                        problems.append(f"[{lang}] {g['name']!r} needs {g['nameW']:.0f}px but the select shows only {g['avail']:.0f}px")
+                    ctr = lambda b: (b["t"] + b["b"]) / 2
+                    if max(abs(ctr(g["sel"]) - ctr(g["hold"])), abs(ctr(g["sel"]) - ctr(g["voidb"]))) > 8:
+                        problems.append(f"[{lang}] {label}: the header row wrapped (select/Hold/Void not on one line)")
+                    if g["hdr"]["r"] > 1366 or g["voidb"]["r"] > 1366 or g["voidb"]["l"] < 0:
+                        problems.append(f"[{lang}] {label}: the header row spills off the screen")
+                reachable(cashier, cashier.locator("#pos-customer"), f"[{lang}] customer select")
+            cashier.select_option("#pos-customer", "")
+        finally:
+            ui_lang(cashier, "en")
+            go_pos(cashier)
+        for s in seen:
+            print("      " + s)
+        assert not problems, "; ".join(problems)
+
+    check("FINAL F10: at 1366x768, EN and AR, the chosen customer's name fits its select and Hold/Void stay on the same row",
+          final_f10_the_chosen_customer_is_readable_at_1366)
+
+    STATEMENT_LINES_JS = """() => {
+      const dlg = document.getElementById('ret-statement-dialog');
+      const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el);
+        const tops = new Set(Array.from(r.getClientRects()).filter(x => x.width > 0).map(x => Math.round(x.top / 4)));
+        return tops.size; };
+      const rows = Array.from(dlg.querySelectorAll('tbody tr')).map(tr => { const td = tr.querySelectorAll('td');
+        return {kind: td[2].innerText.trim(), kindLines: lines(td[2]), amt: td[3].innerText.trim(), amtLines: lines(td[3]),
+                bal: td[4].innerText.trim(), balLines: lines(td[4]),
+                amtWs: getComputedStyle(td[3]).whiteSpace, balWs: getComputedStyle(td[4]).whiteSpace,
+                kindMin: parseFloat(getComputedStyle(td[2]).minWidth) || 0}; });
+      const tb = dlg.querySelector('table').getBoundingClientRect(), d = dlg.getBoundingClientRect();
+      return {rows, overflowX: dlg.scrollWidth - dlg.clientWidth, tableL: tb.left, tableR: tb.right, dlgL: d.left, dlgR: d.right};
+    }"""
+
+    def final_f11_arabic_statement_money_and_kind_stay_on_one_line():
+        problems = []
+        try:
+            ui_lang(owner, "ar")
+            for vw in (1440, 1024, 768, 600):
+                owner.set_viewport_size({"width": vw, "height": 900})
+                owner.evaluate("(id) => RetailSystem._openPartyStatement('customer', id)", MANY_ID)
+                owner.wait_for_selector("#ret-statement-dialog", timeout=8000)
+                owner.wait_for_timeout(500)
+                g = owner.evaluate(STATEMENT_LINES_JS)
+                assert len(g["rows"]) == 8, f"positive control: the fixture statement should have 8 events, has {len(g['rows'])}"
+                # The line counts above only bite when the table is squeezed;
+                # the convention itself (money never breaks, the kind has a
+                # floor) is asserted directly so it cannot quietly go missing
+                # at a width nobody measured.
+                r0 = g["rows"][0]
+                if r0["amtWs"] != "nowrap" or r0["balWs"] != "nowrap":
+                    problems.append(f"[{vw}] money cells may wrap (white-space: {r0['amtWs']}/{r0['balWs']})")
+                if r0["kindMin"] < 100:
+                    problems.append(f"[{vw}] the kind column has no floor (min-width {r0['kindMin']}px)")
+                for r in g["rows"]:
+                    for k in ("kind", "amt", "bal"):
+                        if r[k + "Lines"] != 1:
+                            problems.append(f"[{vw}] {k} {r[k]!r} is on {r[k + 'Lines']} lines")
+                if g["overflowX"] > 1 or g["tableR"] > g["dlgR"] + 1 or g["tableL"] < g["dlgL"] - 1:
+                    problems.append(f"[{vw}] the statement table spills out of its modal (scroll overflow {g['overflowX']}px)")
+                print(f"      [{vw}] kinds={sorted({r['kind'] for r in g['rows']})} sample amount={g['rows'][0]['amt']!r}")
+                close_statement()
+        finally:
+            owner.set_viewport_size({"width": 1440, "height": 900})
+            owner.evaluate("() => document.querySelectorAll('.ret-modal-overlay').forEach(el => el.remove())")
+            ui_lang(owner, "en")
+        assert not problems, "; ".join(problems[:6])
+
+    check("FINAL F11: in Arabic the statement's money and kind cells are one line each, and the table fits its modal (1440 / 1024 / 768 / 600)",
+          final_f11_arabic_statement_money_and_kind_stay_on_one_line)
+
+    def final_f12_a_seller_who_lands_on_the_dashboard_is_handed_the_till():
+        REFUSAL = "limited to managers and the store owner"
+        # "Never show a refusal" means not even for one frame: the navigation
+        # replaces the landing within ~50 ms, so a check taken afterwards
+        # cannot see a refusal that flashed and left. Record every DOM change.
+        cashier.evaluate("""(needle) => {
+          window.__sawRefusal = false;
+          if (window.__refusalObs) window.__refusalObs.disconnect();
+          // textContent, not innerText: a refusal painted for one frame inside
+          // a not-yet-laid-out container has no innerText but is still text.
+          const look = () => { if ((document.body.textContent || '').includes(needle)) window.__sawRefusal = true; };
+          window.__refusalObs = new MutationObserver(look);
+          window.__refusalObs.observe(document.body, {childList: true, subtree: true, characterData: true});
+        }""", REFUSAL)
+        go(cashier, "dashboard", wait_ms=1500)
+        saw = cashier.evaluate("() => { window.__refusalObs.disconnect(); return window.__sawRefusal; }")
+        assert not saw, "the refusal sentence was on the cashier's screen at some moment on the way to the till"
+        assert cashier.evaluate("() => SubsystemApp.currentSection") == "pos", \
+            "a cashier sent to the dashboard was not handed to the till"
+        assert cashier.locator("#pos-product-grid").count() == 1, "the till did not render for the cashier"
+        assert REFUSAL not in cashier.locator("#sub-content").inner_text(), "the cashier was shown the refusal sentence"
+        # Allow half / positive control: the owner still gets the real dashboard.
+        go(owner, "dashboard", wait_ms=1500)
+        assert owner.evaluate("() => SubsystemApp.currentSection") == "dashboard", "the owner was moved off the dashboard"
+        assert owner.locator("#pos-product-grid").count() == 0, "the owner was handed the till instead of the dashboard"
+        assert REFUSAL not in owner.locator("#sub-content").inner_text()
+
+    check("FINAL F12: a cashier sent to the dashboard ends on the till with no refusal sentence; the owner still gets the dashboard",
+          final_f12_a_seller_who_lands_on_the_dashboard_is_handed_the_till)
+
+    # =========================================================================
     # F15 / M5 -- a category's tone is its CREATION ORDER, so adding a category
     # never repaints an existing one.
     # =========================================================================
