@@ -1604,9 +1604,15 @@ with sync_playwright() as p:
     #      shipped default itself; the ON-path checks above force it True, so the
     #      constant's real value is proved only by the backend numbering tests.
     # -------------------------------------------------------------------------
-    UNAVAILABLE_REASON = "Readable receipt numbers arrive with multi-computer support."
-    WITHDRAWN_REASON = ("This computer was using readable numbers. An update switched them off until "
-                        "multi-computer support arrives, so it uses the long numbers again.")
+    # v42 wording: the reason is no longer "arrives with multi-computer support" -- it is
+    # "the main computer has not given this computer a till number yet". The first is the
+    # server's own sentence word for word (the page shows the server's reason when it sends
+    # one); the second is the page's own sentence for a computer that WAS on and lost its number.
+    UNAVAILABLE_REASON = ("Readable numbers are given out by the main computer, and this computer has "
+                          "no till number from the main computer yet. Until it has one it uses the long "
+                          "numbers, so two computers can never print the same receipt number.")
+    WITHDRAWN_REASON = ("This computer was using readable numbers, but it has no till number from the "
+                        "main computer now, so it uses the long numbers again.")
 
     def assert_arabic_only(txt, where):
         assert re.search(r"[؀-ۿ]", txt), f"{where}: not Arabic: {txt!r}"

@@ -67,6 +67,7 @@
     pvSeq: 0,
     catalog: null,       // categories loaded for the tax card
     numbering: null,     // last GET /numbering data
+    tills: null,         // {data: last GET /tills, raw: {terminal_uid: typed text}}
     ready: false,        // true once the baseline is taken; refreshBar records only then
     carry: null,         // unsaved values to bring back across a theme / language re-render
     holding: {},         // group name -> true while its fields are still loading (never "dirty")
@@ -137,6 +138,10 @@
     deviceBranch: { section: 'tills', fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
     businessDay: { section: 'tills', fields: ['business-day-tz', 'business-day-hour'], save: () => R()._saveBusinessDay() },
     numbering: { section: 'tills', fields: ['num-branch-code', 'num-readable', 'num-till'], save: () => saveNumbering() },
+    // The plan for the shop's till numbers (a hidden field that mirrors what is
+    // typed in the Tills card; see "tills" below). Absent on any computer that
+    // is not the main one, so there it is never dirty.
+    tillPlan: { section: 'tills', fields: ['till-plan'], save: () => saveTills() },
     einvoice: { section: 'tax', fields: ['einvoicing-regime'], save: () => R()._saveEinvoicingRegime() },
     // Device-local (F7): saved to this computer's localStorage, not the server,
     // so it cannot be refused. It joins the one bar instead of keeping a Save
@@ -147,7 +152,7 @@
       save: async () => !!R()._savePrinterSettings(),
     },
   };
-  const GROUP_ORDER = ['brand', 'taxMode', 'taxRate', 'credit', 'deviceBranch', 'businessDay', 'numbering', 'einvoice', 'printer'];
+  const GROUP_ORDER = ['brand', 'taxMode', 'taxRate', 'credit', 'deviceBranch', 'businessDay', 'numbering', 'tillPlan', 'einvoice', 'printer'];
 
   function fieldValue(el) {
     return el.type === 'checkbox' ? !!el.checked : String(el.value == null ? '' : el.value);
@@ -262,9 +267,12 @@
   let leaveObserver = null;
 
   // ── the "Discard unsaved changes?" leave warning ───────────────────────────
-  // Every way out of the hub (sidebar, phone tabs, More sheet, Ctrl+K, sign
-  // out) goes through app-shell's _navigate / logout, which ask the guards
-  // registered here first. The hub registers ONE guard while it is on screen
+  // Every way out of the hub asks the guards registered here first: section
+  // changes and sign out (app-shell _navigate / logout), page loads to the
+  // Licence / E-invoicing / WhatsApp / LAN-hub pages and the brand logo and
+  // "make this the main computer" (app-shell _leaveToPage / exit / claim), and
+  // reload / back / close-window (the browser's own prompt, armed through the
+  // isDirty probe below). See the exits list in app-shell.js "Leave guards". The hub registers ONE guard while it is on screen
   // and drops it the moment it is not (a guard left behind would question the
   // person on every other screen). Answering Yes puts the saved values back and
   // lets them go; No keeps them on the screen with every typed value and the
@@ -273,6 +281,9 @@
   function unregisterHubGuard() {
     if (dropLeaveGuard) { try { dropLeaveGuard(); } catch (e) { /* nothing to undo */ } }
     dropLeaveGuard = null;
+  }
+  function hubIsDirty() {
+    return !!(S.ready && S.root && S.root.isConnected && dirtyGroups().length);
   }
   async function hubLeaveGuard() {
     // A guard that outlived its screen must not ask about a screen that is gone.
@@ -294,7 +305,9 @@
     unregisterHubGuard(); // a re-render must not stack a second copy
     const shell = window.SubsystemApp;
     if (!shell || typeof shell.registerLeaveGuard !== 'function') return;
-    dropLeaveGuard = shell.registerLeaveGuard(hubLeaveGuard);
+    // isDirty lets app-shell's one beforeunload handler (reload / back / close
+    // window) ask the browser to confirm ONLY when there is real unsaved work.
+    dropLeaveGuard = shell.registerLeaveGuard(hubLeaveGuard, { isDirty: hubIsDirty });
   }
 
   function watchHubLeft(root) {
@@ -567,6 +580,9 @@
   const NOTE_KEEPS = 'This computer keeps numbering with its current books ({code}). The new branch code applies only to tills switched on afterwards.';
   const NOTE_EXAMPLE = 'An example for till {n}. This computer is not switched on, so it still uses the long numbers.';
 
+  const NOTE_LONG = 'This computer uses the long numbers. The two short codes at the end tell tills apart.';
+  const LONG_EXAMPLE = { sale: 'SALE-000001-a1b2c3d4-e5f6a7b8', ret: 'RET-000001-a1b2c3d4-e5f6a7b8' };
+
   // `{slot}` fill without String.replace: a value such as "$&" must stay literal.
   function fill(s, vars) {
     let out = String(s);
@@ -582,6 +598,21 @@
     m = /^An example for till (\d+)\. This computer is not switched on, so it still uses the long numbers\.$/.exec(note);
     if (m) return fill(t(NOTE_EXAMPLE), { n: shownTill != null ? shownTill : m[1] });
     return t(note);
+  }
+
+  // Why readable numbers are not on for this computer. Since v42 the honest
+  // reason is "the main computer has not given this computer a till number yet"
+  // -- the old "arrive with multi-computer support" promise is gone. This is the
+  // server's own sentence word for word (retail_api._READABLE_UNAVAILABLE_REASON),
+  // so a server that sends it and a client that falls back to it read the same.
+  const READABLE_UNAVAILABLE_TEXT = 'Readable numbers are given out by the main computer, and this computer has no till number from the main computer yet. Until it has one it uses the long numbers, so two computers can never print the same receipt number.';
+  const READABLE_WITHDRAWN_TEXT = 'This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again.';
+  function readableUnavailableText(d) {
+    // Prefer the server's reason when it sends one; t() gives it in Arabic when the
+    // locale has that exact sentence, and shows the English otherwise.
+    if (d && d.readable_switched_off_by_update) return t(READABLE_WITHDRAWN_TEXT);
+    const fromServer = d && typeof d.unavailable_reason === 'string' ? d.unavailable_reason.trim() : '';
+    return t(fromServer || READABLE_UNAVAILABLE_TEXT);
   }
 
   // Every 400 / 409 the route can answer, as a sentence in the person's own
@@ -600,8 +631,13 @@
         : t('That branch code already belongs to another branch. Each branch needs its own code.');
     }
     if (kind === 'READABLE_NEEDS_DEVICE_REGISTRY') {
-      return t('Readable receipt numbers arrive with multi-computer support.');
+      return t(READABLE_UNAVAILABLE_TEXT);
     }
+    if (kind === 'TILL_NEEDS_MAIN_COMPUTER') {
+      return t("Only the shop's main computer can give out till numbers. Do this on the main computer.");
+    }
+    if (kind === 'TILL_ALREADY_ALLOCATED') return tillRefusalText(resp);
+    if (kind === 'DEVICE_IDENTITY_CLASH') return tillRefusalText(resp);
     if (kind === 'TILL_NUMBER_TAKEN') {
       m = /^Till number (\d+) is already used/.exec(msg);
       if (m) return fill(t('Till number {n} is already used by another computer. Choose a different number.'), { n: m[1] });
@@ -673,6 +709,16 @@
     const bdi = (s) => `<bdi dir="ltr">${esc(s)}</bdi>`;
     const line = (a, b) => `${esc(t('Sale'))}: ${bdi(a)}<br>${esc(t('Return'))}: ${bdi(b)}`;
     let shownTill = null;
+    if (n.available === false) {
+      // Readable numbers are unavailable, so THIS computer prints the long
+      // numbers whatever code is typed. Showing "ABD1-000001" here would promise
+      // a receipt this computer cannot print. The shape is the real legacy one
+      // (SALE-000016-<company8>-<device8>, see RetailSystem._docNo); the two
+      // hex tails are obvious placeholders.
+      box.innerHTML = line(LONG_EXAMPLE.sale, LONG_EXAMPLE.ret);
+      if (noteBox) noteBox.textContent = t(NOTE_LONG);
+      return;
+    }
     if (n.preview && n.preview_is_example === false) {
       box.innerHTML = line(String(n.preview.sale || ''), String(n.preview.return || ''));
     } else {
@@ -749,13 +795,11 @@
         ? t('2 to 4 letters (A to Z).')
         : t('2 to 4 letters (A to Z). Filled in from the branch name until you change it.'));
     // Readable numbers are UNAVAILABLE (the server says so with `available:false`)
-    // until multi-computer support can hand out till numbers safely. Everything
+    // until the main computer has given this computer a till number. Everything
     // that turns them ON stays in this file, behind `readableAvailable`, so
     // enabling them later is the server flipping one answer, not a rewrite.
     const readableAvailable = d.available !== false;
-    const reason = readableAvailable ? '' : (d.readable_switched_off_by_update
-      ? t('This computer was using readable numbers. An update switched them off until multi-computer support arrives, so it uses the long numbers again.')
-      : t('Readable receipt numbers arrive with multi-computer support.'));
+    const reason = readableAvailable ? '' : readableUnavailableText(d);
     host.innerHTML = `
       <div class="sh-num-split">
         <div class="sh-num-fields">
@@ -793,6 +837,21 @@
     if (!readableAvailable) $('num-till').disabled = true;
     syncNumberingFields();
     drawNumberingExample();
+    // Every numbering write is main-computer-only on the server (a 409
+    // TILL_NEEDS_MAIN_COMPUTER otherwise), so on any other computer the fields
+    // are read-only and say why, instead of letting a change be typed and then
+    // refused. Strictly `=== false`: an answer that does not say stays editable.
+    if (d.is_main === false) {
+      ['num-readable', 'num-till', 'num-branch-code'].forEach((id) => { const el = $(id); if (el) el.disabled = true; });
+      const box = $('num-error');
+      if (box && !$('num-main-only')) {
+        const p = document.createElement('p');
+        p.className = 'sh-num-unavailable';
+        p.id = 'num-main-only';
+        p.textContent = t('Receipt numbers are set on the main computer. Here they can only be read.');
+        box.parentNode.insertBefore(p, box);
+      }
+    }
   }
 
   async function loadNumbering() {
@@ -831,7 +890,7 @@
     // The switch is disabled while unavailable, so this only fires if the page was
     // tampered with; it still must not send a request the server will refuse.
     if (cb.checked && n.available === false && !n.readable_enabled) {
-      const msg = t('Readable receipt numbers arrive with multi-computer support.');
+      const msg = readableUnavailableText(n);
       showNumberingError(msg);
       toast(msg, 'error');
       return false;
@@ -864,6 +923,493 @@
       showNumberingError(msg);
       toast(msg, 'error');
       return false;
+    }
+  }
+
+  // ── tills: which computer is which till number (P2S, schema v42) ───────────
+  // The MAIN computer gives out till numbers; every other computer only reads
+  // them. Routes (retail_api.py, owner only):
+  //   GET    /tills                     -> {available, is_main, branch_uid, branch_code,
+  //            max_till_number, devices:[{terminal_uid, label, is_main, is_this_computer,
+  //            till_number|null, suggested_till_number|null}]}
+  //   POST   /tills/allocations         {terminal_uid, till_number?} or {all:true} -> same body
+  //   DELETE /tills/allocations?terminal_uid=  -> same body
+  // Main computer only: anything else is a 409 TILL_NEEDS_MAIN_COMPUTER.
+  //
+  // What is typed is a PLAN, not a change: nothing is sent until Save. The plan
+  // is kept in `S.tills.raw` (the text in each computer's box) and DERIVED into
+  // operations (tillOp), so there is one source of truth. It is mirrored into a
+  // hidden field, #till-plan, as sorted JSON ('' when there is nothing to do),
+  // which is what lets the ONE bar's dirty test, Discard and the theme /
+  // language carry treat it like any other field: the baseline is '', so
+  // "typed and then put back" is not dirty either.
+  //
+  // "Number all tills" is the one thing that is NOT a plan: it asks first and
+  // acts at once, and it is never done for the person.
+  const TILL_PLAN_ID = 'till-plan';
+  const TILL_STYLE_ID = 'sh-tills-style';
+
+  // Tokens only, no colour literals. Kept here (not in settings-hub.css) because
+  // that file is another crew's; it can move over unchanged.
+  function injectTillStyles() {
+    if (document.getElementById(TILL_STYLE_ID)) return;
+    const st = document.createElement('style');
+    st.id = TILL_STYLE_ID;
+    st.textContent = `
+      .sh-till-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-base); }
+      .sh-till-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+        gap: var(--space-base) var(--space-comfy); padding: var(--space-base); background: var(--surface-sunken);
+        border: 1px solid var(--border-default); border-radius: var(--radius-control); }
+      .sh-till-row[data-problem="1"] { border-color: var(--state-danger-border); }
+      .sh-till-who { flex: 1 1 220px; min-inline-size: 0; display: flex; flex-direction: column; gap: var(--space-tight); }
+      .sh-till-name { font-size: var(--text-size-body); font-weight: var(--text-weight-semibold); color: var(--text-primary); overflow-wrap: anywhere; }
+      .sh-till-badge { display: inline-block; margin-inline-start: var(--space-tight); padding: 0 var(--space-tight);
+        font-size: var(--text-size-meta); font-weight: normal; color: var(--text-secondary);
+        border: 1px solid var(--border-default); border-radius: var(--radius-control); }
+      .sh-till-hint { margin: 0; font-size: var(--text-size-meta); color: var(--text-secondary); }
+      .sh-till-hint bdi { font-weight: var(--text-weight-semibold); color: var(--text-primary); }
+      .sh-till-hint[data-tone="change"] { color: var(--state-warning-text); }
+      .sh-till-hint[data-tone="problem"] { color: var(--state-danger-text); }
+      .sh-till-ctl { display: flex; align-items: center; gap: var(--space-base); flex: 0 0 auto; }
+      .sh-till-input { inline-size: 5rem; min-block-size: var(--touch-target-min); padding-inline: var(--space-base);
+        font: inherit; text-align: center; color: var(--text-primary); background: var(--surface-raised);
+        border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
+      .sh-till-input:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+      .sh-till-input[aria-invalid="true"] { border-color: var(--state-danger-border); }
+      .sh-till-act { min-inline-size: 7.5rem; }
+      .sh-till-foot { margin-block-start: var(--space-comfy); }
+      .sh-till-sub { margin: var(--space-comfy) 0 var(--space-base); font-size: var(--text-size-body); color: var(--text-secondary); }
+    `;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  // Every 400 / 409 the till routes can answer, as a sentence in the person's
+  // language. Only some carry a `code`; the rest are recognised by their
+  // English wording. Anything unrecognised gets a generic sentence -- never
+  // the raw English.
+  function tillMaxN() { const d = S.tills && S.tills.data; return (d && Number(d.max_till_number)) || 99; }
+  function tillRefusalText(resp) {
+    const msg = String((resp && resp.message) || '');
+    const kind = resp && resp.code;
+    let m;
+    if (kind === 'TILL_NEEDS_MAIN_COMPUTER') {
+      return t("Only the shop's main computer can give out till numbers. Do this on the main computer.");
+    }
+    if (kind === 'TILL_ALREADY_ALLOCATED') {
+      m = /^That computer already is till (\d+)/.exec(msg);
+      return m
+        ? fill(t('That computer already is till {n}. Release its number first, then give it a new one.'), { n: m[1] })
+        : t('That computer already has a till number. Release its number first, then give it a new one.');
+    }
+    if (kind === 'TILL_NUMBER_TAKEN') {
+      if (/^All \d+ till numbers/.test(msg)) return t('Every till number of this branch is in use.');
+      m = /^Till number (\d+) was just given/.exec(msg);
+      if (m) return fill(t('Till number {n} was just given to another computer. Pick a different number.'), { n: m[1] });
+      m = /^Till number (\d+) is already used/.exec(msg);
+      if (m) return fill(t('Till number {n} is already used by another computer. Choose a different number.'), { n: m[1] });
+      return t('That till number cannot be used. Choose a different number.');
+    }
+    if (kind === 'DEVICE_IDENTITY_CLASH') {
+      return t("That computer is not one of this shop's active computers, so it cannot be given a till number.");
+    }
+    if (kind === 'READABLE_NEEDS_DEVICE_REGISTRY') return t(READABLE_UNAVAILABLE_TEXT);
+    if (/no code yet/.test(msg)) return t('This branch has no code yet. Choose 2 to 4 letters for it under Receipt numbers first.');
+    if (/^A till number is from/.test(msg)) return fill(t('A till number is a whole number from 1 to {max}.'), { max: tillMaxN() });
+    if (/^That computer has no identity yet/.test(msg)) return t('That computer has no identity yet, so it cannot be given a till number.');
+    if (/^This computer has no identity yet/.test(msg)) return t('This computer has no identity yet, so it cannot give out till numbers.');
+    if (/^This branch has no identity yet/.test(msg)) return t('This branch has no identity yet, so its tills cannot be numbered.');
+    if (/^Unknown branch/.test(msg)) return t('This branch was not found.');
+    if (/no till number to release/.test(msg)) return t('That computer has no till number to release.');
+    if (/^Say which computer/.test(msg)) return t('Choose which computer first.');
+    return t('Could not change the till numbers.');
+  }
+
+  function tillDevices() {
+    const d = S.tills && S.tills.data;
+    return d && Array.isArray(d.devices) ? d.devices : [];
+  }
+  // What the box of this computer means, given the number it holds now:
+  //   null  nothing to do        'r'  release its number
+  //   n     give it number n     'x'  what is typed cannot be a till number
+  function tillOp(dev) {
+    const raw = S.tills.raw[dev.terminal_uid];
+    if (raw === undefined) return null;
+    const s = String(raw).trim();
+    if (s === '') return dev.till_number != null ? 'r' : null;
+    if (!/^\d{1,2}$/.test(s)) return 'x';
+    const n = parseInt(s, 10);
+    if (n < 1 || n > tillMaxN()) return 'x';
+    return n === dev.till_number ? null : n;
+  }
+  function tillPlan() {
+    const plan = {};
+    tillDevices().forEach((dev) => { const op = tillOp(dev); if (op !== null) plan[dev.terminal_uid] = op; });
+    return plan;
+  }
+  function tillPlanJson() {
+    const plan = tillPlan();
+    const keys = Object.keys(plan).sort();
+    if (!keys.length) return '';
+    const sorted = {};
+    keys.forEach((k) => { sorted[k] = plan[k]; });
+    return JSON.stringify(sorted);
+  }
+  function syncTillPlanField() {
+    const el = $(TILL_PLAN_ID);
+    if (el) el.value = tillPlanJson(); // no event on purpose: callers call refreshBar()
+  }
+  // Discard / a theme or language carry put a plan back through the hidden field.
+  function tillsFromField() {
+    const el = $(TILL_PLAN_ID);
+    if (!el || !S.tills) return;
+    let plan = {};
+    try { plan = JSON.parse(el.value || '{}') || {}; } catch (e) { plan = {}; }
+    const raw = {};
+    tillDevices().forEach((dev) => {
+      const op = Object.prototype.hasOwnProperty.call(plan, dev.terminal_uid) ? plan[dev.terminal_uid] : undefined;
+      if (op === undefined) return;
+      raw[dev.terminal_uid] = op === 'r' ? '' : (typeof op === 'number' ? String(op) : '0');
+    });
+    S.tills.raw = raw;
+    renderTillsBody();
+    refreshBar();
+  }
+  function ensureTillField(on) {
+    const card = $('tills-card');
+    if (!card) return;
+    const el = $(TILL_PLAN_ID);
+    if (on && !el) {
+      const f = document.createElement('input');
+      f.type = 'hidden';
+      f.id = TILL_PLAN_ID;
+      f.value = '';
+      card.appendChild(f);
+    } else if (!on && el) {
+      el.remove();
+    }
+  }
+
+  // What is wrong with the numbers as typed, per computer, in plain words.
+  function tillProblems() {
+    const out = {};
+    const finals = {};
+    tillDevices().forEach((dev) => {
+      const op = tillOp(dev);
+      if (op === 'x') { out[dev.terminal_uid] = fill(t('A till number is a whole number from 1 to {max}.'), { max: tillMaxN() }); return; }
+      const n = op === 'r' ? null : (op === null ? dev.till_number : op);
+      if (n != null) (finals[n] = finals[n] || []).push(dev.terminal_uid);
+    });
+    Object.keys(finals).forEach((k) => {
+      if (finals[k].length > 1) {
+        finals[k].forEach((uid) => {
+          out[uid] = fill(t('Till number {n} is used twice in this list. Every computer needs its own number.'), { n: k });
+        });
+      }
+    });
+    return out;
+  }
+
+  function showTillsError(msg) {
+    const box = $('tills-error');
+    if (!box) return;
+    box.textContent = msg || '';
+    box.hidden = !msg;
+  }
+
+  function tillHint(dev, op, problem) {
+    const d = S.tills.data;
+    const code = d.branch_code || '';
+    const bdi = (s) => `<bdi dir="ltr">${esc(s)}</bdi>`;
+    if (problem) return { tone: 'problem', html: esc(problem) };
+    if (op === 'r') return { tone: 'change', html: esc(fill(t('Will lose its number {m} when you save.'), { m: dev.till_number })) };
+    if (typeof op === 'number') {
+      return { tone: 'change', html: esc(dev.till_number != null
+        ? fill(t('Will change from {m} to {n} when you save.'), { m: dev.till_number, n: op })
+        : fill(t('Will get till number {n} when you save.'), { n: op })) };
+    }
+    if (dev.till_number != null) {
+      return { tone: '', html: code
+        ? `${esc(t('Receipts start with'))} ${bdi(code + dev.till_number + '-')}`
+        : esc(fill(t('Till number {n}.'), { n: dev.till_number })) };
+    }
+    return { tone: '', html: esc(dev.suggested_till_number != null
+      ? fill(t('No number yet. Next free number: {n}.'), { n: dev.suggested_till_number })
+      : t('No number yet.')) };
+  }
+
+  // The one button of a row. "Undo" whenever the box differs from what the
+  // computer holds now; otherwise Release (it has a number) or Use N (it has
+  // none and the server knows a free one).
+  function tillActionHTML(dev, op) {
+    const uid = esc(dev.terminal_uid);
+    const btn = (act, label) => `<button type="button" class="ret-btn ret-btn-ghost sh-till-act" data-till-act="${act}" data-till-uid="${uid}">${esc(label)}</button>`;
+    if (op !== null) return btn('undo', dev.till_number != null ? fill(t('Keep number {n}'), { n: dev.till_number }) : t('Undo'));
+    if (dev.till_number != null) return btn('release', t('Release number'));
+    if (dev.suggested_till_number != null) return btn('suggest', fill(t('Use {n}'), { n: dev.suggested_till_number }));
+    return '';
+  }
+
+  function paintTillRows() {
+    const st = S.tills;
+    if (!st || !st.data) return;
+    const problems = tillProblems();
+    const byUid = {};
+    tillDevices().forEach((dev) => { byUid[dev.terminal_uid] = dev; });
+    document.querySelectorAll('#tills-body [data-till-row]').forEach((li) => {
+      const dev = byUid[li.dataset.tillRow];
+      if (!dev) return;
+      const op = tillOp(dev);
+      const problem = problems[dev.terminal_uid] || '';
+      const hint = tillHint(dev, op, problem);
+      const h = li.querySelector('[data-till-hint]');
+      if (h) { h.innerHTML = hint.html; h.setAttribute('data-tone', hint.tone); }
+      li.setAttribute('data-problem', problem ? '1' : '0');
+      const input = li.querySelector('[data-till-input]');
+      if (input) input.setAttribute('aria-invalid', problem ? 'true' : 'false');
+      const slot = li.querySelector('[data-till-act-slot]');
+      if (slot) {
+        const want = tillActionHTML(dev, op);
+        // Replaced only when it changed, so a button being pressed keeps focus.
+        if (slot.dataset.now !== want) { slot.innerHTML = want; slot.dataset.now = want; }
+      }
+    });
+    const all = $('till-number-all');
+    if (all) {
+      const dirty = !!tillPlanJson();
+      const anyFree = tillDevices().some((dev) => dev.till_number == null);
+      all.disabled = dirty || !anyFree;
+      const note = $('till-all-note');
+      if (note) {
+        note.textContent = dirty
+          ? t('Save or discard your changes first.')
+          : (anyFree
+            ? t('Gives every computer that has no number the next free one. You are asked first.')
+            : t('Every computer already has a number.'));
+      }
+    }
+  }
+
+  function badgesHTML(dev) {
+    return (dev.is_this_computer ? `<span class="sh-till-badge">${esc(t('This computer'))}</span>` : '') +
+      (dev.is_main ? `<span class="sh-till-badge">${esc(t('Main computer'))}</span>` : '');
+  }
+
+  // Not the main computer: only text and a list. Nothing here can change a number.
+  function renderTillsReadOnly(host, d) {
+    const main = tillDevices().find((x) => x.is_main);
+    const lead = main && main.label
+      ? fill(t('Till numbers are given out on the main computer ({label}).'), { label: main.label })
+      : t('Till numbers are given out on the main computer.');
+    host.innerHTML = `
+      <p class="sh-num-unavailable" id="tills-main-pointer">${esc(lead)}</p>
+      <p class="sh-till-sub">${esc(t('Computers in this shop'))}</p>
+      <ul class="sh-till-list" id="tills-readonly-list">
+        ${tillDevices().map((dev) => `
+          <li class="sh-till-row" data-till-row-ro="${esc(dev.terminal_uid)}">
+            <div class="sh-till-who">
+              <span class="sh-till-name">${esc(dev.label || t('Unnamed computer'))}${badgesHTML(dev)}</span>
+            </div>
+            <p class="sh-till-hint">${dev.till_number != null
+    ? esc(fill(t('Till number {n}'), { n: dev.till_number }))
+    : esc(t('No number yet.'))}</p>
+          </li>`).join('')}
+      </ul>`;
+  }
+
+  function renderTillsBody() {
+    const host = $('tills-body');
+    if (!host) return;
+    const st = S.tills;
+    const d = st && st.data;
+    if (!d) {
+      host.innerHTML = `<p class="sh-note">${esc(t('Till numbers are not available on this computer yet.'))}</p>`;
+      return;
+    }
+    if (d.available === false) {
+      host.innerHTML = `<p class="sh-num-unavailable">${esc(readableUnavailableText(d))}</p>`;
+      return;
+    }
+    if (d.is_main === false) { renderTillsReadOnly(host, d); return; }
+    const devs = tillDevices();
+    host.innerHTML = `
+      ${d.branch_code ? '' : `<p class="sh-num-unavailable" id="tills-no-code">${esc(t('This branch has no code yet. Choose 2 to 4 letters for it under Receipt numbers first.'))}</p>`}
+      <ul class="sh-till-list" id="tills-list">
+        ${devs.map((dev, i) => `
+          <li class="sh-till-row" data-till-row="${esc(dev.terminal_uid)}" data-problem="0">
+            <div class="sh-till-who">
+              <span class="sh-till-name">${esc(dev.label || t('Unnamed computer'))}${badgesHTML(dev)}</span>
+              <p class="sh-till-hint" id="till-hint-${i}" data-till-hint data-tone=""></p>
+            </div>
+            <div class="sh-till-ctl">
+              <input type="text" class="sh-till-input" id="till-n-${i}" data-till-input="${esc(dev.terminal_uid)}"
+                inputmode="numeric" maxlength="2" dir="ltr" autocomplete="off" aria-invalid="false"
+                aria-label="${esc(fill(t('Till number of {name}'), { name: dev.label || t('Unnamed computer') }))}"
+                aria-describedby="till-hint-${i}" />
+              <span data-till-act-slot></span>
+            </div>
+          </li>`).join('')}
+      </ul>
+      <p class="sh-num-error" id="tills-error" role="alert" hidden></p>
+      <div class="sh-inline-actions sh-till-foot">
+        <button type="button" class="ret-btn ret-btn-ghost" id="till-number-all">${esc(t('Number all tills'))}</button>
+        <p class="sh-note" id="till-all-note"></p>
+      </div>`;
+    host.querySelectorAll('[data-till-input]').forEach((input) => {
+      const dev = devs.find((x) => x.terminal_uid === input.dataset.tillInput);
+      if (!dev) return;
+      const raw = st.raw[dev.terminal_uid];
+      input.value = raw !== undefined ? raw : (dev.till_number != null ? String(dev.till_number) : '');
+    });
+    syncTillPlanField();
+    paintTillRows();
+  }
+
+  async function reloadTillData() {
+    try {
+      const resp = await R()._get('/api/sub/retail/tills');
+      if (resp && resp.status === 'success' && resp.data) { S.tills.data = resp.data; return true; }
+    } catch (e) { console.error(e); }
+    return false;
+  }
+  async function loadTills() {
+    const host = $('tills-body');
+    if (!host) return;
+    injectTillStyles();
+    let d = null;
+    try {
+      const resp = await R()._get('/api/sub/retail/tills');
+      if (resp && resp.status === 'success' && resp.data) d = resp.data;
+    } catch (e) { d = null; }
+    S.tills = { data: d, raw: {} };
+    ensureTillField(!!d && d.is_main !== false && d.available !== false);
+    renderTillsBody();
+    rebaseline('tillPlan');
+  }
+  // The main computer's own number is also on the Receipt numbers card.
+  async function refreshNumberingCard() {
+    if (dirtyGroups().indexOf('numbering') !== -1) return; // never overwrite typing
+    await loadNumbering();
+  }
+
+  function tillTyped(input) {
+    if (!S.tills) return;
+    S.tills.raw[input.dataset.tillInput] = input.value;
+    showTillsError('');
+    syncTillPlanField();
+    paintTillRows();
+    refreshBar();
+  }
+  function tillAction(act, uid) {
+    const st = S.tills;
+    const dev = tillDevices().find((x) => x.terminal_uid === uid);
+    if (!st || !dev) return;
+    if (act === 'release') st.raw[uid] = '';
+    else if (act === 'undo') delete st.raw[uid];
+    else if (act === 'suggest' && dev.suggested_till_number != null) st.raw[uid] = String(dev.suggested_till_number);
+    else return;
+    showTillsError('');
+    renderTillsBody();
+    refreshBar();
+    // The button that was pressed is gone; keyboard focus stays in the same row.
+    const li = Array.prototype.find.call(document.querySelectorAll('#tills-body [data-till-row]'), (x) => x.dataset.tillRow === uid);
+    const next = li && (li.querySelector('[data-till-act]') || li.querySelector('[data-till-input]'));
+    if (next) next.focus();
+  }
+
+  async function saveTills() {
+    const st = S.tills;
+    if (!st || !st.data || st.data.is_main === false || !$(TILL_PLAN_ID)) return true;
+    const problems = tillProblems();
+    const first = Object.keys(problems)[0];
+    if (first) {
+      showTillsError(problems[first]);
+      toast(problems[first], 'error');
+      return false;
+    }
+    const devs = tillDevices();
+    // A change of number is a release and then a new number (the server refuses
+    // to give a second number to a computer that has one). Every release goes
+    // first, so a number handed from one computer to another is free by then.
+    const releases = [];
+    const assigns = [];
+    devs.forEach((dev) => {
+      const op = tillOp(dev);
+      if (op === null) return;
+      if (dev.till_number != null) releases.push(dev);
+      if (typeof op === 'number') assigns.push({ dev, n: op });
+    });
+    if (!releases.length && !assigns.length) return true;
+    const fail = async (resp, thrown) => {
+      const msg = thrown ? t('Could not change the till numbers.') : tillRefusalText(resp);
+      await reloadTillData(); // show what the server really holds now
+      renderTillsBody();
+      showTillsError(msg);
+      toast(msg, 'error');
+      return false;
+    };
+    let latest = null;
+    try {
+      for (let i = 0; i < releases.length; i += 1) {
+        const resp = await R()._del('/api/sub/retail/tills/allocations?terminal_uid=' + encodeURIComponent(releases[i].terminal_uid));
+        if (!resp || resp.status !== 'success') return await fail(resp);
+        latest = resp.data || latest;
+        // Keep the screen honest between calls: this computer no longer holds it.
+        releases[i].till_number = null;
+      }
+      for (let i = 0; i < assigns.length; i += 1) {
+        const resp = await R()._post('/api/sub/retail/tills/allocations',
+          { terminal_uid: assigns[i].dev.terminal_uid, till_number: assigns[i].n, branch_uid: st.data.branch_uid });
+        if (!resp || resp.status !== 'success') return await fail(resp);
+        latest = resp.data || latest;
+        assigns[i].dev.till_number = assigns[i].n;
+      }
+    } catch (e) {
+      console.error(e);
+      return await fail(null, true);
+    }
+    if (latest) st.data = latest; else await reloadTillData();
+    st.raw = {};
+    showTillsError('');
+    renderTillsBody();
+    await refreshNumberingCard();
+    toast(t('Till numbers saved.'), 'success');
+    return true;
+  }
+
+  async function numberAllTills() {
+    const st = S.tills;
+    const btn = $('till-number-all');
+    if (!st || !st.data || st.data.is_main === false || tillPlanJson()) return;
+    const yes = await R()._confirm({
+      title: t('Number all tills?'),
+      message: t('Every computer that has no number gets the next free one. Computers that already have a number keep it. You can release a number later.'),
+      confirmLabel: t('Number all tills'),
+      cancelLabel: t('Cancel'),
+    });
+    if (!yes) return;
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await R()._post('/api/sub/retail/tills/allocations', { all: true, branch_uid: st.data.branch_uid });
+      if (!resp || resp.status !== 'success') {
+        const msg = tillRefusalText(resp);
+        showTillsError(msg);
+        toast(msg, 'error');
+        return;
+      }
+      st.data = resp.data || st.data;
+      st.raw = {};
+      showTillsError('');
+      renderTillsBody();
+      refreshBar();
+      await refreshNumberingCard();
+      toast(t('All tills are numbered.'), 'success');
+    } catch (e) {
+      console.error(e);
+      const msg = t('Could not change the till numbers.');
+      showTillsError(msg);
+      toast(msg, 'error');
+    } finally {
+      paintTillRows();
     }
   }
 
@@ -1087,6 +1633,14 @@
         moveCard('doc-series-card', num.querySelector('#numbering-advanced-body'));
         const ds = $('doc-series-card');
         if (ds) ds.classList.add('sh-embedded');
+        // Which computer is which till: right under the receipt numbers it feeds.
+        const tc = document.createElement('div');
+        tc.className = 'sub-chart-card';
+        tc.id = 'tills-card';
+        tc.innerHTML = `<h3 class="sh-card-title">${esc(t('Tills'))}</h3>
+          <p class="sh-card-lead">${esc(t('Give each computer in the shop its own till number, so every receipt says which till printed it.'))}</p>
+          <div id="tills-body"><p class="sh-pane-loading">${esc(t('Loading…'))}</p></div>`;
+        tills.appendChild(tc);
       } else {
         moveCard('doc-series-card', tills);
       }
@@ -1216,6 +1770,7 @@
     S.baseline = {};
     S.catalog = null;
     S.numbering = null;
+    S.tills = null;
     S.current = null;
     S.pvSeq += 1;
     S.pvWidth = r._printerCfg().paperWidth === '58mm' ? 58 : 80;
@@ -1265,7 +1820,7 @@
     if (S.token !== token || !S.root || !S.root.isConnected) return;
     fillAdminPanes();
     if (isOwner()) {
-      await Promise.all([loadTaxMode(), loadCategories(), loadNumbering()]);
+      await Promise.all([loadTaxMode(), loadCategories(), loadNumbering(), loadTills()]);
     } else {
       await loadNumbering(); // a no-op without the owner-only card
     }
@@ -1293,6 +1848,9 @@
   function onEdit(ev) {
     const t0 = ev.target;
     if (!t0) return;
+    // The till plan: a typed box, or Discard / a theme switch putting a plan back.
+    if (t0.id === TILL_PLAN_ID) { tillsFromField(); return; }
+    if (t0.dataset && t0.dataset.tillInput !== undefined) { tillTyped(t0); return; }
     if (t0.id === 'credit-mode') syncCreditLimitVisibility();
     // The sample receipt's tax follows the selected mode (F14).
     if (t0.id === 'tax-mode') schedulePreview();
@@ -1333,6 +1891,8 @@
     if (el.id === 'sh-save') { save(); return; }
     if (el.id === 'sh-discard') { discard(); return; }
     if (el.id === 'tax-cat-apply') { applyCategoryRate(); return; }
+    if (el.dataset.tillAct) { tillAction(el.dataset.tillAct, el.dataset.tillUid); return; }
+    if (el.id === 'till-number-all') { numberAllTills(); return; }
     if (el.dataset.shW) { S.pvWidth = Number(el.dataset.shW) === 58 ? 58 : 80; syncPreviewToggles(); schedulePreview(0); return; }
     if (el.dataset.shL) { S.pvLang = el.dataset.shL === 'ar' ? 'ar' : 'en'; syncPreviewToggles(); schedulePreview(0); }
   }

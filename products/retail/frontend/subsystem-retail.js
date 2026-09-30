@@ -11902,7 +11902,7 @@ const RetailSystem = {
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
           <button class="ret-btn ret-btn-primary" id="einvoicing-save-btn" onclick="RetailSystem._saveEinvoicingRegime()">${t('Save')}</button>
-          <button class="ret-btn ret-btn-ghost" onclick="location.href='/static/einvoicing.html'">${t('Manage E-Invoicing')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="SubsystemApp._leaveToPage('/static/einvoicing.html')">${t('Manage E-Invoicing')}</button>
         </div>
       </div>
       <div class="sub-chart-card" id="wa-reports-card">
@@ -11910,14 +11910,14 @@ const RetailSystem = {
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple phone numbers by role or branch. Off by default.')}
         </p>
-        <button class="ret-btn ret-btn-primary" onclick="location.href='/static/whatsapp.html'">${t('Manage WhatsApp Reports')}</button>
+        <button class="ret-btn ret-btn-primary" onclick="SubsystemApp._leaveToPage('/static/whatsapp.html')">${t('Manage WhatsApp Reports')}</button>
       </div>
       <div class="sub-chart-card" id="shop-network-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Shop Network')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Let your other tills and tablets work together over the shop\'s own wifi, including when the internet is down. One device acts as the hub the others connect to.')}
         </p>
-        <button class="ret-btn ret-btn-primary" onclick="location.href='/static/site-relay.html'">${t('Manage Shop Network')}</button>
+        <button class="ret-btn ret-btn-primary" onclick="SubsystemApp._leaveToPage('/static/site-relay.html')">${t('Manage Shop Network')}</button>
       </div>`;
     // The two DEVICE-LOCAL cards (Device Branch, Document Numbering) render
     // and load for everyone who cleared the gate above -- owner or delegated

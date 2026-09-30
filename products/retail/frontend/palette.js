@@ -204,7 +204,15 @@ const AuraPalette = {
         icon: item.icon,
         keywords: [item.label],
         run: () => {
-          if (item.externalPage) { window.location.href = '/static/' + item.externalPage; return; }
+          if (item.externalPage) {
+            // A full page load throws away whatever is unsaved on this page, so it
+            // goes through the same leave guards a sidebar click does (P2S exit
+            // holes). The bare location fallback is only for a page with no shell.
+            const url = '/static/' + item.externalPage;
+            if (app && typeof app._leaveToPage === 'function') app._leaveToPage(url);
+            else window.location.href = url;
+            return;
+          }
           app._navigate(item.id);
         },
       }));

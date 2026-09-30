@@ -10,10 +10,11 @@ Why this exists: the server's kill switch (READABLE_NUMBERS_AVAILABLE) is up, so
 behaviours that depend on it were therefore never exercised by anything:
 
   wording   the sentence under the disabled switch follows the SERVER field
-            `readable_switched_off_by_update`: true -> "An update switched them
-            off", false and ABSENT -> the plain "arrive with multi-computer
-            support" sentence. Three directions, because a guard that ignores
-            the field passes two of them.
+            `readable_switched_off_by_update`: true -> "it has no till number
+            from the main computer now", false and ABSENT -> the "given out by
+            the main computer" sentence, and a `unavailable_reason` the server
+            sends is shown as sent. Separate directions, because a guard that
+            ignores the field passes some of them.
   example   while unavailable the example beside the fields shows the LONG
             number this computer really prints (SALE-000001-<8 hex>-<8 hex>),
             never the short <code><till>-000001 shape, and it does not change
@@ -49,9 +50,15 @@ OWNER_EMAIL = "tareq@numunavail.test"
 OWNER_PASSWORD = "NumUnavailOwner_123!"
 PORT_RANGE = range(6260, 6280)
 
-SWITCHED_OFF = ("This computer was using readable numbers. An update switched them off "
-                "until multi-computer support arrives, so it uses the long numbers again.")
-PLAIN = "Readable receipt numbers arrive with multi-computer support."
+# v42 wording (the old "arrive with multi-computer support" promise is gone): the real
+# reason is "the main computer has not given this computer a till number yet".
+SWITCHED_OFF = ("This computer was using readable numbers, but it has no till number from the "
+                "main computer now, so it uses the long numbers again.")
+PLAIN = ("Readable numbers are given out by the main computer, and this computer has no till "
+         "number from the main computer yet. Until it has one it uses the long numbers, so two "
+         "computers can never print the same receipt number.")
+# A reason the SERVER sends must be shown as sent (the page prefers it to its own sentence).
+SERVER_REASON = "Server-sent reason for this test only: ask the main computer for a till number."
 LONG_SALE = "SALE-000001-a1b2c3d4-e5f6a7b8"
 LONG_RET = "RET-000001-a1b2c3d4-e5f6a7b8"
 LONG_NOTE = "This computer uses the long numbers. The two short codes at the end tell tills apart."
@@ -117,10 +124,12 @@ def reason(page):
     return page.evaluate("() => { const e = document.getElementById('num-unavailable'); return e ? e.textContent.trim() : null; }")
 
 
-def unavailable(off_by_update):
+def unavailable(off_by_update, server_reason=None):
     def m(body):
         body["available"] = False
         body["readable_enabled"] = False
+        if server_reason is not None:
+            body["unavailable_reason"] = server_reason
         if off_by_update is None:
             body.pop("readable_switched_off_by_update", None)
         else:
@@ -128,8 +137,8 @@ def unavailable(off_by_update):
     return m
 
 
-def wording_case(browser, base, off_by_update, expected):
-    ctx, page, seen = numbering_page(browser, base, unavailable(off_by_update))
+def wording_case(browser, base, off_by_update, expected, server_reason=None):
+    ctx, page, seen = numbering_page(browser, base, unavailable(off_by_update, server_reason))
     try:
         assert seen["gets"] >= 1, "the numbering GET was never rewritten -- this case proved nothing"
         got = reason(page)
@@ -137,6 +146,20 @@ def wording_case(browser, base, off_by_update, expected):
         assert page.is_disabled("#num-readable"), "the switch is not disabled while unavailable"
     finally:
         ctx.close()
+
+
+def no_old_promise_case(browser, base):
+    """Every unavailable shape, and the whole Tills card, must not promise a feature
+    that already shipped."""
+    for off in (True, False, None):
+        ctx, page, seen = numbering_page(browser, base, unavailable(off))
+        try:
+            assert seen["gets"] >= 1, "the numbering GET was never rewritten -- this case proved nothing"
+            body = page.inner_text("#sh-root")
+            assert "multi-computer support" not in body, \
+                f"switched_off_by_update={off!r}: the old promise is still on the page"
+        finally:
+            ctx.close()
 
 
 def example_case(browser, base):
@@ -207,12 +230,16 @@ def main() -> int:
             c0.close()
 
             if wanted("wording"):
-                check("wording", "switched_off_by_update TRUE -> 'An update switched them off'",
+                check("wording", "switched_off_by_update TRUE -> 'it has no till number from the main computer now'",
                       lambda: wording_case(browser, base, True, SWITCHED_OFF))
-                check("wording", "switched_off_by_update FALSE -> the plain 'arrive with multi-computer support'",
+                check("wording", "switched_off_by_update FALSE, no server reason -> the main-computer sentence",
                       lambda: wording_case(browser, base, False, PLAIN))
-                check("wording", "switched_off_by_update ABSENT -> the plain sentence",
+                check("wording", "switched_off_by_update ABSENT, no server reason -> the main-computer sentence",
                       lambda: wording_case(browser, base, None, PLAIN))
+                check("wording", "switched_off_by_update FALSE + a reason from the server -> the server's reason, as sent",
+                      lambda: wording_case(browser, base, False, SERVER_REASON, server_reason=SERVER_REASON))
+                check("wording", "the old 'multi-computer support' promise is nowhere on the card",
+                      lambda: no_old_promise_case(browser, base))
             if wanted("example"):
                 check("example", "unavailable: the example is the LONG number and ignores a typed code",
                       lambda: example_case(browser, base))
