@@ -6601,3 +6601,20 @@ OPEN, written down on purpose:
    ("Security Test Removal") and was not retried. An exemption set plus a
    canary test cover it until someone teaches the helper.
 6. Android was never run on a phone this wave (contract-tested only).
+
+### 2026-09-30 — the real two-till proof (AuraLab A2/B2, code 560f8279)
+
+Script tmp/p2s/PR/proof_p2s.py (job scratch), evidence C:\Users\MSI\AuraLab\proof\p2s,
+data backed up first to AuraLab\backup-before-p2s-proof-20260930-1703.
+- E8.1 PASS: both tills upgraded 8->9 / 41->42, integrity ok, pre-migration backups written.
+- E8.2 PASS: 11 money tables byte-identical before/after the upgrade.
+- E8.3 PASS: different default-branch uids before, the same licence-derived uid D after (aliases recorded).
+- E8.4 sale PASS, gate FAIL on a technicality: a sale rung on A reached B in 3.0s under D with no
+  warning; B's log holds ONE fallback warning (20s earlier) for 10 PRE-UPGRADE backlog rows still
+  carrying A's old uid, which arrived before A's alias announce - filed under B's default branch,
+  which is D, so they landed correctly. Pre-upgrade backlog will warn once per shop; new traffic does not.
+- E13.1 PASS: B learned A is main 6.2s after the claim. E13.2 PASS: hand-over A->B seen on both in 8.5s.
+- E13.3 PASS: B's device list shows A with its version. E13.4 PASS: B (online and offline) 409
+  TILL_NEEDS_MAIN_COMPUTER. E13.5 PASS: long number before an allocation, PRS1-000001 after.
+- X1 PASS: 6 sales, takings 22.518, ledger 45.532 = 45.532 (15 journals) and stock identical on both.
+  The forced-duplicate parked child is covered by the two-process tests only (the relay stamps ids).
