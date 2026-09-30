@@ -28,6 +28,11 @@ What each tag pins (and what the SERVER, not the page, is asked afterwards):
   gate       while a device still reports registry_schema_version < 9 the
              preset controls are OFF and the reason is on screen; no /preset
              call is made.
+  gaterace   the device answer arrives LATE (held with page.route). Before it,
+             no preset card exists to click and the dialog says it is checking;
+             an old-device answer then shows the explanation, an allowed answer
+             shows the cards on the already-open dialog, and an unreadable
+             answer fails CLOSED (plain Cashier/Manager picker + a sentence).
   look       Arabic/RTL, all five themes, and rule 6b (1366x768 and 1024x768,
              EN and AR): dialogs inside the window, footer buttons reachable,
              no sideways page scroll. Screenshots go to SHOTS.
@@ -59,8 +64,8 @@ except Exception:
 
 OWNER_EMAIL = "tareq@usersroles.test"
 OWNER_PASSWORD = "UsersRolesOwner_123!"
-PORT_RANGE = range(6260, 6280)
-SHOTS = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p2s\U\shots")
+PORT_RANGE = range(6580, 6600)
+SHOTS = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p2s\V2\shots")
 THEMES = ["light", "sand", "dark", "night", "dusk"]
 SMALL = {"width": 1024, "height": 768}
 NEW_CODES = [c for c in ua.CAPABILITY_CODES]  # the twelve
@@ -513,6 +518,118 @@ def case_gate(browser, base):
         ctx.close()
 
 
+def held_devices_page(browser, base):
+    """Owner page whose GET /api/devices is HELD until the test releases it.
+    The route callback only parks the route; page.wait_for_timeout keeps the
+    browser pumping while it waits, so the screen really is mid-question."""
+    ctx, page = owner_page(browser, base)
+    held = []
+
+    def handler(route, request):
+        if request.method != "GET":
+            route.continue_()
+            return
+        held.append(route)
+
+    page.route("**/api/devices", handler)
+    return ctx, page, held
+
+
+def _release(page, held, mode):
+    """Answer the parked /api/devices request: 'old', 'allowed' or 'fail'."""
+    for _ in range(60):
+        if held:
+            break
+        page.wait_for_timeout(100)
+    assert held, "GET /api/devices never reached the browser -- this case proved nothing"
+    route = held.pop(0)
+    if mode == "fail":
+        route.abort()
+        return
+    try:
+        resp = route.fetch()
+    except Exception as exc:  # noqa: BLE001
+        if "closed" in str(exc).lower():
+            return
+        raise
+    body = resp.json()
+    d = body["data"] if isinstance(body.get("data"), dict) else body
+    if mode == "old":
+        d["role_editing"] = {"allowed": False, "min_registry_schema_version": 9,
+                             "blocking_devices": [{"id": "old-1", "device_label": "Old phone", "platform": "ANDROID",
+                                                   "registry_schema_version": 8}]}
+    else:
+        d["role_editing"] = {"allowed": True, "min_registry_schema_version": 9, "blocking_devices": []}
+    route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+
+
+def _reachable_cards(page):
+    """Preset cards a person could actually hit: inside the window, and the
+    topmost thing at their centre (rule 6b -- not is_visible, not locator.click)."""
+    return page.evaluate("""() => [...document.querySelectorAll('.emp-pcard')].filter(c => {
+        const q = c.getBoundingClientRect(); if (!q.width || !q.height) return false;
+        const cx = q.x + q.width / 2, cy = q.y + q.height / 2;
+        if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return false;
+        const top = document.elementFromPoint(cx, cy);
+        return !!top && (top === c || c.contains(top));
+    }).length""")
+
+
+def _open_invite_while_held(page, held):
+    """Start on the employees screen with the answer held, open the invite dialog."""
+    page.evaluate("() => SubsystemApp._navigate('employees')")
+    for _ in range(60):
+        if held:
+            break
+        page.wait_for_timeout(100)
+    assert held, "the employees screen never asked for /api/devices"
+    page.evaluate("() => RetailEmployees._openInvite()")
+    page.wait_for_selector("#emp-invite-modal", timeout=8000)
+
+
+def case_gate_race(browser, base):
+    # 1. Answer held, then "an old phone" arrives: never a card, then the explanation.
+    ctx, page, held = held_devices_page(browser, base)
+    try:
+        _open_invite_while_held(page, held)
+        assert page.locator(".emp-pcard").count() == 0, "preset cards drawn before the device answer"
+        assert _reachable_cards(page) == 0
+        assert page.locator("#emp-inv-role").count() == 1, "the plain Role picker is missing while checking"
+        assert "Checking" in page.inner_text("#emp-inv-gate"), page.inner_text("#emp-inv-gate")
+        _release(page, held, "old")
+        page.wait_for_function("() => /Old phone/.test((document.getElementById('emp-inv-gate')||{}).textContent || '')", timeout=8000)
+        assert page.locator(".emp-pcard").count() == 0 and _reachable_cards(page) == 0, "cards appeared for an old-device answer"
+        assert "locked" in page.inner_text("#emp-inv-gate").lower()
+    finally:
+        ctx.close()
+    # 2. Answer held, then "allowed": the OPEN dialog grows its cards, and a mouse click picks one.
+    ctx, page, held = held_devices_page(browser, base)
+    try:
+        _open_invite_while_held(page, held)
+        assert _reachable_cards(page) == 0
+        _release(page, held, "allowed")
+        page.wait_for_function("() => document.querySelectorAll('.emp-pcard').length === 4", timeout=8000)
+        assert _reachable_cards(page) == 4, "the four cards are not all reachable once the answer allowed them"
+        click_center(page, '.emp-pcard:has(input[value="accountant"])')
+        assert page.evaluate("() => document.querySelector('input[name=\"emp-preset\"]:checked').value") == "accountant"
+        page.screenshot(path=str(SHOTS / "gaterace_allowed.png"))
+    finally:
+        ctx.close()
+    # 3. Answer never readable: fail CLOSED -- plain picker, one honest sentence, no cards.
+    ctx, page, held = held_devices_page(browser, base)
+    try:
+        _open_invite_while_held(page, held)
+        _release(page, held, "fail")
+        page.wait_for_function("() => /Could not check/.test((document.getElementById('emp-inv-gate')||{}).textContent || '')", timeout=8000)
+        assert page.locator(".emp-pcard").count() == 0 and _reachable_cards(page) == 0, "cards drawn after a failed check"
+        assert page.locator("#emp-inv-role").count() == 1
+        page.fill("#emp-inv-email", "failclosed@usersroles.test")
+        click_center(page, "#emp-inv-btn")
+        page.wait_for_selector("#emp-link-modal", timeout=10000)
+    finally:
+        ctx.close()
+
+
 def dialog_fits(page, overlay_id, tag):
     info = page.evaluate("""(id) => {
         const o = document.getElementById(id); const d = o && o.querySelector('.ret-modal');
@@ -650,7 +767,7 @@ def main() -> int:
             # by custom/role/gate is the API-seeded one, so make the UI ones share it
             for tag, fn in (("table", case_table), ("rows", case_rows), ("custom", case_custom),
                             ("role", case_role), ("delegated", case_delegated), ("name", case_name),
-                            ("gate", case_gate), ("look", case_look)):
+                            ("gate", case_gate), ("gaterace", case_gate_race), ("look", case_look)):
                 if wanted(tag):
                     check(tag, fn.__name__.replace("case_", "").replace("_", " "), lambda f=fn: f(browser, base))
         finally:

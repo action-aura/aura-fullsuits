@@ -482,8 +482,11 @@ const SubsystemApp = {
   _platformLabel(platform) {
     const raw = String(platform == null ? '' : platform).trim();
     if (!raw) return '';
-    const known = { windows: 'Windows', android: 'Android', ios: 'iOS',
-                    macos: 'macOS', mac: 'macOS', linux: 'Linux', web: 'Web' };
+    // V2: each known word goes through t(), so the Arabic chip says ويندوز and
+    // not an English "Windows" between Arabic words. An UNKNOWN platform is
+    // sentence-cased and left alone -- it is data, not a word we can translate.
+    const known = { windows: t('Windows'), android: t('Android'), ios: t('iOS'),
+                    macos: t('macOS'), mac: t('macOS'), linux: t('Linux'), web: t('Web') };
     const hit = known[raw.toLowerCase()];
     return hit || (raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase());
   },
@@ -1577,12 +1580,21 @@ const SubsystemApp = {
           const devRow = (dev && dev.success && dev.device) || null;
           this.deviceLabel = (devRow && (devRow.device_name || devRow.device_label
             || this._platformLabel(devRow.platform))) || null;
+          // V2: `deviceLabel` above is a string frozen in whatever language the
+          // page booted in. The chip must follow a later language switch, so the
+          // two INPUTS are kept too and the chip re-derives the word at paint
+          // time (_deviceDisplay). A name someone typed is data and is never
+          // translated; only the bare-platform fallback goes through t().
+          this.deviceNamed = (devRow && (devRow.device_name || devRow.device_label)) || null;
+          this.devicePlatform = (devRow && devRow.platform) || null;
           this.branchName = (dev && dev.success
             && ((devRow && devRow.branch_name) || dev.branch_name)) || null;
         } catch (e) {
           this.isAdminDevice = false;
           this.canClaimAdminDevice = false;
           this.deviceLabel = null;
+          this.deviceNamed = null;
+          this.devicePlatform = null;
           this.branchName = null;
         }
 
@@ -3420,9 +3432,10 @@ const SubsystemApp = {
     // that width); the media query is what actually hides it ≥641px, not a
     // JS branch, so there is nothing here for a resize to get out of sync
     // with. Stable across every role on purpose -- see the spec's "why these
-    // five" -- so no _isNavItemVisible() gating applies to the four mapped
-    // slots the way it does for the sidebar/More-sheet items. ONE exception,
-    // below: a books-only person (registry v9 Accountant) gets no Till tab.
+    // five" -- so a tab shows unless the sidebar row it points at is itself
+    // withheld from this person (tabOffered, below, asks _isNavItemVisible).
+    // Today that is only a books-only person (registry v9 Accountant), who
+    // gets no Till tab; Stock and Customers carry no capability so they stay.
     const activeSection = this.currentSection || 'dashboard';
     const tabIcon = (val) => window.AuraIcons ? AuraIcons.render(val, 22) : val;
     const tabHTML = (id, emoji, label, extraClass) => `
@@ -3440,13 +3453,23 @@ const SubsystemApp = {
     // More; the Home slot is dropped rather than duplicating Till. Owner and
     // manager (and unknown capabilities, which fail open) keep Home unchanged.
     const sellOnly = this._isSellOnlyCapabilities();
-    const booksOnly = this._isBooksOnlyCapabilities();
+    // V2: a tab is offered only when the sidebar row it points at is offered to
+    // this person -- the SAME _isNavItemVisible the sidebar and the More sheet
+    // ask, never a second copy of the rule. That already covers the books-only
+    // Till exception (it lives inside _isNavItemVisible), and it means a
+    // capability later put on Stock or Customers hides the tab and the row
+    // together instead of leaving a tab that lands on a screen the sidebar
+    // hides. A tab whose nav row cannot be found stays (fail open, as before).
+    const tabOffered = (id) => {
+      const row = (sys.nav || []).find((n) => n.id === id);
+      return !row || this._isNavItemVisible(row);
+    };
     const tabBarHTML = `
       <nav class="sub-tabbar" id="sub-tabbar" aria-label="${t('Quick navigation')}">
         ${sellOnly ? '' : tabHTML('dashboard', '🏠', 'Home')}
-        ${tabHTML('products', '📦', 'Stock')}
-        ${booksOnly ? '' : tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
-        ${tabHTML('customers', '👥', 'Customers')}
+        ${tabOffered('products') ? tabHTML('products', '📦', 'Stock') : ''}
+        ${tabOffered('pos') ? tabHTML('pos', '🛒', 'Till', 'sub-tab-till') : ''}
+        ${tabOffered('customers') ? tabHTML('customers', '👥', 'Customers') : ''}
         <a class="sub-tab${!this._TAB_BAR_SECTIONS.includes(activeSection) ? ' active' : ''}"
            id="sub-tab-more"
            tabindex="0" role="button"
@@ -3941,8 +3964,17 @@ const SubsystemApp = {
     return n === 'Main Branch' ? t('Main Branch') : n;
   },
 
+  // V2: the computer segment, derived at paint time so a language switch
+  // re-words it. A typed device name wins untouched; else the platform word
+  // through t(); else whatever `deviceLabel` was set to (older callers).
+  _deviceDisplay() {
+    if (this.deviceNamed) return this.deviceNamed;
+    if (this.devicePlatform) return this._platformLabel(this.devicePlatform) || this.deviceLabel;
+    return this.deviceLabel;
+  },
+
   _identityPlace() {
-    return [this._branchDisplayName(), this.deviceLabel].filter((p) => p && String(p).trim()).join(' · ');
+    return [this._branchDisplayName(), this._deviceDisplay()].filter((p) => p && String(p).trim()).join(' · ');
   },
 
   // Two letters, uppercased. An email local-part usually has no spaces to

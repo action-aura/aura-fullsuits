@@ -40,7 +40,7 @@ function stub() {
   return {
     innerHTML: '', textContent: '', value: '', disabled: false, hidden: false, id: '', className: '',
     style: {}, dataset: {}, appendChild() {}, remove() {}, focus() {}, select() {}, setSelectionRange() {},
-    addEventListener(type, fn) { this['_on' + type] = fn; }, removeEventListener() {},
+    addEventListener(type, fn) { this['_on' + type] = fn; }, removeEventListener() {}, click() {},
     getAttribute() { return null; }, setAttribute() {},
     querySelector() { return stub(); }, querySelectorAll() { return []; },
   };
@@ -191,8 +191,11 @@ test('a role edit for a preset person goes to /preset and never /role', async ()
   assert.deepStrictEqual(plain(writes[0][2]), { preset: 'accountant' });
 });
 
-test('Change Role on a preset person opens the cards, not the two-role select', () => {
+test('Change Role on a preset person opens the cards, not the two-role select', async () => {
   const { screen, byId } = load({ employees: [] });
+  // V2: the screen starts in "checking" (presets OFF) until the device list has
+  // answered, so the cards only exist after that answer.
+  await screen._refreshGate();
   screen._rows = [{ id: 'u1', email: 'a@b.c', role_preset: 'accountant', preset_matches: true, effective_role: 'manager' }];
   let opened = null;
   screen._openPreset = (emp) => { opened = emp.id; };
@@ -264,11 +267,78 @@ test('gate: an old device locks preset people, names it, and leaves legacy rows 
   assert.ok(screen._gateReason().includes('Old phone'));
 });
 
-test('gate: an unreadable answer does not lock anyone out', async () => {
+// V2. The gate used to START open ("allowed") and close only if the answer said
+// so, so on a slow answer the owner saw four preset cards that a still-old
+// device could not honour, and an unreadable answer left them open for good.
+// It now starts CLOSED ("checking"), opens only on an explicit allowed:true,
+// and stays closed (state "failed", plain Cashier/Manager picker) if the
+// answer never comes or cannot be read.
+test('gate: before any answer, presets are OFF and the reason says it is checking', () => {
+  const { screen } = load();
+  assert.strictEqual(screen._gate.state, 'checking');
+  assert.strictEqual(screen._gate.allowed, false);
+  assert.strictEqual(screen._gateBlocks({ role_preset: 'cashier' }), true, 'a preset person is locked while checking');
+  assert.strictEqual(screen._gateBlocks({ role_preset: null }), false, 'a legacy row is never locked');
+  assert.ok(screen._gateReason().startsWith('Checking'), screen._gateReason());
+  const html = screen._inviteRoleFieldHtml(false);
+  assert.ok(!html.includes('emp-pcard'), 'preset cards drawn before the gate answered');
+  assert.ok(html.includes('id="emp-inv-role"'), 'the plain role picker must still be there');
+});
+
+test('gate: an explicit allowed:true opens the cards', async () => {
+  const { screen } = load();
+  await screen._refreshGate();
+  assert.strictEqual(screen._gate.state, 'ok');
+  assert.strictEqual(screen._gate.allowed, true);
+  const html = screen._inviteRoleFieldHtml(false);
+  assert.ok(html.includes('emp-pcard'), 'no cards after an allowed answer');
+  assert.ok(!html.includes('id="emp-inv-role"'), 'the plain picker is still drawn beside the cards');
+});
+
+test('gate: an unreadable answer FAILS CLOSED and says so', async () => {
   const { screen } = load();
   screen._get = async () => { throw new Error('offline'); };
+  const realError = console.error;
+  console.error = () => {};             // the screen logs the failure on purpose
+  try { await screen._refreshGate(); } finally { console.error = realError; }
+  assert.strictEqual(screen._gate.state, 'failed');
+  assert.strictEqual(screen._gate.allowed, false);
+  assert.ok(screen._gateReason().startsWith('Could not check'), screen._gateReason());
+  assert.ok(!screen._inviteRoleFieldHtml(false).includes('emp-pcard'), 'cards drawn after a failed check');
+});
+
+test('gate: an answer with no role_editing block is not an "allowed" answer', async () => {
+  const { screen } = load();
+  screen._get = async () => ({ success: true, devices: [] });
   await screen._refreshGate();
-  assert.strictEqual(screen._gate.allowed, true);
+  assert.strictEqual(screen._gate.allowed, false);
+  assert.strictEqual(screen._gate.state, 'failed');
+});
+
+// The dialog can be opened BEFORE the answer lands. The answer must redraw its
+// Role field, keep a Manager pick, and never touch what was typed elsewhere.
+test('gate: an open invite dialog is redrawn with cards when the answer is allowed', async () => {
+  const { screen, byId } = load();
+  const holder = stub();
+  holder.querySelector = () => null;                 // no cards drawn yet
+  byId['emp-inv-rolefield'] = holder;
+  byId['emp-inv-role'] = Object.assign(stub(), { value: 'manager' });
+  byId['emp-invite-modal-dialog'] = stub();
+  await screen._refreshGate();
+  assert.ok(holder.innerHTML.includes('emp-pcard'), 'the open dialog never got the cards');
+  assert.strictEqual(screen._selPreset, 'manager', 'a Manager pick on the plain picker was lost');
+  assert.strictEqual(byId['emp-invite-modal-dialog'].style.width, '620px');
+});
+
+test('gate: an open invite dialog stays a plain picker when the answer is blocked', async () => {
+  const { screen, byId } = load({ roleEditing: { allowed: false, blocking_devices: [{ device_label: 'Old phone' }] } });
+  const holder = stub();
+  holder.querySelector = () => null;
+  byId['emp-inv-rolefield'] = holder;
+  byId['emp-inv-role'] = Object.assign(stub(), { value: 'cashier' });
+  await screen._refreshGate();
+  assert.ok(!holder.innerHTML.includes('emp-pcard'), 'cards drawn for a blocked shop');
+  assert.ok(holder.innerHTML.includes('Old phone'), 'the blocking device is not named');
 });
 
 // ---------------------------------------------------------------- runner

@@ -2254,5 +2254,13 @@
   "{n} day": "يوم واحد",
   "{n} days": "{n} يومًا",
   "{n} days (two)": "يومين",
-  "{n} days (few)": "{n} أيام"
+  "{n} days (few)": "{n} أيام",
+  "Checking the computers in this shop…": "جارٍ فحص أجهزة المتجر…",
+  "Could not check the computers in this shop, so only Cashier and Manager can be chosen for now.": "تعذّر فحص أجهزة المتجر، لذا يمكن اختيار كاشير أو مدير فقط في الوقت الحالي.",
+  "Windows": "ويندوز",
+  "Android": "أندرويد",
+  "iOS": "آي أو إس",
+  "macOS": "ماك أو إس",
+  "Linux": "لينكس",
+  "Web": "ويب"
 }

@@ -2254,5 +2254,13 @@
   "{n} day": "{n} day",
   "{n} days": "{n} days",
   "{n} days (two)": "{n} days (two)",
-  "{n} days (few)": "{n} days (few)"
+  "{n} days (few)": "{n} days (few)",
+  "Checking the computers in this shop…": "Checking the computers in this shop…",
+  "Could not check the computers in this shop, so only Cashier and Manager can be chosen for now.": "Could not check the computers in this shop, so only Cashier and Manager can be chosen for now.",
+  "Windows": "Windows",
+  "Android": "Android",
+  "iOS": "iOS",
+  "macOS": "macOS",
+  "Linux": "Linux",
+  "Web": "Web"
 }

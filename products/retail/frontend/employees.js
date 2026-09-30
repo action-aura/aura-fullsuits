@@ -156,11 +156,19 @@ const RetailEmployees = {
     return '';
   },
 
-  // What GET /api/devices last said about editing roles: {allowed, blocking}.
-  // Advisory only (the server does not refuse), so a missing or unreadable
-  // answer FAILS OPEN -- an owner must never be locked out of the screen by a
-  // device list that would not load.
-  _gate: { allowed: true, blocking: [] },
+  // What GET /api/devices last said about editing roles:
+  // {state, allowed, blocking}. `state` is one of
+  //   'checking' -- no answer yet (the starting value),
+  //   'ok'       -- every device understands presets,
+  //   'blocked'  -- some device runs registry < 9 (`blocking` names them),
+  //   'failed'   -- the device list would not load.
+  // `allowed` is true ONLY for 'ok'. It used to start true, so an invite dialog
+  // opened before the answer drew the four preset cards, and an invite sent from
+  // them carried a preset to a shop with a device that cannot read one (the
+  // server accepted it). Presets now FAIL CLOSED in 'checking' and 'failed'; the
+  // plain Cashier/Manager picker never depends on the gate, so an owner is still
+  // never locked out of inviting by a device list that would not load.
+  _gate: { state: 'checking', allowed: false, blocking: [] },
   //: The preset chosen in the dialog that is open right now.
   _selPreset: 'cashier',
 
@@ -693,21 +701,24 @@ const RetailEmployees = {
   // server reports it under `role_editing.blocking_devices` and this screen
   // stops offering preset edits until it is updated. ADVISORY: the server
   // does not refuse the edit, so this is here to stop the owner doing
-  // something that half-works, not to enforce anything. Unreadable answer =
-  // allowed (see _gate above).
+  // something that half-works, not to enforce anything. An unreadable answer
+  // is 'failed' = presets OFF (see _gate above); the plain role picker stays.
   async _refreshGate() {
-    let gate = { allowed: true, blocking: [] };
+    let gate = { state: 'failed', allowed: false, blocking: [] };
     try {
       const res = await this._get('/api/devices');
       const re = res && res.role_editing;
       if (re && re.allowed === false) {
-        gate = { allowed: false, blocking: Array.isArray(re.blocking_devices) ? re.blocking_devices : [] };
+        gate = { state: 'blocked', allowed: false, blocking: Array.isArray(re.blocking_devices) ? re.blocking_devices : [] };
+      } else if (re && re.allowed === true) {
+        gate = { state: 'ok', allowed: true, blocking: [] };
       }
     } catch (err) {
       console.error('Device list for role editing failed', err);
     }
     this._gate = gate;
     this._paintGateNote();
+    this._repaintInviteRole();
     return gate;
   },
   _gateBlocks(e) { return !this._gate.allowed && !!(e && e.role_preset); },
@@ -716,6 +727,8 @@ const RetailEmployees = {
     return names.join(', ');
   },
   _gateReason() {
+    if (this._gate.state === 'checking') return t('Checking the computers in this shop…');
+    if (this._gate.state === 'failed') return t('Could not check the computers in this shop, so only Cashier and Manager can be chosen for now.');
     const names = this._gateNames();
     return names
       ? t('Roles are locked until every computer and phone is updated. Still on the old version:') + ' ' + names
@@ -724,7 +737,7 @@ const RetailEmployees = {
   _paintGateNote() {
     const slot = document.getElementById('emp-gate-note');
     if (!slot) return;
-    if (this._gate.allowed) { slot.innerHTML = ''; return; }
+    if (this._gate.allowed || this._gate.state === 'checking') { slot.innerHTML = ''; return; }
     slot.innerHTML = `<div role="status" id="emp-gate-reason" style="background:var(--state-warning-surface);border:1px solid var(--state-warning-border);border-radius:10px;padding:10px 14px;margin:0 0 16px;color:var(--state-warning-text);font-size:13px;line-height:1.6">${this._esc(this._gateReason())}</div>`;
   },
 
@@ -811,6 +824,43 @@ const RetailEmployees = {
     // four preset cards and the twelve-row matrix.
     this._selPreset = 'cashier';
     const presetsOn = !reduced && this._gate.allowed;
+    const roleField = `<div id="emp-inv-rolefield">${this._inviteRoleFieldHtml(reduced)}</div>`;
+    this._ensureStyles();
+    this._modal('emp-invite-modal', `
+      <h3><span aria-hidden="true">${this._icon('user', 18, '👤')}</span> ${reduced ? t('Invite a cashier') : t('Invite an employee')}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px;line-height:1.7">
+        ${t('They receive a one-time setup link and choose their own password. No password is set for them here.')}
+      </p>
+      <div class="emp-mbody">
+      <div class="ret-field">
+        <label for="emp-inv-name">${t('Name')}</label>
+        <input id="emp-inv-name" type="text" maxlength="60" autocomplete="off" />
+      </div>
+      <div class="ret-field">
+        <label>${t('Email address')} *</label>
+        <!-- The placeholder is NOT translated, and that is the correct
+             answer rather than an omission: an example email address is not
+             language, and the locale suite requires every catalog entry to
+             differ between en and ar, which "name@example.com" cannot
+             honestly do. i18n.js never sweeps input elements anyway. -->
+        <input id="emp-inv-email" type="email" autocomplete="off" placeholder="name@example.com" />
+      </div>
+      ${roleField}
+      </div>
+      <div class="ret-modal-footer">
+        <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-invite-modal')">${t('Cancel')}</button>
+        <button class="ret-btn ret-btn-primary" id="emp-inv-btn" onclick="RetailEmployees._submitInvite(${reduced ? 'true' : 'false'})">${reduced ? t('Add Cashier') : t('Create Invite')}</button>
+      </div>`, presetsOn ? 620 : 480);
+    if (presetsOn) this._wireCards('emp-invite-modal', () => this._toggleInviteBranch());
+    document.getElementById('emp-inv-email')?.focus();
+  },
+
+  // The Role field of the invite dialog, drawn from the CURRENT gate. Its own
+  // method so the answer to GET /api/devices can redraw just this field in a
+  // dialog that is already open (_repaintInviteRole) -- the name and email the
+  // owner has typed are outside it and stay untouched.
+  _inviteRoleFieldHtml(reduced) {
+    const presetsOn = !reduced && this._gate.allowed;
     let roleField;
     if (reduced) {
       roleField = `<div class="ret-field">
@@ -846,34 +896,32 @@ const RetailEmployees = {
           ${this._matrixHtml('cashier')}
         </div>`;
     }
-    this._ensureStyles();
-    this._modal('emp-invite-modal', `
-      <h3><span aria-hidden="true">${this._icon('user', 18, '👤')}</span> ${reduced ? t('Invite a cashier') : t('Invite an employee')}</h3>
-      <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px;line-height:1.7">
-        ${t('They receive a one-time setup link and choose their own password. No password is set for them here.')}
-      </p>
-      <div class="emp-mbody">
-      <div class="ret-field">
-        <label for="emp-inv-name">${t('Name')}</label>
-        <input id="emp-inv-name" type="text" maxlength="60" autocomplete="off" />
-      </div>
-      <div class="ret-field">
-        <label>${t('Email address')} *</label>
-        <!-- The placeholder is NOT translated, and that is the correct
-             answer rather than an omission: an example email address is not
-             language, and the locale suite requires every catalog entry to
-             differ between en and ar, which "name@example.com" cannot
-             honestly do. i18n.js never sweeps input elements anyway. -->
-        <input id="emp-inv-email" type="email" autocomplete="off" placeholder="name@example.com" />
-      </div>
-      ${roleField}
-      </div>
-      <div class="ret-modal-footer">
-        <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-invite-modal')">${t('Cancel')}</button>
-        <button class="ret-btn ret-btn-primary" id="emp-inv-btn" onclick="RetailEmployees._submitInvite(${reduced ? 'true' : 'false'})">${reduced ? t('Add Cashier') : t('Create Invite')}</button>
-      </div>`, presetsOn ? 620 : 480);
-    if (presetsOn) this._wireCards('emp-invite-modal', () => this._toggleInviteBranch());
-    document.getElementById('emp-inv-email')?.focus();
+    return roleField;
+  },
+
+  // The gate just answered. If the invite dialog was opened before that (the
+  // 'checking' shape: plain picker + a quiet line), redraw its Role field for
+  // the real answer and resize the dialog to match. Whatever the owner already
+  // typed or picked is kept; a 'Manager' pick on the plain select carries over
+  // to the Manager card.
+  _repaintInviteRole() {
+    const holder = document.getElementById('emp-inv-rolefield');
+    if (!holder) return;
+    const legacy = document.getElementById('emp-inv-role');
+    // No plain select = already the card shape (a later refresh): leave it be
+    // unless the gate has since closed on it.
+    const hasCards = !legacy && !!holder.querySelector('.emp-pcard');
+    if (!legacy && !hasCards) return;          // the delegated shape: no gate involved
+    if (hasCards && this._gate.allowed) return;
+    if (legacy) this._selPreset = legacy.value === 'manager' ? 'manager' : 'cashier';
+    holder.innerHTML = this._inviteRoleFieldHtml(false);
+    const dialog = document.getElementById('emp-invite-modal-dialog');
+    if (dialog) dialog.style.width = (this._gate.allowed ? 620 : 480) + 'px';
+    if (this._gate.allowed) {
+      this._wireCards('emp-invite-modal', () => this._toggleInviteBranch());
+      const sel = document.querySelector('#emp-invite-modal input[name="emp-preset"][value="' + this._selPreset + '"]');
+      if (sel && !sel.checked) sel.click();
+    }
   },
 
   _toggleInviteBranch() {

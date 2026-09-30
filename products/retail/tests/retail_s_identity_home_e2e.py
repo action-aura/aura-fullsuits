@@ -5,7 +5,7 @@ Accountant's read-only home, in a REAL browser. STANDALONE SCRIPT, NOT PYTEST.
     C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe ^
         products/retail/tests/retail_s_identity_home_e2e.py [--only tag,tag]
 
-Tags: chip home phone look books
+Tags: chip home phone look books chipar tabs
 
   chip   every seeded person (owner, cashier, manager, branch manager,
          accountant) shows their REAL name, their preset label (Accountant /
@@ -27,6 +27,13 @@ Tags: chip home phone look books
          platform word ("WINDOWS"), and the 60 s dashboard timer is never armed on the
          books home (it re-rendered the page and dropped the focused card) yet IS armed
          for a manager's dashboard, and stops firing if the person becomes books-only.
+  chipar V2. In Arabic the header chip reads Arabic all the way through: the platform
+         word is Arabic (not "Windows"), the seeded "Main Branch" is the Arabic
+         branch name, whether the page BOOTED in Arabic or was switched after load.
+  tabs   V2. At phone width every bottom-bar tab follows the sidebar row it points
+         at (the same _isNavItemVisible): a capability put on the Stock row takes
+         the tab away from a person who lacks it, and a manager who has it keeps
+         the tab. Tabs are hit with a real mouse at their centre (rule 6b).
 """
 from __future__ import annotations
 
@@ -240,6 +247,103 @@ def case_phone(browser, base):
         ctx.close()
 
 
+WINDOWS_AR = "\u0648\u064a\u0646\u062f\u0648\u0632"
+MAIN_BRANCH_AR = "\u0627\u0644\u0641\u0631\u0639 \u0627\u0644\u0631\u0626\u064a\u0633\u064a"
+
+
+def _place_text(page):
+    return page.evaluate("() => (document.querySelector('.sub-identity-place') || {textContent: ''}).textContent.trim()")
+
+
+def case_chipar(browser, base):
+    import re
+    latin = re.compile(r"[A-Za-z]")
+    # booted in Arabic
+    ctx, page = person_page(browser, base, ACCOUNTANT, lang="ar")
+    try:
+        ur.go_lang(page, "ar")
+        chip(page)
+        place = _place_text(page)
+        assert WINDOWS_AR in place, f"Arabic chip has no Arabic platform word: {place!r}"
+        assert "Windows" not in place, f"Arabic chip still has the English platform word: {place!r}"
+        ur.shot(page, "chip-ar-boot")
+        # The branch in this data is the e2e's own typed "Main branch" (lower-case b),
+        # NOT the server's seeded default "Main Branch" -- typed names are the owner's
+        # and must stay untouched (N2). Both halves of that rule, asked directly:
+        got = page.evaluate("""() => { const keep = SubsystemApp.branchName;
+            SubsystemApp.branchName = 'Main Branch'; const seeded = SubsystemApp._branchDisplayName();
+            SubsystemApp.branchName = 'Main branch'; const typed = SubsystemApp._branchDisplayName();
+            SubsystemApp.branchName = keep; return {seeded, typed}; }""")
+        assert got["seeded"] == MAIN_BRANCH_AR, f"seeded default not translated: {got}"
+        assert got["typed"] == "Main branch", f"a typed branch name was rewritten: {got}"
+    finally:
+        ctx.close()
+    # booted in English, then switched: the chip must follow the language, not stay frozen
+    ctx, page = person_page(browser, base, ACCOUNTANT, lang="en")
+    try:
+        chip(page)
+        before = _place_text(page)
+        assert "Windows" in before and "Main" in before, f"English chip is not the expected control: {before!r}"
+        ur.go_lang(page, "ar")
+        page.wait_for_timeout(500)
+        after = _place_text(page)
+        assert WINDOWS_AR in after and 'Windows' not in after, \
+            f"after switching to Arabic the chip kept English: {after!r}"
+        ur.shot(page, "chip-ar-switched")
+    finally:
+        ctx.close()
+
+
+TAB_REACH = """(id) => { const t = document.querySelector('#sub-tabbar [data-tab="' + id + '"]');
+    if (!t) return null; const q = t.getBoundingClientRect();
+    if (!q.width || !q.height) return false;
+    const cx = q.x + q.width / 2, cy = q.y + q.height / 2;
+    if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return false;
+    const top = document.elementFromPoint(cx, cy); return !!top && (top === t || t.contains(top)); }"""
+
+GATE_STOCK_ROW = """() => { const sys = SubsystemApp.systems[SubsystemApp.active];
+    const row = sys.nav.find(n => n.id === 'products'); window.__stockCap = row.capability;
+    row.capability = 'retail.sell'; SubsystemApp._renderShell(sys, SubsystemApp.active);
+    return !!SubsystemApp._isNavItemVisible(row); }"""
+
+
+def case_tabs(browser, base):
+    # Accountant (books only, lacks retail.sell): with Stock gated, no Stock tab.
+    ctx, page = person_page(browser, base, ACCOUNTANT, viewport=PHONE)
+    try:
+        page.wait_for_selector(".bkh-grid", timeout=20000)
+        page.wait_for_selector("#sub-tabbar .sub-tab", timeout=8000)
+        # control: nothing gated -> the tab is there and a real mouse can reach it
+        assert page.evaluate(TAB_REACH, "products") is True, "control: Stock tab is not reachable before gating"
+        visible = page.evaluate(GATE_STOCK_ROW)
+        assert visible is False, "premise: the accountant should not be offered the gated Stock row"
+        page.wait_for_selector("#sub-tabbar .sub-tab", timeout=8000)
+        assert page.evaluate(TAB_REACH, "products") is None, "the Stock tab stayed after its row was withheld"
+        assert page.evaluate(TAB_REACH, "customers") is True, "an ungated Customers tab disappeared"
+        ur.shot(page, "phone-accountant-stock-gated")
+    finally:
+        ctx.close()
+    # Manager (has retail.sell): the same gated row keeps its tab.
+    ctx, page = person_page(browser, base, MANAGER, viewport=PHONE)
+    try:
+        page.wait_for_selector("#sub-tabbar .sub-tab", timeout=20000)
+        visible = page.evaluate(GATE_STOCK_ROW)
+        assert visible is True, "premise: the manager should be offered the Stock row"
+        assert page.evaluate(TAB_REACH, "products") is True, "a manager lost the Stock tab"
+        assert page.evaluate(TAB_REACH, "customers") is True
+        assert page.evaluate(TAB_REACH, "pos") is True
+        ur.shot(page, "phone-manager-stock-gated")
+    finally:
+        ctx.close()
+    # Today's real rows: Stock and Customers carry no capability, so a normal manager sees both tabs.
+    ctx, page = person_page(browser, base, MANAGER, viewport=PHONE)
+    try:
+        page.wait_for_selector("#sub-tabbar .sub-tab", timeout=20000)
+        assert page.evaluate(TAB_REACH, "products") is True and page.evaluate(TAB_REACH, "customers") is True
+    finally:
+        ctx.close()
+
+
 def case_look(browser, base):
     for vp_name, vp in (("1366", VIEWPORT), ("1024", SMALL)):
         for lang in ("en", "ar"):
@@ -306,10 +410,14 @@ def case_books(browser, base):
         for gone in ("returns", "scanner"):
             assert gone not in rows, f"accountant is still offered the {gone!r} row: {rows}"
         # chip: the raw platform word must never be printed
+        # V2: the platform word now follows the language, and an earlier case leaves
+        # this person's saved language on Arabic -- so pin English here, then read the
+        # chip's OWN derivation (not the boot-time frozen deviceLabel).
+        ur.go_lang(page, "en")
         c = chip(page)
         info = page.evaluate("""async () => { const r = await fetch('/api/devices/me', {credentials: 'same-origin'});
             const j = await r.json(); const d = (j && j.device) || {};
-            return {label: SubsystemApp.deviceLabel, name: d.device_name || d.device_label || null,
+            return {label: SubsystemApp._deviceDisplay(), name: d.device_name || d.device_label || null,
                     platform: d.platform || null}; }""")
         assert info["label"] != "WINDOWS", f"chip printed the raw platform word: {info}"
         if not info["name"] and info["platform"]:
@@ -434,7 +542,7 @@ def main() -> int:
             backend.start()
             print("SEEDING DONE.", flush=True)
             for tag, fn in (("chip", case_chip), ("home", case_home), ("phone", case_phone), ("look", case_look),
-                            ("books", case_books)):
+                            ("books", case_books), ("chipar", case_chipar), ("tabs", case_tabs)):
                 if wanted(tag):
                     check(tag, fn.__name__.replace("case_", ""), lambda f=fn: f(browser, base))
         finally:
