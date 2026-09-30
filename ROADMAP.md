@@ -6618,3 +6618,23 @@ data backed up first to AuraLab\backup-before-p2s-proof-20260930-1703.
   TILL_NEEDS_MAIN_COMPUTER. E13.5 PASS: long number before an allocation, PRS1-000001 after.
 - X1 PASS: 6 sales, takings 22.518, ledger 45.532 = 45.532 (15 journals) and stock identical on both.
   The forced-duplicate parked child is covered by the two-process tests only (the relay stamps ids).
+
+### 2026-09-30 — final full run and the test installer (Track S close)
+
+Canonical runner on a frozen copy of 560f8279 (retail -j 4, others -j 2):
+retail 331 files / 329 passed; identity 34/34; sync 35/35; commercial_runtime 4/4;
+licensing_contracts 24/24; einvoicing 17/17; notifications 10/10; clinic 16/19.
+- retail red #1, retail_p1b_sync_review "every reason has a sentence": two engine reasons
+  from 9cad4b7b had none - fixed in af91f440, re-run green.
+- retail red #2, retail_owner_endpoint_baked_url_test: environmental. The frozen copy
+  lives under C:\Users\MSI\.claude\jobs\... and lacks the git-ignored trust anchor the
+  build script asks for; in the worktree it is 38 passed, 1 skipped.
+- clinic: the same three e-invoicing files that fail identically on the pre-wave tree
+  (1d15b35e); pre-existing, open item 4 above.
+Test installer (LOCAL ONLY, not published - the repo is public):
+dist/installers/AuraRetail-Setup-1.0.0-rc.8-p2s-test.exe, SHA256
+FAF077DCCCFF235FBACB5D91E3A8E5CB3349A4D7835F5905F14533844DBFB4B1. The built
+AuraRetail.exe, every AURA_* variable stripped and a never-existing data folder:
+ready in 2.80s on 127.0.0.1:5001, GET / 200, registry v0->9 and retail v0->42 each with
+its pre-migration backup. The installer itself was not run (an old rc.7 test install
+still holds the same AppId on this laptop).
