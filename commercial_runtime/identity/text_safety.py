@@ -16,8 +16,15 @@ carry, invisibly:
 
 The shop's names are Arabic-first, so the two joiners that Arabic and Persian
 shaping genuinely needs, U+200C ZERO WIDTH NON-JOINER and U+200D ZERO WIDTH
-JOINER, are KEPT. Everything else in Unicode categories Cc (control) and Cf
-(format) is removed, and a line break is REFUSED rather than silently joined
+JOINER, are KEPT. So are the three DIRECTIONAL MARKS an Arabic keyboard types
+when a name mixes scripts (\"Ahmad (أحمد)\", \"رقم 5\"): U+200E LEFT-TO-RIGHT
+MARK, U+200F RIGHT-TO-LEFT MARK and U+061C ARABIC LETTER MARK (fix round 2,
+D12: they used to be stripped silently, which changed what a cashier typed).
+A mark only nudges how NEIGHBOURING neutral characters are placed; unlike an
+override it cannot make text display as its own reverse. STILL removed: the
+overrides, embeddings and isolates (U+202A-U+202E, U+2066-U+2069), the zero
+width space and every other Cc/Cf character. Everything else in Unicode
+categories Cc (control) and Cf (format) is removed, and a line break is REFUSED rather than silently joined
 (a name with a newline in it was never typed by a person filling a one-line
 box; it is an attack or a corrupt row).
 
@@ -25,8 +32,10 @@ Stdlib only: this module stays safe to import eagerly on Android.
 """
 import unicodedata
 
-# The only Cf characters a real name needs (Arabic/Persian joining behaviour).
-_KEPT_FORMAT_CHARS = frozenset('‌‍')
+# The only Cf characters a real name needs: U+200C/U+200D (Arabic/Persian
+# joining behaviour) and U+200E/U+200F/U+061C (the directional MARKS, not the
+# overrides/embeddings/isolates).
+_KEPT_FORMAT_CHARS = frozenset('‌‍‎‏؜')
 
 # Anything that ends a line in any common convention. \n \r \x0b \x0c \x1c-\x1e
 # and \x85 are Cc; U+2028/U+2029 are Zl/Zp, so they are named explicitly.
@@ -38,7 +47,8 @@ def has_line_break(text: str) -> bool:
 
 
 def strip_control_and_format(text: str) -> str:
-    """Remove every Cc/Cf character except U+200C / U+200D. Does not trim."""
+    """Remove every Cc/Cf character except U+200C, U+200D, U+200E, U+200F and
+    U+061C. Does not trim."""
     return ''.join(
         ch for ch in text
         if ch in _KEPT_FORMAT_CHARS or unicodedata.category(ch) not in ('Cc', 'Cf')

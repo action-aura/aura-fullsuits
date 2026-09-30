@@ -650,7 +650,12 @@ def enforce_cash_pair_after_apply(conn: sqlite3.Connection, company_id: str, use
     NARROWS access, so it can be called speculatively."""
     if not user_uid:
         return False
-    row = conn.execute("SELECT id, role FROM users WHERE uid=?", (user_uid,)).fetchone()
+    # Fix round 2 (D13): scoped to THIS company. The lookup used to take any
+    # user with that uid, so an event for company A could narrow (and file an
+    # audit row about) a person who belongs to company B on a shared registry.
+    row = conn.execute(
+        "SELECT id, role FROM users WHERE uid=? AND company_id=?", (user_uid, company_id)
+    ).fetchone()
     if row is None:
         return False
     return _revoke_cash_approve_if_paired(conn, company_id, row[0], row[1], user_uid, source)
@@ -663,9 +668,11 @@ def _revoke_cash_approve_if_paired(conn, company_id, user_id, role, user_uid, so
         return False
     if not cash_self_approval_conflict(role, granted_capability_codes(conn, user_id)):
         return False
+    # D13: the write is company-scoped too (user_id must be a user OF this company).
     conn.execute(
-        "UPDATE user_permissions SET access_level=? WHERE user_id=? AND subsystem=?",
-        (ACCESS_NONE, user_id, CAP_CASH_APPROVE),
+        "UPDATE user_permissions SET access_level=? WHERE subsystem=? AND user_id=? "
+        "AND user_id IN (SELECT id FROM users WHERE id=? AND company_id=?)",
+        (ACCESS_NONE, CAP_CASH_APPROVE, user_id, user_id, company_id),
     )
     try:
         conn.execute(
@@ -717,7 +724,8 @@ def sanitize_synced_user_fields(payload):
     COPY; never raises (raising would drop the whole event, and a name is not
     worth losing a password change over).
 
-      display_name -- Cc/Cf stripped except U+200C/U+200D, each line break
+      display_name -- Cc/Cf stripped except U+200C/U+200D and the directional
+        marks U+200E/U+200F/U+061C (text_safety), each line break
         turned into a space, NFC, trimmed, cut to DISPLAY_NAME_MAX; empty or
         non-text becomes None ("clear it", the key is still PRESENT).
       role_preset  -- must be a key of ROLE_PRESETS. Anything else (an unknown

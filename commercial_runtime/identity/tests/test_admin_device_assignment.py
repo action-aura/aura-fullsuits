@@ -282,7 +282,13 @@ def test_label_bumps_version_and_emits_but_does_not_touch_last_seen(conn):
     before = device_registry.get_device(conn, "d1")
     row = set_device_label_synced(conn, CO, "d1", "Front till")
     assert row["device_label"] == "Front till"
-    assert row["row_version"] == before["row_version"] + 1
+    # CHANGED ON PURPOSE (item 12, 2026-09-30): the label is the OWNER's
+    # decision, so it now versions on `admin_row_version`; `row_version` (the
+    # device's own facts) must NOT move, otherwise a restarting computer could
+    # outrun the rename. What this can no longer catch: a label edit that
+    # bumps the shared row_version -- that is now the asserted-against bug.
+    assert row["admin_row_version"] == before["admin_row_version"] + 1
+    assert row["row_version"] == before["row_version"]
     assert row["last_seen_at"] == before["last_seen_at"]
     assert [e[0] for e in _events(conn, "device")] == ["update"]
 
@@ -302,6 +308,7 @@ def test_revoke_marks_revoked_emits_once_and_is_idempotent(conn):
     assert row["status"] == "revoked"
     again = revoke_device_synced(conn, CO, "d2")
     assert again["row_version"] == row["row_version"]
+    assert again["admin_row_version"] == row["admin_row_version"]
     assert len(_events(conn, "device")) == 1
 
 
@@ -356,11 +363,23 @@ def test_arm_b_allow_and_deny_directions_fail_closed(conn):
     conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'ADMIN_CREATED')", (CO,))
     conn.commit()
     assert is_joined_device(conn, CO, "me") is False
-    # The seeder's positive marker beats a founding row: this install was
-    # seeded as a joiner, so it is joined.
+    # REWRITTEN ON PURPOSE (second fix round, D9, 2026-09-30). This step used
+    # to assert "the seeder's JOINED mark BEATS a founding row" -- an
+    # unconditional precedence. That precedence was the bug: a device that
+    # joined a shop and whose owner later chose "Set up a new shop instead"
+    # (create-admin writes ADMIN_CREATED after the JOINED mark) stayed
+    # "joined" for ever and could never claim the main role. The rule is now
+    # "the LATEST mark, by audit row order, decides". WHAT THIS STEP CAN NO
+    # LONGER CATCH: a regression that makes JOINED unconditionally win again.
+    # That is now caught by the dedicated D9 tests in test_fix_round_devices.py
+    # (out-of-order ids, three marks) and the real-route test in
+    # test_device_takeover.py; here we pin only the two plain orders.
     conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'JOINED_DEVICE_SEEDED')", (CO,))
     conn.commit()
-    assert is_joined_device(conn, CO, "me") is True
+    assert is_joined_device(conn, CO, "me") is True        # joined AFTER founding: joined
+    conn.execute("INSERT INTO audit_logs (company_id, action) VALUES (?, 'ADMIN_CREATED')", (CO,))
+    conn.commit()
+    assert is_joined_device(conn, CO, "me") is False       # founded AFTER joining: a founder
 
 
 def test_missing_audit_table_reads_as_joined(conn):

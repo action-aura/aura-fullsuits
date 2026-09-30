@@ -537,6 +537,7 @@ def _refuse_while_split_state():
         # `_sync_service is None` check), and the site relay has its own
         # double-start guard; and this branch runs once per refusal, since
         # the next request short-circuits on `reason is None` above.
+        _announce_device('changed')   # the deferred form of the same announce
         _start_sync_after_activation()
         return None
 
@@ -599,6 +600,14 @@ def _on_licence_activated():
         _enter_split_state_refusal(reason)
     else:
         _clear_split_state_refusal()
+        # Activation is one of the two moments a company comes into being on
+        # this install (the other is signup -- create_admin). A JOINING
+        # computer activates with the shop's key before any admin exists here,
+        # so nothing else would announce it: the boot announce ran before
+        # there was a company, and there is no SyncService heartbeat yet. Do
+        # it BEFORE sync starts so the event rides the very first push.
+        # `_announce_device` never raises.
+        _announce_device('changed')
         _start_sync_after_activation()
 
 
@@ -2481,6 +2490,20 @@ def _announce_device(reason):
         logging.getLogger(__name__).warning(
             'Device announce (%s) failed; this till keeps running.', reason,
             exc_info=True)
+
+
+def _announce_when_company_established(company_id=None):
+    """The identity layer's `company_established` hook (signup): announce THIS
+    computer the moment a company exists, not at the next restart. See
+    device_context.notify_company_established."""
+    _announce_device('changed')
+
+
+# Registered at import time, like the other identity seams: the hook must exist
+# before the first signup request, and init_app() may run more than once in a
+# test process (re-registering the same function is harmless).
+from commercial_runtime.identity import device_context as _identity_device_context  # noqa: E402
+_identity_device_context.set_company_established_hook(_announce_when_company_established)
 
 
 def _announce_boot_device():

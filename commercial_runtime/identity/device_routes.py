@@ -321,6 +321,11 @@ def my_device_route():
     #   branch_name -- this device's branch for THIS company, via the
     #                  product-registered resolver (see top of file).
     serialized = _serialize_device(device)
+    # L2 (fix round 2): /me used to hand the fingerprint and install id to ANY
+    # signed-in user; the list route already hid them from non-admins.
+    if not (session.get('mt_role') == 'admin' and not session.get('is_demo_mode')):
+        for hidden in NON_ADMIN_HIDDEN_DEVICE_FIELDS:
+            serialized.pop(hidden, None)
     label = serialized.get('device_label')
     serialized['device_name'] = (label.strip() or None) if isinstance(label, str) else None
     serialized['branch_name'] = _resolve_branch_name(company_id)

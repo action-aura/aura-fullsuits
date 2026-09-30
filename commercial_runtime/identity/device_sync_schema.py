@@ -5,14 +5,27 @@ from the 2026-09-29 security review (the `takeover` column on the assignment
 row, and the device-local `takeover_lockout` table; both explained where they
 are created below):
 
-1. `devices` gains five columns so a peer can tell how current a device row is
+1. `devices` gains six columns so a peer can tell how current a device row is
    and which build it runs:
 
-       row_version             INTEGER NOT NULL DEFAULT 1   -- last-writer gate on the apply side
+       row_version             INTEGER NOT NULL DEFAULT 1   -- last-writer gate for what the DEVICE says about itself
+       admin_row_version       INTEGER NOT NULL DEFAULT 1   -- last-writer gate for what the OWNER decides (label, status)
        updated_at_utc          TEXT                          -- NULL until the device announces
        app_version             TEXT
        retail_schema_version   INTEGER
        registry_schema_version INTEGER
+
+   TWO COUNTERS, NOT ONE (fix round 2, item 12). Every start and heartbeat of a
+   computer used to bump the same `row_version` that the owner's rename,
+   revoke and reinstate bump, so a computer that restarted more often than the
+   owner acted silently outvoted the owner: the rename never reached it and a
+   removal was overwritten. The owner's fields (label, status) are now gated
+   by `admin_row_version`, which ONLY the owner's actions (and the one-time
+   fill of a blank label) move; the device's own facts (platform, app and
+   schema versions) stay under `row_version`; `last_seen_at` is merged with
+   MAX and is never versioned. Added inside this same v9 step, PRAGMA-guarded
+   and idempotent -- NO new registry schema version: v9 has not shipped, and a
+   v8 peer skips `device` events entirely, so no mixed build reads it.
 
    The three build-version columns are what the rollout rule reads: preset
    cards and role edits stay disabled while ANY active device reports a
@@ -53,6 +66,7 @@ import sqlite3
 
 _DEVICE_COLUMNS = (
     ("row_version", "INTEGER NOT NULL DEFAULT 1"),
+    ("admin_row_version", "INTEGER NOT NULL DEFAULT 1"),
     ("updated_at_utc", "TEXT"),
     ("app_version", "TEXT"),
     ("retail_schema_version", "INTEGER"),

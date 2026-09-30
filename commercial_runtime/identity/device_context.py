@@ -493,6 +493,45 @@ def detect_platform() -> str:
     return "LINUX"
 
 
+# A company comes into being on this install at signup (create_admin) or at
+# activation. The process-start announce ran BEFORE that, found no company and
+# did nothing, and a till with no SyncService has no heartbeat -- so a fresh
+# install stayed un-announced (NULL platform / app version / registry version,
+# which `registry_rollout_blockers` reads as "old build", so role editing was
+# refused) until the backend restarted. The app registers ONE hook here that
+# announces this device; the identity routes only say "a company now exists".
+# A hook and not an import: identity/* must not import the product's app.py.
+_company_established_hook = None
+
+
+def set_company_established_hook(fn):
+    """Register the callable run when a company comes into being on this
+    install (None clears it). Returns the PREVIOUS hook so a test can restore it."""
+    global _company_established_hook
+    previous = _company_established_hook
+    _company_established_hook = fn
+    return previous
+
+
+def notify_company_established(company_id: str = None) -> bool:
+    """Run the registered hook. NEVER RAISES: it is called after the account
+    and session are already committed, and a failed announce must not turn a
+    successful signup into an error (the 6-hour heartbeat and the next boot
+    both retry). Returns True when a hook ran without error."""
+    hook = _company_established_hook
+    if hook is None:
+        return False
+    try:
+        hook(company_id)
+        return True
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            'company-established announce failed; the next boot or heartbeat retries.',
+            exc_info=True)
+        return False
+
+
 def announce_local_device(conn, company_id: str, *, device_label: str = None,
                           platform: str = None, app_version: str = None,
                           retail_schema_version: int = None,

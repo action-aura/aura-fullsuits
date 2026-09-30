@@ -210,6 +210,50 @@ def test_h3_an_unknown_or_empty_uid_never_reaches_a_legacy_row_without_a_uid(
     assert _audit(db_path, 'CASH_PAIR_REVOKED_ON_RECEIPT') == []
 
 
+def test_d13_a_receipt_for_another_companys_uid_changes_nothing_and_is_scoped(admin, db_path, conn):
+    """Mutant: the company_id filter dropped from the uid lookup, or from the
+    UPDATE in _revoke_cash_approve_if_paired. uids are unique per install today,
+    but the rule runs on RECEIVED events and must never revoke a user of
+    another company whatever uid the event names. ALLOW half: the same uid
+    under the OWNING company is repaired."""
+    uid = _breached_manager(admin, db_path)
+    user_uid = _uid(db_path, uid)
+    company = _company(db_path)
+    outbox_before = _outbox_count(db_path)
+    assert ua.enforce_cash_pair_after_apply(conn, 'OTHER-CO', user_uid) is False
+    conn.commit()
+    assert _caps(db_path, uid)[APPROVE] == 'full'
+    assert _audit(db_path, 'CASH_PAIR_REVOKED_ON_RECEIPT') == []
+    assert ua.enforce_cash_pair_after_apply(conn, company, user_uid) is True
+    conn.commit()
+    assert _caps(db_path, uid)[APPROVE] == 'none'
+    assert _outbox_count(db_path) == outbox_before
+
+
+def test_d13_the_write_itself_is_scoped_to_the_company_even_when_the_lookup_is_bypassed(
+        admin, db_path, conn):
+    """Mutation-found gap: the test above only reaches the UPDATE through the
+    company-scoped uid lookup, so removing the company filter from the UPDATE
+    alone stayed green (the lookup already refused). The UPDATE is the second
+    lock, and the boot sweep reaches `_revoke_cash_approve_if_paired` by LOCAL
+    user id, with no uid lookup in front of it. Call it directly with a user
+    who belongs to the real company but a company_id that is not theirs: the
+    permission row must not move. ALLOW half: the true company narrows it."""
+    uid = _breached_manager(admin, db_path)
+    user_uid = _uid(db_path, uid)
+    company = _company(db_path)
+    role = _rows(db_path, "SELECT role FROM users WHERE id=?", (uid,))[0]['role']
+
+    ua._revoke_cash_approve_if_paired(conn, 'OTHER-CO', uid, role, user_uid, 'test')
+    conn.commit()
+    assert _caps(db_path, uid)[APPROVE] == 'full', (
+        'the cash.approve grant of a user in company A was narrowed by a call scoped to company B')
+
+    ua._revoke_cash_approve_if_paired(conn, company, uid, role, user_uid, 'test')
+    conn.commit()
+    assert _caps(db_path, uid)[APPROVE] == 'none'
+
+
 def test_h3_running_the_rule_twice_is_a_no_op_the_second_time(admin, db_path, conn):
     uid = _breached_manager(admin, db_path)
     company, user_uid = _company(db_path), _uid(db_path, uid)
@@ -402,6 +446,32 @@ def test_l3_allow_half_arabic_joiners_and_arabic_names_survive():
     assert ua.normalize_display_name(arabic) == arabic
 
 
+@pytest.mark.parametrize("raw", [
+    "Ahmad\u200f (أحمد)",     # U+200F RLM between Latin and Arabic
+    "رقم\u061c 5",           # U+061C ALM before a digit
+    "\u200fكاشير 1",              # leading RLM
+    "Sam\u200e (سام)",       # U+200E LRM
+])
+def test_d12_directional_marks_survive_in_mixed_arabic_latin_names(raw):
+    """Mutant: RLM/LRM/ALM dropped from _KEPT_FORMAT_CHARS. These are the marks
+    a bilingual name NEEDS to display in order; stripping them (as the first L3
+    pass did) scrambled 'Ahmad (أحمد)' style names."""
+    assert ua.normalize_display_name(raw) == raw
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("Sam\u202e", "Sam"),                  # U+202E override
+    ("\u202aSam\u202c", "Sam"),            # U+202A / U+202C embedding
+    ("\u2067Sam\u2069", "Sam"),            # isolates
+    ("S\u200bam", "Sam"),                  # U+200B zero-width space
+    ("Sam\u200f\u202e", "Sam\u200f"),           # a kept RLM does not shelter an override
+])
+def test_d12_overrides_embeddings_isolates_are_still_stripped(raw, expected):
+    """The ALLOW-half's partner: widening the kept set to the three marks must
+    not have widened it to the rest of Cc/Cf."""
+    assert ua.normalize_display_name(raw) == expected
+
+
 def test_l3_only_invisible_characters_means_no_name():
     assert ua.normalize_display_name("​‮") is None
 
@@ -546,6 +616,36 @@ def test_item16_create_other_presets_ignore_a_missing_scope(admin, db_path):
     assert r.status_code == 200, r.get_json()
 
 
+def test_scope_route_refuses_to_clear_a_standing_branch_managers_scope(admin, db_path):
+    """Mutant: the BRANCH_SCOPE_REQUIRED check in update_branch_scope removed.
+    Clearing a branch manager's scope silently widens them to EVERY branch --
+    the exact thing create and the preset route refuse. Every clearing shape
+    (missing key, null, '', blanks) is refused and the stored scope survives;
+    ALLOW halves: moving the scope to another branch works, and clearing the
+    scope of a NON-branch-manager still works."""
+    r, email = _create(admin, preset='branch_manager', branch_scope_uid='branch-uid-1')
+    assert r.status_code == 200, r.get_json()
+    uid = _id_for(admin, email)
+    marker = _rows(db_path, "SELECT COALESCE(MAX(rowid),0) AS m FROM sync_outbox")[0]['m']
+    for body in ({}, {'branch_scope_uid': None}, {'branch_scope_uid': ''}, {'branch_scope_uid': '   '}):
+        r = admin.put(f'/api/admin/employees/{uid}/branch-scope', json=body)
+        assert r.status_code == 400, (body, r.get_json())
+        assert r.get_json()['code'] == 'BRANCH_SCOPE_REQUIRED'
+        assert r.get_json()['error'] == onboarding_routes.BRANCH_SCOPE_REQUIRED_MESSAGE
+    assert _rows(db_path, "SELECT branch_scope_uid FROM users WHERE id=?", (uid,))[0]['branch_scope_uid'] == 'branch-uid-1'
+    assert _rows(db_path, "SELECT COUNT(*) AS n FROM sync_outbox WHERE rowid>?", (marker,))[0]['n'] == 0
+    # allow half 1: re-pointing the manager at another branch is fine.
+    r = admin.put(f'/api/admin/employees/{uid}/branch-scope', json={'branch_scope_uid': 'branch-uid-2'})
+    assert r.status_code == 200, r.get_json()
+    assert _rows(db_path, "SELECT branch_scope_uid FROM users WHERE id=?", (uid,))[0]['branch_scope_uid'] == 'branch-uid-2'
+    # allow half 2: a plain manager with a scope can still have it cleared.
+    plain = _make(admin, role='manager')
+    admin.put(f'/api/admin/employees/{plain}/branch-scope', json={'branch_scope_uid': 'branch-uid-3'})
+    r = admin.put(f'/api/admin/employees/{plain}/branch-scope', json={'branch_scope_uid': None})
+    assert r.status_code == 200, r.get_json()
+    assert _rows(db_path, "SELECT branch_scope_uid FROM users WHERE id=?", (plain,))[0]['branch_scope_uid'] is None
+
+
 # ── M15: the preset route is tenant-scoped ───────────────────────────────────
 
 def test_m15_preset_for_another_companys_user_is_not_found_and_changes_nothing(admin, db_path):
@@ -680,14 +780,26 @@ def _two_computers_cross_grants(tmp_path, monkeypatch):
     pa, ga = _build(tmp_path, "A")
     pb, gb = _build(tmp_path, "B")
     ab, ba = [], []
+    # Fix round 2 (D13): enforce_cash_pair_after_apply is now scoped to the
+    # company it is handed, so the engine must be handed the company the users
+    # REALLY belong to. This fixture used to feed a made-up CO ("shop-co-1")
+    # while create-admin minted its own company id; the old unscoped lookup
+    # never noticed. `real_co` is filled in once create-admin has run and is
+    # what the engine's provider reports from then on -- what a real till does.
+    real_co = {'v': CO}
     sa = SyncService(client_factory=lambda: _Pipe(ab, ba), get_conn=ga,
-                     local_company_id_provider=lambda: CO, handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+                     local_company_id_provider=lambda: real_co['v'],
+                     handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
     sb = SyncService(client_factory=lambda: _Pipe(ba, ab), get_conn=gb,
-                     local_company_id_provider=lambda: CO, handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+                     local_company_id_provider=lambda: real_co['v'],
+                     handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
 
     ca = _flask(monkeypatch, pa, ga, tmp_path, "A").test_client()
     assert ca.post('/api/onboarding/create-admin', json={
         'name': 'Owner', 'email': 'owner@shop.co', 'password': 'OwnerPW11'}).status_code == 200
+    _c = ga()
+    real_co['v'] = _c.execute("SELECT company_id FROM users WHERE email='owner@shop.co'").fetchone()[0]
+    _c.close()
     assert ca.post('/api/admin/employees', json={'email': 'x@shop.co', 'role': 'manager'}).status_code == 200
     _, xa = _held(ga, 'x@shop.co')
     assert ca.post(f'/api/admin/employees/{xa}/permissions',
@@ -705,7 +817,7 @@ def _two_computers_cross_grants(tmp_path, monkeypatch):
     c.close()
     _, xb = _held(gb, 'x@shop.co')
     with cb.session_transaction() as s:
-        s.update({'mt_user_id': owner_b, 'mt_role': 'admin', 'company_id': CO,
+        s.update({'mt_user_id': owner_b, 'mt_role': 'admin', 'company_id': real_co['v'],
                   'mt_session_version': 999, 'email': 'owner@shop.co'})
     assert cb.post(f'/api/admin/employees/{xb}/permissions',
                    json={'subsystem': CLOSE, 'access_level': 'full'}).status_code == 200

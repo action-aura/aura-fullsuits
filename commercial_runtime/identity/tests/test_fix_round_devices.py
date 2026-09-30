@@ -33,6 +33,10 @@ from commercial_runtime.identity import (
     mt_auth,
 )
 from commercial_runtime.identity.device_registry import (
+    ASSIGNMENT_RECEIPT_FUTURE_SECONDS,
+    DEVICE_STATUSES,
+    MAX_ADMIN_EPOCH,
+    MAX_ROW_VERSION_JUMP,
     admin_assignment_wins,
     announce_admin_assignment,
     apply_admin_assignment,
@@ -119,21 +123,26 @@ def _a(device_id, epoch, at=GOOD_AT, **extra):
 
 # ── H1: what an assignment payload may say ───────────────────────────────────
 
-@pytest.mark.parametrize("epoch", [2 ** 63 - 1, 10 ** 20, 2 ** 31 + 1, 0, -1, True, "5", 2.0, None])
-def test_h1_an_epoch_outside_1_to_2_31_or_not_an_int_is_refused(conn, epoch):
-    """P1/P1b. A forged epoch of 2**63-1 froze every later hand-over (the next
-    epoch overflowed), and a bool/str/float slipped through int(). Nothing may
-    be stored by a refused payload."""
+@pytest.mark.parametrize("epoch", [2 ** 63 - 1, 10 ** 20, 2 ** 31 + 1, 2 ** 31, 0, -1, True, "5", 2.0, None])
+def test_h1_an_epoch_outside_1_to_2_31_minus_1_or_not_an_int_is_refused(conn, epoch):
+    """P1/P1b + D1 (fix round 2). A forged epoch of 2**63-1 froze every later
+    hand-over (the next epoch overflowed), and a bool/str/float slipped through
+    int(). D1: the ceiling was INCLUSIVE at 2**31, so an epoch a peer stored
+    could not be followed (the next hand-over is 2**31 + 1, which no peer
+    accepts). Valid epochs are now 1 .. MAX_ADMIN_EPOCH = 2**31 - 1, and 2**31
+    is refused. Nothing may be stored by a refused payload."""
     with pytest.raises(ValueError):
         apply_admin_assignment(conn, CO, _a("till2", epoch), now=NOW)
     assert get_assignment(conn, CO) is None
 
 
 def test_h1_the_epoch_ceiling_itself_and_a_plain_first_epoch_are_accepted(conn):
-    """ALLOW half of the bound: 2**31 is the last legal value, 1 the first."""
+    """ALLOW half of the bound: MAX_ADMIN_EPOCH (2**31 - 1) is the last legal
+    value, 1 the first. (This used to say 2**31; that was the D1 defect.)"""
+    assert MAX_ADMIN_EPOCH == 2 ** 31 - 1
     assert apply_admin_assignment(conn, CO, _a("till2", 1), now=NOW) is True
-    assert apply_admin_assignment(conn, CO, _a("till2", 2 ** 31, "2026-09-02T00:00:00+00:00"), now=NOW) is True
-    assert get_assignment(conn, CO)["epoch"] == 2 ** 31
+    assert apply_admin_assignment(conn, CO, _a("till2", MAX_ADMIN_EPOCH, "2026-09-02T00:00:00+00:00"), now=NOW) is True
+    assert get_assignment(conn, CO)["epoch"] == MAX_ADMIN_EPOCH
 
 
 def test_h1_a_refused_forgery_leaves_the_next_honest_handover_working(conn):
@@ -151,19 +160,31 @@ def test_h1_a_refused_forgery_leaves_the_next_honest_handover_working(conn):
 
 @pytest.mark.parametrize("bad_at", [
     "x", "", "0001-01-01T00:00:00+00:00", "2023-12-31T23:59:59+00:00",
-    "2026-09-29T12:11:00+00:00",   # 11 minutes ahead of NOW
+    "2026-10-01T12:00:01+00:00",   # 48h + 1s ahead of NOW (D8: receipt tolerance is 48h)
+    "2027-09-29T12:00:00+00:00",   # a year ahead
 ])
 def test_h1_assigned_at_must_parse_be_recent_and_not_in_the_future(conn, bad_at):
     """P3 + the far-future variant: a timestamp of year 1 wins every epoch tie
     forever and a far-future one freezes the takeover clock. Bounded to
-    [2024-01-01, now + 10 minutes]."""
+    [2024-01-01, now + 48 hours] (D8: was 10 minutes, which refused an honest
+    computer whose clock ran a few hours fast and left the shop with no main)."""
     with pytest.raises(ValueError):
         apply_admin_assignment(conn, CO, _a("till2", 1, bad_at), now=NOW)
     assert get_assignment(conn, CO) is None
 
 
-def test_h1_assigned_at_inside_the_window_is_accepted(conn):
-    assert apply_admin_assignment(conn, CO, _a("till2", 1, "2026-09-29T12:05:00+00:00"), now=NOW) is True
+@pytest.mark.parametrize("at", [
+    "2026-09-29T12:05:00+00:00",   # 5 minutes ahead
+    "2026-09-29T12:11:00+00:00",   # 11 minutes ahead: refused before D8
+    "2026-09-30T12:00:00+00:00",   # one day ahead: an honest fast clock
+    "2026-10-01T11:59:59+00:00",   # 1s inside the 48h edge
+])
+def test_h1_assigned_at_inside_the_window_is_accepted(conn, at):
+    """D8. The ALLOW half of the future bound. We never CLAMP the stamp, only
+    accept or refuse it. The takeover's own clock guard (FUTURE_SKEW_SECONDS,
+    10 minutes) is deliberately unchanged: it guards the LOCAL clock, and this
+    tolerance is only about a peer's stamp on receipt."""
+    assert apply_admin_assignment(conn, CO, _a("till2", 1, at), now=NOW) is True
 
 
 def test_h1_a_forged_year_one_epoch_one_cannot_win_the_tie(conn):
@@ -300,18 +321,27 @@ def test_h2b_timestamps_from_a_peer_are_clamped_to_now_plus_ten_minutes(conn):
 def test_h2c_a_peer_cannot_set_a_hostile_label_or_platform(conn):
     """P6. Bidi override characters are stripped, a 5000-character name and a
     platform that is not a token are refused whole (not truncated into
-    something that looks intended)."""
+    something that looks intended).
+
+    Item 12 (deliberate change): the label is an OWNER decision, so it rides
+    `admin_row_version`; these events used to carry it under `row_version`,
+    which now (correctly) leaves the label alone. The sanitiser is exercised
+    exactly as before, through the counter that actually applies a label."""
     _shop(conn)
-    apply_device_event(conn, CO, _dev_event("till2", device_label="Front‮desk", row_version=3),
-                       now=NOW)
+    apply_device_event(conn, CO, _dev_event("till2", device_label="Front‮desk",
+                                            row_version=1, admin_row_version=3), now=NOW)
     assert get_device(conn, "till2")["device_label"] == "Frontdesk"
     with pytest.raises(ValueError):
-        apply_device_event(conn, CO, _dev_event("till2", device_label="A" * 5000, row_version=4), now=NOW)
+        apply_device_event(conn, CO, _dev_event("till2", device_label="A" * 5000,
+                                                row_version=1, admin_row_version=4), now=NOW)
     with pytest.raises(ValueError):
         apply_device_event(conn, CO, _dev_event("till2", platform="x y<script>", row_version=4), now=NOW)
     with pytest.raises(ValueError):
         apply_device_event(conn, CO, _dev_event("till2", row_version=True), now=NOW)
-    assert get_device(conn, "till2")["row_version"] == 3
+    with pytest.raises(ValueError):
+        apply_device_event(conn, CO, _dev_event("till2", admin_row_version=True), now=NOW)
+    assert get_device(conn, "till2")["admin_row_version"] == 3
+    assert get_device(conn, "till2")["device_label"] == "Frontdesk"
 
 
 def test_h2d_revoked_stays_revoked_unless_the_known_main_reinstates(conn):
@@ -321,17 +351,22 @@ def test_h2d_revoked_stays_revoked_unless_the_known_main_reinstates(conn):
     allowance."""
     _shop(conn)
     revoke_device_synced(conn, CO, "till2")
-    v = get_device(conn, "till2")["row_version"]
-    apply_device_event(conn, CO, _dev_event("till2", row_version=v + 50), now=NOW)
+    # Item 12: a revoke moves the OWNER counter, so that is the one to beat.
+    v = get_device(conn, "till2")["admin_row_version"]
+    apply_device_event(conn, CO, _dev_event("till2", admin_row_version=v + 50), now=NOW)
     assert get_device(conn, "till2")["status"] == "revoked"
-    apply_device_event(conn, CO, _dev_event("till2", row_version=v + 51,
+    apply_device_event(conn, CO, _dev_event("till2", admin_row_version=v + 51,
                                             reinstated_by_device_id="phone"), now=NOW)
     assert get_device(conn, "till2")["status"] == "revoked"
     # same version as the revoke, even from the real main: not strictly newer.
-    apply_device_event(conn, CO, _dev_event("till2", row_version=v,
+    apply_device_event(conn, CO, _dev_event("till2", admin_row_version=v,
                                             reinstated_by_device_id="main"), now=NOW)
     assert get_device(conn, "till2")["status"] == "revoked"
-    apply_device_event(conn, CO, _dev_event("till2", row_version=v + 52,
+    # a newer DEVICE counter alone never reinstates, whoever it names.
+    apply_device_event(conn, CO, _dev_event("till2", row_version=v + 60, admin_row_version=v,
+                                            reinstated_by_device_id="main"), now=NOW)
+    assert get_device(conn, "till2")["status"] == "revoked"
+    apply_device_event(conn, CO, _dev_event("till2", admin_row_version=v + 52,
                                             reinstated_by_device_id="main"), now=NOW)
     assert get_device(conn, "till2")["status"] == "active"
 
@@ -339,8 +374,8 @@ def test_h2d_revoked_stays_revoked_unless_the_known_main_reinstates(conn):
 def test_h2d_a_receiver_that_knows_no_main_never_honours_a_reinstatement(conn):
     upsert_local_device(conn, "till2", CO, platform="WINDOWS")
     revoke_device_synced(conn, CO, "till2")
-    v = get_device(conn, "till2")["row_version"]
-    apply_device_event(conn, CO, _dev_event("till2", row_version=v + 1,
+    v = get_device(conn, "till2")["admin_row_version"]
+    apply_device_event(conn, CO, _dev_event("till2", admin_row_version=v + 1,
                                             reinstated_by_device_id="main"), now=NOW)
     assert get_device(conn, "till2")["status"] == "revoked"
 
@@ -591,7 +626,8 @@ def test_item_13_an_ordinary_install_that_already_has_an_admin_is_not_marked_joi
 
 def test_item_13_is_joined_device_fails_closed_and_reads_both_marks(conn):
     """No mark either way -> joined (fail closed). Founding mark -> not joined.
-    A JOINED mark beats a founding mark. An assignment naming this device
+    The LATEST mark wins (D9; here the joined mark is inserted after the
+    founding one, so it wins -- the reverse order is test_d9_*). An assignment naming this device
     overrides everything (the holder re-claiming is not a bootstrap)."""
     upsert_local_device(conn, "me", CO, platform="WINDOWS")
     assert is_joined_device(conn, CO, "me") is True
@@ -702,6 +738,31 @@ def test_l2_only_an_admin_session_sees_the_fingerprint_and_install_id(client, co
     assert "device_fingerprint" not in next(d for d in demo_view if d["id"] == "till2")
 
 
+def test_l2_me_hides_the_fingerprint_and_install_id_from_non_admins(client, conn):
+    """Mutant: the strip in my_device_route removed. /me used to hand the
+    fingerprint and the Owner install id to ANY signed-in user (a cashier);
+    the list route already hid them. The admin session must still see both
+    (ALLOW half), a cashier and a demo-mode admin must not; the route still
+    answers and still names the device (the fix must not empty the envelope)."""
+    did = device_context.local_device_uuid()
+    upsert_local_device(conn, did, CO, platform="WINDOWS",
+                        device_fingerprint="fp-secret", owner_installation_id="inst-secret")
+    device_context._cached_device = None
+    admin = client.get("/api/devices/me").get_json()["device"]
+    assert admin["device_fingerprint"] == "fp-secret"
+    assert admin["owner_installation_id"] == "inst-secret"
+    for role, demo in (("cashier", False), ("admin", True)):
+        with client.session_transaction() as s:
+            s["mt_role"] = role
+            s["is_demo_mode"] = demo
+        r = client.get("/api/devices/me")
+        assert r.status_code == 200, r.get_json()
+        seen = r.get_json()["device"]
+        for hidden in device_routes.NON_ADMIN_HIDDEN_DEVICE_FIELDS:
+            assert hidden not in seen, (role, demo, hidden)
+        assert seen["id"] == did and "device_name" in seen and "branch_name" in seen
+
+
 def test_h2d_reinstate_route_main_only_revoked_only_and_it_emits_the_marker(client, conn):
     did = _make_this_main(client, conn)
     upsert_local_device(conn, "till2", CO, platform="WINDOWS")
@@ -754,14 +815,14 @@ def test_the_claim_route_names_the_holder_before_it_says_you_joined(client, conn
 def test_h1_at_the_ceiling_the_next_handover_is_refused_not_written(conn):
     """Mutant: `_next_epoch`'s bound replaced by `if False`. The ceiling itself
     is a legal stored epoch (ALLOW half tested above), so the handover AFTER it
-    must be refused with the 'exhausted' ValueError -- writing 2**31 + 1 would
+    must be refused with the 'exhausted' ValueError -- writing MAX_ADMIN_EPOCH + 1 would
     store a value no peer's apply accepts, forking the shop's main."""
     _shop(conn)
-    assert apply_admin_assignment(conn, CO, _a("till2", 2 ** 31, "2026-09-02T00:00:00+00:00"), now=NOW) is True
+    assert apply_admin_assignment(conn, CO, _a("till2", MAX_ADMIN_EPOCH, "2026-09-02T00:00:00+00:00"), now=NOW) is True
     _clear_outbox(conn)
     with pytest.raises(ValueError, match="exhausted"):
         transfer_admin_device_with_assignment(conn, CO, "main", by_user_uid="owner-uid")
-    assert get_assignment(conn, CO)["epoch"] == 2 ** 31
+    assert get_assignment(conn, CO)["epoch"] == MAX_ADMIN_EPOCH
     assert get_assignment(conn, CO)["device_id"] == "till2"
     assert _events(conn, "admin_device") == []
 
@@ -842,3 +903,406 @@ def test_item_13_an_assignment_naming_another_computer_beats_a_founding_mark(con
     apply_admin_assignment(conn, CO, _a("boss", 1), now=NOW)
     assert is_joined_device(conn, CO, "me") is True           # the shop already has a main, and it is not me
     assert is_joined_device(conn, CO, "boss") is False        # ...whereas the holder itself is not joined
+
+
+# ── Second fix round (crew R2, 2026-09-30): D1-D13 + item 12 ────────────────
+# Every test below was RED against commit 99b9aa95 (or was written first and
+# watched fail) and is GREEN now. The mutant each one is tied to is named in
+# the docstring; the mutation logs are in the hand-back.
+
+# D3 ─ an ANDROID row never becomes main, whatever order the events arrive in.
+
+def test_d3_an_assignment_that_arrived_before_an_android_row_never_flags_it(conn):
+    """Mutant: the platform filter in recompute_admin_flag removed. The
+    assignment is stored while the device is still unknown (ordering is not
+    guaranteed); the row then lands as ANDROID. It used to be flagged main the
+    moment it arrived. The assignment row stays -- it is the shop's recorded
+    fact -- but the flag must not land on a phone."""
+    assert apply_admin_assignment(conn, CO, _a("late-phone", 1), now=NOW) is True
+    apply_device_event(conn, CO, _dev_event("late-phone", platform="ANDROID", row_version=1), now=NOW)
+    assert get_device(conn, "late-phone")["platform"] == "ANDROID"
+    assert _flagged(conn) == []
+    assert get_assignment(conn, CO)["device_id"] == "late-phone"
+
+
+def test_d3_a_windows_or_unknown_platform_device_is_still_flagged(conn):
+    """ALLOW half of D3: the filter must not lock out the honest cases -- a
+    WINDOWS row, and a row whose platform is not known yet (NULL)."""
+    assert apply_admin_assignment(conn, CO, _a("late-win", 1), now=NOW) is True
+    apply_device_event(conn, CO, _dev_event("late-win", platform="WINDOWS", row_version=1), now=NOW)
+    assert _flagged(conn) == ["late-win"]
+    upsert_local_device(conn, "no-platform", CO)                 # platform NULL
+    assert apply_admin_assignment(conn, CO, _a("no-platform", 2, "2026-09-02T00:00:00+00:00"),
+                                  now=NOW) is True
+    assert get_device(conn, "no-platform")["platform"] is None
+    assert _flagged(conn) == ["no-platform"]
+
+
+# D4 ─ status is a whitelist, matched exactly.
+
+@pytest.mark.parametrize("status", [
+    "inactive", " revoked", "revoked\t", "disabled", "REVOKED\u200b", "Revoked", "ACTIVE", "", 0, True, ["revoked"],
+])
+def test_d4_a_status_that_is_not_exactly_active_or_revoked_is_refused(conn, status):
+    """Mutant: the whitelist check in _validated_device_payload removed. The old
+    guard only recognised the lower-cased word 'revoked', so every spelling
+    above slipped past cannot-revoke-main and was STORED. Refused whole, and the
+    row is untouched (no half-applied update)."""
+    _shop(conn)
+    before = dict(get_device(conn, "till2"))
+    with pytest.raises(ValueError, match="malformed device payload: status"):
+        apply_device_event(conn, CO, _dev_event("till2", status=status, row_version=5), now=NOW)
+    assert dict(get_device(conn, "till2")) == before
+
+
+def test_d4_the_two_real_statuses_and_an_absent_status_are_accepted(conn):
+    """ALLOW half of D4: the whitelist is exactly ('active', 'revoked') and an
+    event that says nothing about status changes nothing about it."""
+    assert DEVICE_STATUSES == ("active", "revoked")
+    _shop(conn)
+    apply_device_event(conn, CO, _dev_event("till2", status="revoked", row_version=3), now=NOW)
+    assert get_device(conn, "till2")["status"] == "revoked"
+    event = _dev_event("phone", row_version=3)
+    del event["status"]
+    apply_device_event(conn, CO, event, now=NOW)
+    assert get_device(conn, "phone")["status"] == "active"
+    apply_device_event(conn, CO, _dev_event("phone", status="active", row_version=4), now=NOW)
+    assert get_device(conn, "phone")["status"] == "active"
+
+
+def test_d4_no_received_event_moves_the_main_computer_off_active(conn):
+    """Mutant: the main-status guard in apply_device_event removed. With the
+    whitelist in place 'revoked' is the only way left to try, and the local
+    assignment names the main. A refused attempt leaves the flag and the
+    status alone; an 'active' event about the main is an ordinary update."""
+    _shop(conn)
+    for version in (2, 50):
+        with pytest.raises(ValueError, match=device_registry.REASON_CANNOT_REVOKE_MAIN):
+            apply_device_event(conn, CO, _dev_event("main", status="revoked", row_version=version,
+                                                    admin_row_version=version), now=NOW)
+    assert get_device(conn, "main")["status"] == "active"
+    assert _flagged(conn) == ["main"]
+    apply_device_event(conn, CO, _dev_event("main", status="active", row_version=3,
+                                            app_version="9.9"), now=NOW)
+    assert get_device(conn, "main")["app_version"] == "9.9"
+    assert _flagged(conn) == ["main"]
+
+
+# D5 ─ AUDIT-033: the reinstate event is forgeable; what is bounded today.
+
+def test_d5_reinstate_never_moves_main(conn):
+    """Mutant: a reinstate that also rewrote the assignment / the flag. D5 is a
+    KNOWN residual (AUDIT-033, next wave): `reinstated_by_device_id` is a public
+    string, so any peer that can put an event on the wire can un-revoke a
+    device. No pseudo-authentication is invented here. What is bounded, and
+    pinned by this test: the reinstate sets status 'active' and NOTHING ELSE. A
+    reinstated device cannot become main through it, whoever forged it."""
+    _shop(conn)
+    revoke_device_synced(conn, CO, "till2")
+    v = get_device(conn, "till2")["admin_row_version"]
+    assignment_before = dict(get_assignment(conn, CO))
+    apply_device_event(conn, CO, _dev_event("till2", admin_row_version=v + 1,
+                                            reinstated_by_device_id="main"), now=NOW)
+    assert get_device(conn, "till2")["status"] == "active"            # the door opened...
+    assert dict(get_assignment(conn, CO)) == assignment_before        # ...and only that
+    assert _flagged(conn) == ["main"]
+    assert get_device(conn, "till2")["is_admin_device"] == 0
+
+
+# D7 ─ a version may not leap, on either counter; the sender caps itself.
+
+@pytest.mark.parametrize("counter", ["row_version", "admin_row_version"])
+def test_d7_a_version_more_than_the_jump_cap_above_ours_is_refused(conn, counter):
+    """Mutant: the D7 jump check removed (or its counter loop narrowed to
+    row_version). A forged 2**31 version would pin the row so no honest edit
+    could ever be newer. Each counter is compared with its OWN local value;
+    exactly the cap above is still a legal (if large) edit."""
+    _shop(conn)
+    local = get_device(conn, "till2")[counter]
+    ok = {"row_version": 1, "admin_row_version": 1}
+    with pytest.raises(ValueError, match="jumps too far"):
+        apply_device_event(conn, CO, _dev_event(
+            "till2", **{**ok, counter: local + MAX_ROW_VERSION_JUMP + 1}), now=NOW)
+    assert get_device(conn, "till2")[counter] == local
+    apply_device_event(conn, CO, _dev_event(
+        "till2", **{**ok, counter: local + MAX_ROW_VERSION_JUMP}), now=NOW)
+    assert get_device(conn, "till2")[counter] == local + MAX_ROW_VERSION_JUMP
+
+
+def test_d7_a_new_row_has_no_baseline_so_a_high_version_is_stored(conn):
+    """Documents the stated residual: with no local row there is nothing to
+    compare with, so the first event for an unknown device is not jump-capped
+    (only the DEVICE_ROW_VERSION_MAX ceiling applies). Recorded, not fixed."""
+    apply_device_event(conn, CO, _dev_event("brand-new", row_version=5000, admin_row_version=7000), now=NOW)
+    assert get_device(conn, "brand-new")["row_version"] == 5000
+    assert get_device(conn, "brand-new")["admin_row_version"] == 7000
+
+
+@pytest.mark.parametrize("counter", ["row_version", "admin_row_version"])
+def test_d7_a_new_row_above_the_ceiling_is_refused_and_the_ceiling_itself_is_not(conn, counter):
+    """Mutant: the DEVICE_ROW_VERSION_MAX range check in the payload validator
+    loosened (or removed). A brand-new row has no jump baseline (test above),
+    so this ceiling is the ONLY thing between a forged 10**12 and a row no
+    honest edit could ever be newer than. Refusal must store NOTHING (no
+    half-made row); exactly the ceiling is legal, and so is the sender's own
+    cap (test below) -- deny half and allow half, each counter."""
+    top = device_registry.DEVICE_ROW_VERSION_MAX
+    other = "admin_row_version" if counter == "row_version" else "row_version"
+    with pytest.raises(ValueError, match="malformed device payload"):
+        apply_device_event(conn, CO, _dev_event(
+            "forged", **{other: 1, counter: top + 1}), now=NOW)
+    assert get_device(conn, "forged") is None
+    with pytest.raises(ValueError, match="malformed device payload"):
+        apply_device_event(conn, CO, _dev_event(
+            "zero", **{other: 1, counter: 0}), now=NOW)
+    assert get_device(conn, "zero") is None
+    apply_device_event(conn, CO, _dev_event(
+        "at-ceiling", **{other: 1, counter: top}), now=NOW)
+    assert get_device(conn, "at-ceiling")[counter] == top
+
+
+def test_d7_the_sender_stops_at_the_ceiling_a_receiver_accepts(conn):
+    """Mutant: the MIN(..., DEVICE_ROW_VERSION_MAX) cap removed from
+    _bump_device. A row a forgery pushed to the ceiling would otherwise emit
+    ceiling+1 on the next honest change, which every receiver refuses for good.
+    Both counters. ALLOW half: below the ceiling a bump is still +1."""
+    _shop(conn)
+    top = device_registry.DEVICE_ROW_VERSION_MAX
+    conn.execute("UPDATE devices SET row_version=?, admin_row_version=? WHERE id='till2'", (top, top))
+    conn.commit()
+    announce_row, _ = device_registry.announce_device_fields(conn, "till2", app_version="new-build")
+    assert announce_row["row_version"] == top
+    assert set_label(conn, "till2", "Renamed")["admin_row_version"] == top
+    conn.execute("UPDATE devices SET row_version=5, admin_row_version=5 WHERE id='till2'")
+    conn.commit()
+    announce_row, _ = device_registry.announce_device_fields(conn, "till2", app_version="newer-build")
+    assert announce_row["row_version"] == 6 and announce_row["admin_row_version"] == 5
+    assert set_label(conn, "till2", "Renamed again")["admin_row_version"] == 6
+
+
+def set_label(conn, device_id, label):
+    return device_registry.set_device_label_synced(conn, CO, device_id, label)
+
+
+# D9 ─ the LATEST of the two marks decides.
+
+def test_d9_the_latest_audit_row_decides_joined_or_founder(conn):
+    """Mutant: the ORDER BY rowid DESC dropped / flipped to ASC. A device that
+    joined (JOINED_DEVICE_SEEDED) and whose owner then chose 'Set up a new shop
+    instead' (create-admin writes ADMIN_CREATED) is a FOUNDER. Ordering is by
+    insertion (rowid), NOT by id or timestamp: the ids below are deliberately
+    out of alphabetical order so an id sort would answer the opposite way."""
+    upsert_local_device(conn, "me", CO, platform="WINDOWS")
+    conn.execute("INSERT INTO audit_logs (id, company_id, action) VALUES ('z', ?, 'JOINED_DEVICE_SEEDED')", (CO,))
+    conn.commit()
+    assert is_joined_device(conn, CO, "me") is True                  # joined, nothing later
+    conn.execute("INSERT INTO audit_logs (id, company_id, action) VALUES ('a', ?, 'ADMIN_CREATED')", (CO,))
+    conn.commit()
+    assert is_joined_device(conn, CO, "me") is False                 # then founded: a founder
+    conn.execute("INSERT INTO audit_logs (id, company_id, action) VALUES ('m', ?, 'JOINED_DEVICE_SEEDED')", (CO,))
+    conn.commit()
+    assert is_joined_device(conn, CO, "me") is True                  # then re-joined: joined again
+
+
+def test_d9_another_shops_audit_rows_do_not_decide(conn):
+    """The lookup is company-scoped: a founding mark under another company_id
+    must not turn a joined device into a founder."""
+    upsert_local_device(conn, "me", CO, platform="WINDOWS")
+    conn.execute("INSERT INTO audit_logs (id, company_id, action) VALUES ('1', 'other-shop', 'ADMIN_CREATED')")
+    conn.commit()
+    assert is_joined_device(conn, CO, "me") is True
+
+
+# Item 12 ─ two counters: the owner's changes and the device's own facts.
+
+def _pair_with_till2(tmp_path, label="Old"):
+    """Two registries that both know till2 (Windows) under the same label."""
+    owner = _new_registry(tmp_path / "owner.db")
+    peer = _new_registry(tmp_path / "peer.db")
+    for reg in (owner, peer):
+        upsert_local_device(reg, "till2", CO, platform="WINDOWS", device_label=label,
+                            owner_installation_id="inst-till2")
+    return owner, peer
+
+
+def test_item_12_an_owner_rename_survives_a_computer_that_restarts_more_often(tmp_path):
+    """Mutant (a): announce bumps the SHARED counter (`counters=` back to
+    row_version on a boot/heartbeat). The owner renames till2 once; till2's own
+    computer restarts three times. Before this fix its row_version outran the
+    rename and the rename was silently discarded everywhere. Now the restart
+    moves no version, so the rename wins on the restarting computer AND the
+    restarting computer's old label does not win on the owner's."""
+    owner, peer = _pair_with_till2(tmp_path)
+    try:
+        set_label(owner, "till2", "Front desk")
+        (_, from_owner), = _events(owner, "device")
+        for _ in range(3):
+            device_registry.announce_device_fields(peer, "till2", force=True,
+                                                   device_label="Old")
+        after_restarts = get_device(peer, "till2")
+        assert after_restarts["row_version"] == 1 and after_restarts["admin_row_version"] == 1
+        from_peer = _events(peer, "device")[-1][1]
+        apply_device_event(peer, CO, from_owner, now=NOW)
+        assert get_device(peer, "till2")["device_label"] == "Front desk"
+        apply_device_event(owner, CO, from_peer, now=NOW)
+        assert get_device(owner, "till2")["device_label"] == "Front desk"
+    finally:
+        owner.close()
+        peer.close()
+
+
+def test_item_12_an_owner_removal_survives_a_restarting_computer_too(tmp_path):
+    """Same shape for status: the owner revokes till2 on the owner's registry;
+    the revoked computer's own restarts (which still say 'active') cannot
+    outvote it, and its event cannot un-revoke the row."""
+    owner, peer = _pair_with_till2(tmp_path)
+    try:
+        upsert_local_device(owner, "main", CO, platform="WINDOWS")
+        claim_admin_device_with_assignment(owner, CO, "main", by_user_uid="owner-uid")
+        before = get_device(owner, "till2")
+        revoke_device_synced(owner, CO, "till2")
+        # Mutation-found gap: the revoke bumping the SHARED row_version instead of
+        # the owner counter stayed green here (the sticky-revoked rule alone kept
+        # the row revoked). The owner's decision belongs to the owner counter,
+        # and the event must carry it, or a restarting computer can outrun it.
+        after = get_device(owner, "till2")
+        assert after["admin_row_version"] == before["admin_row_version"] + 1
+        assert after["row_version"] == before["row_version"]
+        revoke_payload = _events(owner, "device")[-1][1]
+        assert revoke_payload["admin_row_version"] == before["admin_row_version"] + 1
+        assert revoke_payload["row_version"] == before["row_version"]
+        for _ in range(3):
+            device_registry.announce_device_fields(peer, "till2", force=True)
+        from_peer = _events(peer, "device")[-1][1]
+        assert from_peer["status"] == "active"
+        apply_device_event(owner, CO, from_peer, now=NOW)
+        assert get_device(owner, "till2")["status"] == "revoked"
+    finally:
+        owner.close()
+        peer.close()
+
+
+def test_item_12_a_boot_or_heartbeat_that_changes_nothing_moves_no_version(conn):
+    """Mutant: an unchanged force announce bumps row_version. It must still
+    queue ONE event (a peer that lost the row re-learns it; an old peer
+    updates) and move last_seen_at, but no counter."""
+    _shop(conn)
+    before = get_device(conn, "till2")
+    _clear_outbox(conn)
+    row, announced = device_registry.announce_device_fields(
+        conn, "till2", force=True, now="2026-09-29T13:00:00+00:00")
+    assert announced is True
+    assert row["row_version"] == before["row_version"]
+    assert row["admin_row_version"] == before["admin_row_version"]
+    assert row["last_seen_at"] == "2026-09-29T13:00:00+00:00"
+    (_, payload), = _events(conn, "device")
+    assert payload["row_version"] == before["row_version"]
+    assert payload["admin_row_version"] == before["admin_row_version"]
+    # a stale heartbeat (no force) behaves the same way.
+    _clear_outbox(conn)
+    row, announced = device_registry.announce_device_fields(
+        conn, "till2", now="2026-09-30T13:00:00+00:00")
+    assert announced is True and row["row_version"] == before["row_version"]
+
+
+def test_item_12_a_change_to_the_devices_own_facts_moves_only_row_version(conn):
+    """ALLOW half: a real change still versions the self group, and only it."""
+    _shop(conn)
+    before = get_device(conn, "till2")
+    row, announced = device_registry.announce_device_fields(conn, "till2", app_version="2.0")
+    assert announced is True
+    assert row["row_version"] == before["row_version"] + 1
+    assert row["admin_row_version"] == before["admin_row_version"]
+
+
+def test_item_12_an_announce_only_fills_a_blank_label_and_that_moves_the_owner_counter(conn):
+    """Mutant: the announce puts device_label back into the diff. A non-blank
+    label the owner set is never overwritten by a restart; a BLANK one is
+    filled (that fill is an owner-group change, so admin_row_version moves and
+    row_version does not)."""
+    upsert_local_device(conn, "till2", CO, platform="WINDOWS")
+    before = get_device(conn, "till2")
+    row, _ = device_registry.announce_device_fields(conn, "till2", device_label="Till 2")
+    assert row["device_label"] == "Till 2"
+    assert row["admin_row_version"] == before["admin_row_version"] + 1
+    assert row["row_version"] == before["row_version"]
+    row, _ = device_registry.announce_device_fields(conn, "till2", device_label="Something else", force=True)
+    assert row["device_label"] == "Till 2"
+    assert row["admin_row_version"] == before["admin_row_version"] + 1
+
+
+def test_item_12_a_self_announce_with_a_newer_row_version_leaves_label_and_status_alone(conn):
+    """Mutant (b): the label (or status) applied under row_version. An event
+    whose row_version is newer but whose admin_row_version is not carries the
+    device's own facts only -- its label and status are NOT authoritative."""
+    _shop(conn)
+    set_label(conn, "till2", "Front desk")
+    admin_v = get_device(conn, "till2")["admin_row_version"]
+    apply_device_event(conn, CO, _dev_event("till2", device_label="Hijacked", row_version=9,
+                                            admin_row_version=admin_v, app_version="7.7"), now=NOW)
+    row = get_device(conn, "till2")
+    assert row["device_label"] == "Front desk" and row["status"] == "active"
+    assert row["row_version"] == 9 and row["app_version"] == "7.7"        # the self group DID apply
+    assert row["admin_row_version"] == admin_v
+    # An absent admin_row_version reads as 1: it can never beat the owner's.
+    event = _dev_event("till2", device_label="Hijacked", row_version=10)
+    apply_device_event(conn, CO, event, now=NOW)
+    assert get_device(conn, "till2")["device_label"] == "Front desk"
+    # ALLOW half: a strictly newer admin_row_version DOES apply the label.
+    apply_device_event(conn, CO, _dev_event("till2", device_label="Renamed by owner",
+                                            row_version=1, admin_row_version=admin_v + 1), now=NOW)
+    assert get_device(conn, "till2")["device_label"] == "Renamed by owner"
+    assert get_device(conn, "till2")["row_version"] == 10                 # self group untouched
+
+
+def test_item_12_an_insert_carries_both_counters(conn):
+    """A peer that lost the row gets both versions, not a reset to 1."""
+    apply_device_event(conn, CO, _dev_event("fresh", row_version=4, admin_row_version=6), now=NOW)
+    row = get_device(conn, "fresh")
+    assert (row["row_version"], row["admin_row_version"]) == (4, 6)
+    apply_device_event(conn, CO, _dev_event("fresh-2", row_version=3), now=NOW)   # absent reads as 1
+    assert get_device(conn, "fresh-2")["admin_row_version"] == 1
+
+
+def test_item_12_last_seen_is_merged_to_the_later_value_never_replaced(conn):
+    """Mutant: `last_seen = incoming.get('last_seen_at')` instead of MAX. A peer
+    event that is accepted on its counters but carries an OLDER last_seen_at
+    (a relayed, delayed announce) must not drag this computer's 'last seen'
+    backwards -- that timestamp is what the takeover freshness rule reads.
+    Both accepted branches are covered (device facts newer, owner decision newer)
+    plus the pure 'touch' branch; and the ALLOW half: a later incoming value wins."""
+    _shop(conn)
+    late, early = "2026-09-29T11:00:00+00:00", "2026-09-29T09:00:00+00:00"
+    conn.execute("UPDATE devices SET last_seen_at=? WHERE id='till2'", (late,))
+    conn.commit()
+    # accepted on row_version (device facts), older last_seen
+    apply_device_event(conn, CO, _dev_event("till2", row_version=5, last_seen_at=early), now=NOW)
+    row = get_device(conn, "till2")
+    assert row["row_version"] == 5
+    assert row["last_seen_at"] == late, row["last_seen_at"]
+    # accepted on admin_row_version (owner decision), older last_seen
+    apply_device_event(conn, CO, _dev_event("till2", row_version=1, admin_row_version=4,
+                                            device_label="Renamed", last_seen_at=early), now=NOW)
+    row = get_device(conn, "till2")
+    assert row["device_label"] == "Renamed" and row["admin_row_version"] == 4
+    assert row["last_seen_at"] == late, row["last_seen_at"]
+    # not newer on either counter, older last_seen: nothing moves
+    apply_device_event(conn, CO, _dev_event("till2", row_version=1, last_seen_at=early), now=NOW)
+    assert get_device(conn, "till2")["last_seen_at"] == late
+    # ALLOW half: a LATER last_seen_at wins, on the touch path and on the update path.
+    later = "2026-09-29T11:30:00+00:00"
+    apply_device_event(conn, CO, _dev_event("till2", row_version=1, last_seen_at=later), now=NOW)
+    assert get_device(conn, "till2")["last_seen_at"] == later
+    latest = "2026-09-29T11:45:00+00:00"
+    apply_device_event(conn, CO, _dev_event("till2", row_version=9, last_seen_at=latest), now=NOW)
+    assert get_device(conn, "till2")["last_seen_at"] == latest
+
+
+def test_item_12_the_wire_payload_carries_admin_row_version(conn):
+    """device_sync_payload puts the owner counter on the wire; without it a
+    receiver could never tell an owner change from a device announce."""
+    _shop(conn)
+    set_label(conn, "till2", "Front desk")
+    payload = device_registry.device_sync_payload(get_device(conn, "till2"))
+    assert payload["admin_row_version"] == get_device(conn, "till2")["admin_row_version"] >= 2
+    assert payload["row_version"] == get_device(conn, "till2")["row_version"]

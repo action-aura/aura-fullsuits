@@ -38,6 +38,7 @@ from commercial_runtime.identity import verification as _verification
 # device_context has no import chain of its own worth deferring, and this
 # file already imports several other leaf modules the same way.
 from commercial_runtime.identity.device_context import peek_local_device_uuid
+from commercial_runtime.identity import device_context as _device_context
 from commercial_runtime.security.passwords import hash_password
 from commercial_runtime.security.audit import record as _security_audit, ADMIN_CREATED
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
@@ -472,6 +473,15 @@ def create_admin():
             conn, company_id=company_id, user_email=email, base_url=request.host_url,
         )
         conn.commit()
+
+        # A company now exists on this install: announce THIS computer now, not
+        # at the next restart. The boot announce ran before any company existed
+        # and did nothing, and a till with no SyncService has no heartbeat, so
+        # without this the device row stays NULL platform / app version /
+        # registry version and role editing is refused ("old build") until a
+        # restart. `notify_company_established` never raises -- the account and
+        # session above are already committed.
+        _device_context.notify_company_established(company_id)
 
         return jsonify({
             'success': True,
@@ -1507,11 +1517,20 @@ def update_branch_scope(user_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, role FROM users WHERE id=? AND company_id=?",
+            "SELECT id, role, role_preset FROM users WHERE id=? AND company_id=?",
             (user_id, session['company_id']),
         ).fetchone()
         if not row:
             return jsonify({'error': 'User not found.'}), 404
+
+        # Fix round 2 (also-verify): clearing the scope of a standing branch
+        # manager would silently widen them to EVERY branch -- the very thing
+        # create-employee and update-preset already refuse for this preset
+        # (BRANCH_SCOPE_REQUIRED). Same code, same message, so the client has
+        # one answer to handle. Move them to another preset first.
+        if scope_uid is None and row['role_preset'] == _accounts.PRESET_BRANCH_MANAGER:
+            return jsonify({'error': BRANCH_SCOPE_REQUIRED_MESSAGE,
+                            'code': 'BRANCH_SCOPE_REQUIRED'}), 400
 
         # The owner is never scoped -- structurally, not merely by
         # convention. 409, matching update_role's own "conflict with a

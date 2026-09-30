@@ -24,7 +24,7 @@ import pytest
 from flask import Flask
 
 from commercial_runtime.identity import (
-    device_context, device_registry, device_routes, device_takeover, mt_auth,
+    company_rebind, device_context, device_registry, device_routes, device_takeover, mt_auth,
     onboarding_routes, registry_db,
 )
 from commercial_runtime.identity.device_registry import (
@@ -564,4 +564,71 @@ def test_route_no_main_yet_is_pointed_at_the_ordinary_claim(admin, db_path):
         c.close()
     r = _take(admin)
     assert r.status_code == 409 and r.get_json()["code"] == "TAKEOVER_NO_MAIN"
+    assert _state(db_path)[0] is None
+
+
+# ── D9 (second fix round, 2026-09-30): joined, THEN founded a new shop ───────
+
+def _audit_marks(db_path):
+    c = _db(db_path)
+    try:
+        return [r[0] for r in c.execute(
+            "SELECT action FROM audit_logs WHERE action IN ('JOINED_DEVICE_SEEDED','ADMIN_CREATED') "
+            "ORDER BY rowid")]
+    finally:
+        c.close()
+
+
+def test_d9_a_joined_device_that_then_founds_its_own_shop_can_claim_main(app, db_path):
+    """Mutant: is_joined_device goes back to "a JOINED mark beats a founding
+    mark" (or its ORDER BY rowid DESC is dropped). Real routes, real audit
+    rows: this computer first joined a shop with a licence key (the seeder
+    writes JOINED_DEVICE_SEEDED), then its owner chose "set up a new shop
+    instead" -- POST create-admin writes ADMIN_CREATED AFTER it. That computer
+    is a founder, and used to be refused for ever (JOINED_DEVICE_CANNOT_CLAIM)
+    because the older mark outranked the newer one.
+    DENY twin, opposite order: a founder whose device is later re-joined to
+    another shop (JOINED mark written AFTER) is a joiner again and IS refused,
+    so the fix did not simply open the claim to everyone."""
+    c = _db(db_path)
+    try:
+        assert company_rebind.seed_company_settings_for_joining_device(c, "LIC-1") is True
+        c.commit()
+    finally:
+        c.close()
+    assert _audit_marks(db_path) == ["JOINED_DEVICE_SEEDED"]
+
+    client = app.test_client()
+    r = client.post('/api/onboarding/create-admin', json={
+        'name': 'Owner', 'email': OWNER_EMAIL, 'password': OWNER_PW})
+    assert r.status_code == 200, r.get_json()
+    assert _audit_marks(db_path) == ["JOINED_DEVICE_SEEDED", "ADMIN_CREATED"]   # joined FIRST, founded LATER
+
+    co, me = _shop_on_disk(db_path, main_seen=LONG_AGO)
+    c = _db(db_path)
+    try:
+        c.execute("DELETE FROM admin_device_assignment")
+        c.execute("UPDATE devices SET is_admin_device=0")
+        c.commit()
+    finally:
+        c.close()
+    ok = client.post("/api/devices/me/claim-admin")
+    assert ok.status_code == 200, ok.get_json()
+    a, flagged, _ = _state(db_path)
+    assert a["device_id"] == me and flagged == [me]
+
+    # DENY twin: now a JOINED mark lands AFTER the founding one.
+    c = _db(db_path)
+    try:
+        c.execute("DELETE FROM admin_device_assignment")
+        c.execute("UPDATE devices SET is_admin_device=0")
+        c.execute("INSERT INTO audit_logs (id, company_id, action, entity_type, entity_id) "
+                  "VALUES ('later-join', ?, 'JOINED_DEVICE_SEEDED', 'company_settings', 'later-join')", (co,))
+        c.commit()
+    finally:
+        c.close()
+    device_context._cached_device = None
+    refused = client.post("/api/devices/me/claim-admin")
+    assert refused.status_code == 409
+    assert refused.get_json()["code"] == "JOINED_DEVICE_CANNOT_CLAIM"
     assert _state(db_path)[0] is None

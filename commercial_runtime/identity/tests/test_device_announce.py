@@ -246,9 +246,26 @@ def test_revoked_is_sticky_both_ways():
     rv = device_sync_apply_plan(_loc(row_version=2), None, _inc(row_version=2, status="revoked"))
     assert rv["action"] == "update" and rv["set"]["status"] == "revoked"
     # ...and a newer 'active' announcement never resurrects a locally revoked device.
+    # ITEM 12 (deliberate change): this used to assert up["set"]["status"] ==
+    # "revoked". Status now belongs to the OWNER's counter, so a device
+    # announcement with a newer row_version applies its own facts and does not
+    # put `status` in the update at all. What this test can no longer catch:
+    # a self-announce plan that WRITES 'revoked' explicitly. What it still
+    # catches is the resurrection itself: 'active' must never appear in the set.
     up = device_sync_apply_plan(_loc(row_version=1, status="revoked"), None,
                                 _inc(row_version=9, status="active"))
+    assert up["action"] == "update" and up["set"].get("status") != "active"
+    assert up["set"]["row_version"] == 9
+    # A newer OWNER counter with 'active' but no reinstate key stays revoked.
+    up = device_sync_apply_plan(_loc(row_version=1, status="revoked"), None,
+                                _inc(row_version=1, admin_row_version=9, status="active"))
     assert up["action"] == "update" and up["set"]["status"] == "revoked"
+    # Allow-half: the reinstate door (names the known main) still opens.
+    up = device_sync_apply_plan(_loc(row_version=1, status="revoked"), None,
+                                _inc(row_version=1, admin_row_version=9, status="active",
+                                     reinstated_by_device_id="boss"),
+                                local_main_device_id="boss")
+    assert up["action"] == "update" and up["set"]["status"] == "active"
 
 
 def test_plan_update_never_blanks_identity_and_takes_the_later_last_seen():
