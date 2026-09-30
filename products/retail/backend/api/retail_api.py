@@ -19806,6 +19806,11 @@ _SYNC_REVIEW_REASONS = {
     'malformed_till_allocation': ('the other computer described a till number in a way this one cannot read', False),
     'allocation_epoch_unknown': ('it comes from a main computer this one has not heard about yet', True),
     'till_allocation_not_from_main': ('a till number was given out by a computer that is not the main computer', False),
+    # 9cad4b7b (fix crew F3a): the engine refuses a SECOND reversal of one
+    # accounting entry (the books keep exactly one), and a till number that was
+    # given up can never be switched back on by an update.
+    'gl_duplicate_reversal': ('this accounting entry was already taken back here, so a second take-back was set aside', False),
+    'till_allocation_status_backwards': ('it tried to switch a till number back on after it was given up', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

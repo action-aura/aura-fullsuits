@@ -2262,5 +2262,7 @@
   "iOS": "آي أو إس",
   "macOS": "ماك أو إس",
   "Linux": "لينكس",
-  "Web": "ويب"
+  "Web": "ويب",
+  "this accounting entry was already taken back here, so a second take-back was set aside": "سبق عكس هذا القيد المحاسبي هنا، لذلك وُضع العكس الثاني جانبًا",
+  "it tried to switch a till number back on after it was given up": "حاول إعادة تفعيل رقم جهاز بيع بعد التخلي عنه"
 }

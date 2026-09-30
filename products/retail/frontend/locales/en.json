@@ -2262,5 +2262,7 @@
   "iOS": "iOS",
   "macOS": "macOS",
   "Linux": "Linux",
-  "Web": "Web"
+  "Web": "Web",
+  "this accounting entry was already taken back here, so a second take-back was set aside": "this accounting entry was already taken back here, so a second take-back was set aside",
+  "it tried to switch a till number back on after it was given up": "it tried to switch a till number back on after it was given up"
 }
