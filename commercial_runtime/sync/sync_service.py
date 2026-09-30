@@ -359,6 +359,7 @@ from commercial_runtime.currency import DEFAULT_BASE_CURRENCY, currency_quantum
 # payload keys and the rules for reading them are edited together. Neither
 # module imports the sync engine, so there is no cycle.
 from commercial_runtime.identity.device_registry import (
+    MAX_ADMIN_EPOCH,
     apply_admin_assignment,
     apply_device_event,
 )
@@ -381,7 +382,11 @@ _ISOLATED_APPLY_ERRORS = (
 
 # Largest `admin_device` epoch a peer may announce; see the branch in
 # `_apply_event` for why the ceiling exists.
-_MAX_SYNCED_ADMIN_EPOCH = 2 ** 31 - 1
+# ONE constant, owned by identity (device_registry.MAX_ADMIN_EPOCH): this engine's
+# pre-check and identity's own bound used to be two literals (2**31-1 here, 2**31
+# there) and disagreed on exactly one value. The alias keeps the name the
+# row_version/epoch bounds below already use.
+_MAX_SYNCED_ADMIN_EPOCH = MAX_ADMIN_EPOCH
 
 # ---------------------------------------------------------------------------
 # Schema v42 branch-uid helpers.
@@ -396,6 +401,10 @@ _DEFAULT_BRANCH_UID_NAMESPACE = uuid.UUID("6f1d0c52-8b3e-4f7a-9c41-2a5e7d90b3c8"
 _ALIAS_MAX_HOPS = 4
 _ALIAS_UID_MAX_LEN = 64
 _TILL_STATUSES = frozenset({"active", "released", "superseded"})
+# Twin of `database.schema.PLACEHOLDER_BRANCH_NAMES` (parity-tested): the two
+# names an auto-created default branch carries. A branch event that reaches the
+# canonical row THROUGH an alias may only carry one of them (P2S M3b).
+_PLACEHOLDER_BRANCH_NAMES = ("Main Branch", "Main Store")
 
 
 def _default_branch_uid(license_id: Any) -> Optional[str]:
@@ -1350,8 +1359,16 @@ class SyncService:
         # foreign-stream event, or a type this build has never heard of)
         # never triggers this fetch either way -- `_apply_event` is about to
         # skip it without ever touching `local_company_id`.
+        #
+        # P2S H3: this scan runs BEFORE the per-event savepoint, so it must
+        # not be the thing a malformed event blows up on. `isinstance(str)`
+        # guards a non-object event (`None`, a bare string -> AttributeError)
+        # and an unhashable `entity_type` (a list -> `TypeError: unhashable
+        # type` from the frozenset membership test).
         if any(
-            ev.get("entity_type") in self._handled_entity_types - _ENTITY_TYPES_WITHOUT_COMPANY_ID
+            isinstance(ev, dict)
+            and isinstance(ev.get("entity_type"), str)
+            and ev.get("entity_type") in self._handled_entity_types - _ENTITY_TYPES_WITHOUT_COMPANY_ID
             and ev.get("event_type") in ("create", "update")
             for ev in events
         ) or touches_pending_or_quarantine:
@@ -1378,9 +1395,10 @@ class SyncService:
         # is the one that still holds if that boot call ever failed.
         if self._local_ensure_schema is not None and (
             any(
-                (ev.get("entity_type") in ("sale", "return", "payment")
-                 and ev.get("event_type") in ("create", "update"))
-                or ev.get("entity_type") == "retail_setting"
+                isinstance(ev, dict) and (
+                    (ev.get("entity_type") in ("sale", "return", "payment")
+                     and ev.get("event_type") in ("create", "update"))
+                    or ev.get("entity_type") == "retail_setting")
                 for ev in events
             ) or touches_pending_or_quarantine
         ):
@@ -1850,6 +1868,17 @@ class SyncService:
                         )
             return True
         p = ev.get("payload") or {}
+        if not isinstance(p, dict):
+            # P2S H3: every branch below reads the payload with `.get`, so a
+            # list / string / number payload on a HANDLED type used to raise
+            # `AttributeError` out of the loop, roll the whole batch back and
+            # be re-pulled forever with every later event stuck behind it.
+            # Parked as one row instead (never skipped: a peer that later
+            # fixes its payload re-sends under the same id and the retry
+            # loop picks it up).
+            return self._quarantine_apply_event(
+                conn, ev, reason="malformed_payload",
+                detail=f"payload is a {type(p).__name__}, not an object")
         event_type = ev.get("event_type")
         # Schema-version skew guard (module docstring's dedicated section) --
         # runs BEFORE any entity-specific branch, uniformly, for every
@@ -3235,6 +3264,18 @@ class SyncService:
             _b_uid = p.get("uid")
             _b_canon = _canonical_branch_uid(conn, _b_uid, local_company_id)
             if _b_canon and _b_canon != _b_uid:
+                # P2S M3b. This event reached the canonical row THROUGH an
+                # alias. That is how a placeholder branch converges on the
+                # default one, and a converging placeholder is called 'Main
+                # Branch' / 'Main Store'. Anything else would let an alias
+                # rename (or, with no row yet, name) the shop's Main branch
+                # after a DIFFERENT branch -- the vYM 'North Branch' probe.
+                # Events that name the canonical uid itself are unaffected.
+                if p.get("name") not in _PLACEHOLDER_BRANCH_NAMES:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="branch_alias_conflict",
+                        detail=f"branch event for aliased uid {_b_uid!r} would rename the "
+                               f"canonical branch {_b_canon!r} to {p.get('name')!r}")
                 _b_uid = _b_canon
             _b_have = conn.execute(
                 "SELECT 1 FROM branches WHERE uid = ? AND CAST(company_id AS TEXT) = ?",
@@ -4408,7 +4449,8 @@ class SyncService:
             if row["entity_id"] == uid:
                 return True
             try:
-                if (json.loads(row["payload"]) or {}).get("uid") == uid:
+                parked = json.loads(row["payload"])
+                if isinstance(parked, dict) and parked.get("uid") == uid:
                     return True
             except (TypeError, ValueError):
                 continue
@@ -4423,8 +4465,16 @@ class SyncService:
         `terminal_id`) is that source. The terminal is part of the key
         because two computers can legitimately hold the same number (that IS
         the clash that parked it), and the movement of the computer whose sale
-        WON must not be parked because the loser's sale was."""
-        if not number:
+        WON must not be parked because the loser's sale was.
+
+        P2S L1: two more guards, both about the WINNER. (1) A blank terminal
+        on either side identifies nothing (None == None is not "the same
+        computer"), so a blank never matches. (2) When a PRESENT local
+        document already carries this number on this terminal, that document
+        is the movement's parent and the parked one is only its twin (the
+        loser of a duplicate-number clash) -- the movement belongs to the
+        present one and is not parked."""
+        if not number or not terminal_id:
             return False
         try:
             rows = conn.execute(
@@ -4440,9 +4490,27 @@ class SyncService:
                 parked = json.loads(row["payload"]) or {}
             except (TypeError, ValueError):
                 continue
+            if not isinstance(parked, dict):
+                continue
             if parked.get(number_key) == number and parked.get("terminal_id") == terminal_id:
-                return True
-        return False
+                twin_parked = True
+                break
+        else:
+            return False
+        # A parked twin exists. If the number is ALSO held by a present
+        # local document on this terminal, the movement is that document's.
+        table, column = (("sales", "sale_number") if entity_type == "sale"
+                         else ("returns", "return_number"))
+        try:
+            present = conn.execute(
+                f'SELECT 1 FROM "{table}" WHERE "{column}"=? AND terminal_id=? LIMIT 1',
+                (number, terminal_id),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Cannot tell (a minimal fixture schema): keep the conservative
+            # old behaviour -- park.
+            return twin_parked
+        return present is None
 
     @classmethod
     def _movement_source_parked_reason(cls, conn, p: dict) -> Optional[str]:
@@ -4723,11 +4791,13 @@ class SyncService:
     # ------------------------------------------------------------------
     # Schema v42 (Track S): `branch_alias` and `till_allocation`.
     #
-    # These two entity types are RETAIL-stream types, so they do not pass
-    # through `_apply_event_guarded` (that wrapper is registry-only). A bad
-    # payload from a peer must therefore be handled HERE: validated, skipped
-    # (`return True`, it can never become valid on retry) or parked, never
-    # raised -- one hostile or buggy event must not stop a whole pull batch.
+    # These two entity types are RETAIL-stream types. Since P2S H3
+    # `_apply_event_guarded` runs EVERY handled event in its own savepoint on
+    # both streams, so anything these raise is parked there as one
+    # `malformed_<type>` row -- but a bad payload is still best handled HERE
+    # where the reason is specific: validated, skipped (`return True`, it can
+    # never become valid on retry) or parked, never raised -- one hostile or
+    # buggy event must not stop a whole pull batch.
     # Both write with plain SQL and queue NO sync event of their own.
     # ------------------------------------------------------------------
     @staticmethod
@@ -4797,6 +4867,21 @@ class SyncService:
                 conn, ev, reason="branch_alias_conflict",
                 detail=f"this device holds two separate branches for {alias!r} and "
                        f"{canon!r}; they are not merged automatically")
+        # P2S M3a. The only convergence the product ever announces is "a random
+        # placeholder branch became this licence's deterministic default one".
+        # An alias to ANY other uid lets a peer fold a real branch -- its
+        # sales, stock and cash sessions -- into another, so it is refused. It
+        # is parked, not dropped, so a device that has no licence YET (the
+        # default cannot be derived) applies it on a later round; a peer's
+        # genuine forgery just stays parked and harmless. Checked AFTER the
+        # replay / loop / two-branch guards so those keep their own reasons.
+        _expected_canon = _default_branch_uid(_owner_licence_id())
+        if _expected_canon is None or canon != _expected_canon:
+            return self._quarantine_apply_event(
+                conn, ev, reason="branch_alias_conflict",
+                detail=f"alias {alias!r} -> {canon!r} refused: a branch alias may only "
+                       f"point at this licence's default branch uid"
+                       + ("" if _expected_canon else " (no licence id here to derive it from yet)"))
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         created = self._bounded_text(p.get("created_at_utc"), 40) or now
         reason = self._bounded_text(p.get("reason"), 64) or "peer"
@@ -4817,29 +4902,129 @@ class SyncService:
         two rows pick the same winner without talking."""
         return (-int(admin_epoch or 0), str(created_at_utc or ""), str(alloc_id))
 
-    def _settle_till_clash(self, conn, cid: str, alloc_id: str, branch_uid: str,
-                           till_number: int, terminal_uid: str, admin_epoch: int,
-                           created_at_utc: str) -> str:
-        """Decide the status an incoming ACTIVE allocation is stored with.
-        Two mains can each hand out the same till number (or the same
-        terminal a second number) while apart. Losers are marked
-        'superseded' LOCALLY, without a row_version bump and without an
-        event: every device holds the same rows and derives the same winner."""
-        clashes = conn.execute(
-            "SELECT id, admin_epoch, created_at_utc FROM till_allocations "
-            "WHERE CAST(company_id AS TEXT) = ? AND status = 'active' AND id <> ? "
-            "AND ((branch_uid = ? AND till_number = ?) OR terminal_uid = ?)",
-            (cid, alloc_id, branch_uid, till_number, terminal_uid)).fetchall()
-        if not clashes:
-            return "active"
-        mine = self._till_priority(admin_epoch, created_at_utc, alloc_id)
-        if any(self._till_priority(r[1], r[2], r[0]) < mine for r in clashes):
-            return "superseded"
-        for r in clashes:
-            conn.execute(
-                "UPDATE till_allocations SET status = 'superseded' WHERE id = ? "
-                "AND CAST(company_id AS TEXT) = ?", (r[0], cid))
-        return "active"
+    def _settle_till_allocations(self, conn, cid: str) -> None:
+        """Recompute EVERY unreleased allocation's active/superseded verdict
+        for this company from the whole set. A pure function of the rows, so
+        arrival order cannot matter (P2S F2 / M1).
+
+        Why a recompute and not the incremental "compare the newcomer with its
+        clashes" it replaces: three allocations chained across a NUMBER clash
+        and a TERMINAL clash settled differently by arrival order. Y (#1, T1),
+        X (#1, T3, higher epoch), Z (#2, T1): arriving Y, Z, X, Z was demoted
+        because Y still held T1 at that moment, then Y was demoted by X, and
+        nothing went back to look at Z -- till 2 ended up with no owner on a
+        device that had seen every event. A loser holds NOTHING, so a row
+        beaten for its number frees its terminal for the next in line; only a
+        walk over the whole set sees that.
+
+        Walk in `_till_priority` order (higher admin epoch, earlier creation,
+        smaller id); a row is active when neither its (branch, number) nor its
+        terminal was taken by an earlier ACTIVE row, otherwise superseded.
+        Company-wide, not per branch: the terminal unique index spans
+        branches (a terminal has one number in the whole shop).
+
+        Only 'active' and 'superseded' rows take part -- 'released' is a real
+        lifecycle state, never a clash verdict. Demote before promote so the
+        two partial unique indexes are never violated part-way through. No
+        row_version bump and no outbox event: `superseded` is a local verdict
+        every device derives identically."""
+        rows = conn.execute(
+            "SELECT id, branch_uid, till_number, terminal_uid, admin_epoch, "
+            "created_at_utc, status FROM till_allocations "
+            "WHERE CAST(company_id AS TEXT) = ? AND status IN ('active', 'superseded')",
+            (cid,)).fetchall()
+        rows = sorted(rows, key=lambda r: self._till_priority(r[4], r[5], r[0]))
+        taken_numbers: set = set()
+        taken_terminals: set = set()
+        demote: list = []
+        promote: list = []
+        for r in rows:
+            number_key = (r[1], r[2])
+            if number_key in taken_numbers or r[3] in taken_terminals:
+                if r[6] != "superseded":
+                    demote.append(r[0])
+                continue
+            taken_numbers.add(number_key)
+            taken_terminals.add(r[3])
+            if r[6] != "active":
+                promote.append(r[0])
+        for alloc_id in demote:
+            conn.execute("UPDATE till_allocations SET status = 'superseded' WHERE id = ? "
+                         "AND CAST(company_id AS TEXT) = ?", (alloc_id, cid))
+        for alloc_id in promote:
+            conn.execute("UPDATE till_allocations SET status = 'active' WHERE id = ? "
+                         "AND CAST(company_id AS TEXT) = ?", (alloc_id, cid))
+
+    @staticmethod
+    def _till_registry_assignment(cid: str):
+        """`(main_device_id, epoch)` of THIS company's main-computer
+        assignment in the local registry, or None when there is nothing to
+        check against (no assignment yet, no registry table, or the registry
+        cannot be opened). Its own tiny seam so a test can point it at a
+        throwaway registry and so a registry problem can never wedge the
+        retail apply: None means "accept", exactly as before P2S M2."""
+        registry_conn = None
+        try:
+            from commercial_runtime.identity import registry_db
+            from commercial_runtime.identity.device_registry import get_assignment
+
+            registry_conn = registry_db.get_conn()
+            assignment = get_assignment(registry_conn, cid)
+            if not assignment:
+                return None
+            return str(assignment["device_id"]), int(assignment["epoch"])
+        except Exception as exc:  # noqa: BLE001 -- see docstring: never wedge the apply
+            logger.warning("SyncService: could not read the main-computer assignment (%s: %s); "
+                           "accepting the till allocation unchecked", type(exc).__name__, exc)
+            return None
+        finally:
+            if registry_conn is not None:
+                try:
+                    registry_conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _till_author_refusal(self, cid: str, by_uid: str, epoch: int):
+        """P2S M2 -- `(quarantine_reason, detail)` when a NEW till allocation
+        must be parked, else None.
+
+        The money verifier's finding: any peer could send a `till_allocation`
+        with `admin_epoch` 2**31-1 and a far-future `created_at_utc`; the clash
+        settle orders by epoch first, so it outranked and superseded every real
+        allocation, and nothing checked that the author was the main computer.
+        Now the receiver compares against its OWN registry assignment
+        `(main, C)`, for an incoming author `by_uid` at epoch `E`:
+
+          * E > C  -> `allocation_epoch_unknown`. This device has not yet heard
+            of an epoch that high. Parked, NOT dropped: `_retry_quarantined_
+            events` replays it on every pull, so a real hand-over whose
+            registry event simply arrives after the allocation applies as soon
+            as the registry catches up, while a forged sky-high epoch stays
+            parked for ever and outranks nothing.
+          * E == C and author != main -> `till_allocation_not_from_main`.
+          * E < C  -> accepted. An old main's allocation is history; the settle
+            recompute orders by epoch DESC, so it can never displace a
+            higher-epoch one.
+
+        This is a BAR-RAISER, NOT AUTHENTICATION: a device holding the licence
+        can still write the real main's id and current epoch into the payload.
+        Proving who wrote an event is AUDIT-033 (next wave). Only INSERTs are
+        checked -- an update carries no author, only the lifecycle moves -- and
+        a forged LOW-epoch allocation for a FREE number is still accepted
+        (recorded residual). No assignment to compare with -> accepted."""
+        assignment = self._till_registry_assignment(cid)
+        if assignment is None:
+            return None
+        main_device, current_epoch = assignment
+        if epoch > current_epoch:
+            return ("allocation_epoch_unknown",
+                    f"allocation epoch {epoch} is above this device's known main-computer "
+                    f"epoch {current_epoch}; parked until the registry catches up")
+        if epoch == current_epoch and by_uid != main_device:
+            return ("till_allocation_not_from_main",
+                    f"allocated by {by_uid!r}, but the main computer at epoch "
+                    f"{current_epoch} is {main_device!r}")
+        return None
 
     def _apply_till_allocation(self, conn, ev: dict, p: dict, event_type: str,
                                local_company_id: Optional[str],
@@ -4857,6 +5042,18 @@ class SyncService:
         epoch = self._bounded_int(p.get("admin_epoch"), 0, _MAX_SYNCED_ADMIN_EPOCH)
         row_version = self._bounded_int(p.get("row_version", 1), 1, _MAX_SYNCED_ADMIN_EPOCH)
         status = p.get("status", "active")
+        if isinstance(status, (list, dict)):
+            # P2S H3: a list/dict status made `status not in _TILL_STATUSES`
+            # raise `TypeError: unhashable type` (a set membership test) out
+            # of the whole batch. A wrong-TYPE field is a broken peer, not a
+            # value this build should quietly drop: park it where an operator
+            # can see it (one row, `malformed_till_allocation`). A null or a
+            # scalar status is hashable and keeps the long-standing "skip with
+            # a warning" path below (pinned by
+            # test_malformed_till_allocation_is_skipped_not_raised_not_stored).
+            return self._quarantine_apply_event(
+                conn, ev, reason="malformed_till_allocation",
+                detail=f"status is a {type(status).__name__}, not a string")
         if (None in (alloc_id, branch_uid, terminal_uid, by_uid, till_number, epoch, row_version)
                 or status not in _TILL_STATUSES):
             logger.warning("SyncService: skipped a malformed till_allocation event (entity_id=%r)",
@@ -4886,9 +5083,9 @@ class SyncService:
                 if row_version > int(local[2] or 0):
                     new_status = status
                     if status == "active" and local[1] != "active":
-                        new_status = self._settle_till_clash(
-                            conn, cid, alloc_id, branch_uid, till_number, terminal_uid,
-                            epoch, created)
+                        # Stored provisionally as a loser so the partial unique
+                        # indexes cannot trip; the recompute below decides.
+                        new_status = "superseded"
                     conn.execute(
                         "UPDATE till_allocations SET status = ?, row_version = ?, "
                         "updated_at_utc = ? WHERE id = ?",
@@ -4902,17 +5099,23 @@ class SyncService:
                         entity_type="till_allocation", entity_id=alloc_id,
                         event_type=event_type, local_row_version=int(local[2] or 0),
                         incoming_row_version=row_version, payload=p)
+                # Also after a replay / stale update that changed nothing: the
+                # verdict is derived from the set, so re-deriving is harmless
+                # and heals a row left inconsistent by an older build.
+                self._settle_till_allocations(conn, cid)
                 return True
-            store_status = status
-            if status == "active":
-                store_status = self._settle_till_clash(
-                    conn, cid, alloc_id, branch_uid, till_number, terminal_uid, epoch, created)
+            refusal = self._till_author_refusal(cid, by_uid, epoch)
+            if refusal is not None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason=refusal[0], detail=refusal[1])
+            store_status = "superseded" if status == "active" else status
             conn.execute(
                 "INSERT INTO till_allocations (id, company_id, branch_uid, till_number, "
                 "terminal_uid, status, allocated_by_terminal_uid, admin_epoch, row_version, "
                 "created_at_utc, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (alloc_id, cid, branch_uid, till_number, terminal_uid, store_status, by_uid,
                  epoch, row_version, created, updated))
+            self._settle_till_allocations(conn, cid)
         except sqlite3.IntegrityError as exc:
             if "till_allocations" in str(exc):
                 return self._quarantine_apply_event(
@@ -4976,8 +5179,17 @@ class SyncService:
 
     def _apply_event_guarded(self, conn, ev: dict, local_company_id: Optional[str] = None,
                              **sinks) -> bool:
-        """`_apply_event`, but a REGISTRY-stream event that blows up on its own
-        payload is parked instead of wedging the stream.
+        """`_apply_event`, but an event (on EITHER stream) that blows up on its
+        own payload is parked instead of wedging the stream.
+
+        P2S H3 widened this from the four registry entity types to every
+        handled type on both streams: the retail stream had no per-event
+        isolation at all, and one wrong-shaped `till_allocation` /
+        `branch_alias` / `sale` / `branch` payload stopped ALL retail sync
+        (measured by the money verifier: the batch rolled back, the cursor
+        never moved, the same event was re-pulled forever). An unhandled
+        `entity_type` still takes the direct path -- it is skipped or parked
+        by `_apply_event` itself and touches nothing.
 
         Why this exists (Track S security review): `apply_pull_result` has no
         per-event savepoint, so ONE exception aborts the whole batch, the
@@ -4994,14 +5206,22 @@ class SyncService:
         can see the broken peer, and `_retry_quarantined_events` re-tries it
         harmlessly), and the loop moves on to the next event.
 
-        NOT caught: `sqlite3.OperationalError` (a locked or corrupt database
-        is not a property of the payload -- it must still fail the batch), and
-        the `user` branch's deliberate loud IntegrityError for an unexpected
-        constraint (wave A, Decision 4 -- flagged by `_aura_loud_integrity`).
-        Every other entity type takes the direct path, byte-for-byte as
-        before."""
+        Caught: ANY exception an event raises on its own (the payload is the
+        only thing that differs between a good and a bad event). NOT caught:
+        a `sqlite3.DatabaseError` that is not a payload-shaped constraint or
+        binding error -- `OperationalError` (locked), a corrupt file -- since
+        those are not a property of the payload and must still fail the batch
+        so the cursor stays put; and the `user` branch's deliberate loud
+        IntegrityError for an unexpected constraint (wave A, Decision 4 --
+        flagged by `_aura_loud_integrity`)."""
+        if not isinstance(ev, dict):
+            # Nothing to apply and nothing to park: there is no entity_id to
+            # key a quarantine row on. Skipped, never an AttributeError.
+            logger.warning("sync: skipped a pulled event that is not an object (%s)",
+                           type(ev).__name__)
+            return True
         entity_type = ev.get("entity_type")
-        if entity_type not in REGISTRY_SYNC_ENTITY_TYPES or entity_type not in self._handled_entity_types:
+        if not isinstance(entity_type, str) or entity_type not in self._handled_entity_types:
             return self._apply_event(conn, ev, local_company_id, **sinks)
         # Python's legacy sqlite3 driver opens its implicit transaction only
         # before DML; a SAVEPOINT issued outside one would start (and its
@@ -5009,12 +5229,15 @@ class SyncService:
         # so the caller's single commit stays the only commit.
         if not conn.in_transaction:
             conn.execute("BEGIN")
-        savepoint = "reg_apply_" + uuid.uuid4().hex[:12]
+        savepoint = "ev_apply_" + uuid.uuid4().hex[:12]
         conn.execute(f"SAVEPOINT {savepoint}")
         try:
             applied = self._apply_event(conn, ev, local_company_id, **sinks)
-        except _ISOLATED_APPLY_ERRORS as exc:
+        except Exception as exc:
             if getattr(exc, "_aura_loud_integrity", False):
+                raise
+            if (isinstance(exc, sqlite3.DatabaseError)
+                    and not isinstance(exc, _ISOLATED_APPLY_ERRORS)):
                 raise
             conn.execute(f"ROLLBACK TO {savepoint}")
             conn.execute(f"RELEASE {savepoint}")
@@ -5033,20 +5256,34 @@ class SyncService:
         instead of dropping it or letting an FK violation raise and wedge the
         whole pull batch -- see schema.py's `CREATE TABLE sync_apply_quarantine`
         for the full reasoning (the client-side twin of Owner's own push-side
-        quarantine, 681b0fa). `INSERT OR IGNORE` keyed on `(entity_id,
+        quarantine, 681b0fa). An upsert keyed on `(entity_id,
         event_type)` -- NOT `entity_id` alone, see that CREATE TABLE's own
         comment for why -- makes re-parking the SAME still-blocked event on
-        every retry tick a no-op rather than an ever-growing pile of
-        duplicate rows -- `quarantined_at` on an already-parked row therefore
-        stays at the FIRST time it was seen, which is exactly what "how long
-        has this been stuck" should show. Always returns False -- the event
+        every retry tick refresh one row rather than grow an ever-larger pile
+        of duplicates. P2S L2: on a re-park `reason`, `detail` and `payload`
+        follow the LATEST attempt (an event first parked for one reason and
+        now blocked for another must say so; `INSERT OR IGNORE` used to keep
+        the first story), while `quarantined_at` is deliberately left alone
+        and stays at the FIRST time the event was seen, which is exactly what
+        "how long has this been stuck" should show and what the retry loop's
+        oldest-first order relies on. Always returns False -- the event
         was NOT applied -- so `_apply_event`'s callers can tell this case
         apart from a genuine success."""
+        def text(value) -> str:
+            # P2S H3: the three key columns are TEXT NOT NULL. A malformed
+            # event may carry a null / list / number there, and binding that
+            # would raise out of the very handler that exists to park it.
+            if isinstance(value, str):
+                return value
+            return "" if value is None else json.dumps(value, default=str)
+
         conn.execute(
-            "INSERT OR IGNORE INTO sync_apply_quarantine "
-            "(entity_id, entity_type, event_type, payload, reason, detail) VALUES (?,?,?,?,?,?)",
-            (ev.get("entity_id"), ev.get("entity_type"), ev.get("event_type"),
-             json.dumps(ev.get("payload") or {}), reason, detail),
+            "INSERT INTO sync_apply_quarantine "
+            "(entity_id, entity_type, event_type, payload, reason, detail) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(entity_id, event_type) DO UPDATE SET "
+            "payload=excluded.payload, reason=excluded.reason, detail=excluded.detail",
+            (text(ev.get("entity_id")), text(ev.get("entity_type")), text(ev.get("event_type")),
+             json.dumps(ev.get("payload") or {}, default=str), reason, detail),
         )
         return False
 
@@ -5082,9 +5319,10 @@ class SyncService:
         oldest first, and deletes exactly the ones that resolve this pass.
         Safe to call every `apply_pull_result()` -- an empty quarantine table
         is a cheap SELECT and an empty loop; a row that is STILL blocked is
-        re-parked by `_quarantine_apply_event` (INSERT OR IGNORE onto its own
-        PRIMARY KEY) rather than duplicated, so this is idempotent to call as
-        often as convenient. `local_company_id` is only actually consumed by
+        re-parked by `_quarantine_apply_event` (an upsert onto its own PRIMARY
+        KEY: the row's reason/detail/payload follow the latest attempt and its
+        `quarantined_at` stays at the first-seen time) rather than
+        duplicated, so this is idempotent to call as often as convenient. `local_company_id` is only actually consumed by
         the "sale"/"return"/"payment" branches inside `_apply_event`; a batch
         of purely still-orphaned sale_items would never need it, but the
         caller (`apply_pull_result`) already resolves it eagerly whenever the

@@ -1344,12 +1344,20 @@ def test_pull_once_partial_batch_apply_failure_never_advances_cursor_or_partiall
     def _apply_event_second_one_explodes(self, conn, ev, local_company_id=None, **kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
-            raise RuntimeError("simulated failure applying the second event in the batch")
+            # P2S H3: a DATABASE-level error, not a bare RuntimeError. A
+            # handler exception on one malformed event is now parked by the
+            # per-event SAVEPOINT isolation (test_apply_isolation.py) and the
+            # batch proceeds; what must still abort the whole pull, roll back
+            # event 1 and leave the cursor alone is a failure the database
+            # itself reports. Assertions unchanged; this test can no longer
+            # catch "any exception at all aborts the pull" -- that is the
+            # wedge H3 removed.
+            raise sqlite3.OperationalError("simulated database failure applying the second event in the batch")
         return real_apply(self, conn, ev, local_company_id, **kwargs)
 
     monkeypatch.setattr(SyncService, "_apply_event", _apply_event_second_one_explodes)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(sqlite3.OperationalError):
         service.pull_once()
 
     # Event 1 was applied to the connection before the explosion, but the

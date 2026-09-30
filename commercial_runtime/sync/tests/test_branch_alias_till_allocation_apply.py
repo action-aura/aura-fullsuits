@@ -38,18 +38,39 @@ for _p in (str(_REPO_ROOT), str(_RETAIL_BACKEND_DIR)):
 import database.schema as schema  # noqa: E402
 import api.retail_api as _retail_api_module  # noqa: E402
 from api.retail_api import _ensure_credit_schema  # noqa: E402
+from commercial_runtime.identity import device_registry, registry_db  # noqa: E402
 from commercial_runtime.sync import sync_service as ss  # noqa: E402
 from commercial_runtime.sync.sync_service import SyncService  # noqa: E402
 
 CID = "company-alias-test"
 OTHER_CID = "some-other-company"
 OLD = "11111111-1111-4111-8111-111111111111"     # an old, random branch uid
-CANON = "22222222-2222-4222-8222-222222222222"   # the canonical uid
+# F2 / M3a: a `branch_alias` is accepted ONLY when its canonical uid is this
+# licence's deterministic default-branch uid (see `_apply_branch_alias`). So the
+# canonical uid every test below aliases TO is now DERIVED from a fixed test
+# licence id -- `install` makes that licence the one `_owner_licence_id()`
+# reports -- instead of being a hand-typed constant that no real install could
+# ever have produced. What the tests can no longer say: "any uid may be a
+# canonical". That is exactly the M3 defect (a peer aliasing a real branch into
+# Main), and it is pinned the other way round in test_alias_to_a_uid_that_is_not_
+# this_licences_default_is_refused below.
+LID = "LIC-ALIAS-TEST-0001"
+CANON = schema.default_branch_uid(LID)           # the canonical uid
 OLD2 = "33333333-3333-4333-8333-333333333333"
 
 
 @pytest.fixture
-def install(tmp_path):
+def install(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "_owner_licence_id", lambda: LID)
+    # F2 / M2: the till_allocation apply reads the REGISTRY's main-computer
+    # assignment. Point it at an empty, throwaway registry so no test ever reads
+    # the developer's real registry.db (an empty one has no assignment, which
+    # the apply treats as "cannot check, accept" -- the pre-M2 behaviour every
+    # older test in this file relies on).
+    reg_dir = tmp_path / "registry_db"
+    monkeypatch.setattr(registry_db, "_db_dir", str(reg_dir))
+    monkeypatch.setattr(registry_db, "DB_PATH", str(reg_dir / "registry.db"))
+    registry_db.init_registry_db()
     root = tmp_path / "install"
     subsys = root / "subsystems"
     subsys.mkdir(parents=True, exist_ok=True)
@@ -228,6 +249,50 @@ def test_a_lone_local_branch_under_either_uid_is_allowed(install, held_uid):
     assert [r["alias_uid"] for r in _aliases(install)] == [OLD]
 
 
+# F2 / M3a. An alias says "this uid is the same branch as that one", and the
+# receiver then re-files everything that names the alias under the canonical
+# row. The ONLY convergence the product ever needs is "a random placeholder
+# branch becomes the licence's deterministic default one", so the only canonical
+# uid a peer may name is that default. Any other target is a peer folding a REAL
+# branch (or its sales and stock) into another.
+NORTH = "44444444-4444-4444-8444-444444444444"     # a real, separate branch
+
+
+def test_alias_to_a_uid_that_is_not_this_licences_default_is_refused(install):
+    ok = _apply(install, _alias_ev(alias=OLD, canon=NORTH))
+    assert ok is False
+    assert _aliases(install) == [], "a non-default canonical must never be stored"
+    assert [q["reason"] for q in _quarantined(install, "branch_alias")] == ["branch_alias_conflict"]
+
+
+def test_alias_to_another_licences_default_uid_is_refused(install):
+    other_default = schema.default_branch_uid("LIC-SOMEONE-ELSE-0002")
+    assert other_default != CANON
+    assert _apply(install, _alias_ev(alias=OLD, canon=other_default)) is False
+    assert _aliases(install) == []
+
+
+def test_alias_to_this_licences_default_is_still_accepted(install):
+    """Allow-half of M3a: the legitimate convergence must keep working."""
+    assert _apply(install, _alias_ev(alias=OLD, canon=CANON)) is True
+    assert [(r["alias_uid"], r["canonical_uid"]) for r in _aliases(install)] == [(OLD, CANON)]
+    assert _quarantined(install, "branch_alias") == []
+
+
+def test_alias_with_no_licence_yet_is_parked_then_applies_once_the_licence_exists(install, monkeypatch):
+    """No licence id -> the default uid cannot be derived -> nothing can be
+    verified. Fail CLOSED, but as a parked event the retry loop replays, not as a
+    dropped one: the alias is legitimate, this device is just not activated yet."""
+    monkeypatch.setattr(ss, "_owner_licence_id", lambda: None)
+    assert _apply(install, _alias_ev(alias=OLD, canon=CANON)) is False
+    assert _aliases(install) == []
+    assert [q["reason"] for q in _quarantined(install, "branch_alias")] == ["branch_alias_conflict"]
+    monkeypatch.setattr(ss, "_owner_licence_id", lambda: LID)
+    _pull(install)                       # an empty pull still replays the parked rows
+    assert [(r["alias_uid"], r["canonical_uid"]) for r in _aliases(install)] == [(OLD, CANON)]
+    assert _quarantined(install, "branch_alias") == []
+
+
 def test_alias_normalises_references_and_queues_no_event(install):
     conn = install()
     for sid, code in (("s-old", "AAA"), ("s-canon", "BBB")):
@@ -361,11 +426,86 @@ def test_branch_event_updates_a_lone_alias_row_in_place(install):
 def test_branch_event_naming_the_old_uid_lands_on_the_canonical_row(install):
     bid = _seed_branch(install, CANON, "Canon")
     _seed_alias(install)
+    # F2 / M3b: a branch event that reaches the canonical row THROUGH an alias
+    # may only carry a placeholder name ('Main Store' / 'Main Branch'); it used
+    # to be "Renamed". The test still pins what it was written for -- the event
+    # lands on the ONE canonical row instead of minting a second -- and can no
+    # longer say "an aliased uid may rename it to anything"; that is the defect
+    # and is pinned the other way in the M3b tests below.
     ev = {"entity_type": "branch", "event_type": "update", "entity_id": OLD,
-          "payload": {"uid": OLD, "name": "Renamed", "address": "", "phone": "", "status": "active"}}
+          "payload": {"uid": OLD, "name": "Main Store", "address": "", "phone": "", "status": "active"}}
     assert _apply(install, ev) is True
     rows = _company_branches(install, "id, uid, name")
-    assert [(r["id"], r["uid"], r["name"]) for r in rows] == [(bid, CANON, "Renamed")]
+    assert [(r["id"], r["uid"], r["name"]) for r in rows] == [(bid, CANON, "Main Store")]
+
+
+# F2 / M3b. Accepting an alias to the default uid is legitimate, but the branch
+# events that then follow it onto the canonical row must not be able to RENAME
+# the shop's Main branch into something else. The vYM North probe: alias
+# NORTH -> Main, then `branch NORTH "North Branch"` used to overwrite Main's
+# name with "North Branch" and file North's sales under it.
+def _branch_ev(uid, name, event="create"):
+    return {"entity_type": "branch", "event_type": event, "entity_id": uid,
+            "payload": {"uid": uid, "name": name, "address": "", "phone": "", "status": "active"}}
+
+
+def test_a_branch_event_that_follows_an_alias_cannot_rename_the_canonical_row(install):
+    """The verifier's North case, end to end, including the sale."""
+    _seed_branch(install, CANON, "Main Branch")
+    assert _apply(install, _alias_ev(alias=NORTH, canon=CANON)) is True
+    assert _apply(install, _branch_ev(NORTH, "North Branch")) is False
+    sale_uid = str(uuid.uuid4())
+    sale = {"entity_type": "sale", "event_type": "create", "entity_id": sale_uid,
+            "payload": {"uid": sale_uid, "sale_number": "N-1", "branch_uid": NORTH, "customer_id": None,
+                        "cashier": "POS", "subtotal": 10, "discount_amount": 0, "tax_amount": 0, "total": 10,
+                        "amount_paid": 10, "change_amount": 0, "points_redeemed_amount": 0,
+                        "payment_method": "cash", "status": "completed", "notes": "",
+                        "created_at": "2026-09-24 09:00:00", "due_date": None, "actor_user_uid": None,
+                        "terminal_id": "t-north", "created_at_utc": None}}
+    _apply(install, sale)
+    rows = _company_branches(install, "uid, name")
+    assert [(r["uid"], r["name"]) for r in rows] == [(CANON, "Main Branch")], rows
+    assert [q["reason"] for q in _quarantined(install, "branch")] == ["branch_alias_conflict"]
+
+
+def test_a_renaming_branch_event_through_an_alias_is_parked_even_with_no_canonical_row(install):
+    """Nothing to overwrite here, but inserting the canonical row under a real
+    branch's name would still make Main into 'North Branch'."""
+    _seed_alias(install, alias=NORTH, canon=CANON)
+    assert _apply(install, _branch_ev(NORTH, "North Branch")) is False
+    assert _company_branches(install, "uid, name") == []
+    assert [q["reason"] for q in _quarantined(install, "branch")] == ["branch_alias_conflict"]
+
+
+def test_a_renaming_branch_event_through_an_alias_cannot_rename_a_lone_old_row(install):
+    """The other write site: this device still holds the branch under the old uid."""
+    _seed_branch(install, OLD, "Main Store")
+    _seed_alias(install)
+    assert _apply(install, _branch_ev(OLD, "North Branch", "update")) is False
+    assert [(r["uid"], r["name"]) for r in _company_branches(install, "uid, name")] == [(OLD, "Main Store")]
+
+
+@pytest.mark.parametrize("name", ["Main Branch", "Main Store"])
+def test_a_placeholder_named_branch_event_through_an_alias_still_applies(install, name):
+    """Allow-half: the two placeholder names are what a converging default
+    branch legitimately carries."""
+    _seed_branch(install, CANON, "Main Store" if name == "Main Branch" else "Main Branch")
+    _seed_alias(install)
+    assert _apply(install, _branch_ev(OLD, name, "update")) is True
+    assert [(r["uid"], r["name"]) for r in _company_branches(install, "uid, name")] == [(CANON, name)]
+    assert _quarantined(install, "branch") == []
+
+
+def test_a_branch_event_naming_the_canonical_uid_itself_can_rename_it(install):
+    """Allow-half: the guard is about arriving THROUGH an alias, not about renames."""
+    _seed_branch(install, CANON, "Main Branch")
+    _seed_alias(install)
+    assert _apply(install, _branch_ev(CANON, "Airport", "update")) is True
+    assert [(r["uid"], r["name"]) for r in _company_branches(install, "uid, name")] == [(CANON, "Airport")]
+
+
+def test_placeholder_names_match_the_schemas(install):
+    assert set(ss._PLACEHOLDER_BRANCH_NAMES) == set(schema.PLACEHOLDER_BRANCH_NAMES)
 
 
 def test_branch_event_without_any_alias_still_inserts(install):
@@ -731,10 +871,268 @@ def test_two_active_rows_never_share_a_number_or_a_terminal_after_any_arrival_or
         assert len({(r["branch_uid"], r["till_number"]) for r in active}) == len(active)
         assert len({r["terminal_uid"] for r in active}) == len(active)
         finals.add(tuple(sorted(_status(install).items())))
-    # Documented residual: three rows chained across a number clash AND a
-    # terminal clash can settle differently by arrival order when several
-    # mains race. This pins that it is at least one valid set every time.
-    assert finals
+    # F2 / M1: this used to say "three rows chained across a number clash AND a
+    # terminal clash can settle differently by arrival order" and asserted only
+    # `finals` was non-empty. That residual is the defect the money verifier
+    # measured, so the assertion is now the real one: ONE outcome, whatever the
+    # order. (c3 wins tB, so c2 loses; c2 losing frees number 5 for c1.)
+    assert len(finals) == 1, finals
+    assert finals == {(("c1", "active"), ("c2", "superseded"), ("c3", "active"))}
+
+
+# ---------------------------------------------------------------------------
+# F2 / M1 -- the clash verdict is a pure function of the SET, not of arrival order
+# ---------------------------------------------------------------------------
+# Measured by the money verifier (vYM probe test_probe_till.py): three
+# allocations chained across a number clash and a terminal clash,
+#     Y  #1 on T1  epoch 1  (created first)
+#     X  #1 on T3  epoch 2  (beats Y for number 1)
+#     Z  #2 on T1  epoch 1  (loses to Y for terminal T1 -- but Y is out)
+# The correct verdict is {X, Z} active, Y superseded: Y loses number 1 to X, so
+# it holds nothing, so Z's terminal T1 is free. Arriving in the order Y, Z, X the
+# old incremental code demoted Z (Y still held T1 at that moment), then demoted Y
+# (X beat it) and never looked back at Z: only {X} was active, till 2 unowned.
+
+def _apply_many(get_conn, events):
+    svc = _svc(get_conn)
+    conn = get_conn()
+    try:
+        for e in events:
+            assert svc._apply_event(conn, e, local_company_id=CID) is True
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _clear_tills(get_conn):
+    conn = get_conn()
+    conn.execute("DELETE FROM till_allocations")
+    conn.commit()
+    conn.close()
+
+
+def _active_ids(get_conn):
+    return sorted(k for k, v in _status(get_conn).items() if v == "active")
+
+
+def _yxz():
+    return {
+        "Y": _till_ev("Y", number=1, terminal="T1", epoch=1, created="2026-09-27T10:00:01Z"),
+        "X": _till_ev("X", number=1, terminal="T3", epoch=2, created="2026-09-27T10:00:05Z"),
+        "Z": _till_ev("Z", number=2, terminal="T1", epoch=1, created="2026-09-27T10:00:02Z"),
+    }
+
+
+@pytest.mark.parametrize("order", ["YXZ", "YZX", "XYZ", "XZY", "ZYX", "ZXY"])
+def test_verifier_chain_settles_the_same_in_every_arrival_order(install, order):
+    evs = _yxz()
+    _apply_many(install, [evs[c] for c in order])
+    assert _status(install) == {"X": "active", "Y": "superseded", "Z": "active"}, order
+
+
+def _chain5():
+    return {
+        "a": _till_ev("a", number=1, terminal="T1", epoch=1, created="2026-09-27T10:00:01Z"),
+        "b": _till_ev("b", number=1, terminal="T3", epoch=2, created="2026-09-27T10:00:02Z"),
+        "c": _till_ev("c", number=2, terminal="T1", epoch=1, created="2026-09-27T10:00:03Z"),
+        "d": _till_ev("d", number=2, terminal="T4", epoch=1, created="2026-09-27T10:00:04Z"),
+        "e": _till_ev("e", number=3, terminal="T4", epoch=1, created="2026-09-27T10:00:05Z"),
+    }
+
+
+def test_five_allocation_chain_has_one_verdict_in_all_120_orders(install):
+    """Exhaustive, not sampled: every permutation of a five-row chain (number
+    clashes and terminal clashes interleaved) ends on the same active set.
+    Walk by priority: b (#1,T3) wins; a (#1,T1) loses #1; c (#2,T1) wins #2 and
+    T1 (a took neither); d (#2,T4) loses #2; e (#3,T4) wins #3 and T4."""
+    import itertools
+    evs = _chain5()
+    finals = set()
+    for perm in itertools.permutations("abcde"):
+        _clear_tills(install)
+        _apply_many(install, [evs[k] for k in perm])
+        st = _status(install)
+        active = [r for r in _tills(install).values() if r["status"] == "active"]
+        assert len({(r["branch_uid"], r["till_number"]) for r in active}) == len(active)
+        assert len({r["terminal_uid"] for r in active}) == len(active)
+        finals.add(tuple(sorted(st.items())))
+    assert finals == {(("a", "superseded"), ("b", "active"), ("c", "active"),
+                       ("d", "superseded"), ("e", "active"))}, finals
+
+
+def test_release_in_the_middle_of_a_random_order_still_gives_one_verdict(install):
+    """A release is an `update` that frees a number/terminal: rows it had
+    beaten must come back. Seeded random orders of the six events."""
+    import random
+    evs = _chain5()
+    release_b = _till_ev("b", number=1, terminal="T3", epoch=2, status="released", rv=2,
+                         created="2026-09-27T10:00:02Z", event="update")
+    rng = random.Random(4242)
+    finals = set()
+    for _ in range(120):
+        seq = [evs[k] for k in "abcde"]
+        # the release can only follow the create it releases (rv 2 > rv 1); any
+        # position after it is legal, and the create may also arrive after the
+        # release (then the release must not be lost -- see the insert path)
+        rng.shuffle(seq)
+        seq.insert(rng.randrange(len(seq) + 1), release_b)
+        _clear_tills(install)
+        _apply_many(install, seq)
+        finals.add(tuple(sorted(_status(install).items())))
+    # b released: a takes #1/T1, so c (#2,T1) loses T1 and d (#2,T4) takes #2,
+    # so e (#3,T4) loses T4.
+    assert finals == {(("a", "active"), ("b", "released"), ("c", "superseded"),
+                       ("d", "active"), ("e", "superseded"))}, finals
+
+
+def test_one_terminal_holds_one_number_even_across_two_branches(install):
+    """The terminal unique index spans branches, so the recompute must be
+    company-wide: the same terminal given a number in each of two branches
+    leaves exactly one of them active, in either arrival order."""
+    other_branch = "88888888-8888-4888-8888-888888888888"
+    a = _till_ev("al-a", number=1, terminal="T1", branch=BR, epoch=1)
+    b = _till_ev("al-b", number=1, terminal="T1", branch=other_branch, epoch=2)
+    _apply_many(install, [a, b])
+    assert _status(install) == {"al-a": "superseded", "al-b": "active"}
+    _clear_tills(install)
+    _apply_many(install, [b, a])
+    assert _status(install) == {"al-a": "superseded", "al-b": "active"}
+
+
+def test_settling_never_touches_a_released_row_or_another_company(install):
+    _seed_foreign_till(install, "foreign", epoch=0, created="2030-01-01T00:00:00Z",
+                       number=1, terminal="T1")
+    evs = _yxz()
+    _apply_many(install, [evs["Y"], _till_ev("R", number=9, terminal="T9", status="released"),
+                          evs["Z"], evs["X"]])
+    st = _status(install)
+    assert st == {"X": "active", "Y": "superseded", "Z": "active", "R": "released",
+                  "foreign": "active"}, st
+
+
+# ---------------------------------------------------------------------------
+# F2 / M2 -- only the main computer may hand out a till number
+#
+# The receiver reads its OWN registry's main-computer assignment (device id +
+# epoch). It never trusts the allocation's own claim to be from the main. This
+# is a BAR-RAISER, not authentication: a device holding the licence can still
+# put any string in `allocated_by_terminal_uid` and name the real main's id and
+# epoch. Authenticating the author is AUDIT-033 (next wave). What this pins is
+# that the cheap forgery the money verifier measured (a non-main peer minting
+# epoch 2**31-1 to outrank every real allocation for ever) no longer works.
+# ---------------------------------------------------------------------------
+
+MAIN = "term-main"
+FORGED_EPOCH = 2 ** 31 - 1
+
+
+def _set_main(device_id, epoch, company=CID):
+    conn = registry_db.get_conn()
+    try:
+        device_registry._write_assignment(conn, company, device_id, epoch,
+                                          "2026-09-27T09:00:00Z", None, None)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _pull(get_conn, events=()):
+    svc = _svc(get_conn)
+    conn = get_conn()
+    try:
+        svc.apply_pull_result(conn, {"events": list(events), "cursor": 1})
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _park_reasons(get_conn):
+    return sorted(r["reason"] for r in _quarantined(get_conn, "till_allocation"))
+
+
+def _legit_and_forged():
+    legit = _till_ev("legit", number=2, terminal="term-A", epoch=1, by=MAIN,
+                     created="2026-09-27T10:00:00Z")
+    forged = _till_ev("forged", number=2, terminal="term-EVIL", epoch=FORGED_EPOCH,
+                      by="not-the-main", created="2030-01-01T00:00:00Z")
+    return legit, forged
+
+
+@pytest.mark.parametrize("forged_first", [False, True])
+def test_a_forged_sky_high_epoch_from_a_non_main_is_parked_and_the_real_allocation_stays_active(
+        install, forged_first):
+    _set_main(MAIN, 1)
+    legit, forged = _legit_and_forged()
+    for ev in ([forged, legit] if forged_first else [legit, forged]):
+        assert _apply(install, ev) in (True, False)
+    assert _status(install) == {"legit": "active"}
+    assert _park_reasons(install) == ["allocation_epoch_unknown"]
+
+
+def test_a_parked_future_epoch_allocation_is_replayed_once_the_registry_catches_up(install):
+    _set_main(MAIN, 1)
+    old = _till_ev("old", number=2, terminal="term-A", epoch=1, by=MAIN,
+                   created="2026-09-27T10:00:00Z")
+    new = _till_ev("new", number=2, terminal="term-B", epoch=2, by="term-new-main",
+                   created="2026-09-27T11:00:00Z")
+    _apply(install, old)
+    assert _apply(install, new) is False                 # parked, not applied
+    assert _status(install) == {"old": "active"}
+    assert _park_reasons(install) == ["allocation_epoch_unknown"]
+    # the registry stream delivers the hand-over; the retry loop runs on the
+    # next pull, even one that carries no events of its own
+    _set_main("term-new-main", 2)
+    _pull(install)
+    assert _park_reasons(install) == []
+    assert _status(install) == {"old": "superseded", "new": "active"}
+
+
+def test_at_the_current_epoch_only_the_assigned_main_may_allocate(install):
+    _set_main(MAIN, 4)
+    other = _till_ev("other", number=3, terminal="term-X", epoch=4, by="not-the-main")
+    assert _apply(install, other) is False
+    assert _tills(install) == {}
+    assert _park_reasons(install) == ["till_allocation_not_from_main"]
+    real = _till_ev("real", number=3, terminal="term-X", epoch=4, by=MAIN)
+    assert _apply(install, real) is True
+    assert _status(install) == {"real": "active"}
+
+
+def test_a_lower_epoch_allocation_is_accepted_but_never_displaces_a_higher_one(install):
+    _set_main(MAIN, 3)
+    high = _till_ev("high", number=5, terminal="T1", epoch=3, by=MAIN,
+                    created="2026-09-27T10:00:00Z")
+    low_held = _till_ev("low-held", number=5, terminal="T2", epoch=1, by="old-main",
+                        created="2030-01-01T00:00:00Z")
+    low_free = _till_ev("low-free", number=6, terminal="T3", epoch=1, by="old-main")
+    for ev in (high, low_held, low_free):
+        assert _apply(install, ev) is True
+    assert _status(install) == {"high": "active", "low-held": "superseded", "low-free": "active"}
+    assert _park_reasons(install) == []
+
+
+def test_with_no_assignment_to_check_against_the_allocation_is_accepted(install):
+    # a fresh install / a receiver whose registry stream has not delivered the
+    # assignment yet: nothing to compare with, so behave exactly as before M2
+    _legit, forged = _legit_and_forged()
+    assert _apply(install, forged) is True
+    assert _status(install) == {"forged": "active"}
+    assert _park_reasons(install) == []
+
+
+def test_an_unreadable_registry_never_wedges_the_apply(install, monkeypatch):
+    def _boom():
+        raise sqlite3.OperationalError("unable to open database file")
+    monkeypatch.setattr(registry_db, "get_conn", _boom)
+    assert _apply(install, _till_ev("x", number=4, terminal="T9", by="anyone")) is True
+    assert _status(install) == {"x": "active"}
+    assert _park_reasons(install) == []
+
+
+def test_another_companys_assignment_is_not_this_companys_main(install):
+    _set_main("their-main", 9, company=OTHER_CID)
+    assert _apply(install, _till_ev("mine", number=4, terminal="T9", epoch=1, by="anyone")) is True
+    assert _status(install) == {"mine": "active"}
 
 
 # ---------------------------------------------------------------------------

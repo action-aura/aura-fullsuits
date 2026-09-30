@@ -343,8 +343,17 @@ def test_pull_apply_rejects_body_without_cursor(client):
 def test_pull_apply_failure_leaves_cursor_untouched(client, get_conn, monkeypatch):
     import commercial_runtime.sync.sync_service as sync_service_module
 
-    def _boom(self, conn, ev, local_company_id=None):
-        raise RuntimeError("malformed event")
+    # P2S H3: the injected fault is now a DATABASE-level error, not a bare
+    # RuntimeError. A handler exception on ONE malformed event is parked
+    # (per-event SAVEPOINT isolation, pinned in test_apply_isolation.py) and
+    # the batch proceeds -- so a RuntimeError here would no longer abort the
+    # pull. What must STILL abort the whole pull with the cursor untouched is
+    # a failure the database itself reports (locked / full / corrupt): nothing
+    # can be said about the rest of the batch, so nothing advances. The
+    # assertions below are unchanged. What this test can no longer catch: "any
+    # exception at all aborts the pull" -- that is exactly the wedge H3 removed.
+    def _boom(self, conn, ev, local_company_id=None, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(sync_service_module.SyncService, "_apply_event", _boom)
 
