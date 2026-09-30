@@ -1836,7 +1836,12 @@ class SyncService:
         # this fix: `test_registry_stream_events_stay_unaffected_by_the_
         # unknown_type_schema_guard` (commercial_runtime/sync/tests/
         # test_sync_service.py) proves this directly.
-        if entity_type not in self._handled_entity_types:
+        # A non-string entity_type (a list or dict off a hostile/broken peer)
+        # is UNHASHABLE, and `in <set>` on it raised TypeError out of the
+        # whole batch (vYM2). It is by definition not a type this build
+        # handles, so it takes the same plain-skip path as any unknown one.
+        # The hub transport already rejects the shape; defence in depth.
+        if not isinstance(entity_type, str) or entity_type not in self._handled_entity_types:
             if self._local_schema_version_provider is not None:
                 # isinstance: before F6 this path never read the payload at
                 # all, so a non-object payload on an unknown type must stay
@@ -2944,21 +2949,39 @@ class SyncService:
                 # only because it does NOT reopen that hole.
                 if p.get("status") != "voided" or not p.get("uid"):
                     return True
-                cursor = conn.execute(
-                    "UPDATE payments SET status='voided' WHERE uid=?", (p.get("uid"),)
-                )
-                if cursor.rowcount == 0:
-                    # The void arrived before (or without) its own payment's
-                    # `create` event -- the identical orphan shape as
-                    # sale_item/return/return_item above (Owner's push-side
-                    # quarantine can split a parent from a later event just
-                    # as easily as from a child); "parent" here means "the
-                    # row this update is about". Parked, not dropped or
-                    # allowed to raise and wedge the batch.
-                    return self._quarantine_apply_event(
-                        conn, ev, reason="missing_parent:payment",
-                        detail=f"uid={p.get('uid')!r} not found locally to void")
-                return True
+                # THE VOID MUST ALSO MOVE THE ACCOUNT BALANCE, ONCE. The local
+                # void_payment route flips the status AND puts the payment's
+                # amount back on the party's `credit_balance`; before this
+                # the engine did only the first, so a payment taken on
+                # computer B and voided on computer A left B's `credit_balance`
+                # short by the payment forever while its books (the reversal
+                # journal) had gone back -- B's AR/AP subledger tie broke.
+                # Adjust on the TRANSITION only: a row that is already voided
+                # (this device voided it itself, or this is a replayed /
+                # doubly-delivered event) must not move the balance a second
+                # time. `_apply_voided_payment_credit` documents the rest.
+                before = conn.execute(
+                    "SELECT id, status, party_type, party_id, direction, amount, related_type "
+                    "FROM payments WHERE uid=? AND company_id=?",
+                    (p.get("uid"), local_company_id)).fetchone()
+                if before is not None and (before["status"] or "active") != "voided":
+                    conn.execute(
+                        "UPDATE payments SET status='voided' WHERE uid=? AND company_id=?",
+                        (p.get("uid"), local_company_id))
+                    self._apply_voided_payment_credit(conn, local_company_id, before)
+                    return True
+                if before is not None:
+                    return True  # already voided here: nothing to do, nothing to move
+                # The void arrived before (or without) its own payment's
+                # `create` event -- the identical orphan shape as
+                # sale_item/return/return_item above (Owner's push-side
+                # quarantine can split a parent from a later event just
+                # as easily as from a child); "parent" here means "the
+                # row this update is about". Parked, not dropped or
+                # allowed to raise and wedge the batch.
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:payment",
+                    detail=f"uid={p.get('uid')!r} not found locally to void")
             if event_type != "create":
                 return True
             # Only a payment FK-tied to a sale (`related_type == "sale"`) has
@@ -3490,7 +3513,23 @@ class SyncService:
                 # all (verified directly), and neither `reason` nor
                 # `detail` here ever interpolates either credential field.
                 msg = str(exc)
-                if "users.email" in msg:
+                # A user event missing a REQUIRED field (null password_hash /
+                # employee_id / email) is a malformed payload, not a
+                # collision and not a code bug worth wedging the stream for:
+                # the registry stream is ordered, so raising here stopped
+                # every user/permission event queued behind it, for every
+                # device, until an operator intervened (vYM2 finding). Park
+                # it, keep going. This check MUST come before the
+                # `users.email` match below: SQLite words a null email as
+                # "NOT NULL constraint failed: users.email", which contains
+                # "users.email" and used to be mislabelled duplicate_email.
+                # Only the column name goes in `detail`, never a value --
+                # the event may carry credential hashes.
+                if msg.startswith("NOT NULL constraint failed"):
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="malformed_user",
+                        detail=f"{msg} (incoming uid={uid!r}); the event is missing a required field")
+                if msg.startswith("UNIQUE constraint failed") and "users.email" in msg:
                     return self._quarantine_apply_event(
                         conn, ev, reason="duplicate_email",
                         detail=f"email={p.get('email')!r} already registered to a different "
@@ -4114,6 +4153,26 @@ class SyncService:
                         conn, ev, reason="missing_parent:gl_journal",
                         detail=f"reversed_journal_uid={reversed_journal_uid!r} "
                                f"not found locally yet (gl_journal uid={uid!r})")
+            # ONE REVERSAL PER JOURNAL. Two computers that each void the same
+            # payment while offline each mint a reversing journal, and (before
+            # the reversal id became deterministic) with two different uids, so
+            # the by-uid DO NOTHING below could not tell them apart and the
+            # payment's money was reversed TWICE on whichever device met both.
+            # A journal that already has a reversal under a DIFFERENT uid is
+            # parked, not applied. The same uid again is a replay/echo and falls
+            # through to the idempotent insert. The first reversal to land wins,
+            # which is what a local void_payment does too.
+            if reversed_journal_id is not None:
+                already = conn.execute(
+                    "SELECT uid FROM gl_journals WHERE company_id=? AND reversed_journal_id=? "
+                    "AND uid IS NOT ? LIMIT 1",
+                    (local_company_id, reversed_journal_id, uid)).fetchone()
+                if already is not None:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="gl_duplicate_reversal",
+                        detail=f"gl_journal uid={uid!r} would reverse journal "
+                               f"{reversed_journal_uid!r} a second time; it is already "
+                               f"reversed by uid={already['uid']!r}")
             # `source_id` -- plan §2.2 "source_id" row: the RECEIVER's own
             # local id, never the sender's integer, and NULL rather than
             # parked when it cannot be resolved (a journal is allowed to
@@ -4238,6 +4297,63 @@ class SyncService:
                         (journal_id, line_account_ids[code], float(debit), float(credit), line_memo),
                     )
         return True
+
+    def _apply_voided_payment_credit(self, conn, local_company_id, pay) -> None:
+        """Put a voided account payment back on the party's `credit_balance`,
+        exactly as retail_api.void_payment does for a void made on THIS device.
+
+        Called ONLY on the active -> voided transition (never for a row that
+        was already voided), so a doubly-delivered event or a void this device
+        made itself cannot move the balance twice. The arithmetic is a copy of
+        the route's, not a reinterpretation: `reduced` is True when the
+        payment had LOWERED what the party owes/is owed (a customer paying in,
+        a supplier being paid out), and the void undoes that.
+
+        KNOWN LIMIT, deliberately not papered over: `credit_balance` is a
+        device-local accumulator that no event carries (see `_adjust_credit`
+        in retail_api.py). The device that TOOK the payment reduced it and now
+        gets it back, which is the case that used to break the AR/AP tie. A
+        device that only ever received the payment as a synced fact never
+        reduced its own balance, so it also never held the debt; its
+        subledger cannot tie to the synced books either way.
+
+        Only account payments are adjusted: `void_payment` refuses a
+        sale-tied or cheque-tied receipt, so a void event for one carries no
+        balance change. The column is created lazily by retail_api
+        (`_ensure_credit_schema`), so its absence is a no-op, not an error.
+        """
+        if pay["related_type"] in ("sale", "cheque"):
+            return
+        party_type, party_id = pay["party_type"], pay["party_id"]
+        if not party_id or party_type not in ("customer", "supplier"):
+            return
+        table = "customers" if party_type == "customer" else "suppliers"
+        try:
+            columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        except sqlite3.Error:
+            return
+        if "credit_balance" not in columns:
+            return
+        try:
+            row = conn.execute(
+                "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+                (local_company_id,)).fetchone()
+            currency = (row[0] if row and row[0] else None) or DEFAULT_BASE_CURRENCY
+        except sqlite3.Error:
+            currency = DEFAULT_BASE_CURRENCY
+        quantum = currency_quantum(currency)
+        amount = Decimal(str(pay["amount"] or 0)).quantize(quantum, rounding=ROUND_HALF_UP)
+        reduced = (party_type == "customer") == (pay["direction"] == "in")
+        delta = amount if reduced else -amount
+        current = conn.execute(
+            f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?",
+            (party_id, local_company_id)).fetchone()
+        if current is None:
+            return  # the party has not arrived here: nothing of ours to correct
+        base = Decimal(str(current[0] if current[0] is not None else 0))
+        conn.execute(
+            f"UPDATE {table} SET credit_balance=? WHERE id=? AND company_id=?",
+            (float((base + delta).quantize(quantum, rounding=ROUND_HALF_UP)), party_id, local_company_id))
 
     _GL_JOURNAL_TEXT_FIELDS = (
         "uid", "business_date", "reference", "memo", "source_type", "source_uid",
@@ -5081,6 +5197,23 @@ class SyncService:
                         conn, ev, reason="till_allocation_conflict",
                         detail=f"allocation id {alloc_id!r} already belongs to another company")
                 if row_version > int(local[2] or 0):
+                    if status == "active" and local[1] in ("released", "superseded"):
+                        # FORWARD-ONLY (vYM2 M2): the lifecycle is
+                        # active -> released | superseded and never back. This
+                        # update path has no author check, so a forged or
+                        # replayed event with a big row_version could flip a
+                        # released allocation (its number already handed on
+                        # and acked) back to active and take the number away
+                        # from the new holder. Parked, not applied; the
+                        # holder of a number is decided by `_settle_
+                        # till_allocations` from the set, never by an update
+                        # claiming to revive a finished row. Only fires when
+                        # the version would actually have applied, so a stale
+                        # replay stays the silent no-op it always was.
+                        return self._quarantine_apply_event(
+                            conn, ev, reason="till_allocation_status_backwards",
+                            detail=f"allocation {alloc_id!r} is {local[1]!r} here; "
+                                   f"an update may not make it active again")
                     new_status = status
                     if status == "active" and local[1] != "active":
                         # Stored provisionally as a loser so the partial unique
@@ -5241,9 +5374,13 @@ class SyncService:
                 raise
             conn.execute(f"ROLLBACK TO {savepoint}")
             conn.execute(f"RELEASE {savepoint}")
+            # ascii(): %s of an exception that quotes a lone surrogate would
+            # otherwise hand the log handler a string its stream cannot
+            # encode. %r/ascii() always escape it (vYM2, defence in depth).
             logger.warning(
-                "sync: parked malformed %s event %r (%s: %s)",
-                entity_type, ev.get("entity_id"), type(exc).__name__, exc)
+                "sync: parked malformed %s event %s (%s: %s)",
+                ascii(entity_type), ascii(ev.get("entity_id")),
+                type(exc).__name__, ascii(str(exc)))
             return self._quarantine_apply_event(
                 conn, ev, reason=f"malformed_{entity_type}",
                 detail=f"{type(exc).__name__}: {exc}")
@@ -5273,10 +5410,22 @@ class SyncService:
             # P2S H3: the three key columns are TEXT NOT NULL. A malformed
             # event may carry a null / list / number there, and binding that
             # would raise out of the very handler that exists to park it.
+            # vYM2: a LONE SURROGATE in a string ("\udc80" -- what json.loads
+            # makes of the JSON text "\udc80") cannot be bound by sqlite3
+            # (UnicodeEncodeError), which raised out of the very handler
+            # that parks the event and wedged the batch again. Such a string
+            # is stored as its escaped form ("\\udc80"): still readable by an
+            # operator, still a stable key for the upsert, and a well-formed
+            # string never changes. The hub transport already rejects these
+            # shapes; this is defence in depth for a direct/LAN pull.
             if isinstance(value, str):
-                return value
+                return value.encode("utf-8", "backslashreplace").decode("utf-8")
             return "" if value is None else json.dumps(value, default=str)
 
+        # reason carries f"malformed_{entity_type}" from the guard, and detail
+        # carries exception text that can quote the offending value.
+        reason = text(reason)
+        detail = text(detail)
         conn.execute(
             "INSERT INTO sync_apply_quarantine "
             "(entity_id, entity_type, event_type, payload, reason, detail) VALUES (?,?,?,?,?,?) "

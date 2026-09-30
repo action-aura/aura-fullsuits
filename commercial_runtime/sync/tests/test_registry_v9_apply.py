@@ -491,12 +491,32 @@ def test_a_parked_poison_event_is_retried_harmlessly_and_stays_one_row(registry_
 
 def test_the_user_branch_still_raises_loudly_on_an_unexpected_constraint(registry_env):
     """Deliberate wave-A behaviour the new net must NOT swallow: an
-    IntegrityError that is neither email nor employee_id (here a NOT NULL on
-    `password_hash`) is a real bug and stays loud, never quietly parked."""
+    IntegrityError that is neither email nor employee_id nor a missing
+    required field is a real bug and stays loud, never quietly parked.
+
+    F3a (vYM2): this test used to use a NOT NULL on `password_hash` as its
+    "unexpected constraint". That case is now DELIBERATELY parked as
+    `malformed_user` (a missing required field is a malformed payload, not a
+    code bug, and raising stopped the whole ordered registry stream -- proved
+    in test_money_sync_engine_fixes.py). The unexpected constraint is
+    therefore produced by a trigger that raises a constraint error of a kind
+    the handler does not know. WHAT THIS CAN NO LONGER CATCH: a NOT NULL
+    failure staying loud -- that behaviour was reversed on purpose."""
     import sqlite3
+    conn = registry_env()
+    try:
+        conn.execute(
+            "CREATE TRIGGER f3a_unexpected_constraint BEFORE INSERT ON users "
+            "WHEN NEW.language = 'zz' BEGIN "
+            "SELECT RAISE(ABORT, 'CHECK constraint failed: f3a_unexpected'); END")
+        conn.commit()
+    finally:
+        conn.close()
     uid = str(uuid.uuid4())
     with pytest.raises(sqlite3.IntegrityError):
-        _pull(registry_env, [_user_ev(uid, password_hash=None)], cursor=5)
+        _pull(registry_env, [_user_ev(uid, language="zz")], cursor=5)
+    assert _q(registry_env, "SELECT 1 FROM sync_apply_quarantine") == [], (
+        "an unexpected constraint was quietly parked instead of staying loud")
 
 
 # ── H3 / L3 of the 2026-09-29 security review: the receiving side ───────────

@@ -226,7 +226,22 @@ def test_the_set_aside_family_is_exactly_the_sale_and_what_belongs_to_it(world, 
     # nothing else can hide behind the exclusion.
     side = {(r["entity_type"], r["reason"]) for r in q_all if r["entity_type"] == "doc_series"}
     assert side <= {("doc_series", "duplicate_series_code")}, side
-    q = [r for r in q_all if r["entity_type"] != "doc_series"]
+    # Since 1e7194cb a till number is only accepted from the main computer, and
+    # the two computers here are two separate first installs that each handed
+    # THEMSELVES till 1 -- so each parks the other's allocation, because the
+    # sender is not the main computer it knows about. Same shape as the
+    # receipt book above: a side effect of the scenario's two independent
+    # installs, not part of the sale's family. Pinned exactly: one row per
+    # computer, and only that reason, so a different till_allocation refusal
+    # (or a second row) cannot hide behind this exclusion.
+    # WHAT THIS CAN NO LONGER CATCH: a till_allocation being parked WRONGLY
+    # for this same reason. The till-number tests
+    # (test_branch_alias_till_allocation_apply.py) own that behaviour; this
+    # test owns only "no sale-family row is missing or foreign".
+    tills = [(r["entity_type"], r["reason"]) for r in q_all if r["entity_type"] == "till_allocation"]
+    assert tills == [("till_allocation", "till_allocation_not_from_main")], (
+        f"computer {who}: {tills}")
+    q = [r for r in q_all if r["entity_type"] not in ("doc_series", "till_allocation")]
     kinds = {r["entity_type"] for r in q}
     assert kinds == FAMILY, f"computer {who}: parked kinds {sorted(kinds)}, expected {sorted(FAMILY)}"
     [sale] = [r for r in q if r["entity_type"] == "sale"]
