@@ -136,6 +136,24 @@ def client_and_company():
     return _make_admin_client('docseries')
 
 
+@pytest.fixture(autouse=True)
+def _runs_as_the_main_computer(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42 - 952a9d5b). Creating or claiming a
+    number book is now a main-computer-only action (409 TILL_NEEDS_MAIN_COMPUTER
+    anywhere else), and the local test device is not the registry's main
+    computer. These tests are about the rules of a BOOK (duplicate codes, doc
+    types, reserved e-invoicing prefixes, immutable fields, one active book per
+    till, a device with no identity), not about who may create one, so every
+    route call here runs AS the main computer with the one registry answer
+    pinned true -- the same seam retail_doc_series_sync_test.py uses.
+
+    WHAT THIS FILE CAN NO LONGER CATCH: whether create_doc_series /
+    claim_doc_series refuse a non-main computer. That is proven with a REAL
+    registry, both directions, in retail_v42_till_allocation_test.py."""
+    from commercial_runtime.identity import device_context
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+
+
 def _seed_product(c, **kw):
     payload = {
         'name': 'Doc Series Test Widget', 'sku': f'DOCSER-{uuid.uuid4().hex[:8]}',

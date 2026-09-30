@@ -2231,5 +2231,15 @@
   "This computer has no identity yet, so it cannot give out till numbers.": "ليس لهذا الجهاز هوية بعد، لذا لا يمكنه إعطاء أرقام أجهزة البيع.",
   "Choose which computer first.": "اختر الجهاز أولًا.",
   "Could not change the till numbers.": "تعذّر تغيير أرقام أجهزة البيع.",
-  "This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again.": "كان هذا الجهاز يستخدم الأرقام المقروءة، لكن ليس لديه الآن رقم جهاز بيع من الجهاز الرئيسي، لذلك عاد يستخدم الأرقام الطويلة."
+  "This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again.": "كان هذا الجهاز يستخدم الأرقام المقروءة، لكن ليس لديه الآن رقم جهاز بيع من الجهاز الرئيسي، لذلك عاد يستخدم الأرقام الطويلة.",
+  "the other computer described a device in a way this one cannot read": "وصف الجهاز الآخر جهازًا بطريقة لا يستطيع هذا الجهاز قراءتها",
+  "the other computer named a main computer in a way this one cannot read": "حدّد الجهاز الآخر الجهاز الرئيسي بطريقة لا يستطيع هذا الجهاز قراءتها",
+  "two computers disagree about which shop branch this is the same as": "يختلف جهازان حول الفرع الذي يطابقه هذا الفرع",
+  "a till number it gives out clashes with one already recorded here": "رقم جهاز البيع الذي يعطيه يتعارض مع رقم مسجّل هنا مسبقًا",
+  "the other computer sent it in a shape this one cannot read": "أرسله الجهاز الآخر بشكل لا يستطيع هذا الجهاز قراءته",
+  "the other computer described a till number in a way this one cannot read": "وصف الجهاز الآخر رقم جهاز البيع بطريقة لا يستطيع هذا الجهاز قراءتها",
+  "it comes from a main computer this one has not heard about yet": "مصدره جهاز رئيسي لم يعرف به هذا الجهاز بعد",
+  "a till number was given out by a computer that is not the main computer": "أُعطي رقم جهاز البيع من جهاز ليس هو الجهاز الرئيسي",
+  "A till number from another computer": "رقم جهاز بيع من جهاز آخر",
+  "A branch link from another computer": "ربط فرع من جهاز آخر"
 }

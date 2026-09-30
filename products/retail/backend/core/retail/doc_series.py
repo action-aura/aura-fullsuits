@@ -485,6 +485,9 @@ def allocations_in_branch(conn, company_id, branch_uid, active_only=True):
     return conn.execute(sql, (str(company_id), branch_uid)).fetchall()
 
 
+RELEASE_ACK_PREFIX = 'till_release_ack:'
+
+
 def till_number_problem(conn, company_id, branch_uid, branch_code, till_number, terminal_uid):
     """Why `till_number` cannot be given to `terminal_uid`, or None when it can.
     Returns the string 'allocated' (another terminal holds an ACTIVE allocation
@@ -492,10 +495,29 @@ def till_number_problem(conn, company_id, branch_uid, branch_code, till_number, 
     exists that is NOT this terminal's own -- a hand-made book, an older
     terminal's book that a release left behind). Both are the same refusal to
     the operator: TILL_NUMBER_TAKEN. Checked against `idx_doc_series_code`'s
-    global code space, not only this branch, because that index is global."""
+    global code space, not only this branch, because that index is global.
+
+    A third answer, 'release_pending' (H1, Track S money verifier): the number
+    was RELEASED from another terminal, but that terminal has not yet confirmed
+    it stopped using it. The confirmation is the shop setting
+    `till_release_ack:<allocation id>`, which the old computer writes once it has
+    learned of the release through sync and retired its readable books, and
+    which syncs back. Without it the old computer may still be ringing sales
+    under the number, so giving it to another computer would print the same
+    receipt number twice. A computer that never comes back keeps its number
+    reserved forever (deliberate: unlock it by getting that computer online).
+    Releasing the number back to the SAME terminal is not blocked."""
     for row in allocations_in_branch(conn, company_id, branch_uid):
         if int(row['till_number']) == int(till_number) and row['terminal_uid'] != terminal_uid:
             return 'allocated'
+    if conn.execute(
+            "SELECT 1 FROM till_allocations a WHERE CAST(a.company_id AS TEXT)=? AND a.branch_uid=? "
+            "AND a.till_number=? AND a.status='released' AND a.terminal_uid != ? "
+            "AND NOT EXISTS (SELECT 1 FROM retail_settings s WHERE CAST(s.company_id AS TEXT)=? "
+            "                AND s.skey = ? || a.id) LIMIT 1",
+            (str(company_id), branch_uid, int(till_number), terminal_uid or '',
+             str(company_id), RELEASE_ACK_PREFIX)).fetchone():
+        return 'release_pending'
     if inspect_till_books(conn, company_id, terminal_uid, branch_code, till_number)['conflicts']:
         return 'book'
     return None

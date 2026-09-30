@@ -269,6 +269,26 @@ def test_two_computers_that_both_believed_they_were_main_converge_on_one_winner(
     assert epochs[id_b_gave] > epochs[id_a_gave], epochs            # the setup did what it claims
 
     shop.sync_all()
+    # CHANGED ON PURPOSE (1e7194cb, fix crew F2 / money verifier M2): the engine no
+    # longer takes a till number from a main computer it has never heard of. A's
+    # registry still says epoch 1, so B's newer-epoch allocation is PARKED on A as
+    # allocation_epoch_unknown -- not applied, not lost. Before that fix this test
+    # expected instant agreement; that instant agreement is exactly what let any
+    # licensed peer take a till number. What this test can no longer catch: a
+    # double-main clash converging WITHOUT the registry ever catching up -- which
+    # is now refused by design.
+    parked_on_a = shop.sel("a", "SELECT entity_id, reason FROM sync_apply_quarantine "
+                                "WHERE entity_type='till_allocation'")
+    assert [(r["entity_id"], r["reason"]) for r in parked_on_a] == \
+        [(id_b_gave, "allocation_epoch_unknown")], parked_on_a
+    # A learns of B's newer main role (as a registry pull would deliver it), and
+    # the retry loop replays the parked allocation on the next sync.
+    shop.run("a", [
+        {"op": "reg_exec", "sql": "UPDATE devices SET is_admin_device=0 WHERE id=?", "params": [a]},
+        {"op": "reg_exec", "sql": "UPDATE devices SET is_admin_device=1 WHERE id=?", "params": [b]},
+        {"op": "reg_exec", "sql": "UPDATE admin_device_assignment SET epoch=epoch+1, device_id=?",
+         "params": [b]}])
+    shop.sync_all()
     on_a, on_b = _allocs(shop, "a"), _allocs(shop, "b")
     assert on_a == on_b, (on_a, on_b)                               # same rows, same verdicts
     active = [r for r in on_a if r["status"] == "active"]
@@ -336,3 +356,195 @@ def test_fact2_the_main_computers_sale_return_and_purchase_all_get_a_number(tmp_
     assert po["status_code"] == 200, po
     assert ret["body"]["data"]["return_number"] == "MAI1-R-000001"
     assert po["body"]["data"]["po_number"] == "MAI1-P-000001"
+
+
+# ------------------------------------------------- H1: release, then re-give
+# THE DEFECT (Track S money verifier, probe test_probe_release_realloc): the main
+# computer released B's till number while B was away, gave the SAME number to C,
+# and B -- which had never heard of the release -- kept ringing sales under it.
+# B and C then printed the same readable receipt number ("MAI1-000001").
+#
+# THE RULE NOW: a released number is NEVER given to another computer until the
+# computer that held it confirms it has stopped using it. The confirmation is the
+# setting `till_release_ack:<allocation id>`, written by that computer once it has
+# learned of the release (through sync) and retired its readable books, and
+# synced back to the main computer. Until it arrives: 409 TILL_NUMBER_TAKEN.
+# A computer that never comes back keeps its number reserved forever (written
+# down in retail_api.py, on `_ack_pending_till_releases`).
+# A book a computer already made for the number ALSO keeps it reserved for good
+# (the codes are globally unique), which is why a number is only ever recycled
+# from a computer that never actually made books.
+
+def _sale_numbers(shop: Shop, which: str) -> list:
+    return [r["sale_number"] for r in shop.sel(which, "SELECT sale_number FROM sales ORDER BY id")]
+
+
+def test_h1_a_released_number_is_not_given_to_another_computer_that_sold_under_it(tmp_path):
+    shop = Shop(tmp_path, computers=("a", "b", "c")).build()
+    for w in ("b", "c"):
+        shop.patch_branch_uid(w, _branch_uid(shop, "a"))
+    b, c = shop.ids["b"], shop.ids["c"]
+
+    [give_b] = shop.login("a", [{"op": "allocate_till", "terminal_uid": b, "till_number": 1}])
+    assert give_b["status_code"] == 200, give_b
+    shop.sync("a", "b")
+    b_nums = _open_and_sell(shop, "b", 2)
+    assert b_nums == ["MAI1-000001", "MAI1-000002"], b_nums
+
+    # B goes away (it pushes nothing). The owner releases B's number and tries to
+    # hand it straight to C.
+    [rel] = shop.login("a", [{"op": "release_till", "terminal_uid": b}])
+    assert rel["status_code"] == 200, rel
+    [give_c] = shop.login("a", [{"op": "allocate_till", "terminal_uid": c, "till_number": 1}])
+    assert give_c["status_code"] == 409 and _code(give_c) == "TILL_NUMBER_TAKEN", give_c
+    assert "confirm" in give_c["body"]["message"], give_c["body"]["message"]
+    # ... and the screen does not suggest it either.
+    [tills] = shop.login("a", [{"op": "http", "path": "/api/sub/retail/tills"}])
+    sugg = {d["terminal_uid"]: d["suggested_till_number"] for d in tills["body"]["data"]["devices"]}
+    assert sugg[c] != 1, sugg
+    assert [r for r in _allocs(shop, "a") if r["terminal_uid"] == c] == []
+
+    # B, still away, sells once more under the number it believes it still has.
+    late = shop.login("b", [{"op": "sell", "product_id": shop.shop["product_id"], "quantity": 1}])
+    assert late[0]["status_code"] == 200, late
+
+    # B comes back: it pushes everything, learns of the release, confirms.
+    shop.sync("b", "a")
+    shop.sync("a", "b")
+    shop.login("b", [{"op": "numbering_get"}])
+    shop.sync("b", "a")
+    # The books B made are now known to the main computer, so the number stays
+    # reserved for good -- a different reason, the same refusal.
+    [again] = shop.login("a", [{"op": "allocate_till", "terminal_uid": c, "till_number": 1}])
+    assert again["status_code"] == 409 and _code(again) == "TILL_NUMBER_TAKEN", again
+    assert "MAI1" in again["body"]["message"], again["body"]["message"]
+
+    # C gets a fresh number and sells; nothing anywhere is printed twice.
+    [give_c2] = shop.login("a", [{"op": "allocate_till", "terminal_uid": c}])
+    assert give_c2["status_code"] == 200, give_c2
+    shop.sync("a", "c")
+    c_nums = _open_and_sell(shop, "c", 1)
+    assert c_nums == ["MAI2-000001"], c_nums
+    shop.sync_all()
+    shop.sync_all()
+    for w in ("a", "b", "c"):
+        nums = _sale_numbers(shop, w)
+        assert len(nums) == len(set(nums)), (w, nums)
+
+
+@pytest.mark.parametrize("confirm_by", ["numbering_screen", "opening_a_shift"])
+def test_h1_a_number_nobody_made_books_for_is_reusable_once_the_old_computer_confirms(tmp_path, confirm_by):
+    shop = Shop(tmp_path, computers=("a", "b", "c")).build()
+    for w in ("b", "c"):
+        shop.patch_branch_uid(w, _branch_uid(shop, "a"))
+    b, c = shop.ids["b"], shop.ids["c"]
+    a_uid = shop.ids["a"]
+
+    [give_b] = shop.login("a", [{"op": "allocate_till", "terminal_uid": b, "till_number": 1}])
+    assert give_b["status_code"] == 200, give_b
+    shop.sync("a", "b")            # B holds till 1 but has not opened a shift: no books yet
+    [rel] = shop.login("a", [{"op": "release_till", "terminal_uid": b}])
+    assert rel["status_code"] == 200, rel
+
+    # Nobody -- not C, not the main computer itself -- may take it yet.
+    for target in (c, a_uid):
+        [r] = shop.login("a", [{"op": "allocate_till", "terminal_uid": target, "till_number": 1}])
+        assert r["status_code"] == 409 and _code(r) == "TILL_NUMBER_TAKEN", (target, r)
+
+    # B learns of the release. That alone is not enough: main has no confirmation.
+    shop.sync("a", "b")
+    [still] = shop.login("a", [{"op": "allocate_till", "terminal_uid": c, "till_number": 1}])
+    assert still["status_code"] == 409, still
+
+    # B confirms (two ways it can), the confirmation travels back.
+    if confirm_by == "numbering_screen":
+        [seen] = shop.login("b", [{"op": "numbering_get"}])
+        assert seen["status_code"] == 200, seen
+    else:
+        [opened] = shop.login("b", [{"op": "cash_session_open", "branch_id": _branch_id(shop, "b")}])
+        assert opened["status_code"] == 200, opened
+    acks = shop.sel("b", "SELECT skey FROM retail_settings WHERE skey LIKE 'till_release_ack:%'")
+    assert len(acks) == 1, acks
+    shop.sync("b", "a")
+
+    [ok] = shop.login("a", [{"op": "allocate_till", "terminal_uid": c, "till_number": 1}])
+    assert ok["status_code"] == 200, ok
+    shop.sync("a", "c")
+    c_nums = _open_and_sell(shop, "c", 1)
+    assert c_nums == ["MAI1-000001"], c_nums
+
+    # B, released, sells with plain numbers -- it must not mint under number 1.
+    shop.sync("a", "b")
+    b_out = shop.login("b", [{"op": "cash_session_open", "branch_id": _branch_id(shop, "b")},
+                             {"op": "sell", "product_id": shop.shop["product_id"], "quantity": 1}])
+    b_num = b_out[-1]["body"]["data"]["sale_number"]
+    assert not b_num.startswith("MAI"), b_num
+    shop.sync_all()
+    shop.sync_all()
+    for w in ("a", "b", "c"):
+        nums = _sale_numbers(shop, w)
+        assert len(nums) == len(set(nums)), (w, nums)
+
+
+def test_h1_the_main_computer_releasing_its_own_number_needs_no_confirmation(tmp_path):
+    """There is nobody to wait for: the main computer retires its own books in
+    the same step that releases the number."""
+    shop = Shop(tmp_path, computers=("a", "b")).build()
+    shop.patch_branch_uid("b", _branch_uid(shop, "a"))
+    a, b = shop.ids["a"], shop.ids["b"]
+    [give_a] = shop.login("a", [{"op": "allocate_till", "terminal_uid": a, "till_number": 1}])
+    assert give_a["status_code"] == 200, give_a
+    [rel] = shop.login("a", [{"op": "release_till", "terminal_uid": a}])
+    assert rel["status_code"] == 200, rel
+    [give_b] = shop.login("a", [{"op": "allocate_till", "terminal_uid": b, "till_number": 1}])
+    assert give_b["status_code"] == 200, give_b
+
+
+# ------------------------------------------------------------------- L4
+def test_l4_a_readable_shaped_book_is_minted_only_under_an_active_allocation(tmp_path):
+    """Track S L4. The mint gate used to skip any book the device-LOCAL
+    `numbering_till` list did not track -- a list that never syncs and is lost on
+    a reinstall -- so a readable-shaped book (`QQQ7`) that list did not know
+    minted under a number this computer was never given. Now the book's CODE SHAPE
+    decides: no active allocation for THIS terminal, no `QQQ7-...` sale number.
+
+    The census found no doc_series rows in any lab database, so no shop depended
+    on the old bypass. The allow half (a tracked book under a real allocation
+    still mints) is x5 / x3 / fact2 above, which assert `MAI1-000001`."""
+    shop = Shop(tmp_path, computers=("a",)).build()
+    # A hand-made, readable-SHAPED book claimed by this computer, and NOTHING in
+    # its device-local numbering_till record about it (it was not made by the
+    # feature), and NO till allocation for this computer.
+    [made] = shop.login("a", [{"op": "create_doc_series", "doc_type": "sale", "code": "QQQ7"}])
+    assert made["status_code"] == 200, made
+    [claim] = shop.login("a", [{"op": "claim_doc_series", "series_id": made["series_id"]}])
+    assert claim["status_code"] == 200, claim
+    assert shop.sel("a", "SELECT COUNT(*) AS n FROM till_allocations") == [{"n": 0}]
+
+    [number] = _open_and_sell(shop, "a")
+    assert not number.startswith("QQQ7"), \
+        f"minted {number!r} under a readable-shaped book with no till allocation"
+    assert shop.sel("a", "SELECT COUNT(*) AS n FROM sales WHERE sale_number LIKE 'QQQ7%'") == [{"n": 0}]
+    counters = shop.sel("a", "SELECT COUNT(*) AS n FROM doc_series_counter WHERE series_id=?",
+                        [made["series_id"]])
+    assert counters == [{"n": 0}], "the gated book's counter must not have advanced"
+
+
+def test_h1_the_main_computer_switching_its_own_readable_numbers_off_needs_no_confirmation(tmp_path):
+    """The SWITCH-OFF path of the same rule as the test above (which drives the
+    release-a-till route): the main computer turns its own readable numbers off,
+    which releases its own number in the same step. It must write its own
+    confirmation there too, or its number stays 'release_pending' forever and can
+    never be given to another computer. Added by F1b because mutating that ack
+    write (`_confirm_release_written` in set_numbering) left every test green."""
+    shop = Shop(tmp_path, computers=("a", "b")).build()
+    shop.patch_branch_uid("b", _branch_uid(shop, "a"))
+    b = shop.ids["b"]
+    [on] = shop.login("a", [{"op": "numbering_set", "readable_enabled": True, "till_number": 1}])
+    assert on["status_code"] == 200, on
+    assert [r["till_number"] for r in _allocs(shop, "a") if r["status"] == "active"] == [1]
+    [off] = shop.login("a", [{"op": "numbering_set", "readable_enabled": False}])
+    assert off["status_code"] == 200, off
+    assert [r for r in _allocs(shop, "a") if r["status"] == "active"] == []
+    [give_b] = shop.login("a", [{"op": "allocate_till", "terminal_uid": b, "till_number": 1}])
+    assert give_b["status_code"] == 200, give_b

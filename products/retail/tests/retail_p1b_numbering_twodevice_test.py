@@ -343,6 +343,24 @@ def test_t5b_two_main_computers_end_with_one_till_1_and_the_clash_parked_for_rev
     _open_and_sell(shop, "a")
     _open_and_sell(shop, "b")
     shop.sync_all()
+    # CHANGED ON PURPOSE (1e7194cb, fix crew F2 / money verifier M2): the engine no
+    # longer takes a till number from a main computer it has never heard of, so on
+    # A (registry still at epoch 1) B's newer-epoch allocation is PARKED as
+    # allocation_epoch_unknown until A's registry catches up. This test can no
+    # longer catch a double-main clash converging WITHOUT the registry catching up
+    # -- which is now refused by design (it is exactly how a forged allocation got
+    # in). A then learns of B's role, as a registry pull would deliver it, and the
+    # retry loop replays the parked allocation.
+    parked_on_a = shop.sel("a", "SELECT entity_id, reason FROM sync_apply_quarantine "
+                                "WHERE entity_type='till_allocation'")
+    assert [(r["entity_id"], r["reason"]) for r in parked_on_a] == \
+        [(won_b, "allocation_epoch_unknown")], parked_on_a
+    shop.run("a", [
+        {"op": "reg_exec", "sql": "UPDATE devices SET is_admin_device=0 WHERE id=?", "params": [a]},
+        {"op": "reg_exec", "sql": "UPDATE devices SET is_admin_device=1 WHERE id=?", "params": [b]},
+        {"op": "reg_exec", "sql": "UPDATE admin_device_assignment SET epoch=epoch+1, device_id=?",
+         "params": [b]}])
+    shop.sync_all()
     on_a, on_b = _allocs(shop, "a"), _allocs(shop, "b")
     assert on_a == on_b, (on_a, on_b)                       # same rows, same verdicts
     active = [r for r in on_a if r["status"] == "active" and r["till_number"] == 1]
@@ -424,7 +442,11 @@ def test_t7_a_computer_that_had_readable_numbers_when_the_switch_went_off_is_ret
     d = view["body"]["data"]
     assert d["available"] is False and d["readable_enabled"] is False, d
     assert d["readable_switched_off_by_update"] is True, d
-    assert "multi-computer support" in d["unavailable_reason"], d
+    # Reworded on purpose (v42): the old "until multi-computer support arrives" promise is
+    # gone. Literal text, so the test still catches the wording drifting back.
+    assert ("it has no till number from the main computer now"
+            in d["unavailable_reason"]), d
+    assert "multi-computer support" not in d["unavailable_reason"], d
     # the NEXT shift creates nothing, retires the books, sells on the long number
     [shift2] = _off(shop, "a", [{"op": "cash_session_open", "branch_id": _branch_id(shop, "a")}])[-1:]
     assert shift2["status_code"] == 200, shift2

@@ -555,3 +555,56 @@ def test_a_non_owner_holding_close_and_approve_cannot_close_straight_to_closed()
     assert _session_row(sid)['status'] == 'closed'
     # The allow half (owner's own close settles) is pinned by
     # test_the_owner_may_still_close_and_approve_their_own_drawer above.
+
+
+def test_approve_refuses_the_person_who_OPENED_the_drawer_though_somebody_else_closed_it():
+    """AUDIT-032, the opener half (F1/M4). P opens the drawer and rings the
+    sale; Q counts it 50 short; P (holding approve by a synced grant) is asked
+    to accept the shortfall of P's OWN drawer. `_same_actor` used to look at the
+    ender alone, so P sailed through as "not the closer". Refused now, the
+    variance stays pending, and the allow-half still works: a third person
+    approves, and the response says self_approved is False for them."""
+    admin, cid, pid = _new_shop()
+    p, p_uid = _make_user('manager', cid, {'retail.cash.close': 'full', 'retail.cash.approve': 'none'})
+    q, _q_uid = _make_user('manager', cid, {'retail.cash.close': 'full', 'retail.cash.approve': 'none'})
+    r = _open(p)
+    assert r.status_code == 200, r.get_json()
+    sid = r.get_json()['data']['id']
+    assert _sell_cash(p, pid, 100).status_code == 200
+    r = _end(q, sid, 150.0)
+    assert r.status_code == 200, r.get_json()
+    row = _session_row(sid)
+    assert row['status'] == 'ended', row
+    assert str(row['opened_by']) == str(p_uid) and str(row['opened_by']) != str(row['closed_by']), (
+        'precondition: opener and ender are different people', dict(row))
+
+    _plant(p_uid, user_accounts.CAP_CASH_APPROVE, 'full')
+    p = _login(p_uid)
+    r = _approve(p, sid)
+    assert r.status_code == 403, r.get_json()
+    assert r.get_json().get('code') == 'SELF_APPROVAL_FORBIDDEN', r.get_json()
+    assert _session_row(sid)['status'] == 'ended', 'the refused self-approval must leave the variance pending'
+
+    other, _ = _make_accountant(cid)
+    r = _approve(other, sid)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['self_approved'] is False, r.get_json()
+    assert _session_row(sid)['status'] == 'closed'
+
+
+def test_the_owner_may_approve_a_drawer_they_opened_that_somebody_else_closed():
+    """Allow-half of the opener rule: the owner stays exempt (a one-person
+    shop has no second authority), and the response still surfaces
+    self_approved=True."""
+    admin, cid, pid = _new_shop()
+    q, _q_uid = _make_user('manager', cid, {'retail.cash.close': 'full', 'retail.cash.approve': 'none'})
+    r = _open(admin)
+    assert r.status_code == 200, r.get_json()
+    sid = r.get_json()['data']['id']
+    assert _sell_cash(admin, pid, 100).status_code == 200
+    assert _end(q, sid, 150.0).status_code == 200
+    assert _session_row(sid)['status'] == 'ended'
+    r = _approve(admin, sid)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['self_approved'] is True, r.get_json()
+    assert _session_row(sid)['status'] == 'closed'

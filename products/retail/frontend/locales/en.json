@@ -2231,5 +2231,15 @@
   "This computer has no identity yet, so it cannot give out till numbers.": "This computer has no identity yet, so it cannot give out till numbers.",
   "Choose which computer first.": "Choose which computer first.",
   "Could not change the till numbers.": "Could not change the till numbers.",
-  "This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again.": "This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again."
+  "This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again.": "This computer was using readable numbers, but it has no till number from the main computer now, so it uses the long numbers again.",
+  "the other computer described a device in a way this one cannot read": "the other computer described a device in a way this one cannot read",
+  "the other computer named a main computer in a way this one cannot read": "the other computer named a main computer in a way this one cannot read",
+  "two computers disagree about which shop branch this is the same as": "two computers disagree about which shop branch this is the same as",
+  "a till number it gives out clashes with one already recorded here": "a till number it gives out clashes with one already recorded here",
+  "the other computer sent it in a shape this one cannot read": "the other computer sent it in a shape this one cannot read",
+  "the other computer described a till number in a way this one cannot read": "the other computer described a till number in a way this one cannot read",
+  "it comes from a main computer this one has not heard about yet": "it comes from a main computer this one has not heard about yet",
+  "a till number was given out by a computer that is not the main computer": "a till number was given out by a computer that is not the main computer",
+  "A till number from another computer": "A till number from another computer",
+  "A branch link from another computer": "A branch link from another computer"
 }

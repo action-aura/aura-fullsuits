@@ -10084,17 +10084,27 @@ def _cash_session_public(sess, this_terminal=_UNSET):
 
 
 def _same_actor(sess, actor_uid):
-    """True when `actor_uid` is the person who ended this shift.
+    """True when `actor_uid` is the person who OPENED this drawer or the person
+    who ENDED (counted) it -- i.e. somebody who ran the very shift whose
+    shortfall they are being asked to accept (AUDIT-032).
+
+    It used to key on the ender alone, so P could open a drawer and ring its
+    sales, let Q count it short, and then approve the shortfall as a person who
+    "was not the closer" -- P accepting the loss of P's own drawer. The opener
+    is the person whose till it was; the ender is the person who counted it;
+    either one approving is a person approving their own shift.
 
     Reads `ended_by` where v16 has landed and `closed_by` where it has not --
     which is the SAME fallback `_cash_session_public` documents, and it has to
     be, or "did the ender approve their own count?" would be answered from one
-    column while the screen reported the other.
+    column while the screen reported the other. `opened_by` is a column every
+    version of the table has always carried.
     """
     keys = sess.keys()
     ender = (sess['ended_by'] if 'ended_by' in keys else None) or (
         sess['closed_by'] if 'closed_by' in keys else None)
-    return bool(ender) and str(ender) == str(actor_uid)
+    opener = sess['opened_by'] if 'opened_by' in keys else None
+    return any(bool(who) and str(who) == str(actor_uid) for who in (opener, ender))
 
 
 def _terminal_owns(sess, this_terminal=_UNSET):
@@ -11017,10 +11027,13 @@ def approve_cash_variance(session_id):
         # that arrives by sync, so it is repeated here where the act happens.
         # The owner is exempt: in a one-person shop the owner is the only
         # authority there is (and the response still surfaces self_approved).
+        # "A shift THEY ran" = opened OR ended it (`_same_actor`): P opening
+        # and ringing a drawer that Q counts short must not let P accept P's
+        # own drawer just because Q happened to press the close button.
         if _same_actor(sess, _uid()) and session.get('mt_role') != 'admin':
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'code': 'SELF_APPROVAL_FORBIDDEN',
-                            'message': 'You cannot approve the variance of a shift you ended yourself. '
+                            'message': 'You cannot approve the variance of a shift you opened or ended yourself. '
                                        'Ask somebody else to approve it.'}), 403
 
         # A DRAWER NOBODY COUNTED CANNOT BE RUBBER-STAMPED BY ACCIDENT.
@@ -14878,12 +14891,12 @@ _TILL_STATE_KEY_PREFIX = 'numbering_till:'
 READABLE_NUMBERS_AVAILABLE = True
 READABLE_NEEDS_DEVICE_REGISTRY = 'READABLE_NEEDS_DEVICE_REGISTRY'
 _READABLE_UNAVAILABLE_REASON = (
-    "Readable numbers are switched off until multi-computer support arrives. "
-    "Two computers that have not heard from each other could otherwise pick the "
-    "same till number and print the same receipt number for different sales.")
+    "Readable numbers are given out by the main computer, and this computer has "
+    "no till number from the main computer yet. Until it has one it uses the long "
+    "numbers, so two computers can never print the same receipt number.")
 _READABLE_WITHDRAWN_REASON = (
-    "This computer was using readable numbers. They are switched off until "
-    "multi-computer support arrives, and it now uses the long numbers again.")
+    "This computer was using readable numbers, but it has no till number from "
+    "the main computer now, so it uses the long numbers again.")
 
 
 TILL_NEEDS_MAIN_COMPUTER = 'TILL_NEEDS_MAIN_COMPUTER'
@@ -14987,22 +15000,27 @@ def _resolve_series_gated(conn, cid, doc_type):
     minting `ABD1-...` numbers while its own screen said readable numbers were
     off. Deciding at MINT time closes every path at once.
 
-    Hand-made books (`POST /doc-series` then `/allocator-claim`) are NOT tracked
-    by that record and pass through unchanged: they are a separate, explicit
-    mechanism (now main-only), and gating them here would change numbering the
-    owner deliberately set up. Known limit, written down: a hand-made book whose
-    code merely LOOKS readable is not gated; only books this feature created
-    are."""
+    Track S L4: the gate keys on the book's CODE SHAPE (`ABD1`, `ABD1-R`,
+    `ABD1-P`), NOT on whether this computer's device-local `numbering_till`
+    list tracks the book. That list never syncs and can be lost or never written
+    (a reinstall, a restored database, a hand-made book), and a readable-shaped
+    book it does not know about used to sail through the gate and mint under
+    someone else's number. Now a readable-shaped book is minted only under an
+    ACTIVE allocation for THIS terminal whose number and branch match the book,
+    whatever the local list says. A book whose code is NOT readable-shaped (any
+    other hand-made book: `POST /doc-series` then `/allocator-claim`, main-only
+    since v42) still passes through unchanged.
+
+    Census: no `doc_series` rows exist in any lab database (Track S census), so
+    no shop depends on the old bypass; a shop that hand-made a readable-shaped
+    book and no longer gets numbers from it falls back to plain numbering and
+    needs the main computer to give the computer a till number."""
     terminal = local_terminal_id()
     row = doc_series.resolve_series(conn, cid, doc_type, terminal)
     if row is None:
         return None
     row = _adopt_reinstalled_counter(conn, row)
-    try:
-        state = _read_till_state(conn, cid, terminal)
-    except Exception:
-        return row
-    if row['id'] not in state['series_ids']:
+    if doc_series.parse_readable_code(row['code']) is None:
         return row
     if not READABLE_NUMBERS_AVAILABLE:
         return None
@@ -15071,6 +15089,11 @@ def _allocate_till_in_txn(conn, cid, branch, terminal_uid, till_number, main_uid
     inspected = doc_series.inspect_till_books(conn, cid, terminal_uid, code, till_number)
     why = _why_till_cannot_be_numbered(inspected, till_number)
     if problem is not None or why:
+        if problem == 'release_pending' and not why:
+            return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN, 'message':
+                f"Till number {till_number} was taken away from another computer, but that "
+                "computer has not yet confirmed it stopped using it. Switch it on and let it "
+                "connect, then try again - or pick a different number."}), 409)
         return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN, 'message':
             why or f"Till number {till_number} is already used by another computer or book. "
                    "Pick a different number."}), 409)
@@ -15112,6 +15135,59 @@ def _release_till_in_txn(conn, cid, alloc_row):
     _audit(conn, 'TILL_RELEASED', 'till_allocation', alloc_row['id'],
            f"till {alloc_row['till_number']} <- {alloc_row['terminal_uid']}")
     return row
+
+
+def _confirm_release_written(conn, cid, alloc_id):
+    """Write (and sync) the confirmation `till_release_ack:<allocation id>` that
+    THIS computer has stopped using the number a release took away. The main
+    computer refuses to give that number to anyone else until it arrives
+    (`doc_series.till_number_problem` -> 'release_pending'). Idempotent. NO
+    commit. Only call it after the books this computer numbers with are
+    retired IN THE SAME TRANSACTION -- the ack is the claim that they are."""
+    skey = doc_series.RELEASE_ACK_PREFIX + alloc_id
+    if _read_stored_setting(conn, cid, skey) is None:
+        _write_retail_setting(conn, cid, skey, now_utc_iso())
+        _audit(conn, 'TILL_RELEASE_CONFIRMED', 'till_allocation', alloc_id,
+               'this computer stopped using the released till number')
+
+
+def _ack_pending_till_releases(conn, cid, terminal):
+    """H1. If the main computer RELEASED this computer's till number while it was
+    away, stop using it now and say so: retire the readable books this computer
+    tracks, switch its local state off, and confirm each released allocation of
+    this terminal (`_confirm_release_written`). Commits only when it did
+    something. Safe to call often (a no-op after the first time).
+
+    WHEN it runs (the only ack points -- the MINT gate is not one, it merely
+    refuses): opening a shift and the numbering screen's GET. A computer that
+    sells all day without doing either keeps the number reserved a little
+    longer; it can never mint under it (`_resolve_series_gated` needs an ACTIVE
+    allocation), so nothing prints twice, the number is just held.
+
+    A computer that never comes back, or is revoked, never confirms: its number
+    stays reserved FOREVER. That is the price of never printing a receipt
+    number twice; freeing it takes that computer connecting once."""
+    if not terminal:
+        return False
+    pending = [r['id'] for r in conn.execute(
+        "SELECT a.id FROM till_allocations a WHERE CAST(a.company_id AS TEXT)=? "
+        "AND a.terminal_uid=? AND a.status='released' AND NOT EXISTS ("
+        "  SELECT 1 FROM retail_settings s WHERE CAST(s.company_id AS TEXT)=? AND s.skey = ? || a.id)",
+        (str(cid), terminal, str(cid), doc_series.RELEASE_ACK_PREFIX)).fetchall()]
+    if not pending:
+        return False
+    state = _read_till_state(conn, cid, terminal)
+    active = doc_series.active_allocation(conn, cid, terminal)
+    # Books tracked for a number this computer no longer holds are the ones to
+    # retire; books that belong to its CURRENT active number stay.
+    if state['on'] and (active is None or state['till'] != int(active['till_number'])):
+        _retire_tracked_books(conn, cid, terminal, state, 'till number released')
+        _write_till_state(conn, cid, terminal, False, None, None, [])
+    for alloc_id in pending:
+        _confirm_release_written(conn, cid, alloc_id)
+    conn.commit()
+    _sync_nudge()
+    return True
 
 
 def _reserved_book_prefixes():
@@ -15326,6 +15402,9 @@ def _book_till_at_shift_open(conn, cid, bid):
         if not terminal:
             log.info('readable numbering skipped: this device has no identity yet')
             return
+        # H1: if the main computer took this computer's number away while it was
+        # away, stop using it and confirm -- the number stays reserved until then.
+        _ack_pending_till_releases(conn, cid, terminal)
         state = _read_till_state(conn, cid, terminal)
         if not READABLE_NUMBERS_AVAILABLE:
             if state['on']:
@@ -15524,8 +15603,8 @@ def _numbering_branch(conn, cid, explicit_uid):
 #                               only if a build turns readable numbers off.
 #                               Setting the branch code is still allowed.
 #        unavailable_reason     null when available; else a plain sentence. It is
-#                               the "switched off until multi-computer support
-#                               arrives" wording for a computer an earlier build
+#                               the "it has no till number from the main computer
+#                               now" wording for a computer an earlier build
 #                               had switched ON, else the general "not yet" wording
 #        readable_switched_off_by_update  true for that already-ON computer (its
 #                               books are retired, audited, at its next shift open)
@@ -15573,6 +15652,11 @@ def get_numbering():
         branch, err = _numbering_branch(conn, cid, request.args.get('branch_uid'))
         if err:
             return err
+        try:
+            _ack_pending_till_releases(conn, cid, local_terminal_id())
+        except Exception:
+            conn.rollback()
+            log.warning('till release confirmation failed; the screen still loads', exc_info=True)
         return jsonify({'status': 'success',
                         'data': _numbering_payload(conn, cid, branch, preview_till)})
     finally:
@@ -15686,6 +15770,9 @@ def set_numbering():
                 _release_till_in_txn(conn, cid, mine)
             _retire_tracked_books(conn, cid, terminal, state, 'readable numbers switched off')
             _write_till_state(conn, cid, terminal, False, None, None, [])
+            if mine is not None:
+                # The releasing computer IS the old holder: nobody to wait for.
+                _confirm_release_written(conn, cid, mine['id'])
             _audit(conn, 'NUMBERING_READABLE_SET', 'company', cid, '0')
         conn.commit()
         payload = _numbering_payload(conn, cid, branch)
@@ -15767,6 +15854,17 @@ def _tills_payload(conn, cid, branch):
         'branch_uid': branch_uid, 'branch_name': branch['name'], 'branch_code': code,
         'max_till_number': doc_series.MAX_TILL_NUMBER,
         'devices': devices,
+        # Numbers taken away from a computer that has not yet confirmed it stopped
+        # using them (H1). They stay reserved; the screen can say who to wait for.
+        'pending_releases': [
+            {'id': r['id'], 'terminal_uid': r['terminal_uid'], 'till_number': int(r['till_number'])}
+            for r in conn.execute(
+                "SELECT a.id, a.terminal_uid, a.till_number FROM till_allocations a "
+                "WHERE CAST(a.company_id AS TEXT)=? AND a.branch_uid=? AND a.status='released' "
+                "AND NOT EXISTS (SELECT 1 FROM retail_settings s WHERE CAST(s.company_id AS TEXT)=? "
+                "                AND s.skey = ? || a.id) ORDER BY a.till_number, a.id",
+                (str(cid), branch_uid, str(cid), doc_series.RELEASE_ACK_PREFIX)).fetchall()
+        ] if branch_uid else [],
         'allocations': [{'id': a['id'], 'terminal_uid': a['terminal_uid'],
                          'till_number': int(a['till_number']), 'branch_uid': a['branch_uid']}
                         for a in allocs],
@@ -15882,6 +15980,7 @@ def release_till():
             state = _read_till_state(conn, cid, me)
             _retire_tracked_books(conn, cid, me, state, 'till number released')
             _write_till_state(conn, cid, me, False, None, None, [])
+            _confirm_release_written(conn, cid, alloc['id'])
         conn.commit()
         branch, err = _numbering_branch(conn, cid, data.get('branch_uid'))
         payload = _tills_payload(conn, cid, branch) if not err else None
@@ -18197,6 +18296,64 @@ def export_cash_sessions_csv():
     )
 
 # ── Void (immutability: never edit/delete, only reverse) ──────────────────────
+_PAYMENT_JOURNAL_SOURCES = ('customer_payment', 'supplier_payment', 'po_payment')
+
+
+def _reverse_payment_journal(conn, cid, payment):
+    """Books half of voiding a customer/supplier payment (P2S money fix H2).
+
+    void_payment used to undo the SUBLEDGER (`_adjust_credit`) and flag the
+    payment 'voided' and stop there, so pay 20 / void it left the customer at
+    0 while GL Accounts Receivable still carried the 20 -- the books no longer
+    tied to the subledger and the trial balance never came back to its
+    pre-payment value. The ledger is append-only, so the correction is a
+    REVERSING journal (`general_ledger.reverse_journal`: the original's own
+    lines, sides swapped, `reversed_journal_id` -> the original), never an
+    edit. It carries the payment's receipt reference and the original's uid as
+    its `source_uid`, so it syncs like every other journal and links back.
+
+    The original is found by the payment's `reference` (customer_payment /
+    supplier_payment / pay_purchase_order all post with reference=ref and no
+    per-row source id), narrowed to the journals of those three source types,
+    to one whose cash leg equals THIS payment's amount, and to one nothing has
+    reversed yet -- so a reused reference cannot make the void reverse someone
+    else's journal, and a repeat call is a no-op rather than a second reversal.
+
+    Returns the reversing journal id, or None when there is nothing to
+    reverse: a payment with no journal (written before schema v38, or a
+    supplier-less PO payment, which never touched the subledger either -- the
+    caller only calls this where it did), or a synced payment whose journal
+    has not arrived on this computer yet. That last case leaves the books one
+    reversal short until the journals converge; recorded as a residual, and
+    better than inventing a journal from a row.
+    """
+    ref = payment['reference']
+    if not ref:
+        return None
+    marks = ','.join('?' * len(_PAYMENT_JOURNAL_SOURCES))
+    candidates = conn.execute(
+        f"SELECT j.id FROM gl_journals j WHERE j.company_id=? AND j.reference=? "
+        f"AND j.source_type IN ({marks}) AND j.reversed_journal_id IS NULL "
+        f"AND NOT EXISTS (SELECT 1 FROM gl_journals r WHERE r.reversed_journal_id=j.id) "
+        f"ORDER BY j.id",
+        (cid, ref, *_PAYMENT_JOURNAL_SOURCES)).fetchall()
+    currency = _company_currency(conn, cid)
+    want = _money(payment['amount'], currency)
+    for cand in candidates:
+        cash = conn.execute(
+            "SELECT COALESCE(SUM(l.debit),0) AS d, COALESCE(SUM(l.credit),0) AS c "
+            "FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
+            "WHERE l.journal_id=? AND a.code=?", (cand['id'], gl.ACCOUNT_CASH)).fetchone()
+        if _money(cash['d'] or cash['c'], currency) == want:
+            # Dated TODAY (the accounting date of the void), not the original's
+            # date: a reversal posted into an already-reported day would change
+            # that day's figures after the fact.
+            return gl.reverse_journal(conn, cid, cand['id'],
+                                      memo=f"Void of payment {ref}",
+                                      business_date=gl._today())
+    return None
+
+
 @retail_bp.route('/payments/<int:pid>/void', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -18363,6 +18520,9 @@ def void_payment(pid):
             reduced = (p['party_type'] == 'customer') == (p['direction'] == 'in')
             void_amt = _money(p['amount'], void_currency)
             _adjust_credit(conn, table, p['party_id'], cid, void_amt if reduced else -void_amt, void_currency)
+            # The books half (see _reverse_payment_journal): gated on the very
+            # branch that moved the subledger, so the two cannot diverge again.
+            _reverse_payment_journal(conn, cid, p)
         _audit(conn, 'PAYMENT_VOIDED', 'payment', pid, data.get('reason', ''))
         # AUDIT-032A fix (DEFECT 2): this route mutates `payments.status` in
         # place -- the ONE documented exception to Phase 5's "money is an
@@ -19435,6 +19595,11 @@ _SYNC_REVIEW_KINDS = {
     'cheque': 'A cheque from another computer',
     'gl_journal': 'An accounting entry',
     'gl_journal_line': 'A line of an accounting entry',
+    # Track S (retail v42 + 1e7194cb): the engine parks these too -- a till
+    # number given out by a computer that is not main, or a branch alias it
+    # refused -- so the owner is told what the item is, not "something".
+    'till_allocation': 'A till number from another computer',
+    'branch_alias': 'A branch link from another computer',
 }
 _SYNC_REVIEW_KIND_FALLBACK = 'Something from another computer'
 
@@ -19464,7 +19629,19 @@ _SYNC_REVIEW_REASONS = {
     'malformed_admin_device': ('the other computer named a main computer in a way this one cannot read', False),
     'branch_alias_conflict': ('two computers disagree about which shop branch this is the same as', False),
     'till_allocation_conflict': ('a till number it gives out clashes with one already recorded here', False),
+    # 1e7194cb (fix crew F2): every event now applies in its own savepoint, so a
+    # malformed one parks instead of stopping the whole sync; and a till number
+    # is only taken from the main computer. `allocation_epoch_unknown` clears by
+    # itself once this computer learns about the newer main computer.
+    'malformed_payload': ('the other computer sent it in a shape this one cannot read', False),
+    'malformed_till_allocation': ('the other computer described a till number in a way this one cannot read', False),
+    'allocation_epoch_unknown': ('it comes from a main computer this one has not heard about yet', True),
+    'till_allocation_not_from_main': ('a till number was given out by a computer that is not the main computer', False),
 }
+# The engine also parks `malformed_<entity type>` for any entity it cannot read
+# (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one
+# honest sentence rather than the unknown fallback.
+_SYNC_REVIEW_REASON_MALFORMED = ('the other computer sent it in a shape this one cannot read', False)
 _SYNC_REVIEW_REASON_SALE_DUPLICATE = 'the same receipt number already exists here'
 _SYNC_REVIEW_REASON_MISSING_OTHER = ('something it belongs to is missing here', True)
 _SYNC_REVIEW_REASON_UNKNOWN = ('it could not be added for a reason this screen does not know', False)
@@ -19479,6 +19656,8 @@ def _sync_review_reason(reason, entity_type):
         return hit
     if isinstance(reason, str) and reason.startswith('missing_parent:'):
         return _SYNC_REVIEW_REASON_MISSING_OTHER
+    if isinstance(reason, str) and reason.startswith('malformed_'):
+        return _SYNC_REVIEW_REASON_MALFORMED
     return _SYNC_REVIEW_REASON_UNKNOWN
 
 

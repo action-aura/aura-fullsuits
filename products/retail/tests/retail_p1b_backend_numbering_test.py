@@ -1270,7 +1270,9 @@ def test_an_already_on_computer_reads_off_at_once_and_says_an_update_switched_it
     assert d['readable_enabled'] is False and d['till_number'] is None
     assert d['available'] is False and d['readable_switched_off_by_update'] is True
     assert d['unavailable_reason'] == _WITHDRAWN
-    assert 'switched off until multi-computer support arrives' in d['unavailable_reason']
+    # Reworded on purpose (v42): the "multi-computer support arrives" promise is gone.
+    assert 'it has no till number from the main computer now' in d['unavailable_reason']
+    assert 'multi-computer support' not in d['unavailable_reason']
     # GET is a pure read: the books are retired at the next shift, not here
     assert {b['status'] for b in _books(cid)} == {'active'}
 
