@@ -774,7 +774,23 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // (preset). The old "no separate name field" sentence is gone with the field.
     "Name" to "الاسم",
     "Name (optional)" to "الاسم (اختياري)",
-    "Name must be 1 to 60 characters." to "يجب أن يتكوّن الاسم من 1 إلى 60 حرفًا.",
+    // The two name refusals the server can give (text_safety.clean_single_line).
+    // A blank name is NOT a refusal: it clears the name.
+    "Name must be 60 characters or fewer." to "يجب ألا يزيد الاسم على 60 حرفًا.",
+    "Name must be a single line." to "يجب أن يكون الاسم سطرًا واحدًا.",
+    "Unknown preset." to "وظيفة غير معروفة.",
+    "Role does not match the chosen preset." to "الدور لا يطابق الوظيفة المختارة.",
+    "Custom" to "مخصّص",
+    "Branch" to "الفرع",
+    "There is no branch to choose yet." to "لا يوجد فرع للاختيار بعد.",
+    "You don't have permission to do this." to "ليست لديك صلاحية لتنفيذ هذا الإجراء.",
+    // Empty-state lines shown instead of an "Add ..." call to action when the
+    // signed-in person does not hold the capability the server needs for the
+    // write (RetailSession.hasAnyCapability).
+    "Returns will show here." to "ستظهر المرتجعات هنا.",
+    "Suppliers will show here." to "سيظهر الموردون هنا.",
+    "Purchase orders will show here." to "ستظهر أوامر الشراء هنا.",
+    "Categories will show here." to "ستظهر التصنيفات هنا.",
     "Save name" to "حفظ الاسم",
     "Name saved" to "تم حفظ الاسم",
     "Branch manager" to "مدير فرع",

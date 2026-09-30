@@ -76,6 +76,12 @@ import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.CAP_EMPLOYEES
 import com.actionaura.retail.ui.CAP_REPORTS
+import com.actionaura.retail.ui.CAPS_CREATE_RETURN
+import com.actionaura.retail.ui.CAPS_CUSTOMER_PAYMENT
+import com.actionaura.retail.ui.CAPS_STOCK_WRITE
+import com.actionaura.retail.ui.CAPS_SUPPLIER_PAYMENT
+import com.actionaura.retail.ui.CAPS_VOID_CUSTOMER_PAYMENT
+import com.actionaura.retail.ui.CAPS_VOID_SUPPLIER_PAYMENT
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.theme.AuraColors
 import com.actionaura.retail.ui.theme.AuraPalette
@@ -538,6 +544,11 @@ fun ReturnsScreen(snackbar: SnackbarHostState) {
     var showNew by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // POST /returns is @mt_require_capability(CAP_REFUND). The list (GET) is open
+    // to any signed-in account, so the screen stays readable and only the
+    // "Process return" controls go away for someone who could not use them.
+    val canReturn = RetailSession.hasAnyCapability(CAPS_CREATE_RETURN)
+
     suspend fun load() { rows = try { ApiClient.get().returns().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) { load(); loading = false }
 
@@ -545,21 +556,23 @@ fun ReturnsScreen(snackbar: SnackbarHostState) {
         when {
             loading -> SkeletonList()
             rows.isEmpty() -> EmptyState(Icons.AutoMirrored.Filled.AssignmentReturn, tr("No returns yet"),
-                tr("Refund items from a past sale; stock is added back automatically."),
-                ctaText = tr("Process return"), onCta = { showNew = true })
+                if (canReturn) tr("Refund items from a past sale; stock is added back automatically.")
+                else tr("Returns will show here."),
+                ctaText = if (canReturn) tr("Process return") else null,
+                onCta = if (canReturn) ({ showNew = true }) else null)
             else -> LazyColumn(
                 contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) { items(rows, key = { it.id }) { r -> ReturnRow(r) } }
         }
-        if (rows.isNotEmpty()) ExtendedFloatingActionButton(
+        if (rows.isNotEmpty() && canReturn) ExtendedFloatingActionButton(
             onClick = { showNew = true },
             icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Process return")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
 
-    if (showNew) ProcessReturnSheet(
+    if (showNew && canReturn) ProcessReturnSheet(
         onDismiss = { showNew = false },
         onDone = { showNew = false; scope.launch { loading = true; load(); loading = false; snackbar.showSnackbar(tr("Return processed")) } },
     )
@@ -950,6 +963,12 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
     var payAmount by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
+    // Each write control shows only when the person holds what the SERVER
+    // requires for that exact call (customer_payment: sell OR books.record;
+    // void_payment: refund OR books.record). A reports-only account can read this
+    // statement and is offered nothing it would be refused.
+    val canPay = RetailSession.hasAnyCapability(CAPS_CUSTOMER_PAYMENT)
+    val canVoid = RetailSession.hasAnyCapability(CAPS_VOID_CUSTOMER_PAYMENT)
     suspend fun reload() { stmt = try { ApiClient.get().customerStatement(customerId).data } catch (e: Exception) { null } }
     LaunchedEffect(customerId) { reload(); loading = false }
 
@@ -1027,7 +1046,7 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                             // payment" below -- both are money-mutating actions
                             // on this one statement, and only one should be able
                             // to be in flight at a time.
-                            if (e.kind == "payment" && e.payment_id != null) {
+                            if (canVoid && e.kind == "payment" && e.payment_id != null) {
                                 TextButton(onClick = {
                                     paying = true; err = null
                                     scope.launch {
@@ -1043,6 +1062,7 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                             }
                         }
                     }
+                    if (canPay) {
                     HorizontalDivider(Modifier.padding(vertical = 12.dp))
                     Text(tr("Record a payment"), fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
@@ -1066,6 +1086,7 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                             else Text(tr("Pay"))
                         }
                     }
+                    }
                     if (err != null) { Spacer(Modifier.height(8.dp)); Text(err!!, color = MaterialTheme.colorScheme.error) }
                 }
             }
@@ -1082,6 +1103,8 @@ fun SuppliersScreen(snackbar: SnackbarHostState) {
     var loading by remember { mutableStateOf(true) }
     var showAdd by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // create_supplier is CAP_STOCK_ADJUST on the server; the list is login-only.
+    val canAdd = RetailSession.hasAnyCapability(CAPS_STOCK_WRITE)
 
     suspend fun load() { suppliers = try { ApiClient.get().suppliers().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) { load(); loading = false }
@@ -1090,7 +1113,9 @@ fun SuppliersScreen(snackbar: SnackbarHostState) {
         when {
             loading -> SkeletonList()
             suppliers.isEmpty() -> EmptyState(Icons.Default.LocalShipping, tr("No suppliers yet"),
-                tr("Add the vendors you buy stock from."), ctaText = tr("Add Supplier"), onCta = { showAdd = true })
+                if (canAdd) tr("Add the vendors you buy stock from.") else tr("Suppliers will show here."),
+                ctaText = if (canAdd) tr("Add Supplier") else null,
+                onCta = if (canAdd) ({ showAdd = true }) else null)
             else -> LazyColumn(
                 contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1098,14 +1123,14 @@ fun SuppliersScreen(snackbar: SnackbarHostState) {
                 items(suppliers, key = { it.id }) { sup -> SupplierRow(sup) }
             }
         }
-        if (suppliers.isNotEmpty()) ExtendedFloatingActionButton(
+        if (suppliers.isNotEmpty() && canAdd) ExtendedFloatingActionButton(
             onClick = { showAdd = true },
             icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Supplier")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
 
-    if (showAdd) AddSupplierSheet(
+    if (showAdd && canAdd) AddSupplierSheet(
         onDismiss = { showAdd = false },
         onCreated = { showAdd = false; scope.launch { loading = true; load(); loading = false; snackbar.showSnackbar(tr("Supplier added")) } },
     )
@@ -1236,6 +1261,10 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
     var payAmount by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
+    // supplier_payment is books.record only; void_payment's supplier half is
+    // narrowed to books.record in its body (a refund-only cashier is refused).
+    val canPay = RetailSession.hasAnyCapability(CAPS_SUPPLIER_PAYMENT)
+    val canVoid = RetailSession.hasAnyCapability(CAPS_VOID_SUPPLIER_PAYMENT)
     LaunchedEffect(supplierId) {
         stmt = try { ApiClient.get().supplierStatement(supplierId).data } catch (e: Exception) { null }
         loading = false
@@ -1283,7 +1312,7 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                             // H1 fix: busy-guarded and error-surfaced the same
                             // way as StatementSheet's Void button above -- see
                             // that comment for the full reasoning.
-                            if (e.kind == "payment" && e.payment_id != null) {
+                            if (canVoid && e.kind == "payment" && e.payment_id != null) {
                                 TextButton(onClick = {
                                     paying = true; err = null
                                     scope.launch {
@@ -1299,6 +1328,7 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                             }
                         }
                     }
+                    if (canPay) {
                     HorizontalDivider(Modifier.padding(vertical = 12.dp))
                     Text(tr("Record a payment"), fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
@@ -1321,6 +1351,7 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                             if (paying) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                             else Text(tr("Pay"))
                         }
+                    }
                     }
                     if (err != null) { Spacer(Modifier.height(8.dp)); Text(err!!, color = MaterialTheme.colorScheme.error) }
                 }
@@ -2320,6 +2351,9 @@ fun PurchaseOrdersScreen(snackbar: SnackbarHostState) {
     var showCreate by remember { mutableStateOf(false) }
     var detailId by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
+    // create_purchase_order is CAP_STOCK_ADJUST on the server; the list and the
+    // detail read are login-only, so a viewer still sees the orders.
+    val canCreate = RetailSession.hasAnyCapability(CAPS_STOCK_WRITE)
 
     suspend fun load() { orders = try { ApiClient.get().purchaseOrders().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) { load(); loading = false }
@@ -2328,7 +2362,9 @@ fun PurchaseOrdersScreen(snackbar: SnackbarHostState) {
         when {
             loading -> SkeletonList()
             orders.isEmpty() -> EmptyState(Icons.Default.Inventory2, tr("No purchase orders"),
-                tr("Create a PO to restock from a supplier."), ctaText = tr("New Purchase Order"), onCta = { showCreate = true })
+                if (canCreate) tr("Create a PO to restock from a supplier.") else tr("Purchase orders will show here."),
+                ctaText = if (canCreate) tr("New Purchase Order") else null,
+                onCta = if (canCreate) ({ showCreate = true }) else null)
             else -> LazyColumn(
                 contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -2336,14 +2372,14 @@ fun PurchaseOrdersScreen(snackbar: SnackbarHostState) {
                 items(orders, key = { it.id }) { po -> PoRow(po) { detailId = po.id } }
             }
         }
-        if (orders.isNotEmpty()) ExtendedFloatingActionButton(
+        if (orders.isNotEmpty() && canCreate) ExtendedFloatingActionButton(
             onClick = { showCreate = true },
             icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("New PO")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
 
-    if (showCreate) CreatePoSheet(
+    if (showCreate && canCreate) CreatePoSheet(
         onDismiss = { showCreate = false },
         onCreated = { showCreate = false; scope.launch { loading = true; load(); loading = false; snackbar.showSnackbar(tr("Purchase order created")) } },
     )
@@ -2399,6 +2435,9 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
     var receiving by remember { mutableStateOf(false) }
     var payAmt by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
+    // pay_purchase_order is books.record; receive_purchase_order is stock.adjust.
+    val canPayPo = RetailSession.hasAnyCapability(CAPS_SUPPLIER_PAYMENT)
+    val canReceive = RetailSession.hasAnyCapability(CAPS_STOCK_WRITE)
     LaunchedEffect(poId) {
         detail = try { ApiClient.get().purchaseOrder(poId).data } catch (e: Exception) { null }
         loading = false
@@ -2431,7 +2470,7 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
                     SummaryRow(tr("Balance"), money((po?.total ?: 0.0) - (po?.amount_paid ?: 0.0)))
                     Text(tr("Payment:") + " " + (po?.payment_status ?: "unpaid").replaceFirstChar { it.uppercase() },
                         style = MaterialTheme.typography.labelMedium, color = payStatusColor(po?.payment_status))
-                    if ((po?.payment_status ?: "unpaid") != "paid") {
+                    if (canPayPo && (po?.payment_status ?: "unpaid") != "paid") {
                         Spacer(Modifier.height(12.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(payAmt, { payAmt = it }, label = { Text(tr("Pay supplier")) }, singleLine = true,
@@ -2455,7 +2494,7 @@ private fun PoDetailSheet(poId: Int, onDismiss: () -> Unit, onReceived: () -> Un
                             }
                         }
                     }
-                    if (po?.status == "pending") {
+                    if (canReceive && po?.status == "pending") {
                         Spacer(Modifier.height(16.dp))
                         Button(
                             onClick = {

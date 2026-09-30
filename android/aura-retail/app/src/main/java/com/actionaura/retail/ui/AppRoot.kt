@@ -426,12 +426,25 @@ private val booksOnlyTabs = listOf(
 
 private data class BooksEntry(val route: String, val title: String, val hint: String, val needs: String)
 
-// Read-only destinations only. Every one of these screens is a viewer; the
-// server keeps its own gate on each route, this list is just the front door.
+// These destinations are the front door only; the server keeps its own gate on
+// each route. NOT every screen behind them is a pure viewer: Receivables and
+// Payables lead to statements that carry "Record a payment" and Void buttons.
+// Those buttons are hidden unless the person holds the capability the server
+// requires for that exact call (CAPS_CUSTOMER_PAYMENT, CAPS_SUPPLIER_PAYMENT,
+// CAPS_VOID_*, see RetailSession.kt), so the Accountant (books.record) sees
+// them and a reports-only account does not. This comment used to say "every one
+// of these screens is a viewer", which was wrong the moment those buttons
+// existed.
+//
+// Trial balance, profit-and-loss and balance-sheet are all
+// `@mt_require_capability(CAP_REPORTS)` on the server (retail_api.py), NOT
+// books.view: gating them on books.view showed the entry to a books.view-only
+// account whose fetch then 403'd, and hid it from a reports-only account the
+// server would have served. Pinned by AccountantHomeContractTest.
 private val booksEntries = listOf(
-    BooksEntry("trial_balance", "Trial Balance", "Every account, debits against credits.", CAP_BOOKS_VIEW),
-    BooksEntry("profit_and_loss", "Profit and Loss", "Income minus cost and expenses for a period.", CAP_BOOKS_VIEW),
-    BooksEntry("balance_sheet", "Balance Sheet", "What the business owns and owes.", CAP_BOOKS_VIEW),
+    BooksEntry("trial_balance", "Trial Balance", "Every account, debits against credits.", CAP_REPORTS),
+    BooksEntry("profit_and_loss", "Profit and Loss", "Income minus cost and expenses for a period.", CAP_REPORTS),
+    BooksEntry("balance_sheet", "Balance Sheet", "What the business owns and owes.", CAP_REPORTS),
     BooksEntry("reports", "Reports", "Sales and stock reports.", CAP_REPORTS),
     BooksEntry("receivables", "Receivables", "What customers owe.", CAP_REPORTS),
     BooksEntry("payables", "Payables", "What the shop owes suppliers.", CAP_REPORTS),

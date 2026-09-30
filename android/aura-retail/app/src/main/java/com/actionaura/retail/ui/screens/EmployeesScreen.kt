@@ -31,9 +31,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.AdminActionResponse
 import com.actionaura.retail.net.ApiClient
+import com.actionaura.retail.net.Branch
 import com.actionaura.retail.net.CreateEmployeeRequest
 import com.actionaura.retail.net.Employee
 import com.actionaura.retail.net.SetEmployeePinRequest
+import com.actionaura.retail.net.UpdateEmployeeBranchScopeRequest
 import com.actionaura.retail.net.UpdateEmployeeNameRequest
 import com.actionaura.retail.net.UpdateEmployeePresetRequest
 import com.actionaura.retail.net.UpdateEmployeeRoleRequest
@@ -52,6 +54,7 @@ import com.actionaura.retail.ui.theme.Warning
 import com.google.gson.JsonParser
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import java.text.Normalizer
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  EMPLOYEES -- the owner's account-management screen (Phase 1, design §3)
@@ -118,8 +121,103 @@ private fun presetExplainer(preset: String?): String = when (preset) {
     else -> tr("Can sell, refund against a sale and close their own drawer.")
 }
 
-/** Name length as a reader counts it, trimmed. Blank is 0. */
-internal fun nameLength(raw: String): Int = raw.trim().let { it.codePointCount(0, it.length) }
+/**
+ * The job label a row or the manage sheet shows.
+ *
+ * `preset_matches == false` is the server saying "this account's stored preset
+ * no longer matches its capability rows" (someone edited a permission by hand
+ * after the preset was applied). Showing "Accountant" then would be a label
+ * that lies about what the person can do, so it reads "Custom" -- the same word
+ * the desktop screen uses. Only an EXPLICIT false does that: null means an
+ * older server that never sent the field, and must keep the preset's own name.
+ * A blank preset falls back to the legacy role label.
+ */
+internal fun employeeJobLabel(rolePreset: String?, presetMatches: Boolean?, effectiveRole: String?): String {
+    val preset = rolePreset?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        ?: return roleLabel(effectiveRole)
+    return if (presetMatches == false) tr("Custom") else presetLabel(preset)
+}
+
+/**
+ * The preset the picker should show as CHOSEN: the stored one, unless the
+ * server says it no longer matches (then nothing is chosen, so tapping any
+ * preset -- including the stored one, which re-applies it -- is a real change).
+ * Null for a legacy row with no preset at all.
+ */
+internal fun matchedPreset(rolePreset: String?, presetMatches: Boolean?): String? =
+    rolePreset?.trim()?.lowercase()?.takeIf { it.isNotEmpty() && presetMatches != false }
+
+/** A tap on [picked] opens the "Change job?" confirm only when it is a change. */
+internal fun shouldConfirmPresetChange(current: String?, picked: String): Boolean = current != picked
+
+/** Only this preset needs a branch (`update_preset` / create_employee). */
+internal const val BRANCH_SCOPED_PRESET = "branch_manager"
+
+internal fun presetNeedsBranch(preset: String?): Boolean = preset == BRANCH_SCOPED_PRESET
+
+// -- Name, judged the way `text_safety.clean_single_line` judges it ---------
+//
+// Kept format characters: ZWNJ, ZWJ, LRM, RLM and ALM. Every OTHER Cc/Cf
+// character is stripped before counting, so an invisible pad cannot push a name
+// over the limit on the phone while the server would accept it (or the
+// reverse). Line breaks are refused, not joined.
+private val NAME_KEPT_FORMAT = setOf(0x200C, 0x200D, 0x200E, 0x200F, 0x061C)
+private val NAME_LINE_BREAKS = setOf(0x0A, 0x0D, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)
+
+// String.codePoints() needs API 24; a manual walk works on every device.
+private fun codePointsOf(s: String): List<Int> {
+    val out = ArrayList<Int>(s.length)
+    var i = 0
+    while (i < s.length) {
+        val cp = s.codePointAt(i)
+        out.add(cp)
+        i += Character.charCount(cp)
+    }
+    return out
+}
+
+internal fun nameHasLineBreak(raw: String): Boolean = codePointsOf(raw).any { it in NAME_LINE_BREAKS }
+
+/** NFC, Cc/Cf stripped (except the kept five), trimmed. Blank when nothing is left. */
+internal fun cleanName(raw: String): String {
+    val stripped = StringBuilder()
+    codePointsOf(raw).forEach { cp ->
+        val type = Character.getType(cp)
+        val control = type == Character.CONTROL.toInt() || type == Character.FORMAT.toInt()
+        if (!control || cp in NAME_KEPT_FORMAT) stripped.appendCodePoint(cp)
+    }
+    return Normalizer.normalize(stripped, Normalizer.Form.NFC).trim()
+}
+
+/** Name length as the server counts it: code points of the cleaned name. Blank is 0. */
+internal fun nameLength(raw: String): Int = cleanName(raw).let { it.codePointCount(0, it.length) }
+
+/** The English sentence for what is wrong with [raw], or null when the server
+ *  would accept it (a blank name is accepted: it means "no name"). Callers
+ *  pass it through `tr`. */
+internal fun nameProblem(raw: String): String? = when {
+    nameHasLineBreak(raw) -> "Name must be a single line."
+    nameLength(raw) > DISPLAY_NAME_MAX -> "Name must be 60 characters or fewer."
+    else -> null
+}
+
+/**
+ * The invite request exactly as it goes on the wire. `role` is the preset's BASE
+ * role (accountant and branch_manager ride on `manager`), never a fixed
+ * "cashier": the server rejects a role that does not match the preset with
+ * "Role does not match the chosen preset.". The branch uid is sent only for the
+ * branch-scoped preset; the server ignores it for the others but a stale uid
+ * from an earlier pick must not travel.
+ */
+internal fun buildCreateEmployeeRequest(
+    email: String, name: String, preset: String, branchUid: String?,
+): CreateEmployeeRequest = CreateEmployeeRequest(
+    email.trim().lowercase(),
+    PRESET_BASE_ROLE.getValue(preset),
+    name = cleanName(name).ifEmpty { null },
+    preset = preset,
+    branch_scope_uid = if (presetNeedsBranch(preset)) branchUid else null,
+)
 
 /** True when a body is the server's `BRANCH_SCOPE_REQUIRED` refusal. Reads the
  *  `code` field, never the sentence, so a reworded message cannot break it. */
@@ -467,9 +565,9 @@ private fun EmployeeRow(e: Employee, onClick: () -> Unit) {
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     // The preset label when there is one ("Accountant" says more
-                    // than the base role "Manager" it rides on).
-                    if (e.role_preset.isNullOrBlank()) roleLabel(e.effective_role ?: e.role)
-                    else presetLabel(e.role_preset),
+                    // than the base role "Manager" it rides on) -- or "Custom"
+                    // when the server says the rows no longer match it.
+                    employeeJobLabel(e.role_preset, e.preset_matches, e.effective_role ?: e.role),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = if (owner) MaterialTheme.colorScheme.primary
@@ -501,6 +599,8 @@ private fun CreateEmployeeDialog(
     var name by remember { mutableStateOf("") }
     // A preset, not a bare role: it decides the role AND the capability rows.
     var preset by remember { mutableStateOf(ASSIGNABLE_PRESETS.first()) }
+    // Only meaningful for branch_manager; the confirm button needs it there.
+    var branchUid by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -526,11 +626,8 @@ private fun CreateEmployeeDialog(
                     value = name, onValueChange = { name = it; error = null },
                     label = { Text(tr("Name (optional)")) },
                     singleLine = true,
-                    isError = nameLength(name) > DISPLAY_NAME_MAX,
-                    supportingText = {
-                        if (nameLength(name) > DISPLAY_NAME_MAX)
-                            Text(tr("Name must be 1 to 60 characters."))
-                    },
+                    isError = nameProblem(name) != null,
+                    supportingText = { nameProblem(name)?.let { Text(tr(it)) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -538,6 +635,9 @@ private fun CreateEmployeeDialog(
                 PresetPicker(selected = preset, enabled = !busy, onPick = { preset = it; error = null })
                 Text(presetExplainer(preset), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (presetNeedsBranch(preset)) {
+                    BranchScopePicker(branchUid, enabled = !busy, onPick = { branchUid = it; error = null })
+                }
 
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error,
@@ -547,18 +647,14 @@ private fun CreateEmployeeDialog(
         },
         confirmButton = {
             Button(
-                enabled = !busy && email.isNotBlank() && nameLength(name) <= DISPLAY_NAME_MAX,
+                enabled = !busy && email.isNotBlank() && nameProblem(name) == null &&
+                    (!presetNeedsBranch(preset) || !branchUid.isNullOrBlank()),
                 onClick = {
                     busy = true; error = null
                     scope.launch {
                         try {
                             val r = ApiClient.get().createEmployee(
-                                CreateEmployeeRequest(
-                                    email.trim().lowercase(),
-                                    PRESET_BASE_ROLE.getValue(preset),
-                                    name = name.trim().ifEmpty { null },
-                                    preset = preset,
-                                ))
+                                buildCreateEmployeeRequest(email, name, preset, branchUid))
                             // The route answers 200 with {"success": true,
                             // "setup_link": ...}. A 200 that carries neither is
                             // not something to celebrate silently, so the
@@ -570,8 +666,9 @@ private fun CreateEmployeeDialog(
                             // "Email already registered." -- apiErrorMessage
                             // surfaces the server's own sentence, translated.
                             // A branch_manager sent without a branch is a 400
-                            // with code BRANCH_SCOPE_REQUIRED: this screen has
-                            // no branch picker, so say what to do in plain words.
+                            // with code BRANCH_SCOPE_REQUIRED; the picker above
+                            // prevents it, but a stale answer still gets a plain
+                            // sentence rather than a raw code.
                             error = branchScopeMessage(e) ?: apiErrorMessage(e)
                         } finally { busy = false }
                     }
@@ -624,6 +721,62 @@ private fun PresetPicker(selected: String?, enabled: Boolean, onPick: (String) -
                 RadioButton(selected = selected == p, onClick = null, enabled = enabled)
                 Spacer(Modifier.width(10.dp))
                 Text(presetLabel(p))
+            }
+        }
+    }
+}
+
+/** The branches a branch manager may be limited to: active, and carrying the
+ *  uid the server keys the scope on (never the integer id). */
+internal fun scopableBranches(all: List<Branch>): List<Branch> =
+    all.filter { !it.uid.isNullOrBlank() && (it.status ?: "active").lowercase() == "active" }
+
+/**
+ * "Which branch?" for a branch_manager. The server refuses that preset without
+ * one (400 BRANCH_SCOPE_REQUIRED), so the person choosing it is asked here, up
+ * front, instead of being told after the fact. Loads the branch list itself;
+ * an empty list or a load failure is said in words and leaves nothing chosen,
+ * which keeps the caller's confirm button disabled.
+ */
+@Composable
+private fun BranchScopePicker(selectedUid: String?, enabled: Boolean, onPick: (String) -> Unit) {
+    var loading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var branches by remember { mutableStateOf<List<Branch>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        try {
+            branches = scopableBranches(ApiClient.get().branches().data)
+            loadError = null
+        } catch (e: Exception) {
+            loadError = apiErrorMessage(e)
+        }
+        loading = false
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(tr("Branch"), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+        when {
+            loading -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall)
+            branches.isEmpty() -> Text(tr("There is no branch to choose yet."),
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            else -> Column(Modifier.fillMaxWidth().selectableGroup()) {
+                branches.forEach { b ->
+                    val uid = b.uid.orEmpty()
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .selectable(
+                                selected = selectedUid == uid, enabled = enabled,
+                                role = Role.RadioButton, onClick = { onPick(uid) },
+                            )
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedUid == uid, onClick = null, enabled = enabled)
+                        Spacer(Modifier.width(10.dp))
+                        Text(b.name ?: "—")
+                    }
+                }
             }
         }
     }
@@ -705,11 +858,17 @@ private fun ManageEmployeeSheet(
     var busy by remember { mutableStateOf(false) }
     var confirmRole by remember { mutableStateOf<String?>(null) }
     var confirmPreset by remember { mutableStateOf<String?>(null) }
+    // The branch chosen inside the "Change job?" confirm, for branch_manager.
+    var confirmBranchUid by remember { mutableStateOf(employee.branch_scope_uid) }
     var nameDraft by remember { mutableStateOf(employee.display_name.orEmpty()) }
     val current = (employee.effective_role ?: employee.role)?.trim()?.lowercase() ?: "cashier"
     // Non-null for every account created or edited since registry v9. Such an
     // account is edited through /preset only; see ASSIGNABLE_PRESETS.
-    val currentPreset = employee.role_preset?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    val storedPreset = employee.role_preset?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+    // What the picker shows as chosen: null for a "Custom" account (the server
+    // says its rows no longer match the stored preset), so no preset sentence
+    // is shown for it and tapping any preset -- even the stored one -- applies it.
+    val currentPreset = matchedPreset(employee.role_preset, employee.preset_matches)
     val isDisabled = employee.status?.lowercase() == "disabled"
 
     /**
@@ -755,7 +914,7 @@ private fun ManageEmployeeSheet(
                     )
                     Text(
                         "${employee.employee_id ?: ""}  ·  " +
-                            "${if (currentPreset != null) presetLabel(currentPreset) else roleLabel(current)}" +
+                            employeeJobLabel(employee.role_preset, employee.preset_matches, current) +
                             "  ·  ${statusLabel(employee.status)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -764,27 +923,25 @@ private fun ManageEmployeeSheet(
             }
             HorizontalDivider()
 
-            // Name. 1-60 characters: a rename cannot clear the name from this
-            // box (the create box is where "no name yet" is allowed).
+            // Name, 0-60 characters as the server counts them. A BLANK box is a
+            // real request: PUT .../name clears the name ("blank clears it"),
+            // so the owner can take a name off, not only replace it.
             OutlinedTextField(
                 value = nameDraft, onValueChange = { nameDraft = it },
                 label = { Text(tr("Name")) },
                 singleLine = true,
                 enabled = !busy,
-                isError = nameDraft.isNotEmpty() && nameLength(nameDraft) !in 1..DISPLAY_NAME_MAX,
-                supportingText = {
-                    if (nameDraft.isNotEmpty() && nameLength(nameDraft) !in 1..DISPLAY_NAME_MAX)
-                        Text(tr("Name must be 1 to 60 characters."))
-                },
+                isError = nameProblem(nameDraft) != null,
+                supportingText = { nameProblem(nameDraft)?.let { Text(tr(it)) } },
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedButton(
-                enabled = !busy && nameLength(nameDraft) in 1..DISPLAY_NAME_MAX &&
-                    nameDraft.trim() != employee.display_name.orEmpty(),
+                enabled = !busy && nameProblem(nameDraft) == null &&
+                    cleanName(nameDraft) != employee.display_name.orEmpty(),
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
                     run({ ApiClient.get().updateEmployeeName(
-                        employee.id, UpdateEmployeeNameRequest(nameDraft.trim())) },
+                        employee.id, UpdateEmployeeNameRequest(cleanName(nameDraft))) },
                         tr("Name saved"))
                 },
             ) { Text(tr("Save name")) }
@@ -792,14 +949,18 @@ private fun ManageEmployeeSheet(
             HorizontalDivider()
 
             Text(tr("Role"), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            if (currentPreset != null) {
+            if (storedPreset != null) {
                 // A preset account: pick a preset, confirmed, sent to /preset.
                 PresetPicker(
                     selected = currentPreset, enabled = !busy,
-                    onPick = { if (currentPreset != it) confirmPreset = it },
+                    onPick = { if (shouldConfirmPresetChange(currentPreset, it)) confirmPreset = it },
                 )
-                Text(presetExplainer(currentPreset), style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // No sentence for a "Custom" account: none of the four describes
+                // what this person can actually do any more.
+                if (currentPreset != null) {
+                    Text(presetExplainer(currentPreset), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             } else {
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     ASSIGNABLE_ROLES.forEachIndexed { i, r ->
@@ -928,16 +1089,30 @@ private fun ManageEmployeeSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (presetNeedsBranch(target)) {
+                        BranchScopePicker(confirmBranchUid, enabled = !busy, onPick = { confirmBranchUid = it })
+                    }
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = !busy,
+                    enabled = !busy && (!presetNeedsBranch(target) || !confirmBranchUid.isNullOrBlank()),
                     onClick = {
                         confirmPreset = null
-                        run({ ApiClient.get().updateEmployeePreset(
-                            employee.id, UpdateEmployeePresetRequest(target)) },
-                            tr("Job updated"))
+                        val scopeUid = if (presetNeedsBranch(target)) confirmBranchUid else null
+                        run({
+                            // update_preset reads NO scope from its own body: it only
+                            // checks the row already has one (else 400
+                            // BRANCH_SCOPE_REQUIRED). So the branch is written first,
+                            // through its own route, and the preset second.
+                            val scoped = if (scopeUid != null)
+                                ApiClient.get().updateEmployeeBranchScope(
+                                    employee.id, UpdateEmployeeBranchScopeRequest(scopeUid))
+                            else null
+                            if (scoped != null && !scoped.success) scoped
+                            else ApiClient.get().updateEmployeePreset(
+                                employee.id, UpdateEmployeePresetRequest(target))
+                        }, tr("Job updated"))
                     },
                 ) { Text(tr("Change job")) }
             },

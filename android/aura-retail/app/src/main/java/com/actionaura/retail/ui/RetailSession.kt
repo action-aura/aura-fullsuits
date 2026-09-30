@@ -93,27 +93,53 @@ const val CAP_SELL = "retail.sell"
 
 /**
  * The four registry-v9 "books" capabilities, spelled exactly as
- * `user_accounts.py` spells them (CAP_BOOKS_VIEW .. CAP_BOOKS_CLOSE). View and
- * record are what the Accountant preset grants; approve and close are held by
- * the owner and manager presets. A code that drifts from the server's does not
- * fail loudly -- it hides the books from the one person hired to read them, or
- * routes a cashier to a screen that only 403s. Pinned against the server by
- * SessionCapabilityContractTest.
+ * `user_accounts.py` spells them (CAP_BOOKS_VIEW .. CAP_BOOKS_CLOSE). The
+ * Accountant preset grants view and record and neither of the other two; the
+ * owner holds all four. The manager preset holds NO books code at all
+ * (`ROLE_PRESETS[PRESET_MANAGER]` is `ROLE_CAPABILITIES[ROLE_MANAGER]`, which
+ * carries none) -- this comment used to say approve and close were "held by
+ * the owner and manager presets", which was wrong and would have sent a
+ * reader looking for a bug in the manager grant. A code that drifts from the
+ * server's does not fail loudly -- it hides the books from the one person
+ * hired to read them, or routes a cashier to a screen that only 403s. Pinned
+ * against the server by SessionCapabilityContractTest.
  */
 const val CAP_BOOKS_VIEW = "retail.books.view"
 const val CAP_BOOKS_RECORD = "retail.books.record"
 const val CAP_BOOKS_APPROVE = "retail.books.approve"
 const val CAP_BOOKS_CLOSE = "retail.books.close"
 
+/** "Take money back / reverse a sale" -- `user_accounts.py::CAP_REFUND`. */
+const val CAP_REFUND = "retail.refund"
+
+/** "Close the till drawer" -- `user_accounts.py::CAP_CASH_CLOSE`. */
+const val CAP_CASH_CLOSE = "retail.cash.close"
+
 /** Every books code, in one place so [isBooksOnly] cannot forget one. */
 val BOOKS_CAPABILITIES: List<String> =
     listOf(CAP_BOOKS_VIEW, CAP_BOOKS_RECORD, CAP_BOOKS_APPROVE, CAP_BOOKS_CLOSE)
 
 /**
- * True for a person who holds at least one books code and does NOT hold
- * [CAP_SELL] -- the Accountant. Such a person must not land on the till: the
- * server would refuse every sale they rang (403), and a till screen that
- * refuses everything is a broken first impression for the one user who was
+ * The codes a NORMAL tab (POS, Products, Customers) is there to serve: selling,
+ * adjusting stock, refunding, discounting and closing the drawer. A person who
+ * holds ANY of them has something to do on the normal shell, so they keep it
+ * even if they also hold a books code and even if they lack [CAP_SELL].
+ *
+ * Before this list [isBooksOnly] asked only "no CAP_SELL", so a custom account
+ * with books.view and stock.adjust (but not sell) was moved onto a two-tab
+ * shell with no Products tab -- locked out of the one screen their own grant
+ * exists for. Which means the books shell never has to ADD Products or
+ * Customers tabs: anybody who would want them fails [isBooksOnly] and stays on
+ * the shell that already has them.
+ */
+val TILL_CAPABILITIES: List<String> =
+    listOf(CAP_SELL, CAP_STOCK_ADJUST, CAP_REFUND, CAP_DISCOUNT, CAP_CASH_CLOSE)
+
+/**
+ * True for a person who holds at least one books code and NONE of
+ * [TILL_CAPABILITIES] -- the Accountant. Such a person must not land on the
+ * till: the server would refuse every sale they rang (403), and a till screen
+ * that refuses everything is a broken first impression for the one user who was
  * never meant to see it.
  *
  * Fails CLOSED to "not books-only" on null (capabilities not known yet):
@@ -125,9 +151,56 @@ val BOOKS_CAPABILITIES: List<String> =
  */
 fun isBooksOnly(capabilities: List<String>?): Boolean {
     if (capabilities == null) return false
-    if (capabilities.contains(CAP_SELL)) return false
+    if (capabilities.any { it in TILL_CAPABILITIES }) return false
     return capabilities.any { it in BOOKS_CAPABILITIES }
 }
+
+/**
+ * True if `capabilities` grants ANY of `codes` -- the multi-code twin of
+ * [holdsCapability], with the same fail-open default on null (rendering advice
+ * only; the server re-gates every call) and the same reading of an empty list
+ * as "holds nothing". An empty `codes` list is a programming error and answers
+ * false so it can never silently show a control to everybody.
+ */
+fun holdsAnyCapability(capabilities: List<String>?, codes: List<String>): Boolean =
+    capabilities?.any { it in codes } ?: codes.isNotEmpty()
+
+// ── Write gates, one per server decorator ────────────────────────────────────
+//
+// Each list is what the SERVER requires for the call the button makes, copied
+// from the route's own decorator in `products/retail/backend/api/retail_api.py`
+// and pinned to it by WriteGateContractTest (which reads the Python). They are
+// rendering advice: a control the person cannot use is hidden instead of being
+// offered and answered with a 403. The server re-gates every call regardless.
+
+/** `POST /returns` -- `@mt_require_capability(CAP_REFUND)`. */
+val CAPS_CREATE_RETURN: List<String> = listOf(CAP_REFUND)
+
+/**
+ * Categories create/update/delete, `POST /suppliers`, `POST /purchase-orders`
+ * and `POST /purchase-orders/<id>/receive` -- all
+ * `@mt_require_capability(CAP_STOCK_ADJUST)`.
+ */
+val CAPS_STOCK_WRITE: List<String> = listOf(CAP_STOCK_ADJUST)
+
+/** `POST /customers/<id>/payment` -- `mt_require_any_capability(CAP_SELL, CAP_BOOKS_RECORD)`. */
+val CAPS_CUSTOMER_PAYMENT: List<String> = listOf(CAP_SELL, CAP_BOOKS_RECORD)
+
+/** `POST /suppliers/<id>/payment` and `POST /purchase-orders/<id>/pay` -- books.record only. */
+val CAPS_SUPPLIER_PAYMENT: List<String> = listOf(CAP_BOOKS_RECORD)
+
+/**
+ * `POST /payments/<id>/void` on a CUSTOMER payment -- the decorator floor,
+ * `mt_require_any_capability(CAP_REFUND, CAP_BOOKS_RECORD)`.
+ */
+val CAPS_VOID_CUSTOMER_PAYMENT: List<String> = listOf(CAP_REFUND, CAP_BOOKS_RECORD)
+
+/**
+ * `POST /payments/<id>/void` on a SUPPLIER or PO payment -- narrowed to
+ * books.record in the route body, so a refund-only cashier cannot undo money the
+ * shop paid out.
+ */
+val CAPS_VOID_SUPPLIER_PAYMENT: List<String> = listOf(CAP_BOOKS_RECORD)
 
 /** Route names shared by AppRoot.kt's nav graph and the routing contract test. */
 const val ROUTE_DASHBOARD = "dashboard"
@@ -238,17 +311,27 @@ object RetailSession {
 
     /**
      * Admin state from a LOGIN response, which carries `user` and nothing else.
-     * Deliberately leaves [capabilities] alone rather than clearing it: the
-     * login body has no opinion on grants, and writing null here would be that
-     * absence of an opinion masquerading as "not known" -- harmless today
-     * (it fails open) but the exact shape of the bug this file just fixed.
-     * The caller follows this with [adopt] over a real session fetch.
+     *
+     * CLEARS [capabilities] to "not known". This used to leave them alone, on the
+     * reasoning that the login body has no opinion on grants -- but the previous
+     * account's list is a stale opinion, not an absence of one. Sign out as an
+     * Accountant, sign in as a cashier without an intervening [reset] (an
+     * expired session bounces straight to the login screen without one) and the
+     * cashier briefly inherited the Accountant's grants: [isBooksOnly] still
+     * answered true, so the cashier was routed to the books home until the
+     * session fetch landed. Null is the fail-open default [holdsCapability]
+     * documents, so a moment of "not known" only means the gates render inert
+     * until [adopt] runs over a real session fetch -- which the caller does next.
      */
     fun update(user: User?) {
         isAdmin = isAdminUser(user)
+        capabilities = null
     }
 
     fun hasCapability(code: String): Boolean = holdsCapability(capabilities, code)
+
+    /** True when the account holds ANY of [codes] (see [holdsAnyCapability]). */
+    fun hasAnyCapability(codes: List<String>): Boolean = holdsAnyCapability(capabilities, codes)
 
     /**
      * Books-only Accountant: routed to a read-only home instead of the till.

@@ -403,11 +403,13 @@ class EmployeesWiringContractTest {
         // leave the person labelled by a job their twelve rows no longer match.
         // The only thing that can arm the /role confirmation is `confirmRole = r`
         // (the legacy segmented control), and it sits in the ELSE arm of
-        // `if (currentPreset != null) {`. Any other assignment of a non-null
-        // value to confirmRole would be a second door to /role.
+        // `if (storedPreset != null) {` (the STORED preset, not the matched one:
+        // a "Custom" account still has a preset row and must still never reach
+        // /role). Any other assignment of a non-null value to confirmRole would
+        // be a second door to /role.
         val assigns = Regex("""confirmRole\s*=\s*(\w+)""").findAll(src).map { it.groupValues[1] }.toList()
         assertThat(assigns.filter { it != "null" }).containsExactly("r")
-        val ifPreset = src.indexOf("if (currentPreset != null) {")
+        val ifPreset = src.indexOf("if (storedPreset != null) {")
         val armRole = src.indexOf("confirmRole = r")
         assertThat(ifPreset).isAtLeast(0)
         assertThat(armRole).isGreaterThan(ifPreset)
@@ -418,6 +420,49 @@ class EmployeesWiringContractTest {
         // exactly one call site of each, so no third path sneaks a /role in
         assertThat(Regex("""updateEmployeeRole\(""").findAll(src).count()).isEqualTo(1)
         assertThat(Regex("""updateEmployeePreset\(""").findAll(src).count()).isEqualTo(1)
+    }
+
+    /**
+     * The server's PUT /preset reads NO branch from its own body; it only checks
+     * that the row already has a scope (else 400 BRANCH_SCOPE_REQUIRED). So the
+     * confirm dialog must write the scope through PUT /branch-scope FIRST and
+     * the preset SECOND, and must not proceed to the preset when the scope write
+     * was refused. These are source-text pins (no phone, no compose harness),
+     * proven by mutation: swapping the order, dropping the scope call, or
+     * dropping the early-out each turn this red.
+     */
+    @Test
+    fun the_job_change_writes_the_branch_scope_before_the_preset_and_stops_if_it_fails() {
+        val src = codeOnly(employeesScreen)
+        assertThat(Regex("""updateEmployeeBranchScope\(""").findAll(src).count()).isEqualTo(1)
+        val scopeCall = src.indexOf("updateEmployeeBranchScope(")
+        val presetCall = src.indexOf("updateEmployeePreset(")
+        assertThat(scopeCall).isAtLeast(0)
+        assertThat(presetCall).isGreaterThan(scopeCall)
+        // The two calls sit in one block: the scope result gates the preset.
+        val between = src.substring(scopeCall, presetCall)
+        assertThat(between).contains("UpdateEmployeeBranchScopeRequest(scopeUid)")
+        // ...guarded ONLY by "there is a scope to write" (a `&& false` here would
+        // leave the call in the source but never make it).
+        assertThat(src).contains("val scoped = if (scopeUid != null) ApiClient.get().updateEmployeeBranchScope(")
+        assertThat(between).contains("if (scoped != null && !scoped.success) scoped")
+        // The scope is only written for the branch-scoped preset, and is the
+        // uid chosen inside this confirm (not a stale one).
+        assertThat(src).contains(
+            "val scopeUid = if (presetNeedsBranch(target)) confirmBranchUid else null")
+    }
+
+    @Test
+    fun the_branch_picker_is_offered_for_branch_manager_in_both_dialogs() {
+        val src = codeOnly(employeesScreen)
+        // Invite dialog: picker under presetNeedsBranch(preset), wired to branchUid...
+        assertThat(src).contains("if (presetNeedsBranch(preset)) { BranchScopePicker(branchUid,")
+        // ...and the request is built ONLY through buildCreateEmployeeRequest,
+        // which is what carries branch_scope_uid onto the wire.
+        assertThat(src).contains("createEmployee( buildCreateEmployeeRequest(email, name, preset, branchUid))")
+        assertThat(Regex("""(?<![A-Za-z])CreateEmployeeRequest\(""").findAll(src).count()).isEqualTo(1)
+        // Job-change confirm: picker under presetNeedsBranch(target).
+        assertThat(src).contains("if (presetNeedsBranch(target)) { BranchScopePicker(confirmBranchUid,")
     }
 
     @Test
@@ -439,13 +484,32 @@ class EmployeesWiringContractTest {
         for (p in listOf("manager", "branch_manager", "accountant")) {
             assertThat(PRESET_BASE_ROLE[p]).isEqualTo("manager")
         }
+        // ...and the WHOLE table equals the server's, parsed (fix round A2): the
+        // hand-typed pairs above only cover the four presets known today.
+        fun consts(prefix: String) = Regex("""(?m)^($prefix[A-Z_]+)\s*=\s*'(\w+)'""").findAll(py)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+        val presetNames = consts("PRESET_")
+        val roleNames = consts("ROLE_")
+        val parsed = Regex("""(PRESET_[A-Z_]+):\s*(ROLE_[A-Z_]+)""").findAll(
+            py.substringAfter("PRESET_BASE_ROLE = {").substringBefore("}"))
+            .associate { presetNames.getValue(it.groupValues[1]) to roleNames.getValue(it.groupValues[2]) }
+        assertThat(parsed).hasSize(4)
+        assertThat(PRESET_BASE_ROLE).isEqualTo(parsed)
     }
 
     @Test
     fun the_row_shows_the_preset_label_and_falls_back_to_the_role_for_legacy_rows() {
+        // CHANGED (fix round A2): this used to assert the source text
+        // `presetLabel(e.role_preset)` / `e.role_preset.isNullOrBlank()`, which is
+        // exactly the code that lied -- it showed the stored preset even when the
+        // server said the account no longer matches it. What the label actually
+        // says is now pinned BEHAVIOURALLY in EmployeeJobLabelTest. What this
+        // assertion can no longer catch: nothing that test does not -- but it
+        // cannot see the row/sheet wiring by itself, so that is checked below by
+        // counting the call sites of the one label function.
         val src = codeOnly(employeesScreen)
-        assertThat(src).contains("presetLabel(e.role_preset)")
-        assertThat(src).contains("e.role_preset.isNullOrBlank()")
+        assertThat(Regex("""employeeJobLabel\(\s*\w+\.role_preset,\s*\w+\.preset_matches""")
+            .findAll(src).count()).isAtLeast(2)
         assertThat(presetLabel("accountant")).isEqualTo("Accountant")
         assertThat(presetLabel("branch_manager")).isEqualTo("Branch manager")
         assertThat(presetLabel(null)).isEmpty()
@@ -455,9 +519,11 @@ class EmployeesWiringContractTest {
     fun a_name_field_exists_on_create_and_edit_and_edit_uses_the_name_endpoint() {
         val src = codeOnly(employeesScreen)
         assertThat(src).contains("updateEmployeeName(")
-        assertThat(src).contains("UpdateEmployeeNameRequest(nameDraft.trim())")
+        // The name goes out CLEANED the way the server cleans it (cleanName), and
+        // a blank one is still sent on edit -- PUT /name clears on blank.
+        assertThat(src).contains("UpdateEmployeeNameRequest(cleanName(nameDraft))")
         // create carries the name too (optional, sent only when typed)
-        assertThat(src).contains("name = name.trim().ifEmpty { null }")
+        assertThat(src).contains("name = cleanName(name).ifEmpty { null }")
         // The boxes themselves exist and are bound to the state that is sent.
         // Without these two lines the sends above could stay wired to a
         // variable no field ever fills (found by mutation: relabelling the
@@ -534,7 +600,16 @@ class EmployeesWiringContractTest {
             source("src/main/java/com/actionaura/retail/ui/i18n/Strings.kt"))).toSet()
         assertThat(catalog).contains(branchSentence)
         assertThat(catalog).containsAtLeast(
-            "Accountant", "Branch manager", "Change job", "Job updated", "Save name")
+            "Accountant", "Branch manager", "Change job", "Job updated", "Save name",
+            // A2 fix round: the label the row shows when the preset no longer
+            // matches, the two name refusals and the two preset refusals the
+            // server can return, and the capability-403 sentence.
+            "Custom",
+            "Name must be 60 characters or fewer.",
+            "Name must be a single line.",
+            "Unknown preset.",
+            "Role does not match the chosen preset.",
+            "You don't have permission to do this.")
     }
 
     @Test

@@ -284,6 +284,64 @@ class SessionCapabilityContractTest {
     }
 
     @Test
+    fun a_books_account_without_books_view_is_still_books_only() {
+        // A hand-edited accountant can lose books.view and keep books.record.
+        // The routing question is "does this person hold a books code and NOT a
+        // till code", not "do they hold books.view" -- so this must still be a
+        // books-only account, not fall through to a till they cannot use.
+        assertThat(isBooksOnly(listOf(CAP_BOOKS_RECORD, CAP_REPORTS, "retail.cash.approve"))).isTrue()
+        assertThat(isBooksOnly(listOf(CAP_BOOKS_CLOSE))).isTrue()
+        assertThat(isBooksOnly(listOf(CAP_BOOKS_APPROVE))).isTrue()
+    }
+
+    @Test
+    fun any_single_till_capability_keeps_the_normal_shell_even_with_books_codes() {
+        // The fix-round widening: an accountant who was ALSO given stock.adjust,
+        // refund, discount or cash.close can do till work, and the books-only
+        // shell would hide the Products / Customers screens they need. Each
+        // till code alone, beside a full books set, must fail isBooksOnly.
+        val books = listOf(CAP_BOOKS_VIEW, CAP_BOOKS_RECORD, CAP_REPORTS)
+        for (till in TILL_CAPABILITIES) {
+            assertThat(isBooksOnly(books + till)).isFalse()
+        }
+        assertThat(isBooksOnly(books + CAP_STOCK_ADJUST)).isFalse()
+    }
+
+    @Test
+    fun the_till_capability_set_is_exactly_the_five_till_codes_spelled_as_the_server_spells_them() {
+        assertThat(TILL_CAPABILITIES).containsExactly(
+            serverConst("CAP_SELL"), serverConst("CAP_STOCK_ADJUST"), serverConst("CAP_REFUND"),
+            serverConst("CAP_DISCOUNT"), serverConst("CAP_CASH_CLOSE"))
+        assertThat(CAP_REFUND).isEqualTo(serverConst("CAP_REFUND"))
+        assertThat(CAP_CASH_CLOSE).isEqualTo(serverConst("CAP_CASH_CLOSE"))
+        assertThat(CAP_STOCK_ADJUST).isEqualTo(serverConst("CAP_STOCK_ADJUST"))
+        assertThat(CAP_DISCOUNT).isEqualTo(serverConst("CAP_DISCOUNT"))
+        assertThat(CAP_REPORTS).isEqualTo(serverConst("CAP_REPORTS"))
+        assertThat(CAP_EMPLOYEES).isEqualTo(serverConst("CAP_EMPLOYEES"))
+    }
+
+    @Test
+    fun a_login_response_forgets_the_previous_accounts_grants() {
+        // update(user) is the login-response partial: it carries a user and no
+        // capabilities. If it left the earlier account's list in place, the next
+        // person to sign in would inherit it until /api/auth/session answered.
+        try {
+            RetailSession.adopt(gson.fromJson(cashierBody, SessionResponse::class.java))
+            assertThat(RetailSession.capabilities).isNotNull()
+
+            RetailSession.update(User(role = "manager"))
+
+            assertThat(RetailSession.capabilities).isNull()
+            assertThat(RetailSession.isAdmin).isFalse()
+            // ...so a books-only list from a previous session cannot keep
+            // routing a new login to the books home either.
+            assertThat(RetailSession.isBooksOnly).isFalse()
+        } finally {
+            RetailSession.reset()
+        }
+    }
+
+    @Test
     fun the_session_says_books_only_for_an_accountant_and_never_for_the_owner() {
         val accountantBody = """
             {"authenticated": true,

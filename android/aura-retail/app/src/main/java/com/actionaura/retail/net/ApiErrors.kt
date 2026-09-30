@@ -31,22 +31,44 @@ import java.io.IOException
  * more honest than a wrong "server unreachable".
  */
 fun apiErrorMessage(e: Throwable): String = when (e) {
-    is HttpException -> when (e.code()) {
-        // Licensing/subscription guard. Prefix makes unmistakably clear the
-        // block is the subscription, not the network; the server's own
-        // message (flask_guard.py's "message" field) is appended so the
-        // user sees exactly what the backend refused and why.
-        403 -> tr("Blocked by your subscription/license:") + " " +
-            tr(serverMessageOf(e) ?: "This action is not available in the current licensing state.")
-        // mt_login_required (commercial_runtime/identity/mt_auth.py):
-        // session cookie missing, expired, or revoked.
-        401 -> tr("Your session has expired. Please log in again.")
-        // Any other HTTP error: surface the server's message when it sent
-        // one (e.g. the AI route's 503 "AI assistant is temporarily
-        // unavailable."), otherwise at least name the status code instead
-        // of pretending the network is down.
-        else -> serverMessageOf(e)?.let { tr(it) }
-            ?: (tr("Server error") + " (HTTP ${e.code()})")
+    is HttpException -> {
+        // An HTTP error body is ONE-SHOT (okhttp's ResponseBody.string()
+        // consumes it), so parse it exactly once and hand the parts around.
+        val body = parseErrorBody(e)
+        when (e.code()) {
+            // TWO different servers-side refusals share HTTP 403 and used to
+            // both read "Blocked by your subscription/license":
+            //   * the LICENCE guard (licensing_contracts/flask_guard.py) answers
+            //     {"status":"error","reason_code":"LICENSE_INACTIVE"|
+            //      "CAPABILITY_NOT_ENTITLED","message":...};
+            //   * the PERMISSION guard (identity/mt_auth.py
+            //     _capability_denied_response) answers
+            //     {"status":"error","error":...,"message":...,"code":403} and
+            //     carries NO reason_code.
+            // The discriminator is a non-blank string `reason_code`. Before this,
+            // a cashier refused a manager-only action was told to check their
+            // subscription, which is exactly the wrong thing to go and fix.
+            403 ->
+                if (body.reasonCode != null) {
+                    // Licensing/subscription guard. Prefix makes unmistakably
+                    // clear the block is the subscription, not the network; the
+                    // server's own message is appended so the user sees exactly
+                    // what the backend refused and why.
+                    tr("Blocked by your subscription/license:") + " " +
+                        tr(body.message ?: "This action is not available in the current licensing state.")
+                } else {
+                    tr("You don't have permission to do this.")
+                }
+            // mt_login_required (commercial_runtime/identity/mt_auth.py):
+            // session cookie missing, expired, or revoked.
+            401 -> tr("Your session has expired. Please log in again.")
+            // Any other HTTP error: surface the server's message when it sent
+            // one (e.g. the AI route's 503 "AI assistant is temporarily
+            // unavailable."), otherwise at least name the status code instead
+            // of pretending the network is down.
+            else -> body.message?.let { tr(it) }
+                ?: (tr("Server error") + " (HTTP ${e.code()})")
+        }
     }
     // Real connectivity failure (unreachable, refused, timed out): the one
     // case where the historical blanket message was actually correct.
@@ -79,7 +101,7 @@ fun apiErrorMessage(e: Throwable): String = when (e) {
  */
 fun loginErrorMessage(e: Throwable): String =
     if (e is HttpException && e.code() == 401) {
-        serverMessageOf(e)?.let { tr(it) } ?: tr("Invalid email or password.")
+        parseErrorBody(e).message?.let { tr(it) } ?: tr("Invalid email or password.")
     } else {
         apiErrorMessage(e)
     }
@@ -104,12 +126,24 @@ fun loginErrorMessage(e: Throwable): String =
  * so this is the same parser RetailExtraScreens.kt's pairing code already
  * uses for the same reason.
  */
-private fun serverMessageOf(e: HttpException): String? = try {
+private data class ErrorBody(val message: String?, val reasonCode: String?)
+
+private val NO_ERROR_BODY = ErrorBody(message = null, reasonCode = null)
+
+private fun parseErrorBody(e: HttpException): ErrorBody = try {
     val raw = e.response()?.errorBody()?.string()
-    if (raw.isNullOrBlank()) null
+    if (raw.isNullOrBlank()) NO_ERROR_BODY
     else JsonParser.parseString(raw).asJsonObject.let { body ->
-        sequenceOf("message", "error")
-            .mapNotNull { key -> body.get(key)?.takeUnless { it.isJsonNull }?.asString }
-            .firstOrNull { it.isNotBlank() }
+        ErrorBody(
+            message = sequenceOf("message", "error")
+                .mapNotNull { key -> body.get(key)?.takeUnless { it.isJsonNull }?.asString }
+                .firstOrNull { it.isNotBlank() },
+            // A non-blank STRING only: a numeric or null reason_code is not the
+            // licence guard's shape and must not flip a permission refusal into
+            // a subscription one.
+            reasonCode = body.get("reason_code")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                ?.asString?.takeIf { it.isNotBlank() },
+        )
     }
-} catch (_: Exception) { null }
+} catch (_: Exception) { NO_ERROR_BODY }

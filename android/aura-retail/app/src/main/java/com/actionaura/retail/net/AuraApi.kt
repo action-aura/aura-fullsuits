@@ -380,6 +380,12 @@ interface AuraApi {
     @PUT("api/admin/employees/{id}/preset")
     suspend fun updateEmployeePreset(@Path("id") id: String, @Body body: UpdateEmployeePresetRequest): AdminActionResponse
 
+    // A branch_manager's branch. The server's /preset does not read a scope
+    // from its own body (it only checks the row already HAS one), so the
+    // picker calls this FIRST, then /preset. Admin only; 409 for the owner row.
+    @PUT("api/admin/employees/{id}/branch-scope")
+    suspend fun updateEmployeeBranchScope(@Path("id") id: String, @Body body: UpdateEmployeeBranchScopeRequest): AdminActionResponse
+
     @PUT("api/admin/employees/{id}/name")
     suspend fun updateEmployeeName(@Path("id") id: String, @Body body: UpdateEmployeeNameRequest): AdminActionResponse
 

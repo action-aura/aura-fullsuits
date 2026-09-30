@@ -32,6 +32,8 @@ import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SkeletonList
+import com.actionaura.retail.ui.CAPS_STOCK_WRITE
+import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.i18n.tr
 import kotlinx.coroutines.launch
 
@@ -42,6 +44,10 @@ fun CategoriesScreen(snackbar: SnackbarHostState) {
     var showAdd by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<CategoryModel?>(null) }
     val scope = rememberCoroutineScope()
+    // create/update/delete category are CAP_STOCK_ADJUST on the server; the list
+    // is login-only. A person without it can read categories but is offered no
+    // Add button and no edit sheet (front-door advice; the server re-gates).
+    val canWrite = RetailSession.hasAnyCapability(CAPS_STOCK_WRITE)
 
     suspend fun load() { categories = try { ApiClient.get().categories().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) { load(); loading = false }
@@ -50,22 +56,26 @@ fun CategoriesScreen(snackbar: SnackbarHostState) {
         when {
             loading -> SkeletonList()
             categories.isEmpty() -> EmptyState(Icons.Default.Category, tr("No categories yet"),
-                tr("Group products so they're easy to find and filter."), ctaText = tr("Add Category"), onCta = { showAdd = true })
+                if (canWrite) tr("Group products so they're easy to find and filter.") else tr("Categories will show here."),
+                ctaText = if (canWrite) tr("Add Category") else null,
+                onCta = if (canWrite) ({ showAdd = true }) else null)
             else -> LazyColumn(
                 contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(categories, key = { it.id }) { c -> CategoryRow(c, onClick = { editing = c }) }
+                items(categories, key = { it.id }) { c ->
+                    CategoryRow(c, onClick = { if (canWrite) editing = c })
+                }
             }
         }
-        if (categories.isNotEmpty()) ExtendedFloatingActionButton(
+        if (categories.isNotEmpty() && canWrite) ExtendedFloatingActionButton(
             onClick = { showAdd = true },
             icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Category")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
 
-    if (showAdd) AddOrEditCategorySheet(
+    if (showAdd && canWrite) AddOrEditCategorySheet(
         existing = null,
         onDismiss = { showAdd = false },
         onSaved = {

@@ -145,6 +145,31 @@ class AccountantHomeContractTest {
         // every entry carries a `needs` from the capability constants
         assertThat(Regex("""BooksEntry\(""").findAll(list).count()).isEqualTo(routes.size)
         assertThat(list).doesNotContain("CAP_SELL")
+        // The three statements are gated on retail.reports -- the capability the
+        // SERVER demands for them (WriteGateContractTest reads the decorators).
+        // They used to say books.view, which hid the statements from a manager
+        // the server would have served.
+        for (statement in listOf("trial_balance", "profit_and_loss", "balance_sheet")) {
+            val line = list.lines().single { it.contains("BooksEntry(\"$statement\"") }
+            assertThat(line).contains(", CAP_REPORTS)")
+        }
+        // A3: EVERY entry, not just the three statements, is a read-only report
+        // view and the server demands retail.reports for each of them. Mutation
+        // S (trial_balance -> CAP_DISCOUNT) survived the statement-only check
+        // above when the line pinned was the wrong one; this pins every line
+        // so a wrong gate on any card, statement or not, goes red.
+        // codeOnly() collapses the whole list onto ONE line, so the check
+        // above (`list.lines().single { ... }`) is really the whole blob and its
+        // `.contains(", CAP_REPORTS)")` passes if ANY entry has it -- which is
+        // exactly why S survived. Split on the constructor instead, one chunk
+        // per entry, each of which must itself end in the gate.
+        val entries = list.split("BooksEntry(\"").drop(1)
+        assertThat(entries.size).isEqualTo(routes.size)
+        for (entry in entries) {
+            // this chunk is `route", "Title", "blurb", CAP_X),` (+ maybe the
+            // list's own closing paren): the gate is the LAST argument.
+            assertThat(entry).containsMatch(Regex(""", CAP_REPORTS\)[\s,)]*$""").toPattern())
+        }
         // and the screen filters by it
         assertThat(appRoot).contains("booksEntries.filter { RetailSession.hasCapability(it.needs) }")
     }

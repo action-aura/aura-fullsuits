@@ -1031,6 +1031,15 @@ data class Employee(
     // through PUT .../preset, never PUT .../role.
     val display_name: String? = null,
     val role_preset: String? = null,
+    // GET /api/admin/employees sends `preset_matches`: false when the row's
+    // stored role no longer matches the base role its preset implies (a legacy
+    // role edit, or a synced row that drifted). Nullable so an older server
+    // (key absent) stays distinguishable from a real false. Only an explicit
+    // false makes the job label read "Custom" -- see employeeJobLabel().
+    val preset_matches: Boolean? = null,
+    // The branch this person is limited to (registry v7), or null for "every
+    // branch". Lets the branch picker open on their CURRENT branch.
+    val branch_scope_uid: String? = null,
 )
 
 data class EmployeesResponse(
@@ -1046,6 +1055,11 @@ data class CreateEmployeeRequest(
     val role: String,
     val name: String? = null,
     val preset: String? = null,
+    // Required by the server (admin arm) when preset == "branch_manager":
+    // the branch's stable `uid` (NOT its integer id), else 400
+    // BRANCH_SCOPE_REQUIRED. Null for every other preset -- Gson omits nulls,
+    // so the key is absent from their bodies.
+    val branch_scope_uid: String? = null,
 )
 
 /**
@@ -1066,6 +1080,13 @@ data class CreateEmployeeResponse(
 data class UpdateEmployeeRoleRequest(val role: String)
 data class UpdateEmployeePresetRequest(val preset: String)
 data class UpdateEmployeeNameRequest(val name: String)
+
+/**
+ * PUT .../branch-scope. The server's `update_preset` does NOT read a scope
+ * from its own body; a branch_manager's branch is set by this call, then the
+ * preset is changed. `branch_scope_uid` is the branch's stable uid.
+ */
+data class UpdateEmployeeBranchScopeRequest(val branch_scope_uid: String?)
 data class UpdateEmployeeStatusRequest(val status: String)
 data class SetEmployeePinRequest(val pin: String)
 

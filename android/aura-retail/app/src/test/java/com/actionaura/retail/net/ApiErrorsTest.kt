@@ -56,19 +56,59 @@ class ApiErrorsTest {
         // ("This action is not available in the current licensing state.")
         // -- deliberately, so this proves the server's body is actually
         // being read rather than coincidentally matching the fallback.
+        //
+        // FIXTURE CHANGED in the A2 fix round: the body now carries the
+        // licence guard's real `reason_code` (flask_guard.py), because a 403
+        // WITHOUT one is a permission refusal and no longer reads as licence.
+        // What this test can no longer catch: a body-less/reason-less 403 being
+        // called a licence problem -- that is now pinned the other way by
+        // a_capability_403_says_permission_not_subscription below.
         val e = httpException(
             403,
-            """{"status":"error","message":"Your trial ended 3 days ago. Renew to keep selling."}""",
+            """{"status":"error","reason_code":"LICENSE_INACTIVE","message":"Your trial ended 3 days ago. Renew to keep selling."}""",
         )
         assertThat(apiErrorMessage(e))
             .isEqualTo("Blocked by your subscription/license: Your trial ended 3 days ago. Renew to keep selling.")
     }
 
     @Test
-    fun a_403_with_no_server_message_falls_back_to_the_generic_licensing_sentence() {
-        val e = httpException(403, "")
+    fun a_licence_403_with_no_server_message_falls_back_to_the_generic_licensing_sentence() {
+        val e = httpException(403, """{"status":"error","reason_code":"CAPABILITY_NOT_ENTITLED"}""")
         assertThat(apiErrorMessage(e))
             .isEqualTo("Blocked by your subscription/license: This action is not available in the current licensing state.")
+    }
+
+    @Test
+    fun a_capability_403_says_permission_not_subscription() {
+        // mt_auth._capability_denied_response's REAL body: error + message +
+        // code, and NO reason_code. The old code told a cashier refused a
+        // manager-only action to go and check their subscription.
+        val e = httpException(
+            403,
+            """{"status":"error","error":"You do not have permission for this action. Ask your store administrator.","message":"You do not have permission for this action. Ask your store administrator.","code":403}""",
+        )
+        val msg = apiErrorMessage(e)
+        assertThat(msg).isEqualTo("You don't have permission to do this.")
+        assertThat(msg).doesNotContain("subscription")
+    }
+
+    @Test
+    fun a_403_with_an_empty_body_is_a_permission_refusal_not_a_licence_one() {
+        assertThat(apiErrorMessage(httpException(403, "")))
+            .isEqualTo("You don't have permission to do this.")
+    }
+
+    @Test
+    fun a_reason_code_that_is_not_a_non_blank_string_does_not_make_a_403_a_licence_one() {
+        // The discriminator is a non-blank STRING reason_code, nothing looser.
+        for (body in listOf(
+            """{"reason_code":null,"message":"x"}""",
+            """{"reason_code":"","message":"x"}""",
+            """{"reason_code":403,"message":"x"}""",
+        )) {
+            assertThat(apiErrorMessage(httpException(403, body)))
+                .isEqualTo("You don't have permission to do this.")
+        }
     }
 
     @Test
@@ -150,8 +190,8 @@ class ApiErrorsTest {
         // Two separate exceptions -- see the identical note on the 401 test
         // above for why reusing one HttpException across both calls would
         // silently prove nothing (the second body read comes back empty).
-        val forLogin = httpException(403, """{"message":"Your subscription is restricted."}""")
-        val forApi = httpException(403, """{"message":"Your subscription is restricted."}""")
+        val forLogin = httpException(403, """{"reason_code":"LICENSE_INACTIVE","message":"Your subscription is restricted."}""")
+        val forApi = httpException(403, """{"reason_code":"LICENSE_INACTIVE","message":"Your subscription is restricted."}""")
         assertThat(loginErrorMessage(forLogin)).isEqualTo(apiErrorMessage(forApi))
     }
 }
