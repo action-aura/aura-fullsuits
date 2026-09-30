@@ -551,6 +551,28 @@ PRE_EXISTING_UNGATED_MONEY_READS = frozenset({
     # and quietly cover the day somebody un-gates it again.
 })
 
+#: Routes that ARE gated -- by `@mt_require_any_capability(A, B)`, the "any of"
+#: decorator registry v9 (Track S) introduced so an Accountant preset can
+#: record receipts without being able to ring a sale -- but which the shared
+#: classifier (`retail_capability_ratchet_ast.decorator_capability`) cannot
+#: see, because it matches the substring 'mt_require_capability' and the any-of
+#: name does not contain it. This is NOT the frozen ungated baseline above and
+#: must not be read as one: nothing here is unreviewed or excused for being
+#: old. Each entry is proved gated from the handler's own decorator list by
+#: `test_the_any_of_gated_routes_really_carry_the_any_of_decorator`, so the
+#: list cannot go on covering a route whose decorator was removed. The
+#: proper fix is to teach `decorator_capability` the second spelling (a
+#: one-line change in retail_capability_ratchet_ast.py, which this file's crew
+#: does not own); `test_the_classifier_now_sees_any_of_gates_delete_the_list`
+#: turns red the day that lands, and tells whoever sees it to delete this set.
+ANY_OF_GATED_BUT_INVISIBLE_TO_CLASSIFIER = {
+    # retail.sell OR retail.books.record. Returns the customer's new balance.
+    'customer_payment': ('CAP_SELL', 'CAP_BOOKS_RECORD'),
+    # retail.cash.close OR retail.cash.approve (the approver opens the drawer
+    # they approve); WHOSE drawer is then narrowed by _session_read_scope.
+    'get_cash_session': ('CAP_CASH_CLOSE', 'CAP_CASH_APPROVE'),
+}
+
 
 def test_the_classifier_actually_read_the_route_files():
     """A scan that parsed nothing passes every assertion below. First guard,
@@ -641,6 +663,7 @@ def test_no_new_money_returning_route_is_ungated():
            if diagnosis else "")
         for rel, name, capability, money, diagnosis in _route_handlers()
         if money and capability is None and name not in PRE_EXISTING_UNGATED_MONEY_READS
+        and name not in ANY_OF_GATED_BUT_INVISIBLE_TO_CLASSIFIER
     )
     assert not unaccounted, (
         "these handlers execute SQL that returns the shop's transacted money and "
@@ -760,6 +783,52 @@ def test_the_route_this_file_fixed_is_gated_by_behaviour_not_by_a_list():
         "recent_sales no longer consults retail.reports; the §1 behaviour tests "
         "would be the only thing holding the book shut")
     assert 'recent_sales' not in PRE_EXISTING_UNGATED_MONEY_READS
+
+
+def _any_of_decorator_codes(fn):
+    """The capability codes named by a handler's `mt_require_any_capability`
+    decorator, or None if it has none. Read off the AST, not the source text."""
+    for d in fn.decorator_list:
+        if (isinstance(d, ast.Call) and isinstance(d.func, ast.Name)
+                and d.func.id == 'mt_require_any_capability'):
+            return tuple(a.id for a in d.args if isinstance(a, ast.Name))
+    return None
+
+
+def test_the_any_of_gated_routes_really_carry_the_any_of_decorator():
+    """Why the exemption above is safe: each named route is asserted to carry
+    the any-of decorator with EXACTLY the codes written next to its name. If the
+    decorator is removed, or widened to a weaker code, this fails -- the list
+    cannot quietly keep covering a route that is no longer gated. Synthetic
+    handlers prove the reader returns None for a bare route rather than always
+    agreeing, and reads the codes of a real any-of decorator."""
+    tree = ast.parse(Path(retail_api_module.__file__).read_text(encoding='utf-8'))
+    handlers = {fn.name: fn for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)}
+    for name, expected in ANY_OF_GATED_BUT_INVISIBLE_TO_CLASSIFIER.items():
+        assert name in handlers, f"{name} is no longer a handler -- delete the entry"
+        assert _any_of_decorator_codes(handlers[name]) == expected, (
+            f"{name} no longer carries @mt_require_any_capability{expected}: "
+            f"{_any_of_decorator_codes(handlers[name])}")
+
+    bare = ast.parse("@retail_bp.route('/x')\n@mt_login_required\ndef x():\n    pass\n")
+    assert _any_of_decorator_codes(bare.body[0]) is None
+    one = ast.parse("@mt_require_any_capability(CAP_A, CAP_B)\ndef y():\n    pass\n")
+    assert _any_of_decorator_codes(one.body[0]) == ('CAP_A', 'CAP_B')
+
+
+def test_the_classifier_now_sees_any_of_gates_delete_the_list():
+    """A canary in the OTHER direction. While the shared classifier cannot see
+    the any-of decorator, the two routes above read as ungated. The day it
+    learns the second spelling they read as gated and this fails, saying to
+    delete ANY_OF_GATED_BUT_INVISIBLE_TO_CLASSIFIER -- otherwise the set would
+    outlive its reason and become the exemption list this file was written to
+    prevent."""
+    live = _live_baseline_facts()
+    now_seen = sorted(n for n in ANY_OF_GATED_BUT_INVISIBLE_TO_CLASSIFIER
+                      if live.get(n, (None, None))[0] is not None)
+    assert not now_seen, (
+        f"the classifier now recognises the any-of decorator on {now_seen}; "
+        f"delete ANY_OF_GATED_BUT_INVISIBLE_TO_CLASSIFIER and its two tests")
 
 
 # ── HAND-OVER ────────────────────────────────────────────────────────────────

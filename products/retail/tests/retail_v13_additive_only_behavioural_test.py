@@ -155,7 +155,25 @@ def _assert_nothing_destroyed(before, after, *, exempt_columns=frozenset()):
 
 # ── the fixture ─────────────────────────────────────────────────────────────
 
+# Columns where the generic 'fixture-<table>-<column>-<n>' text (or an
+# arbitrary integer) violates a CHECK constraint, so the row could not be
+# inserted and the table would be left empty -- which is exactly what the
+# "could not populate" assertion below refuses. Added for schema v42's
+# `till_allocations` (status IN ('active','released','superseded'),
+# till_number BETWEEN 1 AND 99); the tables are NOT excluded from the guard.
+# What this can no longer catch: nothing -- the overrides only choose WHICH
+# valid value the row carries; the row is still snapshotted and compared
+# byte-for-byte like every other. The partial UNIQUE indexes on that table
+# (one active row per number, one per terminal) hold trivially with one row.
+_CHECK_SAFE_VALUES = {
+    ('till_allocations', 'status'): 'active',
+    ('till_allocations', 'till_number'): 1,
+}
+
+
 def _synthetic_value(table, column, decl, seq):
+    if (table, column) in _CHECK_SAFE_VALUES:
+        return _CHECK_SAFE_VALUES[(table, column)]
     d = (decl or '').upper()
     if 'INT' in d:
         return seq

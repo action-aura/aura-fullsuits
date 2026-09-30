@@ -885,10 +885,25 @@ window.AuraIcons = (function () {
       "<path d=\"M20 17H4\" />"
     ],
     heavy: [0, 2]
+  },
+  // ── 2026-09-30, the Ctrl+K palette's "no icon given" default ─────────────
+  // palette.js asks for '•' when a palette entry carries neither `iconName`
+  // nor `icon` (render(e.icon || '•', 16)). Nothing mapped it, so
+  // retail_icons_test.js's every-requested-value-resolves check went red and,
+  // at runtime, such a row drew the circle-help question mark -- a row with
+  // no icon is not a question. Real Lucide v0.469.0 'dot', geometry fetched
+  // verbatim from unpkg.com/lucide-static/icons/dot.svg (note the 12.1
+  // centre is Lucide's own, not a typo), never hand-drawn.
+  'dot': {  // the whole icon is one feature, so the one element carries the weight
+    el: [
+      "<circle cx=\"12.1\" cy=\"12.1\" r=\"1\" />"
+    ],
+    heavy: [0]
   }
   };
 
   var EMOJI = {
+    "•": "dot",
     "🏠": "home",
     "📦": "package",
     "📋": "clipboard-list",

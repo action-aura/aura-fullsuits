@@ -410,8 +410,18 @@ def test_the_real_chain_advances_the_version_and_keeps_integrity():
         # proves the version constant and this file's chain still agree,
         # so a future bump that forgets to update this line fails LOUDLY
         # here rather than silently leaving the suite's docstring wrong.
-        assert sch.RETAIL_SCHEMA_VERSION == 40, (
-            f"this suite is written against v40; constant is {sch.RETAIL_SCHEMA_VERSION}")
+        # Bumped 40 -> 42 (schema v41 GL journal sync, v42 Track S: two NEW
+        # tables `branch_uid_aliases` and `till_allocations`, the branch-uid
+        # converge step, and no change to `payments` or any money table).
+        # v41 was never bumped here, so this line lagged by two versions --
+        # which is exactly what the tripwire is for. What it can no longer
+        # catch, same as every bump before it: it does not verify that v41's
+        # or v42's own migration is right in the same upgrade run (that is
+        # the job of the v41 / Track S suites); it only proves this file's
+        # chain and the version constant agree. The requantize assertions
+        # below (pay_id == 4.007) are unchanged and still prove v37 ran.
+        assert sch.RETAIL_SCHEMA_VERSION == 42, (
+            f"this suite is written against v42; constant is {sch.RETAIL_SCHEMA_VERSION}")
         assert _amount(conn, pay_id) == 4.007, (
             f"the chain must have applied the correction, got {_amount(conn, pay_id)!r}")
     finally:
