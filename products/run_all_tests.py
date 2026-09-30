@@ -316,6 +316,24 @@ MUST_RUN_SERIAL = frozenset({
 # investigating the original comment had in mind.
 PER_FILE_TIMEOUT_SECONDS = int(os.environ.get('AURA_TEST_RUNNER_TIMEOUT_S', '1200'))
 
+# Named, measured exceptions to the bound above -- never a quiet global raise.
+# retail_v42_till_allocation_test.py (Track S, 2026-09-30): 14 tests, each one
+# REAL multi-process computers (every login is a subprocess booting the app)
+# driving main-computer / release / reinstall scenarios; measured 1822.88s
+# (30m22s) standing alone, 14/14 passing, killed at 1200s inside a -j 4 run.
+# It is slow because it is honest, not because it hangs. 3600s keeps ~2x
+# headroom; a genuine hang is still caught. An explicit
+# AURA_TEST_RUNNER_TIMEOUT_S (a test of the timeout path) wins over this list.
+SLOW_FILE_TIMEOUT_SECONDS = {
+    'retail_v42_till_allocation_test.py': 3600,
+}
+
+
+def _timeout_for(path) -> int:
+    if 'AURA_TEST_RUNNER_TIMEOUT_S' in os.environ:
+        return PER_FILE_TIMEOUT_SECONDS
+    return max(PER_FILE_TIMEOUT_SECONDS, SLOW_FILE_TIMEOUT_SECONDS.get(Path(path).name, 0))
+
 # Default worker count, used only when -j/--jobs is not given. Capped, and
 # never hardcoded to one machine's core count:
 #   * -1 leaves a core free for the OS, an IDE, or -- concretely true of
@@ -403,7 +421,7 @@ def run_one(path):
             encoding='utf-8', errors='replace',
             # See PER_FILE_TIMEOUT_SECONDS's own comment: without this, one
             # hung file hangs the whole run forever, no matter -j.
-            timeout=PER_FILE_TIMEOUT_SECONDS,
+            timeout=_timeout_for(path),
         )
     except subprocess.TimeoutExpired as exc:
         duration = time.time() - start
@@ -416,7 +434,7 @@ def run_one(path):
         return {
             'path': str(path.relative_to(ROOT)),
             'ok': False,
-            'summary': f'TIMEOUT after {PER_FILE_TIMEOUT_SECONDS}s -- subprocess killed',
+            'summary': f'TIMEOUT after {_timeout_for(path)}s -- subprocess killed',
             'duration_s': round(duration, 2),
             'stdout_tail': '\n'.join(leftover[-15:]) if leftover else '(no output before timeout)',
         }
@@ -447,7 +465,7 @@ def run_one_js(path):
             encoding='utf-8', errors='replace',
             # See PER_FILE_TIMEOUT_SECONDS's own comment: without this, one
             # hung file hangs the whole run forever, no matter -j.
-            timeout=PER_FILE_TIMEOUT_SECONDS,
+            timeout=_timeout_for(path),
         )
     except subprocess.TimeoutExpired as exc:
         duration = time.time() - start
@@ -455,7 +473,7 @@ def run_one_js(path):
         return {
             'path': str(path.relative_to(ROOT)),
             'ok': False,
-            'summary': f'TIMEOUT after {PER_FILE_TIMEOUT_SECONDS}s -- subprocess killed',
+            'summary': f'TIMEOUT after {_timeout_for(path)}s -- subprocess killed',
             'duration_s': round(duration, 2),
             'stdout_tail': '\n'.join(leftover[-15:]) if leftover else '(no output before timeout)',
         }
