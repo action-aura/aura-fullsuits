@@ -150,7 +150,9 @@
     '.pd-input{font:inherit;font-size:var(--text-size-body);min-block-size:2.5rem;inline-size:100%;box-sizing:border-box;padding-inline:var(--space-snug);border-radius:var(--radius-control);border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-primary)}',
     '.pd-input:focus-visible{outline:2px solid var(--accent-action);outline-offset:2px}',
     '.pd-edit{display:flex;flex-wrap:wrap;gap:var(--space-snug);align-items:center;inline-size:100%}',
-    '.pd-edit .pd-input{flex:1 1 12rem;inline-size:auto}'
+    '.pd-edit .pd-input{flex:1 1 12rem;inline-size:auto}',
+    // inside the take-over dialog the explanation sits right above the first label: give it air
+    '#pd-takeover-dialog>.pd-muted{margin-block-end:var(--space-base)}'
   ].join('');
 
   function ensureStyle() {

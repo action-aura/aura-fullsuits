@@ -216,7 +216,7 @@ def case_main(browser, base):
         click_center(page, row(WIN, "[data-pd=rename]"))
         page.fill(row(WIN, "[data-pd=rename-input]"), "   ")
         click_center(page, row(WIN, "[data-pd=rename-save]"))
-        page.wait_for_function("() => (document.querySelector('#pd-host .pd-err')||{}).textContent", timeout=8000)
+        page.wait_for_function("() => ((document.querySelector('#pd-host [data-pd=shop-computers] .pd-err')||{}).textContent||'').trim() !== ''", timeout=8000)
         assert pd_err(page) == "Type a name first.", f"blank rename said {pd_err(page)!r}"
         assert dev_row(WIN)["device_label"] == "Back office", "a refused rename must not change the label"
         page.fill(row(WIN, "[data-pd=rename-input]"), "Front counter")
@@ -291,11 +291,21 @@ def open_takeover(page):
     page.wait_for_selector("#pd-takeover-modal #pd-takeover-pw", timeout=8000)
 
 
+def human_type(page, selector, text):
+    """Rule 6b: reach the field the way a person does (topmost at its centre, real mouse click),
+    then type with the keyboard. page.fill would work on a field a person cannot reach."""
+    click_center(page, selector)
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Delete")
+    if text:
+        page.keyboard.type(text)
+
+
 def try_takeover(page, password, phrase="TAKE OVER"):
-    page.fill("#pd-takeover-pw", password)
-    page.fill("#pd-takeover-phrase", phrase)
+    human_type(page, "#pd-takeover-pw", password)
+    human_type(page, "#pd-takeover-phrase", phrase)
     assert not page.is_disabled("#pd-takeover-btn"), "button should be ready"
-    page.click("#pd-takeover-btn")
+    click_center(page, "#pd-takeover-btn")
     page.wait_for_function(
         "() => { const e = document.getElementById('pd-takeover-err'); return !e || e.textContent.trim() !== ''; }",
         timeout=10000)
@@ -322,7 +332,8 @@ def case_takeover(browser, base):
         assert not page.is_disabled(btn), "password + exact phrase (spaces trimmed): enabled"
         page.fill("#pd-takeover-pw", "")
         assert page.is_disabled(btn), "phrase only: disabled again"
-        page.keyboard.press("Escape")
+        # rule 6b: the Cancel button is reachable by a real click and it closes the box
+        click_center(page, "#pd-takeover-modal .ret-modal-footer button.ret-btn-ghost")
         page.wait_for_selector("#pd-takeover-modal", state="detached", timeout=5000)
 
         # a main seen recently is refused in words, with the RIGHT password, and nothing moves
@@ -369,9 +380,9 @@ def case_takeover(browser, base):
 
 
 def try_takeover_ok(page, password):
-    page.fill("#pd-takeover-pw", password)
-    page.fill("#pd-takeover-phrase", "TAKE OVER")
-    page.click("#pd-takeover-btn")
+    human_type(page, "#pd-takeover-pw", password)
+    human_type(page, "#pd-takeover-phrase", "TAKE OVER")
+    click_center(page, "#pd-takeover-btn")
     page.wait_for_selector("#pd-takeover-modal", state="detached", timeout=15000)
 
 
@@ -489,9 +500,9 @@ def case_look(browser, base):
             mount(page)
             open_takeover(page)
             try_err = "#pd-takeover-err"
-            page.fill("#pd-takeover-pw", "wrong-on-purpose")
-            page.fill("#pd-takeover-phrase", "TAKE OVER")
-            page.click("#pd-takeover-btn")
+            human_type(page, "#pd-takeover-pw", "wrong-on-purpose")
+            human_type(page, "#pd-takeover-phrase", "TAKE OVER")
+            click_center(page, "#pd-takeover-btn")
             page.wait_for_function("() => document.getElementById('pd-takeover-err').textContent.trim() !== ''", timeout=10000)
             dialog_fits(page, "pd-takeover-modal", "takeover " + tag)
             if lang == "ar":
@@ -516,6 +527,9 @@ def main() -> int:
     def wanted(tag):
         return not _pe.ONLY or tag in _pe.ONLY
 
+    # This script's own ports (one crew, one range) and its own screenshot folder.
+    ur.PORT_RANGE = range(6460, 6480)
+    ur.SHOTS = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p2s\U3\shots")
     data_dir = Path(tempfile.mkdtemp(prefix="aura_retail_s_devices_"))
     ur.DATA["dir"] = data_dir
     backend = Backend(data_dir)
