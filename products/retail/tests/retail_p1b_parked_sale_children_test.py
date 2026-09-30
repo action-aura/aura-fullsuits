@@ -10,7 +10,9 @@ Two halves, deliberately separate:
      `missing_parent:sale`, a reason that used to read "will fix itself" -- which
      is false for them. The route now says so: `retries_itself=false`,
      `parent_parked=true`, a plain "needs a person" note. The parked sale itself
-     says `stock_and_books_applied=true`.
+     carries `stock_and_books_applied`, DERIVED from the database (P2S): False
+     ("set aside with it") on a computer that holds no movement/journal for it,
+     True ("WERE added") only where one really is there -- both are pinned.
 
   B. THE ENGINE PIN (two REAL computers, real relay, real sync engine). This
      half pins what `commercial_runtime/sync/sync_service.py::_apply_event`
@@ -146,14 +148,104 @@ def test_children_of_a_permanently_parked_sale_say_a_person_is_needed(monkeypatc
         assert 'set aside' in it['reason'] and 'same receipt number' in it['reason'], it
 
 
-def test_a_parked_sale_says_its_stock_and_books_were_applied(monkeypatch):
+def _plant_movement(number, terminal, movement_type='sale_out'):
+    """A stock movement really present on THIS computer, as the OLD engine left it
+    for a set-aside sale. Product 1 is enough: the flag only looks at the
+    (movement_type, reference, terminal_id) key. This fixture database has no
+    products, and `inventory_movements.product_id` is a real foreign key, so a
+    throwaway product 9001 is planted first (removed by `_planted_rows_cleaned`)."""
+    conn = get_retail_conn()
+    try:
+        conn.execute("INSERT OR IGNORE INTO products (id, sku, name) VALUES (9001, 'PLANT-SKU', 'PLANT-product')")
+        conn.execute("INSERT INTO inventory_movements (product_id, movement_type, quantity, reference, terminal_id) "
+                     "VALUES (9001, ?, 1, ?, ?)", (movement_type, number, terminal))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _plant_journal(kind, uid):
+    """An accounting journal really present on THIS computer for the document."""
+    conn = get_retail_conn()
+    try:
+        conn.execute("INSERT INTO gl_journals (company_id, business_date, reference, source_type, source_uid, currency) "
+                     "VALUES (1, '2026-09-30', 'planted', ?, ?, 'JOD')", (kind, uid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def _planted_rows_cleaned():
+    yield
+    conn = get_retail_conn()
+    try:
+        conn.execute("DELETE FROM inventory_movements WHERE reference LIKE 'PLANT-%'")
+        # gl_journals is APPEND-ONLY (a database trigger aborts DELETE), so the
+        # planted journal cannot be removed. It is harmless: its source_uid
+        # ('sale-uid-p2') is used by no other test and the fixture DB is a throwaway.
+        conn.execute("DELETE FROM products WHERE id=9001 AND sku='PLANT-SKU'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_a_parked_sale_says_its_stock_and_books_were_set_aside_with_it(monkeypatch):
+    """DELIBERATE UPDATE (P2S, crew Y's 52aa477c + `_sync_review_applied_uids`).
+    This test used to assert `stock_and_books_applied is True` and the words
+    'WERE added' for ANY sale parked as a repeated number. The server now DERIVES
+    the flag from the database, and a computer that holds no movement and no
+    journal for the sale (which is what the current engine leaves, since it parks
+    them with the sale) must say the opposite: False, and 'set aside with it'.
+
+    WHAT THE OLD ASSERTION CAN NO LONGER CATCH: it could not tell a computer that
+    HAD applied the stock and books from one that had not, so it would have passed
+    a screen that told the owner 'stock and accounts are ahead of the takings' on a
+    computer where nothing was added. That direction is now guarded by the
+    planted-row tests below (the flag must be True when the rows are really there)."""
     client = _owner(monkeypatch)
-    _park('sale', 'duplicate_document_number', {'uid': 'sale-uid-2', 'sale_number': 'X-1', 'total': 5})
+    _park('sale', 'duplicate_document_number', {'uid': 'sale-uid-2', 'sale_number': 'X-1', 'total': 5,
+                                               'terminal_id': 'other-till'})
+    [sale] = _by_kind(_items(client), 'sale')
+    assert sale['stock_and_books_applied'] is False, sale
+    assert sale['parent_parked'] is False, sale
+    assert 'set aside with it' in sale['note'] and 'WERE added' not in sale['note'], sale
+    assert 'stock' in sale['note'] and 'accounting' in sale['note'], sale
+
+
+def test_a_parked_sale_whose_movement_really_was_applied_says_so(monkeypatch, _planted_rows_cleaned):
+    """The other half of the derived flag: a computer that DID apply the sale's
+    stock movement (the old engine) must still be told 'WERE added'."""
+    client = _owner(monkeypatch)
+    _plant_movement('PLANT-1', 'other-till')
+    _park('sale', 'duplicate_document_number', {'uid': 'sale-uid-p1', 'sale_number': 'PLANT-1', 'total': 5,
+                                               'terminal_id': 'other-till'})
     [sale] = _by_kind(_items(client), 'sale')
     assert sale['stock_and_books_applied'] is True, sale
-    assert sale['parent_parked'] is False, sale
-    assert 'stock' in sale['note'] and 'WERE added' in sale['note'], sale
-    assert 'accounting' in sale['note'], sale
+    assert 'WERE added' in sale['note'] and 'set aside with it' not in sale['note'], sale
+
+
+def test_a_parked_sale_whose_journal_really_was_applied_says_so(monkeypatch, _planted_rows_cleaned):
+    client = _owner(monkeypatch)
+    _plant_journal('sale', 'sale-uid-p2')
+    _park('sale', 'duplicate_document_number', {'uid': 'sale-uid-p2', 'sale_number': 'PLANT-2', 'total': 5,
+                                               'terminal_id': 'other-till'})
+    [sale] = _by_kind(_items(client), 'sale')
+    assert sale['stock_and_books_applied'] is True, sale
+    assert 'WERE added' in sale['note'], sale
+
+
+def test_the_winning_computers_movement_with_the_same_number_is_not_the_losers(monkeypatch, _planted_rows_cleaned):
+    """Deny-half of the movement key: the computer that WON the number holds a
+    movement with the SAME reference but its OWN terminal. That must not make the
+    loser's parked sale read as applied, or every clash would claim it."""
+    client = _owner(monkeypatch)
+    _plant_movement('PLANT-3', 'the-winning-till')
+    _park('sale', 'duplicate_document_number', {'uid': 'sale-uid-p3', 'sale_number': 'PLANT-3', 'total': 5,
+                                               'terminal_id': 'the-losing-till'})
+    [sale] = _by_kind(_items(client), 'sale')
+    assert sale['stock_and_books_applied'] is False, sale
+    assert 'set aside with it' in sale['note'], sale
 
 
 def test_children_of_a_sale_that_is_not_parked_keep_saying_they_retry(monkeypatch):

@@ -93,8 +93,10 @@ def port_is_free(port):
 
 server = None
 PORT = None
-# crew H2's own range (6380-6399). (Chromium refuses 6000 as an "unsafe port".)
-for candidate in range(6380, 6400):
+# crew T's range for the P2S harmonisation run (6280-6299); the range is per
+# run, not per file -- move it if another crew owns those ports. (Chromium
+# refuses 6000 as an "unsafe port".)
+for candidate in range(6280, 6300):
     if not port_is_free(candidate):
         continue
     try:
@@ -104,7 +106,7 @@ for candidate in range(6380, 6400):
     except OSError:
         continue
 if server is None:
-    print("FATAL: no free port 6380-6399")
+    print("FATAL: no free port 6280-6299")
     sys.exit(2)
 
 threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -353,6 +355,22 @@ with sync_playwright() as p:
     owner.wait_for_selector("#sub-header-section", timeout=20000)
     owner.wait_for_timeout(800)
     merge_i18n(owner)
+
+    # v42: this computer must be a REAL registered till, not a made-up terminal id.
+    # A till's terminal id IS its registry device id, and the server refuses to hand
+    # a till number (DEVICE_IDENTITY_CLASH) to a terminal the registry does not list
+    # as active. So do what a real first-run shop does: the boot announce puts this
+    # computer in the registry, then the owner claims it as the MAIN computer. The
+    # owner above was made by the real signup route, so the founder's ADMIN_CREATED
+    # row is there without planting anything.
+    # What this can no longer catch: nothing was removed -- the numbering checks now
+    # ALSO fail if a fresh shop cannot become its own main computer with these two
+    # calls alone.
+    _app_module._announce_device("boot")
+    _st, _cl = api(owner, "POST", "/api/devices/me/claim-admin")
+    assert _st == 200 and (_cl or {}).get("success") is True \
+        and ((_cl or {}).get("device") or {}).get("is_admin_device") is True, (
+        "the owner's computer could not become the main computer: %s %s" % (_st, _cl))
 
     api(owner, "POST", "/api/sub/retail/settings/credit", {"base_currency": "JOD"})
 
@@ -988,7 +1006,11 @@ with sync_playwright() as p:
     from database.schema import get_retail_conn as _retail_conn  # noqa: E402
 
     NUM = "/api/sub/retail/numbering"
-    NUM_TERMINAL = "5e5e5e5e-1111-4111-8111-000000000001"
+    # This computer's REAL terminal id (its registry device id, set by the announce
+    # above). It used to be a made-up constant patched over local_terminal_id(); v42
+    # refuses a made-up id (DEVICE_IDENTITY_CLASH), and rightly.
+    NUM_TERMINAL = _retail_api.local_terminal_id()
+    assert NUM_TERMINAL, "the boot announce did not give this computer a device id"
     RIVAL_CO = "e2e-rival-shop"
     RIVAL_TERMINAL = "5e5e5e5e-2222-4222-8222-000000000002"
     LEGACY_SALE = re.compile(r"^SALE-\d+-[0-9a-f]{8}-[0-9a-f]{8}$")
@@ -998,26 +1020,27 @@ with sync_playwright() as p:
     NUM_STATE = {}
 
     @contextlib.contextmanager
-    def pinned(terminal=NUM_TERMINAL, available=None):
-        """Same seam retail_doc_series_test.py uses: which till this process is.
+    def pinned(available=None):
+        """Sets ONE thing for the length of the block: the server's
+        READABLE_NUMBERS_AVAILABLE kill switch (None leaves it alone, so the
+        num_get/num_post helpers nested inside a check never undo what the check
+        chose).
 
-        `available` flips the server's READABLE_NUMBERS_AVAILABLE switch for the
-        length of the block (None leaves it alone, so the num_get/num_post helpers
-        nested inside a check never undo what the check chose). Readable numbers
-        are UNAVAILABLE in the shipped product until multi-computer support lands,
-        so the ON-path checks below run with it True (that is the code path kept
-        ready behind `available`) and the unavailable-state checks with the real
-        False. What that seam cannot catch: the real shipped value of the constant
-        itself (the unavailable checks run against the real default, un-patched)."""
-        previous = _retail_api.local_terminal_id
+        v42 change: this used to ALSO patch local_terminal_id() to a made-up id.
+        That fake is gone -- this computer is now a real registered main computer
+        (announce + claim-admin at seed time) and its terminal id is real, so the
+        server's own DEVICE_IDENTITY_CLASH guard is exercised instead of dodged.
+        The shipped default of the switch is now True (readable numbers ship ON);
+        the ON-path checks run with it True and the unavailable-state checks force
+        it False. What that seam cannot catch: the value of the constant as shipped
+        -- a check that forces it either way proves the code path behind it, not
+        the default itself."""
         previous_avail = _retail_api.READABLE_NUMBERS_AVAILABLE
-        _retail_api.local_terminal_id = lambda: terminal
         if available is not None:
             _retail_api.READABLE_NUMBERS_AVAILABLE = bool(available)
         try:
             yield
         finally:
-            _retail_api.local_terminal_id = previous
             _retail_api.READABLE_NUMBERS_AVAILABLE = previous_avail
 
     def num_get(**qs):
@@ -1573,8 +1596,13 @@ with sync_playwright() as p:
 
     # -------------------------------------------------------------------------
     # 7-U. Readable numbers are UNAVAILABLE until multi-computer support (the
-    #      server says `available:false`). These run against the SHIPPED value
-    #      (available=False); the ON-path checks above ran with it patched True.
+    #      server says `available:false`). v42: the shipped default of the switch is
+    #      now True, so these no longer run "against the shipped value" -- they FORCE
+    #      it False (pinned_check(available=False)) to keep proving the page's
+    #      unavailable state, which the server still enters when a computer has no
+    #      till number from the main computer. What they can no longer catch: the
+    #      shipped default itself; the ON-path checks above force it True, so the
+    #      constant's real value is proved only by the backend numbering tests.
     # -------------------------------------------------------------------------
     UNAVAILABLE_REASON = "Readable receipt numbers arrive with multi-computer support."
     WITHDRAWN_REASON = ("This computer was using readable numbers. An update switched them off until "
@@ -1585,7 +1613,7 @@ with sync_playwright() as p:
         assert not re.search(r"[A-Za-z]{3,}", txt), f"{where}: English leaked into the Arabic text: {txt!r}"
 
     def numbering_unavailable_is_shown_and_cannot_be_turned_on():
-        assert _retail_api.READABLE_NUMBERS_AVAILABLE is False, "this check must run against the shipped (unavailable) state"
+        assert _retail_api.READABLE_NUMBERS_AVAILABLE is False, "this check must run with the switch forced to the unavailable state (pinned_check(available=False))"
         num_reset()
         br = num_branch()
         posts = spy_numbering_posts(owner)
@@ -1771,6 +1799,12 @@ with sync_playwright() as p:
             assert posts == [], f"a switch-on for an unavailable feature was sent: {posts}"
             assert savebar_up(owner)
             assert num_get()["readable_enabled"] is False
+            # The refused edit is still on screen with the Save bar up (asserted
+            # above). Take it out the way a person would, so this check does not
+            # hand a dirty hub to the next one -- the run-level "no check left the
+            # hub dirty" guard (go() auto-discarding) caught exactly that here.
+            real_click(owner, "#sh-discard", "Discard (leave the hub clean)")
+            assert not savebar_up(owner), "Discard did not clear the refused edit"
         finally:
             owner.unroute("**/api/sub/retail/numbering*")
             with pinned(available=True):

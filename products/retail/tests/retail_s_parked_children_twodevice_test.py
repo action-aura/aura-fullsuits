@@ -195,12 +195,23 @@ def test_the_books_hold_exactly_the_sales_that_are_present(world, who):
     assert gl["cash"] == pytest.approx(sales["total"]), (
         f"computer {who}: cash in the books {gl['cash']} vs sales present {sales['total']}")
     # And no journal or stock movement points at a sale this computer does not hold.
+    # A sale's stock movement is written as 'sale_out' (not 'sale'). This query
+    # used to say 'sale', which no code path writes, so its movements count was
+    # always 0 and the check could never fail. The non-vacuity assertion right
+    # below is what stops that recurring: it insists the detector SEES this
+    # computer's own sale movement, so a wrong type name goes red instead of
+    # silently counting nothing.
+    [seen] = world.select(
+        who, "SELECT COUNT(*) AS n FROM inventory_movements WHERE movement_type = 'sale_out'")
+    assert seen["n"] >= 1, (
+        f"computer {who}: no 'sale_out' movement found at all -- the orphan check below "
+        "would be counting nothing")
     [orph] = world.select(
         who,
         "SELECT "
         " (SELECT COUNT(*) FROM gl_journals j WHERE j.source_type = 'sale' "
         "    AND (j.source_id IS NULL OR j.source_id NOT IN (SELECT id FROM sales))) AS journals, "
-        " (SELECT COUNT(*) FROM inventory_movements m WHERE m.movement_type = 'sale' "
+        " (SELECT COUNT(*) FROM inventory_movements m WHERE m.movement_type = 'sale_out' "
         "    AND (m.reference IS NULL OR m.reference NOT IN (SELECT sale_number FROM sales))) AS movements")
     assert orph == {"journals": 0, "movements": 0}, f"computer {who}: {orph}"
 

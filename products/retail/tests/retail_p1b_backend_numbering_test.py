@@ -83,12 +83,12 @@ def teardown_module(module):
 
 @pytest.fixture(autouse=True)
 def _readable_numbers_available(request, monkeypatch):
-    """Readable numbers are UNAVAILABLE in the shipped build until the device
-    registry syncs (`retail_api.READABLE_NUMBERS_AVAILABLE`, re-verifier B2 round
-    3). Every test in this file except the ones marked `readable_unavailable`
-    runs the KEPT code with that one switch flipped on -- which is exactly how
-    Track S will run it -- so sections A-E still prove the whole feature. The
-    marked tests (section F) run the real shipped default."""
+    """Since schema v42 `retail_api.READABLE_NUMBERS_AVAILABLE` defaults to TRUE
+    (readable numbers work, but only through a till allocation from the main
+    computer); it is now a KILL SWITCH. Every test in this file except the ones
+    marked `readable_unavailable` runs with it True. The marked tests (section F)
+    force it FALSE, i.e. they pin what the kill switch does -- they do NOT run
+    the shipped default any more (it was False when this fixture was written)."""
     on = request.node.get_closest_marker('readable_unavailable') is None
     monkeypatch.setattr(retail_api, 'READABLE_NUMBERS_AVAILABLE', on)
     yield
@@ -1178,7 +1178,12 @@ def test_the_computers_switch_never_reaches_the_sync_outbox_but_the_branch_code_
 
 # ═════════════════════════════════════════════════════════════════════════
 # F. UNAVAILABLE until the device registry syncs (re-verifier B2, round 3)
-#    The tests below run the SHIPPED default (READABLE_NUMBERS_AVAILABLE False).
+#    The tests below force READABLE_NUMBERS_AVAILABLE False (the kill switch) with the
+#    autouse fixture, for the tests marked `readable_unavailable`. Since schema v42 the
+#    SHIPPED default is True (readable numbers come back, but only through a till
+#    allocation from the main computer), so these tests no longer run the shipped
+#    default: they pin what the kill switch does when it is thrown, and the wording it
+#    gives. The shipped-default behaviour is covered by the v42 allocation tests.
 #    Why: two computers that have not heard from each other can pick the same
 #    till number (offline, and online when the second is switched on before the
 #    first's first shift). See the pin in retail_p1b_parked_sale_children_test.py
@@ -1191,14 +1196,17 @@ _WITHDRAWN = retail_api._READABLE_WITHDRAWN_REASON
 
 @pytest.mark.readable_unavailable
 def test_the_shipped_default_is_unavailable_and_says_so_plainly():
-    """The constant itself, not just the routes: a build that flipped it would
-    silently re-open the collision."""
+    """The kill switch itself, not just the routes. NOTE: the autouse fixture forces
+    it False for this marker, so the `is False` line proves the FIXTURE, not the
+    shipped default (which is True since v42, pinned by the allocation tests)."""
     assert retail_api.READABLE_NUMBERS_AVAILABLE is False
     c, cid, buid, code = _make_shop()
     d = _get(c).get_json()['data']
     assert d['available'] is False
     assert d['unavailable_reason'] == _UNAVAILABLE
-    assert 'until multi-computer support arrives' in d['unavailable_reason']
+    # v42 wording: readable numbers are given out by the main computer; this computer has no
+    # till number from it. (Was 'until multi-computer support arrives' -- that promise is gone.)
+    assert 'given out by the main computer' in d['unavailable_reason']
     assert d['readable_enabled'] is False and d['readable_switched_off_by_update'] is False
     assert d['branch_code'] == code   # the read still works in full
 
