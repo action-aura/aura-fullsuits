@@ -17116,15 +17116,19 @@ def customer_payment(cust_id):
     if not cust:
         conn.close(); return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
     try:
+        # F3b: mint the payment's uid HERE so the same value names the
+        # payments row and stamps the journal's `source_uid` -- the source
+        # link a void later finds the journal by (never reference+amount).
+        pay_uid = _new_uid()
         ref = _record_payment(conn, cid, 'customer', cust_id, 'in', amt, method=data.get('method', 'cash'),
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='receipt',
-                              currency=currency)
+                              currency=currency, pay_uid=pay_uid)
         newbal = _adjust_credit(conn, 'customers', cust_id, cid, -amt, currency)
         # Schema v38 (general ledger core): Dr Cash / Cr AR. No branch
         # context on this route (an account payment is not tied to a
         # terminal or a branch), so branch_id is None -- matches
         # gl_journals.branch_id's own nullable design.
-        gl.post_customer_payment(conn, cid, None, ref, currency, amt)
+        gl.post_customer_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid)
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -17270,14 +17274,15 @@ def supplier_payment(sid):
     if not sup:
         conn.close(); return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
     try:
+        pay_uid = _new_uid()  # F3b: see customer_payment -- names the row AND the journal's source link
         ref = _record_payment(conn, cid, 'supplier', sid, 'out', amt, method=data.get('method', 'cash'),
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='supplier_payment',
-                              currency=currency)
+                              currency=currency, pay_uid=pay_uid)
         newbal = _adjust_credit(conn, 'suppliers', sid, cid, -amt, currency)
         # Schema v38 (general ledger core): Dr AP / Cr Cash. See
         # customer_payment's identical comment just above -- same
         # reasoning, no branch context on this route.
-        gl.post_supplier_payment(conn, cid, None, ref, currency, amt)
+        gl.post_supplier_payment(conn, cid, None, ref, currency, amt, source_uid=pay_uid)
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -17320,9 +17325,11 @@ def pay_purchase_order(po_id):
         status = 'paid' if new_paid >= _money(po['total'], currency) - _money_epsilon(currency) else 'partial'
         conn.execute("UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
                      (new_paid, status, po_id, cid))
+        pay_uid = _new_uid()  # F3b: see customer_payment -- source link for a later void
         ref = _record_payment(conn, cid, 'supplier', po['supplier_id'], 'out', amt, method=data.get('method', 'cash'),
                               related_type='po', related_id=po_id, notes=data.get('notes', ''),
-                              device=data.get('device'), doc_type='supplier_payment', currency=currency)
+                              device=data.get('device'), doc_type='supplier_payment', currency=currency,
+                              pay_uid=pay_uid)
         if po['supplier_id']:
             _adjust_credit(conn, 'suppliers', po['supplier_id'], cid, -amt, currency)
             # Schema v38 (general ledger core): Dr AP / Cr Cash. Gated on
@@ -17334,7 +17341,8 @@ def pay_purchase_order(po_id):
             # than credit a GL Accounts Payable balance nothing in
             # `suppliers.credit_balance` will ever match.
             gl.post_supplier_payment(conn, cid, None, ref, currency, amt,
-                                      source_type='po_payment', source_id=po_id)
+                                      source_type='po_payment', source_id=po_id,
+                                      source_uid=pay_uid)
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -18350,28 +18358,57 @@ def _reverse_payment_journal(conn, cid, payment):
     edit. It carries the payment's receipt reference and the original's uid as
     its `source_uid`, so it syncs like every other journal and links back.
 
-    The original is found by the payment's `reference` (customer_payment /
-    supplier_payment / pay_purchase_order all post with reference=ref and no
-    per-row source id), narrowed to the journals of those three source types,
-    to one whose cash leg equals THIS payment's amount, and to one nothing has
-    reversed yet -- so a reused reference cannot make the void reverse someone
-    else's journal, and a repeat call is a no-op rather than a second reversal.
+    F3b -- THE ORIGINAL IS FOUND BY SOURCE LINK. Every payment journal since
+    F3b carries the payment row's own `uid` as its `source_uid`, so the
+    original is `WHERE source_type IN (payment sources) AND source_uid =
+    <payment uid>`: exact, and unaffected by the per-device reference
+    counters that collide across tills (two tills each mint receipt #7; the
+    old reference+amount match could pick the wrong till's journal, and was
+    only guarded by "nothing has reversed it yet", which mutation N11/N12
+    showed no test pinned). `general_ledger.reverse_journal` is itself
+    idempotent, so a repeat call returns the existing reversal instead of
+    posting a second one, and its uid is deterministic, so two computers
+    voiding the same payment offline still collapse to one reversal.
+
+    FALLBACK, for rows older than F3b only: a payment with no linked journal
+    is matched by `reference` plus cash amount, restricted to journals whose
+    own `source_uid` is NULL (a journal that carries a source link belongs to
+    exactly one payment and must never be claimed by reference) and that
+    nothing has reversed yet. That is the pre-F3b behaviour, kept so a void of
+    an old payment still reverses its books; it stays exposed to the
+    cross-till reference collision for those rows alone. The SWEEP below
+    never uses the fallback for the same reason.
 
     Returns the reversing journal id, or None when there is nothing to
     reverse: a payment with no journal (written before schema v38, or a
     supplier-less PO payment, which never touched the subledger either -- the
     caller only calls this where it did), or a synced payment whose journal
-    has not arrived on this computer yet. That last case leaves the books one
-    reversal short until the journals converge; recorded as a residual, and
-    better than inventing a journal from a row.
+    has not arrived on this computer yet. That last case is closed by
+    `_post_missing_void_reversals`, which runs after every sync pull and posts
+    the reversal once the journal is here.
     """
+    marks = ','.join('?' * len(_PAYMENT_JOURNAL_SOURCES))
+    pay_uid = payment['uid']
+    if pay_uid:
+        linked = conn.execute(
+            f"SELECT id FROM gl_journals WHERE company_id=? AND source_uid=? "
+            f"AND source_type IN ({marks}) AND reversed_journal_id IS NULL "
+            f"ORDER BY id LIMIT 1",
+            (cid, pay_uid, *_PAYMENT_JOURNAL_SOURCES)).fetchone()
+        if linked:
+            # Dated TODAY (the accounting date of the void), not the original's
+            # date: a reversal posted into an already-reported day would change
+            # that day's figures after the fact.
+            return gl.reverse_journal(conn, cid, linked['id'],
+                                      memo=f"Void of payment {payment['reference']}",
+                                      business_date=gl._today())
     ref = payment['reference']
     if not ref:
         return None
-    marks = ','.join('?' * len(_PAYMENT_JOURNAL_SOURCES))
     candidates = conn.execute(
         f"SELECT j.id FROM gl_journals j WHERE j.company_id=? AND j.reference=? "
         f"AND j.source_type IN ({marks}) AND j.reversed_journal_id IS NULL "
+        f"AND j.source_uid IS NULL "
         f"AND NOT EXISTS (SELECT 1 FROM gl_journals r WHERE r.reversed_journal_id=j.id) "
         f"ORDER BY j.id",
         (cid, ref, *_PAYMENT_JOURNAL_SOURCES)).fetchall()
@@ -18383,13 +18420,103 @@ def _reverse_payment_journal(conn, cid, payment):
             "FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
             "WHERE l.journal_id=? AND a.code=?", (cand['id'], gl.ACCOUNT_CASH)).fetchone()
         if _money(cash['d'] or cash['c'], currency) == want:
-            # Dated TODAY (the accounting date of the void), not the original's
-            # date: a reversal posted into an already-reported day would change
-            # that day's figures after the fact.
             return gl.reverse_journal(conn, cid, cand['id'],
                                       memo=f"Void of payment {ref}",
                                       business_date=gl._today())
     return None
+
+
+def _post_missing_void_reversals(conn, company_id):
+    """Idempotent sweep (F3b item 2): for every VOIDED payment whose linked
+    original journal exists here with no reversal, post the reversal.
+
+    Why it exists: a payment voided on computer A before the payment's
+    journal reached A found nothing to reverse at void time
+    (`_reverse_payment_journal` returned None), and the journal arrives later
+    as an ordinary active fact -- so the payment stayed voided while its money
+    stayed in the books, on every computer. Run at the END of every void and
+    after every successful sync pull (`install_void_reversal_sweep`), so
+    whichever of {journal arrives, void arrives} happens last completes the
+    pair.
+
+    SOURCE LINK ONLY -- no reference fallback. A sweep that matched by
+    reference could claim another till's journal for an old, already-handled
+    payment. Payments and journals without a link are left exactly as they
+    are. Reversal uid is deterministic and `reverse_journal` is idempotent, so
+    running this twice, or on two computers, is a no-op after the first.
+
+    Runs in the caller's transaction; the caller commits. Returns the number
+    of reversals posted.
+    """
+    marks = ','.join('?' * len(_PAYMENT_JOURNAL_SOURCES))
+    rows = conn.execute(
+        f"SELECT j.id AS journal_id, p.reference AS reference "
+        f"FROM payments p JOIN gl_journals j "
+        f"  ON j.company_id=p.company_id AND j.source_uid=p.uid "
+        f" AND j.source_type IN ({marks}) "
+        f"WHERE p.company_id=? AND p.status='voided' AND p.uid IS NOT NULL "
+        f"AND j.reversed_journal_id IS NULL "
+        f"AND NOT EXISTS (SELECT 1 FROM gl_journals r "
+        f"  WHERE r.company_id=j.company_id AND r.reversed_journal_id=j.id) "
+        f"ORDER BY j.id",
+        (*_PAYMENT_JOURNAL_SOURCES, company_id)).fetchall()
+    posted = 0
+    for row in rows:
+        gl.reverse_journal(conn, company_id, row['journal_id'],
+                           memo=f"Void of payment {row['reference']}",
+                           business_date=gl._today())
+        posted += 1
+    return posted
+
+
+def post_missing_void_reversals_all_companies(conn):
+    """`_post_missing_void_reversals` for every company that has a voided
+    payment on this computer. The sync apply path has no company context of
+    its own, and one install normally holds one company, so this walks them."""
+    total = 0
+    for row in conn.execute(
+            "SELECT DISTINCT company_id FROM payments WHERE status='voided'").fetchall():
+        total += _post_missing_void_reversals(conn, row['company_id'])
+    return total
+
+
+def install_void_reversal_sweep(sync_service):
+    """Wrap `sync_service.apply_pull_result` (on this INSTANCE) so that after
+    every pull that applied, the void-reversal sweep runs on the same
+    connection. `apply_pull_result` is the one apply path both the Windows
+    `pull_once` and the Android pull-apply route go through, and it has no
+    post-apply hook of its own (sync_service.py is not this module's to
+    edit), hence the wrap. The caller of `apply_pull_result` commits, so the
+    sweep's journals are committed with the rest of the pull.
+
+    A sweep failure must never fail a pull that already applied: it is
+    logged and swallowed (the next pull, or the next void, runs it again --
+    it is idempotent). Installing twice is a no-op."""
+    if getattr(sync_service, '_void_sweep_installed', False):
+        return sync_service
+    original = sync_service.apply_pull_result
+
+    def apply_pull_result_then_sweep(conn, result, *args, **kwargs):
+        out = original(conn, result, *args, **kwargs)
+        # SAVEPOINT so a failure part-way through one reversal (header in,
+        # lines not) is rolled back on its own instead of being committed
+        # with the pull the caller is about to commit.
+        try:
+            conn.execute("SAVEPOINT void_sweep")
+            try:
+                post_missing_void_reversals_all_companies(conn)
+                conn.execute("RELEASE SAVEPOINT void_sweep")
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT void_sweep")
+                conn.execute("RELEASE SAVEPOINT void_sweep")
+                raise
+        except Exception:  # noqa: BLE001 -- see docstring
+            log.exception('void-reversal sweep failed after pull')
+        return out
+
+    sync_service.apply_pull_result = apply_pull_result_then_sweep
+    sync_service._void_sweep_installed = True
+    return sync_service
 
 
 @retail_bp.route('/payments/<int:pid>/void', methods=['POST'])
@@ -18561,6 +18688,10 @@ def void_payment(pid):
             # The books half (see _reverse_payment_journal): gated on the very
             # branch that moved the subledger, so the two cannot diverge again.
             _reverse_payment_journal(conn, cid, p)
+        # F3b: the payment is 'voided' now; complete any pair whose journal
+        # is here but unreversed (idempotent -- a no-op when the line above
+        # already did the work).
+        _post_missing_void_reversals(conn, cid)
         _audit(conn, 'PAYMENT_VOIDED', 'payment', pid, data.get('reason', ''))
         # AUDIT-032A fix (DEFECT 2): this route mutates `payments.status` in
         # place -- the ONE documented exception to Phase 5's "money is an

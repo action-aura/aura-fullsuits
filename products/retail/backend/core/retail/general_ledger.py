@@ -122,6 +122,23 @@ from commercial_runtime.currency import (
 #: deterministic-uid backfill uses (see that module's docstring).
 _GL_LEGACY_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, 'gl-legacy.aura-fullsuits.internal')
 
+#: Deterministic uuid5 NAMESPACE for REVERSAL journals' own `uid` (F3b). A
+#: reversal's uid is `uuid5(this, <original journal's uid> + ':reversal')`,
+#: so the SAME payment voided independently on two computers before they
+#: sync mints the SAME uid on both -- and the sync apply's `ON CONFLICT(uid)
+#: DO NOTHING` collapses the two reversals into one row, instead of
+#: reversing the money twice. The ORIGINAL's uid (not its integer id) is the
+#: name, because integer ids differ per device. Fixed literal, never
+#: regenerated: changing it would make two builds disagree about the uid.
+_GL_REVERSAL_NAMESPACE = uuid.UUID('6f1c2b8e-4d3a-5e7f-9a10-2c5b7d8e9f31')
+
+
+def reversal_uid(original_journal_uid):
+    """The deterministic uid of the reversal of the journal whose uid is
+    `original_journal_uid`. Pure; same input gives the same output on every
+    device, every run."""
+    return str(uuid.uuid5(_GL_REVERSAL_NAMESPACE, f"{original_journal_uid}:reversal"))
+
 #: `source_type` -> the LOCAL table whose own `uid` column is this journal's
 #: `source_uid`, for every source type that names a real document row.
 #: `'reversal'` is handled separately (its `source_uid` is the REVERSED
@@ -1169,7 +1186,7 @@ def backfill_legacy_journals(conn, chunk=1000):
 
 def post_journal(conn, cid, branch_id, business_date, source_type, source_id,
                   currency, lines, reference=None, memo=None, posted_by=None,
-                  reversed_journal_id=None):
+                  reversed_journal_id=None, uid=None, source_uid=None):
     """THE balance invariant, enforced at write time. Inserts one
     `gl_journals` header plus its `gl_journal_lines`, in the caller's own
     transaction (no commit here -- see the module docstring), IF AND ONLY
@@ -1249,8 +1266,14 @@ def post_journal(conn, cid, branch_id, business_date, source_type, source_id,
             f"journal for {source_type}:{source_id} -- {exc}"
         ) from exc
 
-    uid = str(uuid.uuid4())
-    source_uid = _derive_source_uid(conn, cid, source_type, source_id, reversed_journal_id)
+    # F3b: `uid` is overridable so `reverse_journal` can mint the
+    # DETERMINISTIC reversal uid (see `_GL_REVERSAL_NAMESPACE`), and
+    # `source_uid` so a payment posting can carry the payment row's own uid
+    # -- the source link the void path finds its journal by. Both default
+    # to the old behaviour.
+    uid = uid or str(uuid.uuid4())
+    if source_uid is None:
+        source_uid = _derive_source_uid(conn, cid, source_type, source_id, reversed_journal_id)
 
     cur = conn.cursor()
     cur.execute(
@@ -1288,9 +1311,19 @@ def reverse_journal(conn, cid, journal_id, memo=None, posted_by=None, business_d
     trusting a caller to supply them again, so a reversal can never
     accidentally land in the wrong branch or the wrong currency's
     minor-unit rounding.
+
+    F3b -- IDEMPOTENT AND DETERMINISTIC. A journal is reversed AT MOST ONCE:
+    if a reversal of it already exists (posted here, or arrived by sync),
+    this returns THAT reversal's id and posts nothing. The reversal's `uid`
+    is `reversal_uid(<original's uid>)`, so two computers that each reverse
+    the same journal while offline mint the SAME uid and the sync apply
+    collapses them into one row (a partial UNIQUE index on `(company_id,
+    reversed_journal_id)` backs this at the database level). A legacy
+    original with no uid falls back to a random uid: nothing else can name it
+    across devices anyway.
     """
     original = conn.execute(
-        "SELECT branch_id, business_date, reference, currency "
+        "SELECT branch_id, business_date, reference, currency, uid "
         "FROM gl_journals WHERE id=? AND company_id=?",
         (journal_id, cid)
     ).fetchone()
@@ -1298,6 +1331,13 @@ def reverse_journal(conn, cid, journal_id, memo=None, posted_by=None, business_d
         raise GeneralLedgerAccountError(
             f"cannot reverse journal {journal_id}: no such journal for company {cid!r}"
         )
+    existing = conn.execute(
+        "SELECT id FROM gl_journals WHERE company_id=? AND reversed_journal_id=? "
+        "ORDER BY id LIMIT 1",
+        (cid, journal_id)
+    ).fetchone()
+    if existing:
+        return existing['id']
     rows = conn.execute(
         "SELECT a.code AS account_code, l.debit, l.credit, l.memo "
         "FROM gl_journal_lines l JOIN gl_accounts a ON a.id = l.account_id "
@@ -1318,6 +1358,7 @@ def reverse_journal(conn, cid, journal_id, memo=None, posted_by=None, business_d
         'reversal', journal_id, original['currency'], swapped,
         reference=original['reference'], memo=memo or f"Reversal of journal #{journal_id}",
         posted_by=posted_by, reversed_journal_id=journal_id,
+        uid=reversal_uid(original['uid']) if original['uid'] else None,
     )
 
 
@@ -1799,11 +1840,15 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
 
 
 def post_customer_payment(conn, cid, branch_id, reference, currency, amount,
-                           business_date=None, posted_by=None):
+                           business_date=None, posted_by=None, source_uid=None):
     """Dr Cash / Cr Accounts Receivable -- a customer paying down what they
     owe. `amount` must be the exact figure already passed to both
     `_record_payment` and `_adjust_credit` at the call site (customer_
     payment in api/retail_api.py), not re-derived.
+
+    `source_uid` (F3b) is the PAYMENT ROW'S OWN `uid`. It is the source link
+    a later void finds this journal by -- never by reference plus amount,
+    because reference counters are per-device and collide across tills.
     """
     if not amount or amount <= 0:
         return None
@@ -1813,12 +1858,13 @@ def post_customer_payment(conn, cid, branch_id, reference, currency, amount,
     ]
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          'customer_payment', None, currency, lines,
-                         reference=reference, posted_by=posted_by)
+                         reference=reference, posted_by=posted_by,
+                         source_uid=source_uid)
 
 
 def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
                            source_type='supplier_payment', source_id=None,
-                           business_date=None, posted_by=None):
+                           business_date=None, posted_by=None, source_uid=None):
     """Dr Accounts Payable / Cr Cash -- the shop paying down what it owes a
     supplier. ONE helper for BOTH `supplier_payment` (a direct account
     payment, `source_id=None`) and `pay_purchase_order` (an instalment
@@ -1827,6 +1873,10 @@ def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
     own `supplier_payment`/`pay_purchase_order`, which differ only in
     which `purchase_orders` row they also touch), so this is one function
     with a doc-metadata parameter rather than two near-duplicates.
+
+    `source_uid` (F3b): the payment row's own `uid`, the source link a later
+    void finds this journal by (`source_id` cannot be it: every instalment
+    against one PO shares the PO's `source_id`).
     """
     if not amount or amount <= 0:
         return None
@@ -1836,7 +1886,8 @@ def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
     ]
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          source_type, source_id, currency, lines,
-                         reference=reference, posted_by=posted_by)
+                         reference=reference, posted_by=posted_by,
+                         source_uid=source_uid)
 
 
 def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,

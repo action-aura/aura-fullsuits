@@ -11018,6 +11018,53 @@ def _migrate_add_branch_identity_and_till_allocation(conn):
             ON till_allocations(company_id, terminal_uid) WHERE status='active';
     """)
     converge_default_branch_uid(conn)
+    _ensure_one_reversal_per_journal_index(conn)
+
+
+def _ensure_one_reversal_per_journal_index(conn):
+    """F3b (inside the unshipped v42 step -- no new version number): a journal
+    may be reversed AT MOST ONCE. Partial UNIQUE index on
+    `gl_journals(company_id, reversed_journal_id) WHERE reversed_journal_id IS
+    NOT NULL`. Backs the deterministic reversal uid: even if two reversals of
+    one journal somehow got past the sync apply's `gl_duplicate_reversal`
+    park, the database refuses the second instead of reversing money twice.
+
+    Guarded three ways, idempotent, and it never blocks a boot:
+      * no `gl_journals` table yet (a database that never reached the GL
+        step) -> nothing to index;
+      * ANY existing (company_id, reversed_journal_id) pair already appearing
+        more than once -> the index is NOT created and a warning names the
+        count. Real data is never rewritten to make an index fit (the ledger
+        is append-only); the runtime idempotency in `reverse_journal` and the
+        sync apply park still hold, and the owner decides what to do with the
+        duplicate. The census copies of live databases held none;
+      * `IF NOT EXISTS`, so a re-run is a no-op.
+    """
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gl_journals'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(gl_journals)").fetchall()}
+    if 'reversed_journal_id' not in cols:
+        return
+    dupes = conn.execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM gl_journals "
+        "WHERE reversed_journal_id IS NOT NULL "
+        "GROUP BY company_id, reversed_journal_id HAVING COUNT(*) > 1)"
+    ).fetchone()[0]
+    if dupes:
+        import logging
+        logging.getLogger(__name__).warning(
+            "gl_journals: %d journal(s) are reversed more than once; the "
+            "one-reversal-per-journal unique index was NOT created. Reverse "
+            "nothing by hand -- report it.", dupes)
+        return
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_gl_journals_one_reversal "
+        "ON gl_journals(company_id, reversed_journal_id) "
+        "WHERE reversed_journal_id IS NOT NULL"
+    )
 
 
 def _migrate_add_gl_journal_sync(conn):
