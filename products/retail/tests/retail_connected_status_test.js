@@ -323,14 +323,14 @@ async function run(name, fn) {
   });
   await run('M3: exit() always goes to the dashboard => logo RED', async () => {
     const b = mutateSource(SHELL_SRC,
-      "this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');\n  },\n\n  // Device license",
-      "this.launch('retail', 'dashboard');\n  },\n\n  // Device license");
+      "const home = () => this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');",
+      "const home = () => this.launch('retail', 'dashboard');");
     return provesMutation('M3 exit() -> dashboard for everyone', b, testLogoGoesToTillForCashierOnly);
   });
   await run('M3b: exit() always goes to the till => fail-open half RED', async () => {
     const b = mutateSource(SHELL_SRC,
-      "this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');\n  },\n\n  // Device license",
-      "this.launch('retail', 'pos');\n  },\n\n  // Device license");
+      "const home = () => this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');",
+      "const home = () => this.launch('retail', 'pos');");
     return provesMutation('M3b exit() -> till for everyone', b, testLogoGoesToTillForCashierOnly);
   });
   await run('M4: the Home tab put back for a cashier => phone tab RED', async () => {

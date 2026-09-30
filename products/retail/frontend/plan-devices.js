@@ -21,9 +21,18 @@
  * received shows "—" and says why; a joined till cannot count the other
  * computers and says so instead of claiming "1 of 2".
  *
- * P1b-waits: registry v9 -- the DEVICE-SYNC items (identity device list,
- * "Make this the main computer") are deliberately not built here; they wait
- * on registry v9 and will slot into devicesCard() below.
+ * P2S (registry v9, crew U): the device-sync items now live here.
+ *   - "This computer" row  main badge from the registry, app version, last seen,
+ *                          and (on a non-main computer) the way to become main.
+ *   - "Computers in this shop" card  every computer the registry knows, with the
+ *                          rename / remove / reinstate / make-main actions ON THE
+ *                          MAIN COMPUTER ONLY (the server enforces the same rule
+ *                          with NOT_ADMIN_DEVICE; hiding the buttons is manners).
+ *   - take-over dialog     for a non-main computer whose main is gone: owner
+ *                          password + typing TAKE OVER, server codes said as
+ *                          plain sentences (errorText, also used by app-shell).
+ * The site-relay list above is a different list (licence seats on the shop
+ * network) and is untouched.
  */
 (function () {
   'use strict';
@@ -134,7 +143,14 @@
     '.pd-tile{border:1px solid var(--border-default);border-radius:var(--radius-card);padding:var(--space-base);display:flex;flex-direction:column;gap:var(--space-snug)}',
     '.pd-price{font-size:var(--text-size-title);font-weight:var(--text-weight-semibold)}',
     '.pd-list{margin:0;padding-inline-start:var(--space-base);display:flex;flex-direction:column;gap:var(--space-tight)}',
-    '.pd-err{margin:0;color:var(--state-danger-text);font-size:var(--text-size-meta)}'
+    '.pd-err{margin:0;color:var(--state-danger-text);font-size:var(--text-size-meta)}',
+    '.pd-acts{display:flex;flex-wrap:wrap;gap:var(--space-snug);align-items:center}',
+    '.pd-badges{display:flex;flex-wrap:wrap;gap:var(--space-snug);align-items:center}',
+    '.pd-dev>div:first-child{min-inline-size:0;flex:1 1 12rem;overflow-wrap:anywhere}',
+    '.pd-input{font:inherit;font-size:var(--text-size-body);min-block-size:2.5rem;inline-size:100%;box-sizing:border-box;padding-inline:var(--space-snug);border-radius:var(--radius-control);border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-primary)}',
+    '.pd-input:focus-visible{outline:2px solid var(--accent-action);outline-offset:2px}',
+    '.pd-edit{display:flex;flex-wrap:wrap;gap:var(--space-snug);align-items:center;inline-size:100%}',
+    '.pd-edit .pd-input{flex:1 1 12rem;inline-size:auto}'
   ].join('');
 
   function ensureStyle() {
@@ -207,15 +223,22 @@
         fetchJson('/api/licensing/status'),
         fetchJson('/api/site-relay/status'),
         fetchJson('/api/devices/me'),
-        fetchJson('/api/sub/retail/settings/branding')
+        fetchJson('/api/sub/retail/settings/branding'),
+        fetchJson('/api/devices')
       ]).then(function (r) {
         var branding = r[3] && r[3].data ? r[3].data : {};
+        // The registry list. null = could not be read (an old server, a
+        // network blip): the screen then shows exactly what it showed before
+        // registry v9 rather than an empty "no computers" it does not know.
+        var regBody = r[4] && Array.isArray(r[4].devices) ? r[4]
+          : (r[4] && r[4].data && Array.isArray(r[4].data.devices) ? r[4].data : null);
         return {
           owner: true,
           lic: r[0] || {},
           relay: r[1],
           me: r[2],
-          shopName: branding.branding_business_name || ''
+          shopName: branding.branding_business_name || '',
+          registry: regBody && Array.isArray(regBody.devices) ? regBody.devices : null
         };
       });
     });
@@ -298,6 +321,343 @@
     });
   }
 
+  // ── registry v9: the shop's computers ───────────────────────────────────
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // A server refusal, said the way a shopkeeper would say it. Keyed on the
+  // stable `code`, never on the English `error` string: that one is for logs
+  // and is not translated. An unknown code (a newer server) gets the generic
+  // sentence instead of raw text. Also used by app-shell's claim button.
+  function errorText(body) {
+    var code = body && typeof body.code === 'string' ? body.code : '';
+    if (code === 'TAKEOVER_LOCKED') {
+      var secs = Number(body.retry_after_seconds);
+      if (isFinite(secs) && secs > 0) {
+        var mins = Math.max(1, Math.ceil(secs / 60));
+        if (mins === 1) return t('Too many wrong passwords. Try again in 1 minute.');
+        if (mins < 120) return fill(t('Too many wrong passwords. Try again in {minutes} minutes.'), { minutes: mins });
+        var hours = Math.ceil(mins / 60);
+        if (hours < 48) return fill(t('Too many wrong passwords. Try again in {hours} hours.'), { hours: hours });
+        return fill(t('Too many wrong passwords. Try again in {days} days.'), { days: Math.ceil(hours / 24) });
+      }
+      return t('Too many wrong passwords. Try again later.');
+    }
+    var known = {
+      NOT_ADMIN_DEVICE: t('Only the main computer can do this. Open this screen on the main computer.'),
+      ADMIN_ROLE_REQUIRED: t('Only the shop owner can do this.'),
+      DEVICE_NOT_FOUND: t('That computer is not in this shop any more.'),
+      DEVICE_REVOKED: t('That computer was removed from the shop. Bring it back first.'),
+      DEVICE_NOT_REVOKED: t('That computer is already part of the shop.'),
+      DEVICE_NOT_ELIGIBLE: t('That computer cannot be the main computer.'),
+      DEVICE_IDENTITY_CLASH: t('This computer looks the same as another computer in the shop, so it cannot be made the main computer. Contact support.'),
+      MAIN_MUST_BE_WINDOWS: t('Only a Windows computer can be the main computer.'),
+      JOINED_DEVICE_CANNOT_CLAIM: t('This computer joined an existing shop, so it cannot become the main computer by itself. Ask the main computer to hand the role over.'),
+      ADMIN_DEVICE_ALREADY_CLAIMED: t('Another computer is already the main computer.'),
+      CANNOT_REVOKE_MAIN: t('The main computer cannot be removed. Make another computer the main one first.'),
+      DEVICE_NAME_REQUIRED: t('Type a name first.'),
+      DEVICE_NAME_TOO_LONG: t('The name can be at most 60 characters.'),
+      DEVICE_NAME_INVALID: t('That name has characters that are not allowed.'),
+      TAKEOVER_CONFIRM_REQUIRED: t('Type TAKE OVER to confirm.'),
+      TAKEOVER_PASSWORD_INCORRECT: t('Your password is not correct.'),
+      TAKEOVER_NO_MAIN: t('This shop has no main computer to replace. Set this computer as the main computer instead.'),
+      TAKEOVER_ALREADY_MAIN: t('This computer is already the main computer.'),
+      TAKEOVER_MAIN_SEEN_RECENTLY: t('The main computer was online in the last 7 days. You can only take over when it has been silent for at least 7 days.'),
+      TAKEOVER_MAIN_UNKNOWN: t('This computer cannot tell when the main computer was last online, so it cannot take over.'),
+      TAKEOVER_DEVICE_NOT_ACTIVE: t('This computer was removed from the shop and cannot take over.'),
+      TAKEOVER_CLOCK_BEHIND: t('The clock on this computer is behind the shop records. Correct the date and time, then try again.')
+    };
+    return Object.prototype.hasOwnProperty.call(known, code) ? known[code] : t('That did not work. Please try again.');
+  }
+
+  function postJson(url, payload) {
+    var init = { method: 'POST', credentials: 'include', cache: 'no-store' };
+    if (payload !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify(payload);
+    }
+    return fetch(url, init).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (b) {
+        return { ok: r.ok, status: r.status, body: b };
+      });
+    }).catch(function () { return { ok: false, status: 0, body: null }; });
+  }
+
+  function thisRegistryDevice(data) {
+    var list = data.registry;
+    if (!Array.isArray(list)) return null;
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].is_this_device === true) return list[i];
+    return null;
+  }
+
+  // Only the main computer may manage the others. Read from the registry
+  // entry of THIS computer; no entry means the list could not be read, and
+  // then nothing is offered (a button that cannot work is worse than none).
+  function mainHere(data) {
+    var d = thisRegistryDevice(data);
+    return !!(d && d.is_admin_device === true);
+  }
+
+  function canBeMain(d) {
+    var p = d && typeof d.platform === 'string' ? d.platform.toUpperCase() : '';
+    return p === '' || p === 'WINDOWS';
+  }
+
+  var PLATFORM_NAMES = { WINDOWS: 'Windows', ANDROID: 'Android', IOS: 'iOS' };
+
+  function metaLines(d) {
+    var bits = [];
+    var p = typeof d.platform === 'string' ? d.platform.toUpperCase() : '';
+    if (p) bits.push(PLATFORM_NAMES[p] || (p.charAt(0) + p.slice(1).toLowerCase()));
+    if (typeof d.app_version === 'string' && d.app_version) {
+      bits.push(fill(t('Version {version}'), { version: '⁦' + d.app_version + '⁩' }));
+    }
+    var seen = dateOnly(d.last_seen_at);
+    return {
+      line1: bits.join(' · '),
+      line2: seen ? fill(t('Last seen {date}'), { date: seen }) : t('Never seen')
+    };
+  }
+
+  // This computer just became the main one, or just stopped being it: the
+  // shell's own badge, gear menu and audit entry all hang off these two flags,
+  // and launch() is what re-reads them (the same thing the claim button does).
+  function refreshShell(nowMain, host, opts) {
+    var app = window.SubsystemApp;
+    if (app && typeof app.launch === 'function') {
+      app.isAdminDevice = nowMain;
+      app.canClaimAdminDevice = false;
+      app.launch(app.active || 'retail', app.currentSection || 'dashboard');
+      return Promise.resolve();
+    }
+    return render(host, opts);
+  }
+
+  function askLeave(reason) {
+    var app = window.SubsystemApp;
+    if (app && typeof app._askLeaveGuards === 'function') return app._askLeaveGuards(reason, 'navigate');
+    return Promise.resolve(true);
+  }
+
+  function toast(msg, kind) {
+    var app = window.SubsystemApp;
+    if (app && typeof app.showToast === 'function') app.showToast(msg, kind);
+  }
+
+  function makeMain(host, opts, d, errNode) {
+    var name = d.device_label || t('Unnamed computer');
+    var title = fill(t('Make {name} the main computer?'), { name: name });
+    var message = t('This computer will stop being the main computer.');
+    var rs = window.RetailSystem;
+    var asked = rs && typeof rs._confirm === 'function'
+      ? rs._confirm({ title: title, message: message, confirmLabel: t('Make main computer'), danger: false })
+      : Promise.resolve(window.confirm(title + '\n\n' + message));
+    return asked.then(function (ok) {
+      if (!ok) return null;
+      return askLeave('transfer-main-computer').then(function (go) {
+        if (!go) return null;
+        return postJson('/api/devices/' + encodeURIComponent(d.id) + '/admin').then(function (r) {
+          if (!r.ok) { errNode.textContent = errorText(r.body); return null; }
+          return refreshShell(false, host, opts);
+        });
+      });
+    });
+  }
+
+  function removeComputer(host, opts, d, errNode) {
+    return confirmRemove(d.device_label || t('Unnamed computer')).then(function (ok) {
+      if (!ok) return null;
+      return postJson('/api/devices/' + encodeURIComponent(d.id) + '/revoke').then(function (r) {
+        if (!r.ok) { errNode.textContent = errorText(r.body); return null; }
+        return render(host, opts);
+      });
+    });
+  }
+
+  function reinstateComputer(host, opts, d, errNode) {
+    return postJson('/api/devices/' + encodeURIComponent(d.id) + '/reinstate').then(function (r) {
+      if (!r.ok) { errNode.textContent = errorText(r.body); return null; }
+      return render(host, opts);
+    });
+  }
+
+  function openRename(host, opts, d, row, renameBtn, errNode) {
+    if (row.querySelector('.pd-edit')) return;
+    renameBtn.disabled = true;
+    var wrap = el('div', 'pd-edit');
+    wrap.setAttribute('data-pd', 'rename');
+    var input = el('input', 'pd-input');
+    input.type = 'text';
+    input.maxLength = 60;
+    input.value = d.device_label || '';
+    input.setAttribute('aria-label', t('Computer name'));
+    input.setAttribute('data-pd', 'rename-input');
+    var save = el('button', 'pd-btn', t('Save'));
+    save.type = 'button';
+    save.setAttribute('data-pd', 'rename-save');
+    var cancel = el('button', 'pd-btn', t('Cancel'));
+    cancel.type = 'button';
+    function stop() {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      renameBtn.disabled = false;
+      renameBtn.focus();
+    }
+    function submit() {
+      save.disabled = true;
+      errNode.textContent = '';
+      postJson('/api/devices/' + encodeURIComponent(d.id) + '/label', { label: input.value }).then(function (r) {
+        if (!r.ok) { errNode.textContent = errorText(r.body); save.disabled = false; return null; }
+        return render(host, opts);
+      });
+    }
+    save.addEventListener('click', submit);
+    cancel.addEventListener('click', stop);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stop(); }
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(save);
+    wrap.appendChild(cancel);
+    row.appendChild(wrap);
+    input.focus();
+    input.select();
+  }
+
+  function computerRow(data, host, opts, d, manage, errNode) {
+    var revoked = d.status === 'revoked';
+    var row = el('div', 'pd-dev');
+    row.setAttribute('data-pd-shop-device', String(d.id));
+    row.setAttribute('data-status', revoked ? 'revoked' : 'active');
+    var left = el('div');
+    left.appendChild(el('p', 'pd-body', d.device_label || t('Unnamed computer')));
+    var meta = metaLines(d);
+    if (meta.line1) left.appendChild(el('p', 'pd-muted', meta.line1));
+    var seen = el('p', 'pd-muted', meta.line2);
+    seen.setAttribute('data-pd', 'last-seen');
+    left.appendChild(seen);
+    row.appendChild(left);
+
+    var right = el('div', 'pd-badges');
+    if (d.is_admin_device === true) {
+      var mb = el('span', 'pd-badge info', t('Main computer'));
+      mb.setAttribute('data-pd', 'main-badge');
+      right.appendChild(mb);
+    }
+    if (revoked) {
+      var rb = el('span', 'pd-badge bad', t('Removed from the shop'));
+      rb.setAttribute('data-pd', 'removed-badge');
+      right.appendChild(rb);
+    }
+    if (manage) {
+      var acts = el('div', 'pd-acts');
+      function button(label, cls, key, fn) {
+        var b = el('button', 'pd-btn' + (cls ? ' ' + cls : ''), label);
+        b.type = 'button';
+        b.setAttribute('data-pd', key);
+        b.addEventListener('click', function () { fn(b); });
+        acts.appendChild(b);
+        return b;
+      }
+      button(t('Rename'), '', 'rename', function (b) { openRename(host, opts, d, row, b, errNode); });
+      if (revoked) {
+        button(t('Reinstate'), '', 'reinstate', function () { reinstateComputer(host, opts, d, errNode); });
+      } else if (d.is_admin_device !== true) {
+        if (canBeMain(d)) button(t('Make main computer'), '', 'make-main', function () { makeMain(host, opts, d, errNode); });
+        button(t('Remove'), 'danger', 'remove', function () { removeComputer(host, opts, d, errNode); });
+      }
+      right.appendChild(acts);
+    }
+    row.appendChild(right);
+    return row;
+  }
+
+  function shopComputersCard(data, host, opts) {
+    if (!Array.isArray(data.registry)) return null;
+    var card = el('section', 'pd-card');
+    card.setAttribute('data-pd', 'shop-computers');
+    card.appendChild(el('h2', 'pd-h', t('Computers in this shop')));
+    var others = data.registry.filter(function (d) { return d && d.is_this_device !== true; });
+    var manage = mainHere(data);
+    var errNode = el('p', 'pd-err');
+    errNode.setAttribute('role', 'alert');
+    if (!others.length) {
+      card.appendChild(el('p', 'pd-muted', t('No other computer has joined this shop yet.')));
+      return card;
+    }
+    if (!manage) {
+      card.appendChild(el('p', 'pd-muted', t('Only the main computer can do this. Open this screen on the main computer.')));
+    }
+    var ordered = others.filter(function (d) { return d.status !== 'revoked'; })
+      .concat(others.filter(function (d) { return d.status === 'revoked'; }));
+    ordered.forEach(function (d) { card.appendChild(computerRow(data, host, opts, d, manage, errNode)); });
+    card.appendChild(errNode);
+    return card;
+  }
+
+  // The owner's escape hatch when the main computer is gone. Two deliberate
+  // frictions -- the password and the typed phrase -- because this replaces
+  // the computer everything else follows. The SERVER decides whether it may
+  // happen (7 days of silence, lockout after wrong passwords); this dialog
+  // only carries the answer back in words.
+  function openTakeover(host, opts) {
+    var rs = window.RetailSystem;
+    if (!rs || typeof rs._wireModalA11y !== 'function' || document.getElementById('pd-takeover-modal')) return;
+    var overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'pd-takeover-modal';
+    overlay.innerHTML =
+      '<div class="ret-modal" style="max-width:26rem" id="pd-takeover-dialog" role="dialog" aria-modal="true" aria-labelledby="pd-takeover-dialog-title">' +
+      '<h3 id="pd-takeover-dialog-title">' + esc(t('Take over as main computer')) + '</h3>' +
+      '<p class="pd-muted">' + esc(t('Use this only if the old main computer is broken or lost. It only works after the main computer has been silent for 7 days or more.')) + '</p>' +
+      '<div class="ret-field"><label for="pd-takeover-pw">' + esc(t('Password')) + '</label>' +
+      '<input class="pd-input" type="password" id="pd-takeover-pw" autocomplete="current-password" /></div>' +
+      '<div class="ret-field"><label for="pd-takeover-phrase">' + esc(t('Type TAKE OVER to confirm.')) + '</label>' +
+      '<input class="pd-input" type="text" id="pd-takeover-phrase" dir="ltr" autocomplete="off" autocapitalize="characters" spellcheck="false" /></div>' +
+      '<p class="pd-err" id="pd-takeover-err" role="alert"></p>' +
+      '<div class="ret-modal-footer">' +
+      '<button type="button" class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">' + esc(t('Cancel')) + '</button>' +
+      '<button type="button" class="ret-btn ret-btn-primary" id="pd-takeover-btn" disabled>' + esc(t('Take over')) + '</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    var close = rs._wireModalA11y(overlay, 'pd-takeover-dialog');
+    var pw = document.getElementById('pd-takeover-pw');
+    var phrase = document.getElementById('pd-takeover-phrase');
+    var err = document.getElementById('pd-takeover-err');
+    var btn = document.getElementById('pd-takeover-btn');
+    function ready() { return pw.value !== '' && phrase.value.trim() === 'TAKE OVER'; }
+    function sync() { btn.disabled = !ready(); }
+    pw.addEventListener('input', sync);
+    phrase.addEventListener('input', sync);
+    function submit() {
+      if (!ready() || btn.disabled) return;
+      btn.disabled = true;
+      err.textContent = '';
+      askLeave('take-over-main-computer').then(function (go) {
+        if (!go) { sync(); return null; }
+        return postJson('/api/devices/me/take-over', { password: pw.value, confirm: phrase.value.trim() }).then(function (r) {
+          if (!r.ok) {
+            err.textContent = errorText(r.body);
+            pw.value = '';
+            sync();
+            pw.focus();
+            return null;
+          }
+          if (typeof close === 'function') close();
+          toast(t('This computer is now your shop’s main computer.'), 'success');
+          return refreshShell(true, host, opts);
+        });
+      });
+    }
+    btn.addEventListener('click', submit);
+    [pw, phrase].forEach(function (i) {
+      i.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    });
+    pw.focus();
+  }
+
   function devicesCard(data, host, opts) {
     var card = el('section', 'pd-card');
     card.setAttribute('data-pd', 'devices');
@@ -366,8 +726,47 @@
     // would be printed twice, one line under the other.
     meLeft.appendChild(el('p', 'pd-body', ownName || t('This computer')));
     if (ownName) meLeft.appendChild(el('p', 'pd-muted', t('This computer')));
+    var reg = thisRegistryDevice(data);
+    // The registry knows who is main; the older me/joined guess is only the
+    // fallback when the registry list could not be read.
+    var isMain = reg ? reg.is_admin_device === true : !joined;
+    me.setAttribute('data-pd', 'this-computer');
+    me.setAttribute('data-main', isMain ? 'true' : 'false');
+    if (reg) {
+      var rm = metaLines(reg);
+      if (rm.line1) meLeft.appendChild(el('p', 'pd-muted', rm.line1));
+      var rSeen = el('p', 'pd-muted', rm.line2);
+      rSeen.setAttribute('data-pd', 'last-seen');
+      meLeft.appendChild(rSeen);
+    }
     me.appendChild(meLeft);
-    if (!joined) me.appendChild(el('span', 'pd-badge info', t('Main computer')));
+    var meRight = el('div', 'pd-badges');
+    if (isMain) {
+      var mainBadge = el('span', 'pd-badge info', t('Main computer'));
+      mainBadge.setAttribute('data-pd', 'main-badge');
+      meRight.appendChild(mainBadge);
+    } else {
+      var meActs = el('div', 'pd-acts');
+      var appNow = window.SubsystemApp;
+      if (data.me && data.me.can_claim_admin === true && appNow && typeof appNow._claimAdminDeviceFromMenu === 'function') {
+        var claimBtn = el('button', 'pd-btn', t('Make this the main computer'));
+        claimBtn.type = 'button';
+        claimBtn.setAttribute('data-pd', 'claim-main');
+        claimBtn.addEventListener('click', function () {
+          claimBtn.disabled = true;
+          Promise.resolve(appNow._claimAdminDeviceFromMenu()).then(function () { return render(host, opts); });
+        });
+        meActs.appendChild(claimBtn);
+      } else if (joined && canBeMain(reg || {}) && window.RetailSystem && typeof window.RetailSystem._wireModalA11y === 'function') {
+        var takeBtn = el('button', 'pd-btn', t('Take over as main computer'));
+        takeBtn.type = 'button';
+        takeBtn.setAttribute('data-pd', 'take-over');
+        takeBtn.addEventListener('click', function () { openTakeover(host, opts); });
+        meActs.appendChild(takeBtn);
+      }
+      if (meActs.childNodes.length) meRight.appendChild(meActs);
+    }
+    me.appendChild(meRight);
     card.appendChild(me);
 
     if (joined) {
@@ -475,10 +874,12 @@
       }
       host.appendChild(planCard(data));
       host.appendChild(devicesCard(data, host, opts));
+      var shopCard = shopComputersCard(data, host, opts);
+      if (shopCard) host.appendChild(shopCard);
       host.appendChild(featuresCard(data));
       host.appendChild(addonsCard(data, opts));
     });
   }
 
-  window.PlanDevices = { render: render, prices: PRICES };
+  window.PlanDevices = { render: render, prices: PRICES, errorText: errorText };
 })();

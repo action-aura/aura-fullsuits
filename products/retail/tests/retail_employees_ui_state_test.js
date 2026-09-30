@@ -515,8 +515,8 @@ async function main() {
   // succeed is worse than the bug it claims to fix.
   await run('M2: _saveRole never completes a save => allow-half pin FAILS', async () => {
     const broken = mutate(SRC, [[
-      "      if (res && res.success) {\n        this._closeModal('emp-role-modal');\n        SubsystemApp.showToast(t('Role updated'), 'success');",
-      "      if (false) { // MUTATED: never takes the success branch, even on a real success\n        this._closeModal('emp-role-modal');\n        SubsystemApp.showToast(t('Role updated'), 'success');",
+      "      const res = await this._put(`/api/admin/employees/${id}/role`, { role });\n      if (res && res.success) {\n        this._closeModal('emp-role-modal');\n        SubsystemApp.showToast(t('Role updated'), 'success');",
+      "      const res = await this._put(`/api/admin/employees/${id}/role`, { role });\n      if (false) { // MUTATED: never takes the success branch, even on a real success\n        this._closeModal('emp-role-modal');\n        SubsystemApp.showToast(t('Role updated'), 'success');",
     ]]);
     return provesMutation('M2 _saveRole never completes a save', broken,
       (b) => testRoleSuccessfulSaveStillClosesModalAndReloads(b));

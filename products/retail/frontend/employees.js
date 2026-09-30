@@ -14,15 +14,13 @@
  *
  * ── WHAT THIS SCREEN DELIBERATELY DOES NOT HAVE ──────────────────────────
  *
- * A NAME FIELD. `registry.db users` has no `name` column (registry_db.py's
- * CREATE TABLE) and `create_employee` accepts no name -- `create_admin` takes
- * one and writes it to config.json, which belongs to the install rather than
- * to any account. An account here IS its email address: that is what the
- * owner types to invite somebody, what that person signs in with, and what
- * `audit_logs` and every future `actor_user_uid` report resolves back to. A
- * "Full name" input would have looked like the obvious missing field and
- * would have been silently dropped in transit, which is worse than its
- * absence. The screen says so out loud instead of pretending.
+ * (History: this block used to say the screen deliberately had NO name field
+ * because `create_employee` accepted none. Registry v9 changed that -- POST
+ * /api/admin/employees takes an optional `name` and PUT .../<id>/name edits
+ * it -- so the invite and edit dialogs now carry a Name of 1-60 characters and
+ * every row shows `display_name` first, the email beneath. The EMAIL is still
+ * what a person signs in with and what audit rows resolve back to; the name is
+ * a label, blank means "not given", and a blank name is never sent at all.)
  *
  * A ROLE OR STATUS CONTROL ON THE OWNER ROW. Two different reasons, both
  * server-side facts rather than styling choices:
@@ -42,12 +40,20 @@
  * PIN controls DO appear on the owner row: the owner rings sales too, and
  * `update_pin` has no owner bar because a PIN grants nothing (see below).
  *
- * A "PERMISSIONS" GRID. The eight capability codes exist and are seeded
- * (user_accounts.py), but no retail route reads them yet -- wiring them onto
- * the ~80 `@mt_require_subsystem('retail')` routes is a later slice of this
- * phase. A grid of switches that changed no behaviour would be a screen that
- * lies. Role IS the permission control today, and the role modal says that
- * changing it replaces the defaults.
+ * A PER-SWITCH "PERMISSIONS" GRID. There are twelve capability codes (registry
+ * v9 added the four books codes) and the server enforces them, but the owner
+ * chooses a PRESET -- Cashier, Manager, Branch manager, Accountant -- not
+ * twelve switches. The preset dialog shows the twelve as a read-only list in
+ * plain words so the owner sees what a card grants; nothing on this screen
+ * flips a single code on its own. A stored preset whose rows have since been
+ * tuned by hand (`preset_matches === false`) is shown as "Custom" rather than
+ * under the name it no longer matches.
+ *
+ * THE PRESET TABLE BELOW IS A COPY. The server has no "list presets" route, so
+ * `_PRESET_CAPS` mirrors `ROLE_PRESETS` in commercial_runtime/identity/
+ * user_accounts.py. It is display only -- the server derives the real rows
+ * from the preset NAME -- and retail_s_users_roles_e2e.py compares it to the
+ * python constant so the two cannot drift without a red test.
  *
  * ── GATING: THE OWNER ROLE, NOT THE ADMIN DEVICE ─────────────────────────
  * Every route here gates on `session['mt_role'] == 'admin'` -- the USER axis.
@@ -95,6 +101,68 @@ const RetailEmployees = {
   // render()'s branch-manager arm below) -- never flipped anywhere else, so
   // there is exactly one place that can put this screen into reduced mode.
   _reduced: false,
+
+  // ── Presets (registry v9) ────────────────────────────────────────────────
+  //
+  // Display copy of ROLE_PRESETS -- see the header comment. Codes carry the
+  // server's `retail.` prefix so the comparison with the python constant is a
+  // plain set equality. Order = the order the four cards are drawn in.
+  _PRESET_ORDER: ['cashier', 'manager', 'branch_manager', 'accountant'],
+  _PRESET_CAPS: {
+    cashier: ['retail.sell', 'retail.refund', 'retail.cash.close'],
+    manager: ['retail.sell', 'retail.refund', 'retail.discount', 'retail.stock.adjust',
+      'retail.reports', 'retail.cash.close'],
+    branch_manager: ['retail.sell', 'retail.refund', 'retail.discount', 'retail.stock.adjust',
+      'retail.reports', 'retail.cash.close', 'retail.employees'],
+    accountant: ['retail.books.view', 'retail.books.record', 'retail.reports', 'retail.cash.approve'],
+  },
+  // The `users.role` each preset lives on (PRESET_BASE_ROLE). Sent alongside
+  // `preset` on create because the server refuses a role that disagrees.
+  _PRESET_BASE_ROLE: {
+    cashier: 'cashier', manager: 'manager', branch_manager: 'manager', accountant: 'manager',
+  },
+
+  // The twelve codes in the order the list is drawn, each in plain words.
+  // A method, not a constant, so t() runs when the dialog opens (after the
+  // language is known) and every label stays a literal the parity scan sees.
+  _capRows() {
+    return [
+      ['retail.sell', t('Ring up sales')],
+      ['retail.refund', t('Refund a sale')],
+      ['retail.discount', t('Give discounts')],
+      ['retail.stock.adjust', t('Change stock counts')],
+      ['retail.reports', t('Read reports')],
+      ['retail.cash.close', t('Close their own cash drawer')],
+      ['retail.cash.approve', t('Sign off cash drawer shortfalls')],
+      ['retail.employees', t('Add and disable cashiers at their branch')],
+      ['retail.books.view', t('Look at the books')],
+      ['retail.books.record', t('Write entries in the books')],
+      ['retail.books.approve', t('Approve entries in the books')],
+      ['retail.books.close', t('Close a books period')],
+    ];
+  },
+  _presetLabel(key) {
+    if (key === 'cashier') return t('Cashier');
+    if (key === 'manager') return t('Manager');
+    if (key === 'branch_manager') return t('Branch manager');
+    if (key === 'accountant') return t('Accountant');
+    return t('Custom');
+  },
+  _presetBlurb(key) {
+    if (key === 'cashier') return t('Sells at the till and closes their own drawer.');
+    if (key === 'manager') return t('Does what a cashier does, plus discounts, stock changes and reports.');
+    if (key === 'branch_manager') return t('A manager who can also add and disable cashiers at one branch. Needs a branch.');
+    if (key === 'accountant') return t('Works in the books and reads reports. Does not sell.');
+    return '';
+  },
+
+  // What GET /api/devices last said about editing roles: {allowed, blocking}.
+  // Advisory only (the server does not refuse), so a missing or unreadable
+  // answer FAILS OPEN -- an owner must never be locked out of the screen by a
+  // device list that would not load.
+  _gate: { allowed: true, blocking: [] },
+  //: The preset chosen in the dialog that is open right now.
+  _selPreset: 'cashier',
 
   // Bumped by _beginRender(), read by _isStaleRender() -- see the "Render
   // generation guard" comment on render() below for the concrete race this
@@ -228,8 +296,9 @@ const RetailEmployees = {
         </div>
         <div class="sub-chart-card">
           <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7">
-            ${t('Every account is identified by its email address. This product does not store a separate display name.')}
+            ${t('Each person signs in with their email. The name is only for your own lists.')}
           </p>
+          <div id="emp-gate-note"></div>
           <div style="overflow-x:auto">
             <table class="ret-table" id="emp-table">
               <thead><tr>
@@ -412,6 +481,9 @@ const RetailEmployees = {
         return String(a.employee_id || '').localeCompare(String(b.employee_id || ''));
       });
       if (!tbody) return;
+      // Owner arm only: a delegated branch manager has no preset controls,
+      // so asking the device list (an owner-only route) would be a wasted 403.
+      if (!this._reduced) await this._refreshGate();
       if (!this._rows.length) {
         tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('No staff accounts yet. Add one to get started.')}</td></tr>`;
         return;
@@ -485,7 +557,8 @@ const RetailEmployees = {
     const reduced = this._reduced;
     return `<tr>
       <td>
-        <div style="font-weight:600;color:var(--text)">${this._esc(e.email)}</div>
+        <div style="font-weight:600;color:var(--text)">${this._esc(e.display_name || e.email)}</div>
+        ${e.display_name ? `<div style="font-size:12px;color:var(--text-muted)">${this._esc(e.email)}</div>` : ''}
         <div style="font-size:11px;color:var(--text-muted);font-family:monospace">${this._esc(e.employee_id || '')}</div>
       </td>
       <td>${this._roleBadge(e)}</td>
@@ -496,7 +569,8 @@ const RetailEmployees = {
             : `<span style="color:var(--text-muted);font-size:12px">○ ${t('Not set')}</span>`}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${reduced ? '' : (owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`)}
+          ${reduced ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="name" data-id="${id}">${t('Edit name')}</button>`}
+          ${reduced ? '' : (owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}"${this._gateBlocks(e) ? ` disabled aria-disabled="true" title="${this._esc(this._gateReason())}"` : ''}>${t('Change Role')}</button>`)}
           ${reduced ? '' : (owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`)}
           ${reduced ? '' : this._delegationButton(e)}
           <button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="pin" data-id="${id}">${e.has_pin ? t('Reset PIN') : t('Set PIN')}</button>
@@ -577,6 +651,7 @@ const RetailEmployees = {
     const id = btn.dataset.id;
     const action = btn.dataset.action;
     if (action === 'role') this._openRole(id);
+    else if (action === 'name') this._openName(id);
     else if (action === 'branch') this._openBranchScope(id);
     else if (action === 'pin') this._openPin(id);
     else if (action === 'status') this._setStatus(id, btn.dataset.status);
@@ -588,11 +663,69 @@ const RetailEmployees = {
   // 'employee', and adds `effective_role` as the widened-domain reading. The
   // effective one is what every capability decision is actually made against,
   // so showing it is showing the truth rather than the stored spelling.
+  //
+  // A row that carries a stored preset shows the PRESET's name (an accountant
+  // is stored on the 'manager' role, so effective_role alone would call them a
+  // manager). "Custom" appears ONLY when the server says the rows disagree
+  // with the preset (`preset_matches === false`) -- absent/true means the
+  // preset is what it says it is, and a legacy row with no preset gets no
+  // extra badge at all.
   _roleBadge(e) {
     const role = (e && e.effective_role) || 'cashier';
-    if (role === 'admin')   return RetailSystem._badge(t('Owner'), 'purple');
+    if (role === 'admin') return RetailSystem._badge(t('Owner'), 'purple');
+    const key = e && e.role_preset;
+    if (key) {
+      const known = this._PRESET_ORDER.indexOf(key) !== -1;
+      const colour = key === 'cashier' ? 'yellow' : (key === 'accountant' ? 'green' : 'blue');
+      const main = known ? RetailSystem._badge(this._presetLabel(key), colour) : '';
+      const custom = e.preset_matches === false
+        ? ` <span data-emp-custom="1">${RetailSystem._badge(t('Custom'), 'red')}</span>`
+        : '';
+      return main + custom;
+    }
     if (role === 'manager') return RetailSystem._badge(t('Manager'), 'blue');
     return RetailSystem._badge(t('Cashier'), 'yellow');
+  },
+
+  // ── Device gate (registry v9) ────────────────────────────────────────────
+  //
+  // A device still on registry < 9 does not understand preset rows, so the
+  // server reports it under `role_editing.blocking_devices` and this screen
+  // stops offering preset edits until it is updated. ADVISORY: the server
+  // does not refuse the edit, so this is here to stop the owner doing
+  // something that half-works, not to enforce anything. Unreadable answer =
+  // allowed (see _gate above).
+  async _refreshGate() {
+    let gate = { allowed: true, blocking: [] };
+    try {
+      const res = await this._get('/api/devices');
+      const re = res && res.role_editing;
+      if (re && re.allowed === false) {
+        gate = { allowed: false, blocking: Array.isArray(re.blocking_devices) ? re.blocking_devices : [] };
+      }
+    } catch (err) {
+      console.error('Device list for role editing failed', err);
+    }
+    this._gate = gate;
+    this._paintGateNote();
+    return gate;
+  },
+  _gateBlocks(e) { return !this._gate.allowed && !!(e && e.role_preset); },
+  _gateNames() {
+    const names = (this._gate.blocking || []).map(d => d.device_label || d.platform || '').filter(Boolean);
+    return names.join(', ');
+  },
+  _gateReason() {
+    const names = this._gateNames();
+    return names
+      ? t('Roles are locked until every computer and phone is updated. Still on the old version:') + ' ' + names
+      : t('Roles are locked until every computer and phone is updated.');
+  },
+  _paintGateNote() {
+    const slot = document.getElementById('emp-gate-note');
+    if (!slot) return;
+    if (this._gate.allowed) { slot.innerHTML = ''; return; }
+    slot.innerHTML = `<div role="status" id="emp-gate-reason" style="background:var(--state-warning-surface);border:1px solid var(--state-warning-border);border-radius:10px;padding:10px 14px;margin:0 0 16px;color:var(--state-warning-text);font-size:13px;line-height:1.6">${this._esc(this._gateReason())}</div>`;
   },
 
   // 'pending_setup' is shown as "Invited", not "Pending": it is the state of
@@ -671,15 +804,25 @@ const RetailEmployees = {
   // "screen does something other than what it showed" failure shape the
   // reduced view exists to avoid.
   _openInvite(reduced) {
-    const roleField = reduced
-      ? `<div class="ret-field">
+    // Three shapes of the role field, and only the middle one has preset
+    // controls: the delegated branch manager (reduced) is always creating a
+    // cashier; a shop with a device still on the old registry gets the plain
+    // two-role select and the reason presets are off; everyone else gets the
+    // four preset cards and the twelve-row matrix.
+    this._selPreset = 'cashier';
+    const presetsOn = !reduced && this._gate.allowed;
+    let roleField;
+    if (reduced) {
+      roleField = `<div class="ret-field">
           <label>${t('Role')}</label>
           <p style="color:var(--text-muted);font-size:12px;margin:6px 0 0;line-height:1.6">
             ${t('New staff you add here are always cashiers at your own branch.')}
           </p>
-        </div>`
-      : `<div class="ret-field">
+        </div>`;
+    } else if (!presetsOn) {
+      roleField = `<div class="ret-field">
           <label>${t('Role')}</label>
+          <div role="status" id="emp-inv-gate" style="color:var(--state-warning-text);font-size:12px;margin:0 0 8px;line-height:1.6">${this._esc(this._gateReason())}</div>
           <select id="emp-inv-role">
             <option value="cashier">${t('Cashier')}</option>
             <option value="manager">${t('Manager')}</option>
@@ -688,11 +831,32 @@ const RetailEmployees = {
             ${t('A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.')}
           </p>
         </div>`;
+    } else {
+      const branchOpts = (this._branches || [])
+        .map(b => `<option value="${this._esc(b.uid)}">${this._esc(b.name)}</option>`).join('');
+      roleField = `<div class="ret-field">
+          <label id="emp-inv-role-label">${t('Role')}</label>
+          ${this._cardsHtml('cashier', {})}
+          <div class="ret-field" id="emp-inv-branch-wrap" hidden style="margin-block-start:10px">
+            <label for="emp-inv-branch">${t('Branch')} *</label>
+            <select id="emp-inv-branch">
+              <option value="">${t('Choose a branch')}</option>${branchOpts}
+            </select>
+          </div>
+          ${this._matrixHtml('cashier')}
+        </div>`;
+    }
+    this._ensureStyles();
     this._modal('emp-invite-modal', `
       <h3><span aria-hidden="true">${this._icon('user', 18, '👤')}</span> ${reduced ? t('Invite a cashier') : t('Invite an employee')}</h3>
       <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px;line-height:1.7">
         ${t('They receive a one-time setup link and choose their own password. No password is set for them here.')}
       </p>
+      <div class="emp-mbody">
+      <div class="ret-field">
+        <label for="emp-inv-name">${t('Name')}</label>
+        <input id="emp-inv-name" type="text" maxlength="60" autocomplete="off" />
+      </div>
       <div class="ret-field">
         <label>${t('Email address')} *</label>
         <!-- The placeholder is NOT translated, and that is the correct
@@ -703,26 +867,145 @@ const RetailEmployees = {
         <input id="emp-inv-email" type="email" autocomplete="off" placeholder="name@example.com" />
       </div>
       ${roleField}
+      </div>
       <div class="ret-modal-footer">
         <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-invite-modal')">${t('Cancel')}</button>
         <button class="ret-btn ret-btn-primary" id="emp-inv-btn" onclick="RetailEmployees._submitInvite(${reduced ? 'true' : 'false'})">${reduced ? t('Add Cashier') : t('Create Invite')}</button>
-      </div>`);
+      </div>`, presetsOn ? 620 : 480);
+    if (presetsOn) this._wireCards('emp-invite-modal', () => this._toggleInviteBranch());
     document.getElementById('emp-inv-email')?.focus();
+  },
+
+  _toggleInviteBranch() {
+    const wrap = document.getElementById('emp-inv-branch-wrap');
+    if (wrap) wrap.hidden = this._selPreset !== 'branch_manager';
+  },
+
+  // The four preset cards. `opts.disabled` greys every card (device gate);
+  // `opts.lock` maps a preset key to the reason that one card cannot be
+  // picked (a branch manager needs a branch the person does not have yet).
+  _cardsHtml(selected, opts) {
+    const o = opts || {};
+    const cards = this._PRESET_ORDER.map(key => {
+      const lockReason = (o.lock && o.lock[key]) || '';
+      const off = !!o.disabled || !!lockReason;
+      return `<label class="emp-pcard${key === selected ? ' emp-on' : ''}${off ? ' emp-off' : ''}" data-preset="${key}"${lockReason ? ` title="${this._esc(lockReason)}"` : ''}>
+          <input type="radio" name="emp-preset" value="${key}"${key === selected ? ' checked' : ''}${off ? ' disabled' : ''} />
+          <span>
+            <span class="emp-pname">${this._esc(this._presetLabel(key))}</span>
+            <span class="emp-pblurb">${this._esc(this._presetBlurb(key))}</span>
+            ${lockReason ? `<span class="emp-pblurb emp-plock">${this._esc(lockReason)}</span>` : ''}
+          </span>
+        </label>`;
+    }).join('');
+    return `<div class="emp-cards" role="radiogroup" aria-labelledby="emp-inv-role-label">${cards}</div>`;
+  },
+
+  // The twelve capabilities, one row each, one column per preset, in plain
+  // words. Drawn from _PRESET_CAPS so the screen cannot describe a preset
+  // differently from the table the server enforces (retail_s_users_roles_e2e.py
+  // compares that table with ROLE_PRESETS).
+  _matrixHtml(selected) {
+    const head = this._PRESET_ORDER.map(k =>
+      `<th scope="col" data-preset="${k}" class="${k === selected ? 'emp-sel' : ''}">${this._esc(this._presetLabel(k))}</th>`).join('');
+    const yes = t('Yes');
+    const no = t('No');
+    const body = this._capRows().map(([code, label]) => {
+      const cells = this._PRESET_ORDER.map(k => {
+        const has = this._PRESET_CAPS[k].indexOf(code) !== -1;
+        return `<td data-preset="${k}" data-cap="${code}" data-has="${has ? '1' : '0'}" class="${k === selected ? 'emp-sel' : ''}"><span aria-label="${has ? yes : no}">${has ? '✓' : '–'}</span></td>`;
+      }).join('');
+      return `<tr><th scope="row">${this._esc(label)}</th>${cells}</tr>`;
+    }).join('');
+    return `<table class="emp-matrix" id="emp-matrix"><caption>${t('What each role can do')}</caption><thead><tr><th scope="col"><span class="emp-vh">${t('Can do')}</span></th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  },
+
+  // Radio change: remember the pick, move the highlight (cards + matrix
+  // column), then let the caller react (show/hide the branch select).
+  _wireCards(overlayId, onPick) {
+    const overlay = document.getElementById(overlayId);
+    if (!overlay) return;
+    overlay.querySelectorAll('input[name="emp-preset"]').forEach(inp => {
+      inp.addEventListener('change', () => {
+        if (!inp.checked) return;
+        this._selPreset = inp.value;
+        overlay.querySelectorAll('.emp-pcard').forEach(c => c.classList.toggle('emp-on', c.dataset.preset === inp.value));
+        overlay.querySelectorAll('#emp-matrix [data-preset]').forEach(c => c.classList.toggle('emp-sel', c.dataset.preset === inp.value));
+        if (onPick) onPick();
+      });
+    });
+  },
+
+  // Own styles, injected once. Logical properties only (RTL ratchet) and
+  // theme tokens only -- no colour literal, no theme-scoped rule.
+  _ensureStyles() {
+    if (document.getElementById('emp-style')) return;
+    const st = document.createElement('style');
+    st.id = 'emp-style';
+    st.textContent = `
+      /* The dialog is a column: title on top, the fields scroll in the middle,
+         the buttons stay put at the bottom. Without this the dialog scrolled as
+         a whole and Create Invite sat below the fold at 1366x768. */
+      .ret-modal:has(>.emp-mbody){display:flex;flex-direction:column;overflow:hidden}
+      .emp-mbody{flex:1 1 auto;min-block-size:0;overflow-y:auto;padding-inline-end:4px}
+      .ret-modal:has(>.emp-mbody) .ret-modal-footer{flex:none}
+      .emp-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+      /* .ret-field label / .ret-field input (subsystem-retail.js) style every
+         label as a small uppercase caption and every input as a full-width text
+         box; a card is a label that wraps a radio, so both are undone here. */
+      .ret-field label.emp-pcard{display:flex;text-transform:none;letter-spacing:normal;font-size:inherit;color:var(--text);margin:0}
+      .ret-field .emp-pcard input{inline-size:auto;min-block-size:0;flex:none;padding:0;border:0;background:none;box-shadow:none}
+      .emp-pcard{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border-default);border-radius:10px;background:var(--surface-raised);cursor:pointer}
+      .emp-pcard.emp-on{border-color:var(--accent-action);background:var(--surface-accent-soft)}
+      .emp-pcard.emp-off{opacity:.6;cursor:not-allowed}
+      .emp-pcard input{margin-block-start:3px}
+      .emp-pcard>span{display:flex;flex-direction:column;gap:2px;min-inline-size:0}
+      .emp-pname{font-weight:700;color:var(--text);font-size:13px}
+      .emp-pblurb{font-size:11.5px;color:var(--text-muted);line-height:1.5}
+      .emp-plock{color:var(--state-warning-text)}
+      .emp-matrix{inline-size:100%;border-collapse:collapse;font-size:12px;margin-block-start:14px;color:var(--text)}
+      .emp-matrix caption{caption-side:top;text-align:start;font-weight:700;padding-block-end:6px;color:var(--text)}
+      .emp-matrix th,.emp-matrix td{padding:5px 6px;border-block-end:1px solid var(--border-hairline);text-align:center;font-weight:400}
+      .emp-matrix thead th{font-weight:700}
+      .emp-matrix tbody th{text-align:start}
+      .emp-matrix .emp-sel{background:var(--surface-accent-soft)}
+      .emp-mbody [hidden]{display:none}
+      .emp-vh{position:absolute;inline-size:1px;block-size:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+      @media (max-width:640px){.emp-cards{grid-template-columns:minmax(0,1fr)}}
+    `;
+    document.head.appendChild(st);
   },
 
   async _submitInvite(reduced) {
     const email = (document.getElementById('emp-inv-email')?.value || '').trim();
+    const name = (document.getElementById('emp-inv-name')?.value || '').trim();
     // Reduced mode sends 'cashier' directly rather than reading a select
     // that does not exist in this mode's markup -- see _openInvite's
     // comment above for why that select is absent rather than merely
     // disabled.
-    const role = reduced ? 'cashier' : (document.getElementById('emp-inv-role')?.value || 'cashier');
+    const legacySelect = document.getElementById('emp-inv-role');
+    const role = reduced ? 'cashier' : (legacySelect ? (legacySelect.value || 'cashier') : this._PRESET_BASE_ROLE[this._selPreset]);
     if (!email) { SubsystemApp.showToast(t('Enter an email address.'), 'error'); return; }
+    if (name.length > 60) { SubsystemApp.showToast(t('The name can be at most 60 characters.'), 'error'); return; }
+    const body = { email, role };
+    // Only when the shape has cards: reduced and gated invites keep the
+    // exact old {email, role} body.
+    if (!reduced && !legacySelect) {
+      body.preset = this._selPreset;
+      if (this._selPreset === 'branch_manager') {
+        const uid = document.getElementById('emp-inv-branch')?.value || '';
+        if (!uid) { SubsystemApp.showToast(t('Choose a branch for the branch manager.'), 'error'); return; }
+        body.branch_scope_uid = uid;
+      }
+    }
+    // A blank name is never sent -- the server would read '' as "clear it",
+    // which on a new account is just noise.
+    if (name) body.name = name;
 
     const btn = document.getElementById('emp-inv-btn');
     if (btn) { btn.disabled = true; btn.textContent = t('Working…'); }
     try {
-      const res = await this._post('/api/admin/employees', { email, role });
+      const res = await this._post('/api/admin/employees', body);
       if (res && res.success) {
         this._closeModal('emp-invite-modal');
         this._showInviteLink(email, res.setup_link || '');
@@ -800,10 +1083,25 @@ const RetailEmployees = {
 
   // ── Change role ───────────────────────────────────────────────────────────
 
-  _openRole(id) {
+  // Two shapes. A person who HAS a stored preset (or an owner who chose "pick a
+  // preset instead") gets the four cards and is saved through PUT /preset --
+  // never /role, which would reset their permission rows to the plain
+  // manager/cashier defaults and drop the preset with them (an accountant
+  // edited through /role stopped being an accountant). A person with no preset
+  // (an account made before presets) keeps the two-role select.
+  _openRole(id, forcePreset) {
     const emp = this._find(id);
     if (!emp) return;
+    const presetMode = this._gate.allowed && (!!emp.role_preset || !!forcePreset);
+    if (presetMode) { this._openPreset(emp); return; }
+    if (emp.role_preset) {
+      // Preset user while the gate is shut: the row's button is disabled, but a
+      // stale open modal must not fall back to /role for them.
+      SubsystemApp.showToast(this._gateReason(), 'error');
+      return;
+    }
     const current = emp.effective_role === 'manager' ? 'manager' : 'cashier';
+    const offerPresets = this._gate.allowed && !this._reduced;
     this._modal('emp-role-modal', `
       <h3>${t('Change Role')}</h3>
       <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px">${this._esc(emp.email)}</p>
@@ -828,6 +1126,7 @@ const RetailEmployees = {
         </div>
       </div>
       <div class="ret-modal-footer">
+        ${offerPresets ? `<button class="ret-btn ret-btn-ghost" id="emp-role-topreset" style="margin-inline-end:auto">${t('Choose a preset instead')}</button>` : ''}
         <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-role-modal')">${t('Cancel')}</button>
         <button class="ret-btn ret-btn-primary" id="emp-role-btn">${t('Save')}</button>
       </div>`);
@@ -836,6 +1135,105 @@ const RetailEmployees = {
     // this button at all, so there is no attribute/JS-string boundary left
     // for it to break out of.
     document.getElementById('emp-role-btn')?.addEventListener('click', () => this._saveRole(id));
+    document.getElementById('emp-role-topreset')?.addEventListener('click', () => {
+      this._closeModal('emp-role-modal');
+      this._openRole(id, true);
+    });
+  },
+
+  _openPreset(emp) {
+    this._ensureStyles();
+    const id = emp.id;
+    const start = this._PRESET_ORDER.indexOf(emp.role_preset) !== -1 ? emp.role_preset : 'cashier';
+    this._selPreset = start;
+    // branch_manager needs a branch that already exists on the account: the
+    // server refuses 400 otherwise, so say so on the card instead of letting
+    // the owner pick it and fail.
+    const lock = {};
+    if (!emp.branch_scope_uid) lock.branch_manager = t('Set a branch for this person first.');
+    const custom = emp.role_preset && emp.preset_matches === false;
+    this._modal('emp-role-modal', `
+      <h3>${t('Change Role')}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 14px">${this._esc(emp.display_name || emp.email)}</p>
+      <div class="emp-mbody">
+      ${custom ? `<p role="status" style="color:var(--state-warning-text);font-size:12px;margin:0 0 10px;line-height:1.6">${t('This person has custom permissions. Picking a role replaces them.')}</p>` : ''}
+      <div class="ret-field">
+        <label id="emp-inv-role-label">${t('Role')}</label>
+        ${this._cardsHtml(start, { lock })}
+        ${this._matrixHtml(start)}
+      </div>
+      </div>
+      <div class="ret-modal-footer">
+        <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-role-modal')">${t('Cancel')}</button>
+        <button class="ret-btn ret-btn-primary" id="emp-role-btn">${t('Save')}</button>
+      </div>`, 620);
+    this._wireCards('emp-role-modal');
+    document.getElementById('emp-role-btn')?.addEventListener('click', () => this._savePreset(id));
+  },
+
+  async _savePreset(id) {
+    const preset = this._selPreset;
+    const btn = document.getElementById('emp-role-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Working…'); }
+    try {
+      const res = await this._put(`/api/admin/employees/${id}/preset`, { preset });
+      if (res && res.success) {
+        this._closeModal('emp-role-modal');
+        SubsystemApp.showToast(t('Role updated'), 'success');
+        this._load();
+        return;
+      }
+      this._fail(res, t('Could not change the role.'));
+    } catch (err) {
+      console.error('Preset change failed', err);
+      SubsystemApp.showToast(t('Could not change the role.'), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+    }
+  },
+
+  // ── Name (registry v9) ────────────────────────────────────────────────────
+  //
+  // Only the owner sets it (PUT /name is admin-only). A blank value CLEARS the
+  // name, which is why the field is pre-filled: emptying it is a real action.
+
+  _openName(id) {
+    const emp = this._find(id);
+    if (!emp) return;
+    this._modal('emp-name-modal', `
+      <h3>${t('Edit name')}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px">${this._esc(emp.email)}</p>
+      <div class="ret-field">
+        <label for="emp-name-input">${t('Name')}</label>
+        <input id="emp-name-input" type="text" maxlength="60" autocomplete="off" value="${this._esc(emp.display_name || '')}" />
+      </div>
+      <div class="ret-modal-footer">
+        <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-name-modal')">${t('Cancel')}</button>
+        <button class="ret-btn ret-btn-primary" id="emp-name-btn">${t('Save')}</button>
+      </div>`);
+    document.getElementById('emp-name-btn')?.addEventListener('click', () => this._saveName(id));
+    document.getElementById('emp-name-input')?.focus();
+  },
+
+  async _saveName(id) {
+    const name = (document.getElementById('emp-name-input')?.value || '').trim();
+    if (name.length > 60) { SubsystemApp.showToast(t('The name can be at most 60 characters.'), 'error'); return; }
+    const btn = document.getElementById('emp-name-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Working…'); }
+    try {
+      const res = await this._put(`/api/admin/employees/${id}/name`, { name });
+      if (res && res.success) {
+        this._closeModal('emp-name-modal');
+        this._load();
+        return;
+      }
+      this._fail(res, t('Could not save the name.'));
+    } catch (err) {
+      console.error('Name change failed', err);
+      SubsystemApp.showToast(t('Could not save the name.'), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+    }
   },
 
   async _saveRole(id) {

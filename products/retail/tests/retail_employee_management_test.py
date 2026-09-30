@@ -721,14 +721,29 @@ def test_the_screen_states_the_pin_rule():
     assert 'A PIN identifies who is acting. It does not grant permission.' in src
 
 
-def test_the_screen_does_not_invent_a_name_field():
-    """`registry.db users` has no `name` column (registry_db.py:113-131) and
-    `create_employee` accepts no name -- `create_admin`'s `name` goes to
-    config.json and belongs to nobody in the table. A form field that looked
-    like it named the person would be discarded in transit, silently."""
+def test_the_name_field_is_real_and_only_sent_when_typed():
+    """Registry v9 gave accounts a display name (1-60 characters; POST accepts
+    an optional `name`, PUT /<id>/name sets or clears it). This used to assert
+    the screen carried NO name because the backend would silently drop it -- a
+    true statement about v8 that became false the day v9 shipped.
+
+    What the screen must still never do is the OLD failure in the new setting:
+    send a name the server may refuse or read as "clear it". So: the create
+    payload gets `name` only under `if (name)` (a blank field must not send
+    ''), the input is capped at 60 like the server, and a name edit goes
+    through PUT .../name -- never through /role or /preset.
+
+    What this replaces can no longer catch: "the create payload carries a name
+    at all" (it legitimately does now). It still catches a name sent
+    unconditionally from the field, which is the shape that clears a name."""
     src = _served('/static/employees.js')
+    assert re.search(r"""if\s*\(\s*name\s*\)\s*body\.name\s*=\s*name""", src), \
+        'the invite payload must attach the name only when one was typed'
     assert not re.search(r"""\bname\s*:\s*(document|this\._val)""", src), \
-        'the create payload appears to carry a name the backend will drop'
+        'the create payload reads the name field straight into the body, unguarded'
+    assert src.count('maxlength="60"') >= 2, \
+        'both name inputs (invite, edit) must be capped at 60 like the server'
+    assert '/api/admin/employees/${id}/name' in src, 'name edits must use PUT .../name'
 
 
 # ═════════════════════════════════════════════════════════════════════════════

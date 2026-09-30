@@ -276,12 +276,18 @@ async function testOwnerSeesTheTableAndItLoads() {
   await screen.render(content);
   assert.ok(content.innerHTML.includes('<table'), 'the owner was not shown the table');
   // _load() now fetches the branch list FIRST (for the scope picker/badge --
-  // design §3.3/§4.2 D9), then the employee list -- two calls, not one.
+  // design §3.3/§4.2 D9), then the employee list, then (registry v9) the
+  // device list for the role-editing gate -- three calls. The gate read is
+  // owner-only and comes AFTER the list so a slow device fetch never delays
+  // the table. What this can no longer catch: "the owner screen makes exactly
+  // two calls"; the order of the first two and the absence of any other
+  // request are still pinned.
   assert.deepStrictEqual(calls, [
     ['GET', '/api/sub/retail/branches'],
     ['GET', '/api/admin/employees'],
+    ['GET', '/api/devices'],
   ]);
-  console.log('PASS: the owner gets the table and both list calls');
+  console.log('PASS: the owner gets the table and all three list calls');
 }
 
 // ── 1b. The branch-manager reduced screen (launch-readiness account-

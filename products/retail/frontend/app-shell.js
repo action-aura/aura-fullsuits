@@ -480,7 +480,8 @@ const SubsystemApp = {
       (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) &&
       (!item.adminOnly || this.isAdminDevice) &&
       (!item.ownerOnly || this.role === 'admin') &&
-      (!item.capability || this.hasCapability(item.capability));
+      (!item.capability || this.hasCapability(item.capability)) &&
+      !(item.id === 'pos' && this._isBooksOnlyCapabilities());
   },
 
   // P1a final polish (F5): three states, not two. A device-bound item (today
@@ -1670,6 +1671,77 @@ const SubsystemApp = {
     return !BEYOND_SELLING.some((cap) => this.capabilities.includes(cap));
   },
 
+  // Registry v9 Accountant: a person whose grants are the BOOKS and nothing
+  // that touches the till. Mirrors Android's isBooksOnly(caps) exactly so the
+  // two clients cannot disagree about who this is: at least one books code,
+  // and none of sell / refund / discount / stock.adjust / cash.close.
+  //
+  // Two deliberate differences from _isSellOnlyCapabilities():
+  //   * UNKNOWN capabilities answer false (fail CLOSED to "not books-only").
+  //     Sell-only fails open to the dashboard because the dashboard is the
+  //     broader screen; here the "narrow" answer is the books home, and
+  //     showing it to a manager whose grants failed to load would hide the
+  //     till from someone who sells. Unknown means the ordinary home.
+  //   * the owner is never books-only, whatever the list says.
+  // A convenience for what to show first, never a security boundary: the
+  // till's own routes still refuse a sale from this person.
+  _isBooksOnlyCapabilities() {
+    if (this.role === 'admin') return false;
+    if (!Array.isArray(this.capabilities)) return false;
+    const BOOKS = ['retail.books.view', 'retail.books.record', 'retail.books.approve', 'retail.books.close'];
+    const TILL = ['retail.sell', 'retail.refund', 'retail.discount', 'retail.stock.adjust', 'retail.cash.close'];
+    return BOOKS.some((cap) => this.capabilities.includes(cap))
+      && !TILL.some((cap) => this.capabilities.includes(cap));
+  },
+
+  // The read-only home a books-only person lands on instead of the till (and
+  // instead of the sales dashboard). Only links to screens this person may
+  // already open -- the same _isNavItemVisible the sidebar asks -- so it can
+  // never offer a card whose first read would be refused.
+  _BOOKS_HOME_CARDS: ['trial-balance', 'profit-and-loss', 'balance-sheet', 'cash-flow', 'receivables', 'payables', 'reports'],
+
+  _ensureBooksHomeStyles() {
+    if (typeof document === 'undefined' || document.getElementById('sub-books-home-style')) return;
+    const st = document.createElement('style');
+    st.id = 'sub-books-home-style';
+    st.textContent = `
+      .bkh-note { color: var(--text-dim); font-size: 14px; line-height: 1.7; margin-block: 0 20px; max-inline-size: 60ch; }
+      .bkh-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+      .bkh-card { display: flex; align-items: center; gap: 12px; min-block-size: 64px; padding-block: 12px; padding-inline: 16px;
+        text-align: start; font: inherit; color: var(--text); cursor: pointer;
+        background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-card, 10px); }
+      .bkh-card:hover { background: var(--surface-hover); }
+      .bkh-card:focus-visible { outline: var(--focus-ring-width, 3px) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset, 2px); }
+      .bkh-icon { font-size: 22px; flex: none; }
+      .bkh-label { font-size: 15px; font-weight: 600; }
+    `;
+    document.head.appendChild(st);
+  },
+
+  _renderBooksHome() {
+    const c = document.getElementById('sub-content');
+    if (!c) return;
+    this._ensureBooksHomeStyles();
+    const sys = this.systems && this.systems[this.active];
+    const byId = new Map(((sys && sys.nav) || []).map((i) => [i.id, i]));
+    const cards = this._BOOKS_HOME_CARDS
+      .map((id) => byId.get(id))
+      .filter((item) => item && this._isNavItemVisible(item))
+      .map((item) => `
+        <button type="button" class="bkh-card" data-books-card="${this._esc(item.id)}"
+                onclick="SubsystemApp._navigate('${item.id}')">
+          <span class="bkh-icon" aria-hidden="true">${item.icon}</span>
+          <span class="bkh-label">${t(item.label)}</span>
+        </button>`)
+      .join('');
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <div><h2 class="ret-title" id="bkh-title">${t('Books')}</h2></div>
+      </div>
+      <p class="bkh-note" data-books-note="1">${t('You can read the books and reports here. Selling at the till is not part of this account.')}</p>
+      <div class="bkh-grid" role="group" aria-labelledby="bkh-title">${cards}</div>`;
+  },
+
   // See the comment on the call site above. Reads the same
   // GET /settings/branding route subsystem-retail.js's receipt printer
   // reads -- one company-scoped source for "what does this shop call
@@ -1867,7 +1939,13 @@ const SubsystemApp = {
     // them on it anyway and show the refusal sentence. Unknown capabilities
     // fail open (_isSellOnlyCapabilities returns false), so a load failure
     // never mis-routes a manager to the till.
-    this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');
+    //
+    // P2S: the logo is a way OUT of the current screen like any other, and
+    // launch() re-renders the whole shell, which throws away an unsaved Settings
+    // hub. It asks the leave guards first (stay = nothing happens).
+    const home = () => this.launch('retail', this._isSellOnlyCapabilities() ? 'pos' : 'dashboard');
+    if (!this._leaveGuards.size) { home(); return true; }
+    return this._askLeaveGuards('home', 'navigate').then((ok) => { if (ok) home(); return ok; });
   },
 
   // Device license activation/status page (licensing.html + licensing.js,
@@ -1885,8 +1963,12 @@ const SubsystemApp = {
   // licensing.html carries its own "Back to Aura Retail" link (see that
   // file) to return here, mirroring the Android app's onOpenLicensing /
   // onBack round trip (android/aura-retail/.../ui/AppRoot.kt).
+  //
+  // P2S: this used to assign location.href directly, so an unsaved Settings hub
+  // was thrown away with no question (identity menu, gear, More sheet and the
+  // licence banner all land here). It now goes through _leaveToPage().
   openLicensing() {
-    location.href = '/static/licensing.html';
+    return this._leaveToPage('/static/licensing.html');
   },
 
   // True when it is OK to go ahead and sign out. See this section's reasoning
@@ -3282,7 +3364,8 @@ const SubsystemApp = {
     // JS branch, so there is nothing here for a resize to get out of sync
     // with. Stable across every role on purpose -- see the spec's "why these
     // five" -- so no _isNavItemVisible() gating applies to the four mapped
-    // slots the way it does for the sidebar/More-sheet items.
+    // slots the way it does for the sidebar/More-sheet items. ONE exception,
+    // below: a books-only person (registry v9 Accountant) gets no Till tab.
     const activeSection = this.currentSection || 'dashboard';
     const tabIcon = (val) => window.AuraIcons ? AuraIcons.render(val, 22) : val;
     const tabHTML = (id, emoji, label, extraClass) => `
@@ -3300,11 +3383,12 @@ const SubsystemApp = {
     // More; the Home slot is dropped rather than duplicating Till. Owner and
     // manager (and unknown capabilities, which fail open) keep Home unchanged.
     const sellOnly = this._isSellOnlyCapabilities();
+    const booksOnly = this._isBooksOnlyCapabilities();
     const tabBarHTML = `
       <nav class="sub-tabbar" id="sub-tabbar" aria-label="${t('Quick navigation')}">
         ${sellOnly ? '' : tabHTML('dashboard', '🏠', 'Home')}
         ${tabHTML('products', '📦', 'Stock')}
-        ${tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
+        ${booksOnly ? '' : tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
         ${tabHTML('customers', '👥', 'Customers')}
         <a class="sub-tab${!this._TAB_BAR_SECTIONS.includes(activeSection) ? ' active' : ''}"
            id="sub-tab-more"
@@ -3356,7 +3440,7 @@ const SubsystemApp = {
     // visible label off the rail, the only fix that matters on it.
     const navItemHTML = (item, trailing) => {
       const action = item.externalPage
-        ? `location.href='/static/${item.externalPage}'`
+        ? `SubsystemApp._leaveToPage('/static/${item.externalPage}')`
         : `SubsystemApp._navigate('${item.id}')`;
       const label = this._esc(t(item.label));
       // F5: a device-bound item on a computer that is not the main one. Shown,
@@ -3551,16 +3635,17 @@ const SubsystemApp = {
 
     // ── Identity chip (P1a item 2) ───────────────────────────────────────────
     const displayName = this._identityDisplayName();
+    const roleLabel = this._identityRoleLabel();
     const chipHTML = `
       <div class="sub-identity-chip">
         <button type="button" class="sub-identity-chip-btn" id="sub-identity-chip-btn"
-           title="${this._esc([displayName, this._identityPlace()].filter(Boolean).join(' · '))}"
+           title="${this._esc([displayName, roleLabel, this._identityPlace()].filter(Boolean).join(' · '))}"
            aria-haspopup="true" aria-expanded="false"
            onclick="SubsystemApp._toggleIdentityMenu()">
           <span class="sub-identity-initials" aria-hidden="true">${this._esc(this._identityInitials(displayName))}</span>
           <span class="sub-identity-text">
             <span class="sub-identity-head">
-              <span class="sub-identity-name">${this._bdi(displayName, 'ltr')}</span>
+              <span class="sub-identity-name">${this._bdi(displayName, this._identityRealName() ? 'auto' : 'ltr')}</span>
               ${this.isAdminDevice ? `<span class="sub-main-computer-badge"><span class="sub-main-computer-badge-icon" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('laptop', 11) : ''}</span>${t('Main computer')}</span>` : ''}
             </span>
             <span class="sub-identity-meta">
@@ -3756,7 +3841,19 @@ const SubsystemApp = {
   // domain onto a screen customers can glance at over a cashier's shoulder.
   // Falls back to the raw email (no '@' -- should not happen for a real
   // account) and finally to a neutral placeholder, never an empty chip.
+  //
+  // Registry v9 gave accounts a real display name (1-60 chars; session payload
+  // `user.display_name`, null when the owner never set one). When there is one
+  // it is shown exactly as typed -- never re-cased, and read with dir="auto"
+  // so an Arabic name sits right in an English chip and the other way round.
+  _identityRealName() {
+    const n = this.currentUser && this.currentUser.display_name;
+    return typeof n === 'string' && n.trim() ? n.trim().slice(0, 60) : '';
+  },
+
   _identityDisplayName() {
+    const real = this._identityRealName();
+    if (real) return real;
     const email = (this.currentUser && this.currentUser.email) || '';
     const at = email.indexOf('@');
     const local = (at > 0 ? email.slice(0, at) : email);
@@ -3816,8 +3913,24 @@ const SubsystemApp = {
   _identityRolePillHTML() {
     const role = this.role;
     const cls = role === 'admin' ? 'is-owner' : role === 'manager' ? 'is-manager' : 'is-cashier';
-    const label = role === 'admin' ? t('Owner') : role === 'manager' ? t('Manager') : t('Cashier');
-    return `<span class="sub-role-pill ${cls}">${label}</span>`;
+    return `<span class="sub-role-pill ${cls}" data-identity-role="1">${this._esc(this._identityRoleLabel())}</span>`;
+  },
+
+  // Registry v9 presets. Branch manager and Accountant both ride the base role
+  // 'manager', so the plain role pill said "Manager" for an accountant -- true
+  // to the server's role column and useless to the person looking at the
+  // chip. The owner is never relabelled (a stray role_preset on the admin row
+  // must not turn "Owner" into something else). An unknown preset string
+  // falls back to the plain role rather than printing a raw code.
+  _identityRoleLabel() {
+    const role = this.role;
+    if (role === 'admin') return t('Owner');
+    const preset = this.currentUser && this.currentUser.role_preset;
+    if (preset === 'branch_manager') return t('Branch manager');
+    if (preset === 'accountant') return t('Accountant');
+    if (preset === 'manager') return t('Manager');
+    if (preset === 'cashier') return t('Cashier');
+    return role === 'manager' ? t('Manager') : t('Cashier');
   },
 
   // ── P1b: palette / help / setup-guide wiring ───────────────────────────────
@@ -3963,6 +4076,10 @@ const SubsystemApp = {
   // _autoClaimAdminOnSignup already uses; unlike that silent, unattended
   // call, this one answers a real click and must say what happened.
   async _claimAdminDeviceFromMenu() {
+    // P2S: success re-renders the whole shell (launch() below), which discards
+    // an unsaved Settings hub. Ask the leave guards BEFORE the claim, so "keep
+    // editing" leaves both the screen and the server untouched.
+    if (!(await this._askLeaveGuards('claim-main-computer', 'navigate'))) return;
     let ok = false, body = null;
     try {
       const res = await fetch('/api/devices/me/claim-admin', {
@@ -3975,9 +4092,16 @@ const SubsystemApp = {
     }
     if (!ok) {
       const holder = body && body.admin_device && (body.admin_device.device_label || body.admin_device.platform);
+      // v9: the server names WHY in a stable `code` (joined device, not Windows,
+      // identity clash...). PlanDevices.errorText turns every known code into a
+      // plain sentence; an unknown code falls back to the generic line below,
+      // never to raw server English.
+      const coded = body && typeof body.code === 'string' && window.PlanDevices
+        && typeof window.PlanDevices.errorText === 'function'
+        ? window.PlanDevices.errorText(body) : '';
       this.showToast(
         holder ? t('Another computer is already the main computer:') + ' ' + holder
-               : t('Could not make this the main computer.'),
+               : (coded || t('Could not make this the main computer.')),
         'error'
       );
       return;
@@ -4217,10 +4341,22 @@ const SubsystemApp = {
 
   // ── Leave guards ──────────────────────────────────────────────────────────
   // A screen holding unsaved work (the Settings hub's edit bar) registers a
-  // function here; every way OUT of the current screen asks it first. Every
-  // route out already funnels through _navigate() (sidebar, phone tab bar,
-  // More sheet, identity/settings menus, Ctrl+K) or logout(), so guarding
-  // those two is guarding all of them -- no per-button wiring to forget.
+  // function here; every way OUT of the current screen asks it first.
+  //
+  // P2S (verifier finding): the earlier version of this comment said every
+  // route out funnels through _navigate() or logout(). That was FALSE, and it
+  // is why exits kept being found one at a time. There are FOUR kinds of exit:
+  //   1. in-app section change  -> _navigate()            (asks the guards)
+  //   2. sign out               -> logout()               (asks the guards)
+  //   3. a full page load to another page of this product (Licence, E-invoicing,
+  //      WhatsApp, LAN hub; brand logo -> launch(); "make this the main computer"
+  //      -> launch()) -> _leaveToPage() / exit() / _claimAdminDeviceFromMenu(),
+  //      each of which asks the guards
+  //   4. the browser itself (reload, back, close the window) -> the one
+  //      `beforeunload` handler below, which fires only when a guard that gave
+  //      an `isDirty` probe says there is really unsaved work.
+  // Any NEW code that sets location.href / calls launch() for a reason a person
+  // can trigger must use kinds 3 or 4's helpers, not raw location.
   //
   // A guard is `(target, kind) => boolean | Promise<boolean>`; kind is
   // 'navigate' or 'logout'. ONLY a strict `false` means "stay". A guard that
@@ -4232,18 +4368,72 @@ const SubsystemApp = {
   // refused (false), not queued -- two stacked "discard changes?" dialogs
   // would let the second click answer the first.
   _leaveGuards: new Set(),
+  _leaveGuardOpts: new Map(),
   _leavePromptBusy: false,
+  _leavePromptToken: 0,
+  _leavePromptSince: 0,
+  _allowUnload: false,
+  _unloadWired: false,
 
-  registerLeaveGuard(fn) {
+  // `opts.isDirty` (optional, sync, cheap) answers "is there unsaved work RIGHT
+  // NOW?" so the browser-level beforeunload prompt can be honest: it fires only
+  // when this says true. A guard without it never triggers that prompt.
+  registerLeaveGuard(fn, opts) {
     if (typeof fn !== 'function') return () => {};
     this._leaveGuards.add(fn);
-    return () => { this._leaveGuards.delete(fn); };
+    if (opts && typeof opts.isDirty === 'function') this._leaveGuardOpts.set(fn, opts);
+    this._wireUnloadGuard();
+    return () => { this._leaveGuards.delete(fn); this._leaveGuardOpts.delete(fn); };
+  },
+
+  _hasUnsavedWork() {
+    for (const opts of this._leaveGuardOpts.values()) {
+      try { if (opts.isDirty()) return true; } catch (e) { /* a broken probe must never block leaving */ }
+    }
+    return false;
+  },
+
+  _wireUnloadGuard() {
+    if (this._unloadWired || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    this._unloadWired = true;
+    window.addEventListener('beforeunload', (ev) => {
+      if (this._allowUnload || !this._hasUnsavedWork()) return;
+      ev.preventDefault();
+      ev.returnValue = ''; // required by some engines to show the browser's own prompt
+    });
+  },
+
+  // A full page load to another page of this product. Synchronous when nothing
+  // needs asking (same rule as _navigate). `_allowUnload` stops the browser's
+  // own prompt from asking a SECOND time right after the person already
+  // answered "Discard" in ours; it re-arms itself in case the load never happens.
+  _leaveToPage(url) {
+    const go = () => {
+      this._allowUnload = true;
+      setTimeout(() => { this._allowUnload = false; }, 3000);
+      location.href = url;
+    };
+    if (!this._leaveGuards.size) { go(); return true; }
+    return this._askLeaveGuards(url, 'navigate').then((ok) => { if (ok) go(); return ok; });
+  },
+
+  // "Busy" must never be a trap. If a guard's promise never settles (a dialog
+  // that was removed without answering, a guard awaiting a dead request), every
+  // later exit would be refused for the rest of the session. It counts as stale
+  // when it has been busy a while AND no dialog is on screen to be answered.
+  _leavePromptIsStale() {
+    if (Date.now() - this._leavePromptSince < 2000) return false;
+    try { return !document.querySelector('[role="dialog"],[role="alertdialog"]'); } catch (e) { return true; }
   },
 
   async _askLeaveGuards(target, kind) {
-    if (this._leavePromptBusy) return false;
+    if (this._leavePromptBusy && !this._leavePromptIsStale()) return false;
     if (!this._leaveGuards.size) return true;
+    // The More sheet would otherwise stay open behind "Keep editing".
+    try { this._closeMoreSheet(); } catch (e) { /* no DOM to close */ }
+    const token = ++this._leavePromptToken;
     this._leavePromptBusy = true;
+    this._leavePromptSince = Date.now();
     try {
       for (const guard of Array.from(this._leaveGuards)) {
         let verdict;
@@ -4257,7 +4447,8 @@ const SubsystemApp = {
       }
       return true;
     } finally {
-      this._leavePromptBusy = false;
+      // A stale prompt that was overtaken must not free the newer one's lock.
+      if (token === this._leavePromptToken) this._leavePromptBusy = false;
     }
   },
 
@@ -4288,6 +4479,7 @@ const SubsystemApp = {
       this._explainMainOnly(navEntry);
       sectionId = this._isSellOnlyCapabilities() ? 'pos' : 'dashboard';
     }
+    if (sectionId === 'pos' && this._isBooksOnlyCapabilities()) sectionId = 'dashboard';
     this.currentSection = sectionId;
 
     // ── Stop any active auto-refresh from the previous section ────────────────
@@ -4421,6 +4613,10 @@ const SubsystemApp = {
 
     setTimeout(async () => {
       const _safeRender = async () => {
+        if (sectionId === 'dashboard' && this._isBooksOnlyCapabilities()) {
+          this._renderBooksHome();
+          return;
+        }
         const _RENDERERS = {
           retail: 'RetailSystem',
         };
@@ -4546,7 +4742,7 @@ const SubsystemApp = {
     })() : `
             <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
                tabindex="0" role="button"
-               onclick="${item.externalPage ? `location.href='/static/${item.externalPage}'` : `SubsystemApp._navigate('${item.id}')`}">
+               onclick="${item.externalPage ? `SubsystemApp._leaveToPage('/static/${item.externalPage}')` : `SubsystemApp._navigate('${item.id}')`}">
               <span class="sub-more-row-icon">${icon(item.icon)}</span>
               <span>${t(item.label)}</span>
             </a>
@@ -4971,10 +5167,60 @@ const SubsystemApp = {
   _setupGuideOwnsFirstRun(state) {
     return this.role === 'admin'
       && this._hasSetupGuide()
+      && this.FIRST_RUN_LICENSE_STATES.includes(state)
+      && this._guideCardShowsLicenceStep();
+  },
+
+  // "The guide exists" is not "the guide is on this screen". The checklist card
+  // is mounted on the owner's home screen only, and its one-line summary names
+  // the NEXT step -- the licence step comes first, so on a first run the card
+  // reads "... Next: Activate your licence". The banner may step aside only while
+  // that sentence is really on screen; on the till, or once the licence step is
+  // no longer the next one, the owner would otherwise have a blocked till and no
+  // explanation anywhere. try/catch: a stubbed document must read as "not shown"
+  // (banner stays), never throw out of the render.
+  _guideCardShowsLicenceStep() {
+    try {
+      const card = document.getElementById('setup-guide-card');
+      if (!card) return false;
+      const sub = card.querySelector('.sg-sub');
+      return !!sub && String(sub.textContent || '').indexOf(t('Activate your licence')) !== -1;
+    } catch (e) { return false; }
+  },
+
+  // The card comes and goes as the owner moves between screens and as the
+  // checklist reloads, and nothing tells the shell. While the state is a
+  // first-run one, watch the DOM and redraw the banner when the answer to
+  // "does the card show the licence step" changes. Installed lazily (only for
+  // an admin on a first-run state with a guide), coalesced to one check per
+  // frame-ish tick, and disconnected as soon as the state stops being first-run.
+  _watchGuideCard(state) {
+    this._lastLicenseState = state;
+    const wanted = this.role === 'admin' && this._hasSetupGuide()
       && this.FIRST_RUN_LICENSE_STATES.includes(state);
+    if (!wanted) {
+      if (this._guideCardObserver) { this._guideCardObserver.disconnect(); this._guideCardObserver = null; }
+      return;
+    }
+    if (this._guideCardObserver || typeof MutationObserver !== 'function' || !document.body) return;
+    this._guideCardShown = this._guideCardShowsLicenceStep();
+    let queued = false;
+    this._guideCardObserver = new MutationObserver(() => {
+      if (queued) return;
+      queued = true;
+      setTimeout(() => {
+        queued = false;
+        const now = this._guideCardShowsLicenceStep();
+        if (now === this._guideCardShown) return;
+        this._guideCardShown = now;
+        this._renderLicenseBanner(this._lastLicenseState);
+      }, 0);
+    });
+    this._guideCardObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
   },
 
   _renderLicenseBanner(state) {
+    this._watchGuideCard(state);
     const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)
       && !this._setupGuideOwnsFirstRun(state);
     if (!blocked) {

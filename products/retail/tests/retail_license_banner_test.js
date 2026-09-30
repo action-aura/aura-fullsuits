@@ -314,6 +314,7 @@ async function testMutationRemovingTheBannerRenderIsCaught() {
     // P1b: the condition grew a second line (`&& !this._setupGuideOwnsFirstRun`)
     // so the anchor is the head of the function only. Mutation intent unchanged.
     `  _renderLicenseBanner(state) {
+    this._watchGuideCard(state);
     const blocked = this.LICENSE_BANNER_BLOCKED_STATES.includes(state)`,
     `  _renderLicenseBanner(state) {
     return; // MUTATION: banner render removed entirely
@@ -354,66 +355,167 @@ async function testMutationAlwaysRenderingIsCaught() {
   console.log('PASS: ' + msg);
 }
 
-/* ═══ P1b: the first-run bar hands over to the setup guide -- for OWNERS only,
- * and only while the guide actually exists. Three directions, because this
- * guard both DENIES the bar and must still ALLOW it:
- *   a. owner + guide present + NOT_CONFIGURED -> no bar (the checklist owns it)
- *   b. owner + guide ABSENT                   -> bar stays (nothing replaces it)
- *   c. cashier + guide present                -> bar stays (a cashier never
- *      sees the checklist, so the bar is the only thing telling them)
- *   d. owner + guide present + a NON-first-run blocked state (SUSPENDED) -> bar
- *      stays: the guide is an onboarding aid, not a substitute for a warning. */
+/* ═══ P1b/P2S: the first-run bar hands over to the setup guide -- for OWNERS
+ * only, only while the guide exists, AND only while the guide's checklist card
+ * is really on screen and says the licence is the next step. Directions,
+ * because this guard both DENIES the bar and must still ALLOW it:
+ *   a. owner + guide + NOT_CONFIGURED + card showing the licence step -> no bar
+ *   b. owner + guide ABSENT                    -> bar stays (nothing replaces it)
+ *   c. cashier + guide present                 -> bar stays (never sees the checklist)
+ *   d. owner + guide + a NON-first-run blocked state (SUSPENDED) -> bar stays
+ *   e. owner + guide + EXPIRED (blocked, a real state, NOT first-run) -> bar stays
+ *   f. owner + guide but NO card on this screen (the till)      -> bar stays
+ *   g. owner + guide + a card whose next step is something else -> bar stays
+ * (f) and (g) are the verifier's finding: "the guide exists" used to be enough,
+ * so an owner on the till, or with the licence step not next, had a blocked till
+ * and no explanation anywhere. */
+const LICENCE_CARD = { textContent: '0 of 9 steps done · Next: Activate your licence' };
+const OTHER_CARD = { textContent: '1 of 9 steps done · Next: Add your shop name' };
+
+/** card: undefined = no #setup-guide-card in the document; else the .sg-sub node. */
+function stubCard(sandbox, card) {
+  sandbox.document.getElementById = (id) => (id === 'setup-guide-card' && card
+    ? { querySelector: (sel) => (sel === '.sg-sub' ? card : null) }
+    : null);
+}
+
+function bannerRun(src, role, hasGuide, state, card) {
+  const { app, sandbox } = bootShell(src);
+  app.role = role;
+  if (hasGuide) sandbox.AuraSetupGuide = { open() {} };
+  stubCard(sandbox, card);
+  app._renderLicenseBanner(state);
+  return !!app._licenseBannerEl;
+}
+
 function testSetupGuideOwnsFirstRunForOwnersOnly() {
-  const render = (role, hasGuide, state) => {
-    const { app, sandbox } = bootShell();
-    app.role = role;
-    if (hasGuide) sandbox.AuraSetupGuide = { open() {} };
-    app._renderLicenseBanner(state);
-    return !!app._licenseBannerEl;
-  };
-  assert.strictEqual(render('admin', true, 'NOT_CONFIGURED'), false, 'owner + guide + NOT_CONFIGURED still shows the bar');
-  assert.strictEqual(render('admin', false, 'NOT_CONFIGURED'), true, 'owner WITHOUT the guide lost the bar -- nothing replaces it');
-  assert.strictEqual(render('cashier', true, 'NOT_CONFIGURED'), true, 'a cashier lost the bar');
-  assert.strictEqual(render('admin', true, 'SUSPENDED'), true, 'owner + guide lost the SUSPENDED warning');
-  console.log('PASS: the first-run bar yields to the setup guide for owners only (4 directions)');
+  assert.strictEqual(bannerRun(null, 'admin', true, 'NOT_CONFIGURED', LICENCE_CARD), false, '(a) owner + guide + card + NOT_CONFIGURED still shows the bar');
+  assert.strictEqual(bannerRun(null, 'admin', false, 'NOT_CONFIGURED', LICENCE_CARD), true, '(b) owner WITHOUT the guide lost the bar -- nothing replaces it');
+  assert.strictEqual(bannerRun(null, 'cashier', true, 'NOT_CONFIGURED', LICENCE_CARD), true, '(c) a cashier lost the bar');
+  assert.strictEqual(bannerRun(null, 'admin', true, 'SUSPENDED', LICENCE_CARD), true, '(d) owner + guide lost the SUSPENDED warning');
+  assert.ok(bootShell().app.LICENSE_BANNER_BLOCKED_STATES.includes('EXPIRED'),
+    'EXPIRED is no longer a blocked state -- direction (e) below would prove nothing');
+  assert.strictEqual(bannerRun(null, 'admin', true, 'EXPIRED', LICENCE_CARD), true, '(e) owner + guide lost the EXPIRED warning');
+  assert.strictEqual(bannerRun(null, 'admin', true, 'NOT_CONFIGURED', undefined), true, '(f) owner on a screen with no guide card lost the bar: blocked till, no explanation');
+  assert.strictEqual(bannerRun(null, 'admin', true, 'NOT_CONFIGURED', OTHER_CARD), true, '(g) owner whose guide card does not name the licence step lost the bar');
+  console.log('PASS: the first-run bar yields to the setup guide for owners only, only while its card shows the licence step (7 directions)');
 }
 
 async function testSetupGuideGuardMutationsAreCaught() {
   const nl = nlFor(SHELL_SRC);
   const guard = nl(`    return this.role === 'admin'
       && this._hasSetupGuide()
-      && this.FIRST_RUN_LICENSE_STATES.includes(state);`);
+      && this.FIRST_RUN_LICENSE_STATES.includes(state)
+      && this._guideCardShowsLicenceStep();`);
   assert.strictEqual(SHELL_SRC.split(guard).length - 1, 1, 'guard anchor moved -- re-anchor this proof');
   const noRole = SHELL_SRC.replace(guard, nl(`    return true // MUTATION: role check dropped
       && this._hasSetupGuide()
-      && this.FIRST_RUN_LICENSE_STATES.includes(state);`));
+      && this.FIRST_RUN_LICENSE_STATES.includes(state)
+      && this._guideCardShowsLicenceStep();`));
   const noGuide = SHELL_SRC.replace(guard, nl(`    return this.role === 'admin'
       && true // MUTATION: guide-present check dropped
-      && this.FIRST_RUN_LICENSE_STATES.includes(state);`));
+      && this.FIRST_RUN_LICENSE_STATES.includes(state)
+      && this._guideCardShowsLicenceStep();`));
   const noState = SHELL_SRC.replace(guard, nl(`    return this.role === 'admin'
       && this._hasSetupGuide()
-      && true; // MUTATION: first-run-state check dropped`));
-  const run = (src, role, hasGuide, state) => {
-    const { app, sandbox } = bootShell(src);
-    app.role = role;
-    if (hasGuide) sandbox.AuraSetupGuide = { open() {} };
-    app._renderLicenseBanner(state);
-    return !!app._licenseBannerEl;
-  };
+      && true // MUTATION: first-run-state check dropped
+      && this._guideCardShowsLicenceStep();`));
+  const noCard = SHELL_SRC.replace(guard, nl(`    return this.role === 'admin'
+      && this._hasSetupGuide()
+      && this.FIRST_RUN_LICENSE_STATES.includes(state)
+      && true; // MUTATION: card-shows-the-licence-step check dropped`));
+  // The list itself: EXPIRED slipped into the first-run list is the other way
+  // this handover goes wrong (an expired shop would lose its warning).
+  const listLine = `FIRST_RUN_LICENSE_STATES: ['NOT_CONFIGURED'],`;
+  assert.strictEqual(SHELL_SRC.split(listLine).length - 1, 1, 'FIRST_RUN_LICENSE_STATES anchor moved -- re-anchor this proof');
+  const expiredFirstRun = SHELL_SRC.replace(listLine, `FIRST_RUN_LICENSE_STATES: ['NOT_CONFIGURED', 'EXPIRED'], // MUTATION`);
   const msgs = [];
   msgs.push(await provesMutation('cashier-keeps-the-bar survived a mutant that drops the role check',
-    async () => assert.strictEqual(run(noRole, 'cashier', true, 'NOT_CONFIGURED'), true, 'cashier lost the bar')));
+    async () => assert.strictEqual(bannerRun(noRole, 'cashier', true, 'NOT_CONFIGURED', LICENCE_CARD), true, 'cashier lost the bar')));
   msgs.push(await provesMutation('owner-without-guide-keeps-the-bar survived a mutant that drops the guide-present check',
-    async () => assert.strictEqual(run(noGuide, 'admin', false, 'NOT_CONFIGURED'), true, 'owner without guide lost the bar')));
+    async () => assert.strictEqual(bannerRun(noGuide, 'admin', false, 'NOT_CONFIGURED', LICENCE_CARD), true, 'owner without guide lost the bar')));
   msgs.push(await provesMutation('suspended-keeps-the-bar survived a mutant that drops the first-run-state check',
-    async () => assert.strictEqual(run(noState, 'admin', true, 'SUSPENDED'), true, 'SUSPENDED lost the bar')));
+    async () => assert.strictEqual(bannerRun(noState, 'admin', true, 'SUSPENDED', LICENCE_CARD), true, 'SUSPENDED lost the bar')));
+  msgs.push(await provesMutation('no-card-keeps-the-bar survived a mutant that drops the card-shows-the-licence-step check',
+    async () => assert.strictEqual(bannerRun(noCard, 'admin', true, 'NOT_CONFIGURED', undefined), true, 'owner with no guide card on screen lost the bar')));
+  msgs.push(await provesMutation('other-step-card-keeps-the-bar survived a mutant that drops the card-shows-the-licence-step check',
+    async () => assert.strictEqual(bannerRun(noCard, 'admin', true, 'NOT_CONFIGURED', OTHER_CARD), true, 'owner whose card names another step lost the bar')));
+  msgs.push(await provesMutation('expired-keeps-the-bar survived a mutant that adds EXPIRED to FIRST_RUN_LICENSE_STATES',
+    async () => assert.strictEqual(bannerRun(expiredFirstRun, 'admin', true, 'EXPIRED', LICENCE_CARD), true, 'EXPIRED lost the bar')));
   for (const m of msgs) console.log('PASS: ' + m);
+}
+
+/* The card comes and goes without telling the shell (navigation, the checklist
+ * reloading). While a first-run state is on, a MutationObserver redraws the
+ * banner when the answer changes -- and is released when the state stops being
+ * first-run. Driven with a stub observer whose callback the test fires. */
+async function bannerWatchRun(src) {
+  const { app, sandbox } = bootShell(src);
+  const observers = [];
+  sandbox.MutationObserver = function (cb) {
+    const o = { cb, observed: 0, disconnected: false,
+      observe() { o.observed++; }, disconnect() { o.disconnected = true; } };
+    observers.push(o);
+    return o;
+  };
+  app.role = 'admin';
+  sandbox.AuraSetupGuide = { open() {} };
+  let card;                                   // undefined = not on screen
+  stubCard(sandbox, undefined);
+  const setCard = (c) => { card = c; stubCard(sandbox, card); };
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+  const out = {};
+  app._renderLicenseBanner('NOT_CONFIGURED');
+  out.barWithoutCard = !!app._licenseBannerEl;
+  out.observersAfterFirstRender = observers.length;
+  setCard(LICENCE_CARD);
+  observers.forEach((o) => o.cb());
+  await settle();
+  out.barWithCard = !!app._licenseBannerEl;
+  setCard(undefined);
+  observers.forEach((o) => o.cb());
+  await settle();
+  out.barAfterCardGone = !!app._licenseBannerEl;
+  app._renderLicenseBanner('ACTIVE_ONLINE');
+  out.releasedOnActive = observers.length > 0 && observers.every((o) => o.disconnected);
+  return out;
+}
+
+async function testBannerFollowsTheGuideCard() {
+  const r = await bannerWatchRun();
+  assert.strictEqual(r.barWithoutCard, true, 'no card on screen: the bar must show');
+  assert.strictEqual(r.observersAfterFirstRender, 1, 'a first-run render should install exactly one observer');
+  assert.strictEqual(r.barWithCard, false, 'the card appeared showing the licence step but the bar did not step aside');
+  assert.strictEqual(r.barAfterCardGone, true, 'the card went away but the bar did not come back');
+  assert.strictEqual(r.releasedOnActive, true, 'the observer was not released once the licence became active');
+  console.log('PASS: the banner steps aside when the guide card appears, returns when it goes, and the watcher is released on an active licence');
+
+  const src = SHELL_SRC;
+  const noObserver = mutate(src, [[
+    `    this._guideCardObserver = new MutationObserver(() => {`,
+    `    this._guideCardObserver = { disconnect() {}, observe() {} }; void (() => {`,
+  ]]);
+  const msg1 = await provesMutation('the card-appears check survived a mutant that never watches the DOM', async () => {
+    const m = await bannerWatchRun(noObserver);
+    assert.strictEqual(m.barWithCard, false, 'the bar did not step aside when the card appeared');
+  });
+  const noRelease = mutate(src, [[
+    `      if (this._guideCardObserver) { this._guideCardObserver.disconnect(); this._guideCardObserver = null; }`,
+    `      /* MUTATION: never released */`,
+  ]]);
+  const msg2 = await provesMutation('the release check survived a mutant that never disconnects the watcher', async () => {
+    const m = await bannerWatchRun(noRelease);
+    assert.strictEqual(m.releasedOnActive, true, 'the observer was not released');
+  });
+  console.log('PASS: ' + msg1);
+  console.log('PASS: ' + msg2);
 }
 
 (async () => {
   const tests = [
     testSetupGuideOwnsFirstRunForOwnersOnly,
     testSetupGuideGuardMutationsAreCaught,
+    testBannerFollowsTheGuideCard,
     testBlockedStateRendersBanner,
     testActiveStateRendersNoBanner,
     testEveryDerivedBlockedStateRendersTheBanner,

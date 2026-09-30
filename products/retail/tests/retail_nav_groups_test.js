@@ -385,7 +385,9 @@ function testAllDestinationsReachableForOwner() {
   // `_navigate(id)`. Either shape counts as "reachable" here.
   const EXTERNAL_PAGE = { whatsapp: 'whatsapp.html', einvoicing: 'einvoicing.html', 'site-relay': 'site-relay.html' };
   const isReachable = (id) => {
-    if (EXTERNAL_PAGE[id]) return html.includes(`location.href='/static/${EXTERNAL_PAGE[id]}'`);
+    // P2S: the click goes through _leaveToPage so an unsaved Settings hub is
+    // asked about first; a raw location.href here is the bug, not the shape.
+    if (EXTERNAL_PAGE[id]) return html.includes(`SubsystemApp._leaveToPage('/static/${EXTERNAL_PAGE[id]}')`);
     return new RegExp(`_navigate\\('${id}'\\)`).test(html);
   };
   const missing = ALL_DESTINATIONS.filter((id) => !isReachable(id));
