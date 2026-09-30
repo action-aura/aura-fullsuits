@@ -85,6 +85,34 @@ from database.schema import get_retail_conn  # noqa: E402
 import api.retail_api as retail_api_module  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _runs_as_the_main_computer(monkeypatch):
+    """DELIBERATE UPDATE (P2S, schema v42 - 952a9d5b). Creating or changing a
+    number book is now a main-computer-only action (409 TILL_NEEDS_MAIN_COMPUTER
+    anywhere else) and the local test device is not the registry's main
+    computer. This file is about WHO (owner vs delegated manager) may do it, so
+    every call runs as the main computer with that one registry answer pinned.
+    WHAT THIS FILE CAN NO LONGER CATCH: a non-main computer creating a book --
+    proven both ways in retail_v42_till_allocation_test.py."""
+    from commercial_runtime.identity import device_context
+    monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
+
+
+def _denied_by_the_books_record_gate(body):
+    """DELIBERATE UPDATE (P2S, registry v9 / retail v42 - Accountant re-gates in
+    952a9d5b, owner decision "the accountant toolkit is included"). Paying a
+    purchase order, creating or voiding a supplier payment and every cheque write
+    moved from OWNER-ONLY to `retail.books.record`, so the Accountant preset can do
+    them. The delegated manager here holds `retail.employees` but NOT
+    `retail.books.record`, so it is still refused -- by the capability gate, which
+    now runs first, so the fingerprint is the capability refusal message, not
+    OWNER_ONLY. WHAT THESE TESTS CAN NO LONGER CATCH: these routes being
+    owner-only -- they are not any more, by design. The Accountant's allow half
+    and every other role's deny half are pinned in retail_accountant_regate_test.py
+    and retail_route_capability_matrix_test.py."""
+    from commercial_runtime.identity.mt_auth import CAPABILITY_DENIED_MESSAGE
+    return body.get('error') == CAPABILITY_DENIED_MESSAGE or body.get('message') == CAPABILITY_DENIED_MESSAGE
+
 def teardown_module(module):
     shutil.rmtree(DATA, ignore_errors=True)
 
@@ -314,7 +342,7 @@ def test_delegated_manager_denied_owner_only_on_cheque_write(shop):
         'amount': 25, 'due_date': '2027-01-15', 'cheque_number': f'MGR-{uuid.uuid4().hex[:6]}',
     })
     assert r.status_code == 403, r.get_json()
-    assert r.get_json().get('code') == 'OWNER_ONLY', r.get_json()
+    assert _denied_by_the_books_record_gate(r.get_json()), r.get_json()
     assert _cheque_count(shop['company_id']) == before, (
         "a denied manager's cheque write was recorded anyway -- the guard "
         "must run before the INSERT, not after"
@@ -324,7 +352,7 @@ def test_delegated_manager_denied_owner_only_on_cheque_write(shop):
 def test_delegated_manager_denied_owner_only_on_po_pay(shop):
     r = shop['manager'].post(f'/api/sub/retail/purchase-orders/{shop["po_id"]}/pay', json={'amount': 5})
     assert r.status_code == 403, r.get_json()
-    assert r.get_json().get('code') == 'OWNER_ONLY', r.get_json()
+    assert _denied_by_the_books_record_gate(r.get_json()), r.get_json()
     conn = get_retail_conn()
     row = conn.execute(
         "SELECT COALESCE(amount_paid,0) AS amount_paid FROM purchase_orders WHERE id=? AND company_id=?",
@@ -479,7 +507,7 @@ def test_delegated_manager_denied_owner_only_on_supplier_payment_void(shop):
 
     r = shop['manager'].post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'test'})
     assert r.status_code == 403, r.get_json()
-    assert r.get_json().get('code') == 'OWNER_ONLY', r.get_json()
+    assert _denied_by_the_books_record_gate(r.get_json()), r.get_json()
 
     conn = get_retail_conn()
     status_after = conn.execute("SELECT status FROM payments WHERE id=?", (pid,)).fetchone()['status']
@@ -784,7 +812,7 @@ def test_delegated_manager_denied_owner_only_on_cheque_lifecycle_actions(shop):
     for action, body in actions:
         r = shop['manager'].post(f'/api/sub/retail/cheques/{cheque_id}/{action}', json=body)
         assert r.status_code == 403, (action, r.get_json())
-        assert r.get_json().get('code') == 'OWNER_ONLY', (action, r.get_json())
+        assert _denied_by_the_books_record_gate(r.get_json()), (action, r.get_json())
         assert _cheque_status(shop['owner'], cheque_id) == 'pending', (
             f"a denied manager's {action!r} changed the cheque's status anyway")
 
@@ -845,7 +873,7 @@ def test_delegated_manager_denied_owner_only_on_supplier_payment_create(shop):
     r = shop['manager'].post(f'/api/sub/retail/suppliers/{shop["supplier_id"]}/payments',
                               json={'amount': 9, 'method': 'cash'})
     assert r.status_code == 403, r.get_json()
-    assert r.get_json().get('code') == 'OWNER_ONLY', r.get_json()
+    assert _denied_by_the_books_record_gate(r.get_json()), r.get_json()
     assert _active_supplier_payment_count(shop['company_id']) == before, (
         "a denied manager's supplier payment posted anyway")
 
