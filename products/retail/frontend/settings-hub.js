@@ -169,6 +169,13 @@
   function rebaseline(name) { S.baseline[name] = snapGroup(name); }
   function rebaselineAll() { GROUP_ORDER.forEach(rebaseline); }
   function dirtyGroups() {
+    // ONE comparison for the Save bar, the leave guard and the browser prompt.
+    // Until the hub has finished filling (S.ready), S.baseline is still empty, so
+    // every field "differs" from it -- and the leave guard, which is not gated on
+    // S.ready like the bar is, used to call a hub nobody touched "unsaved" (a
+    // verifier saw 'Discard unsaved changes?' 15 times in 15 rounds on a slow
+    // load). Nothing typed cannot be unsaved: report clean until the baseline is real.
+    if (!S.ready) return [];
     return GROUP_ORDER.filter((g) => {
       if (S.holding[g]) return false; // still loading: its fields are not real values yet
       const now = snapGroup(g);
@@ -394,6 +401,7 @@
   }
 
   async function save() {
+    S.lastSaveAt = Date.now(); // lets a sign-back-in tell "the Save that was refused" from any other refused call
     const btn = $('sh-save');
     const groups = dirtyGroups();
     if (!groups.length) { refreshBar(); return; }
@@ -988,6 +996,28 @@
   // English wording. Anything unrecognised gets a generic sentence -- never
   // the raw English.
   function tillMaxN() { const d = S.tills && S.tills.data; return (d && Number(d.max_till_number)) || 99; }
+  // Numbers taken from a computer that has not yet confirmed it stopped using them
+  // (the server keeps them reserved). Never offered, never accepted.
+  function tillReserved() {
+    const d = S.tills && S.tills.data;
+    return d && Array.isArray(d.pending_releases) ? d.pending_releases : [];
+  }
+  function tillReservedFor(n, exceptUid) {
+    return tillReserved().find((r) => Number(r.till_number) === Number(n) && r.terminal_uid !== exceptUid) || null;
+  }
+  function tillWaitLabel(uid, n) {
+    const devs = tillDevices();
+    let who = uid ? devs.find((x) => x.terminal_uid === uid) : null;
+    if (!who && n != null) {
+      const r = tillReserved().find((x) => Number(x.till_number) === Number(n));
+      who = r ? devs.find((x) => x.terminal_uid === r.terminal_uid) : null;
+    }
+    return (who && who.label) || t('another computer');
+  }
+  function tillPendingText(n, uid) {
+    return fill(t('Till number {n} is still reserved for {label} until that computer is switched on and confirms it gave it up. Pick another number.'),
+      { n: n, label: tillWaitLabel(uid, n) });
+  }
   function tillRefusalText(resp) {
     const msg = String((resp && resp.message) || '');
     const kind = resp && resp.code;
@@ -1002,6 +1032,13 @@
         : t('That computer already has a till number. Release its number first, then give it a new one.');
     }
     if (kind === 'TILL_NUMBER_TAKEN') {
+      // The server says WHY in `reason` (+ which computer it waits for). Read that
+      // first: the English sentence is only the fallback for an older server.
+      if ((resp && resp.reason === 'release_pending') || /^Till number \d+ was taken away/.test(msg)) {
+        const mm = /^Till number (\d+)/.exec(msg);
+        const num = (resp && resp.till_number) || (mm ? mm[1] : '');
+        return tillPendingText(num, resp && resp.held_by_terminal_uid);
+      }
       if (/^All \d+ till numbers/.test(msg)) return t('Every till number of this branch is in use.');
       m = /^Till number (\d+) was just given/.exec(msg);
       if (m) return fill(t('Till number {n} was just given to another computer. Pick a different number.'), { n: m[1] });
@@ -1097,6 +1134,10 @@
       const op = tillOp(dev);
       if (op === 'x') { out[dev.terminal_uid] = fill(t('A till number is a whole number from 1 to {max}.'), { max: tillMaxN() }); return; }
       const n = op === 'r' ? null : (op === null ? dev.till_number : op);
+      if (typeof op === 'number') {
+        const held = tillReservedFor(op, dev.terminal_uid);
+        if (held) { out[dev.terminal_uid] = tillPendingText(op, held.terminal_uid); return; }
+      }
       if (n != null) (finals[n] = finals[n] || []).push(dev.terminal_uid);
     });
     Object.keys(finals).forEach((k) => {
@@ -1116,6 +1157,10 @@
     box.hidden = !msg;
   }
 
+  function tillSuggestion(dev) {
+    const n = dev.suggested_till_number;
+    return n != null && !tillReservedFor(n, dev.terminal_uid) ? n : null;
+  }
   function tillHint(dev, op, problem) {
     const d = S.tills.data;
     const code = d.branch_code || '';
@@ -1132,8 +1177,8 @@
         ? `${esc(t('Receipts start with'))} ${bdi(code + dev.till_number + '-')}`
         : esc(fill(t('Till number {n}.'), { n: dev.till_number })) };
     }
-    return { tone: '', html: esc(dev.suggested_till_number != null
-      ? fill(t('No number yet. Next free number: {n}.'), { n: dev.suggested_till_number })
+    return { tone: '', html: esc(tillSuggestion(dev) != null
+      ? fill(t('No number yet. Next free number: {n}.'), { n: tillSuggestion(dev) })
       : t('No number yet.')) };
   }
 
@@ -1145,7 +1190,7 @@
     const btn = (act, label) => `<button type="button" class="ret-btn ret-btn-ghost sh-till-act" data-till-act="${act}" data-till-uid="${uid}">${esc(label)}</button>`;
     if (op !== null) return btn('undo', dev.till_number != null ? fill(t('Keep number {n}'), { n: dev.till_number }) : t('Undo'));
     if (dev.till_number != null) return btn('release', t('Release number'));
-    if (dev.suggested_till_number != null) return btn('suggest', fill(t('Use {n}'), { n: dev.suggested_till_number }));
+    if (tillSuggestion(dev) != null) return btn('suggest', fill(t('Use {n}'), { n: tillSuggestion(dev) }));
     return '';
   }
 
@@ -1249,6 +1294,17 @@
             </div>
           </li>`).join('')}
       </ul>
+      ${tillReserved().length ? `
+      <p class="sh-till-sub">${esc(t('Reserved numbers'))}</p>
+      <ul class="sh-till-list" id="tills-reserved">
+        ${tillReserved().map((r) => `
+          <li class="sh-till-row" data-till-reserved="${esc(r.terminal_uid)}" data-till-reserved-n="${esc(String(r.till_number))}">
+            <div class="sh-till-who">
+              <span class="sh-till-name">${esc(fill(t('Till number {n}'), { n: r.till_number }))}</span>
+              <p class="sh-till-hint">${esc(fill(t('Reserved for {label} until that computer is switched on and confirms it gave the number up.'), { label: tillWaitLabel(r.terminal_uid, r.till_number) }))}</p>
+            </div>
+          </li>`).join('')}
+      </ul>` : ''}
       <p class="sh-num-error" id="tills-error" role="alert" hidden></p>
       <div class="sh-inline-actions sh-till-foot">
         <button type="button" class="ret-btn ret-btn-ghost" id="till-number-all">${esc(t('Number all tills'))}</button>
@@ -1305,7 +1361,7 @@
     if (!st || !dev) return;
     if (act === 'release') st.raw[uid] = '';
     else if (act === 'undo') delete st.raw[uid];
-    else if (act === 'suggest' && dev.suggested_till_number != null) st.raw[uid] = String(dev.suggested_till_number);
+    else if (act === 'suggest' && tillSuggestion(dev) != null) st.raw[uid] = String(tillSuggestion(dev));
     else return;
     showTillsError('');
     renderTillsBody();
@@ -1327,16 +1383,18 @@
       return false;
     }
     const devs = tillDevices();
-    // A change of number is a release and then a new number (the server refuses
-    // to give a second number to a computer that has one). Every release goes
-    // first, so a number handed from one computer to another is free by then.
+    // A pure release is a DELETE. A change of number is ONE request with
+    // replace:true: the server drops the old number and takes the new one in a
+    // single transaction, so a refused new number leaves the computer holding the
+    // old one (release-then-assign left it with none). Releases go first so a
+    // number handed from one computer to another is free by then.
     const releases = [];
     const assigns = [];
     devs.forEach((dev) => {
       const op = tillOp(dev);
       if (op === null) return;
-      if (dev.till_number != null) releases.push(dev);
       if (typeof op === 'number') assigns.push({ dev, n: op });
+      else if (dev.till_number != null) releases.push(dev);
     });
     if (!releases.length && !assigns.length) return true;
     const fail = async (resp, thrown) => {
@@ -1356,12 +1414,19 @@
         // Keep the screen honest between calls: this computer no longer holds it.
         releases[i].till_number = null;
       }
-      for (let i = 0; i < assigns.length; i += 1) {
+      // Order the changes so a number is taken only after the computer holding it
+      // has moved on (B 6->7 must go before A 4->6).
+      while (assigns.length) {
+        const heldBy = {};
+        devs.forEach((x) => { if (x.till_number != null) heldBy[x.till_number] = x.terminal_uid; });
+        let at = assigns.findIndex((a) => !heldBy[a.n] || heldBy[a.n] === a.dev.terminal_uid);
+        if (at < 0) at = 0; // none can go: let the server say why
+        const a = assigns.splice(at, 1)[0];
         const resp = await R()._post('/api/sub/retail/tills/allocations',
-          { terminal_uid: assigns[i].dev.terminal_uid, till_number: assigns[i].n, branch_uid: st.data.branch_uid });
+          { terminal_uid: a.dev.terminal_uid, till_number: a.n, replace: true, branch_uid: st.data.branch_uid });
         if (!resp || resp.status !== 'success') return await fail(resp);
         latest = resp.data || latest;
-        assigns[i].dev.till_number = assigns[i].n;
+        a.dev.till_number = a.n;
       }
     } catch (e) {
       console.error(e);
@@ -1897,5 +1962,19 @@
     if (el.dataset.shL) { S.pvLang = el.dataset.shL === 'ar' ? 'ar' : 'en'; syncPreviewToggles(); schedulePreview(0); }
   }
 
-  window.SettingsHub = { render, sections, open, sampleSale };
+  // The same person signed back in through the "session expired" box. The
+  // screen was NOT redrawn, so what they typed is still here; the only thing
+  // lost was the call that got the 401. If that call was this hub's Save
+  // (a write, made within seconds of the 401), do it again instead of leaving
+  // the person to notice the bar and press Save a second time. Any other refused
+  // call is not ours to repeat.
+  const RETRY_WINDOW_MS = 10000;
+  function retryAfterRelogin(trigger) {
+    if (!trigger || String(trigger.method || 'GET').toUpperCase() === 'GET') return false;
+    if (!S.lastSaveAt || Math.abs(trigger.at - S.lastSaveAt) > RETRY_WINDOW_MS) return false;
+    if (!hubIsDirty()) return false;
+    save();
+    return true;
+  }
+  window.SettingsHub = { render, sections, open, sampleSale, retryAfterRelogin, hasUnsaved: hubIsDirty };
 })();

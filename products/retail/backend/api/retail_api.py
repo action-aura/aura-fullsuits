@@ -15090,7 +15090,20 @@ def _allocate_till_in_txn(conn, cid, branch, terminal_uid, till_number, main_uid
     why = _why_till_cannot_be_numbered(inspected, till_number)
     if problem is not None or why:
         if problem == 'release_pending' and not why:
-            return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN, 'message':
+            # `reason` + `held_by_terminal_uid` let the screen say WHICH computer to
+            # wait for, in the person's language, instead of printing this English
+            # sentence (or the vague "already used" it used to fall back to).
+            waiting = conn.execute(
+                "SELECT a.terminal_uid FROM till_allocations a WHERE CAST(a.company_id AS TEXT)=? "
+                "AND a.branch_uid=? AND a.till_number=? AND a.status='released' AND a.terminal_uid != ? "
+                "AND NOT EXISTS (SELECT 1 FROM retail_settings s WHERE CAST(s.company_id AS TEXT)=? "
+                "                AND s.skey = ? || a.id) ORDER BY a.updated_at_utc DESC LIMIT 1",
+                (str(cid), branch_uid, int(till_number), terminal_uid or '',
+                 str(cid), doc_series.RELEASE_ACK_PREFIX)).fetchone()
+            return None, (jsonify({'status': 'error', 'code': TILL_NUMBER_TAKEN,
+                'reason': 'release_pending', 'till_number': int(till_number),
+                'held_by_terminal_uid': waiting['terminal_uid'] if waiting else None,
+                'message':
                 f"Till number {till_number} was taken away from another computer, but that "
                 "computer has not yet confirmed it stopped using it. Switch it on and let it "
                 "connect, then try again - or pick a different number."}), 409)
@@ -15794,6 +15807,10 @@ def set_numbering():
 #            number (omitted number = the lowest free one), or {all: true}
 #            numbers every active computer that has none, in ONE transaction
 #            (the one-click "Number all tills"; auto-picking is never silent).
+#            {terminal_uid, till_number, replace: true} CHANGES a held number:
+#            release + assign in one transaction; any refusal changes nothing.
+#            A 409 for a number still waiting on its old computer carries
+#            reason 'release_pending' (+ held_by_terminal_uid, till_number).
 # DELETE /api/sub/retail/tills/allocations       owner + MAIN computer only
 #            body/query {terminal_uid} releases that computer's number.
 # Refusals: 409 TILL_NEEDS_MAIN_COMPUTER (not the main computer -- nothing is
@@ -15903,9 +15920,13 @@ def allocate_tills():
     do_all = data.get('all') is True
     target = data.get('terminal_uid')
     raw_till = data.get('till_number')
+    replace = data.get('replace') is True
     if not do_all and not (isinstance(target, str) and target):
         return jsonify({'status': 'error', 'message':
             'Say which computer (terminal_uid), or send all: true.'}), 400
+    if replace and (do_all or raw_till is None):
+        return jsonify({'status': 'error', 'message':
+            'To change a till number, say which computer and which new number (replace needs both).'}), 400
     if raw_till is not None and (not isinstance(raw_till, int) or isinstance(raw_till, bool)
                                  or not 1 <= raw_till <= doc_series.MAX_TILL_NUMBER):
         return jsonify({'status': 'error', 'message':
@@ -15932,6 +15953,23 @@ def allocate_tills():
             numbers = [None] * len(targets)
         else:
             targets, numbers = [target], [raw_till]
+            if replace:
+                # CHANGE a computer's number in ONE transaction: release the old
+                # one, then give the new one. The UI used to do these as two calls
+                # (DELETE, then POST), so a refusal on the second left the computer
+                # with NO number at all. Here a refusal rolls the release back too:
+                # the computer keeps what it had. Asking for the number it already
+                # holds writes nothing (the plain allocate below is idempotent).
+                held = doc_series.active_allocation(conn, cid, target)
+                if held is not None and int(held['till_number']) != int(raw_till):
+                    _release_till_in_txn(conn, cid, held)
+                    if target == main_uid:
+                        # the main computer's own books are retired and the ack
+                        # written in the same step, exactly as a plain release does
+                        state = _read_till_state(conn, cid, main_uid)
+                        _retire_tracked_books(conn, cid, main_uid, state, 'till number changed')
+                        _write_till_state(conn, cid, main_uid, False, None, None, [])
+                        _confirm_release_written(conn, cid, held['id'])
         for terminal_uid, number in zip(targets, numbers):
             row, refusal = _allocate_till_in_txn(conn, cid, branch, terminal_uid, number, main_uid)
             if refusal is not None:

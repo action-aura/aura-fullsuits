@@ -24,6 +24,12 @@ proves the section both ways for everything that both allows and denies:
               the next sale prints <CODE><n>-000001 with THIS till's own number
   number_all  asks first: Cancel changes nothing; Confirm numbers every free
               computer; the button is disabled while there are unsaved edits
+  atomic      changing a number is ONE request ({replace:true}); a refused change leaves
+              the computer holding its OLD number (never stranded with none); a free
+              number is exactly one POST
+  pending     a number released from a computer that is switched off: the server says
+              reason:'release_pending', the screen names the computer, lists the number
+              under "reserved", and never offers it as the next free number
   non_main    a computer that is not the main one sees the pointer to the main
               computer and nothing it could change a number with; the server
               refuses it too
@@ -82,7 +88,7 @@ except Exception:
 
 OWNER_EMAIL = "tareq@tills.test"
 OWNER_PASSWORD = "TillsOwner_123!"
-PORT_RANGE = range(6400, 6420)  # crew U2's range (contract: 6400-6419)
+PORT_RANGE = range(6480, 6500)  # crew V's range (was U2's 6400-6419)
 THEMES = ("light", "sand", "dark", "night", "dusk")
 VIEWPORTS = ({"width": 1366, "height": 768}, {"width": 1024, "height": 768})
 MIN_CONTRAST = 4.5
@@ -342,7 +348,8 @@ def check_assign_release_discard(page):
     assert dev(tills(page), BACK_ID)["till_number"] is None
     assert page.locator(input_sel(BACK_ID)).input_value() == ""
     assert [m for m, _ in sent] == ["POST", "DELETE"], sent
-    # change = release + assign in one Save
+    # change = ONE atomic POST {replace:true} in one Save (the old release-then-assign
+    # pair could strand the computer with no number; see the `atomic` tag below)
     type_number(page, BACK_ID, "6")
     click_save(page)
     wait_toast(page, "Till numbers saved.")
@@ -391,6 +398,150 @@ def check_refusal(browser):
         finally:
             release_all_via_api(page)
     finally:
+        ctx.close()
+
+
+def spy_bodies(page):
+    """Like spy_allocations, but also keeps the JSON body of every POST/DELETE."""
+    sent = []
+
+    def handler(route, request):
+        if request.method in ("POST", "DELETE"):
+            try:
+                body = request.post_data_json
+            except Exception:  # noqa: BLE001
+                body = None
+            sent.append((request.method, body, request.url))
+        route.continue_()
+    page.route("**/api/sub/retail/tills/allocations*", handler)
+    return sent
+
+
+ALLOC = "/api/sub/retail/tills/allocations"
+
+
+def check_atomic(browser):
+    """Item 4: changing a number is ONE request the server applies all-or-nothing.
+    Deny half: the new number is taken behind the screen's back -> the computer STILL
+    holds its old one (release-then-assign used to leave it with none).
+    Allow half: a free number goes through in a single POST (replace:true), no DELETE."""
+    ctx, page = open_page(browser, BASE)
+    try:
+        release_all_via_api(page)
+        bu = tills(page)["branch_uid"]
+        # Numbers 40/41/42 on purpose: the earlier sections of this file released 6 and 8
+        # from a computer that is switched off, so the server (rightly) still RESERVES
+        # those (release_pending). Fresh numbers keep this check about atomicity only.
+        st, b = api(page, "POST", ALLOC, {"terminal_uid": BACK_ID, "till_number": 40, "branch_uid": bu})
+        assert st == 200, (st, b)
+        open_tills(page)
+        sent = spy_bodies(page)
+        assert page.locator(input_sel(BACK_ID)).input_value() == "40"
+        # another computer takes 41 while the screen still believes it is free
+        st, b = api(page, "POST", ALLOC, {"terminal_uid": KITCHEN_ID, "till_number": 41, "branch_uid": bu})
+        assert st == 200, (st, b)
+        type_number(page, BACK_ID, "41")
+        assert page.locator(row_sel(BACK_ID)).get_attribute("data-problem") == "0", \
+            "the client must not know about the clash (this is the SERVER's refusal)"
+        human_click(page, "#sh-save", "Save bar: Save")
+        page.wait_for_function("() => { const e = document.getElementById('tills-error'); "
+                               "return e && !e.hidden && e.textContent.trim().length > 0; }",
+                               timeout=DEFAULT_WAIT_MS)
+        msg = error_text(page)
+        ok = {"Till number 41 is already used by another computer. Choose a different number.",
+              "Till number 41 was just given to another computer. Pick a different number."}
+        assert msg in ok, f"refusal shown as {msg!r}"
+        assert [(m, (bd or {}).get("replace"), (bd or {}).get("till_number")) for m, bd, _ in sent] \
+            == [("POST", True, 41)], f"a change must be ONE POST with replace:true, no DELETE: {sent}"
+        held = dev(tills(page), BACK_ID)["till_number"]
+        assert held == 40, f"the refused change took the old number away: the computer holds {held}"
+        assert dev(tills(page), KITCHEN_ID)["till_number"] == 41
+        # the screen re-read the truth: the edit is kept, and Discard shows the old number
+        human_click(page, "#sh-discard", "Save bar: Discard")
+        page.wait_for_timeout(300)
+        assert page.locator(input_sel(BACK_ID)).input_value() == "40"
+        assert page.locator(input_sel(KITCHEN_ID)).input_value() == "41"
+        # allow half: a free number, one POST, the old one is gone in the same step
+        del sent[:]
+        type_number(page, BACK_ID, "42")
+        click_save(page)
+        wait_toast(page, "Till numbers saved.")
+        assert [(m, (bd or {}).get("replace")) for m, bd, _ in sent] == [("POST", True)], sent
+        nums = {a["till_number"] for a in tills(page)["allocations"] if a["terminal_uid"] == BACK_ID}
+        assert nums == {42}, f"after a change the computer must hold exactly the new number: {nums}"
+    finally:
+        release_all_via_api(page)
+        ctx.close()
+
+
+def check_pending(browser):
+    """Item 5: a number released from a computer that is switched off stays reserved.
+    The server says so with reason:'release_pending'; the screen names the computer,
+    lists the number as reserved and never offers it."""
+    ctx, page = open_page(browser, BASE)
+    try:
+        release_all_via_api(page)
+        bu = tills(page)["branch_uid"]
+        open_tills(page)          # the card is drawn while 11 is free and nobody is waiting
+        sent = spy_bodies(page)
+        st, b = api(page, "POST", ALLOC, {"terminal_uid": BACK_ID, "till_number": 11, "branch_uid": bu})
+        assert st == 200, (st, b)
+        # released while the (fake, never-answering) computer is off: no confirmation ever comes
+        st, b = api(page, "DELETE", f"{ALLOC}?terminal_uid={BACK_ID}")
+        assert st == 200, (st, b)
+        st, b = api(page, "POST", ALLOC, {"terminal_uid": KITCHEN_ID, "till_number": 11, "branch_uid": bu})
+        assert st == 409 and b.get("reason") == "release_pending", (st, b)
+        assert b.get("held_by_terminal_uid") == BACK_ID and b.get("till_number") == 11, b
+        want = ("Till number 11 is still reserved for Back till until that computer is switched on "
+                "and confirms it gave it up. Pick another number.")
+        # through the screen (stale card: it does not know yet)
+        type_number(page, KITCHEN_ID, "11")
+        assert page.locator(row_sel(KITCHEN_ID)).get_attribute("data-problem") == "0"
+        human_click(page, "#sh-save", "Save bar: Save")
+        page.wait_for_function("() => { const e = document.getElementById('tills-error'); "
+                               "return e && !e.hidden && e.textContent.trim().length > 0; }",
+                               timeout=DEFAULT_WAIT_MS)
+        assert error_text(page) == want, error_text(page)
+        assert [m for m, _, _ in sent] == ["POST"], f"the request must have reached the server: {sent}"
+        assert dev(tills(page), KITCHEN_ID)["till_number"] is None
+        # the card now draws the reserved number, with the computer's name
+        res = page.locator('#tills-reserved li[data-till-reserved-n="11"]')
+        assert res.count() == 1, "the reserved number is not drawn"
+        assert res.inner_text().strip().replace("\n", " ").startswith("Till number 11"), res.inner_text()
+        assert "Reserved for Back till until that computer is switched on and confirms it gave the number up." \
+            in res.inner_text()
+        # typing it again is refused on the screen, sending nothing
+        assert hint_text(page, KITCHEN_ID) == want, hint_text(page, KITCHEN_ID)
+        human_click(page, "#sh-save", "Save bar: Save")
+        page.wait_for_timeout(400)
+        assert len(sent) == 1, f"a reserved number was sent again: {sent}"
+        human_click(page, "#sh-discard", "Save bar: Discard")
+        page.wait_for_timeout(300)
+        # never suggested: make the server (wrongly) offer 11 and see the screen refuse to show it
+        stubbed = []
+
+        def stub(route, request):
+            r = route.fetch()
+            j = r.json()
+            for d in j["data"]["devices"]:
+                if d["till_number"] is None:
+                    d["suggested_till_number"] = 11
+            stubbed.append(1)
+            route.fulfill(response=r, json=j)
+        page.route("**/api/sub/retail/tills*", stub)
+        page.evaluate("() => { SubsystemApp._navigate('dashboard'); }")   # leave, so the card is drawn afresh
+        page.wait_for_timeout(500)
+        open_tills(page)
+        assert stubbed, "the stub never ran, so this proves nothing"
+        for d in tills(page)["devices"]:
+            if d["terminal_uid"] == BACK_ID:
+                continue    # it is the computer that gave 11 up: getting its own number back is allowed
+            h = hint_text(page, d["terminal_uid"])
+            assert "Next free number: 11" not in h, f"{d['label']} is offered a reserved number: {h!r}"
+        assert page.locator(f'button[data-till-act="suggest"][data-till-uid="{KITCHEN_ID}"]:has-text("Use 11")').count() == 0
+        page.unroute("**/api/sub/retail/tills*")
+    finally:
+        release_all_via_api(page)
         ctx.close()
 
 
@@ -681,6 +832,10 @@ def main() -> int:
                 check("themes", f"theme {theme}: took, every text clears {MIN_CONTRAST}:1, screenshot",
                       lambda th=theme: check_theme(browser, th, shots))
             ctx.close()
+            check("atomic", "a refused change of number leaves the computer holding its old number; a free one is one POST",
+                  lambda: check_atomic(browser))
+            check("pending", "a number released from a switched-off computer: named, listed as reserved, never offered",
+                  lambda: check_pending(browser))
             check("non_main", "a computer that is not main sees the pointer and nothing it could change; the server refuses too",
                   lambda: check_non_main(browser, backend, company_id, me))
         finally:

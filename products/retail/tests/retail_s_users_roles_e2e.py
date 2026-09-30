@@ -61,16 +61,10 @@ OWNER_EMAIL = "tareq@usersroles.test"
 OWNER_PASSWORD = "UsersRolesOwner_123!"
 PORT_RANGE = range(6260, 6280)
 SHOTS = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p2s\U\shots")
-I18N_FILES = [Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p2s\i18n-R.json"),
-              Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p2s\i18n-U.json")]
 THEMES = ["light", "sand", "dark", "night", "dusk"]
 SMALL = {"width": 1024, "height": 768}
 NEW_CODES = [c for c in ua.CAPABILITY_CODES]  # the twelve
 DATA = {"dir": None}
-I18N_ADD: dict = {}
-for _f in I18N_FILES:
-    if _f.exists():
-        I18N_ADD.update(json.loads(_f.read_text(encoding="utf-8")))
 
 
 def pick_port() -> int:
@@ -146,16 +140,11 @@ def api(page, base, method, path, body=None):
     return resp.status, j
 
 
-def merge_i18n(page):
-    page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_ADD)
-
-
 def go_lang(page, lang):
     if page.evaluate("() => AuraI18n.current") != lang:
         page.evaluate("(l) => AuraI18n.setLang(l)", lang)
         page.wait_for_function("(l) => AuraI18n.current === l", arg=lang, timeout=DEFAULT_WAIT_MS)
         page.wait_for_timeout(500)
-    merge_i18n(page)
 
 
 def employees_screen(page, ready_action="pin"):
@@ -201,7 +190,6 @@ def watch(page):
 
 def owner_page(browser, base, **kw):
     ctx, page = _open_page(browser, base, email=OWNER_EMAIL, password=OWNER_PASSWORD, viewport=kw.pop("viewport", VIEWPORT), **kw)
-    merge_i18n(page)
     return ctx, page
 
 

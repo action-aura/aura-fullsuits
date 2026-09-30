@@ -5,7 +5,7 @@ Accountant's read-only home, in a REAL browser. STANDALONE SCRIPT, NOT PYTEST.
     C:/Users/MSI/AppData/Local/Python/pythoncore-3.14-64/python.exe ^
         products/retail/tests/retail_s_identity_home_e2e.py [--only tag,tag]
 
-Tags: chip home phone look
+Tags: chip home phone look books
 
   chip   every seeded person (owner, cashier, manager, branch manager,
          accountant) shows their REAL name, their preset label (Accountant /
@@ -21,6 +21,12 @@ Tags: chip home phone look
   phone  narrow window: the accountant's tab bar has no Till tab; a manager's does.
   look   Arabic/RTL, five themes, 1366x768 and 1024x768: books home fits, no
          sideways scroll, cards reachable. Screenshots go to SHOTS.
+  books  UI-verifier item 9. The Accountant's header says Books (not Dashboard), the
+         sidebar offers no Returns / Barcode Scanner row (no refund / sell grant) while
+         a manager and a cashier still get them, the identity chip never prints the raw
+         platform word ("WINDOWS"), and the 60 s dashboard timer is never armed on the
+         books home (it re-rendered the page and dropped the focused card) yet IS armed
+         for a manager's dashboard, and stops firing if the person becomes books-only.
 """
 from __future__ import annotations
 
@@ -64,7 +70,6 @@ NONAME = "noname@usersroles.test"
 def person_page(browser, base, email, *, viewport=VIEWPORT, lang="en", theme=None):
     ctx, page = _open_page(browser, base, email=email, password=ur.PASSWORDS[email],
                            viewport=viewport, lang=lang, theme=theme)
-    ur.merge_i18n(page)
     return ctx, page
 
 
@@ -254,8 +259,8 @@ def case_look(browser, base):
                 if lang == "ar":
                     note = page.inner_text("[data-books-note]")
                     assert any("\u0600" <= ch <= "\u06ff" for ch in note), f"English note in Arabic: {note!r}"
-                    # the chip was drawn before the coordinator's Arabic (i18n-U.json) was merged
-                    # in, so ask the label function itself, which translates at call time
+                    # ask the label function itself, which translates at call time, so a
+                    # chip drawn before the language switched cannot hide an English label
                     lbl = page.evaluate("() => SubsystemApp._identityRoleLabel()")
                     assert any("\u0600" <= ch <= "\u06ff" for ch in lbl), f"English role label in Arabic: {lbl!r}"
                 ur.shot(page, f"home-{vp_name}-{lang}")
@@ -277,6 +282,102 @@ def case_look(browser, base):
                 ur.shot(page, f"home-theme-{theme}-{lang}")
             finally:
                 ctx.close()
+
+
+SPY_TIMERS = """() => { window.__ticks = [];
+    const real = window.setInterval.bind(window);
+    window.setInterval = (fn, ms, ...rest) => { if (ms === 60000) window.__ticks.push(fn); return real(fn, ms, ...rest); };
+    return true; }"""
+
+
+def nav_rows(page):
+    return page.evaluate("() => [...document.querySelectorAll('.sub-nav-item[data-section]')].map(e => e.dataset.section)")
+
+
+def case_books(browser, base):
+    # ---- accountant: header, sidebar, chip, timer
+    ctx, page = person_page(browser, base, ACCOUNTANT)
+    try:
+        page.wait_for_selector(".bkh-grid", timeout=20000)
+        head = page.inner_text("#sub-header-section").strip()
+        assert head == "Books", f"accountant's header says {head!r}, want 'Books'"
+        rows = nav_rows(page)
+        assert len(rows) >= 4 and "trial-balance" in rows, f"sidebar not really rendered (vacuous): {rows}"
+        for gone in ("returns", "scanner"):
+            assert gone not in rows, f"accountant is still offered the {gone!r} row: {rows}"
+        # chip: the raw platform word must never be printed
+        c = chip(page)
+        info = page.evaluate("""async () => { const r = await fetch('/api/devices/me', {credentials: 'same-origin'});
+            const j = await r.json(); const d = (j && j.device) || {};
+            return {label: SubsystemApp.deviceLabel, name: d.device_name || d.device_label || null,
+                    platform: d.platform || null}; }""")
+        assert info["label"] != "WINDOWS", f"chip printed the raw platform word: {info}"
+        if not info["name"] and info["platform"]:
+            assert info["label"] == "Windows", f"no device name, platform {info['platform']!r}: label {info['label']!r}"
+            assert "WINDOWS" not in (c["title"] or ""), f"chip title has the raw platform word: {c['title']!r}"
+        pretty = page.evaluate("""() => ['WINDOWS', 'android', 'IOS', 'MacOS', 'fooBAR', '', null, '  '].map(
+            p => SubsystemApp._platformLabel(p))""")
+        assert pretty == ["Windows", "Android", "iOS", "macOS", "Foobar", "", "", ""], f"platform words: {pretty}"
+        # timer: with the books home open, NO 60 s refresh is armed
+        page.evaluate(SPY_TIMERS)
+        page.evaluate("() => SubsystemApp._navigate('trial-balance')")
+        page.wait_for_function("() => SubsystemApp.currentSection === 'trial-balance'", timeout=8000)
+        page.evaluate("() => SubsystemApp._navigate('dashboard')")
+        page.wait_for_selector(".bkh-grid", timeout=8000)
+        page.wait_for_timeout(500)
+        ticks = page.evaluate("() => window.__ticks.length")
+        assert ticks == 0, f"{ticks} 60 s refresh timer(s) armed on the books home"
+        assert page.evaluate("() => !SubsystemApp._autoRefreshTimer"), "an auto-refresh timer is live on the books home"
+        # focus survives: put focus on a card by a real keyboard Tab from the note, wait, still there
+        page.focus(".bkh-card")
+        marker = page.evaluate("() => { const e = document.activeElement; e.setAttribute('data-keep', '1'); return e.dataset.booksCard; }")
+        page.wait_for_timeout(800)
+        keep = page.evaluate("() => { const e = document.activeElement; return e && e.dataset ? e.dataset.keep : null; }")
+        assert keep == "1", f"focus left the books card {marker!r}"
+        ur.shot(page, "books-accountant-en")
+        # Arabic header
+        ur.go_lang(page, "ar")
+        page.evaluate("() => SubsystemApp._navigate('dashboard')")
+        page.wait_for_selector(".bkh-grid", timeout=8000)
+        ar_head = page.inner_text("#sub-header-section").strip()
+        assert any("\u0600" <= ch <= "\u06ff" for ch in ar_head), f"Arabic header is {ar_head!r}"
+        ur.shot(page, "books-accountant-ar")
+    finally:
+        ctx.close()
+    # ---- allow half: manager and cashier keep their rows; the manager's timer runs
+    for email, want in ((MANAGER, ("returns", "scanner")), (CASHIER, ("returns", "scanner"))):
+        ctx, page = person_page(browser, base, email)
+        try:
+            wait_landed(page)
+            rows = nav_rows(page)
+            for r in want:
+                assert r in rows, f"{email} lost the {r!r} row: {rows}"
+        finally:
+            ctx.close()
+    ctx, page = person_page(browser, base, MANAGER)
+    try:
+        wait_landed(page)
+        page.evaluate(SPY_TIMERS)
+        page.evaluate("() => SubsystemApp._navigate('customers')")
+        page.wait_for_function("() => SubsystemApp.currentSection === 'customers'", timeout=8000)
+        page.evaluate("() => SubsystemApp._navigate('dashboard')")
+        page.wait_for_function("() => SubsystemApp.currentSection === 'dashboard' && !!SubsystemApp._autoRefreshTimer",
+                               timeout=15000)
+        head = page.inner_text("#sub-header-section").strip()
+        assert head == "Dashboard", f"manager's header says {head!r}"
+        assert page.evaluate("() => window.__ticks.length") == 1, "manager's dashboard did not arm its 60 s refresh"
+        # the tick re-renders while the person is a manager ...
+        calls = page.evaluate("""() => { const seen = []; const nav = SubsystemApp._navigate.bind(SubsystemApp);
+            SubsystemApp._navigate = (id, ...a) => { seen.push(id); return nav(id, ...a); };
+            window.__ticks[0](); const n1 = seen.length;
+            // ... and goes quiet the moment they are books-only (relogin as someone else)
+            const keep = SubsystemApp.capabilities;
+            SubsystemApp.capabilities = ['retail.books.view', 'retail.reports'];
+            window.__ticks[0](); const n2 = seen.length;
+            SubsystemApp.capabilities = keep; SubsystemApp._navigate = nav; return [n1, n2]; }""")
+        assert calls == [1, 1], f"tick re-render counts (manager, then books-only): {calls}"
+    finally:
+        ctx.close()
 
 
 # -------------------------------------------------------------------------- main
@@ -332,7 +433,8 @@ def main() -> int:
             backend.stop()
             backend.start()
             print("SEEDING DONE.", flush=True)
-            for tag, fn in (("chip", case_chip), ("home", case_home), ("phone", case_phone), ("look", case_look)):
+            for tag, fn in (("chip", case_chip), ("home", case_home), ("phone", case_phone), ("look", case_look),
+                            ("books", case_books)):
                 if wanted(tag):
                     check(tag, fn.__name__.replace("case_", ""), lambda f=fn: f(browser, base))
         finally:

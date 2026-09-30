@@ -333,17 +333,33 @@
   // stable `code`, never on the English `error` string: that one is for logs
   // and is not translated. An unknown code (a newer server) gets the generic
   // sentence instead of raw text. Also used by app-shell's claim button.
+  // "N minutes / hours / days" in the shopkeeper's language. English has two
+  // forms (1, other). Arabic has four, and one sentence with a glued unit reads
+  // wrong for most counts: 1 (one word, no number), 2 (dual), 3-10 (plural),
+  // 11+ (singular after a big number). Each form is its own whole catalog key
+  // (see also share.js daysPhrase); the "(two)"/"(few)" ones are only ever
+  // picked in Arabic, so English never shows those suffixes.
+  function unitPhrase(n, unit) {
+    var one = '{n} ' + unit;
+    var many = '{n} ' + unit + 's';
+    var ar = window.AuraI18n && window.AuraI18n.current === 'ar';
+    var key = n === 1 ? one : many;
+    if (ar && n === 2) key = many + ' (two)';
+    else if (ar && n >= 3 && n <= 10) key = many + ' (few)';
+    return fill(t(key), { n: n });
+  }
+
   function errorText(body) {
     var code = body && typeof body.code === 'string' ? body.code : '';
     if (code === 'TAKEOVER_LOCKED') {
       var secs = Number(body.retry_after_seconds);
       if (isFinite(secs) && secs > 0) {
         var mins = Math.max(1, Math.ceil(secs / 60));
-        if (mins === 1) return t('Too many wrong passwords. Try again in 1 minute.');
-        if (mins < 120) return fill(t('Too many wrong passwords. Try again in {minutes} minutes.'), { minutes: mins });
-        var hours = Math.ceil(mins / 60);
-        if (hours < 48) return fill(t('Too many wrong passwords. Try again in {hours} hours.'), { hours: hours });
-        return fill(t('Too many wrong passwords. Try again in {days} days.'), { days: Math.ceil(hours / 24) });
+        var wait;
+        if (mins < 120) wait = unitPhrase(mins, 'minute');
+        else if (Math.ceil(mins / 60) < 48) wait = unitPhrase(Math.ceil(mins / 60), 'hour');
+        else wait = unitPhrase(Math.ceil(Math.ceil(mins / 60) / 24), 'day');
+        return fill(t('Too many wrong passwords. Try again in {wait}.'), { wait: wait });
       }
       return t('Too many wrong passwords. Try again later.');
     }

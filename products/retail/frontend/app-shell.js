@@ -475,6 +475,26 @@ const SubsystemApp = {
   // hasCapability). retail_employee_management_test.py greps app-shell.js's
   // SOURCE for the literal fragment `!item.ownerOnly || this.role === 'admin'`
   // -- keep that exact text if this method is ever touched.
+  // UI-verifier V item 9c: the device row's bare `platform` is an enum-ish
+  // upper-case word ("WINDOWS") that the chip printed as-is, shouting beside
+  // a branch name. Known platforms get their proper spelling; anything else
+  // is sentence-cased rather than dropped, so a new platform still shows.
+  _platformLabel(platform) {
+    const raw = String(platform == null ? '' : platform).trim();
+    if (!raw) return '';
+    const known = { windows: 'Windows', android: 'Android', ios: 'iOS',
+                    macos: 'macOS', mac: 'macOS', linux: 'Linux', web: 'Web' };
+    const hit = known[raw.toLowerCase()];
+    return hit || (raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase());
+  },
+
+  // UI-verifier V item 9a: the books home is titled Books in its own body,
+  // but the header above it kept saying "Dashboard" (the nav item's id).
+  _sectionHeaderTitle(sectionId, navItem) {
+    if (sectionId === 'dashboard' && this._isBooksOnlyCapabilities()) return t('Books');
+    return t(navItem?.screenTitle || navItem?.label || sectionId);
+  },
+
   _isNavItemVisible(item) {
     return (!item.roles || this.canClinic(...item.roles)) &&
       (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) &&
@@ -963,7 +983,11 @@ const SubsystemApp = {
         // Promotions and Reports entries above: hiding the nav entry is not
         // the enforcement, just the invitation not to walk into a dead end.
         { id: 'transfers',  label: 'Stock Transfers',   icon: '🔁', capability: 'retail.stock.adjust' },
-        { id: 'returns',    label: 'Returns',           icon: '↩️' },
+        // UI-verifier V item 9b: creating a return is CAP_REFUND end to end
+        // (create_return's @mt_require_capability(CAP_REFUND)), so an
+        // Accountant -- books + reports, no refund -- was invited into a
+        // screen whose one action always 403s. Same rule as every sibling.
+        { id: 'returns',    label: 'Returns',           icon: '↩️', capability: 'retail.refund' },
         // `capability` is a THIRD axis, alongside `adminOnly` (this device)
         // and `ownerOnly` (this user's role) -- see the note on `employees`
         // below for why conflating those two breaks a feature in both
@@ -988,7 +1012,9 @@ const SubsystemApp = {
         // next launch, so a shared till where a manager last opened Reports
         // drops the next cashier straight onto that screen.
         { id: 'reports',    label: 'Reports',           icon: '📊', capability: 'retail.reports' },
-        { id: 'scanner',    label: 'Barcode Scanner',   icon: '🔦', desktopOnly: true },
+        // UI-verifier V item 9b: the scanner exists to look up and ring
+        // items up, i.e. retail.sell; an Accountant has no till to scan for.
+        { id: 'scanner',    label: 'Barcode Scanner',   icon: '🔦', desktopOnly: true, capability: 'retail.sell' },
         // feat/reorder-automation-foundation: gated on this.isAdminDevice
         // (resolved once at init() via GET /api/devices/me -- see that
         // method), same adminOnly mechanism the _renderShell nav filter
@@ -1549,7 +1575,8 @@ const SubsystemApp = {
           // whichever is absent, so reading both costs nothing and a rename
           // of the envelope cannot silently blank the chip.
           const devRow = (dev && dev.success && dev.device) || null;
-          this.deviceLabel = (devRow && (devRow.device_name || devRow.device_label || devRow.platform)) || null;
+          this.deviceLabel = (devRow && (devRow.device_name || devRow.device_label
+            || this._platformLabel(devRow.platform))) || null;
           this.branchName = (dev && dev.success
             && ((devRow && devRow.branch_name) || dev.branch_name)) || null;
         } catch (e) {
@@ -3077,6 +3104,36 @@ const SubsystemApp = {
           // That is the same bug from the opposite side -- asked zero times
           // rather than once.
           if (await this._enforceActivationGate()) return;
+          // WHO signed back in? The box takes any account, so ask the server
+          // instead of assuming it is the person who was here. A different
+          // person must start over completely -- role, menu, capabilities and
+          // the identity chip were all read once by init() for the FIRST
+          // person, and re-drawing the section over them lets an accountant
+          // who signs in over an owner keep the owner's rows (and the till).
+          // The first person's unsaved edits are dropped on purpose: they
+          // are not this person's to keep, and asking would show them to a
+          // stranger. The same person keeps the page (their edits included).
+          const prev = this.currentUser || {};
+          let sess = null;
+          try {
+            sess = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' }).then(r => r.json());
+          } catch (e) { sess = null; }
+          const now = (sess && sess.authenticated && sess.user) || null;
+          const keyOf = (u) => (u && (u.id != null ? 'id:' + u.id : (u.email ? 'em:' + String(u.email).toLowerCase() : ''))) || '';
+          const sameUser = !!now && !!keyOf(prev) && keyOf(now) === keyOf(prev);
+          if (!sameUser) {
+            this._allowUnload = true;   // no browser "leave this page?" for someone else's edits
+            location.reload();
+            return;
+          }
+          const trigger = this._expiredTrigger || null;
+          this._expiredTrigger = null;
+          if (this._hasUnsavedWork()) {
+            // Keep the screen exactly as it is; only re-try what was refused.
+            try { if (window.SettingsHub && window.SettingsHub.retryAfterRelogin) window.SettingsHub.retryAfterRelogin(trigger); }
+            catch (e) { /* the retry is a convenience, never a reason to break sign-in */ }
+            return;
+          }
           this._navigate(this.currentSection || 'dashboard');
         } else {
           // At the menu level — re-init the full platform
@@ -3787,7 +3844,7 @@ const SubsystemApp = {
                  at ≤640px", now made the ONE header for every width) already
                  wait on #sub-header-section as the "shell is ready" selector
                  -- moving the id would have broken all of them silently. -->
-            <span class="sub-header-section" id="sub-header-section">${t('Dashboard')}</span>
+            <span class="sub-header-section" id="sub-header-section">${this._isBooksOnlyCapabilities() ? t('Books') : t('Dashboard')}</span>
           </div>
           <div class="sub-header-right">
             <!-- P1b item 7: the command palette's door. A 36px-tall control on
@@ -4595,7 +4652,7 @@ const SubsystemApp = {
     // title in the header than the short name the sidebar and Ctrl+K use
     // ("Audit Log" there, "Audit log (this computer)" here).
     document.getElementById('sub-header-section')?.innerText &&
-      (document.getElementById('sub-header-section').innerText = t(navItem?.screenTitle || navItem?.label || sectionId));
+      (document.getElementById('sub-header-section').innerText = this._sectionHeaderTitle(sectionId, navItem));
 
     // ── Destroy any existing Chart.js instances before replacing the DOM ──────
     const content = document.getElementById('sub-content');
@@ -4650,9 +4707,15 @@ const SubsystemApp = {
         await _safeRender();
 
         // ── Auto-refresh: re-render the dashboard every 60 s while it's open ──
-        if (sectionId === 'dashboard') {
+        // UI-verifier V item 9d: NOT for the books home. It has no live
+        // figures to refresh, and re-rendering it every minute replaced the
+        // card the person had focused (keyboard and screen-reader users lost
+        // their place). The guard is repeated inside the tick because the
+        // capabilities can change under a running timer (relogin).
+        if (sectionId === 'dashboard' && !this._isBooksOnlyCapabilities()) {
           this._autoRefreshTimer = setInterval(() => {
-            if (this.currentSection === 'dashboard' && this.active) {
+            if (this.currentSection === 'dashboard' && this.active
+                && !this._isBooksOnlyCapabilities()) {
               this._navigate('dashboard');
             }
           }, 60000);
@@ -5652,6 +5715,10 @@ const SubsystemApp = {
         if (res.status === 401 && url.indexOf('/api/') !== -1 && !SKIP.some(s => url.indexOf(s) !== -1)) {
           if (!SubsystemApp._authPrompted) {
             SubsystemApp._authPrompted = true;
+            // Remember WHAT was refused, so a same-person sign-back-in can
+            // re-try it (a Save) instead of leaving the edits stranded.
+            const m = String((args[1] && args[1].method) || (args[0] && args[0].method) || 'GET').toUpperCase();
+            SubsystemApp._expiredTrigger = { url, method: m, at: Date.now() };
             // Defer so the in-flight call stack unwinds before we swap the UI.
             setTimeout(() => {
               try { SubsystemApp.showReloginModal('Your session has expired. Please log in again.'); }

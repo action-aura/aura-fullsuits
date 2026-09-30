@@ -44,7 +44,8 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-REPO = Path(r"C:\Users\MSI\Desktop\aura-fullsuits\.claude\worktrees\retail-hardware-viewports")
+# products/retail/tests/<this file> -> three levels up is the repo (worktree) root
+REPO = Path(__file__).resolve().parents[3]
 BACKEND_DIR = REPO / "products" / "retail" / "backend"
 for _p in (str(REPO), str(BACKEND_DIR)):
     if _p not in sys.path:
@@ -52,9 +53,6 @@ for _p in (str(REPO), str(BACKEND_DIR)):
 
 SCRATCH = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p1b\H2")
 SCRATCH.mkdir(parents=True, exist_ok=True)
-# New Arabic for this crew's strings; merged into the page dictionary because
-# locales/*.json are edited only at merge time (see the report).
-I18N_H = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p1b\i18n-H.json")
 
 DATA = Path(tempfile.mkdtemp(prefix="aura_p1b_hub_", dir=str(SCRATCH)))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
@@ -249,31 +247,9 @@ def grant_capability(user_id, code):
         conn.close()
 
 
-I18N_ADD = json.loads(I18N_H.read_text(encoding="utf-8")) if I18N_H.exists() else {}
-
-
-I18N_H2 = Path(r"C:\Users\MSI\.claude\jobs\c5a4f4c4\tmp\p1b\i18n-H2.json")
-I18N_H2_ADD = json.loads(I18N_H2.read_text(encoding="utf-8")) if I18N_H2.exists() else {}
-# Proof-only switch. The H2 Arabic (setup guide, Customers, Returns, scanner) is
-# NOT in locales/ar.json until the orchestrator merges i18n-H2.json. The checks
-# named "...in Arabic, no dictionary merged" therefore stay RED on purpose until
-# that merge; H2_PROOF_MERGE=1 merges the file into the live dictionary so the
-# rest of the run (and the screenshots) can be judged with the real words.
-H2_PROOF_MERGE = os.environ.get("H2_PROOF_MERGE") == "1"
-
-
-def merge_i18n(page):
-    """The new Arabic is not in locales/ar.json until merge; add it to the live
-    dictionary so the Arabic screens are judged with their real words."""
-    page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_ADD)
-    if H2_PROOF_MERGE:
-        page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_H2_ADD)
-
-
 def set_lang(page, lang):
     page.evaluate("(l) => AuraI18n.setLang(l)", lang)
     page.wait_for_timeout(500)
-    merge_i18n(page)
 
 
 def set_theme(page, theme):
@@ -354,7 +330,6 @@ with sync_playwright() as p:
     dismiss_intro_overlay(owner)
     owner.wait_for_selector("#sub-header-section", timeout=20000)
     owner.wait_for_timeout(800)
-    merge_i18n(owner)
 
     # v42: this computer must be a REAL registered till, not a made-up terminal id.
     # A till's terminal id IS its registry device id, and the server refuses to hand
@@ -428,7 +403,6 @@ with sync_playwright() as p:
         dismiss_intro_overlay(pg)
         pg.wait_for_selector("#sub-header-section", timeout=20000)
         pg.wait_for_timeout(800)
-        merge_i18n(pg)
         return ctx, pg
 
 
@@ -582,7 +556,6 @@ with sync_playwright() as p:
         owner.reload()
         dismiss_intro_overlay(owner)
         owner.wait_for_selector("#sub-header-section", timeout=20000)
-        merge_i18n(owner)
         open_hub(owner, "tax")
         assert owner.input_value("#tax-mode") == "before_discount"
         assert owner.input_value("#tax-default-rate") == "16"
@@ -2833,7 +2806,6 @@ with sync_playwright() as p:
             dismiss_intro_overlay(owner)
             owner.wait_for_selector("#sub-header-section", timeout=20000)
             owner.wait_for_timeout(600)
-            merge_i18n(owner)
 
     check("setup guide (H2): 'Set up WhatsApp on this computer' opens the real WhatsApp page",
           sg_whatsapp_step_opens_the_real_whatsapp_page)
@@ -2889,16 +2861,13 @@ with sync_playwright() as p:
     def arabic_unmerged(page):
         """A fresh page: nothing a previous check merged into the live dictionary
         survives a reload, so what is on screen is what locales/ar.json alone says.
-        (H2_PROOF_MERGE=1 adds the H2 file back, to prove the check goes green once
-        the orchestrator has merged it.)"""
+        The real shipped catalogue is the only Arabic there is: nothing is injected."""
         page.reload()
         dismiss_intro_overlay(page)
         page.wait_for_selector("#sub-header-section", timeout=20000)
         page.wait_for_timeout(700)
         page.evaluate("(l) => AuraI18n.setLang(l)", "ar")
         page.wait_for_timeout(500)
-        if H2_PROOF_MERGE:
-            page.evaluate("(add) => { Object.assign(AuraI18n.dicts.ar, add); }", I18N_H2_ADD)
 
     def back_to_english(page):
         set_lang(page, "en")
@@ -2956,8 +2925,6 @@ with sync_playwright() as p:
                 for lit in literals:
                     if lit.lower() in text:
                         problems.append(f"[{section}] still shows English {lit!r}")
-                    if H2_PROOF_MERGE and I18N_H2_ADD.get(lit) and I18N_H2_ADD[lit].lower() not in text:
-                        problems.append(f"[{section}] does not show the Arabic for {lit!r}")
                 owner.screenshot(path=str(SCRATCH / f"item4_{section}_ar.png"))
         finally:
             back_to_english(owner)

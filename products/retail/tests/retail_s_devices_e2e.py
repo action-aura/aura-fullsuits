@@ -38,7 +38,7 @@ import retail_p1b_palette_e2e as _pe  # noqa: E402
 import retail_s_users_roles_e2e as ur  # noqa: E402
 from retail_s_users_roles_e2e import (  # noqa: E402
     OWNER_EMAIL, OWNER_PASSWORD, SMALL, THEMES, api, click_center, dialog_fits, go_lang,
-    merge_i18n, owner_page, pick_port, reg, shot)
+    owner_page, pick_port, reg, shot)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -430,6 +430,25 @@ def case_errors(browser, base):
         for secs, sentence in LOCK_TABLE:
             got = et({"code": "TAKEOVER_LOCKED", "retry_after_seconds": secs})
             assert got == sentence, f"lock {secs}s: {got!r}"
+        # Arabic has four number forms (1, 2, 3-10, 11+). One glued sentence read
+        # wrong for most counts; each count now gets its own whole phrase.
+        head = "كلمات مرور خاطئة كثيرة. حاول مجددًا بعد "
+        AR_LOCK = ((60, "دقيقة واحدة"),      # 1 minute
+                   (120, "دقيقتين"),         # 2 minutes (dual)
+                   (180, "3 دقائق"),         # 3 (few)
+                   (600, "10 دقائق"),        # 10 (few)
+                   (660, "11 دقيقة"),        # 11 (many)
+                   (7200, "ساعتين"),         # 2 hours (dual)
+                   (7201, "3 ساعات"),        # 3 hours (few)
+                   (172800, "يومين"),        # 2 days (dual)
+                   (172801, "3 أيام"))       # 3 days (few)
+        page.evaluate("() => { window.AuraI18n.current = 'ar'; }")
+        try:
+            for secs, phrase in AR_LOCK:
+                got = et({"code": "TAKEOVER_LOCKED", "retry_after_seconds": secs})
+                assert got == head + phrase + ".", f"arabic lock {secs}s: {got!r}"
+        finally:
+            page.evaluate("() => { window.AuraI18n.current = 'en'; }")
         assert et({"code": "TAKEOVER_LOCKED"}) == "Too many wrong passwords. Try again later."
         assert et({"code": "TAKEOVER_LOCKED", "retry_after_seconds": "soon"}) == "Too many wrong passwords. Try again later."
         generic = "That did not work. Please try again."
