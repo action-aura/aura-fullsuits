@@ -335,6 +335,7 @@ import logging
 import secrets
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -375,6 +376,10 @@ from commercial_runtime.identity.user_accounts import (
 from commercial_runtime.sync import authority as _authority
 
 logger = logging.getLogger(__name__)
+
+#: How long a production `AuthorityEnv` (read from app data) is reused. See
+#: `SyncService._authority_env`.
+_AUTHORITY_ENV_TTL_SECONDS = 5.0
 
 # What a registry-stream payload can make identity's helpers (or the bind to
 # SQLite) raise WITHOUT the database itself being unhealthy. See
@@ -998,6 +1003,7 @@ class SyncService:
         self._on_tick = on_tick
         self._authority_env_provider = authority_env_provider
         self._authority_unsigned_logged = False
+        self._authority_env_cache = None
         self._local_freshness_store = local_freshness_store
         self._stock_exception_recorder = stock_exception_recorder
         # See _ensure_freshness_loaded's own docstring for why this is a
@@ -1258,7 +1264,20 @@ class SyncService:
     def _authority_env(self):
         """The receiver's/sender's authority context, resolved fresh."""
         provider = self._authority_env_provider
-        return provider() if provider is not None else _authority.default_authority_env()
+        if provider is not None:
+            return provider()
+        # Production: resolved from app data (trust store file, licence lease in
+        # licensing.db, DPAPI key, local device id). A pull page can carry
+        # hundreds of authority events, so reuse one resolution for a few
+        # seconds rather than re-reading all four per event -- short enough that
+        # a rotated trust store or a refreshed lease is picked up within a tick.
+        now = time.monotonic()
+        cached = self._authority_env_cache
+        if cached is not None and now - cached[0] < _AUTHORITY_ENV_TTL_SECONDS:
+            return cached[1]
+        env = _authority.default_authority_env()
+        self._authority_env_cache = (now, env)
+        return env
 
     def _authority_gate(self, conn, ev: dict, p: dict, local_company_id: Optional[str],
                         entity_type: str):

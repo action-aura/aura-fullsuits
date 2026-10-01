@@ -581,3 +581,38 @@ def test_a_parked_then_resolved_event_leaves_quarantine(shop):
     shop.pull()
     assert shop.q("SELECT COUNT(*) AS n FROM sync_apply_quarantine")[0]["n"] == 0
     assert shop.user(OWNER)["password_hash"] == "PW2"
+
+
+def test_an_event_parked_AFTER_the_gate_still_carries_its_signature_for_the_retry(shop):
+    """The gate strips `_auth` before the applier runs. If the applier then parks
+    the event for its OWN reason (here: the owning user has not arrived), the
+    parked copy must still hold the signed original -- otherwise the retry finds an
+    unsigned event and refuses it for ever, and a legitimate permission change
+    never lands."""
+    ev = _perm("late-user", "full")
+    assert shop.apply(ev, shop.A) is False
+    assert shop.parked("user_permission") == ["missing_parent:user"]
+    stored = json.loads(shop.q("SELECT payload FROM sync_apply_quarantine")[0]["payload"])
+    assert stored["_auth"]["dev"] == shop.A.dev and stored["_auth"].get("sig")
+
+    late_user = {"entity_type": "user", "entity_id": "late-user", "event_type": "create", "payload": {
+        "uid": "late-user", "employee_id": "EMP-0009", "email": "late@x.com", "role": "cashier",
+        "status": "active", "require_password_change": 0, "language": "en", "password_hash": "H",
+        "pin_hash": "P", "row_version": 1, "updated_at_utc": "2026-02-01T00:00:00+00:00",
+        "session_version": 1}}
+    assert shop.apply(late_user, shop.A) is True
+    shop.pull()
+    assert shop.parked() == []
+    assert shop.q("SELECT access_level FROM user_permissions")[0]["access_level"] == "full"
+
+
+def test_a_non_main_cannot_send_even_a_harmless_event_on_behalf_of_another_device(shop):
+    """A plain heartbeat (no name or status change) for device B, signed by A. The
+    owner-change test above would refuse a rename/removal on its own; this pins the
+    SPEAKER rule independently: only B itself, or the main, speaks for B."""
+    ev = _device_ev(shop.B.dev, app_version="6.6.6")
+    assert shop.apply(ev, shop.A) is False
+    assert shop.parked("device") == ["device_change_needs_main"]
+    assert shop.q("SELECT app_version FROM devices WHERE id=?", (shop.B.dev,))[0]["app_version"] != "6.6.6"
+    assert shop.apply(ev, shop.B) is True                       # B itself: fine
+    assert shop.q("SELECT app_version FROM devices WHERE id=?", (shop.B.dev,))[0]["app_version"] == "6.6.6"
