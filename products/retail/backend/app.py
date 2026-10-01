@@ -2490,6 +2490,17 @@ def _announce_device(reason):
                 app_version=APP_VERSION,
                 retail_schema_version=RETAIL_SCHEMA_VERSION,
             )
+            # AUDIT-033 / S-AUTH: pre-bind THIS computer's own device id to its
+            # own installation and key in `sync_signers`, so no peer can get in
+            # first and claim it. The sync engine also does this lazily before it
+            # judges its first event; doing it at boot (and again after
+            # activation, via the 'changed' announce) just closes the window
+            # earlier. Best effort: a till with no key or lease yet has nothing
+            # to bind.
+            from commercial_runtime.sync import authority as _authority
+            _signer = _authority.local_signer_or_none(Path(DATABASE_DIR).parent)
+            if _signer is not None:
+                _authority.ensure_self_bound(conn, company_id, _signer)
             conn.commit()
         finally:
             conn.close()

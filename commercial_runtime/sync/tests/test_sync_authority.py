@@ -132,6 +132,17 @@ def test_entity_id_case_is_normalised(world):
     assert isinstance(_verify(world, signed), authority.VerifiedSigner)
 
 
+def test_an_integral_float_and_the_same_int_sign_alike_but_a_real_change_does_not(world):
+    """A relay that stores payloads as jsonb or re-serialises them may hand back
+    `2` for `2.0`. That hop must not break a signature -- and a genuinely
+    different number must still break it."""
+    signed = world.sign(_event(payload={"uid": "u1", "epoch": 2.0, "ratio": 1.5}), world.new_device())
+    signed["payload"]["epoch"] = 2
+    assert isinstance(_verify(world, signed), authority.VerifiedSigner)
+    signed["payload"]["ratio"] = 1.6
+    assert isinstance(_verify(world, signed), authority.Refusal)
+
+
 def test_tampered_dev_is_refused(world):
     """Claiming to speak as the main computer by editing `dev` breaks the signature."""
     signed = world.sign(_event(), world.new_device())

@@ -300,3 +300,41 @@ def test_old_computer_changing_an_accountants_role_takes_the_books_away(tmp_path
     # Both directions: the same old payload for a person who was ALREADY a
     # cashier here changes nothing (no needless rewrite of the four rows).
     assert ua.user_sync_apply_plan(out["event"]["payload"], "cashier")["reset_books"] is False
+
+
+# ── S-AUTH (AUDIT-033): the new `_auth` block ──────────────────────────────
+
+def test_old_receiver_ignores_the_signature_block_on_authority_events(admin, db_path, tmp_path):
+    """From now on this build signs every authority event, so a v8 computer sits on
+    a stream whose `user` / `user_permission` / `device` / `admin_device` payloads
+    carry a reserved `_auth` key (a signature plus the sender's Owner-signed
+    lease). The OLD tree's REAL `_apply_event` reads payloads with `.get` and an
+    allowlist of columns, so it must apply or plain-skip every one of them exactly
+    as it does the unsigned form -- nothing quarantined, the person still arrives.
+    A quarantined event here is a permission change that silently never reaches
+    the old computer.
+
+    Non-vacuous: every authority event in the stream is checked to REALLY carry an
+    `_auth` block before it is sent, and its `lease` is a full Owner envelope."""
+    from commercial_runtime.sync import authority
+    from commercial_runtime.sync.tests._signing import SigningWorld
+
+    r = admin.post('/api/admin/employees', json={'email': 'layla@test.local', 'role': 'cashier'})
+    assert r.status_code == 200, r.get_json()
+    _queue_device_events(db_path)
+    events = _outbox_events(db_path)
+
+    world = SigningWorld(tmp_path)
+    signer = world.new_device("dev-main")
+    signed = [world.sign(e, signer) if authority.is_authority_event(e) else e for e in events]
+    authority_events = [e for e in signed if authority.is_authority_event(e)]
+    assert {e["entity_type"] for e in authority_events} >= {"user", "user_permission", "device", "admin_device"}
+    assert all("sig" in e["payload"]["_auth"] and "payload" in e["payload"]["_auth"]["lease"]
+               for e in authority_events)
+
+    out = _run_old(tmp_path, "receive", {"events": signed})
+
+    assert out["quarantine"] == []
+    assert len(out["handled"]) == len(signed)
+    assert all(ok is True for _, ok in out["handled"]), out["handled"]
+    assert any(u["email"] == "layla@test.local" for u in out["users"])

@@ -176,6 +176,21 @@ def strip_auth(payload):
     return {k: v for k, v in payload.items() if k != AUTH_KEY}
 
 
+def _integral_floats_as_ints(value):
+    """`2.0` and `2` are the same JSON number to a relay that stores payloads as
+    jsonb or re-serialises them, but the canonical text differs ("2.0" vs "2"),
+    which would break a signature made on the other spelling. Signing and
+    verifying both fold an integral float to an int, so a hop through any relay
+    cannot change the bytes."""
+    if isinstance(value, dict):
+        return {k: _integral_floats_as_ints(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_integral_floats_as_ints(v) for v in value]
+    if isinstance(value, float) and value == value and value not in (float("inf"), float("-inf"))             and value == int(value):
+        return int(value)
+    return value
+
+
 def build_tbs(event: dict, *, licence: str, inst: str, dev: str) -> bytes:
     """The exact bytes that are signed. Deliberately EXCLUDES the event id and
     `created_at` (relays re-render both) and the two reserved payload keys
@@ -184,7 +199,8 @@ def build_tbs(event: dict, *, licence: str, inst: str, dev: str) -> bytes:
     payload = event.get("payload")
     if not isinstance(payload, dict):
         payload = {}
-    body = {k: v for k, v in payload.items() if k not in (AUTH_KEY, _SENDER_VERSION_KEY)}
+    body = _integral_floats_as_ints(
+        {k: v for k, v in payload.items() if k not in (AUTH_KEY, _SENDER_VERSION_KEY)})
     return canonicalize_bytes({
         "ctx": AUTH_CONTEXT,
         "licence": licence,
