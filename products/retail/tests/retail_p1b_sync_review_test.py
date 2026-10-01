@@ -280,13 +280,14 @@ def test_every_reason_the_engine_can_write_has_a_plain_sentence():
         assert re.search(r'[a-z]{3}', text) and '_' not in text and ':' not in text, (reason, text)
 
 
-_S_AUTH_REASONS = (
-    'unsigned_authority_event', 'bad_signature', 'foreign_licence', 'untrusted_lease',
-    'signer_binding_clash', 'signer_revoked', 'takeover_main_not_silent',
-    'device_change_needs_main', 'owner_change_needs_main', 'second_admin_refused',
-    'needs_main_computer', 'main_unknown', 'release_ack_wrong_sender',
-    'alias_origin_mismatch',
-)
+# AUDIT-033 B2b: checked against the engine's OWN list of refusal reasons, not a
+# hand-typed copy. The hand-typed copy had drifted by three (admin_claim_signer_
+# mismatch, no_local_licence, takeover_signer_mismatch parked with the generic
+# "a reason this screen does not know" sentence) and nothing noticed. A future
+# reason added to authority.ALL_REFUSAL_REASONS without a sentence goes red here.
+from commercial_runtime.sync import authority as _authority  # noqa: E402
+
+_S_AUTH_REASONS = tuple(sorted(_authority.ALL_REFUSAL_REASONS))
 
 
 def test_every_s_auth_park_reason_has_a_plain_sentence_in_both_languages():

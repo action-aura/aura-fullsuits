@@ -19829,6 +19829,10 @@ _SYNC_REVIEW_REASONS = {
     'main_unknown': ('this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer', True),
     'release_ack_wrong_sender': ('a till number was given back by a computer that does not own that number', False),
     'alias_origin_mismatch': ('a computer described a shop-branch link on behalf of another computer', False),
+    # AUDIT-033 B2b: the three reasons B1 could not list before the gate landed.
+    'admin_claim_signer_mismatch': ('a computer announced that another computer is the main computer. Only a computer can claim the main role for itself', False),
+    'no_local_licence': ('this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again', True),
+    'takeover_signer_mismatch': ('a computer announced that another computer took over as the main computer. Only the computer that takes over can say so', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

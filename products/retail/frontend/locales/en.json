@@ -2279,5 +2279,8 @@
   "this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer": "this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer",
   "a till number was given back by a computer that does not own that number": "a till number was given back by a computer that does not own that number",
   "a computer described a shop-branch link on behalf of another computer": "a computer described a shop-branch link on behalf of another computer",
-  "The owner's own sign-in can only be changed at the main computer.": "The owner's own sign-in can only be changed at the main computer."
+  "The owner's own sign-in can only be changed at the main computer.": "The owner's own sign-in can only be changed at the main computer.",
+  "a computer announced that another computer is the main computer. Only a computer can claim the main role for itself": "a computer announced that another computer is the main computer. Only a computer can claim the main role for itself",
+  "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again": "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again",
+  "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so": "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so"
 }
