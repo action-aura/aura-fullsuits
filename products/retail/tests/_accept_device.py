@@ -87,6 +87,54 @@ class _ListHandler(logging.Handler):
         _CAPTURED_LOGS.append(self.format(record))
 
 
+def _provision_signed_identity(app_data_dir: str) -> None:
+    """Give THIS computer what a real activated till has, so the production code
+    path (`authority.default_authority_env`, reading app data) signs and verifies
+    for real: a Windows DPAPI device key, an Owner-signed lease naming this
+    computer's key and installation, and a trust store that trusts the (shared,
+    deterministic) test Owner key -- the same key on every computer of the shop,
+    so each trusts the others' leases. The licence id is the shop's, the same on
+    every computer of a test: `AURA_ACCEPT_SIGNED_LICENCE` (the test file sets it to
+    the licence it already uses), else a fixed default.
+
+    Runs at the start of EVERY process because `seed_active_license` just above
+    overwrites the single licensing row (and so the lease) each time."""
+    import base64
+    import dataclasses
+    import hashlib
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from commercial_runtime.identity import device_context
+    from commercial_runtime.licensing_contracts.device_identity import (
+        WindowsDpapiDeviceIdentityProvider, fingerprint_of)
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore
+    from commercial_runtime.sync.tests._signing import make_lease
+
+    app = Path(app_data_dir)
+    licence = os.environ.get("AURA_ACCEPT_SIGNED_LICENCE", "LIC-ACCEPT-SIGNED")
+    owner_key = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"aura-accept-test-owner").digest())
+    owner_pub = owner_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
+    trust_path = app / "licensing" / "trust_store.json"
+    if not trust_path.exists():
+        trust_path.parent.mkdir(parents=True, exist_ok=True)
+        OwnerTrustStore(trust_path).bootstrap_from_anchor({"keys": [{
+            "key_id": "owner-1", "public_key": base64.b64encode(owner_pub).decode("ascii"),
+            "algorithm": "ed25519"}]})
+    provider = WindowsDpapiDeviceIdentityProvider(app / "licensing")
+    if not provider.has_key():
+        provider.generate_new_key()
+    fingerprint = fingerprint_of(base64.b64decode(provider.get_public_key_b64()))
+    device_id = device_context.local_device_uuid()
+    installation = f"inst-{device_id}"
+    lease = make_lease(owner_key, licence=licence, inst=installation, fingerprint=fingerprint)
+    repo = LicenseStateRepository(app / "database" / "subsystems" / "licensing.db")
+    record = repo.load()
+    repo.save(dataclasses.replace(
+        record, owner_installation_id=installation, assertion_envelope_json=json.dumps(lease)))
+
+
 def main() -> None:
     app_data_dir, relay_db_path, actions_path, output_path = sys.argv[1:5]
     options = json.loads(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else {}
@@ -118,6 +166,16 @@ def main() -> None:
     import app as _app_module
     flask_app = _app_module.init_app()
     flask_app.config["TESTING"] = True
+
+    # AUDIT-033 / S-AUTH: opt-in REAL signing identity for this computer (see
+    # `_provision_signed_identity`). Off unless the test process asked for it, and
+    # never for an old-build device (`code_root`): that build has no signing code.
+    # Deliberately AFTER `init_app()`: a licence present at boot would trigger the
+    # identity company rebind (company id -> licence id), which these harness shops
+    # (random company ids, no real activation) were never built to survive; the
+    # lease is only needed once sync runs.
+    if os.environ.get("AURA_ACCEPT_SIGNED") and not options.get("code_root"):
+        _provision_signed_identity(app_data_dir)
 
     import api.retail_api as retail_api_module
     from api.retail_api import _ensure_credit_schema
@@ -560,16 +618,25 @@ def main() -> None:
             from commercial_runtime.licensing_contracts.state_repository import (
                 LICENSING_SCHEMA_VERSION, LicenseStateRecord, LicenseStateRepository,
             )
-            repo = LicenseStateRepository(Path(app_data_dir) / "database" / "subsystems" / "licensing.db")
-            repo.save(LicenseStateRecord(
-                licensing_schema_version=LICENSING_SCHEMA_VERSION,
-                product_code="AURA_RETAIL", platform=action.get("platform", "WINDOWS"),
-                current_state=LicenseState.ACTIVE_ONLINE.value,
-                owner_installation_id=action.get("installation_id", f"inst-{uuid.uuid4().hex[:8]}"),
-                license_status="ACTIVE", installation_status="ACTIVE", subscription_status="ACTIVE",
-                entitlements_json=json.dumps(action.get("entitlements") or {}),
-                assertion_envelope_json=json.dumps({"payload": {"license_public_id": action["license_public_id"]}}),
-            ))
+            if os.environ.get("AURA_ACCEPT_SIGNED") and not options.get("code_root"):
+                # The real signing identity carries the licence id inside a REAL
+                # Owner-signed lease; record the shop's id and re-issue it.
+                if action["license_public_id"] != os.environ.get("AURA_ACCEPT_SIGNED_LICENCE", "LIC-ACCEPT-SIGNED"):
+                    raise RuntimeError(
+                        "activate_shared_licence names a different licence than the one every computer of "
+                        "this test signs under (AURA_ACCEPT_SIGNED_LICENCE)")
+                _provision_signed_identity(app_data_dir)
+            else:
+                repo = LicenseStateRepository(Path(app_data_dir) / "database" / "subsystems" / "licensing.db")
+                repo.save(LicenseStateRecord(
+                    licensing_schema_version=LICENSING_SCHEMA_VERSION,
+                    product_code="AURA_RETAIL", platform=action.get("platform", "WINDOWS"),
+                    current_state=LicenseState.ACTIVE_ONLINE.value,
+                    owner_installation_id=action.get("installation_id", f"inst-{uuid.uuid4().hex[:8]}"),
+                    license_status="ACTIVE", installation_status="ACTIVE", subscription_status="ACTIVE",
+                    entitlements_json=json.dumps(action.get("entitlements") or {}),
+                    assertion_envelope_json=json.dumps({"payload": {"license_public_id": action["license_public_id"]}}),
+                ))
             results.append({"ok": True, "license_public_id": action["license_public_id"]})
 
         elif op == "http":

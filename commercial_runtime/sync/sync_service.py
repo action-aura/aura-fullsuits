@@ -1315,6 +1315,14 @@ class SyncService:
             clash = _authority.bind_signer(reg, cid, verdict)
             if clash is not None:
                 return clash
+            if env.local_dev is not None and verdict.dev == env.local_dev:
+                # THIS device's own event, handed back by the relay (a relay does not
+                # drop a device's own events from its pull). Nobody else can sign as
+                # this device, and the applier already treats a replay of its own row
+                # as a no-op, so the per-type rules are not re-run: after a hand-over
+                # the old main would otherwise park its own history as
+                # `needs_main_computer` for ever.
+                return None
             ctx = _authority.RuleContext(
                 reg=reg, company_id=cid, local_dev=env.local_dev,
                 retail=conn if own_reg else None)

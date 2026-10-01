@@ -548,3 +548,16 @@ def test_h1_the_main_computer_switching_its_own_readable_numbers_off_needs_no_co
     assert [r for r in _allocs(shop, "a") if r["status"] == "active"] == []
     [give_b] = shop.login("a", [{"op": "allocate_till", "terminal_uid": b, "till_number": 1}])
     assert give_b["status_code"] == 200, give_b
+
+
+# AUDIT-033 / S-AUTH: authority events (users, devices, the main-computer
+# assignment, till allocations, numbering books, release acks) are refused unless
+# a member of the shop signed them. Every simulated computer here is a real
+# process with its own app-data directory, so each one is given what a real
+# activated till has: a device key, an Owner-signed lease and a trust store (see
+# `_provision_signed_identity` in _accept_device.py). Signing and verification are
+# the production code path reading that app data -- nothing is stubbed.
+@pytest.fixture(autouse=True)
+def _real_signing_identities(monkeypatch):
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED", "1")
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED_LICENCE", "LIC-V42-TEST-1")

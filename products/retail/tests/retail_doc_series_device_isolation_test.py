@@ -46,6 +46,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
@@ -88,6 +90,29 @@ def _make_main_computer(device_dir, relay_db, email, password, term, tag):
     assert out[-1]["status_code"] == 200, out[-1]["body"]
 
 
+def _main_device_id(device_dir, relay_db):
+    [res] = run_accept_device(PY, device_dir, relay_db, [
+        {"op": "reg_select", "sql": "SELECT device_id FROM admin_device_assignment"}])
+    return res["rows"][0]["device_id"]
+
+
+def _record_main(device_dir, relay_db, main_device_id, epoch):
+    """Tell `device_dir`'s computer who the shop's main computer is -- the fact its
+    registry stream would deliver as an `admin_device` event. S-AUTH (AUDIT-033):
+    numbering-book events are the main computer's to send and a receiver judges
+    them against the main it KNOWS, so a computer that has not heard who the main
+    is parks them (`main_unknown`). These two tests simulate only the RETAIL
+    stream, so the registry fact is recorded directly instead of synced.
+
+    WHAT THESE TESTS CAN NO LONGER CATCH: a book event applied on a computer that
+    does not know who the main is (pinned in test_sync_authority_retail.py)."""
+    run_accept_device(PY, device_dir, relay_db, [
+        {"op": "reg_exec",
+         "sql": ("INSERT OR REPLACE INTO admin_device_assignment (company_id, device_id, epoch, assigned_at_utc) "
+                 "SELECT company_id, ?, ?, '2026-01-01T00:00:00+00:00' FROM users LIMIT 1"),
+         "params": [main_device_id, epoch]}])
+
+
 def test_a_book_claimed_by_one_device_is_never_used_by_another_and_neither_wedges_the_other(tmp_path):
     device_a = tmp_path / "device_a"
     device_b = tmp_path / "device_b"
@@ -126,6 +151,7 @@ def test_a_book_claimed_by_one_device_is_never_used_by_another_and_neither_wedge
     # ever arriving -- this test is about numbering isolation, not
     # catalogue sync).
     [bootstrap] = run_accept_device(PY, device_b, relay_db, [{"op": "bootstrap"}])
+    _record_main(device_b, relay_db, _main_device_id(device_a, relay_db), 1)
     run_accept_device(PY, device_b, relay_db, [
         {"op": "set_terminal_id", "terminal_id": TERM_B},
         {"op": "login", "email": bootstrap["email"], "password": bootstrap["password"]},
@@ -235,6 +261,12 @@ def test_two_offline_devices_coding_the_same_book_quarantine_without_wedging_the
     ])
     run_accept_device(PY, device_b, relay_db, [{"op": "push"}])
 
+    # Both computers believed they were main while apart. By the time A pulls, the
+    # registry stream has settled it and B's claim is the one that stands (a higher
+    # epoch): A now knows B is main, so B's book reaches the duplicate-code check
+    # this test is about instead of being refused at the authority gate.
+    _record_main(device_a, relay_db, _main_device_id(device_b, relay_db), 2)
+
     # A pulls the WHOLE batch (B's colliding doc_series create, then B's
     # sentinel product create) in ONE pull.
     pull_on_a = run_accept_device(PY, device_a, relay_db, [
@@ -275,3 +307,16 @@ def test_two_offline_devices_coding_the_same_book_quarantine_without_wedging_the
     ])
     assert len(a_series["rows"]) == 1, "A's own book must not have been duplicated or removed"
     assert a_series["rows"][0]["label"] == "A's Dup Book"
+
+
+# AUDIT-033 / S-AUTH: authority events (users, devices, the main-computer
+# assignment, till allocations, numbering books, release acks) are refused unless
+# a member of the shop signed them. Every simulated computer here is a real
+# process with its own app-data directory, so each one is given what a real
+# activated till has: a device key, an Owner-signed lease and a trust store (see
+# `_provision_signed_identity` in _accept_device.py). Signing and verification are
+# the production code path reading that app data -- nothing is stubbed.
+@pytest.fixture(autouse=True)
+def _real_signing_identities(monkeypatch):
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED", "1")
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED_LICENCE", "LIC-ACCEPT-SIGNED")

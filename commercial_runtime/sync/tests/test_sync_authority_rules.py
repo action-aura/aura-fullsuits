@@ -377,13 +377,38 @@ def test_the_silence_clock_is_the_receivers_not_the_senders(shop):
     assert shop.parked("admin_device") == ["takeover_main_not_silent"]
 
 
-def test_a_receiver_that_is_itself_the_main_never_sees_it_as_silent(shop):
+def test_a_receiver_that_is_itself_the_main_and_has_been_syncing_refuses_a_takeover(shop):
     conn = shop.get_conn()
     install_main(conn, COMPANY, shop.R.dev)
     conn.close()
+    shop.set_last_seen(shop.R, datetime.now(timezone.utc) - timedelta(hours=2))   # its own echoes arrive
     assert shop.apply(_takeover(shop.A.dev), shop.A) is False
     assert shop.parked("admin_device") == ["takeover_main_not_silent"]
     assert shop.main() == (shop.R.dev, 1)
+
+
+def test_a_main_that_was_cut_off_for_a_week_steps_down_when_it_comes_back(shop):
+    """The old main returns after the takeover that happened in its absence. Its
+    own row is stale (nothing of its own has been echoed back for 8 days), so the
+    takeover is accepted and it stops being main by itself."""
+    conn = shop.get_conn()
+    install_main(conn, COMPANY, shop.R.dev)
+    conn.close()
+    shop.set_last_seen(shop.R, datetime.now(timezone.utc) - timedelta(days=8))
+    assert shop.apply(_takeover(shop.A.dev), shop.A) is True
+    assert shop.main() == (shop.A.dev, 2)
+
+
+def test_judging_events_never_makes_a_returning_main_look_alive(shop):
+    """`ensure_self_bound` runs on every judged event; it must not refresh the
+    receiver's own last-seen row, or a main that just rebooted after a week away
+    could never be taken over."""
+    conn = shop.get_conn()
+    install_main(conn, COMPANY, shop.R.dev)
+    conn.close()
+    shop.set_last_seen(shop.R, datetime.now(timezone.utc) - timedelta(days=8))
+    assert shop.apply(shop.user_event(CASHIER, role="manager"), shop.A) is True      # any judged event
+    assert shop.apply(_takeover(shop.A.dev), shop.A) is True
 
 
 def test_a_verified_event_from_the_main_refreshes_its_last_seen(shop):
@@ -616,3 +641,20 @@ def test_a_non_main_cannot_send_even_a_harmless_event_on_behalf_of_another_devic
     assert shop.q("SELECT app_version FROM devices WHERE id=?", (shop.B.dev,))[0]["app_version"] != "6.6.6"
     assert shop.apply(ev, shop.B) is True                       # B itself: fine
     assert shop.q("SELECT app_version FROM devices WHERE id=?", (shop.B.dev,))[0]["app_version"] == "6.6.6"
+
+
+def test_an_echo_of_this_devices_own_event_is_not_re_judged_by_the_rules(shop):
+    """The relay hands a device its own pushed events back. After a hand-over the
+    old main would otherwise park its own history as `needs_main_computer` for
+    ever. Only THIS device can sign as itself, so the rules are skipped -- but the
+    signature, the lease and the binding are all still checked first."""
+    ev = shop.user_event(OWNER, password_hash="MY-OWN-EARLIER-CHANGE")
+    assert shop.apply(ev, shop.R) is True               # R is not the main, yet this is R's own event
+    assert shop.parked() == []
+    # ...and it is only skipped for the receiver ITSELF: the same event from a peer is refused
+    assert shop.apply(shop.user_event(OWNER, password_hash="PEER-CHANGE", row_version=9), shop.A) is False
+    assert shop.parked("user") == ["owner_change_needs_main"]
+    # a forged copy "from" this device (wrong key) is still refused
+    impostor = shop.world.new_device(shop.R.dev, inst="impostor")
+    assert shop.apply(shop.user_event(OWNER, password_hash="X", row_version=12), impostor) is False
+    assert shop.parked("user") == ["signer_binding_clash"]

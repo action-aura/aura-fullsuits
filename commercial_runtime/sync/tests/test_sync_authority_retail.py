@@ -253,14 +253,48 @@ def test_the_main_may_create_a_numbering_book(shop):
     assert [r["id"] for r in shop.rows("SELECT id FROM doc_series")] == ["ds-1"]
 
 
-def test_a_non_main_cannot_create_or_claim_a_numbering_book(shop):
+def _own_book(book_id, owner, code, **over):
+    ev = _series_ev(book_id, code)
+    ev["payload"].update(allocator_terminal_uid=owner, claimed_at_utc="2026-09-27T10:00:00Z")
+    ev["payload"].update(over)
+    return ev
+
+
+def test_a_till_may_create_update_and_retire_its_own_book(shop):
+    """Once the main hands a till its number, THAT TILL creates, reactivates and
+    retires its own books and the events travel from it (`_apply_till_books`)."""
+    assert shop.apply(_own_book("own-1", "dev-a", "AAA2"), shop.A) is True
+    retire = _own_book("own-1", "dev-a", "AAA2", status="retired", row_version=2)
+    retire["event_type"] = "update"
+    assert shop.apply(retire, shop.A) is True
+    assert shop.rows("SELECT status FROM doc_series WHERE id='own-1'")[0]["status"] == "retired"
+    assert shop.parked() == []
+
+
+def test_a_non_main_cannot_write_a_book_unowned_or_for_another_till(shop):
     before = shop.counts()
-    claim = _series_ev()
-    claim["payload"].update(allocator_terminal_uid="dev-a", claimed_at_utc="2026-09-27T10:00:00Z", row_version=2)
-    assert shop.apply(_series_ev("ds-2", "ZZZ"), shop.A) is False
-    assert shop.apply(claim, shop.A) is False
+    assert shop.apply(_series_ev("ds-2", "ZZZ"), shop.A) is False                  # allocator None
+    assert shop.apply(_own_book("ds-3", "dev-b", "YYY"), shop.A) is False           # allocator someone else
     assert shop.parked("doc_series") == ["needs_main_computer", "needs_main_computer"]
     assert shop.counts() == before
+
+
+def test_a_non_main_cannot_claim_a_book_the_main_made(shop):
+    assert shop.apply(_series_ev("ds-1", "QQQ"), shop.M) is True                    # unclaimed, made by the main
+    steal = _own_book("ds-1", "dev-a", "QQQ", row_version=2)
+    steal["event_type"] = "update"
+    assert shop.apply(steal, shop.A) is False
+    assert shop.parked("doc_series") == ["needs_main_computer"]
+    assert shop.rows("SELECT allocator_terminal_uid FROM doc_series WHERE id='ds-1'")[0]["allocator_terminal_uid"] is None
+
+
+def test_a_till_cannot_take_over_another_tills_book(shop):
+    assert shop.apply(_own_book("b-book", "dev-b", "BBB1"), shop.B) is True
+    steal = _own_book("b-book", "dev-a", "BBB1", row_version=9)
+    steal["event_type"] = "update"
+    assert shop.apply(steal, shop.A) is False
+    assert shop.parked("doc_series") == ["needs_main_computer"]
+    assert shop.rows("SELECT allocator_terminal_uid FROM doc_series WHERE id='b-book'")[0]["allocator_terminal_uid"] == "dev-b"
 
 
 # ═══ retail_setting: till_release_ack ══════════════════════════════════════

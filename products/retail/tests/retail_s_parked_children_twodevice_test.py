@@ -225,7 +225,13 @@ def test_the_set_aside_family_is_exactly_the_sale_and_what_belongs_to_it(world, 
     # the clash, not part of the sale's family; it is pinned exactly here so
     # nothing else can hide behind the exclusion.
     side = {(r["entity_type"], r["reason"]) for r in q_all if r["entity_type"] == "doc_series"}
-    assert side <= {("doc_series", "duplicate_series_code")}, side
+    # S-AUTH (AUDIT-033): each computer here believed it was main of its OWN registry
+    # and neither knows the other is, so the other's book is refused at the authority
+    # gate (`needs_main_computer`) instead of reaching the duplicate-code check. Either
+    # way it is parked and applied nowhere. WHAT THIS CAN NO LONGER CATCH: which of the
+    # two reasons parked it (the duplicate-code path is pinned in
+    # retail_doc_series_device_isolation_test.py, where the receiver knows the sender is main).
+    assert side <= {("doc_series", "duplicate_series_code"), ("doc_series", "needs_main_computer")}, side
     # Since 1e7194cb a till number is only accepted from the main computer, and
     # the two computers here are two separate first installs that each handed
     # THEMSELVES till 1 -- so each parks the other's allocation, because the
@@ -239,7 +245,13 @@ def test_the_set_aside_family_is_exactly_the_sale_and_what_belongs_to_it(world, 
     # (test_branch_alias_till_allocation_apply.py) own that behaviour; this
     # test owns only "no sale-family row is missing or foreign".
     tills = [(r["entity_type"], r["reason"]) for r in q_all if r["entity_type"] == "till_allocation"]
-    assert tills == [("till_allocation", "till_allocation_not_from_main")], (
+    # S-AUTH (AUDIT-033): the SIGNATURE now says who sent the allocation, and neither
+    # computer knows the other is main, so the authority gate refuses it first
+    # (`needs_main_computer`) -- before the older payload-based epoch/author check
+    # (`till_allocation_not_from_main`) is ever reached. One row, one of those two
+    # reasons. WHAT THIS CAN NO LONGER CATCH: which of the two refused it here; the
+    # older check keeps its own tests in test_branch_alias_till_allocation_apply.py.
+    assert len(tills) == 1 and tills[0][1] in ("till_allocation_not_from_main", "needs_main_computer"), (
         f"computer {who}: {tills}")
     q = [r for r in q_all if r["entity_type"] not in ("doc_series", "till_allocation")]
     kinds = {r["entity_type"] for r in q}
@@ -269,3 +281,22 @@ def test_the_screens_money_at_risk_is_the_total_of_the_parked_sales(world):
         assert s["sales_total"] == pytest.approx(theirs["total"]), (
             f"computer {who}: the screen says {s['sales_total']} is set aside; "
             f"the other computer's sale is worth {theirs['total']}")
+
+
+# AUDIT-033 / S-AUTH: authority events (users, devices, the main-computer
+# assignment, till allocations, numbering books, release acks) are refused unless
+# a member of the shop signed them. Every simulated computer here is a real
+# process with its own app-data directory, so each one is given what a real
+# activated till has: a device key, an Owner-signed lease and a trust store (see
+# `_provision_signed_identity` in _accept_device.py). Signing and verification are
+# the production code path reading that app data -- nothing is stubbed.
+#
+# MODULE-scoped, unlike the sibling files: this file's `world` fixture builds both
+# computers once for the whole module, so the environment must already be set then.
+@pytest.fixture(scope="module", autouse=True)
+def _real_signing_identities():
+    mp = pytest.MonkeyPatch()
+    mp.setenv("AURA_ACCEPT_SIGNED", "1")
+    mp.setenv("AURA_ACCEPT_SIGNED_LICENCE", "LIC-ACCEPT-SIGNED")
+    yield
+    mp.undo()

@@ -561,3 +561,17 @@ def test_claim_race_tie_break_is_deterministic_and_the_same_on_every_device():
     assert winner2 == "till-later", (
         f"order (later, early): expected till-later to STILL win (deterministic tie-break), got {winner2!r}")
     assert rv2 == 2
+
+
+# AUDIT-033 / S-AUTH: numbering-book events are the main computer's to send and are
+# refused unless signed. This file simulates two computers in ONE process sharing a
+# registry, and its assertions are about how a book CONVERGES (id, code, allocator,
+# tie-break), not about who sent it, so each event is signed by a legitimately
+# authorised author right before it is applied (see
+# commercial_runtime/sync/tests/_signing.py for exactly what that keeps and what it
+# can no longer catch). Authorship is pinned, with the wrong people signing, in
+# commercial_runtime/sync/tests/test_sync_authority_retail.py.
+@pytest.fixture(autouse=True)
+def _legit_author_signing(tmp_path, monkeypatch):
+    from commercial_runtime.sync.tests._signing import install_legit_author_signing
+    return install_legit_author_signing(monkeypatch, tmp_path, sign_pushes=False)

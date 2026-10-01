@@ -283,6 +283,13 @@ def test_take_over_needs_a_week_of_silence_and_the_old_main_steps_down_by_itself
 
     # A comes back online and syncs: it loses by epoch and steps down alone.
     assert _mains(pair.listing("a")) == {a_id}, "fixture: A must still believe it is main"
+    # S-AUTH (AUDIT-033): a computer judges a take-over against ITS OWN record of
+    # having been heard from -- a main that has been syncing keeps refusing one, a
+    # main that was away does not. "A goes silent for 8 days" is therefore also true
+    # of A's own row: nothing of A's has been echoed back to A for 8 days.
+    pair.run("a", [{"op": "reg_exec",
+                    "sql": "UPDATE sync_signers SET last_signed_seen_at_utc=? WHERE device_id=?",
+                    "params": [old, a_id]}])
     pair.sync("b", "a")
     on_a = pair.listing("a")
     assert _mains(on_a) == {b_id}, (
@@ -310,3 +317,16 @@ def test_a_computer_the_other_forgot_is_learned_again_at_the_next_real_boot(pair
     row = pair.device_row("b", a_id)
     assert row is not None, "B never learned about A again after A restarted"
     assert row["status"] == "active"
+
+
+# AUDIT-033 / S-AUTH: authority events (users, devices, the main-computer
+# assignment, till allocations, numbering books, release acks) are refused unless
+# a member of the shop signed them. Every simulated computer here is a real
+# process with its own app-data directory, so each one is given what a real
+# activated till has: a device key, an Owner-signed lease and a trust store (see
+# `_provision_signed_identity` in _accept_device.py). Signing and verification are
+# the production code path reading that app data -- nothing is stubbed.
+@pytest.fixture(autouse=True)
+def _real_signing_identities(monkeypatch):
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED", "1")
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED_LICENCE", "LIC-DEVICES-TEST-1")

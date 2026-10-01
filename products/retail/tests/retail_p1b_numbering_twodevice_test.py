@@ -310,6 +310,18 @@ def test_t5_an_offline_second_computer_is_refused_and_nothing_is_parked(tmp_path
     assert _open_and_sell(shop, "a").startswith("AAA1")
     assert _open_and_sell(shop, "b").startswith("SALE-")
     shop.sync_all()
+    # S-AUTH (AUDIT-033): B has still never heard who the main computer is, so the
+    # main's authority events (its book, its allocation) are PARKED on B -- not
+    # applied, and not lost -- with the plain reason that B cannot yet tell the real
+    # main from a forgery. WHAT THIS CAN NO LONGER CATCH: B applying the main's books
+    # before it has heard who the main is.
+    assert _quarantine(shop, "a") == [], "a: something was parked"
+    parked_on_b = {r["reason"] for r in _quarantine(shop, "b")}
+    assert parked_on_b <= {"main_unknown"}, f"b: {parked_on_b}"
+    # Once B's registry stream delivers the assignment the same parked events apply
+    # on the next pull, and nothing is left parked anywhere (the original claim).
+    shop.run("b", [{"op": "reg_pull"}])
+    shop.sync_all()
     for w in ("a", "b"):
         assert _quarantine(shop, w) == [], f"{w}: something was parked"
         rows = shop.sel(w, "SELECT code, COUNT(*) AS n FROM doc_series "
@@ -458,3 +470,16 @@ def test_t7_a_computer_that_had_readable_numbers_when_the_switch_went_off_is_ret
     assert audited[0]["n"] == 1, audited
     sale = _off(shop, "a", [{"op": "sell", "product_id": shop.shop["product_id"], "quantity": 1}])[-1]
     assert sale["body"]["data"]["sale_number"].startswith("SALE-"), sale
+
+
+# AUDIT-033 / S-AUTH: authority events (users, devices, the main-computer
+# assignment, till allocations, numbering books, release acks) are refused unless
+# a member of the shop signed them. Every simulated computer here is a real
+# process with its own app-data directory, so each one is given what a real
+# activated till has: a device key, an Owner-signed lease and a trust store (see
+# `_provision_signed_identity` in _accept_device.py). Signing and verification are
+# the production code path reading that app data -- nothing is stubbed.
+@pytest.fixture(autouse=True)
+def _real_signing_identities(monkeypatch):
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED", "1")
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED_LICENCE", "LIC-V42-TEST-1")

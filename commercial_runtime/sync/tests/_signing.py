@@ -209,7 +209,8 @@ def _registry_main(conn, company_id):
     return str(row[0]) if row else None
 
 
-def install_legit_author_signing(monkeypatch, tmp_path, *, company_id=None, receiver_dev=DEFAULT_SIGNER_DEV):
+def install_legit_author_signing(monkeypatch, tmp_path, *, company_id=None, receiver_dev=DEFAULT_SIGNER_DEV,
+                                 sign_pushes=True):
     """Patch `SyncService` for one test: a throwaway world as the receiver's
     trust context, and legit-author signing in front of `_apply_event`. Returns
     the world."""
@@ -218,6 +219,12 @@ def install_legit_author_signing(monkeypatch, tmp_path, *, company_id=None, rece
     world = SigningWorld(tmp_path)
     receiver = world.new_device(receiver_dev)
     env = world.env(receiver)
+    if not sign_pushes:
+        # `read_outbox` finds no signer, so pushed events stay unsigned and are
+        # signed by the legit author at apply time instead (single-process tests
+        # whose two "computers" share one registry).
+        env = authority.AuthorityEnv(trust_store=env.trust_store, own_licence=env.own_licence,
+                                     signer=None, local_dev=env.local_dev)
     original = ss.SyncService._apply_event
 
     def _author_dev(ev, reg, cid):

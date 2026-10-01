@@ -226,9 +226,23 @@ def test_new_user_and_books_events_reach_an_old_build_clean_and_it_lists_only_ei
 
 
 def test_an_old_build_pin_change_does_not_wipe_the_name_or_preset_on_the_new_build(shop):
+    """CHANGED BY S-AUTH (AUDIT-033), deliberately. This used to prove that an OLD
+    build's PIN change (a `user` event with no `display_name` / `role_preset` keys)
+    arrives on the new build and KEEPS the local name and preset instead of blanking
+    them. An old build cannot sign, and `user` is an authority event, so the new
+    build now PARKS it as `unsigned_authority_event` (visible in sync review) and
+    applies none of it -- the name and preset are untouched because nothing is.
+
+    WHAT THIS CAN NO LONGER CATCH: the absent-key "keep my local value" rule on the
+    real pull path. That rule is still pinned where it can still be reached:
+    `user_sync_apply_plan` in commercial_runtime/identity/tests/
+    test_mixed_build_old_receiver.py (OLD -> NEW) and test_registry_v9_apply.py,
+    which feed it signed events."""
     row = _invite_accountant(shop)
     shop.run("old", [{"op": "reg_pull"}])
     old_id = _local_id(shop, "old", "sara@mix.test")
+    [pin_before] = shop.run("new", [{"op": "reg_select", "sql": "SELECT pin_hash FROM users WHERE email=?",
+                                     "params": ["sara@mix.test"]}])
 
     [put, old_outbox, _push] = shop.login_admin("old", [
         {"op": "http", "method": "PUT", "path": f"/api/admin/employees/{old_id}/pin",
@@ -238,7 +252,7 @@ def test_an_old_build_pin_change_does_not_wipe_the_name_or_preset_on_the_new_bui
     ])
     assert put["status_code"] == 200, put
     # Non-vacuity: the OLD build's user event really does not mention the two
-    # new fields. "Absent" is the whole scenario.
+    # new fields, and really carries no signature.
     pin_events = [r for r in old_outbox["rows"] if r["entity_type"] == "user"]
     assert pin_events, old_outbox
     assert "display_name" not in pin_events[-1]["payload"], pin_events[-1]["payload"]
@@ -251,20 +265,26 @@ def test_an_old_build_pin_change_does_not_wipe_the_name_or_preset_on_the_new_bui
         {"op": "reg_quarantine_rows"},
     ])
     got = after["rows"][0]
-    assert got["pin_hash"], "the PIN change itself did not arrive -- the pull applied nothing"
-    assert got["display_name"] == "Sara Accountant", (
-        f"an old build's event that did not mention the name wiped it: {got}")
-    assert got["role_preset"] == "accountant", (
-        f"an old build's event that did not mention the preset wiped it: {got}")
-    assert quarantine["rows"] == []
-    # NOT asserted, on purpose: whether the accountant's four books rows survive
-    # this PIN change. Registry rule L1 (2026-09-29) treats ANY event from a
-    # sender that cannot say `role_preset` as untrustworthy for a preset holder
-    # and resets the books rows (fail closed). That is R's rule, pinned in
-    # test_registry_v9_apply.py; this test pins only what must NOT be lost.
+    assert got["pin_hash"] == pin_before["rows"][0]["pin_hash"], "an UNSIGNED change from an old build was applied"
+    assert got["display_name"] == "Sara Accountant", f"the name changed: {got}"
+    assert got["role_preset"] == "accountant", f"the preset changed: {got}"
+    parked = [(r["entity_type"], r["reason"]) for r in quarantine["rows"]]
+    assert parked == [("user", "unsigned_authority_event")], parked
 
 
 def test_an_old_build_role_change_resets_the_books_grants_on_the_new_build_and_says_nothing(shop):
+    """CHANGED BY S-AUTH (AUDIT-033), deliberately. This used to prove that an old
+    build demoting an Accountant to cashier makes the new build take the books
+    grants away (fail closed) without announcing the reset. An old build cannot
+    sign, so the new build now PARKS the role change as `unsigned_authority_event`
+    and applies none of it: the person keeps their role AND their grants until the
+    old computer is upgraded and re-sends it signed.
+
+    WHAT THIS CAN NO LONGER CATCH: the receiver-side books reset on the real pull
+    path (`user_sync_apply_plan(...)['reset_books']`), which is still pinned
+    against an old build's REAL payload in commercial_runtime/identity/tests/
+    test_mixed_build_old_receiver.py. What it still pins: nothing is applied,
+    nothing is emitted, and the refusal is visible rather than silent."""
     row = _invite_accountant(shop)
     shop.run("old", [{"op": "reg_pull"}])
 
@@ -287,23 +307,16 @@ def test_an_old_build_role_change_resets_the_books_grants_on_the_new_build_and_s
          "params": ["sara@mix.test"]},
         {"op": "reg_outbox"},
     ])
-    assert quarantine["rows"] == []
-    assert after_user["rows"][0]["role"] == "cashier", after_user
-    after = _perm_levels(shop, "new", row["id"])
-    kept = {c: after.get(c) for c in BOOKS_CODES if after.get(c) not in (None, "none")}
-    assert not kept, (
-        f"a cashier still holds books access after an old build changed their role: {kept}")
-    # A receiver-side reset is not news: announcing it would echo a change the
-    # sender never made back to the whole shop.
-    # Only user/permission events are counted: every process start runs the boot
-    # seam, which legitimately queues a `device` heartbeat (that is what added the
-    # fourth row the first version of this assertion tripped over). What this
-    # pins is that the RESET itself is silent, so it can no longer catch the
-    # apply emitting some other entity type -- nothing else is applied here.
+    parked = {(r["entity_type"], r["reason"]) for r in quarantine["rows"]}
+    assert ("user", "unsigned_authority_event") in parked, parked
+    assert after_user["rows"][0]["role"] == "manager", f"an UNSIGNED role change was applied: {after_user}"
+    assert after_user["rows"][0]["role_preset"] == "accountant", after_user
+    assert _perm_levels(shop, "new", row["id"]) == before, "an unsigned change moved the books grants"
+
     def _person_events(rows):
         return [r for r in rows if r["entity_type"] in ("user", "user_permission")]
     assert len(_person_events(outbox_after["rows"])) == len(_person_events(outbox_before["rows"])), (
-        "applying the old build's role change emitted new user/permission events on the receiver")
+        "parking the old build's role change emitted new user/permission events on the receiver")
 
 
 def test_device_announcements_are_skipped_by_an_old_build_and_learned_again_after_it_upgrades(shop):
@@ -442,3 +455,16 @@ def test_a_v41_till_parks_every_v42_event_and_replays_them_all_once_it_upgrades(
     [uid_row] = pair.run("old", [{"op": "raw_select", "sql": "SELECT uid FROM sales", "params": []}], upgraded=True)
     if sale_uid:
         assert uid_row["rows"][0]["uid"] == sale_uid
+
+
+# AUDIT-033 / S-AUTH: authority events (users, devices, the main-computer
+# assignment, till allocations, numbering books, release acks) are refused unless
+# a member of the shop signed them. Every simulated computer here is a real
+# process with its own app-data directory, so each one is given what a real
+# activated till has: a device key, an Owner-signed lease and a trust store (see
+# `_provision_signed_identity` in _accept_device.py). Signing and verification are
+# the production code path reading that app data -- nothing is stubbed.
+@pytest.fixture(autouse=True)
+def _real_signing_identities(monkeypatch):
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED", "1")
+    monkeypatch.setenv("AURA_ACCEPT_SIGNED_LICENCE", "LIC-MIX-TEST-1")

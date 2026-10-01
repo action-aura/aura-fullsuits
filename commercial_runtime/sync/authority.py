@@ -499,7 +499,7 @@ def _ensure_signers_table(reg: sqlite3.Connection) -> None:
 
 
 def bind_signer(reg: sqlite3.Connection, company_id: str, signer: VerifiedSigner,
-                now: Optional[datetime] = None) -> Optional[Refusal]:
+                now: Optional[datetime] = None, *, refresh_seen: bool = True) -> Optional[Refusal]:
     """First binding wins, in both directions. A verified signer whose device id
     or installation is already bound to something else is refused; the same
     installation presenting a NEW key (Owner re-signed its lease after a key
@@ -523,9 +523,13 @@ def bind_signer(reg: sqlite3.Connection, company_id: str, signer: VerifiedSigner
     if by_inst is not None and by_inst[0] != signer.dev:
         return Refusal(REASON_BINDING_CLASH,
                        f"installation {signer.inst!r} is already bound to a different device")
-    reg.execute(
-        "UPDATE sync_signers SET key_fingerprint=?, last_signed_seen_at_utc=? WHERE device_id=?",
-        (signer.fingerprint, stamp, signer.dev))
+    if refresh_seen:
+        reg.execute(
+            "UPDATE sync_signers SET key_fingerprint=?, last_signed_seen_at_utc=? WHERE device_id=?",
+            (signer.fingerprint, stamp, signer.dev))
+    else:
+        reg.execute("UPDATE sync_signers SET key_fingerprint=? WHERE device_id=?",
+                    (signer.fingerprint, signer.dev))
     return None
 
 
@@ -537,7 +541,9 @@ def ensure_self_bound(reg: sqlite3.Connection, company_id: str, signer: LocalSig
     own = VerifiedSigner(dev=signer.dev, inst=signer.inst,
                          fingerprint=hashlib.sha256(base64.b64decode(signer.pk_b64)).hexdigest(),
                          licence=signer.licence)
-    refusal = bind_signer(reg, company_id, own, now)
+    # refresh_seen=False: this runs on every judged event and at boot; only a
+    # VERIFIED event (including this device's own, echoed back) may say "alive".
+    refusal = bind_signer(reg, company_id, own, now, refresh_seen=False)
     if refusal is not None:
         logger.error("authority: this device's own id cannot be bound: %s", refusal.detail)
         return False
@@ -579,10 +585,16 @@ def _local_admin_uid(ctx: RuleContext) -> Optional[str]:
 def _main_is_silent(ctx: RuleContext, main_dev: str) -> bool:
     """True when the receiver has not recorded a verified event from `main_dev`
     for TAKEOVER_SILENCE_DAYS, by ITS OWN clock. Never heard -> silent (a till
-    that just joined has no evidence the main is alive). The receiver being the
-    main itself is the opposite of silent: it is demonstrably alive."""
-    if ctx.local_dev is not None and main_dev == ctx.local_dev:
-        return False
+    that just joined has no evidence the main is alive).
+
+    When the receiver IS the main, the evidence is its own row: it is refreshed
+    whenever the relay hands this device's own signed events back (they are
+    verified like anyone's). A main that has been syncing recently keeps a fresh
+    row and REFUSES a takeover; a main that was cut off for a week and has just
+    come back has a stale one, so the takeover that happened in its absence is
+    accepted and it steps down by itself -- which is the whole point of a
+    takeover. `ensure_self_bound` never refreshes the row, so merely booting
+    or judging events cannot make a returning main look alive."""
     row = ctx.reg.execute(
         "SELECT last_signed_seen_at_utc FROM sync_signers WHERE device_id=?", (main_dev,)).fetchone()
     if row is None:
@@ -773,6 +785,36 @@ def _till_allocation_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> 
     return refusal
 
 
+def _doc_series_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optional[Refusal]:
+    """The main computer may write any numbering book. A till may write only a
+    book that is, and stays, ITS OWN.
+
+    DEVIATION FROM THE WRITTEN PLAN ("signer must be main"), forced by shipped
+    behaviour (found when the two-process numbering suites went red): once the main
+    hands a till its number, THAT TILL creates, reactivates and retires its own
+    books (`retail_api._apply_till_books`, `allocator_terminal_uid` = its terminal)
+    and the events travel from it. Refusing them would park every till's books on
+    every other computer.
+
+    What stays refused is the part that was ever dangerous: a till creating a book
+    for somebody else, claiming a book the main made (claiming is main-only at the
+    route), or taking over another till's book by sending an update that names
+    itself as the allocator."""
+    main = _current_main(ctx)
+    if main is not None and signer.dev == main:
+        return None
+    own = p.get("allocator_terminal_uid") == signer.dev
+    if own and ctx.retail is not None:
+        try:
+            row = ctx.retail.execute(
+                "SELECT allocator_terminal_uid FROM doc_series WHERE id=?", (str(p.get("id")),)).fetchone()
+        except sqlite3.OperationalError:
+            return _needs_main(ctx, signer, REASON_NEEDS_MAIN, "a numbering-book event")
+        if row is None or row[0] == signer.dev:
+            return None   # a new book of its own, or its own book being updated
+    return _needs_main(ctx, signer, REASON_NEEDS_MAIN, "a numbering-book event")
+
+
 def _release_ack_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optional[Refusal]:
     alloc_id = str(p.get("skey", ""))[len(RELEASE_ACK_PREFIX):]
     main = _current_main(ctx)
@@ -807,7 +849,8 @@ def authority_refusal(event: dict, signer: VerifiedSigner, ctx: RuleContext) -> 
                     second admin is refused outright; everyone else is open to
                     any verified member
       user_permission  the owner's permissions need the main; others open
-      till_allocation, doc_series  main only
+      till_allocation  main only
+      doc_series    the main; a till only for a book that is its own
       retail_setting till_release_ack:<id>  the till being released, or the main
       branch_alias  the signer must be the alias's recorded origin
     """
@@ -824,7 +867,7 @@ def authority_refusal(event: dict, signer: VerifiedSigner, ctx: RuleContext) -> 
     if entity_type == "till_allocation":
         return _till_allocation_rule(p, signer, ctx)
     if entity_type == "doc_series":
-        return _needs_main(ctx, signer, REASON_NEEDS_MAIN, "a numbering-book event")
+        return _doc_series_rule(p, signer, ctx)
     if entity_type == "retail_setting":
         return _release_ack_rule(p, signer, ctx)
     if entity_type == "branch_alias":
