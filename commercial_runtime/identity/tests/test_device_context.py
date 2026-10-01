@@ -141,6 +141,27 @@ def test_local_device_fingerprint_none_when_field_absent(app_data):
     assert local_device_fingerprint() is None
 
 
+def test_local_device_fingerprint_reads_android_camelcase_key(app_data):
+    """AUDIT-033 (D7): Android's Kotlin DeviceIdentity writes `publicKeyFingerprint`
+    (camelCase). Before the fix phones never recorded a fingerprint in the registry."""
+    licensing_dir = app_data / "licensing"
+    licensing_dir.mkdir(parents=True, exist_ok=True)
+    (licensing_dir / "device_key_meta.json").write_text(
+        json.dumps({"algorithm": "ed25519", "status": "ACTIVE",
+                    "publicKeyFingerprint": "fp-android"}), encoding="utf-8")
+    assert local_device_fingerprint() == "fp-android"
+    # the snake_case spelling (desktop) still works and wins when both exist
+    (licensing_dir / "device_key_meta.json").write_text(
+        json.dumps({"status": "ACTIVE", "public_key_fingerprint": "fp-desktop",
+                    "publicKeyFingerprint": "fp-android"}), encoding="utf-8")
+    assert local_device_fingerprint() == "fp-desktop"
+    # camelCase key on a non-ACTIVE key is still refused
+    (licensing_dir / "device_key_meta.json").write_text(
+        json.dumps({"status": "RESET_PENDING", "publicKeyFingerprint": "fp-android"}),
+        encoding="utf-8")
+    assert local_device_fingerprint() is None
+
+
 def test_local_device_fingerprint_none_when_meta_file_corrupt(app_data):
     licensing_dir = app_data / "licensing"
     licensing_dir.mkdir(parents=True, exist_ok=True)

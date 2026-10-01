@@ -133,7 +133,11 @@ def local_device_fingerprint() -> Optional[str]:
         return None
     if raw.get("status") != _ACTIVE_STATUS:
         return None
-    fingerprint = raw.get("public_key_fingerprint")
+    # AUDIT-033 (D7): the Android app writes this file from Kotlin with a
+    # camelCase key (DeviceIdentity.kt). Reading only the snake_case spelling
+    # meant phones never recorded their key fingerprint in the device registry.
+    # Accept both; snake_case wins when both are present.
+    fingerprint = raw.get("public_key_fingerprint") or raw.get("publicKeyFingerprint")
     if not fingerprint or not isinstance(fingerprint, str):
         return None
     return fingerprint
