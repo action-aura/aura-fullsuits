@@ -53,6 +53,11 @@ independent products:
   the running software. Anything that assumes a Clinic user interface — a
   demo, a screenshot, a release note, an estimate — is assuming something
   that does not exist yet.
+- **Aura Gym** (`products/gym/`) — gym/fitness-centre management. Kickoff
+  decided 2026-08-24; no code yet. `products/gym/CLAUDE.md` holds the brief
+  and the decisions, and must be read before proposing anything here — the
+  domain has a membership valid over a *span of time* rather than a sale, and
+  several of its date/freeze rules are already-decided, not open.
 - **Aura Owner Control Center** (`owner/`) — internal admin platform for
   Action Aura itself (customers, subscriptions, licensing, payments,
   employee management, CRM, i18n/RTL, audit). Not customer-facing.
@@ -67,6 +72,7 @@ a shared monolith.
 ```
 products/retail/       Flask backend (raw sqlite3, no ORM) + vanilla JS frontend (no framework/bundler)
 products/clinic/       Same shape as retail
+products/gym/          Same shape as retail (planned) — brief + kickoff decisions only, no code yet
 commercial_runtime/    Shared: identity, licensing_contracts, einvoicing, sync, backup, security
 owner/                 Owner Control Center backend + dashboard (Flask/Postgres, separate stack)
 android/aura-retail/   Native Android (Kotlin, Jetpack Compose) embedding the Python backend via Chaquopy
