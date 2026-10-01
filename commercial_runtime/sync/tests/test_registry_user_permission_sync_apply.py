@@ -566,3 +566,15 @@ def test_residual_last_writer_wins_is_a_known_documented_limitation(registry_env
     assert _fetch_permission(registry_env, local_id, "retail.discount") == "full", (
         "reversing arrival order reverses the winner -- exactly the residual risk Decision 5 accepts"
     )
+
+
+# AUDIT-033 / S-AUTH: authority events are refused unless signed by someone
+# allowed to send them. This file's assertions are about the APPLIERS, not about
+# who sent the event, so each event is signed by a legit author right before it
+# is applied (see _signing.install_legit_author_signing for exactly what that
+# keeps and what it can no longer catch). Authorship itself is tested, with the
+# wrong people signing on purpose, in test_sync_authority*.py.
+@pytest.fixture(autouse=True)
+def _legit_author_signing(tmp_path, monkeypatch):
+    from commercial_runtime.sync.tests._signing import install_legit_author_signing
+    return install_legit_author_signing(monkeypatch, tmp_path)

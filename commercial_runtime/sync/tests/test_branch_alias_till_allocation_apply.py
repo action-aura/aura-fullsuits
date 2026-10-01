@@ -1111,22 +1111,50 @@ def test_a_lower_epoch_allocation_is_accepted_but_never_displaces_a_higher_one(i
     assert _park_reasons(install) == []
 
 
-def test_with_no_assignment_to_check_against_the_allocation_is_accepted(install):
-    # a fresh install / a receiver whose registry stream has not delivered the
-    # assignment yet: nothing to compare with, so behave exactly as before M2
-    _legit, forged = _legit_and_forged()
-    assert _apply(install, forged) is True
-    assert _status(install) == {"forged": "active"}
-    assert _park_reasons(install) == []
+def test_with_no_assignment_the_allocation_is_parked_until_the_main_is_known(
+        install, _legit_author_signing):
+    """CHANGED BY S-AUTH (AUDIT-033), deliberately. This used to pin P2S M2's
+    fail-OPEN: "no assignment to compare with -> accept, exactly as before M2".
+    Authentication cannot fail open -- a receiver that does not yet know who the
+    main computer is has no way to tell the real allocation from a forgery, so it
+    now PARKS (`main_unknown`, retried every pull) instead of applying.
+
+    What this test can no longer catch: an allocation being APPLIED on a device
+    with no main recorded. The new assertions pin both halves: parked while the
+    main is unknown, and still judged on its signer (not its payload) once it is
+    known -- a non-main signer stays parked as `needs_main_computer`."""
+    world = _legit_author_signing
+    forged = _till_ev("forged", number=2, terminal="term-EVIL", epoch=1, by="not-the-main")
+    signed = world.sign(forged, world.new_device("some-till"))   # a real member, no main recorded
+    assert _apply(install, signed) is False
+    assert _status(install) == {}
+    assert _park_reasons(install) == ["main_unknown"]
+    _set_main(MAIN, 1)
+    _pull(install)
+    assert _status(install) == {}
+    assert _park_reasons(install) == ["needs_main_computer"]
 
 
-def test_an_unreadable_registry_never_wedges_the_apply(install, monkeypatch):
+def test_an_unreadable_registry_parks_the_allocation_and_never_wedges_the_apply(
+        install, monkeypatch, _legit_author_signing):
+    """CHANGED BY S-AUTH (AUDIT-033), deliberately. This used to pin "an
+    unreadable registry never wedges the apply" by ACCEPTING the allocation
+    unchecked. It still must never wedge or raise -- but accepting on a registry
+    outage was a fail-open authentication bypass (crash the registry read, get
+    your forgery applied). The event is now parked as `main_unknown` and applies
+    on a later pull once the registry can be read.
+
+    What this test can no longer catch: the apply ACCEPTING an allocation while
+    the registry is unreadable."""
+    world = _legit_author_signing
+    signed = world.sign(_till_ev("x", number=4, terminal="T9", by="anyone"), world.new_device("T9-author"))
+
     def _boom():
         raise sqlite3.OperationalError("unable to open database file")
     monkeypatch.setattr(registry_db, "get_conn", _boom)
-    assert _apply(install, _till_ev("x", number=4, terminal="T9", by="anyone")) is True
-    assert _status(install) == {"x": "active"}
-    assert _park_reasons(install) == []
+    assert _apply(install, signed) is False          # parked, not raised
+    assert _status(install) == {}
+    assert _park_reasons(install) == ["main_unknown"]
 
 
 def test_another_companys_assignment_is_not_this_companys_main(install):
@@ -1176,3 +1204,15 @@ def test_new_types_are_company_scoped_types():
     assert "till_allocation" in ss.RETAIL_SYNC_ENTITY_TYPES
     assert "branch_alias" not in ss._ENTITY_TYPES_WITHOUT_COMPANY_ID
     assert "till_allocation" not in ss._ENTITY_TYPES_WITHOUT_COMPANY_ID
+
+
+# AUDIT-033 / S-AUTH: authority events are refused unless signed by someone
+# allowed to send them. This file's assertions are about the APPLIERS, not about
+# who sent the event, so each event is signed by a legit author right before it
+# is applied (see _signing.install_legit_author_signing for exactly what that
+# keeps and what it can no longer catch). Authorship itself is tested, with the
+# wrong people signing on purpose, in test_sync_authority*.py.
+@pytest.fixture(autouse=True)
+def _legit_author_signing(tmp_path, monkeypatch):
+    from commercial_runtime.sync.tests._signing import install_legit_author_signing
+    return install_legit_author_signing(monkeypatch, tmp_path)

@@ -369,6 +369,11 @@ from commercial_runtime.identity.user_accounts import (
     user_sync_apply_plan,
 )
 
+# AUDIT-033 / S-AUTH: signed authority events. The module imports `cryptography`
+# only lazily inside the functions that verify or sign, so this import is as
+# Android-safe as the identity imports above.
+from commercial_runtime.sync import authority as _authority
+
 logger = logging.getLogger(__name__)
 
 # What a registry-stream payload can make identity's helpers (or the bind to
@@ -809,8 +814,18 @@ class SyncService:
         stock_exception_recorder: Optional[Callable[..., None]] = None,
         local_schema_version_provider: Optional[Callable[[], Optional[int]]] = None,
         on_tick: Optional[Callable[[], None]] = None,
+        authority_env_provider: Optional[Callable[[], "_authority.AuthorityEnv"]] = None,
     ):
-        """`on_tick`, when supplied, is called once at the START of every
+        """`authority_env_provider` (AUDIT-033 / S-AUTH): zero-argument callable
+        returning an `authority.AuthorityEnv` -- the receiver's Owner trust
+        store, its own licence id, its own signer and device id. `None` (the
+        default, and what production uses) resolves them from app data on every
+        batch (`authority.default_authority_env`). It exists so a test can hand
+        in a throwaway world; it is NOT a bypass: there is no setting that
+        switches signature checking off, and an env with no trust store parks
+        every authority event.
+
+        `on_tick`, when supplied, is called once at the START of every
         scheduled tick (before `run_once()`), so work that must recur on the
         service's own cadence can ride its timer instead of growing a second
         thread. Its one production user is the registry stream's device
@@ -981,6 +996,8 @@ class SyncService:
         self._local_ensure_schema = local_ensure_schema
         self._local_schema_version_provider = local_schema_version_provider
         self._on_tick = on_tick
+        self._authority_env_provider = authority_env_provider
+        self._authority_unsigned_logged = False
         self._local_freshness_store = local_freshness_store
         self._stock_exception_recorder = stock_exception_recorder
         # See _ensure_freshness_loaded's own docstring for why this is a
@@ -1199,19 +1216,101 @@ class SyncService:
             params = (limit,)
         rows = conn.execute(query, params).fetchall()
         events = []
+        signer = None
+        signer_resolved = False
         for r in rows:
             payload = json.loads(r["payload"])
-            if sender_version is not None:
-                payload = dict(payload, _sender_schema_version=sender_version)
-            events.append({
+            event = {
                 "id": r["id"],
                 "entity_type": r["entity_type"],
                 "entity_id": r["entity_id"],
                 "event_type": r["event_type"],
                 "payload": payload,
                 "created_at": r["created_at"],
-            })
+            }
+            # AUDIT-033 / S-AUTH: AUTHORITY events are signed here, at read time
+            # (like the schema stamp, never at write time: a row queued before
+            # this device had a signer -- or before an upgrade -- is signed with
+            # the CURRENT key and lease at the moment it is actually sent). It
+            # happens BEFORE `_sender_schema_version` is stamped, and the stamp
+            # is excluded from the signed bytes, so the skew guard can never
+            # break a signature. This covers BOTH streams: each `SyncService`
+            # reads its own outbox through this method.
+            if _authority.is_authority_event(event):
+                if not signer_resolved:
+                    signer = self._authority_env().signer
+                    signer_resolved = True
+                if signer is not None:
+                    event = _authority.sign_event(event, signer)
+                    payload = event["payload"]
+                elif not self._authority_unsigned_logged:
+                    self._authority_unsigned_logged = True
+                    logger.warning(
+                        "SyncService: this device cannot sign (no device key, no Owner-signed "
+                        "lease, or no local device id yet), so its authority events go out "
+                        "UNSIGNED and every up-to-date peer will park them. Logged once.")
+            if sender_version is not None:
+                payload = dict(payload, _sender_schema_version=sender_version)
+                event["payload"] = payload
+            events.append(event)
         return events
+
+    def _authority_env(self):
+        """The receiver's/sender's authority context, resolved fresh."""
+        provider = self._authority_env_provider
+        return provider() if provider is not None else _authority.default_authority_env()
+
+    def _authority_gate(self, conn, ev: dict, p: dict, local_company_id: Optional[str],
+                        entity_type: str):
+        """AUDIT-033 / S-AUTH: `None` when this authority event is signed by a
+        member of THIS licence who is allowed to send this kind of event, else the
+        `authority.Refusal` it must be parked with. Verification first (derives
+        the sender from the signature), then the signer binding (first binding
+        wins, revoked signer refused), then the per-type rule. Fails CLOSED: a
+        registry that cannot be read parks the event as `main_unknown` -- unlike
+        `_till_registry_assignment`, which accepts unchecked, because that one was
+        a bar-raiser and this one is the authentication."""
+        env = self._authority_env()
+        verdict = _authority.verify_event(ev, trust_store=env.trust_store, own_licence=env.own_licence)
+        if isinstance(verdict, _authority.Refusal):
+            return verdict
+        cid = str(local_company_id or self._get_local_company_id())
+        own_reg = entity_type not in REGISTRY_SYNC_ENTITY_TYPES
+        reg = None
+        try:
+            if own_reg:
+                from commercial_runtime.identity import registry_db
+                reg = registry_db.get_conn()
+            else:
+                reg = conn
+            _authority._ensure_signers_table(reg)
+            if env.signer is not None:
+                # Nobody may claim THIS device's own id: bind it before any
+                # peer's first event is judged.
+                _authority.ensure_self_bound(reg, cid, env.signer)
+            revoked = reg.execute("SELECT status FROM devices WHERE id=?", (verdict.dev,)).fetchone()
+            if revoked is not None and str(revoked[0] or "").lower() == "revoked":
+                return _authority.Refusal(
+                    _authority.REASON_SIGNER_REVOKED,
+                    f"computer {verdict.dev!r} has been removed from this shop")
+            clash = _authority.bind_signer(reg, cid, verdict)
+            if clash is not None:
+                return clash
+            ctx = _authority.RuleContext(
+                reg=reg, company_id=cid, local_dev=env.local_dev,
+                retail=conn if own_reg else None)
+            return _authority.authority_refusal(ev, verdict, ctx)
+        except sqlite3.OperationalError as exc:
+            logger.warning("SyncService: authority check could not read the registry (%s); parking %s",
+                           exc, entity_type)
+            return _authority.Refusal(
+                _authority.REASON_MAIN_UNKNOWN, f"the device registry could not be read: {exc}")
+        finally:
+            if own_reg and reg is not None:
+                try:
+                    reg.commit()
+                finally:
+                    reg.close()
 
     def ack_outbox(self, conn, ids: list) -> None:
         """Deletes exactly the given outbox row ids -- the second half of
@@ -1885,6 +1984,22 @@ class SyncService:
                 conn, ev, reason="malformed_payload",
                 detail=f"payload is a {type(p).__name__}, not an object")
         event_type = ev.get("event_type")
+        # AUDIT-033 / S-AUTH: AUTHORITY events must be signed by a member of this
+        # licence who is allowed to send that kind of event. Runs BEFORE the
+        # per-type applier and in front of (never instead of) its own epoch /
+        # row_version / quarantine checks. A refusal PARKS the event with its
+        # full payload (`_auth` included), so `_retry_quarantined_events`
+        # re-verifies it each pull -- a `main_unknown` event applies the moment
+        # the assignment arrives, a forgery stays parked and harmless. The
+        # applier then sees the payload WITHOUT `_auth` (nothing stores it), while
+        # `_orig_payload` keeps the signed original for any later park.
+        if _authority.is_authority_event(ev):
+            refusal = self._authority_gate(conn, ev, p, local_company_id, entity_type)
+            if refusal is not None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason=refusal.reason, detail=refusal.detail)
+            p = _authority.strip_auth(p)
+            ev = dict(ev, payload=p, _orig_payload=ev.get("payload"))
         # Schema-version skew guard (module docstring's dedicated section) --
         # runs BEFORE any entity-specific branch, uniformly, for every
         # handled entity type: a structural compatibility precondition, not
@@ -5432,7 +5547,10 @@ class SyncService:
             "ON CONFLICT(entity_id, event_type) DO UPDATE SET "
             "payload=excluded.payload, reason=excluded.reason, detail=excluded.detail",
             (text(ev.get("entity_id")), text(ev.get("entity_type")), text(ev.get("event_type")),
-             json.dumps(ev.get("payload") or {}, default=str), reason, detail),
+             # `_orig_payload` (set by the authority gate in `_apply_event`) is
+             # the payload AS RECEIVED, `_auth` included -- a retry must be able
+             # to re-verify the signature, so a park AFTER the gate stores it.
+             json.dumps(ev.get("_orig_payload", ev.get("payload")) or {}, default=str), reason, detail),
         )
         return False
 

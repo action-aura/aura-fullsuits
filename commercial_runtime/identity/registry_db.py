@@ -115,7 +115,14 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # sync event. A v8 build ignores the new user keys, stores but never reads the
 # books rows, and plain-skips the new device/admin_device event types; a
 # re-announce heals that (device_context.announce_local_device).
-REGISTRY_SCHEMA_VERSION = 9
+# v10: S-AUTH / AUDIT-033 (ROADMAP.md "registry v10 CLAIMED"). ONE additive step,
+# applied last: `sync_signers` (sync_signers_schema.py), the device-local record
+# of which installation and key legitimately speak as which device id, so every
+# AUTHORITY sync event can be checked against who actually signed it. Emits
+# nothing, backfills nothing. A v9 build never reads the table and ignores the
+# new `_auth` block inside event payloads, so a mixed shop keeps syncing; the
+# v10 receiver simply parks authority events a v9 sender could not sign.
+REGISTRY_SCHEMA_VERSION = 10
 
 
 def _migrate_registry_schema(conn):
@@ -178,6 +185,10 @@ def _migrate_registry_schema(conn):
     from commercial_runtime.identity.device_sync_schema import apply_device_sync_schema
     apply_accounts_v9_schema(conn)
     apply_device_sync_schema(conn)
+    # v10 (S-AUTH): appended LAST, never reordered. Independent of every step
+    # above -- it only creates one brand-new table nothing else reads.
+    from commercial_runtime.identity.sync_signers_schema import apply_sync_signers_schema
+    apply_sync_signers_schema(conn)
 
 
 def get_conn():

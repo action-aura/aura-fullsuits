@@ -624,3 +624,15 @@ def test_hostile_display_name_and_unknown_preset_are_cleaned_on_receipt(registry
     row = _q(registry_env, "SELECT display_name, role_preset FROM users WHERE uid=?", (uid,))[0]
     assert row["display_name"] == "Sara Ali", repr(row["display_name"])
     assert row["role_preset"] == "accountant", "an unknown preset overwrote the local one"
+
+
+# AUDIT-033 / S-AUTH: authority events are refused unless signed by someone
+# allowed to send them. This file's assertions are about the APPLIERS, not about
+# who sent the event, so each event is signed by a legit author right before it
+# is applied (see _signing.install_legit_author_signing for exactly what that
+# keeps and what it can no longer catch). Authorship itself is tested, with the
+# wrong people signing on purpose, in test_sync_authority*.py.
+@pytest.fixture(autouse=True)
+def _legit_author_signing(tmp_path, monkeypatch):
+    from commercial_runtime.sync.tests._signing import install_legit_author_signing
+    return install_legit_author_signing(monkeypatch, tmp_path)

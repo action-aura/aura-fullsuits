@@ -487,3 +487,15 @@ def test_a_normal_quarantine_row_and_a_normal_event_are_unchanged(till_install):
         conn.close()
     assert parked == ["مس-1"]
     assert landed == 1
+
+
+# AUDIT-033 / S-AUTH: authority events are refused unless signed by someone
+# allowed to send them. This file's assertions are about the APPLIERS, not about
+# who sent the event, so each event is signed by a legit author right before it
+# is applied (see _signing.install_legit_author_signing for exactly what that
+# keeps and what it can no longer catch). Authorship itself is tested, with the
+# wrong people signing on purpose, in test_sync_authority*.py.
+@pytest.fixture(autouse=True)
+def _legit_author_signing(tmp_path, monkeypatch):
+    from commercial_runtime.sync.tests._signing import install_legit_author_signing
+    return install_legit_author_signing(monkeypatch, tmp_path)

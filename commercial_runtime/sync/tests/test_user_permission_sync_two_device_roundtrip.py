@@ -84,6 +84,16 @@ def two_devices(tmp_path):
         local_company_id_provider=lambda: COMPANY_ID,
         handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
     )
+    # AUDIT-033 / S-AUTH: the owner's account and permissions are the MAIN
+    # computer's to send. In a real shop B has already heard that A is main (an
+    # `admin_device` event); record that fact here, naming the identity that
+    # signs every event in this file (see _signing.DEFAULT_SIGNER_DEV).
+    from commercial_runtime.sync.tests._signing import DEFAULT_SIGNER_DEV, install_main
+    _conn_b = get_conn_b()
+    try:
+        install_main(_conn_b, COMPANY_ID, DEFAULT_SIGNER_DEV)
+    finally:
+        _conn_b.close()
     return {
         "db_path_a": db_path_a, "get_conn_a": get_conn_a, "service_a": service_a,
         "db_path_b": db_path_b, "get_conn_b": get_conn_b, "service_b": service_b,
@@ -265,3 +275,15 @@ def test_a_revoke_on_device_a_removes_the_permission_on_device_b(two_devices, ap
         assert caps_after[code] is False, (
             f"the old admin's {code!r} grant STAYED GRANTED on device B after device A revoked it"
         )
+
+
+# AUDIT-033 / S-AUTH: authority events are refused unless signed by someone
+# allowed to send them. This file's assertions are about the APPLIERS, not about
+# who sent the event, so each event is signed by a legit author right before it
+# is applied (see _signing.install_legit_author_signing for exactly what that
+# keeps and what it can no longer catch). Authorship itself is tested, with the
+# wrong people signing on purpose, in test_sync_authority*.py.
+@pytest.fixture(autouse=True)
+def _legit_author_signing(tmp_path, monkeypatch):
+    from commercial_runtime.sync.tests._signing import install_legit_author_signing
+    return install_legit_author_signing(monkeypatch, tmp_path)
