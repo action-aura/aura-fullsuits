@@ -101,7 +101,10 @@ def test_migration_gives_admin_full_and_manager_none_on_the_books(v8_with_manage
     db_dir, db_path = v8_with_manager
     registry_db.init_registry_db()
 
-    assert _q(db_path, "PRAGMA user_version")[0][0] == 9
+    # S-AUTH (AUDIT-033) moved the registry to v10 on top of v9: this migrates a v8 copy
+    # through the REAL current chain, so the final marker is 10. The v9 step's own claims
+    # (columns, backfill, no emit, backup taken) are asserted unchanged below.
+    assert _q(db_path, "PRAGMA user_version")[0][0] == 10
     assert _books(db_path, "admin") == {(c, "full") for c in BOOKS}
     # THE guard: a manager that existed before v9 must not gain the books.
     # Mutation (ROLE_MANAGER without the books subtraction) makes this go RED.
@@ -138,9 +141,9 @@ def test_integrity_checked_and_a_backup_exists(v8_with_manager):
     registry_db.init_registry_db()
     assert _q(db_path, "PRAGMA integrity_check")[0][0] == "ok"
     backups = os.listdir(str(db_dir / "migration_backups"))
-    assert any("v8-to-v9" in b for b in backups), backups
+    assert any("v8-to-v10" in b for b in backups), backups
     # The backup is the PRE-migration file: it still has no books rows.
-    bk = str(db_dir / "migration_backups" / [b for b in backups if "v8-to-v9" in b][0])
+    bk = str(db_dir / "migration_backups" / [b for b in backups if "v8-to-v10" in b][0])
     assert _q(bk, "SELECT COUNT(*) FROM user_permissions WHERE subsystem LIKE 'retail.books.%'")[0][0] == 0
 
 

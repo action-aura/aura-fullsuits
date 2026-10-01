@@ -150,7 +150,7 @@ def test_boot_reason_forces_and_heartbeat_reason_does_not(conn):
 def test_announce_local_defaults_platform_and_registry_version(conn):
     out = device_context.announce_local_device(conn, CO, reason="boot")
     from commercial_runtime.identity.registry_db import REGISTRY_SCHEMA_VERSION
-    assert out["device"]["registry_schema_version"] == REGISTRY_SCHEMA_VERSION == 9
+    assert out["device"]["registry_schema_version"] == REGISTRY_SCHEMA_VERSION == 10   # S-AUTH: v10 (sync_signers) sits on v9
     assert out["device"]["platform"] == device_context.detect_platform()
 
 

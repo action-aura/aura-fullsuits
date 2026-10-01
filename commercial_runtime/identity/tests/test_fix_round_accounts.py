@@ -787,12 +787,21 @@ def _two_computers_cross_grants(tmp_path, monkeypatch):
     # never noticed. `real_co` is filled in once create-admin has run and is
     # what the engine's provider reports from then on -- what a real till does.
     real_co = {'v': CO}
+    # AUDIT-033 / S-AUTH: the owner's account is the MAIN computer's to send, and
+    # every event now travels signed. A and B each get a real signer (Owner-signed
+    # lease, device key) and B has already heard that A is the main computer, as
+    # it would have from an `admin_device` event.
+    from commercial_runtime.sync.tests._signing import SigningWorld, install_main
+    world = SigningWorld(tmp_path)
+    dev_a, dev_b = world.new_device('dev-a'), world.new_device('dev-b')
     sa = SyncService(client_factory=lambda: _Pipe(ab, ba), get_conn=ga,
                      local_company_id_provider=lambda: real_co['v'],
-                     handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+                     handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+                     authority_env_provider=world.provider(dev_a))
     sb = SyncService(client_factory=lambda: _Pipe(ba, ab), get_conn=gb,
                      local_company_id_provider=lambda: real_co['v'],
-                     handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
+                     handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+                     authority_env_provider=world.provider(dev_b))
 
     ca = _flask(monkeypatch, pa, ga, tmp_path, "A").test_client()
     assert ca.post('/api/onboarding/create-admin', json={
@@ -800,6 +809,12 @@ def _two_computers_cross_grants(tmp_path, monkeypatch):
     _c = ga()
     real_co['v'] = _c.execute("SELECT company_id FROM users WHERE email='owner@shop.co'").fetchone()[0]
     _c.close()
+    for _get_conn in (ga, gb):
+        _c = _get_conn()
+        try:
+            install_main(_c, real_co['v'], dev_a.dev)
+        finally:
+            _c.close()
     assert ca.post('/api/admin/employees', json={'email': 'x@shop.co', 'role': 'manager'}).status_code == 200
     _, xa = _held(ga, 'x@shop.co')
     assert ca.post(f'/api/admin/employees/{xa}/permissions',

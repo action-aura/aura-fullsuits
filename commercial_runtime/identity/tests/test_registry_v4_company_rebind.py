@@ -727,12 +727,24 @@ def test_a_pulled_owner_row_applies_on_a_seeded_joining_device():
         local_company_id_from_registry,
     )
 
+    # AUDIT-033 / S-AUTH: the owner's account reaches a joining device from the
+    # MAIN computer, signed. The device has already heard who the main is (an
+    # `admin_device` event); both facts are real here, only the keys are throwaway.
+    from commercial_runtime.sync.tests._signing import SigningWorld, install_main
+    world = SigningWorld(tmp, licence='lic-join-5')
+    joining, main = world.new_device('dev-joining'), world.new_device('dev-main')
     service = SyncService(
         client_factory=lambda: None,
         get_conn=registry_db.get_conn,
         local_company_id_provider=local_company_id_from_registry,
         handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+        authority_env_provider=world.provider(joining),
     )
+    _c = registry_db.get_conn()
+    try:
+        install_main(_c, local_company_id_from_registry(), main.dev)
+    finally:
+        _c.close()
     owner_uid = str(uuid.uuid4())
     event = {
         'entity_type': 'user',
@@ -749,6 +761,7 @@ def test_a_pulled_owner_row_applies_on_a_seeded_joining_device():
         },
     }
 
+    event = world.sign(event, main)
     conn = registry_db.get_conn()
     try:
         handled = service._apply_event(conn, event, local_company_id=local_company_id_from_registry())

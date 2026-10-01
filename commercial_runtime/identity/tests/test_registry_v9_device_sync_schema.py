@@ -84,9 +84,12 @@ def test_migration_emits_nothing_and_leaves_integrity_and_a_backup(v8_main_devic
     # ... and no device / admin_device event was queued for it.
     assert _q(db_path, "SELECT COUNT(*) FROM sync_outbox")[0][0] == 0
     assert _q(db_path, "PRAGMA integrity_check")[0][0] == "ok"
-    assert _q(db_path, "PRAGMA user_version")[0][0] == 9
+    # S-AUTH (AUDIT-033) moved the registry to v10 on top of v9: this migrates a v8 copy
+    # through the REAL current chain, so the final marker is 10. The v9 step's own claims
+    # (columns, backfill, no emit, backup taken) are asserted unchanged below.
+    assert _q(db_path, "PRAGMA user_version")[0][0] == 10
     backups = os.listdir(str(db_dir / "migration_backups"))
-    assert any("v8-to-v9" in b for b in backups), backups
+    assert any("v8-to-v10" in b for b in backups), backups
 
 
 def test_rerun_never_overwrites_a_real_assignment(v8_main_device):
