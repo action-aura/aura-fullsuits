@@ -800,9 +800,6 @@ def _doc_series_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optio
     for somebody else, claiming a book the main made (claiming is main-only at the
     route), or taking over another till's book by sending an update that names
     itself as the allocator."""
-    main = _current_main(ctx)
-    if main is not None and signer.dev == main:
-        return None
     own = p.get("allocator_terminal_uid") == signer.dev
     if own and ctx.retail is not None:
         try:
