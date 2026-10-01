@@ -988,7 +988,7 @@ def _queue_user_sync_event(conn: sqlite3.Connection, user_id: str, event_type: s
 
 
 def _queue_user_permission_sync_event(conn: sqlite3.Connection, user_id: str, subsystem: str,
-                                       event_type: str) -> None:
+                                       event_type: str, *, reannounce: bool = False) -> None:
     """Queue a `user_permission` sync_outbox event into registry.db, in the
     SAME transaction as the row write it describes -- identical shape and
     identical reasoning to `_queue_user_sync_event` above (Phase 5 wave B2
@@ -1073,6 +1073,17 @@ def _queue_user_permission_sync_event(conn: sqlite3.Connection, user_id: str, su
             "subsystem": subsystem,
             "access_level": perm_row["access_level"],
         }
+        if reannounce:
+            # AUDIT-033 B2b: this is the main computer RE-STATING a grant it
+            # already holds (the upgrade re-announce, `sync/reannounce.py`), not a
+            # change. `user_permissions` has no version column, so the receiver
+            # needs this signed marker to treat the event as "insert if you lack
+            # it, never overwrite what you have": a re-statement built from the
+            # main's view must not be able to revert a newer edit the main has not
+            # pulled yet. The key rides INSIDE the payload (the only place
+            # metadata survives both relays), so the signature covers it and a
+            # forger cannot add or remove it.
+            payload["_reannounce"] = True
     conn.execute(
         "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
         "VALUES (?,?,?,?,?,?)",

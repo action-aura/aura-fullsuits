@@ -2502,12 +2502,45 @@ def _announce_device(reason):
             if _signer is not None:
                 _authority.ensure_self_bound(conn, company_id, _signer)
             conn.commit()
+            # AUDIT-033 B2b: once this computer can sign (and again when it becomes
+            # the main computer), re-state the shop's authority events SIGNED, so a
+            # computer that joins later does not receive only pre-upgrade unsigned
+            # history that every peer parks. Cheap when nothing is due; never raises.
+            _reannounce_authority_state(conn, company_id)
         finally:
             conn.close()
     except Exception:
         logging.getLogger(__name__).warning(
             'Device announce (%s) failed; this till keeps running.', reason,
             exc_info=True)
+
+
+def _reannounce_authority_state(reg_conn, company_id):
+    """The retail half of `commercial_runtime.sync.reannounce.run_if_due`: hands it
+    a callback that queues this computer's till allocations / numbering books into
+    retail.db's outbox (the payload builders live in `retail_api`; the shared
+    package must not import the product). NEVER RAISES."""
+    try:
+        from commercial_runtime.sync import reannounce as _reannounce
+
+        def _retail_emit(is_main, terminal_uid):
+            from api.retail_api import reannounce_authority_events
+            from database.schema import get_retail_conn
+            retail_conn = get_retail_conn()
+            try:
+                return reannounce_authority_events(
+                    retail_conn, company_id, is_main=is_main, terminal_uid=terminal_uid)
+            except Exception:
+                retail_conn.rollback()
+                raise
+            finally:
+                retail_conn.close()
+
+        _reannounce.run_if_due(reg_conn, company_id, app_data_dir=Path(DATABASE_DIR).parent,
+                               retail_emit=_retail_emit)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'Authority re-announce failed; this till keeps running.', exc_info=True)
 
 
 def _announce_when_company_established(company_id=None):

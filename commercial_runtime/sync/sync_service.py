@@ -1604,6 +1604,31 @@ class SyncService:
         )
 
     @staticmethod
+    def _doc_series_is_echo(conn, p: dict) -> bool:
+        """True when this device's own `doc_series` row for `p["id"]` already
+        equals the incoming payload in every field the tie-break and the book's
+        meaning depend on (AUDIT-033 B2b). Never raises: a row it cannot read is
+        simply "not an echo", which keeps the old behaviour (record a conflict)."""
+        try:
+            row = conn.execute(
+                "SELECT row_version, claimed_at_utc, allocator_terminal_uid, status, label "
+                "FROM doc_series WHERE id=?", (p.get("id"),)).fetchone()
+        except sqlite3.Error:
+            return False
+        if row is None:
+            return False
+        incoming_version = p.get("row_version")
+        try:
+            same_version = incoming_version is not None and int(row[0] or 0) == int(incoming_version)
+        except (TypeError, ValueError):
+            return False
+        return (same_version
+                and (row[1] or None) == (p.get("claimed_at_utc") or None)
+                and (row[2] or None) == (p.get("allocator_terminal_uid") or None)
+                and (row[3] or "active") == (p.get("status") or "active")
+                and (row[4] or None) == (p.get("label") or None))
+
+    @staticmethod
     def _local_row_version(conn, table: str, row_id) -> Optional[int]:
         """Returns THIS device's own current `row_version` for `table`'s row
         with this PRIMARY KEY `id`, or None when no such row exists locally
@@ -2020,11 +2045,20 @@ class SyncService:
         # the assignment arrives, a forgery stays parked and harmless. The
         # applier then sees the payload WITHOUT `_auth` (nothing stores it), while
         # `_orig_payload` keeps the signed original for any later park.
+        ev.pop("_authority_verified", None)   # never trust a value that arrived with the event
         if _authority.is_authority_event(ev):
             refusal = self._authority_gate(conn, ev, p, local_company_id, entity_type)
             if refusal is not None:
                 return self._quarantine_apply_event(
                     conn, ev, reason=refusal.reason, detail=refusal.detail)
+            # Tell `_apply_event_guarded` this event passed verification AND the
+            # rule table, so that once it APPLIES it may supersede the unsigned
+            # copies of the same entity parked earlier (`_supersede_parked_
+            # unsigned`). A private marker on the caller's own dict: it is never
+            # stored (quarantine keeps only the payload) and a pulled event
+            # cannot carry it (the relays drop unknown top-level keys, and the
+            # flag is set here, after the gate, never read from the wire).
+            ev["_authority_verified"] = True
             p = _authority.strip_auth(p)
             ev = dict(ev, payload=p, _orig_payload=ev.get("payload"))
         # Schema-version skew guard (module docstring's dedicated section) --
@@ -3776,9 +3810,18 @@ class SyncService:
             # permission change already bumps `session_version`, forcing a
             # re-login through which the admin sees the resulting state),
             # never silently.
+            #
+            # AUDIT-033 B2b: a signed `_reannounce` is the main computer RE-STATING
+            # a grant after an upgrade (so a device that joined later, and parked
+            # every pre-upgrade unsigned grant, can get them). With no version to
+            # order it by, the only safe reading is "insert if I lack it, never
+            # overwrite": a re-statement built from the main's view could
+            # otherwise revert an edit the main has not pulled yet.
+            on_conflict = ("DO NOTHING" if p.get("_reannounce") is True
+                           else "DO UPDATE SET access_level=excluded.access_level")
             conn.execute(
                 "INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?) "
-                "ON CONFLICT(user_id, subsystem) DO UPDATE SET access_level=excluded.access_level",
+                "ON CONFLICT(user_id, subsystem) " + on_conflict,
                 (str(uuid.uuid4()), local_user_id, subsystem, p.get("access_level", "none")),
             )
             # H3: two permission events (cash.close, then cash.approve) or two
@@ -4179,7 +4222,12 @@ class SyncService:
                 raise
             if cur.rowcount == 0:
                 local_row_version = self._local_row_version(conn, "doc_series", p.get("id"))
-                if local_row_version is not None:
+                # AUDIT-033 B2b: an IDENTICAL copy of what this device already holds
+                # (same version, claim time, allocator, status and label) is a
+                # re-announce / echo, not a conflict. The upgrade re-announce re-sends
+                # every book on purpose; recording each as a "conflict" would bury
+                # the genuine ones in noise.
+                if local_row_version is not None and not self._doc_series_is_echo(conn, p):
                     self._record_sync_conflict(
                         conn, conflict_sink, local_company_id=local_company_id,
                         entity_type="doc_series", entity_id=p.get("id"), event_type=event_type,
@@ -5527,7 +5575,126 @@ class SyncService:
                 conn, ev, reason=f"malformed_{entity_type}",
                 detail=f"{type(exc).__name__}: {exc}")
         conn.execute(f"RELEASE {savepoint}")
+        if applied and ev.get("_authority_verified") is True:
+            try:
+                self._supersede_parked_unsigned(conn, ev)
+            except sqlite3.OperationalError as exc:
+                # Cleanup only: a failure here leaves a stale parked row (visible in
+                # sync-review, harmless) and must never fail the batch.
+                logger.warning("sync: could not clear superseded parked events (%s)", exc)
         return applied
+
+    # Park reasons a SIGNED event of the same entity may clear. `unsigned_authority_
+    # event` is "an older build sent this without proof"; `main_unknown` is "I did
+    # not yet know who the main computer was" (a retry-by-itself state). Every OTHER
+    # reason (bad_signature, foreign_licence, untrusted_lease, signer_binding_clash,
+    # signer_revoked, *_needs_main, second_admin_refused, release_ack_wrong_sender,
+    # alias_origin_mismatch, takeover_*) is a forgery or abuse signal: it stays for a
+    # human, whatever signed event arrives later.
+    _SUPERSEDABLE_PARK_REASONS = ("unsigned_authority_event", "main_unknown")
+
+    @staticmethod
+    def _as_int(value, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _supersede_parked_unsigned(self, conn, ev: dict) -> int:
+        """AUDIT-033 B2b. A VERIFIED, signed authority event just applied for an
+        entity: drop the parked copies of the SAME entity that it supersedes.
+
+        WHY. Relays keep history, so a device that joins (or re-pulls from cursor 0)
+        after the upgrade receives the shop's PRE-upgrade authority events, which
+        carry no signature and park as `unsigned_authority_event`. The main computer
+        re-announces the current state signed (`sync/reannounce.py`); once that
+        applies, the unsigned history of the same entity is answered and would
+        otherwise sit in sync-review for ever, asking a person to look at things the
+        shop has already moved past.
+
+        WHAT MATCHES (all other parked rows are left strictly alone):
+          * reason in `_SUPERSEDABLE_PARK_REASONS` -- never a forgery signal;
+          * the same entity: users by uid, devices / till_allocations / doc_series by
+            entity id; `admin_device` (a fresh entity id per event) by company, which
+            is one assignment; `user_permission` (fresh ids too) by the pair
+            (user_uid, subsystem);
+          * a version <= the applied one: users/till_allocation/doc_series
+            `row_version`, device `row_version` AND `admin_row_version`, admin_device
+            `epoch`. A parked event that is NEWER than the applied state is a real,
+            unanswered change and stays.
+          * `user_permission` only for a signed `_reannounce`, and only when this
+            device's permission row now EQUALS the re-announced level. Re-announces
+            never overwrite (the table has no version), so a device that kept a
+            different local value has a genuine disagreement the parked row may
+            explain; clearing it would hide that.
+        Returns how many rows were removed. No commit (the caller's transaction)."""
+        entity_type = ev.get("entity_type")
+        if entity_type not in ("user", "user_permission", "device", "admin_device",
+                               "till_allocation", "doc_series"):
+            return 0
+        p = _authority.strip_auth(ev.get("payload"))
+        if not isinstance(p, dict):
+            return 0
+        placeholders = ",".join("?" * len(self._SUPERSEDABLE_PARK_REASONS))
+        try:
+            rows = conn.execute(
+                "SELECT entity_id, event_type, payload FROM sync_apply_quarantine "
+                f"WHERE entity_type=? AND reason IN ({placeholders})",
+                (entity_type, *self._SUPERSEDABLE_PARK_REASONS)).fetchall()
+        except sqlite3.OperationalError as exc:
+            if self._is_missing_table_error(exc):
+                return 0
+            raise
+        if not rows:
+            return 0
+        if entity_type == "user_permission":
+            if p.get("_reannounce") is not True or not self._permission_now_equals(conn, p):
+                return 0
+        removed = 0
+        applied_id = str(ev.get("entity_id") or "").lower()
+        for row in rows:
+            try:
+                parked = json.loads(row[2])
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(parked, dict):
+                continue
+            if entity_type == "user_permission":
+                same = (parked.get("user_uid") == p.get("user_uid")
+                        and parked.get("subsystem") == p.get("subsystem"))
+            elif entity_type == "admin_device":
+                same = self._as_int(parked.get("epoch"), 10 ** 12) <= self._as_int(p.get("epoch"), -1)
+            else:
+                same = str(row[0] or "").lower() == applied_id
+                if same and entity_type == "device":
+                    same = (self._as_int(parked.get("row_version"), 10 ** 12)
+                            <= self._as_int(p.get("row_version"), -1)
+                            and self._as_int(parked.get("admin_row_version"), 1)
+                            <= self._as_int(p.get("admin_row_version"), 1))
+                elif same:
+                    same = (self._as_int(parked.get("row_version"), 10 ** 12)
+                            <= self._as_int(p.get("row_version"), -1))
+            if not same:
+                continue
+            conn.execute(
+                "DELETE FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
+                (row[0], row[1]))
+            removed += 1
+        if removed:
+            logger.info("sync: cleared %d parked %s event(s) superseded by a signed one", removed, entity_type)
+        return removed
+
+    @staticmethod
+    def _permission_now_equals(conn, p: dict) -> bool:
+        """Does THIS device's `user_permissions` row for (p.user_uid, p.subsystem)
+        hold exactly `p.access_level`? (see `_supersede_parked_unsigned`)."""
+        try:
+            row = conn.execute(
+                "SELECT up.access_level FROM user_permissions up JOIN users u ON u.id = up.user_id "
+                "WHERE u.uid=? AND up.subsystem=?", (p.get("user_uid"), p.get("subsystem"))).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return row is not None and row[0] == p.get("access_level")
 
     @staticmethod
     def _quarantine_apply_event(conn, ev: dict, reason: str, detail: str) -> bool:
@@ -5653,6 +5820,15 @@ class SyncService:
                 return
             raise
         for row in rows:
+            # AUDIT-033 B2b: `rows` is a snapshot. An earlier retry in this same pass
+            # may have applied a signed event that SUPERSEDED this parked one (see
+            # `_supersede_parked_unsigned`) and deleted it. Re-trying it now would
+            # re-park it (an upsert) and resurrect the very row that was just
+            # cleared, so skip a row that is no longer there.
+            if conn.execute(
+                    "SELECT 1 FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
+                    (row["entity_id"], row["event_type"])).fetchone() is None:
+                continue
             ev = {
                 "entity_id": row["entity_id"],
                 "entity_type": row["entity_type"],

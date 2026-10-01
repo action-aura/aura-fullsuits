@@ -15042,6 +15042,46 @@ def _till_allocation_sync_payload(row):
     return {k: row[k] for k in row.keys()}
 
 
+def reannounce_authority_events(conn, cid, *, is_main, terminal_uid):
+    """AUDIT-033 B2b: re-queue the RETAIL-stream authority state this computer is
+    entitled to speak for, with its CURRENT versions (never bumped), so it goes
+    out signed after an upgrade -- see `commercial_runtime/sync/reannounce.py`
+    for why. Uses the same payload builders as the ordinary emitters.
+
+      * every computer: the numbering books it OWNS (`allocator_terminal_uid` is
+        this computer) -- a till may write only its own books;
+      * the main computer: EVERY numbering book and every till allocation that is
+        not just a local clash verdict. `released` allocations are included on
+        purpose: a number that was given back is held by its `released` row until
+        the release is acknowledged, and a device that never hears of that row
+        would think the number free and hand it out again.
+
+    Writes the outbox rows and COMMITS. Returns how many events were queued."""
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    queued = 0
+    if is_main:
+        series = cur.execute(
+            "SELECT * FROM doc_series WHERE CAST(company_id AS TEXT)=?", (str(cid),)).fetchall()
+    else:
+        series = cur.execute(
+            "SELECT * FROM doc_series WHERE CAST(company_id AS TEXT)=? AND allocator_terminal_uid=?",
+            (str(cid), terminal_uid)).fetchall()
+    for row in series:
+        _queue_sync_event(cur, 'doc_series', row['id'], 'update', _doc_series_sync_payload(row))
+        queued += 1
+    if is_main:
+        allocations = cur.execute(
+            "SELECT * FROM till_allocations WHERE CAST(company_id AS TEXT)=? "
+            "AND status IN ('active','released')", (str(cid),)).fetchall()
+        for row in allocations:
+            _queue_sync_event(cur, 'till_allocation', row['id'], 'update',
+                              _till_allocation_sync_payload(row))
+            queued += 1
+    conn.commit()
+    return queued
+
+
 def _allocate_till_in_txn(conn, cid, branch, terminal_uid, till_number, main_uid):
     """Give `terminal_uid` a till number in `branch`. The CALLER has already
     checked this is the main computer and holds an open write transaction
