@@ -6638,3 +6638,26 @@ AuraRetail.exe, every AURA_* variable stripped and a never-existing data folder:
 ready in 2.80s on 127.0.0.1:5001, GET / 200, registry v0->9 and retail v0->42 each with
 its pre-migration backup. The installer itself was not run (an old rc.7 test install
 still holds the same AppId on this laptop).
+
+## 2026-10-01 — registry schema v10 CLAIMED (S-AUTH: signed authority events, AUDIT-033)
+
+Claimed before any builder starts. Checked on every local and origin ref
+(fetched): highest REGISTRY_SCHEMA_VERSION is 9, no ref contains
+`REGISTRY_SCHEMA_VERSION = 10`. No retail schema bump.
+
+**Registry v10**: new `sync_signers` table (device_id PK, company_id,
+installation_id UNIQUE, key_fingerprint, first_bound_at_utc,
+last_signed_seen_at_utc). Binds a sync signer's registry device id to its
+Owner installation and licensing key, first binding wins.
+
+What S-AUTH does: authority events (user, user_permission, device,
+admin_device, till_allocation, doc_series, branch_alias, till_release_ack)
+carry `payload._auth` - an Ed25519 signature by the sending device's existing
+licensing key plus its Owner-signed lease. Receivers derive the sender from
+the signature, require the same licence, and apply per-type rules (main-only
+for the main computer, tills, books, the owner's own account; self-only for a
+device's own announce). Unsigned or forged authority events are parked and
+shown in sync-review, never applied. Owner-account changes move to the main
+computer only. Residual by design: per-USER authority (a member till can still
+edit non-owner staff, as a delegated manager can). Full plan: job 255fb8da
+tmp/sauth/plan.md.
