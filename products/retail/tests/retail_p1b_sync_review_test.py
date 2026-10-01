@@ -280,6 +280,33 @@ def test_every_reason_the_engine_can_write_has_a_plain_sentence():
         assert re.search(r'[a-z]{3}', text) and '_' not in text and ':' not in text, (reason, text)
 
 
+_S_AUTH_REASONS = (
+    'unsigned_authority_event', 'bad_signature', 'foreign_licence', 'untrusted_lease',
+    'signer_binding_clash', 'signer_revoked', 'takeover_main_not_silent',
+    'device_change_needs_main', 'owner_change_needs_main', 'second_admin_refused',
+    'needs_main_computer', 'main_unknown', 'release_ack_wrong_sender',
+    'alias_origin_mismatch',
+)
+
+
+def test_every_s_auth_park_reason_has_a_plain_sentence_in_both_languages():
+    """AUDIT-033 (D6): the signed-authority gate parks with these reasons. The
+    engine-source scan above cannot see them until the gate lands, so they are
+    listed here; a missing sentence (or a missing Arabic one) fails this."""
+    root = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'locales')
+    with open(os.path.join(root, 'ar.json'), encoding='utf-8') as f:
+        ar = json.load(f)
+    with open(os.path.join(root, 'en.json'), encoding='utf-8') as f:
+        en = json.load(f)
+    generic = retail_api._SYNC_REVIEW_REASON_UNKNOWN[0]
+    for reason in _S_AUTH_REASONS:
+        text, _ = retail_api._sync_review_reason(reason, 'user')
+        assert text != generic, reason
+        assert '_' not in text and ':' not in text, (reason, text)
+        assert en.get(text) == text, f"en.json lacks the sentence for {reason!r}"
+        assert ar.get(text) and ar[text] != text, f"ar.json lacks Arabic for {reason!r}"
+
+
 def test_unknown_reason_is_generic_and_not_echoed(monkeypatch):
     client, cid = _make_admin()
     _local_company_is(monkeypatch, cid)

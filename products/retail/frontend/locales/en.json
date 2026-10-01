@@ -2264,5 +2264,19 @@
   "Linux": "Linux",
   "Web": "Web",
   "this accounting entry was already taken back here, so a second take-back was set aside": "this accounting entry was already taken back here, so a second take-back was set aside",
-  "it tried to switch a till number back on after it was given up": "it tried to switch a till number back on after it was given up"
+  "it tried to switch a till number back on after it was given up": "it tried to switch a till number back on after it was given up",
+  "it came from a computer running an older version, so it carried no proof of who sent it. Update that computer and make the change again": "it came from a computer running an older version, so it carried no proof of who sent it. Update that computer and make the change again",
+  "its proof of who sent it did not check out, so it may have been changed on the way. Make the change again on the sending computer": "its proof of who sent it did not check out, so it may have been changed on the way. Make the change again on the sending computer",
+  "it came from a computer that belongs to a different shop licence": "it came from a computer that belongs to a different shop licence",
+  "the sending computer could not prove that it is licensed. Open Aura on that computer while it is online, then make the change again": "the sending computer could not prove that it is licensed. Open Aura on that computer while it is online, then make the change again",
+  "the sending computer claims to be a computer that is already known here under a different identity": "the sending computer claims to be a computer that is already known here under a different identity",
+  "it came from a computer that was removed from this shop": "it came from a computer that was removed from this shop",
+  "another computer tried to become the main computer while the current main computer is still working. Move the main role on purpose from the current main computer instead": "another computer tried to become the main computer while the current main computer is still working. Move the main role on purpose from the current main computer instead",
+  "a computer's name or status was changed from a computer that is not the main computer. Make this change on the main computer": "a computer's name or status was changed from a computer that is not the main computer. Make this change on the main computer",
+  "the owner's own sign-in was changed from a computer that is not the main computer. Make this change on the main computer": "the owner's own sign-in was changed from a computer that is not the main computer. Make this change on the main computer",
+  "it tried to make a second owner, and a shop has only one owner": "it tried to make a second owner, and a shop has only one owner",
+  "only the main computer may do this and it came from another computer. Do it on the main computer": "only the main computer may do this and it came from another computer. Do it on the main computer",
+  "this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer": "this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer",
+  "a till number was given back by a computer that does not own that number": "a till number was given back by a computer that does not own that number",
+  "a computer described a shop-branch link on behalf of another computer": "a computer described a shop-branch link on behalf of another computer"
 }

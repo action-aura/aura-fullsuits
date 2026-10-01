@@ -19811,6 +19811,24 @@ _SYNC_REVIEW_REASONS = {
     # given up can never be switched back on by an update.
     'gl_duplicate_reversal': ('this accounting entry was already taken back here, so a second take-back was set aside', False),
     'till_allocation_status_backwards': ('it tried to switch a till number back on after it was given up', False),
+    # AUDIT-033 (S-AUTH): authority events are signed by the sending computer and
+    # the receiving one parks anything unsigned, forged, or sent by a computer
+    # that is not allowed to make that kind of change. Each reason says what
+    # happened and what to do, in plain words (shown after 'Not added because').
+    'unsigned_authority_event': ('it came from a computer running an older version, so it carried no proof of who sent it. Update that computer and make the change again', False),
+    'bad_signature': ('its proof of who sent it did not check out, so it may have been changed on the way. Make the change again on the sending computer', False),
+    'foreign_licence': ('it came from a computer that belongs to a different shop licence', False),
+    'untrusted_lease': ('the sending computer could not prove that it is licensed. Open Aura on that computer while it is online, then make the change again', False),
+    'signer_binding_clash': ('the sending computer claims to be a computer that is already known here under a different identity', False),
+    'signer_revoked': ('it came from a computer that was removed from this shop', False),
+    'takeover_main_not_silent': ('another computer tried to become the main computer while the current main computer is still working. Move the main role on purpose from the current main computer instead', False),
+    'device_change_needs_main': ("a computer's name or status was changed from a computer that is not the main computer. Make this change on the main computer", False),
+    'owner_change_needs_main': ("the owner's own sign-in was changed from a computer that is not the main computer. Make this change on the main computer", False),
+    'second_admin_refused': ('it tried to make a second owner, and a shop has only one owner', False),
+    'needs_main_computer': ('only the main computer may do this and it came from another computer. Do it on the main computer', False),
+    'main_unknown': ('this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer', True),
+    'release_ack_wrong_sender': ('a till number was given back by a computer that does not own that number', False),
+    'alias_origin_mismatch': ('a computer described a shop-branch link on behalf of another computer', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

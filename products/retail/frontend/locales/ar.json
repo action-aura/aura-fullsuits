@@ -2264,5 +2264,19 @@
   "Linux": "لينكس",
   "Web": "ويب",
   "this accounting entry was already taken back here, so a second take-back was set aside": "سبق عكس هذا القيد المحاسبي هنا، لذلك وُضع العكس الثاني جانبًا",
-  "it tried to switch a till number back on after it was given up": "حاول إعادة تفعيل رقم جهاز بيع بعد التخلي عنه"
+  "it tried to switch a till number back on after it was given up": "حاول إعادة تفعيل رقم جهاز بيع بعد التخلي عنه",
+  "it came from a computer running an older version, so it carried no proof of who sent it. Update that computer and make the change again": "جاء من جهاز يعمل بإصدار أقدم، لذلك لم يحمل ما يثبت من أرسله. حدّث ذلك الجهاز ثم أعد إجراء التغيير",
+  "its proof of who sent it did not check out, so it may have been changed on the way. Make the change again on the sending computer": "لم يصح الدليل على هوية مرسله، فقد يكون تغيّر في الطريق. أعد إجراء التغيير على الجهاز المرسل",
+  "it came from a computer that belongs to a different shop licence": "جاء من جهاز يتبع ترخيص متجر آخر",
+  "the sending computer could not prove that it is licensed. Open Aura on that computer while it is online, then make the change again": "لم يستطع الجهاز المرسل إثبات أنه مرخّص. افتح Aura على ذلك الجهاز وهو متصل بالإنترنت ثم أعد إجراء التغيير",
+  "the sending computer claims to be a computer that is already known here under a different identity": "يدّعي الجهاز المرسل أنه جهاز معروف هنا مسبقًا بهوية مختلفة",
+  "it came from a computer that was removed from this shop": "جاء من جهاز أُزيل من هذا المتجر",
+  "another computer tried to become the main computer while the current main computer is still working. Move the main role on purpose from the current main computer instead": "حاول جهاز آخر أن يصبح الجهاز الرئيسي بينما الجهاز الرئيسي الحالي ما زال يعمل. انقل الدور الرئيسي عمدًا من الجهاز الرئيسي الحالي بدلًا من ذلك",
+  "a computer's name or status was changed from a computer that is not the main computer. Make this change on the main computer": "تم تغيير اسم جهاز أو حالته من جهاز ليس هو الجهاز الرئيسي. أجرِ هذا التغيير على الجهاز الرئيسي",
+  "the owner's own sign-in was changed from a computer that is not the main computer. Make this change on the main computer": "تم تغيير بيانات دخول المالك من جهاز ليس هو الجهاز الرئيسي. أجرِ هذا التغيير على الجهاز الرئيسي",
+  "it tried to make a second owner, and a shop has only one owner": "حاول إنشاء مالك ثانٍ، والمتجر له مالك واحد فقط",
+  "only the main computer may do this and it came from another computer. Do it on the main computer": "الجهاز الرئيسي وحده يستطيع القيام بهذا، وقد جاء من جهاز آخر. أجرِه على الجهاز الرئيسي",
+  "this computer does not know yet which computer is the main one. It tries again by itself once it hears from the main computer": "لا يعرف هذا الجهاز بعد أي جهاز هو الرئيسي. سيحاول مجددًا من تلقاء نفسه عندما يسمع من الجهاز الرئيسي",
+  "a till number was given back by a computer that does not own that number": "أُعيد رقم جهاز بيع من جهاز لا يملك ذلك الرقم",
+  "a computer described a shop-branch link on behalf of another computer": "وصف جهاز رابط فرع متجر نيابةً عن جهاز آخر"
 }
