@@ -1,0 +1,67 @@
+{
+ "device_seed_b64": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+ "owner_pub_b64": "2inpWwLgD/oVZFd1+x0roiKhlDOV7qBrlOLAV7e+adA=",
+ "licence": "lic-shop-1",
+ "inst": "inst-cross-language",
+ "dev": "11111111-2222-4333-8444-555555555555",
+ "device_pub_b64": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
+ "page_event": {
+  "id": "evt-1",
+  "entity_type": "till_allocation",
+  "entity_id": "alloc-1",
+  "event_type": "update",
+  "created_at": "2026-10-01 10:00:00",
+  "payload": {
+   "terminal_uid": "11111111-2222-4333-8444-555555555555",
+   "epoch": 2,
+   "ratio": 2.0,
+   "half": 1.5,
+   "big": 9007199254740993,
+   "note": "caf\u00e9",
+   "_auth": {
+    "v": 1,
+    "inst": "inst-cross-language",
+    "dev": "11111111-2222-4333-8444-555555555555",
+    "pk": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
+    "lease": {
+     "payload": {
+      "assertion_id": "9ab8aff8-56bf-40eb-8d82-90e7f105e90f",
+      "issuer": "aura-owner",
+      "product_code": "AURA_RETAIL",
+      "license_public_id": "lic-shop-1",
+      "installation_public_id": "inst-cross-language",
+      "platform": "WINDOWS",
+      "app_version_policy": "1.0.0",
+      "release_channel": "rc",
+      "issued_at": "2026-10-01T14:48:27.888938+00:00",
+      "not_before": "2026-10-01T14:43:27.888938+00:00",
+      "expires_at": "2026-10-02T14:48:27.888938+00:00",
+      "license_status": "ACTIVE",
+      "installation_status": "ACTIVE",
+      "subscription_status": "ACTIVE",
+      "allowed_device_count": 5,
+      "device_key_fingerprint": "65b60673d6ed884bf01c2c222d82ada0740f29ac3355d6a925c81f17f47a27b8",
+      "entitlements": {},
+      "offline_policy": {
+       "check_in_interval_seconds": 86400,
+       "retry_interval_seconds": 3600,
+       "offline_grace_seconds": 1209600,
+       "warning_start_seconds": 864000,
+       "hard_expiry_behavior": "RESTRICT_COMMERCIAL_FEATURES_PRESERVE_DATA",
+       "clock_rollback_tolerance_seconds": 300,
+       "assertion_refresh_threshold_seconds": 86400
+      },
+      "contract_version": "v1"
+     },
+     "signing_key_id": "owner-1",
+     "algorithm": "ed25519",
+     "assertion_version": 1,
+     "signature": "PzmWxeTzD2y+xwW8mx6V8CF33WweHIscDF1e/95/XeqaiAAJVdj2xcY9Ig/HF7VNiceRCp4dqLTY8pH8QNWfAw=="
+    }
+   }
+  },
+  "auth_tbs_b64": "eyJjdHgiOiJhdXJhLXN5bmMtYXV0aG9yaXR5L3YxIiwiZGV2IjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwiZW50aXR5X2lkIjoiYWxsb2MtMSIsImVudGl0eV90eXBlIjoidGlsbF9hbGxvY2F0aW9uIiwiZXZlbnRfdHlwZSI6InVwZGF0ZSIsImluc3QiOiJpbnN0LWNyb3NzLWxhbmd1YWdlIiwibGljZW5jZSI6ImxpYy1zaG9wLTEiLCJwYXlsb2FkIjp7ImJpZyI6OTAwNzE5OTI1NDc0MDk5MywiZXBvY2giOjIsImhhbGYiOjEuNSwibm90ZSI6ImNhZsOpIiwicmF0aW8iOjIsInRlcm1pbmFsX3VpZCI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSJ9fQ=="
+ },
+ "tbs_b64": "eyJjdHgiOiJhdXJhLXN5bmMtYXV0aG9yaXR5L3YxIiwiZGV2IjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwiZW50aXR5X2lkIjoiYWxsb2MtMSIsImVudGl0eV90eXBlIjoidGlsbF9hbGxvY2F0aW9uIiwiZXZlbnRfdHlwZSI6InVwZGF0ZSIsImluc3QiOiJpbnN0LWNyb3NzLWxhbmd1YWdlIiwibGljZW5jZSI6ImxpYy1zaG9wLTEiLCJwYXlsb2FkIjp7ImJpZyI6OTAwNzE5OTI1NDc0MDk5MywiZXBvY2giOjIsImhhbGYiOjEuNSwibm90ZSI6ImNhZsOpIiwicmF0aW8iOjIsInRlcm1pbmFsX3VpZCI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSJ9fQ==",
+ "sig_b64": "UyeDYaWZuJTJhHIUF2ub4dwkC/AaL5/e0XFLmZz/vqnxhCZIsLsYMH9bgBM/GHY4cbBswFcbafKKDtD9ViV4CA=="
+}

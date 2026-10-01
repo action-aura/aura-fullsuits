@@ -44,6 +44,7 @@ device, with no error anywhere to point at.
 """
 from __future__ import annotations
 
+import base64
 import hmac
 
 from flask import Blueprint, jsonify, request
@@ -83,6 +84,27 @@ from flask import Blueprint, jsonify, request
 # report rather than "fix" Kotlin from this side.
 _OUTBOX_DEFAULT_PAGE_LIMIT = 500
 _OUTBOX_MAX_PAGE_LIMIT = 500
+
+
+
+def _attach_tbs_for_kotlin(events, sync_service) -> None:
+    """Add `auth_tbs_b64` to every authority event whose `_auth` is awaiting a
+    signature (prepare-only signer). No signer -> nothing to add: the event goes
+    out unsigned and receivers park it (read_outbox already logged that once)."""
+    from commercial_runtime.sync import authority
+
+    pending = [e for e in events if authority.is_authority_event(e)]
+    if not pending:
+        return
+    signer = sync_service._authority_env().signer
+    if signer is None:
+        return
+    for event in pending:
+        auth = event["payload"].get(authority.AUTH_KEY)
+        if not isinstance(auth, dict) or auth.get("sig"):
+            continue
+        tbs = authority.build_tbs(event, licence=signer.licence, inst=signer.inst, dev=signer.dev)
+        event["auth_tbs_b64"] = base64.b64encode(tbs).decode("ascii")
 
 
 def make_sync_internal_blueprint(
@@ -169,6 +191,17 @@ def make_sync_internal_blueprint(
                 events = sync_service.read_outbox(conn, limit=limit)
         finally:
             conn.close()
+        # AUDIT-033 / S-AUTH (D3, Android): Python never holds the Android
+        # device key, so read_outbox left each authority event's `_auth`
+        # WITHOUT a `sig`. Hand Kotlin the exact bytes to sign as a top-level
+        # per-event `auth_tbs_b64` (never inside the payload: the relay keeps
+        # only the known keys, and the field must not be signed or stored).
+        # Kotlin signs these bytes as-is -- it must NOT re-canonicalise, because
+        # Kotlin's number handling differs from Python's (int vs float) and a
+        # re-rendered document would not verify. Non-authority events, and
+        # authority events that already carry a sig, are left exactly as they
+        # were.
+        _attach_tbs_for_kotlin(events, sync_service)
         return jsonify({"installation_id": installation_id, "events": events}), 200
 
     @bp.route("/_internal/outbox/ack", methods=["POST"])

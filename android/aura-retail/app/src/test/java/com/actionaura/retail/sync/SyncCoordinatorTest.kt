@@ -3,6 +3,7 @@ package com.actionaura.retail.sync
 import com.actionaura.retail.licensing.DeviceIdentity
 import com.actionaura.retail.licensing.KeyWrapper
 import com.google.common.truth.Truth.assertThat
+import com.google.gson.JsonParser
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -288,6 +289,40 @@ class SyncCoordinatorTest {
         // other's request count.
         val registryAcks = server.requests.count { it.path == SyncStream.REGISTRY.prefix + "/_internal/outbox/ack" }
         assertThat(registryAcks).isEqualTo(0)
+    }
+
+    // ── (e2) AUDIT-033 / S-AUTH: the push path signs authority events ────
+
+    /**
+     * End to end through the real [SyncCoordinator.runOnce]: the local outbox
+     * page carries an authority event with `auth_tbs_b64` (exactly what
+     * internal_routes.py sends); what reaches the relay's push endpoint must
+     * carry `_auth.sig` made by THIS device's key over those bytes, and no
+     * `auth_tbs_b64`. Guards the WIRING (AuthoritySigningTest proves the
+     * function itself): a pushOnce that forgot to call it would still pass
+     * every function-level test.
+     */
+    @Test
+    fun `pushed authority events carry the device signature and no auth_tbs_b64`() {
+        val fixture = JsonParser.parseReader(
+            javaClass.classLoader!!.getResourceAsStream("authority_cross_language.json")!!.reader()
+        ).asJsonObject
+        val pageEvent = fixture["page_event"].toString()
+        server.on(
+            SyncStream.RETAIL.prefix + "/_internal/outbox",
+            body = """{"installation_id":"inst-1","events":[$pageEvent]}""",
+        )
+        server.on(SyncStream.REGISTRY.prefix + "/_internal/outbox", body = """{"installation_id":"inst-1","events":[]}""")
+
+        runOnce()
+
+        val push = server.requests.single { it.path == "/api/sync/v1/push" }
+        assertThat(push.body).doesNotContain("auth_tbs_b64")
+        val sent = JsonParser.parseString(push.body).asJsonObject.getAsJsonArray("events")[0].asJsonObject
+        val sig = sent.getAsJsonObject("payload").getAsJsonObject("_auth")["sig"].asString
+        val decoder = java.util.Base64.getDecoder()
+        com.google.crypto.tink.subtle.Ed25519Verify(decoder.decode(identity.getPublicKeyB64().trim()))
+            .verify(decoder.decode(sig), decoder.decode(fixture["tbs_b64"].asString))
     }
 
     // ── (f) relay_url query param on cursor requests -- schema v31's guard ──

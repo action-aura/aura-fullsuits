@@ -149,6 +149,10 @@ object SyncCoordinator {
         if (exc != null) Log.e(TAG, message, exc) else Log.e(TAG, message)
     }
 
+    /** AUDIT-033: log a failed authority-event signature once, not per event/tick. */
+    @Volatile
+    private var authoritySignFailureLogged = false
+
     /** Upper bound on how many events one signed push request may carry.
      * Owner's relay hard-rejects any batch above its `_MAX_PUSH_BATCH = 200`
      * (owner/app/sync/routes.py) with INVALID_BATCH, all-or-nothing -- so an
@@ -984,6 +988,18 @@ object SyncCoordinator {
         // clobbering the other's.
         recordPending(stream, events.size())
         if (events.size() == 0) return
+
+        // AUDIT-033 / S-AUTH: sign this page's authority events with the device
+        // key (Python cannot, on Android). Done once per page, before chunking;
+        // a failure leaves that event unsigned and never aborts the tick.
+        signAuthorityEvents(events, identity::sign) { exc ->
+            if (!authoritySignFailureLogged) {
+                authoritySignFailureLogged = true
+                logError(
+                    "Could not sign an authority sync event with the device key; it is pushed " +
+                        "UNSIGNED and other devices will park it. Logged once.", exc)
+            }
+        }
 
         // Chunked to the relay's batch cap (see PUSH_CHUNK_SIZE), each chunk
         // acked only after Owner genuinely stored it and BEFORE the next
