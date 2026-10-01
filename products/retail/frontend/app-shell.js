@@ -3311,7 +3311,7 @@ const SubsystemApp = {
         body: JSON.stringify({ token, password: pass }),
       });
       const data = await res.json();
-      if (!data.success) return showErr(data.error || 'This reset link is invalid or has expired.');
+      if (!data.success) return showErr(t(data.error || 'This reset link is invalid or has expired.'));
 
       const overlay = document.getElementById('aura-reset-password-screen');
       if (overlay) {

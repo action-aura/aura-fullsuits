@@ -32,6 +32,7 @@ from commercial_runtime.identity.registry_db import get_conn
 from commercial_runtime.identity.mt_auth import create_session, mt_login_required
 from commercial_runtime.identity import user_accounts as _accounts
 from commercial_runtime.identity import verification as _verification
+from commercial_runtime.identity.owner_change_guard import owner_change_refusal as _owner_change_refusal
 # Launch-readiness account-hierarchy design §2.4/§4.2 D1 -- the install-
 # stable device UUID `EMP-<dev4>-NNNN` derives its fragment from. Imported
 # at module scope (unlike mt_auth.py's deferred `user_accounts` import):
@@ -580,10 +581,17 @@ def reset_password():
         if link is None:
             conn.rollback()
             return jsonify({'error': 'This reset link is invalid or has expired.'}), 400
-        user = conn.execute("SELECT id FROM users WHERE email=?", (link['email_target'],)).fetchone()
+        user = conn.execute("SELECT id, role FROM users WHERE email=?", (link['email_target'],)).fetchone()
         if user is None:
             conn.rollback()
             return jsonify({'error': 'This reset link is invalid or has expired.'}), 400
+        # AUDIT-033 (D5): the owner's password changes at the main computer
+        # only. The rollback un-burns the link consume_link just used, so the
+        # same link still works when opened on the main computer.
+        refusal = _owner_change_refusal(conn, link['company_id'], user['role'])
+        if refusal is not None:
+            conn.rollback()
+            return refusal
         # Bumping session_version invalidates every session issued before
         # this reset -- same pattern update_clinic_role/update_perms use for
         # any other security-relevant change to a user row.
@@ -1440,6 +1448,13 @@ def update_status(user_id):
                 conn.rollback()
                 return jsonify({'error': 'You may only manage cashiers at your own branch.'}), 403
 
+        # AUDIT-033 (D5): re-affirming the owner as 'active' still bumps the
+        # row and emits a signed owner event, so it is main-computer-only too.
+        refusal = _owner_change_refusal(conn, session['company_id'], row['role'])
+        if refusal is not None:
+            conn.rollback()
+            return refusal
+
         conn.execute("UPDATE users SET status=?, session_version=session_version+1, "
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
                      "WHERE id=? AND company_id=?",
@@ -1785,6 +1800,11 @@ def update_pin(user_id):
             if not target_is_own_branch_cashier:
                 return jsonify({'error': 'You may only manage cashiers at your own branch.'}), 403
 
+        # AUDIT-033 (D5): the owner's PIN (set or clear) is main-computer-only.
+        refusal = _owner_change_refusal(conn, session['company_id'], row['role'])
+        if refusal is not None:
+            return refusal
+
         if request.method == 'DELETE':
             _accounts.clear_user_pin(conn, user_id)
             action, has_pin = 'CLEAR_PIN', False
@@ -1829,6 +1849,15 @@ def update_clinic_role(user_id):
         return jsonify({'error': 'clinic_role must be doctor, secretary, or empty.'}), 400
     conn = get_conn()
     try:
+        # AUDIT-033 (D5): this write bumps session_version and emits an owner
+        # event when the target is the owner, so it is main-computer-only then.
+        # (The role lookup is a read; an unknown id falls through as before.)
+        target = conn.execute("SELECT role FROM users WHERE id=? AND company_id=?",
+                              (user_id, session['company_id'])).fetchone()
+        if target is not None:
+            refusal = _owner_change_refusal(conn, session['company_id'], target['role'])
+            if refusal is not None:
+                return refusal
         conn.execute(
             "UPDATE users SET clinic_role=?, session_version=session_version+1, "
             "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=? AND company_id=?",
@@ -1932,6 +1961,12 @@ def update_perms(user_id):
         ).fetchone()
         if not row:
             return jsonify({'error': 'User not found.'}), 404
+
+        # AUDIT-033 (D5): the owner's permission rows change at the main
+        # computer only (checked before any write, so a refusal changes nothing).
+        refusal = _owner_change_refusal(conn, session['company_id'], row['role'])
+        if refusal is not None:
+            return refusal
 
         # AUDIT-032: whoever closes the drawer must not also be the person who
         # signs off the variance. Checked on the grants the person WOULD hold
@@ -2302,9 +2337,15 @@ def employee_setup():
         if _accounts.now_utc_iso() > link['expires_at']:
             return jsonify({'error': 'This setup link has expired. Request a new one from your admin.'}), 400
 
-        user = conn.execute("SELECT id FROM users WHERE email=?", (link['email_target'],)).fetchone()
+        user = conn.execute("SELECT id, role, company_id FROM users WHERE email=?",
+                            (link['email_target'],)).fetchone()
         if not user:
             return jsonify({'error': 'User not found.'}), 404
+        # AUDIT-033 (D5): a setup link must never become a side door to the
+        # owner's password from a non-main computer.
+        refusal = _owner_change_refusal(conn, user['company_id'], user['role'])
+        if refusal is not None:
+            return refusal
 
         conn.execute("UPDATE users SET password_hash=?, status='active', require_password_change=0, "
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=?",
