@@ -530,7 +530,10 @@ def test_route_refuses_a_non_windows_computer_and_a_clashing_one(admin, db_path)
         c.execute("CREATE TABLE IF NOT EXISTS sync_apply_quarantine (entity_id TEXT, entity_type TEXT,"
                   " event_type TEXT, payload TEXT, reason TEXT, detail TEXT, quarantined_at TEXT,"
                   " PRIMARY KEY (entity_id, event_type))")
-        c.execute("INSERT OR REPLACE INTO sync_apply_quarantine VALUES (?,'device','update','{}',"
+        # AUDIT-033 fix round: the real table now has an 8th column (auth_key), so the
+        # columns are NAMED; the row itself (an unsigned device park) is unchanged.
+        c.execute("INSERT OR REPLACE INTO sync_apply_quarantine (entity_id, entity_type, event_type, "
+                  "payload, reason, detail, quarantined_at) VALUES (?,'device','update','{}',"
                   "'device_identity_clash','','2026-01-01')", (me,))
         c.commit()
     finally:
