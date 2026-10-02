@@ -455,6 +455,10 @@ const CashDrawer = {
       </div>`;
     document.body.appendChild(overlay);
     RetailSystem._wireModalA11y(overlay, 'cd-open-dialog');
+    this._focusAndEnter('cd-opening-float', ['cd-opening-float'], () => {
+      const b = document.getElementById('cd-open-btn');
+      if (b && !b.disabled) this._submitOpenShift();
+    });
   },
 
   async _submitOpenShift() {
@@ -475,6 +479,46 @@ const CashDrawer = {
     } catch (e) {
       SubsystemApp.showToast(t('Could not load the cash drawer. Its state is unknown.'), 'error');
       if (btn) { btn.disabled = false; btn.textContent = t('Open Shift'); }
+    }
+  },
+
+  // ── Keyboard (till keys Shift+F1..F4) ────────────────────────────────────
+  //
+  // Called by RetailSystem._drawerKey. 1 open shift, 2 cash in/out, 3 X report,
+  // 4 end shift. Answers in words when the key cannot do anything (no drawer
+  // open, no permission, state unknown) instead of doing nothing silently --
+  // a key that appears dead on a till with a queue reads as "broken".
+  keyAction(n) {
+    if (this._state === 'denied') { SubsystemApp.showToast(t('You do not have access to the cash drawer'), 'error'); return; }
+    if (this._state === 'error') { SubsystemApp.showToast(t('Could not load the cash drawer. Its state is unknown.'), 'error'); return; }
+    if (n === 1) {
+      if (this._session) SubsystemApp.showToast(t('A cash shift is already open'), 'info');
+      else this.openOpenShiftModal();
+      return;
+    }
+    if (!this._session) { SubsystemApp.showToast(t('Open a cash shift first'), 'error'); return; }
+    if (n === 2) this.openMovementModal();
+    else if (n === 3) this.openXReportModal();
+    else if (n === 4) this.openCloseModal();
+  },
+
+  // Focus `fieldId` in a freshly opened drawer dialog and make Enter in any of
+  // `enterIds` call `onEnter`. _wireModalA11y focuses the dialog box itself;
+  // a cashier with a queue wants the cursor already in the amount field.
+  _focusAndEnter(fieldId, enterIds, onEnter) {
+    const first = document.getElementById(fieldId);
+    (enterIds || [fieldId]).forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault(); ev.stopPropagation();
+        onEnter();
+      });
+    });
+    if (first && typeof first.focus === 'function') {
+      first.focus();
+      if (typeof first.select === 'function') first.select();
     }
   },
 
@@ -512,6 +556,10 @@ const CashDrawer = {
       </div>`;
     document.body.appendChild(overlay);
     RetailSystem._wireModalA11y(overlay, 'cd-mv-dialog');
+    this._focusAndEnter('cd-mv-amount', ['cd-mv-amount', 'cd-mv-reason'], () => {
+      const b = document.getElementById('cd-mv-btn');
+      if (b && !b.disabled) this._submitMovement();
+    });
   },
 
   async _submitMovement() {
@@ -665,6 +713,13 @@ const CashDrawer = {
       </div>`;
     document.body.appendChild(overlay);
     RetailSystem._wireModalA11y(overlay, 'cd-close-dialog');
+    // Enter in the counted field does NOT end the shift: ending locks the count
+    // and is the one irreversible step here. It moves focus to the End Shift
+    // button, so ending is a second, deliberate Enter on that button itself.
+    this._focusAndEnter('cd-close-counted', ['cd-close-counted'], () => {
+      const b = document.getElementById('cd-close-btn');
+      if (b && typeof b.focus === 'function') b.focus();
+    });
   },
 
   // AUDIT-item#15(a), 2026-09-27: this used to be a hardcoded

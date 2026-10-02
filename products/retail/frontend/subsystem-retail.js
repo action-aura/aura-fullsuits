@@ -465,6 +465,10 @@ const RetailSystem = {
     // (bumps the same shared counter again) -- it stays so the file's other
     // reader of that call site is not left looking orphaned.
     this._beginRender();
+    // Leaving (or re-rendering, e.g. a theme switch) the till: remember the
+    // discount/customer/tender of the sale in progress while its DOM still
+    // exists -- _renderPOS restores them with the cart it no longer wipes.
+    if (this._section === 'pos') this._savePosDraft();
     this._section = sectionId;     // remembered so the scanner can route scans
     this._initScanner();           // idempotent; desktop-only HID listener
     this._initShortcuts();         // idempotent; keyboard shortcuts, all platforms
@@ -4492,6 +4496,32 @@ const RetailSystem = {
              which this floor's own headroom depends on. */
           .pos-wrap { --pos-cart-row-min: 74px; }
         }
+        /* Till keyboard model: the highlight for the cart line the cashier arrowed
+           onto and for the search result Enter will add. An outline (not just a
+           tint) so it still reads on every theme and for a colour-blind cashier. */
+        .pos-cart-row-sel { background:var(--surface-hover);outline:2px solid var(--sub-accent);outline-offset:-2px;border-radius:8px; }
+        .pos-card.pos-card-hl { outline:3px solid var(--sub-accent);outline-offset:1px;background:var(--surface-hover); }
+        /* Dialogs opened from the keyboard (customer picker F7, price check F11,
+           key card F12, held-sales highlight). Appended to <body>, so they cannot
+           lean on .pos-wrap descendants -- their own small set of rules. */
+        .pk-dialog { inline-size:min(480px,94vw); }
+        .pk-input { inline-size:100%;min-block-size:48px;padding-inline:14px;font-size:16px;border-radius:10px;
+          border:1px solid var(--border-mid);background:var(--input-bg);color:var(--text);box-sizing:border-box; }
+        .pk-list { margin-block-start:10px;max-block-size:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:4px; }
+        .pk-row { display:flex;align-items:center;justify-content:space-between;gap:12px;inline-size:100%;
+          min-block-size:44px;padding-block:8px;padding-inline:12px;border-radius:8px;border:1px solid transparent;
+          background:transparent;color:var(--text);font:inherit;font-size:15px;text-align:start;cursor:pointer;flex-wrap:wrap; }
+        .pk-row:hover { background:var(--surface-hover); }
+        .pk-row-static { cursor:default; }
+        .pk-row-sel { background:var(--surface-hover);border-color:var(--sub-accent);outline:2px solid var(--sub-accent);outline-offset:-2px; }
+        .pk-row-main { font-weight:600; }
+        .pk-row-price { font-weight:700; }
+        .pk-row-sub { inline-size:100%;color:var(--text-dim);font-size:13px; }
+        .pk-empty { padding:16px;text-align:center;color:var(--text-dim); }
+        .pk-hint { margin-block-start:10px;color:var(--text-dim);font-size:12px; }
+        .pk-keytable { inline-size:100%;border-collapse:collapse;font-size:14px; }
+        .pk-keytable td { padding-block:6px;padding-inline:4px;border-block-end:1px solid var(--border-soft);vertical-align:top; }
+        .pk-key { white-space:nowrap;inline-size:1%; }
         .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
 
         /* ── Money typography (see rule 3) ───────────────────────────────── */
@@ -4556,12 +4586,14 @@ const RetailSystem = {
             <span class="pos-scan-lamp">${t('Ready to scan')}</span>
           </div>
           <div class="pos-kbd-hints" title="${this._esc(t('Keyboard shortcuts'))}" aria-label="${this._esc(t('Keyboard shortcuts'))}">
-            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Enter')}</kbd> ${t('Charge')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Enter')}</kbd> ${t('Pay')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">F10</kbd> ${t('Charge')}</span>
             <span class="pos-kbd-item"><kbd class="pos-kbd">${t('N*')}</kbd> ${t('Quantity')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">X</kbd> ${t('Exact cash')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">/</kbd> ${t('Search')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Del')}</kbd> ${t('Remove line')}</span>
-            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Esc')}</kbd> ${t('Cancel')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">F7</kbd> ${t('Customer')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">F8</kbd> ${t('Discount')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">F9</kbd> ${t('Hold')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">F11</kbd> ${t('Price check')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">F12</kbd> ${t('All keys')}</span>
           </div>
           <!-- retail-hardware-viewports: the old dedicated "Products" pane
                header (a pure label, no controls) is gone. The Held button it
@@ -4592,7 +4624,7 @@ const RetailSystem = {
               <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
             </div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm pos-held-btn" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
-              title="${this._esc(t("Browse and resume sales you've held"))}"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>)</button>
+              title="${this._esc(t("Browse and resume sales you've held"))}" aria-keyshortcuts="Shift+F9"><span aria-hidden="true">${this._icon('clipboard-list', 16, '📋')}</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>) <span class="pos-pay-kbd" aria-hidden="true">Shift+F9</span></button>
             <!-- retail-hardware-viewports: opens customer-display.html on a
                  second monitor (see _openCustomerDisplay). Lives in THIS row
                  (not its own toolbar) specifically so it inherits
@@ -4626,11 +4658,11 @@ const RetailSystem = {
                  two are never on screen together. -->
             <h3 class="pos-pane-title" id="pos-pane-title">${this._esc(t('Current Sale'))}</h3>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <select id="pos-customer" class="pos-cust-select" onchange="RetailSystem._onCustomerChange()">
+              <select id="pos-customer" class="pos-cust-select" onchange="RetailSystem._onCustomerChange()" aria-keyshortcuts="F7" title="${this._esc(t('Customer'))} (F7)">
                 <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
-              <button class="pos-hold-btn" onclick="RetailSystem._holdSale()"
-                title="${this._esc(t('Park this sale and start a new one'))}"><span aria-hidden="true">${this._icon('pause', 16, '⏸')}</span> <span>${t('Hold')}</span></button>
+              <button class="pos-hold-btn" onclick="RetailSystem._holdSale()" aria-keyshortcuts="F9"
+                title="${this._esc(t('Park this sale and start a new one'))}"><span aria-hidden="true">${this._icon('pause', 16, '⏸')}</span> <span>${t('Hold')}</span> <span class="pos-pay-kbd" aria-hidden="true">F9</span></button>
             </div>
             <!-- Round 2, till R2 (items #7(c)/#8 layout re-budget): Void
                  Sale used to have its OWN bar below the cart, deliberately
@@ -4664,7 +4696,7 @@ const RetailSystem = {
                  stops at a dialog instead of silently emptying the sale. -->
             <div class="pos-pane-void-slot">
               <button class="pos-clear-btn" onclick="RetailSystem._voidSale()"
-                title="${this._esc(t('Void the whole sale'))}">${t('Void Sale')}</button>
+                title="${this._esc(t('Void the whole sale'))}" aria-keyshortcuts="Control+Delete">${t('Void Sale')} <span class="pos-pay-kbd" aria-hidden="true">Ctrl+Del</span></button>
             </div>
           </div>
           <div class="pos-cart-items" id="pos-cart" onmousedown="RetailSystem._keepScanFocus(event)">
@@ -4824,7 +4856,7 @@ const RetailSystem = {
                 </span>
               </span>
             </div>
-            <button class="pos-checkout-btn" id="pos-checkout-btn" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
+            <button class="pos-checkout-btn" id="pos-checkout-btn" aria-keyshortcuts="F10" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
           </div>
         </div>
         <!-- retail-hardware-viewports Step 9 (docs/design/phone-ui-redesign.md
@@ -4878,7 +4910,16 @@ const RetailSystem = {
         </div>
       </div>`;
 
-    this._cart = [];
+    // A sale in progress SURVIVES leaving this screen. The till used to wipe the
+    // cart on every open, so a cashier who glanced at Customers or Products
+    // mid-queue silently lost the whole basket. Now only a completed sale or an
+    // explicit void empties it (_clearCart). The discount %, customer and
+    // tender are restored from the draft render() saved on the way out.
+    this._cart = Array.isArray(this._cart) ? this._cart : [];
+    this._selLine = null;
+    this._resSel = null;
+    this._gridVisible = [];
+    this._posResultsTerm = '';
     // Restaurant modifiers, wave 2 (the till side). Per-product cache of
     // GET /products/<id>/modifier-groups results, keyed by product_id --
     // reset on every POS (re)mount, same as _cart/_promotions below, so a
@@ -4887,7 +4928,7 @@ const RetailSystem = {
     // session"; an explicit [] means "checked, has none" -- _addToCart
     // relies on that distinction to only fetch once per product.
     this._modifierGroupsByProduct = {};
-    this._paymentMethod = 'cash';
+    this._paymentMethod = (this._cart.length && this._posDraft && this._posDraft.method) || 'cash';
     this._activeCat = null;
     // Promotions wave 1 (ROADMAP.md "retail schema v23"). Reset synchronously
     // at mount, same as _cart above -- _loadPOSData()'s fetch is async and a
@@ -4916,6 +4957,7 @@ const RetailSystem = {
     // channel (so the display's "hello" retry, see customer-display.js, is
     // answered even if the cashier never touches the button below) and pushes
     // the now-empty cart immediately.
+    if (this._cart.length) this._restorePosDraft();
     this._broadcastDisplayState();
     this._loadPOSData();
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
@@ -5107,6 +5149,9 @@ const RetailSystem = {
           opt.textContent = `${cu.name}${cu.phone ? ' ('+cu.phone+')' : ''}`;
           sel.appendChild(opt);
         });
+        // The customer picked before the cashier left this screen, for a sale
+        // that is still in progress (see _renderPOS / _savePosDraft).
+        if (this._cart.length && this._posDraft && this._posDraft.customerId) sel.value = this._posDraft.customerId;
       }
       this._renderPOSGrid();
       // Loyalty redemption wave 1: re-evaluate the control now that
@@ -5292,6 +5337,8 @@ const RetailSystem = {
       }
     });
     if (!matches.length) {
+      this._gridVisible = [];
+      this._resSel = null;
       grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${t('No products found.')}</div>`;
       return;
     }
@@ -5303,6 +5350,11 @@ const RetailSystem = {
     // screen), with no flag needed from the backend.
     const truncated = matches.length > this.POS_GRID_PAGE_SIZE;
     const visible = truncated ? matches.slice(0, this.POS_GRID_PAGE_SIZE) : matches;
+    // The tiles in on-screen order -- what Arrow Up/Down walks and Enter
+    // activates (see _moveResSel / _searchEnter). A fresh render invalidates
+    // any highlight: its index pointed into the previous result set.
+    this._gridVisible = visible;
+    this._resSel = null;
     // Silently showing a subset would be worse than saying it is one.
     const notice = truncated
       ? `<div class="pos-grid-note" style="grid-column:1/-1;text-align:center;color:var(--text-dim);font-size:12px;padding-block:8px">${t('Showing the first 200 matches. Type to narrow the search.')}</div>`
@@ -5555,9 +5607,11 @@ const RetailSystem = {
   _filterPOS() {
     clearTimeout(this._posSearchTimer);
     const term = (document.getElementById('pos-search')?.value || '').trim();
+    this._resSel = null;
     if (!term) {
       // Box cleared: restore page 1 from what _loadPOSData already cached --
       // no debounce, no round trip needed for "show me everything again".
+      this._posResultsTerm = '';
       this._products = this._posInitialPage || [];
       this._renderPOSGrid();
       return;
@@ -5572,6 +5626,7 @@ const RetailSystem = {
       const res = await this._get(`/api/sub/retail/products?q=${encodeURIComponent(term)}&limit=${this.POS_GRID_PAGE_SIZE + 1}`);
       this._products = res.data || [];
       this._products.forEach(p => this._cacheProduct(p));
+      this._posResultsTerm = term;
       this._renderPOSGrid();
     } catch (e) {
       // A failed search must not blank an otherwise-working till -- leave
@@ -5948,6 +6003,7 @@ const RetailSystem = {
   // computes against the already-zeroed controls, not the ones the finished
   // sale left behind.
   _resetSaleControls() {
+    this._posDraft = null;
     const discInput = document.getElementById('pos-disc');
     if (discInput) discInput.value = 0;
     const tenderedInput = document.getElementById('pos-tendered');
@@ -6043,7 +6099,19 @@ const RetailSystem = {
     document.body.appendChild(overlay);
     const _closeHold = this._wireModalA11y(overlay, 'ret-hold-dialog');
     overlay.addEventListener('click', e => { if (e.target === overlay) _closeHold(); });
-    document.getElementById('hold-label')?.focus();
+    const holdLabel = document.getElementById('hold-label');
+    if (holdLabel) {
+      // Enter saves the hold (F9, type a note or nothing, Enter). Ignored while
+      // a save is already in flight -- _saveHold disables the button first.
+      holdLabel.addEventListener('keydown', (ev) => {
+        const k = this._keyCode(ev);
+        if (k !== 'Enter' && k !== 'NumpadEnter') return;
+        ev.preventDefault(); ev.stopPropagation();
+        const b = document.getElementById('hold-save-btn');
+        if (b && !b.disabled) this._saveHold();
+      });
+      holdLabel.focus();
+    }
   },
 
   async _saveHold() {
@@ -6117,7 +6185,41 @@ const RetailSystem = {
     document.body.appendChild(overlay);
     const _closeHeld = this._wireModalA11y(overlay, 'ret-held-dialog');
     overlay.addEventListener('click', e => { if (e.target === overlay) _closeHeld(); });
+    // Keyboard: arrows move a highlight through the held sales, Enter resumes
+    // it, Delete discards it (behind the existing confirm). Acts only while the
+    // dialog itself holds focus -- a focused Resume/Discard/Close button must
+    // keep pressing ITSELF on Enter.
+    this._heldSel = 0;
+    overlay.addEventListener('keydown', (ev) => {
+      const dlg = document.getElementById('ret-held-dialog');
+      if (ev.target !== dlg) return;
+      const rows = overlay.querySelectorAll('.pk-held-row');
+      if (!rows.length) return;
+      const k = this._keyCode(ev);
+      if (k === 'ArrowDown' || k === 'ArrowUp') {
+        ev.preventDefault();
+        this._heldSel = Math.min(rows.length - 1, Math.max(0, (this._heldSel || 0) + (k === 'ArrowDown' ? 1 : -1)));
+        this._paintHeldSel();
+      } else if (k === 'Enter' || k === 'NumpadEnter') {
+        ev.preventDefault();
+        const row = rows[Math.min(this._heldSel || 0, rows.length - 1)];
+        if (row) this._resumeHeldSale(Number(row.dataset.hid));
+      } else if (k === 'Delete') {
+        ev.preventDefault();
+        const row = rows[Math.min(this._heldSel || 0, rows.length - 1)];
+        if (row) this._discardHeldSale(Number(row.dataset.hid));
+      }
+    });
     this._loadHeldList();
+  },
+
+  _paintHeldSel() {
+    const rows = document.querySelectorAll('#held-list .pk-held-row');
+    rows.forEach((row, i) => {
+      const on = i === this._heldSel;
+      row.classList.toggle('pk-row-sel', on);
+      if (on && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
+    });
   },
 
   async _loadHeldList() {
@@ -6153,7 +6255,7 @@ const RetailSystem = {
         // the words on their own.
         const itemsLabel = r.item_count === 1 ? t('item') : t('items');
         return `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border-hairline)">
+        <div class="pk-held-row" data-hid="${r.id}" style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border-hairline)">
           <div>
             <div style="color:var(--text-primary);font-weight:600;font-size:13px">${this._bdi(r.hold_number||'')}${noteHtml}</div>
             <div style="color:var(--text-muted);font-size:11px">${this._bdi(String(r.item_count))} <span>${itemsLabel}</span> · ${this._esc(r.customer_name)} · ${when}</div>
@@ -6165,6 +6267,9 @@ const RetailSystem = {
           </div>
         </div>`;
       }).join('');
+      // The row the cashier's arrows start from (and Enter resumes).
+      this._heldSel = Math.min(this._heldSel || 0, rows.length - 1);
+      this._paintHeldSel();
     } catch (e) {
       box.innerHTML = '<div style="text-align:center;color:var(--state-danger-text);padding:20px">Failed to load held sales.</div>';
     }
@@ -6245,6 +6350,7 @@ const RetailSystem = {
     const container = document.getElementById('pos-cart');
     if (!container) return;
     if (!this._cart.length) {
+      this._selLine = null;
       container.innerHTML = `<div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">${this._icon('shopping-cart', 32, '🛒')}</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>`;
       this._recalc();
       this._refocusScan();
@@ -6262,6 +6368,9 @@ const RetailSystem = {
     // _recalc below -- read once here rather than per line, matching how
     // _recalc itself only reads #pos-disc once per pass.
     const manualFrac = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0))) / 100;
+    // A selection pointing past the end (the line was removed) falls back to
+    // the new last line rather than silently pointing at nothing.
+    if (this._selLine != null && this._selLine >= this._cart.length) this._selLine = this._cart.length - 1;
     container.innerHTML = this._cart.map((item, i) => {
       const promo = this._bestPromoFor(item);
       const promoFrac = promo ? (promo.discount_pct || 0) / 100 : 0;
@@ -6326,7 +6435,7 @@ const RetailSystem = {
         ? `<span class="pos-price-orig">${this._money(gross)}</span> ${this._money(gross - this._roundMoney(gross * promoFrac))}`
         : this._money(item.line_total);
       return `
-      <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
+      <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}${i === this._selLine ? ' pos-cart-row-sel' : ''}" data-idx="${i}"${i === this._selLine ? ' aria-current="true"' : ''}>
         <div class="pos-line-main">
           <div class="pos-item-name" title="${this._esc(item.name)}">${this._esc(item.name)}</div>
           <div class="pos-item-meta">${metaHTML}</div>
@@ -7001,6 +7110,16 @@ const RetailSystem = {
   _pendingQty: null,
   _qtyKeyBuffer: '',
   _qtyKeyLastAt: 0,
+  // Till keyboard model (P1c). _selLine: index of the cart line the cashier has
+  // arrowed onto (null = none; +/-, Delete and "N*" then act on the LAST line,
+  // exactly as before). _resSel: index of the highlighted search result in
+  // _gridVisible (the products the grid is showing, in tile order).
+  // _posResultsTerm: the search term the loaded results answer, so Enter can
+  // tell "these are this keystroke's results" from "the debounce has not fired".
+  _selLine: null,
+  _resSel: null,
+  _gridVisible: [],
+  _posResultsTerm: '',
 
   _isDesktopScanner() { return !/Android/i.test(navigator.userAgent || ''); },
 
@@ -7036,7 +7155,7 @@ const RetailSystem = {
       const el = document.activeElement;
       const tag = el ? el.tagName : '';
       const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
-      const isSearchBox = !!el && (el.id === 'pos-search' || el.id === 'prod-search');
+      const isSearchBox = !!el && (el.id === 'pos-search' || el.id === 'prod-search' || el.id === 'pc-search');
       if (editable && !isSearchBox) return;
     }
 
@@ -7074,11 +7193,33 @@ const RetailSystem = {
     }
 
     if (e.key && e.key.length === 1) {
-      st.buffer += e.key;
+      st.buffer += this._scanChar(e);
       // Only capture mode swallows characters. In normal mode we never preventDefault
       // printable keys, so human typing in search boxes is never disturbed.
       if (capturing) { e.preventDefault(); e.stopPropagation(); }
     }
+  },
+
+  // The character a keydown contributes to a scanned code, independent of the
+  // keyboard layout. A wedge scanner sends PHYSICAL keys; with an Arabic layout
+  // active the OS turns the "A" key into an Arabic letter and e.key carries
+  // that, so a scan of "AB12" arrived as Arabic letters and matched nothing.
+  // Only when e.key is a NON-ASCII character and the physical key is a letter
+  // or digit do we take the character from e.code instead; every ASCII e.key
+  // (including shifted symbols like "-" and "_") is used as-is, so a normal
+  // layout behaves exactly as before. Case follows Shift XOR CapsLock, the way
+  // the scanner itself encodes it (the plan said "upper-case"; preserving the
+  // scanner's own case keeps a lower-case SKU matching).
+  _scanChar(e) {
+    const k = e.key;
+    if (k.charCodeAt(0) < 128 || !e.code) return k;
+    const m = /^(?:Key([A-Z])|Digit(\d)|Numpad(\d))$/.exec(e.code);
+    if (!m) return k;
+    if (m[1]) {
+      const caps = typeof e.getModifierState === 'function' && e.getModifierState('CapsLock');
+      return (!!e.shiftKey !== !!caps) ? m[1] : m[1].toLowerCase();
+    }
+    return m[2] || m[3];
   },
 
   _applyAffixes(raw, cfg) {
@@ -7098,6 +7239,13 @@ const RetailSystem = {
     if (st.capture) { const cb = st.capture; st.capture = null; try { cb(code); } catch (e) {} return; }
 
     // Route to whatever is on screen. Open modals take priority over the section.
+    // A scan while the receipt is still up means the next customer is already
+    // at the counter: close it and ring the scanned item on a fresh sale rather
+    // than ignoring the scan or burying it under a finished sale's receipt.
+    const openReceipt = document.getElementById('ret-receipt-dialog');
+    if (openReceipt) { this._closeModalOverlay(openReceipt); this._refocusScan(true); }
+    // F11 price check open: the scan is a lookup, not a sale line.
+    if (document.getElementById('ret-pricecheck')) return this._priceCheckScan(code);
     if (document.getElementById('ret-prod-modal')) {  // Add/Edit Product → barcode field
       const f = document.getElementById('pm-barcode');
       if (f) { f.value = code; f.focus(); SubsystemApp.showToast(t('Barcode captured'), 'success'); }
@@ -7272,21 +7420,26 @@ const RetailSystem = {
   // platform: a keyboard behaves the same in the packaged desktop app, a
   // browser tab, or via a Bluetooth keyboard paired to an Android till.
   //
-  // Keys, all chosen to be scanner-safe (see _scannerBusy) and OS-safe (none
-  // of them ever requires a modifier, so none of this can shadow a
-  // Ctrl/Cmd/Alt combo the OS or browser owns):
-  //   Enter          charge the sale (existing _checkout(), unchanged)
-  //   <digits> *     quantity multiplier -- "3*" before a scan or a tile tap
-  //                  sets the NEXT _addToCart's quantity (see
-  //                  _consumePendingQty). A hypermarket cashier ringing 12
-  //                  identical items presses 1, 2, *, then scans once --
-  //                  four keys, not twelve taps.
-  //   X              exact-cash pay -- tender = total, method = cash,
-  //                  charge, all in one key. The single most common
-  //                  transaction in a shop.
-  //   /              focus the search box (the GitHub/Slack convention).
-  //   Delete         void the most recently touched cart line.
-  //   Escape         cancel a pending quantity multiplier.
+  // THE TILL KEYBOARD MODEL (P1c). Home position is #pos-search; every action
+  // hands focus back to it. All matching is on the PHYSICAL key (e.code, via
+  // _keyCode), so it works on an Arabic layout too. The full list lives in
+  // POS_KEY_HELP (what F12 shows) -- in short:
+  //   type + Enter   add the highlighted / exact-barcode / single result
+  //   Up/Down        results (search has text) or cart lines (search empty)
+  //   Enter, empty   go to pay: caret into Cash Tendered; Enter there charges
+  //   F10, Ctrl+Enter  charge now        X  exact cash, charge at once
+  //   F1-F6          tender             F7 customer   F8 discount   F9 hold
+  //   Shift+F9       held sales          F11 price check   F12 key card
+  //   +/-            qty of the selected (else last) line
+  //   <digits> *     quantity of the NEXT item added -- or, with a line
+  //                  selected, of THAT line. The typed "3*" is removed from
+  //                  the search box.
+  //   Delete / Ctrl+Delete   remove the line / void the sale (confirm)
+  //   Esc            clear search > clear selection > cancel pending qty
+  //   Shift+F1-F4    cash drawer (open, in/out, X report, end shift)
+  // Enter on a focused BUTTON presses that button only -- it never charges.
+  // A completed scan never reaches this layer (see _initShortcuts), and every
+  // dialog the till opens switches this layer off while it is open.
   //
   // Init once, on first render of any retail section -- mirrors _initScanner.
   _initShortcuts() {
@@ -7302,6 +7455,17 @@ const RetailSystem = {
     // an in-progress scan burst) is guarded separately -- see
     // _scannerBusy().
     document.addEventListener('keydown', (e) => this._onPOSShortcut(e));
+    // Closing the window (or reloading) with a sale in progress asks first.
+    // Honoured by desktop browsers; the pywebview window just closes, which is
+    // no worse than before. Only while the till holds something.
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('beforeunload', (ev) => {
+        if (!(window.SubsystemApp && SubsystemApp.active === 'retail')) return;
+        if (!this._cart || !this._cart.length) return;
+        ev.preventDefault();
+        ev.returnValue = '';
+      });
+    }
   },
 
   // True while the wedge listener DEFINITELY owns this keystroke, with no
@@ -7327,10 +7491,98 @@ const RetailSystem = {
     return !!(st.buffer && st.buffer.length > 1);
   },
 
+  // Controls of the sale in progress that live in the DOM, not in this._cart.
+  // Saved by render() on the way out of the till; read back by _renderPOS /
+  // _loadPOSData. Keeps the previous draft when the DOM is already gone.
+  _savePosDraft() {
+    const sel = document.getElementById('pos-customer');
+    const disc = document.getElementById('pos-disc');
+    if (!sel && !disc) return;
+    this._posDraft = {
+      customerId: sel ? sel.value : '',
+      disc: disc ? disc.value : '0',
+      method: this._paymentMethod,
+    };
+  },
+
+  _restorePosDraft() {
+    const d = this._posDraft;
+    if (d) {
+      const disc = document.getElementById('pos-disc');
+      if (disc && d.disc != null) disc.value = d.disc;
+    }
+    // Same toggles _exactCashCharge / _resetSaleControls use to show the tender.
+    document.querySelectorAll('.pos-pay-btn').forEach(b => {
+      b.classList.toggle('active', !!(b.dataset && b.dataset.method === this._paymentMethod));
+    });
+    this._syncTenderUI(this._paymentMethod);
+    this._renderCart();
+  },
+
+  // Layout-independent key name for the till's key handlers.
+  //
+  // WHY e.code AND NOT e.key. e.key is the character the ACTIVE KEYBOARD
+  // LAYOUT produced. On an Arabic layout the X key yields "ء"-family
+  // letters and "/" yields "ظ", so every handler that compared e.key to
+  // 'x' or '/' was dead for exactly the shops that run this product in
+  // Arabic. e.code names the PHYSICAL key ("KeyX", "Slash", "Digit8"), which
+  // does not change with the layout, so the till's keys sit on the same
+  // physical keys for every cashier.
+  //
+  // Falls back to e.key only when the browser gave no usable code ("" or
+  // "Unidentified" -- some Android soft keyboards, and synthetic events in
+  // tests that only set `key`), mapping the few printable characters the
+  // till cares about onto the code they would have had. Named keys
+  // (Enter, Escape, Delete, ArrowUp, F1...) already ARE their own code.
+  _keyCode(e) {
+    const c = e && e.code;
+    if (c && c !== 'Unidentified') return c;
+    const k = (e && e.key) || '';
+    if (k.length === 1) {
+      if (k >= '0' && k <= '9') return 'Digit' + k;
+      if (/[a-z]/i.test(k)) return 'Key' + k.toUpperCase();
+      const m = { ' ': 'Space', '/': 'Slash', '*': 'NumpadMultiply', '+': 'NumpadAdd', '-': 'Minus', '=': 'Equal' };
+      return m[k] || k;
+    }
+    return k;
+  },
+
+  // "٣" (Arabic-Indic) -> "3". An Arabic layout can type its own digit
+  // glyphs into the search box; the quantity buffer holds ASCII digits, so a
+  // comparison between the two has to normalise first.
+  _asciiDigits(s) {
+    return String(s == null ? '' : s)
+      .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+      .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0));
+  },
+
+  // True for a control whose own keys are typing/choosing (so a bare letter,
+  // Delete or +/- there belongs to the control, not the till).
+  _isTypingTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName || '';
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el.isContentEditable;
+  },
+
+  // True for a control that Enter activates natively (a focused button must
+  // press ITSELF and nothing else -- see _onPOSShortcut's Enter branch).
+  _isActivatorTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName || '';
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY') return true;
+    return typeof el.getAttribute === 'function' && el.getAttribute('role') === 'button';
+  },
+
   _onPOSShortcut(e) {
     if (!(window.SubsystemApp && SubsystemApp.active === 'retail')) return;
     if (this._section !== 'pos') return;               // this is the till, not every screen
-    if (e.ctrlKey || e.metaKey || e.altKey) return;      // never shadow a browser/OS combo
+    const code = this._keyCode(e);
+    const ctrl = !!(e.ctrlKey || e.metaKey);
+    if (e.altKey) return;                               // never shadow a browser/OS combo
+    // The only modified combos the till owns. Anything else with Ctrl/Meta is
+    // the browser's or the OS's (Ctrl+C, Ctrl+P, Ctrl+W ...) and is left alone.
+    const isEnterKey = code === 'Enter' || code === 'NumpadEnter';
+    if (ctrl && !(isEnterKey || code === 'Delete' || code === 'Slash')) return;
 
     // AUDIT (Phase 0 #3): measured in a real browser with the Held Sales
     // dialog open and focused -- pressing Enter completed the sale BEHIND
@@ -7347,6 +7599,10 @@ const RetailSystem = {
     // without ever being pushed there -- a misfired shortcut here is a money
     // bug, not a cosmetic one, so this does not lean on every dialog always
     // wiring itself correctly forever.
+    //
+    // This is also the "shortcuts are off while a dialog is open" rule of the
+    // till keyboard model: every dialog the till opens (customer picker, price
+    // check, key card, held sales, receipt) handles its OWN keys.
     if (this._modalKeyStack.length) return;
     const activeForDialogCheck = document.activeElement;
     if (activeForDialogCheck && typeof activeForDialogCheck.closest === 'function' &&
@@ -7354,24 +7610,60 @@ const RetailSystem = {
 
     if (this._scannerBusy()) { this._qtyKeyBuffer = ''; return; }
 
-    const isDigit = e.key.length === 1 && e.key >= '0' && e.key <= '9';
+    // A modifier or lock key pressed on its own is not a keystroke the till
+    // reads -- and it must NOT reset the quantity-digit run: typing "*" on the
+    // digit row is Shift-down THEN 8, so a modifier that cleared the buffer
+    // made "3*" impossible on every layout where "*" needs Shift.
+    if (/^(?:Shift|Control|Alt|Meta|OS)(?:Left|Right)?$/.test(code) || code === 'CapsLock' || code === 'NumLock') return;
 
-    if (e.key === '*') {
+    const shift = !!e.shiftKey;
+    const el = document.activeElement;
+    const inSearch = !!el && el.id === 'pos-search';
+    const searchEmpty = inSearch && !el.value;
+    const typing = this._isTypingTarget(el);
+
+    // ── "N*" quantity multiplier ─────────────────────────────────────────
+    // "*" is NumpadMultiply, or Shift+8 on the digit row -- decided by the
+    // PHYSICAL key so it works on any layout.
+    const isStar = code === 'NumpadMultiply' || (code === 'Digit8' && shift);
+    if (isStar) {
       // Real barcodes (EAN/UPC, the format this till's own Scanner Settings
       // and _findByCode target) are numeric-only and never contain "*", so
       // its arrival is unambiguous regardless of timing -- the digits that
       // led up to it are what need to have been trustworthy, and the digit
       // branch below is what keeps them that way.
-      const n = parseInt(this._qtyKeyBuffer, 10);
+      const buf = this._qtyKeyBuffer;
       this._qtyKeyBuffer = '';
-      if (n > 0) {
-        this._pendingQty = n;
-        SubsystemApp.showToast(`×${n} — ${t('next item added at this quantity')}`, 'info');
+      const n = parseInt(buf, 10);
+      if (!(n > 0)) return;
+      if (inSearch) {
+        // The "3" the cashier typed is the multiplier, not a search term, and
+        // the "*" must not be typed at all -- before this the box was left
+        // holding "3*" and a live search for it. Only strip when the digits
+        // at the end of the box ARE the run we buffered; a longer run is a
+        // hand-typed barcode, not a multiplier, and is left alone.
+        const v = String(el.value || '');
+        const run = /(\d+)$/.exec(this._asciiDigits(v));
+        if (!run || run[1] !== buf) return;
+        el.value = v.slice(0, v.length - buf.length);
+        this._resSel = null;
+        this._filterPOS();
       }
+      e.preventDefault();
+      this._applyMultiplier(n);
       return;
     }
 
-    if (isDigit) {
+    // Digits build the multiplier run. Taken from the physical key so an
+    // AZERTY or Arabic digit row behaves the same; the printed character wins
+    // when it IS an ASCII digit (a numpad or a synthetic event).
+    let digit = null;
+    if (e.key && e.key.length === 1 && e.key >= '0' && e.key <= '9') digit = e.key;
+    else if (!shift) {
+      const dm = /^(?:Digit|Numpad)(\d)$/.exec(code);
+      if (dm) digit = dm[1];
+    }
+    if (digit !== null) {
       // The one-character ambiguity _scannerBusy() cannot resolve (see its
       // comment): the FIRST digit of a fresh scan burst and an isolated
       // deliberate digit press are indistinguishable from buffer state
@@ -7390,7 +7682,7 @@ const RetailSystem = {
       // Capped at 4 digits (max 9999) -- long enough for any real
       // hypermarket multiplier, short enough that a runaway buffer can't
       // parse into something absurd.
-      if (this._qtyKeyBuffer.length < 4) this._qtyKeyBuffer += e.key;
+      if (this._qtyKeyBuffer.length < 4) this._qtyKeyBuffer += digit;
       return;
     }
 
@@ -7399,70 +7691,96 @@ const RetailSystem = {
     // from here down is a real shortcut, not multiplier entry.
     this._qtyKeyBuffer = '';
 
-    if (e.key === 'Escape') {
-      // "cancel the current entry state" -- the only entry state this layer
-      // introduces is a pending quantity multiplier. Deliberately not
-      // gated on focus location: cancelling a stray "3" is always safe.
-      this._pendingQty = null;
-      return;
-    }
+    if (code === 'Escape') { this._onEscapeKey(e, el); return; }
 
-    // F1-F6 select a tender method in grid order (see POS_PAYMENT_METHODS /
-    // _renderPayButtons, the one list both the badges printed on the tender
-    // grid and this lookup are driven from, so they cannot drift apart). A
-    // printed badge that does not actually fire would be worse than no badge
-    // at all -- see retail_payment_grid_test.js's mutation proof of this
-    // branch. Reuses _setPayment exactly as a click would, including its own
-    // _refocusScan() call, so an F-key press hands the keyboard straight
-    // back to the scanner the same way clicking a tender button already does.
-    //
-    // THIS RUNS BEFORE THE TEXT-FIELD GUARD BELOW, and that ordering is the
+    // ── Function keys ────────────────────────────────────────────────────
+    // THESE RUN BEFORE THE TEXT-FIELD GUARD BELOW, and that ordering is the
     // whole point. The till deliberately parks focus in #pos-search so a
     // barcode wedge always lands somewhere useful (_keepScanFocus), so
     // document.activeElement is an INPUT essentially all the time the till is
-    // open. With the guard first, every one of these badges was dead in
-    // ordinary use: measured 2026-09-10 in a real browser, 1 of 6 worked --
-    // and that one was F1, which only looked right because cash is already
-    // the default. With focus moved off the input, 6 of 6 worked.
-    //
+    // open. With the guard first, every one of these was dead in ordinary use:
+    // measured 2026-09-10 in a real browser, 1 of 6 tender badges worked.
     // A function key cannot be part of anything a cashier is typing: it emits
     // no character, so letting it through cannot corrupt a search term or a
-    // tendered amount. The guard below still covers every key that CAN be
-    // typed -- Enter, digits, "x" -- which is what it was actually written to
-    // protect.
-    const fMatch = /^F([1-6])$/.exec(e.key);
-    if (fMatch) {
-      e.preventDefault();
-      const entry = this.POS_PAYMENT_METHODS[Number(fMatch[1]) - 1];
-      let btn = null;
-      document.querySelectorAll('.pos-pay-btn').forEach(b => {
-        if (b.dataset && b.dataset.method === entry.method) btn = b;
-      });
-      if (btn) this._setPayment(entry.method, btn);
-      return;
+    // tendered amount.
+    //
+    // Every F-key the till uses is preventDefault()ed: the desktop window
+    // (pywebview/WebView2) has no browser accelerators, but the Edge/Chrome
+    // --app fallback does (F5 reload, F11 fullscreen, F12 devtools, F10 menu).
+    const fMatch = /^F(\d{1,2})$/.exec(code);
+    if (fMatch && !ctrl) {
+      if (this._onFunctionKey(Number(fMatch[1]), shift, e)) return;
     }
 
-    const el = document.activeElement;
-    const tag = el ? el.tagName : '';
-    const inTextField = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
-    // Conservative on purpose, with NO exception for #pos-search (unlike
-    // _onScannerKey's isSearchBox carve-out): a cashier who types a manual
-    // search term and hits Enter out of habit must never accidentally
-    // charge whatever is already sitting in the cart. Every shortcut BELOW
-    // shares this one guard -- the function keys above deliberately do not,
-    // for the reason given there.
-    if (inTextField) return;
+    if (ctrl && code === 'Slash') { e.preventDefault(); this._openShortcutHelp(); return; }
 
-    if (e.key === 'Enter') {
+    // ── Enter ────────────────────────────────────────────────────────────
+    if (isEnterKey) {
+      if (ctrl) { e.preventDefault(); this._chargeNow(); return; }
+      if (inSearch) {
+        // The cashier is at the home position. With text: add the matching
+        // product. With nothing: they are done ringing items -- go to pay.
+        // (A scanner's own Enter never gets here: _onScannerKey, registered
+        // on the capture phase, stopPropagation()s a completed scan.)
+        e.preventDefault();
+        if (el.value && String(el.value).trim()) this._searchEnter();
+        else this._goToPay();
+        return;
+      }
+      if (el && el.id === 'pos-tendered') {
+        // Typed an amount (or left it blank = exact): Enter completes the sale.
+        e.preventDefault();
+        if (!e.repeat) this._chargeNow();
+        return;
+      }
+      if (el && el.id === 'pos-disc') { e.preventDefault(); this._refocusScan(true); return; }
+      // Any other form control or button: Enter belongs to THAT control. A
+      // focused qty button, product tile or tender button used to fall through
+      // to "charge the sale" here -- the cashier who tabbed to a button and
+      // pressed Enter to use it took payment instead.
+      if (typing || this._isActivatorTarget(el)) return;
+      // Focus nowhere in particular and a non-empty cart: the long-standing
+      // "Enter charges an idle cart" behaviour (retail_p0_till_e2e.py item 3).
       if (!this._cart.length) return;
-      const btn = document.getElementById('pos-checkout-btn');
-      if (btn && btn.disabled) return;   // a charge is already in flight
       e.preventDefault();
-      this._checkout();
+      if (!e.repeat) this._chargeNow();
       return;
     }
 
-    if (e.key === 'x' || e.key === 'X') {
+    // ── Arrow keys: results while searching, cart lines otherwise ─────────
+    if (code === 'ArrowDown' || code === 'ArrowUp') {
+      const dir = code === 'ArrowDown' ? 1 : -1;
+      if (inSearch && !searchEmpty) { e.preventDefault(); this._moveResSel(dir); return; }
+      if (!typing && !this._isActivatorTarget(el)) { e.preventDefault(); this._moveLineSel(dir); return; }
+      if (searchEmpty) { e.preventDefault(); this._moveLineSel(dir); return; }
+      return;
+    }
+
+    // ── + / - : quantity of the selected (else last) line ─────────────────
+    const plus = code === 'NumpadAdd' || code === 'Equal';
+    const minus = code === 'NumpadSubtract' || code === 'Minus';
+    if ((plus || minus) && (!typing || searchEmpty)) {
+      if (!this._cart.length) return;
+      e.preventDefault();
+      this._adjustSelectedQty(plus ? 1 : -1);
+      return;
+    }
+
+    // Every shortcut BELOW shares this one guard -- a letter, "/" or Delete
+    // typed into a field belongs to that field. Conservative on purpose: a
+    // cashier who types a search term and hits a key out of habit must never
+    // fire a money action underneath their fingers.
+    if (code === 'Delete') {
+      if (ctrl) { e.preventDefault(); this._voidSale(); return; }
+      if (typing && !searchEmpty) return;
+      e.preventDefault();
+      this._voidLastLine();
+      return;
+    }
+
+    if (typing) return;
+
+    if (code === 'KeyX') {
       if (!this._cart.length) return;
       const btn = document.getElementById('pos-checkout-btn');
       if (btn && btn.disabled) return;
@@ -7471,17 +7789,426 @@ const RetailSystem = {
       return;
     }
 
-    if (e.key === '/') {
+    if (code === 'Slash') {
       e.preventDefault();
       this._refocusScan(true);
       return;
     }
+  },
 
-    if (e.key === 'Delete') {
-      e.preventDefault();
-      this._voidLastLine();
+  // "3*" arrived. If a cart line is selected it is THAT line's quantity that
+  // changes (the cashier is correcting a line, not announcing the next item);
+  // otherwise it arms the multiplier for the next item added.
+  _applyMultiplier(n) {
+    const idx = this._selLine;
+    if (idx != null && this._cart[idx]) {
+      this._updateQty(idx, n - this._cart[idx].quantity);
       return;
     }
+    this._pendingQty = n;
+    SubsystemApp.showToast(`×${n} — ${t('next item added at this quantity')}`, 'info');
+  },
+
+  // Esc, in order: (a dialog's own Escape runs before this layer ever sees
+  // the key -- see _onPOSShortcut's dialog guard) > clear the search > clear
+  // the line selection > cancel a pending quantity. It never voids the sale.
+  _onEscapeKey(e, el) {
+    const search = document.getElementById('pos-search');
+    if (search && search.value) {
+      search.value = '';
+      this._resSel = null;
+      this._filterPOS();
+      return;
+    }
+    if (el && (el.id === 'pos-tendered' || el.id === 'pos-disc')) { this._refocusScan(true); return; }
+    if (this._selLine != null) { this._selLine = null; this._paintLineSel(); return; }
+    this._pendingQty = null;
+  },
+
+  // F1..F12 (plain) and Shift+F1..F4 / Shift+F9. Returns true when the key was
+  // the till's (and has been preventDefault()ed), false to let it through.
+  _onFunctionKey(n, shift, e) {
+    if (shift) {
+      if ((n >= 1 && n <= 4) || n === 9) {
+        e.preventDefault();
+        if (n === 9) this._openHeldSalesModal();
+        else this._drawerKey(n);
+        return true;
+      }
+      return false;
+    }
+    if (n >= 1 && n <= 12) e.preventDefault();
+    else return false;
+
+    // F1-F6 select a tender method in grid order (see POS_PAYMENT_METHODS /
+    // _renderPayButtons, the one list both the badges printed on the tender
+    // grid and this lookup are driven from, so they cannot drift apart). A
+    // printed badge that does not actually fire would be worse than no badge
+    // at all -- see retail_payment_grid_test.js's mutation proof of this
+    // branch. Reuses _setPayment exactly as a click would, including its own
+    // _refocusScan() call.
+    if (n <= 6) {
+      const entry = this.POS_PAYMENT_METHODS[n - 1];
+      if (!entry) return true;     // a list shorter than 6 has no such key
+      let btn = null;
+      document.querySelectorAll('.pos-pay-btn').forEach(b => {
+        if (b.dataset && b.dataset.method === entry.method) btn = b;
+      });
+      if (btn) this._setPayment(entry.method, btn);
+      // Cash is the tender with a field to fill: F1 also lands the caret there.
+      if (btn && entry.method === 'cash' && this._paymentMethod === 'cash') this._focusTendered();
+      return true;
+    }
+    if (n === 7) { this._openCustomerPicker(); return true; }
+    if (n === 8) { this._focusDiscount(); return true; }
+    if (n === 9) { this._holdSale(); return true; }
+    if (n === 10) { if (!e.repeat) this._chargeNow(); return true; }
+    if (n === 11) { this._openPriceCheck(); return true; }
+    this._openShortcutHelp();   // F12
+    return true;
+  },
+
+  _drawerKey(n) {
+    const cd = window.CashDrawer;
+    if (!cd) return;
+    if (typeof cd.keyAction === 'function') cd.keyAction(n);
+  },
+
+  _focusTendered() {
+    const f = document.getElementById('pos-tendered');
+    if (!f || typeof f.focus !== 'function') return;
+    this._syncTenderUI('cash');
+    try { f.focus(); if (typeof f.select === 'function') f.select(); } catch (err) { /* focus is a courtesy */ }
+  },
+
+  _focusDiscount() {
+    const d = document.getElementById('pos-disc');
+    if (!d || typeof d.focus !== 'function') {
+      // No #pos-disc at all: this person lacks retail.discount. The manager-
+      // approval (PIN) path is explicitly NOT built yet (owner decision
+      // 2026-09-28, see the Discount link's own comment), so the honest
+      // answer is the same explanation the on-screen link gives.
+      this._explainDiscountNeedsManager();
+      return;
+    }
+    try { d.focus(); if (typeof d.select === 'function') d.select(); } catch (err) { /* courtesy */ }
+  },
+
+  // Charge now with the chosen tender -- the key behind F10 / Ctrl+Enter /
+  // Enter-in-Cash-Tendered. Cash with a blank tendered field is exact
+  // (_checkout reads amount_paid as max(tendered, amountDue)); a tendered
+  // amount that does not cover the total is refused there with its own toast.
+  _chargeNow() {
+    if (!this._cart.length) { SubsystemApp.showToast(t('Cart is empty'), 'error'); return; }
+    const btn = document.getElementById('pos-checkout-btn');
+    if (btn && btn.disabled) return;   // a charge is already in flight
+    this._checkout();
+  },
+
+  // Enter in an EMPTY search with something in the cart: "go to pay". Cash
+  // (the default tender) lands the caret in Cash Tendered -- blank means the
+  // exact amount, so Enter again completes a cash sale. A tender chosen with
+  // F2-F6 has no field to fill; the Charge button takes focus instead, so the
+  // next Enter presses THAT button (a focused button activates only itself).
+  _goToPay() {
+    if (!this._cart.length) return;
+    if (this._paymentMethod === 'cash') { this._focusTendered(); return; }
+    const btn = document.getElementById('pos-checkout-btn');
+    if (btn && typeof btn.focus === 'function' && !btn.disabled) {
+      try { btn.focus(); } catch (err) { /* courtesy */ }
+      SubsystemApp.showToast(t('Press Enter to charge'), 'info');
+    }
+  },
+
+  // ── Cart-line selection (Arrow Up/Down with an empty search) ───────────
+  _paintLineSel() {
+    const rows = document.querySelectorAll('#pos-cart .pos-cart-row');
+    rows.forEach((row, i) => {
+      const on = i === this._selLine;
+      row.classList.toggle('pos-cart-row-sel', on);
+      if (on && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
+    });
+  },
+
+  _moveLineSel(dir) {
+    const n = this._cart.length;
+    if (!n) { this._selLine = null; return; }
+    if (this._selLine == null || this._selLine >= n) this._selLine = dir > 0 ? 0 : n - 1;
+    else this._selLine = Math.min(n - 1, Math.max(0, this._selLine + dir));
+    this._paintLineSel();
+  },
+
+  // +1 / -1 on the selected line, else the last line (the one just rung).
+  _adjustSelectedQty(delta) {
+    if (!this._cart.length) return;
+    const idx = (this._selLine != null && this._cart[this._selLine]) ? this._selLine : this._cart.length - 1;
+    this._updateQty(idx, delta);
+  },
+
+  // ── Search-result highlight (Arrow Up/Down with text in the search) ────
+  _paintResSel() {
+    const tiles = document.querySelectorAll('#pos-product-grid .pos-card');
+    tiles.forEach((tile, i) => {
+      const on = i === this._resSel;
+      tile.classList.toggle('pos-card-hl', on);
+      if (on && typeof tile.scrollIntoView === 'function') tile.scrollIntoView({ block: 'nearest' });
+    });
+  },
+
+  _moveResSel(dir) {
+    const n = (this._gridVisible || []).length;
+    if (!n) { this._resSel = null; return; }
+    if (this._resSel == null || this._resSel >= n) this._resSel = dir > 0 ? 0 : n - 1;
+    else this._resSel = Math.min(n - 1, Math.max(0, this._resSel + dir));
+    this._paintResSel();
+  },
+
+  // What a tile tap does for one product: open the variant picker for a
+  // grouping parent, refuse an out-of-stock plain product, else add it. The
+  // keyboard path (Enter on a highlighted/single/exact result, F11's Enter)
+  // goes through here so it can never behave differently from tapping the tile.
+  _activateProduct(p) {
+    const all = this._products || [];
+    const hasKids = all.some(x => x.parent_product_id && x.parent_product_id === p.id);
+    if (hasKids || p.has_variants) { this._openVariantPicker(p.id); return false; }
+    if (p.total_stock <= 0) { SubsystemApp.showToast(t('Out of stock'), 'error'); return false; }
+    const added = this._addToCart(p.id);
+    if (added) SubsystemApp.showToast(`${t('Added')}: ${p.name}`, 'success');
+    return added;
+  },
+
+  // Enter with text in the search. In order: the highlighted result; an exact
+  // barcode/SKU match among the loaded results; the only result; an exact
+  // server lookup of what was typed. Anything else is ambiguous, and guessing
+  // which of several products the cashier meant on a money screen is worse
+  // than telling them to pick one.
+  async _searchEnter() {
+    const input = document.getElementById('pos-search');
+    const term = ((input && input.value) || '').trim();
+    if (!term) return;
+    let p = (this._resSel != null && this._gridVisible) ? this._gridVisible[this._resSel] : null;
+    if (!p) {
+      // The results on screen may belong to the PREVIOUS keystroke (search is
+      // debounced). Judge the results of what is in the box now.
+      if (this._posResultsTerm !== term) {
+        clearTimeout(this._posSearchTimer);
+        await this._runPOSSearch(term);
+        if (((document.getElementById('pos-search') || {}).value || '').trim() !== term) return;  // typed on
+      }
+      const lc = term.toLowerCase();
+      const loaded = this._products || [];
+      p = loaded.find(x => (x.barcode && String(x.barcode).toLowerCase() === lc) ||
+                           (x.sku && String(x.sku).toLowerCase() === lc)) || null;
+      if (!p && (this._gridVisible || []).length === 1) p = this._gridVisible[0];
+      if (!p) {
+        const found = await this._findByCode(term);
+        if (((document.getElementById('pos-search') || {}).value || '').trim() !== term) return;
+        p = found.product;
+      }
+      if (!p) {
+        const n = (this._gridVisible || []).length;
+        SubsystemApp.showToast(n ? `${n} ${t('matches')} — ${t('use the arrow keys to pick one')}` : t('No products found.'), n ? 'info' : 'error');
+        return;
+      }
+    }
+    if (input) input.value = '';
+    this._resSel = null;
+    this._filterPOS();
+    this._activateProduct(p);
+    this._refocusScan(true);
+  },
+
+  // ══ TILL DIALOGS OPENED FROM THE KEYBOARD ═════════════════════════════════
+  // Customer picker (F7), price check (F11), the key card (F12). Each is a
+  // hand-rolled .ret-modal like the rest of this file: _wireModalA11y gives it
+  // Escape-to-close, focus-in and focus-restore, and pushes it onto
+  // _modalKeyStack -- which is what switches the till's own shortcuts off
+  // while it is open, so none of these dialogs' keys can ever also be read as
+  // "charge" or "remove a line".
+
+  // The one list the F12 card, the till key card (help.js) and the tests read.
+  // [key label, English description]. Key labels that are words go through t().
+  POS_KEY_HELP: [
+    ['Enter', 'Add the item you typed. With an empty search: go to payment'],
+    ['↑ ↓', 'Pick a search result, or a cart line when the search is empty'],
+    ['+ −', 'One more or one fewer of the selected line'],
+    ['N *', 'Quantity of the next item (type 3, then *), or of the selected line'],
+    ['Delete', 'Remove the selected line (or the last one)'],
+    ['Ctrl+Delete', 'Void the whole sale'],
+    ['F1 – F6', 'Choose how the customer pays'],
+    ['F10 / Ctrl+Enter', 'Charge the sale'],
+    ['X', 'Exact cash: charge at once'],
+    ['F7', 'Choose a customer'],
+    ['F8', 'Discount'],
+    ['F9', 'Hold the sale'],
+    ['Shift+F9', 'Held sales'],
+    ['F11', 'Price check'],
+    ['F12', 'Show these keys'],
+    ['Esc', 'Close, clear the search, cancel'],
+    ['/', 'Go to the search box'],
+    ['P', 'On the receipt: print'],
+    ['Shift+F1 – F4', 'Cash drawer: open shift, cash in/out, X report, end shift'],
+  ],
+
+  _pickerOverlay(id, title, bodyHtml) {
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = id;
+    overlay.innerHTML = `
+      <div class="ret-modal pk-dialog" id="${id}-dialog" role="dialog" aria-modal="true" aria-labelledby="${id}-title">
+        <h3 id="${id}-title">${this._esc(title)}</h3>
+        ${bodyHtml}
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = this._wireModalA11y(overlay, `${id}-dialog`);
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+    return { overlay, close };
+  },
+
+  // ── F7: customer picker ─────────────────────────────────────────────────
+  // Type a name or phone, arrows move, Enter selects, Esc closes. "Walk-in" is
+  // always the first row. The <select> in the sale header stays for the mouse;
+  // picking here writes to it and goes through the same _onCustomerChange().
+  _openCustomerPicker() {
+    if (document.getElementById('ret-cust-pick')) return;
+    const { overlay, close } = this._pickerOverlay('ret-cust-pick', t('Choose a customer'), `
+        <input id="cp-search" class="pk-input" type="text" autocomplete="off"
+               aria-label="${this._esc(t('Type a name or phone'))}" placeholder="${this._esc(t('Type a name or phone'))}" />
+        <div class="pk-list" id="cp-list" role="listbox"></div>
+        <div class="pk-hint">↑ ↓ · ${this._esc(t('Enter'))} · ${this._esc(t('Esc'))}</div>`);
+    const input = overlay.querySelector('#cp-search');
+    const list = overlay.querySelector('#cp-list');
+    const state = { rows: [], sel: 0 };
+    const paint = () => {
+      list.innerHTML = state.rows.map((r, i) => `<button type="button" tabindex="-1" role="option"
+          class="pk-row${i === state.sel ? ' pk-row-sel' : ''}" data-i="${i}" aria-selected="${i === state.sel}">
+          <span class="pk-row-main">${this._esc(r.label)}</span></button>`).join('');
+      const cur = list.querySelector('.pk-row-sel');
+      if (cur && typeof cur.scrollIntoView === 'function') cur.scrollIntoView({ block: 'nearest' });
+    };
+    const build = () => {
+      const q = this._asciiDigits(input.value).trim().toLowerCase();
+      const rows = [{ id: '', label: t('Walk-in') }];
+      (this._customers || []).forEach(cu => {
+        const hay = `${cu.name || ''} ${this._asciiDigits(cu.phone || '')}`.toLowerCase();
+        if (!q || hay.indexOf(q) !== -1) rows.push({ id: cu.id, label: `${cu.name}${cu.phone ? ' (' + cu.phone + ')' : ''}` });
+      });
+      state.rows = rows.slice(0, 50);
+      state.sel = q && state.rows.length > 1 ? 1 : 0;   // a typed query lands on the first real match
+      paint();
+    };
+    const pick = (i) => {
+      const r = state.rows[i];
+      if (!r) return;
+      const sel = document.getElementById('pos-customer');
+      if (sel) sel.value = r.id == null ? '' : String(r.id);
+      close();
+      this._onCustomerChange();
+    };
+    input.addEventListener('input', build);
+    input.addEventListener('keydown', (ev) => {
+      const k = this._keyCode(ev);
+      if (k === 'ArrowDown' || k === 'ArrowUp') {
+        ev.preventDefault();
+        state.sel = Math.min(state.rows.length - 1, Math.max(0, state.sel + (k === 'ArrowDown' ? 1 : -1)));
+        paint();
+      } else if (k === 'Enter' || k === 'NumpadEnter') {
+        ev.preventDefault(); ev.stopPropagation();
+        pick(state.sel);
+      }
+    });
+    list.addEventListener('click', (ev) => {
+      const row = ev.target.closest && ev.target.closest('.pk-row');
+      if (row) pick(Number(row.dataset.i));
+    });
+    build();
+    input.focus();
+  },
+
+  // ── F11: price check ────────────────────────────────────────────────────
+  // Look an item up WITHOUT adding it: name, price, stock. Type or scan, Enter
+  // looks it up; Enter again (same term) adds the shown item to the sale; Esc
+  // closes. A scan while it is open lands here (see _dispatchScan), not in the
+  // cart. F11 is fullscreen in the Edge/Chrome fallback window -- the key
+  // handler preventDefault()s it.
+  _openPriceCheck() {
+    if (document.getElementById('ret-pricecheck')) return;
+    const { overlay, close } = this._pickerOverlay('ret-pricecheck', t('Price check'), `
+        <input id="pc-search" class="pk-input" type="text" autocomplete="off"
+               aria-label="${this._esc(t('Scan a barcode or search'))}" placeholder="${this._esc(t('Scan a barcode or search'))}" />
+        <div class="pk-list" id="pc-result" role="listbox" aria-live="polite"></div>
+        <div class="pk-hint">${this._esc(t('Enter'))}: ${this._esc(t('look up'))} · ${this._esc(t('Enter'))} ${this._esc(t('again'))}: ${this._esc(t('add to the sale'))} · ${this._esc(t('Esc'))}</div>`);
+    const input = overlay.querySelector('#pc-search');
+    const box = overlay.querySelector('#pc-result');
+    const st = { term: '', results: [], sel: 0, close };
+    this._pc = st;
+    const paint = () => {
+      if (!st.term) { box.innerHTML = ''; return; }
+      if (!st.results.length) { box.innerHTML = `<div class="pk-empty">${this._esc(t('No products found.'))}</div>`; return; }
+      box.innerHTML = st.results.map((p, i) => {
+        const stock = p.total_stock <= 0 ? this._esc(t('Out of stock')) : `${this._esc(t('Stock'))}: ${this._esc(String(p.total_stock))} ${this._esc(p.unit || '')}`;
+        return `<div class="pk-row pk-row-static${i === st.sel ? ' pk-row-sel' : ''}" role="option" aria-selected="${i === st.sel}">
+          <span class="pk-row-main">${this._esc(p.name)}</span>
+          <span class="pk-row-price">${this._money(p.sell_price)}</span>
+          <span class="pk-row-sub">${stock}</span></div>`;
+      }).join('');
+    };
+    st.lookup = async (term) => {
+      st.term = term;
+      st.results = [];
+      st.sel = 0;
+      const found = await this._findByCode(term);
+      if (st.term !== term) return;                       // a newer lookup superseded this one
+      if (found.product) st.results = [found.product];
+      else {
+        try {
+          const res = await this._get(`/api/sub/retail/products?q=${encodeURIComponent(term)}&limit=6`);
+          if (st.term !== term) return;
+          st.results = (res.data || []).filter(p => !p.parent_product_id);
+          st.results.forEach(p => this._cacheProduct(p));
+        } catch (e) { st.results = []; }
+      }
+      paint();
+    };
+    input.addEventListener('keydown', (ev) => {
+      const k = this._keyCode(ev);
+      if (k === 'ArrowDown' || k === 'ArrowUp') {
+        ev.preventDefault();
+        st.sel = Math.min(st.results.length - 1, Math.max(0, st.sel + (k === 'ArrowDown' ? 1 : -1)));
+        paint();
+      } else if (k === 'Enter' || k === 'NumpadEnter') {
+        ev.preventDefault(); ev.stopPropagation();
+        const term = input.value.trim();
+        if (!term) return;
+        if (term === st.term && st.results.length) {
+          const p = st.results[st.sel] || st.results[0];
+          close();
+          this._activateProduct(p);
+        } else {
+          st.lookup(term);
+        }
+      }
+    });
+    input.focus();
+  },
+
+  // A scan while the price check is open is a lookup, not a sale line.
+  _priceCheckScan(code) {
+    const st = this._pc;
+    const input = document.getElementById('pc-search');
+    if (!st || !input) return;
+    input.value = code;
+    st.lookup(code);
+  },
+
+  // ── F12 / Ctrl+/: the key card ──────────────────────────────────────────
+  _openShortcutHelp() {
+    if (document.getElementById('ret-keyhelp')) return;
+    const rows = this.POS_KEY_HELP.map(([k, d]) =>
+      `<tr><td class="pk-key" dir="ltr"><kbd class="pos-kbd">${this._esc((k === 'Enter' || k === 'Delete' || k === 'Esc') ? t(k) : k)}</kbd></td><td>${this._esc(t(d))}</td></tr>`).join('');
+    this._pickerOverlay('ret-keyhelp', t('Till keys'), `
+        <table class="pk-keytable"><tbody>${rows}</tbody></table>
+        <div class="pk-hint">${this._esc(t('Esc'))}</div>`);
   },
 
   // Tender = total, method = cash, charge -- the single most common
@@ -7510,6 +8237,8 @@ const RetailSystem = {
   // own ✕ button does -- no new removal logic.
   _voidLastLine() {
     if (!this._cart.length) return;
+    // A line the cashier has arrowed onto beats "most recently touched".
+    if (this._selLine != null && this._cart[this._selLine]) { this._removeLine(this._selLine); return; }
     const idx = this._lastAddedId != null
       ? this._cart.findIndex(i => i.product_id === this._lastAddedId)
       : this._cart.length - 1;
@@ -8070,6 +8799,33 @@ const RetailSystem = {
     // hand-rolled modal without one, and adding one would change behaviour
     // on the post-sale receipt, which is out of scope for this pass.
     const _closeReceipt = this._wireModalA11y(overlay, 'ret-receipt-dialog');
+    // Receipt keys: Enter = New Sale, P = print. Registered on the capture
+    // phase like every dialog key handler here, and it removes ITSELF once the
+    // dialog is gone by any route (New Sale click, auto-close, a scan). Ignored
+    // when the keystroke already belongs to something else: a completed scan
+    // (preventDefault'd by _onScannerKey), a typed WhatsApp number, or a focused
+    // button (which must press itself). #pos-search is exempt from the "typing
+    // target" rule -- focus is handed back to it after a print, and a "p" typed
+    // there would otherwise land in the search box instead of printing.
+    const onReceiptKey = (ev) => {
+      if (!overlay.isConnected) { document.removeEventListener('keydown', onReceiptKey, true); return; }
+      const top = this._topModalKeyLayer();
+      if (top && top.overlay !== overlay) return;        // a confirm sits on top
+      if (ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const tgt = ev.target;
+      const own = tgt && tgt.id === 'pos-search';
+      if (!own && (this._isTypingTarget(tgt) || this._isActivatorTarget(tgt))) return;
+      const k = this._keyCode(ev);
+      if (k === 'Enter' || k === 'NumpadEnter') {
+        ev.preventDefault(); ev.stopPropagation();
+        _closeReceipt();
+        this._refocusScan(true);
+      } else if (k === 'KeyP') {
+        ev.preventDefault(); ev.stopPropagation();
+        this._printReceipt(this._lastSaleData);
+      }
+    };
+    document.addEventListener('keydown', onReceiptKey, true);
     // FIX ROUND F6: the dialog used to close 8s after checkout NO MATTER
     // WHAT, including while the cashier was still typing a WhatsApp number
     // -- measured live: a customer reading their number out loud takes
@@ -8520,6 +9276,11 @@ const RetailSystem = {
     setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) {} }, 150);
     await new Promise((resolve) => setTimeout(resolve, 151));
     try { frame.contentWindow.print = nativePrint; } catch (e) { /* frame gone */ }
+    // contentWindow.focus() above moved keyboard focus INTO the hidden print
+    // frame, and nothing ever gave it back: after a printed receipt the next
+    // scan and every till key went to a zero-size iframe. Hand it back to the
+    // scan field (not for a preview, which never touched focus).
+    try { window.focus(); this._refocusScan(true); } catch (e) { /* focus is a courtesy */ }
     return printed;
   },
 

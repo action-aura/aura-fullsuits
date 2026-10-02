@@ -105,6 +105,21 @@ const AuraHelp = {
     'Remove the last line': 'حذف آخر سطر',
     'Go to the search box': 'الانتقال إلى مربع البحث',
     'Quantity of the next item (type 3, then *)': 'كمية الصنف التالي (اكتب 3 ثم *)',
+    'Add the item you typed. With an empty search: go to payment': 'أضف الصنف الذي كتبته. والبحث فارغ: انتقل إلى الدفع',
+    'Pick a search result, or a cart line when the search is empty': 'اختر نتيجة بحث، أو سطرًا من السلة عندما يكون البحث فارغًا',
+    'One more or one fewer of the selected line': 'زيادة أو إنقاص واحد في السطر المحدد',
+    'Quantity of the next item (type 3, then *), or of the selected line': 'كمية الصنف التالي (اكتب 3 ثم *)، أو كمية السطر المحدد',
+    'Remove the selected line (or the last one)': 'حذف السطر المحدد (أو الأخير)',
+    'Void the whole sale': 'إلغاء البيع كاملًا',
+    'Choose a customer': 'اختيار عميل',
+    'Discount': 'الخصم',
+    'Hold the sale': 'تعليق البيع',
+    'Held sales': 'المبيعات المعلّقة',
+    'Price check': 'فحص السعر',
+    'Show these keys': 'عرض هذه المفاتيح',
+    'Close, clear the search, cancel': 'إغلاق، مسح البحث، إلغاء',
+    'On the receipt: print': 'في الإيصال: طباعة',
+    'Cash drawer: open shift, cash in/out, X report, end shift': 'درج النقد: فتح وردية، إيداع/سحب، تقرير X، إنهاء الوردية',
   },
 
   _ar(s) {
@@ -134,16 +149,16 @@ const AuraHelp = {
       const enLine = ar !== en ? `<small class="en" lang="en" dir="ltr">${esc(en)}</small>` : '';
       return `<tr><td class="k" dir="ltr">${esc(key)}</td><td class="v"><span class="ar" lang="ar">${esc(ar)}</span>${enLine}</td></tr>`;
     };
-    // The handler only answers F1..F6 (/^F([1-6])$/), so a 7th method has NO
-    // key and must not be printed as one.
+    // The handler only answers F1..F6 for tenders, so a 7th method has NO key
+    // and must not be printed as one (F7 is the customer picker now -- it is
+    // printed from POS_KEY_HELP below, under its own name, never as a tender).
+    // The other rows come from RetailSystem.POS_KEY_HELP, the same list the
+    // F12 overlay shows, so the printed card and the on-screen card cannot
+    // disagree. Its own "F1 – F6" row is skipped: the six tender rows above
+    // are generated from the live list and are more specific.
+    const help = (window.RetailSystem && RetailSystem.POS_KEY_HELP) || [];
     const rows = methods.slice(0, 6).map((m, i) => row('F' + (i + 1), m.label)).join('')
-      + [
-        ['Enter', 'Charge the sale'],
-        ['X', 'Exact cash: charge at once'],
-        ['Delete', 'Remove the last line'],
-        ['/', 'Go to the search box'],
-        ['N *', 'Quantity of the next item (type 3, then *)'],
-      ].map(([k, en]) => row(k, en)).join('');
+      + help.filter(([k]) => k !== 'F1 – F6').map(([k, en]) => row(k, en)).join('');
     return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
 <title>${esc(this._ar('Till keys'))}</title>
 <style>

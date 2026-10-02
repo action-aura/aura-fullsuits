@@ -380,9 +380,12 @@ async function testFunctionKeysBeatingTheTextGuardIsProved() {
   // it here would throw on the temporal dead zone -- a mutant that fails for
   // the wrong reason proves nothing.
   const mutated = mutate(SOURCE, [[
-    `    const fMatch = /^F([1-6])$/.exec(e.key);`,
+    // Re-anchored for the till keyboard model (P1c): the F-key match is now on
+    // the physical key (e.code via _keyCode) and covers F1-F12. The mutant is
+    // the SAME defect as before -- F-keys ignored while an input has focus.
+    `    const fMatch = /^F(\\d{1,2})$/.exec(code);`,
     `    const fMatch = (document.activeElement && document.activeElement.tagName === 'INPUT')
-      ? null : /^F([1-6])$/.exec(e.key);`,
+      ? null : /^F(\\d{1,2})$/.exec(code);`,
   ]]);
 
   const msg = await provesMutation(
