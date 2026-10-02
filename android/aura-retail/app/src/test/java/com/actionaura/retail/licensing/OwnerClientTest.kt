@@ -179,4 +179,84 @@ class OwnerClientTest {
         val body2 = server.takeRequest().body.readUtf8()
         assertThat(body1).isNotEqualTo(body2) // different nonce/timestamp/request_id -> different signature
     }
+
+    // ---- AUDIT-033 fix round (verifier V finding #1): registry_device_id ----
+
+    private val registryId = "11111111-2222-4333-8444-555555555555"
+
+    /** Re-derives the canonical bytes Owner would, from the body exactly as it
+     * arrived on the wire (minus the signature), and verifies the device
+     * signature over them with the real public key. */
+    private fun signatureCoversBody(wireBody: String): Boolean {
+        val parsed = LinkedHashMap(parseJson(wireBody))
+        val signature = java.util.Base64.getDecoder().decode(parsed.remove("signature") as String)
+        val publicKey = java.util.Base64.getDecoder().decode(identity.getPublicKeyB64())
+        return verifySignature(publicKey, canonicalizeBytes(parsed), signature)
+    }
+
+    @Test
+    fun `checkIn carries the registry device id and the signature covers it`() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"result":"SUCCESS"}"""))
+        client().checkIn(installationId = "inst-1", identity = identity, registryDeviceId = registryId)
+        val sent = server.takeRequest().body.readUtf8()
+        assertThat(parseJson(sent)["registry_device_id"]).isEqualTo(registryId)
+        assertThat(signatureCoversBody(sent)).isTrue()
+        // Swapping the id after signing must break the signature (the id is covered).
+        val tampered = sent.replace(registryId, "99999999-2222-4333-8444-555555555555")
+        assertThat(signatureCoversBody(tampered)).isFalse()
+    }
+
+    @Test
+    fun `activate carries the registry device id and the signature covers it`() {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"result":"SUCCESS"}"""))
+        client().activate(
+            "AURA_RETAIL", "ANDROID", "1.0.0-rc.2", "rc", "id-1",
+            identity.getPublicKeyB64(), "KEY-A", "idem-1", identity,
+            registryDeviceId = registryId,
+        )
+        val sent = server.takeRequest().body.readUtf8()
+        assertThat(parseJson(sent)["registry_device_id"]).isEqualTo(registryId)
+        assertThat(signatureCoversBody(sent)).isTrue()
+    }
+
+    @Test
+    fun `registry device id key is absent when null or blank`() {
+        repeat(3) { server.enqueue(MockResponse().setResponseCode(200).setBody("""{"result":"SUCCESS"}""")) }
+        client().checkIn(installationId = "inst-1", identity = identity)
+        client().checkIn(installationId = "inst-1", identity = identity, registryDeviceId = "  ")
+        client().activate(
+            "AURA_RETAIL", "ANDROID", "1.0.0-rc.2", "rc", "id-1",
+            identity.getPublicKeyB64(), "KEY-A", "idem-1", identity,
+        )
+        repeat(3) {
+            val sent = server.takeRequest().body.readUtf8()
+            // Absent, not sent as a null: old clients reject unknown fields and
+            // Owner only echoes the field when the request carried it.
+            assertThat(sent).doesNotContain("registry_device_id")
+            assertThat(signatureCoversBody(sent)).isTrue()
+        }
+    }
+
+    @Test
+    fun `registry device id is re-signed on every retry`() {
+        server.enqueue(MockResponse().setResponseCode(503))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"result":"SUCCESS"}"""))
+        client().checkIn(installationId = "inst-1", identity = identity, registryDeviceId = registryId)
+        repeat(2) {
+            val sent = server.takeRequest().body.readUtf8()
+            assertThat(parseJson(sent)["registry_device_id"]).isEqualTo(registryId)
+            assertThat(signatureCoversBody(sent)).isTrue()
+        }
+    }
+
+    @Test
+    fun `parseRegistryDeviceId accepts only a non-blank string`() {
+        assertThat(parseRegistryDeviceId(mapOf("registry_device_id" to registryId))).isEqualTo(registryId)
+        assertThat(parseRegistryDeviceId(mapOf("registry_device_id" to null))).isNull()
+        assertThat(parseRegistryDeviceId(mapOf("registry_device_id" to "   "))).isNull()
+        assertThat(parseRegistryDeviceId(mapOf("registry_device_id" to ""))).isNull()
+        assertThat(parseRegistryDeviceId(mapOf("registry_device_id" to 42.0))).isNull()
+        assertThat(parseRegistryDeviceId(emptyMap())).isNull()
+        assertThat(parseRegistryDeviceId(mapOf("reason_code" to "x"))).isNull()
+    }
 }

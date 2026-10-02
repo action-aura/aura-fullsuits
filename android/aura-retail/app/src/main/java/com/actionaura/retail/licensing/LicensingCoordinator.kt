@@ -70,6 +70,7 @@ class LicensingCoordinator(context: Context) {
                 licenseKey = licenseKey,
                 idempotencyKey = UUID.randomUUID().toString(),
                 identity = identity,
+                registryDeviceId = registryDeviceId(),
             )
         } catch (exc: OwnerClientError) {
             return@withContext mapOf("reason_code" to exc.reasonCode, "detail" to (exc.message ?: ""), "_local_error" to true)
@@ -90,7 +91,11 @@ class LicensingCoordinator(context: Context) {
             ?: return@withContext mapOf("current_state" to "ACTIVATION_REQUIRED")
 
         val ownerResponseRaw: String = try {
-            ownerClient().checkIn(installationId = installationId, identity = identity)
+            ownerClient().checkIn(
+                installationId = installationId,
+                identity = identity,
+                registryDeviceId = registryDeviceId(),
+            )
         } catch (exc: OwnerClientError) {
             // Mirrors the Windows route's own behavior (Part AD): a failed
             // check-in attempt is not itself an error state -- report the
@@ -194,6 +199,32 @@ class LicensingCoordinator(context: Context) {
         executeLocal(request)
     }
 
+    /**
+     * AUDIT-033 fix round (verifier V finding #1): this device's shop-registry
+     * computer id, asked of Python, which owns it. Kotlin owns the Owner call
+     * and Python owns the id, so the id travels Python -> here -> Owner (inside
+     * the device-signed body) -> Owner's pin -> the Owner-signed lease.
+     *
+     * Never throws and never blocks licensing: any failure (backend not up,
+     * 403, malformed body) yields null and the request simply goes out without
+     * the field, exactly like a pre-fix client. The lease then stays
+     * unattested and this phone cannot sign shop-authority changes until a
+     * later check-in succeeds -- a degraded state, not a licensing failure.
+     */
+    private fun registryDeviceId(): String? = try {
+        val request = Request.Builder()
+            .url(localUrl("/api/licensing/_internal/registry-device-id"))
+            .header("X-Aura-Internal-Secret", ServerBootstrap.internalSecret())
+            .get()
+            .build()
+        parseRegistryDeviceId(executeLocal(request))
+    } catch (exc: java.io.IOException) {
+        null
+    } catch (exc: RuntimeException) {
+        // Gson parse failures are RuntimeExceptions; same "send without" outcome.
+        null
+    }
+
     private fun localUrl(path: String): String = ServerBootstrap.baseUrl().trimEnd('/') + path
 
     private fun executeLocal(request: Request): Map<String, Any?> {
@@ -204,3 +235,11 @@ class LicensingCoordinator(context: Context) {
         }
     }
 }
+
+/**
+ * Pure parse of the `/_internal/registry-device-id` body: a non-blank String
+ * is the id, anything else (missing key, null, blank, a number) is "no id".
+ * Top-level and `internal` so a plain JVM test can pin it without a Context.
+ */
+internal fun parseRegistryDeviceId(map: Map<String, Any?>): String? =
+    (map["registry_device_id"] as? String)?.takeIf { it.isNotBlank() }

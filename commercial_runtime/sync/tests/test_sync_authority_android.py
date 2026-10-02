@@ -166,3 +166,25 @@ def test_the_kotlin_signed_fixture_event_verifies_in_python(tmp_path):
     # the numbers Kotlin must not reformat are exactly as sent
     assert pushed["payload"]["ratio"] == 2.0 and pushed["payload"]["epoch"] == 2
     assert pushed["payload"]["big"] == 9007199254740993
+
+
+def test_a_kotlin_shaped_event_whose_lease_does_not_attest_dev_is_refused(tmp_path):
+    """AUDIT-033 fix round (verifier V finding #1), the deny half. The phone's
+    event is correctly signed by its own key under a genuine Owner lease -- but
+    the lease never named the registry id it claims (an old Owner, or an
+    unpinned phone). Receivers must refuse it as `device_id_not_attested`, not
+    as a bad signature: signing is fine, the identity is unconfirmed.
+
+    Allow half: `test_the_kotlin_signed_fixture_event_verifies_in_python`
+    (same builder, `attest=True`)."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    fx = fixture_gen.build(attest=False)
+    key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(fx["device_seed_b64"]))
+    assert "registry_device_id" not in fx["page_event"]["payload"]["_auth"]["lease"]["payload"]
+    sig = base64.b64encode(key.sign(base64.b64decode(fx["tbs_b64"]))).decode()
+    trust = OwnerTrustStore(tmp_path / "trust.json")
+    trust.bootstrap_from_anchor({"keys": [{"key_id": "owner-1", "public_key": fx["owner_pub_b64"], "algorithm": "ed25519"}]})
+    verdict = authority.verify_event(_kotlin_style(fx["page_event"], sig),
+                                     trust_store=trust, own_licence=fx["licence"])
+    assert isinstance(verdict, authority.Refusal), verdict
+    assert verdict.reason == authority.REASON_DEV_NOT_ATTESTED == "device_id_not_attested"

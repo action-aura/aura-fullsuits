@@ -25,7 +25,7 @@
     "pk": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
     "lease": {
      "payload": {
-      "assertion_id": "9ab8aff8-56bf-40eb-8d82-90e7f105e90f",
+      "assertion_id": "ae1104c9-e7a2-4cd8-958c-1bdbe1fdabc2",
       "issuer": "aura-owner",
       "product_code": "AURA_RETAIL",
       "license_public_id": "lic-shop-1",
@@ -33,9 +33,9 @@
       "platform": "WINDOWS",
       "app_version_policy": "1.0.0",
       "release_channel": "rc",
-      "issued_at": "2026-10-01T14:48:27.888938+00:00",
-      "not_before": "2026-10-01T14:43:27.888938+00:00",
-      "expires_at": "2026-10-02T14:48:27.888938+00:00",
+      "issued_at": "2026-10-02T13:26:05.660453+00:00",
+      "not_before": "2026-10-02T13:21:05.660453+00:00",
+      "expires_at": "2026-10-03T13:26:05.660453+00:00",
       "license_status": "ACTIVE",
       "installation_status": "ACTIVE",
       "subscription_status": "ACTIVE",
@@ -51,12 +51,13 @@
        "clock_rollback_tolerance_seconds": 300,
        "assertion_refresh_threshold_seconds": 86400
       },
-      "contract_version": "v1"
+      "contract_version": "v1",
+      "registry_device_id": "11111111-2222-4333-8444-555555555555"
      },
      "signing_key_id": "owner-1",
      "algorithm": "ed25519",
      "assertion_version": 1,
-     "signature": "PzmWxeTzD2y+xwW8mx6V8CF33WweHIscDF1e/95/XeqaiAAJVdj2xcY9Ig/HF7VNiceRCp4dqLTY8pH8QNWfAw=="
+     "signature": "UzoubncYMxDIFwnssMohA05s8q+z6rZtNOvqB3+hdUGfb2GscjmQXPXQgRwTqSWDWH7jxxAvOE5gKVOJUvByDw=="
     }
    }
   },

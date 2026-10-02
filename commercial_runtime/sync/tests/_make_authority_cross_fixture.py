@@ -35,11 +35,18 @@ def _raw_pub(key) -> bytes:
         encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
 
 
-def build() -> dict:
+def build(attest: bool = True) -> dict:
+    """`attest=False` is the pre-fix shape (a lease without `registry_device_id`);
+    only the negative test uses it -- the committed file is always attested."""
     device_key = Ed25519PrivateKey.from_private_bytes(DEVICE_SEED)
     owner_key = Ed25519PrivateKey.from_private_bytes(OWNER_SEED)
     pk = _raw_pub(device_key)
-    lease = make_lease(owner_key, licence=LICENCE, inst=INST, fingerprint=hashlib.sha256(pk).hexdigest())
+    # AUDIT-033 fix round (verifier V finding #1): a receiver trusts a signer only
+    # when its Owner-signed lease attests the registry device id the event
+    # claims (`device_id_not_attested` otherwise). Owner pins and echoes that id;
+    # the fixture models Owner, so the lease names DEV.
+    lease = make_lease(owner_key, licence=LICENCE, inst=INST, fingerprint=hashlib.sha256(pk).hexdigest(),
+                       registry_device_id=DEV if attest else None)
     signer = authority.LocalSigner(licence=LICENCE, inst=INST, dev=DEV,
                                    pk_b64=base64.b64encode(pk).decode(), lease=lease, sign_fn=None)
     event = {"id": "evt-1", "entity_type": "till_allocation", "entity_id": "alloc-1",

@@ -69,6 +69,7 @@ class OwnerClient(
         licenseKey: String,
         idempotencyKey: String,
         identity: DeviceIdentity,
+        registryDeviceId: String? = null,
     ): String {
         var lastBody: LinkedHashMap<String, Any?>? = null
         try {
@@ -89,6 +90,7 @@ class OwnerClient(
                     "license_key" to licenseKey,
                     "idempotency_key" to idempotencyKey,
                 )
+                addRegistryDeviceId(body, registryDeviceId)
                 lastBody = body
                 sign(body, identity)
             }
@@ -100,7 +102,7 @@ class OwnerClient(
         }
     }
 
-    fun checkIn(installationId: String, identity: DeviceIdentity): String =
+    fun checkIn(installationId: String, identity: DeviceIdentity, registryDeviceId: String? = null): String =
         requestRaw("POST", "/check-ins") {
             val body = linkedMapOf<String, Any?>(
                 "contract_version" to CONTRACT_VERSION,
@@ -110,6 +112,7 @@ class OwnerClient(
                 "nonce" to newNonce(),
                 "installation_id" to installationId,
             )
+            addRegistryDeviceId(body, registryDeviceId)
             sign(body, identity)
         }
 
@@ -134,6 +137,23 @@ class OwnerClient(
     private fun parseJson(bodyString: String): Map<String, Any?> {
         val type = object : TypeToken<Map<String, Any?>>() {}.type
         return gson.fromJson(bodyString, type)
+    }
+
+    /**
+     * AUDIT-033 fix round (verifier V finding #1): tell Owner which shop-registry
+     * computer id this device claims, so Owner can pin it and echo it back inside
+     * the Owner-signed lease. Receivers of shop-authority events trust a signer
+     * only when its lease attests the id it speaks as.
+     *
+     * Added to the body BEFORE [sign] (callers invoke this inside the body
+     * provider, so every retry rebuilds and re-signs it): the device signature
+     * must cover the id, or a man in the middle could swap it. Omitted entirely
+     * when null or blank -- never sent as a null key -- because Owner only echoes
+     * the field when the request carried it, and old clients reject unknown
+     * fields (the Phase 8 Part W outage).
+     */
+    private fun addRegistryDeviceId(body: LinkedHashMap<String, Any?>, registryDeviceId: String?) {
+        if (!registryDeviceId.isNullOrBlank()) body["registry_device_id"] = registryDeviceId
     }
 
     private fun sign(body: LinkedHashMap<String, Any?>, identity: DeviceIdentity): LinkedHashMap<String, Any?> {
