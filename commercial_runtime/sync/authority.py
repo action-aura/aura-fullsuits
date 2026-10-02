@@ -167,6 +167,33 @@ VERIFICATION_FAILURE_REASONS = frozenset({
 })
 MAX_PARKED_VERIFICATION_FAILURES_PER_ENTITY = 50
 
+#: Review V4r N1/N2. Verification failures come in three kinds:
+#:  * PERMANENT junk -- a bad signature, or a signature made under another shop's
+#:    licence. Nothing that happens later can make it valid, so it is never retried
+#:    and it is the ONLY kind a bound may evict (oldest first).
+#:  * RECOVERABLE -- `untrusted_lease` (Owner rotated its key and this receiver has
+#:    not admitted the new one yet) and `device_id_not_attested`: a legitimate event
+#:    can look exactly like this for a while. A bound NEVER drops one of these: if the
+#:    pile is full of them the new row is kept anyway (the retry budget keeps that
+#:    from costing CPU).
+#:  * everything else in VERIFICATION_FAILURE_REASONS (`unsigned_authority_event`)
+#:    keeps the old rule: over the per-entity bound the newest is dropped.
+PERMANENT_PARK_REASONS = frozenset({REASON_BAD_SIGNATURE, REASON_FOREIGN_LICENCE})
+RECOVERABLE_PARK_REASONS = frozenset({REASON_UNTRUSTED_LEASE, REASON_DEV_NOT_ATTESTED})
+#: Global caps (whole `sync_apply_quarantine`). The junk cap is deliberately far
+#: below the verification-failure cap: permanent junk is only ever kept so a human
+#: can see that somebody is sending it, and a few hundred rows say that as well as
+#: ten thousand do. Beyond either cap the OLDEST permanent junk row is evicted.
+MAX_PARKED_VERIFICATION_FAILURES_TOTAL = 5000
+MAX_PARKED_PERMANENT_JUNK_TOTAL = 200
+#: Evidence rows (a VERIFIED signer broke a rule) per signer installation. Beyond
+#: it the newest is dropped, one WARNING per signer per process.
+MAX_PARKED_EVIDENCE_PER_SIGNER = 1000
+#: One retry pass (one pull) touches at most this many parked rows or this many
+#: seconds, whichever comes first; the start rotates so every row is reached.
+RETRY_PASS_MAX_ROWS = 200
+RETRY_PASS_MAX_SECONDS = 2.0
+
 
 @dataclass(frozen=True)
 class Refusal:

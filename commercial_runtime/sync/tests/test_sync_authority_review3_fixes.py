@@ -257,10 +257,14 @@ def test_junk_is_bounded_per_entity_and_logged_once(shop, caplog):
         for i in range(cap + 25):
             _park(shop, "flood", "bad_signature", {"uid": "flood", "n": i})
     assert _junk_count(shop, "flood") == cap
-    assert len([r for r in caplog.records if "dropping" in r.getMessage()]) == 1
-    # the OLDEST are kept (the newest junk is what is dropped)
+    assert len([r for r in caplog.records if "evicting" in r.getMessage()]) == 1
+    # Review V4r N2 (deliberate reversal of the old rule "keep the oldest, drop the
+    # newest"): over the bound the OLDEST permanent junk is evicted to make room, so
+    # a recoverable failure arriving late is never the row that vanishes. This test
+    # can therefore no longer catch "the newest junk is the one dropped"; the
+    # replacement rule is pinned in test_sync_authority_review4_fixes.py.
     kept = sorted(json.loads(r["payload"])["n"] for r in _rows(shop, "flood"))
-    assert kept == list(range(cap))
+    assert kept == list(range(25, 25 + cap))
     # allow-half: another entity is unaffected, and a row already held can still move
     _park(shop, "other", "bad_signature", {"uid": "other", "n": 1})
     assert _junk_count(shop, "other") == 1

@@ -1296,10 +1296,11 @@ class SyncService:
         `inst` field."""
         identity = {k: ev.get(k) for k in ("entity_type", "entity_id", "event_type")}
 
-        def verify(payload):
+        def verify(payload, entity_type=None):
             env = self._authority_env()
+            ident = dict(identity, entity_type=entity_type) if entity_type is not None else identity
             return _authority.verify_event(
-                dict(identity, payload=payload),
+                dict(ident, payload=payload),
                 trust_store=env.trust_store, own_licence=env.own_licence)
         return verify
 
@@ -1356,6 +1357,7 @@ class SyncService:
             main = _authority._current_main(ctx)
             signer_is_main = main is not None and verdict.dev == main
             ev["_authority_signer_dev"] = verdict.dev
+            ev["_authority_signer_inst"] = verdict.inst
             ev["_authority_signer_is_main"] = signer_is_main
             # AUDIT-033 fix round (verifier V finding #5): an event is this device's
             # OWN echo only when it was signed by THIS device's own signer -- same
@@ -2106,7 +2108,8 @@ class SyncService:
         # Never trust a value that arrived with the event: the gate below sets all of
         # these, from the verified signature, and nothing else may.
         for _private in ("_authority_verified", "_authority_signer_is_main",
-                         "_authority_signer_dev", "_authority_harmless_owner_edit"):
+                         "_authority_signer_dev", "_authority_signer_inst",
+                         "_authority_harmless_owner_edit"):
             ev.pop(_private, None)
         if _authority.is_authority_event(ev):
             refusal = self._authority_gate(conn, ev, p, local_company_id, entity_type,
@@ -3897,6 +3900,17 @@ class SyncService:
                 return self._quarantine_apply_event(
                     conn, ev, reason="missing_parent:user",
                     detail=f"user_uid={user_uid!r} not found locally")
+            # Review V4r N3 (the twin of V3r G4 on `user`): the uid resolves across
+            # EVERY company in this registry, but the authority rule protects only
+            # THIS company's owners, so a member could grant or revoke permissions
+            # of another company's user. A uid owned by a different company is
+            # never written.
+            if local_company_id is not None and conn.execute(
+                    "SELECT 1 FROM users WHERE id=? AND company_id<>?",
+                    (local_user_id, local_company_id)).fetchone() is not None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason=_authority.REASON_FOREIGN_COMPANY_USER,
+                    detail=f"user {ascii(str(user_uid))} belongs to a different company on this computer")
             # A malformed payload with no subsystem at all (unreachable from
             # any real write site -- every one of them supplies it) is not a
             # "missing parent that might resolve later" case, so there is
@@ -5922,65 +5936,66 @@ class SyncService:
         # following the latest attempt (P2S L2): nothing about them is signed.
         columns = [r[1] for r in conn.execute("PRAGMA table_info(sync_apply_quarantine)").fetchall()]
         keyed = "auth_key" in columns
-        existing = conn.execute(
-            "SELECT payload, reason" + (", auth_key" if keyed else "")
-            + " FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
-            (entity_id, event_type)).fetchall()
+        # Review V4r N1: nothing below may read every parked row of this entity WITH
+        # its payload -- one entity's pile of evidence rows made each re-park O(n)
+        # and a whole retry pass O(n^2) (500 rows -> 12 s, 2000 -> 246 s). Each
+        # question asks the database only for what it needs, and LIMITs it where
+        # existence is the whole question.
         new_auth = stored_payload.get(_authority.AUTH_KEY) if isinstance(stored_payload, dict) else None
         if new_auth is None and _authority.is_authority_event(ev):
-            for row in existing:
-                prior = SyncService._loads_or_none(row[0])
-                if isinstance(prior, dict) and prior.get(_authority.AUTH_KEY) is not None:
-                    logger.info("sync: not parking an unsigned copy of %s %s: a signed one is already parked",
-                                ascii(entity_type), ascii(entity_id))
-                    return False
+            signed_parked = conn.execute(
+                "SELECT 1 FROM sync_apply_quarantine WHERE entity_id=? AND event_type=? "
+                "AND instr(payload, ?) > 0 LIMIT 1",
+                (entity_id, event_type, '"' + _authority.AUTH_KEY + '"')).fetchone()
+            if signed_parked is not None:
+                logger.info("sync: not parking an unsigned copy of %s %s: a signed one is already parked",
+                            ascii(entity_type), ascii(entity_id))
+                return False
         if not keyed:
             # Old shape (a database that reached the previous v10/v42 before this
-            # fix): the primary key is still (entity_id, event_type), so the
-            # guards the key would have given are done by hand. Review V3r G3 (R6
-            # restated): a parked row whose stored `_auth` VERIFIES is never
-            # overwritten by anything but another VERIFIED event from the SAME
-            # verified signer. The old guard compared the unverified `_auth.inst`,
-            # which an insider simply writes into its own junk. Where no verifier
-            # was handed in (a direct call), nothing can be proven and the old
-            # last-write behaviour stands.
+            # fix): the primary key is still (entity_id, event_type), so there is AT
+            # MOST ONE parked row, and the guards the key would have given are done
+            # by hand. Review V3r G3 (R6 restated): a parked row whose stored `_auth`
+            # VERIFIES is never overwritten by anything but another VERIFIED event
+            # from the SAME verified signer. Review V4r N4/N5: the parked row is
+            # verified under ITS OWN stored entity_type (the key has no entity_type,
+            # so a `user` junk event can land on a `device` row's key and used to
+            # step the guard aside), the incoming one under its own, and a
+            # replacement must not carry an OLDER row_version/epoch than the parked
+            # one. Where no verifier was handed in (a direct call), nothing can be
+            # proven and the old last-write behaviour stands.
             verify = ev.get("_authority_verify")
             if verify is not None:
-                for row in existing:
+                for row in conn.execute(
+                        "SELECT payload, entity_type FROM sync_apply_quarantine "
+                        "WHERE entity_id=? AND event_type=?", (entity_id, event_type)).fetchall():
                     prior = SyncService._loads_or_none(row[0])
                     if prior is None or prior == stored_payload:
                         continue
-                    prior_v = verify(prior)
+                    prior_v = verify(prior, row[1])
                     if not isinstance(prior_v, _authority.VerifiedSigner):
                         continue
-                    new_v = verify(stored_payload)
+                    new_v = verify(stored_payload, entity_type)
                     same_signer = (isinstance(new_v, _authority.VerifiedSigner)
+                                   and row[1] == entity_type
                                    and (new_v.dev, new_v.inst, new_v.fingerprint)
                                    == (prior_v.dev, prior_v.inst, prior_v.fingerprint))
-                    if not same_signer:
+                    older = SyncService._payload_is_older(stored_payload, prior)
+                    if not same_signer or older:
                         logger.warning(
-                            "sync: keeping the parked verified %s event for %s (signer %s); a different "
-                            "or unverifiable copy cannot replace it in an old-shape quarantine",
-                            ascii(entity_type), ascii(entity_id), ascii(prior_v.dev))
+                            "sync: keeping the parked verified %s event for %s (signer %s); a different, "
+                            "unverifiable or older copy cannot replace it in an old-shape quarantine",
+                            ascii(row[1]), ascii(entity_id), ascii(prior_v.dev))
                         return False
-        # The flood bound. Only a NEW row can grow the pile.
-        if reason in _authority.VERIFICATION_FAILURE_REASONS:
-            same_row = (any(r[2] == auth_key for r in existing) if keyed else bool(existing))
-            if not same_row:
-                marks = ",".join("?" * len(_authority.VERIFICATION_FAILURE_REASONS))
-                held = conn.execute(
-                    "SELECT COUNT(*) FROM sync_apply_quarantine WHERE entity_type=? AND entity_id=? "
-                    f"AND reason IN ({marks})",
-                    (entity_type, entity_id, *sorted(_authority.VERIFICATION_FAILURE_REASONS))).fetchone()[0]
-                if held >= _authority.MAX_PARKED_VERIFICATION_FAILURES_PER_ENTITY:
-                    flood_key = (entity_type, entity_id)
-                    if flood_key not in _FLOOD_WARNED:
-                        _FLOOD_WARNED.add(flood_key)
-                        logger.warning(
-                            "sync: %d unverifiable %s events are already parked for %s; dropping "
-                            "further ones (this is logged once per entity per run)",
-                            held, ascii(entity_type), ascii(entity_id))
-                    return False
+        # The flood bounds. Only a NEW row can grow the pile.
+        if reason in _authority.VERIFICATION_FAILURE_REASONS or reason in _authority.EVIDENCE_PARK_REASONS:
+            same_row = bool(conn.execute(
+                "SELECT 1 FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?"
+                + (" AND auth_key=?" if keyed else "") + " LIMIT 1",
+                (entity_id, event_type) + ((auth_key,) if keyed else ())).fetchone())
+            if not same_row and not SyncService._park_within_bounds(
+                    conn, ev, reason, entity_type, entity_id):
+                return False
         keep_case = (f"CASE WHEN sync_apply_quarantine.reason IN ({ev_marks}) AND excluded.reason IN ({sup_marks}) "
                      "THEN sync_apply_quarantine.{col} ELSE excluded.{col} END")
         # Authority rows: the stored payload is never replaced (identical content on
@@ -5998,6 +6013,98 @@ class SyncService:
             + ((auth_key,) if keyed else ()) + evidence + supersedable + evidence + supersedable,
         )
         return False
+
+    @staticmethod
+    def _payload_is_older(new: dict, old: dict) -> bool:
+        """True when BOTH payloads carry a comparable version (`row_version`, else
+        `epoch`) and the new one is lower. Anything not comparable is not "older"."""
+        for key in ("row_version", "epoch"):
+            a, b = new.get(key), old.get(key)
+            if (isinstance(a, int) and not isinstance(a, bool)
+                    and isinstance(b, int) and not isinstance(b, bool)):
+                return a < b
+        return False
+
+    @staticmethod
+    def _evict_oldest_junk(conn, where: str, args: tuple) -> bool:
+        """Delete the single OLDEST permanent-failure junk row matching `where`
+        (review V4r N2). True when one was removed."""
+        perm = tuple(sorted(_authority.PERMANENT_PARK_REASONS))
+        row = conn.execute(
+            "SELECT rowid FROM sync_apply_quarantine WHERE reason IN (" + ",".join("?" * len(perm)) + ")"
+            + (" AND " + where if where else "") + " ORDER BY quarantined_at, rowid LIMIT 1",
+            perm + args).fetchone()
+        if row is None:
+            return False
+        conn.execute("DELETE FROM sync_apply_quarantine WHERE rowid=?", (row[0],))
+        return True
+
+    @staticmethod
+    def _warn_flood_once(key: tuple, message: str, *args) -> None:
+        if key not in _FLOOD_WARNED:
+            _FLOOD_WARNED.add(key)
+            logger.warning(message + " (logged once per process)", *args)
+
+    @staticmethod
+    def _park_within_bounds(conn, ev: dict, reason: str, entity_type: str, entity_id: str) -> bool:
+        """May a NEW row with this reason be added? (review V3r G2, V4r N1/N2). Makes
+        room by evicting the OLDEST permanent junk row when a bound is full; a
+        RECOVERABLE failure is never refused (see `authority.PERMANENT_PARK_REASONS`);
+        returns False only when the newest row must be dropped."""
+        vf = tuple(sorted(_authority.VERIFICATION_FAILURE_REASONS))
+        vf_marks = ",".join("?" * len(vf))
+        if reason in _authority.VERIFICATION_FAILURE_REASONS:
+            scopes = [
+                ("entity", f"SELECT COUNT(*) FROM sync_apply_quarantine WHERE entity_type=? AND entity_id=? "
+                           f"AND reason IN ({vf_marks})", (entity_type, entity_id, *vf),
+                 _authority.MAX_PARKED_VERIFICATION_FAILURES_PER_ENTITY,
+                 "entity_type=? AND entity_id=?", (entity_type, entity_id)),
+                ("total", f"SELECT COUNT(*) FROM sync_apply_quarantine WHERE reason IN ({vf_marks})", vf,
+                 _authority.MAX_PARKED_VERIFICATION_FAILURES_TOTAL, "", ()),
+            ]
+            if reason in _authority.PERMANENT_PARK_REASONS:
+                perm = tuple(sorted(_authority.PERMANENT_PARK_REASONS))
+                scopes.append(("junk", "SELECT COUNT(*) FROM sync_apply_quarantine WHERE reason IN ("
+                               + ",".join("?" * len(perm)) + ")", perm,
+                               _authority.MAX_PARKED_PERMANENT_JUNK_TOTAL, "", ()))
+            for name, count_sql, count_args, cap, where, wargs in scopes:
+                held = conn.execute(count_sql, count_args).fetchone()[0]
+                if held < cap:
+                    continue
+                if SyncService._evict_oldest_junk(conn, where, wargs):
+                    SyncService._warn_flood_once(
+                        ("evict", name, entity_type, entity_id) if name == "entity" else ("evict", name),
+                        "sync: %d unverifiable events are already parked (%s bound, %s %s); evicting "
+                        "the oldest unverifiable ones to make room", held, name, ascii(entity_type),
+                        ascii(entity_id))
+                    continue
+                if reason in _authority.RECOVERABLE_PARK_REASONS:
+                    continue   # never dropped: a legitimate event can look like this
+                SyncService._warn_flood_once(
+                    (name, entity_type, entity_id) if name == "entity" else (name,),
+                    "sync: %d unverifiable events are already parked (%s bound, %s %s); dropping further ones",
+                    held, name, ascii(entity_type), ascii(entity_id))
+                return False
+            return True
+        # An EVIDENCE row from a VERIFIED signer: bounded per signer installation.
+        inst = ev.get("_authority_signer_inst")
+        if not inst:
+            return True
+        ev_reasons = tuple(sorted(_authority.EVIDENCE_PARK_REASONS - _authority.VERIFICATION_FAILURE_REASONS))
+        try:
+            held = conn.execute(
+                "SELECT COUNT(*) FROM sync_apply_quarantine WHERE reason IN ("
+                + ",".join("?" * len(ev_reasons)) + ") AND json_extract(payload, '$._auth.inst')=?",
+                (*ev_reasons, inst)).fetchone()[0]
+        except sqlite3.OperationalError:
+            return True
+        if held >= _authority.MAX_PARKED_EVIDENCE_PER_SIGNER:
+            SyncService._warn_flood_once(
+                ("signer", inst),
+                "sync: %d rule-breaking events from signer installation %s are already parked; "
+                "dropping further ones", held, ascii(inst))
+            return False
+        return True
 
     @staticmethod
     def _loads_or_none(raw):
@@ -6078,18 +6185,48 @@ class SyncService:
         # movements/journals MUST be retried first (the parked-children rule
         # depends on the parent leaving quarantine before the child is looked at).
         keyed = self._quarantine_has_auth_key(conn)
+        # Review V4r N1: a pass is BOUNDED. Every pull used to retry the whole queue
+        # inside the pull's write transaction, so a pile of parked junk made every
+        # pull (and every concurrent write waiting on that lock) cost time in
+        # proportion to the pile -- measured 8.6 s per pass at 4,000 rows, with an
+        # ordinary write failing "database is locked". Now at most RETRY_PASS_MAX_ROWS
+        # rows or RETRY_PASS_MAX_SECONDS per pass, oldest first. The start ROTATES: a
+        # cursor (the last row touched, kept in memory on this service -- nothing new
+        # in the schema, and a keyset rather than an offset because rows leave the
+        # set as they resolve or turn permanent) makes the next pass continue after
+        # it, so a queue longer than one pass is still reached in full over a few
+        # pulls. A queue that fits in one pass has no cursor and is retried from its
+        # oldest row every time.
+        # Rows that can never become valid (`PERMANENT_PARK_REASONS`) are not retried
+        # at all; they stay for a human.
+        perm = tuple(sorted(_authority.PERMANENT_PARK_REASONS))
+        not_perm = " WHERE reason NOT IN (" + ",".join("?" * len(perm)) + ")"
+        select = ("SELECT entity_id, entity_type, event_type, payload, quarantined_at, rowid AS rid, "
+                  + ("auth_key" if keyed else "'' AS auth_key")
+                  + " FROM sync_apply_quarantine" + not_perm)
+        order = " ORDER BY quarantined_at, rowid LIMIT ?"
+        budget = _authority.RETRY_PASS_MAX_ROWS
         try:
-            rows = conn.execute(
-                "SELECT entity_id, entity_type, event_type, payload, "
-                + ("auth_key" if keyed else "'' AS auth_key")
-                + " FROM sync_apply_quarantine ORDER BY quarantined_at, rowid"
-            ).fetchall()
+            cursor = getattr(self, "_retry_cursor", None)
+            rows = []
+            if cursor is not None:
+                rows = conn.execute(
+                    select + " AND (quarantined_at, rowid) > (?, ?)" + order,
+                    perm + (cursor[0], cursor[1], budget)).fetchall()
+            if not rows:
+                cursor = None
+                rows = conn.execute(select + order, perm + (budget,)).fetchall()
         except sqlite3.OperationalError as exc:
             if self._is_missing_table_error(exc):
                 return
             raise
+        deadline = time.monotonic() + _authority.RETRY_PASS_MAX_SECONDS
+        touched = 0
         key_where = "entity_id=? AND event_type=?" + (" AND auth_key=?" if keyed else "")
         for row in rows:
+            if touched and time.monotonic() > deadline:
+                break
+            touched += 1
             key_args = (row["entity_id"], row["event_type"]) + ((row["auth_key"],) if keyed else ())
             # AUDIT-033 B2b: `rows` is a snapshot. An earlier retry in this same pass
             # may have applied a signed event that SUPERSEDED this parked one (see
@@ -6115,6 +6252,13 @@ class SyncService:
                 # key (AUDIT-033 fix round) two signed events for one entity
                 # each own a row that only THEIR retry may delete.
                 conn.execute(f"DELETE FROM sync_apply_quarantine WHERE {key_where}", key_args)
+        # Continue after the last row looked at, unless this pass reached the end of
+        # the queue (then the next one starts again from the oldest).
+        if touched and touched == len(rows) and len(rows) < budget:
+            self._retry_cursor = None
+        elif touched:
+            last = rows[touched - 1]
+            self._retry_cursor = (last["quarantined_at"], last["rid"])
 
     def run_once(self) -> None:
         """The one entry point the timer tick (and the manual/CLI caller)
