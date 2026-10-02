@@ -36,7 +36,7 @@
   const toast = (msg, type) => { if (window.SubsystemApp && SubsystemApp.showToast) SubsystemApp.showToast(msg, type); };
 
   // Section ids are a contract with the palette (palette.js) and the tests.
-  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'hardware', 'team', 'data-backup', 'plan-devices'];
+  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'hardware', 'display', 'team', 'data-backup', 'plan-devices'];
 
   // ── who is asking ──────────────────────────────────────────────────────────
   // Same two axes _renderAdminCenter uses. `!window.SubsystemApp` fails OPEN,
@@ -1743,6 +1743,22 @@
       </div>`;
   }
 
+  // Screen size (P1c). Applies the moment a button is pressed -- it is a
+  // per-device preference, not a shop setting, so it deliberately does NOT go
+  // through the unsaved-changes bar. Stored by window.AuraUiScale (index.html).
+  function displayCard() {
+    const cur = (window.AuraUiScale && AuraUiScale.get()) || 'large';
+    const opt = (v, label) => `<button type="button" data-ui-scale="${v}" aria-pressed="${cur === v}">${esc(label)}</button>`;
+    return `
+      <div class="sub-chart-card" id="display-card">
+        <h3 class="sh-card-title">${esc(t('Screen size'))}</h3>
+        <p class="sh-card-lead">${esc(t('Makes the text and buttons bigger or smaller on this computer only. It changes at once.'))}</p>
+        <div class="sh-seg" role="group" aria-label="${esc(t('Screen size'))}">
+          ${opt('normal', t('Normal'))}${opt('large', t('Large'))}${opt('xlarge', t('Extra large'))}
+        </div>
+      </div>`;
+  }
+
   // Builds one pane's content the first time it is shown. Returns a promise.
   async function buildPane(id, token) {
     if (S.built[id]) return;
@@ -1766,6 +1782,8 @@
       if (own) own.remove();
       rebaseline('printer');
       delete S.holding.printer;
+    } else if (id === 'display') {
+      host.innerHTML = displayCard();
     } else if (id === 'team') {
       if (window.RetailEmployees && typeof RetailEmployees.render === 'function') await RetailEmployees.render(host);
     } else if (id === 'data-backup') {
@@ -1801,6 +1819,9 @@
       // Hardware stays owner-only (decided): a delegated manager keeps the
       // printer card on the scanner screen, which is where they already use it.
       { id: 'hardware', label: t('Hardware'), visible: owner },
+      // Screen size is per DEVICE and needs no authority (it changes nothing in
+      // the shop's data), so it is offered to everyone who can open Settings.
+      { id: 'display', label: t('Display'), visible: dev },
       { id: 'team', label: t('Team'), visible: dev },
       { id: 'data-backup', label: t('Data & backup'), visible: owner },
       { id: 'plan-devices', label: t('Plan & devices'), visible: owner && !!window.PlanDevices },
@@ -1951,6 +1972,11 @@
   function onClick(ev) {
     const el = ev.target && ev.target.closest ? ev.target.closest('button') : null;
     if (!el) return;
+    if (el.dataset.uiScale) {
+      if (window.AuraUiScale) AuraUiScale.set(el.dataset.uiScale);
+      S.root.querySelectorAll('[data-ui-scale]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.uiScale === el.dataset.uiScale)));
+      return;
+    }
     if (el.dataset.sh) { showSection(el.dataset.sh); return; }
     if (el.dataset.shGoto) { showSection(el.dataset.shGoto); return; }
     if (el.id === 'sh-save') { save(); return; }

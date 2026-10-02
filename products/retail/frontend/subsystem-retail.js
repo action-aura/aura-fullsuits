@@ -470,6 +470,10 @@ const RetailSystem = {
     // exists -- _renderPOS restores them with the cart it no longer wipes.
     if (this._section === 'pos') this._savePosDraft();
     this._section = sectionId;     // remembered so the scanner can route scans
+    // Which screen is showing, as a data attribute: main.css zooms every content
+    // screen for the Large / Extra large sizes EXCEPT the till (see the SCREEN
+    // SIZE block there), and CSS cannot know the section otherwise.
+    if (typeof c.setAttribute === 'function') c.setAttribute('data-section', sectionId);
     this._initScanner();           // idempotent; desktop-only HID listener
     this._initShortcuts();         // idempotent; keyboard shortcuts, all platforms
     switch (sectionId) {
@@ -4522,6 +4526,91 @@ const RetailSystem = {
         .pk-keytable { inline-size:100%;border-collapse:collapse;font-size:14px; }
         .pk-keytable td { padding-block:6px;padding-inline:4px;border-block-end:1px solid var(--border-soft);vertical-align:top; }
         .pk-key { white-space:nowrap;inline-size:1%; }
+        /* ═══ SCREEN SIZE (P1c): Large (default) and Extra large ═══════════════
+           Owner feedback on rc.8, 1366x768: "buttons and text are too small and
+           squeezed". These are REAL pixels, deliberately NOT a CSS zoom on the
+           till: the till's fit at 768px tall was tuned in real px (see the
+           max-height compaction above), and a zoom would multiply every one of
+           those numbers and push Charge off the screen. Instead each size is a
+           set of explicit overrides that win by specificity (html.ui-large adds a
+           class + an element to every selector), so they beat the compaction rules
+           WITHOUT deleting them -- Normal is exactly the geometry it was before.
+           The size classes are set on <html> by index.html's AuraUiScale and
+           changed in Settings > Display. retail_p1c_size_e2e.py measures every
+           number below against the plan's targets at 1366x768 and 1920x1080. */
+        html.ui-large .pos-wrap { grid-template-columns:minmax(0,1.35fr) minmax(400px,1fr); }
+        html.ui-large .pos-kbd-hints { font-size:13px; }
+        html.ui-large .pos-kbd { font-size:12px; }
+        html.ui-large .pos-cat-btn { font-size:15px; }
+        html.ui-large .pos-product-grid { grid-template-columns:repeat(auto-fill,minmax(172px,1fr)); }
+        html.ui-large .pos-card { min-block-size:124px; }
+        html.ui-large .pos-card-name { font-size:16px; }
+        html.ui-large .pos-card-price { font-size:15px; }
+        html.ui-large .pos-card-stock { font-size:13px; }
+        html.ui-large .pos-pane-title { font-size:17px; }
+        html.ui-large .pos-cust-select, html.ui-large .pos-hold-btn, html.ui-large .pos-clear-btn { font-size:15px; }
+        html.ui-large .pos-item-name { font-size:16px; }
+        html.ui-large .pos-item-meta { font-size:14px; }
+        html.ui-large .pos-line-total { font-size:17px; }
+        html.ui-large .pos-qty-val { font-size:17px; }
+        html.ui-large .pos-sum-row { font-size:17px; }
+        html.ui-large .pos-grand-label { font-size:14px; }
+        /* !important: #pos-disc, #pos-tendered and the "%" next to them carry
+           their font size INLINE (13/14/12px) -- inline wins over any selector. */
+        html.ui-large .pos-mini-input { font-size:17px !important; }
+        html.ui-large .pos-sum-row [style*="font-size:12px"] { font-size:15px !important; }
+        html.ui-large .pos-change-lbl { font-size:13px !important; }
+        html.ui-large button.pos-pay-btn { min-block-size:52px;font-size:16px; }
+        html.ui-large .pos-pay-label { font-size:16px; }
+        html.ui-large .pos-pay-btns { gap:8px;margin-block-end:8px; }
+        html.ui-large .pos-checkout-btn { min-block-size:60px;font-size:20px; }
+        html.ui-large .pos-checkout-footer { padding-block:8px 10px; }
+
+        html.ui-xlarge .pos-wrap { grid-template-columns:minmax(0,1.25fr) minmax(440px,1fr); }
+        html.ui-xlarge .pos-kbd-hints { font-size:14px; }
+        html.ui-xlarge .pos-kbd { font-size:13px; }
+        html.ui-xlarge .pos-cat-btn { font-size:17px; }
+        html.ui-xlarge .pos-product-grid { grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); }
+        html.ui-xlarge .pos-card { min-block-size:140px; }
+        html.ui-xlarge .pos-card-name { font-size:18px; }
+        html.ui-xlarge .pos-card-price { font-size:17px; }
+        html.ui-xlarge .pos-card-stock { font-size:14px; }
+        html.ui-xlarge .pos-pane-title { font-size:19px; }
+        html.ui-xlarge .pos-cust-select, html.ui-xlarge .pos-hold-btn, html.ui-xlarge .pos-clear-btn { font-size:17px; }
+        html.ui-xlarge .pos-item-name { font-size:18px; }
+        html.ui-xlarge .pos-item-meta { font-size:15px; }
+        html.ui-xlarge .pos-line-total { font-size:19px; }
+        html.ui-xlarge .pos-qty-val { font-size:19px; }
+        html.ui-xlarge .pos-qty-btn { min-inline-size:52px;min-block-size:52px; }
+        html.ui-xlarge .pos-remove-btn { min-inline-size:52px;min-block-size:52px; }
+        html.ui-xlarge .pos-sum-row { font-size:19px; }
+        html.ui-xlarge .pos-grand-label { font-size:15px; }
+        html.ui-xlarge .pos-mini-input { font-size:19px !important;min-block-size:52px; }
+        html.ui-xlarge .pos-sum-row [style*="font-size:12px"] { font-size:17px !important; }
+        html.ui-xlarge .pos-change-lbl { font-size:14px !important; }
+        html.ui-xlarge button.pos-pay-btn { min-block-size:60px;font-size:18px; }
+        html.ui-xlarge .pos-pay-label { font-size:18px; }
+        html.ui-xlarge .pos-pay-btns { gap:10px;margin-block-end:10px; }
+        html.ui-xlarge .pos-checkout-btn { min-block-size:68px;font-size:22px; }
+        html.ui-xlarge .pos-checkout-footer { padding-block:8px 10px; }
+        /* Short screens (<= 920px tall) put all six tenders in ONE row (see the
+           compaction block above), ~75-80px per button. At 16-18px a label like
+           "Mobile / CliQ" or "Transfer" cannot fit beside its icon, and the old
+           ellipsis turned the labels into "Mobile..." / "Cre...". Here the
+           icon steps aside (the F-key badge and the label identify the tender)
+           and the label may wrap onto two lines inside the button's own height.
+           Tall screens keep the 3x2 grid with icons. */
+        @media (max-height: 920px) {
+          html.ui-large .pos-pay-icon, html.ui-xlarge .pos-pay-icon { display:none; }
+          html.ui-large .pos-pay-label, html.ui-xlarge .pos-pay-label { white-space:normal;text-align:center;line-height:1.1;overflow:visible; }
+          html.ui-xlarge .pos-pay-label { font-size:17px; }
+          html.ui-xlarge button.pos-pay-btn { font-size:17px; }
+          /* Extra large: two cart rows are the floor, not three -- the tender row,
+             Cash Tendered and a 68px Charge already take the room the third row
+             used, and the total must never be the thing that is squeezed out. */
+          html.ui-xlarge .pos-wrap { --pos-cart-row-min:80px; }
+          html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }
+        }
         .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
 
         /* ── Money typography (see rule 3) ───────────────────────────────── */
@@ -4852,7 +4941,7 @@ const RetailSystem = {
                   aria-label="${this._esc(t('Cash Tendered'))}"
                   oninput="RetailSystem._calcChange()" />
                 <span class="pos-change-row" id="pos-change-row" style="display:none">
-                  <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em">${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
+                  <span class="pos-change-lbl" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em">${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
                 </span>
               </span>
             </div>

@@ -179,6 +179,13 @@ MUTANTS = {
     "enter_on_button": ("if (typing || this._isActivatorTarget(el)) return;", "if (typing) return;"),
     "go_to_pay": ("else this._goToPay();", "else this._chargeNow();"),
     "star_strip": ("el.value = v.slice(0, v.length - buf.length);", ""),
+    # size test: each breaks ONE number the Large targets pin
+    "large_pay_height": ("html.ui-large button.pos-pay-btn { min-block-size:52px;font-size:16px; }", "html.ui-large button.pos-pay-btn { min-block-size:44px;font-size:16px; }"),
+    "large_charge_height": ("html.ui-large .pos-checkout-btn { min-block-size:60px;font-size:20px; }", "html.ui-large .pos-checkout-btn { min-block-size:44px;font-size:20px; }"),
+    "large_card_name": ("html.ui-large .pos-card-name { font-size:16px; }", "html.ui-large .pos-card-name { font-size:14px; }"),
+    "large_body": ("html.ui-large body { font-size: 16px; }", "html.ui-large body { font-size: 14px; }", "**/main.css*"),
+    "large_default": ("return 'large';", "return 'normal';", "**/"),
+    "xlarge_cart_floor": ("html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }", "html.ui-xlarge .pos-cart-items { min-block-size:calc(5 * var(--pos-cart-row-min) + 8px); }"),
 }
 
 
@@ -189,7 +196,8 @@ def start_shop(p, viewport=None, currency="JOD"):
     ctx = browser.new_context(viewport=viewport or {"width": 1366, "height": 768})
     mut = mutations_from_env()
     if mut:
-        find, repl = mut
+        find, repl = mut[0], mut[1]
+        glob = mut[2] if len(mut) > 2 else "**/subsystem-retail.js*"
 
         def _serve_mutant(route):
             resp = route.fetch()
@@ -197,7 +205,7 @@ def start_shop(p, viewport=None, currency="JOD"):
             assert body.count(find) == 1, f"mutation anchor occurs {body.count(find)} times"
             route.fulfill(response=resp, body=body.replace(find, repl))
 
-        ctx.route("**/subsystem-retail.js*", _serve_mutant)
+        ctx.route(glob, _serve_mutant)
         print(f"MUTANT ACTIVE: {os.environ.get('P1C_MUTATE')}", flush=True)
     page = ctx.new_page()
     page.goto(BASE)

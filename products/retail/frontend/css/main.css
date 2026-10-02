@@ -5473,3 +5473,56 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
 }
 .aura-help-about dt { color: var(--text-tertiary); }
 .aura-help-about dd { margin: 0; font-family: var(--font-mono); color: var(--text-primary); overflow-wrap: anywhere; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCREEN SIZE (P1c) -- Normal / Large (default) / Extra large
+   ───────────────────────────────────────────────────────────────────────────
+   Owner feedback on rc.8: "buttons and text are too small and squeezed". The
+   class is set on <html> by index.html's AuraUiScale (per device, localStorage
+   'aura_ui_scale') and changed in Settings > Display. NORMAL is the geometry the
+   product shipped with; nothing below applies to it.
+
+   Three layers, because the stylesheet is mostly hard-coded px:
+     1. The TEXT TOKENS and the body size -- everything that reads a token or
+        inherits moves with no further work.
+     2. `zoom` on content surfaces that are NOT the till (every other screen, and
+        dialogs). Their layout is percentage/flex based, so a zoomed box simply
+        lays its content out in a proportionally smaller area -- a bigger UI in
+        the same window.
+     3. The till is NOT zoomed. Its fit at 1366x768 was tuned in real px (the
+        max-height compaction in subsystem-retail.js), so it carries its own
+        explicit Large / Extra large overrides there, measured by
+        retail_p1c_size_e2e.py.
+   Touch-target floors stay >= 44px at every size and grow at Extra large.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html.ui-large {
+  --text-size-micro: 12px;
+  --text-size-meta: 13px;
+  --text-size-body: 16px;
+  --text-size-body-lg: 17px;
+  --text-size-subhead: 19px;
+  --text-size-title: 24px;
+  --text-size-display: 32px;
+  --touch-target-comfortable: 56px;
+}
+html.ui-xlarge {
+  --text-size-micro: 13px;
+  --text-size-meta: 14px;
+  --text-size-body: 18px;
+  --text-size-body-lg: 19px;
+  --text-size-subhead: 21px;
+  --text-size-title: 27px;
+  --text-size-display: 36px;
+  --touch-target-min: 52px;
+  --touch-target-comfortable: 64px;
+}
+html.ui-large body { font-size: 16px; }
+html.ui-xlarge body { font-size: 18px; }
+html.ui-large .sub-nav-label { font-size: 15px; }
+html.ui-xlarge .sub-nav-label { font-size: 17px; }
+html.ui-large .sub-nav-icon { font-size: 18px; }
+html.ui-xlarge .sub-nav-icon { font-size: 20px; }
+html.ui-large .sub-content:not([data-section="pos"]) { zoom: 1.12; }
+html.ui-xlarge .sub-content:not([data-section="pos"]) { zoom: 1.25; }
+html.ui-large .ret-modal { zoom: 1.1; }
+html.ui-xlarge .ret-modal { zoom: 1.2; }
