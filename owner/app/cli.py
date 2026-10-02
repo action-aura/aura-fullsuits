@@ -226,6 +226,35 @@ def register_cli(app: Flask) -> None:
         if result["status"] != "OK":
             raise click.ClickException(result["detail"])
 
+    @licensing_group.command("transfer-registry-id")
+    @click.option("--registry-device-id", required=True, help="The shop-authority registry device id to move.")
+    @click.option("--to", "to_installation_id", required=True, help="Installation id that becomes the id's holder.")
+    @click.option("--actor", required=True, help="Email of the staff user performing (and accountable for) the transfer.")
+    @click.option("--reason", required=True, help="Why this installation is the real computer for the id.")
+    def transfer_registry_id_cmd(registry_device_id: str, to_installation_id: str, actor: str, reason: str):
+        """The only way a pinned registry device id changes installation
+        (AUDIT-033 / review V3o R4). Both installations must be on the same
+        licence chain; the move is audited with who, why, from and to."""
+        import uuid as _uuid
+
+        from app.licensing_service.registry_pin import RegistryTransferError, transfer_registry_device_id
+
+        staff = db_session.execute(select(StaffUser).where(StaffUser.email == actor)).scalars().first()
+        if staff is None:
+            raise click.ClickException(f"No staff user with email {actor!r}.")
+        try:
+            target_id = _uuid.UUID(to_installation_id)
+        except ValueError:
+            raise click.ClickException("--to must be an installation id (a UUID).")
+        try:
+            transfer_registry_device_id(
+                db_session, registry_device_id=registry_device_id, to_installation_id=target_id,
+                actor_staff_user_id=staff.id, reason=reason,
+            )
+        except RegistryTransferError as exc:
+            raise click.ClickException(f"Transfer refused: {exc.code}")
+        click.echo(f"Registry id {registry_device_id} now pinned to installation {target_id}.")
+
     @app.cli.group("commercial")
     def commercial_group():
         """Phase 8 commercial-operations jobs (Parts G/I/J/R)."""

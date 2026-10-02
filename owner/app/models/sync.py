@@ -37,6 +37,9 @@ class SyncEvent(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_owner_sync_events_license_seq", "license_id", "seq"),
+        # AUDIT-033 / V3o G3: registry_pin's history guard looks up the first
+        # event naming a registry device id. Migration 7c41d2e9a0b5.
+        Index("ix_owner_sync_events_license_entity", "license_id", "entity_type", "entity_id"),
     )
 
 

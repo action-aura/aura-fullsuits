@@ -1002,6 +1002,14 @@ msgid "Computer identity malformed"
 msgstr "هوية الجهاز غير صالحة الصيغة"
 
 #: app/i18n_labels.py:677
+msgid "Computer identity refused: this id was already in the shop history before this computer was activated"
+msgstr "رُفضت هوية الجهاز: هذا المعرّف كان في سجل المتجر قبل تفعيل هذا الجهاز"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity moved to this computer by staff"
+msgstr "نقل الموظف هوية الجهاز إلى هذا الجهاز"
+
+#: app/i18n_labels.py:677
 msgid "Device-slot exception created"
 msgstr "تم إنشاء استثناء فتحة الجهاز"
 

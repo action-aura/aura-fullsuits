@@ -23,16 +23,16 @@ class Installation(Base, UUIDPKMixin, TimestampMixin):
         # full-table scan on every request. Found by inspecting real query
         # patterns against pg_indexes, not assumed.
         Index("ix_owner_installations_license_id_installation_label", "license_id", "installation_label"),
-        # AUDIT-033 fix round (verifier V finding #1): the shop-authority
-        # registry device id is pinned to ONE installation per licence among
-        # installations that can still speak. A DEACTIVATED/REPLACED
-        # installation frees the id, so a re-activated or slot-replaced
-        # computer that keeps its app data can pin its own id again. Keep
-        # this predicate identical to migration 5f2c8e1a9b37 and to
-        # licensing_service/registry_pin.py::TERMINAL_STATUSES.
+        # AUDIT-033 (verifier V finding #1, review V3o G2): the shop-authority
+        # registry device id is pinned to ONE installation per licence for
+        # good, in EVERY status. A DEACTIVATED/REPLACED holder keeps the id
+        # reserved, otherwise an installation lurking next to the main could
+        # claim it the moment staff replaced the main's slot. It moves only
+        # by registry_pin.transfer_registry_device_id (staff, audited). Keep
+        # this predicate identical to migration 7c41d2e9a0b5.
         Index(
             "uq_owner_installations_license_registry_device", "license_id", "registry_device_id", unique=True,
-            postgresql_where=text("registry_device_id IS NOT NULL AND status NOT IN ('DEACTIVATED','REPLACED')"),
+            postgresql_where=text("registry_device_id IS NOT NULL"),
         ),
     )
 

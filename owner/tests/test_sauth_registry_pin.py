@@ -149,7 +149,13 @@ def test_another_licence_may_use_the_same_id(app, client, shop):
     assert _events(app, other.get_json()["installation_id"], "REGISTRY_DEVICE_ID_CLASH") == []
 
 
-def test_a_deactivated_holder_frees_the_id(app, client, shop):
+def test_a_deactivated_holder_keeps_the_id_reserved(app, client, shop):
+    # REVERSED in the V3o round (G2). It used to assert that a DEACTIVATED holder
+    # FREES the id; that freeing is the defect (an installation lurking beside
+    # the main claimed the id the moment staff released the main's slot). This
+    # test can therefore no longer catch "a terminal holder frees its id"; that
+    # direction is now the failure. The allow half (the id still moves, by an
+    # explicit staff transfer) is in test_sauth_registry_pin_transfer.py.
     a_key, b_key = make_device_keypair(), make_device_keypair()
     a_iid = _activate(client, a_key, shop["full_key"], "free-a", registry_device_id=RA).get_json()["installation_id"]
     with app.app_context():
@@ -159,8 +165,10 @@ def test_a_deactivated_holder_frees_the_id(app, client, shop):
 
         release_device_slot(db_session.get(Installation, uuid.UUID(a_iid)), reason="test", actor_staff_user_id=shop["actor"])
     b_act = _activate(client, b_key, shop["full_key"], "free-b", registry_device_id=RA)
-    assert _payload(b_act)["registry_device_id"] == RA
-    assert _pin(app, b_act.get_json()["installation_id"]) == RA
+    assert "registry_device_id" not in _payload(b_act)
+    assert _pin(app, b_act.get_json()["installation_id"]) is None
+    assert _pin(app, a_iid) == RA
+    assert len(_events(app, b_act.get_json()["installation_id"], "REGISTRY_DEVICE_ID_CLASH")) == 1
 
 
 @pytest.mark.parametrize(

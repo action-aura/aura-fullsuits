@@ -679,6 +679,8 @@ def generic_audit_action_label(code: str) -> str:
         "REGISTRY_DEVICE_ID_CLASH": _("Computer identity refused: another active computer of this licence claims it"),
         "REGISTRY_DEVICE_ID_CHANGE_REFUSED": _("Computer identity change refused"),
         "REGISTRY_DEVICE_ID_INVALID": _("Computer identity malformed"),
+        "REGISTRY_DEVICE_ID_HISTORY_CONFLICT": _("Computer identity refused: this id was already in the shop history before this computer was activated"),
+        "REGISTRY_ID_TRANSFERRED": _("Computer identity moved to this computer by staff"),
         "DEVICE_SLOT_EXCEPTION_CREATED": _("Device-slot exception created"),
         # Phase 9.5E -- Expenses
         "EXPENSE_CREATED": _("Expense created"),
