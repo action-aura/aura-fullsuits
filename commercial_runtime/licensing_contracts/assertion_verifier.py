@@ -96,6 +96,13 @@ ALLOWED_PAYLOAD_FIELDS = frozenset(
         "commercial_grace_end",
         "pilot_status",
         "emergency_extension_id",
+        # AUDIT-033 fix round (verifier V finding #1): the registry device id
+        # Owner has PINNED to this installation. Owner emits the key ONLY when
+        # the request carried it (registry_pin.py rule 1), so a client that
+        # never sends the id never receives the key. The Phase 8 Part W
+        # outage above is exactly what an allowlist that lags behind Owner
+        # looks like, which is why this ships before anything emits it.
+        "registry_device_id",
     }
 )
 
