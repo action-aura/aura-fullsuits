@@ -6661,3 +6661,35 @@ shown in sync-review, never applied. Owner-account changes move to the main
 computer only. Residual by design: per-USER authority (a member till can still
 edit non-owner staff, as a delegated manager can). Full plan: job 255fb8da
 tmp/sauth/plan.md.
+
+## 2026-10-02 — S-AUTH fix round: claims and amendments, before dispatch
+
+An adversarial verifier broke S-AUTH round 1 (CRITICAL: the registry device id
+in `_auth.dev` was bound first-come-first-served per receiver, so an insider
+signing first under the main's id became "the main" there; plus 8 lesser
+findings). Fix plan: job 255fb8da tmp/sauth/fix_plan.md.
+
+- **Registry v10 (still unreleased) is EXTENDED, not re-claimed:** the same
+  single v10 step also adds `sync_signers.lease_issued_at_utc`, a new
+  `sync_signed_seen` table, `users.main_row_version`, and rebuilds
+  `sync_apply_quarantine` with an `auth_key` column. Every part is
+  PRAGMA-shape-gated and idempotent.
+- **Retail v42 (unreleased; rc.8 is a draft) is EXTENDED:** one appended,
+  shape-gated step `_migrate_quarantine_auth_key` (same rebuild on retail.db).
+  RETAIL_SCHEMA_VERSION stays 42. A database already at v42 keeps the old
+  quarantine shape and runs a guarded fallback until the next retail bump
+  re-runs the chain.
+- **Owner Alembic revision CLAIMED: `5f2c8e1a9b37`**, down_revision
+  `54627d59dd59` (checked: the current head on this branch, and no ref
+  contains 5f2c8e1a9b37). Adds the pinned `registry_device_id` per
+  installation. NOTE the Owner lineage split: the deploy lineage must take
+  this revision in the same order.
+- **New assertion field `registry_device_id`:** Owner pins the reporting
+  device's registry id per installation (unique per licence; a clash is
+  refused and logged as a security event) and includes it in the signed lease
+  only when the request carried it. Receivers require
+  lease.registry_device_id == `_auth.dev`.
+- **Rollout gate: Owner deploys FIRST.** A new client on an old Owner never
+  gets an attested lease and cannot sign authority events at all.
+- Residual R7: `branch_code:<uid>` retail settings are still unsigned - this
+  BLOCKS switching readable receipt numbers on for any real shop.
