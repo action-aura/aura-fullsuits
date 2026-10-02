@@ -470,9 +470,10 @@ const RetailSystem = {
     // exists -- _renderPOS restores them with the cart it no longer wipes.
     if (this._section === 'pos') this._savePosDraft();
     this._section = sectionId;     // remembered so the scanner can route scans
-    // Which screen is showing, as a data attribute: main.css zooms every content
-    // screen for the Large / Extra large sizes EXCEPT the till (see the SCREEN
-    // SIZE block there), and CSS cannot know the section otherwise.
+    // Which screen is showing, as a data attribute: main.css sizes table cells and
+    // form controls on every content screen for Large / Extra large EXCEPT the
+    // till (see the SCREEN SIZE block there), and CSS cannot know the section
+    // otherwise.
     if (typeof c.setAttribute === 'function') c.setAttribute('data-section', sectionId);
     this._initScanner();           // idempotent; desktop-only HID listener
     this._initShortcuts();         // idempotent; keyboard shortcuts, all platforms
@@ -4600,6 +4601,43 @@ const RetailSystem = {
            icon steps aside (the F-key badge and the label identify the tender)
            and the label may wrap onto two lines inside the button's own height.
            Tall screens keep the 3x2 grid with icons. */
+        /* Heavy sale (promoted line + manual discount + customer + Change Due) on a
+           768px-tall till: the summary needs ~25px more than Large's taller rows
+           leave it. Reclaimed from line-height (17px text does not need 1.5) and
+           from the footer's padding/margins -- never from a touch target.
+           retail_p0_till_e2e.py item #7(e) is the proof. */
+        @media (max-height: 800px) {
+          html.ui-large .pos-sum-row { line-height:1.2; }
+          html.ui-large .pos-checkout-footer { padding-block:4px 6px; }
+          html.ui-large .pos-pay-btns { margin-block-end:4px; }
+          html.ui-large .pos-cart-row { padding-block:6px; }
+          /* The sale header (title + customer select + Hold + Void) must stay ONE
+             row here: a wrapped row costs ~50px of the summary's height. At
+             Large's 15-17px type it overflowed, so the select's ceiling was
+             hit and a chosen customer's name was cut ("No Phone At All" needs
+             99px at 14px, the select showed 98). Title 16px, select 14px with a
+             slightly higher ceiling. retail_p1a_till_e2e.py FINAL F10 is the proof. */
+          html.ui-large .pos-pane-title { font-size:16px; }
+          html.ui-large .pos-cust-select { font-size:14px;max-inline-size:156px; }
+        }
+        /* At 720px tall (1280x720 laptops) a Large till cannot hold Large's
+           vertical sizes AND the heavy sale's money -- the Normal till itself only
+           just fits there. So Large keeps its larger TEXT where it costs no height
+           but takes Normal's vertical sizes back; the tender and Charge buttons
+           stay at the 44px touch floor. The plan's Large targets are measured at
+           1366x768 and 1920x1080 (retail_p1c_size_e2e.py), not here. */
+        @media (max-height: 740px) {
+          html.ui-large button.pos-pay-btn { min-block-size:44px;font-size:13px; }
+          html.ui-large .pos-pay-label { font-size:12px; }
+          html.ui-large .pos-pay-btns { gap:4px;margin-block-end:4px; }
+          html.ui-large .pos-checkout-btn { min-block-size:44px;font-size:18px;padding-block:6px; }
+          html.ui-large .pos-checkout-footer { padding-block:2px 4px; }
+          html.ui-large .pos-sum-row { font-size:15px;margin-block-end:2px; }
+          html.ui-large .pos-mini-input { font-size:15px !important; }
+          html.ui-large .pos-item-name { font-size:15px; }
+          html.ui-large .pos-item-meta { font-size:13px; }
+          html.ui-large .pos-cart-row { padding-block:4px; }
+        }
         @media (max-height: 920px) {
           html.ui-large .pos-pay-icon, html.ui-xlarge .pos-pay-icon { display:none; }
           html.ui-large .pos-pay-label, html.ui-xlarge .pos-pay-label { white-space:normal;text-align:center;line-height:1.1;overflow:visible; }

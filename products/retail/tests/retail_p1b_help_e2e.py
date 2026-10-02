@@ -64,8 +64,13 @@ EXPECTED_FKEYS = [("F1", "Cash"), ("F2", "Card"), ("F3", "Mobile / CliQ"),
 # Typed here on purpose, not read from ar.json: reading the dictionary the card
 # reads would agree with any dictionary.
 EXPECTED_FKEYS_AR = ["نقدًا", "بطاقة", "محفظة إلكترونية / كليك", "حوالة مصرفية", "آجل", "قسيمة"]
-# Fixed till keys printed under the F-keys (from _onPOSShortcut).
-EXPECTED_OTHER_KEYS = ["Enter", "X", "Delete", "/", "N *"]
+# Fixed till keys printed under the F-keys. Typed by hand on purpose (not read
+# from RetailSystem.POS_KEY_HELP, which the card is built from -- reading the
+# list the card reads would agree with any list). P1c changed this from the old
+# five keys ["Enter", "X", "Delete", "/", "N *"] to the whole keyboard model:
+# F7-F12, arrows, +/-, Ctrl+Delete, P, the drawer keys.
+EXPECTED_OTHER_KEYS = ["Enter", "\u2191 \u2193", "+ \u2212", "N *", "Delete", "Ctrl+Delete", "F10 / Ctrl+Enter", "X",
+                       "F7", "F8", "F9", "Shift+F9", "F11", "F12", "Esc", "/", "P", "Shift+F1 \u2013 F4"]
 FAKE_NUMBER = "+962 79-123 4567"
 FAKE_DIGITS = "962791234567"
 
@@ -272,10 +277,18 @@ def main() -> int:
                   RetailSystem.POS_PAYMENT_METHODS = saved.concat([{ method: 'gift', label: 'Gift card', fkey: 'F7' }]);
                   try {
                     const doc = new DOMParser().parseFromString(AuraHelp.fkeyCardHtml(), 'text/html');
-                    return [...doc.querySelectorAll('#fkey-card tbody tr')].map(tr => tr.children[0].textContent.trim());
+                    return [...doc.querySelectorAll('#fkey-card tbody tr')].map(tr => [tr.children[0].textContent.trim(), (tr.querySelector('.en') || {}).textContent || '']);
                   } finally { RetailSystem.POS_PAYMENT_METHODS = saved; }
                 }""")
-                assert "F7" not in extra, "the card printed a key the till does not answer (handler only maps F1..F6)"
+                # P1c: F7 IS a till key now (customer picker), so "F7 is absent" is no
+                # longer the claim. The claim that matters is unchanged: the 7th payment
+                # method must not be printed as a key. It would show as an F7 (or any)
+                # row named "Gift card", and the tender rows must stay exactly six.
+                assert not any(en == "Gift card" for _, en in extra), "the card printed the 7th payment method as a key the till does not answer"
+                tender_rows = [k for k, _ in extra if k in ("F1", "F2", "F3", "F4", "F5", "F6")]
+                assert tender_rows == ["F1", "F2", "F3", "F4", "F5", "F6"], f"the tender rows are not exactly F1..F6: {tender_rows}"
+                f7 = [en for k, en in extra if k == "F7"]
+                assert f7 == ["Choose a customer"], f"F7 on the card is not the customer picker: {f7}"
 
             check("card", "a 7th payment method is NOT printed as F7 (the handler only answers F1..F6)", card_seventh_method_has_no_key)
 

@@ -5485,10 +5485,8 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
    Three layers, because the stylesheet is mostly hard-coded px:
      1. The TEXT TOKENS and the body size -- everything that reads a token or
         inherits moves with no further work.
-     2. `zoom` on content surfaces that are NOT the till (every other screen, and
-        dialogs). Their layout is percentage/flex based, so a zoomed box simply
-        lays its content out in a proportionally smaller area -- a bigger UI in
-        the same window.
+     2. One readable size for table cells, labels and form controls on every
+        non-till screen and in dialogs (below) -- no zoom, see the note there.
      3. The till is NOT zoomed. Its fit at 1366x768 was tuned in real px (the
         max-height compaction in subsystem-retail.js), so it carries its own
         explicit Large / Extra large overrides there, measured by
@@ -5518,11 +5516,42 @@ html.ui-xlarge {
 }
 html.ui-large body { font-size: 16px; }
 html.ui-xlarge body { font-size: 18px; }
-html.ui-large .sub-nav-label { font-size: 15px; }
-html.ui-xlarge .sub-nav-label { font-size: 17px; }
+/* 14px, not 15: the sidebar is a fixed width and its longest label ("Email
+   notifications") wrapped onto two lines at 15px, breaking the 38px-per-row
+   rhythm retail_p1a_shell_e2e.py pins. */
+html.ui-large .sub-nav-label { font-size: 14px; }
+html.ui-xlarge .sub-nav-label { font-size: 15px; }
 html.ui-large .sub-nav-icon { font-size: 18px; }
 html.ui-xlarge .sub-nav-icon { font-size: 20px; }
-html.ui-large .sub-content:not([data-section="pos"]) { zoom: 1.12; }
-html.ui-xlarge .sub-content:not([data-section="pos"]) { zoom: 1.25; }
-html.ui-large .ret-modal { zoom: 1.1; }
-html.ui-xlarge .ret-modal { zoom: 1.2; }
+/* Table cells, labels and form controls on every NON-till screen and in dialogs
+   -- the places that hard-code 12-14px and so ignore the tokens above. One broad
+   rule at the readable size rather than `zoom`: a first cut zoomed the whole
+   content area (and dialogs) and measurably broke the layout it was wrapped
+   around (a zoomed scroll container loses a fraction of a pixel of scroll
+   range, so the last row's button sat 0.45px outside the viewport, and vh-based
+   max-heights inside a zoomed box grow with the zoom). Sizes follow the plan's
+   "the tokens move the app"; the till has its own measured overrides. */
+/* A few px of slack at the END of a scrolling screen: larger type gives
+   fractional line heights (15px x 1.5 = 22.5), the scroll range is rounded DOWN,
+   and the last card's bottom edge could end 0.2-0.3px past the viewport with
+   nothing left to scroll (measured on Settings > Hardware and Purchasing). */
+html.ui-large .sub-content:not([data-section="pos"])::after,
+html.ui-xlarge .sub-content:not([data-section="pos"])::after { content: ""; display: block; flex: 0 0 auto; block-size: 4px; }
+/* line-height in WHOLE pixels, on purpose: 15px at the old normal/1.5 line height is
+   a fractional 17.25 / 22.5px, so every card on a settings screen ended a fraction
+   of a pixel off the pixel grid and a browser scrolling the last control "into view"
+   left it 0.2px past the viewport edge (retail_p1b_hub_e2e.py measured exactly
+   that on Hardware, Purchasing and Reorder). Whole-pixel heights align exactly. */
+/* The screen's own inherited line height is a whole number of pixels too: most
+   text inherits it (13px x 1.5 = 19.5 is fractional even at Normal), so one
+   declaration here keeps every card's height on the pixel grid. */
+html.ui-large .sub-content:not([data-section="pos"]), html.ui-large .ret-modal { line-height: 24px; }
+html.ui-xlarge .sub-content:not([data-section="pos"]), html.ui-xlarge .ret-modal { line-height: 28px; }
+html.ui-large .sub-content:not([data-section="pos"]) :is(td, th, label, input, select, textarea, .ret-btn),
+html.ui-large .ret-modal :is(td, th, label, input, select, textarea, .ret-btn) { font-size: 15px; line-height: 22px; }
+html.ui-large .sub-content:not([data-section="pos"]) :is(td, th, label),
+html.ui-large .ret-modal :is(td, th, label) { line-height: 24px; }
+html.ui-xlarge .sub-content:not([data-section="pos"]) :is(td, th, label, input, select, textarea, .ret-btn),
+html.ui-xlarge .ret-modal :is(td, th, label, input, select, textarea, .ret-btn) { font-size: 17px; line-height: 26px; }
+html.ui-xlarge .sub-content:not([data-section="pos"]) :is(td, th, label),
+html.ui-xlarge .ret-modal :is(td, th, label) { line-height: 28px; }

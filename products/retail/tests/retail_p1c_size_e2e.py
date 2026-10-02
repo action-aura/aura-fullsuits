@@ -208,6 +208,57 @@ with sync_playwright() as p:
 
     B.check("Normal < Large <= Extra large on every text measure", ordered)
 
+    # HEAVY SALE across the shop-floor viewport matrix (the same fixture and the
+    # same claims as retail_p0_till_e2e.py item #7: a promoted line + a 5% manual
+    # discount + a customer + Change Due showing). Large must keep EVERY money row
+    # fully inside the summary box, all six tenders on screen, and >= 3 of 4 plain
+    # cart rows visible, at 1366x768, 1440x900, 1280x720 and 1280x800.
+    HEAVY_JS = r"""() => {
+      const q = (s) => document.querySelector(s);
+      const sm = q('.pos-summary'); const cart = q('#pos-cart').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('#pos-cart .pos-cart-row')].map(x => x.getBoundingClientRect());
+      const inside = rows.filter(b => b.top >= cart.top - .5 && b.bottom <= cart.bottom + .5).length;
+      const clipped = ['pos-total','pos-tax','pos-disc','pos-promo-row','pos-discamt-row'].filter(i => { const e = q('#'+i); const a = e.getBoundingClientRect(), s = sm.getBoundingClientRect(); return !(a.top >= s.top-.5 && a.bottom <= s.bottom+.5); });
+      const pay = [...document.querySelectorAll('.pos-pay-btn')].every(b => { const a = b.getBoundingClientRect(); return a.bottom <= innerHeight && a.top >= 0; });
+      return {inside, clipped, pay, pageScroll: document.documentElement.scrollHeight > innerHeight};
+    }"""
+
+    def heavy_sale_fits():
+        _, pr = B.api(page, "POST", "/api/sub/retail/products", {"name": "Home & Kitchen Ceramic Knife Set", "sku": "P1C-PR", "sell_price": 12, "cost_price": 6, "unit": "pc"})
+        promo_pid = pr["data"]["id"]
+        B.api(page, "POST", f"/api/sub/retail/products/{promo_pid}/stock-adjust", {"quantity": 100, "reason": "x"})
+        B.api(page, "POST", "/api/sub/retail/promotions", {"name": "Weekend Clearance - 20% off Home & Kitchen", "product_id": promo_pid, "discount_pct": 20})
+        page.evaluate("() => AuraUiScale.set('large')")
+        bad = []
+        for (w, h) in [(1366, 768), (1440, 900), (1280, 720), (1280, 800)]:
+            for lang in ("en", "ar"):
+                page.set_viewport_size({"width": w, "height": h})
+                page.evaluate("(l) => AuraI18n.setLang(l)", lang)
+                page.wait_for_timeout(300)
+                B.go_pos(page)
+                page.evaluate("() => RetailSystem._clearCart()")
+                for k in ("widget", "gadget", "gizmo", "doohickey"):
+                    page.evaluate("(id) => RetailSystem._addToCart(id)", ids[k])
+                page.wait_for_timeout(300)
+                plain = page.evaluate(HEAVY_JS)["inside"]
+                page.evaluate("() => RetailSystem._clearCart()")
+                for pid in (ids["widget"], ids["gadget"], promo_pid, ids["doohickey"]):
+                    page.evaluate("(id) => RetailSystem._addToCart(id)", pid)
+                page.select_option("#pos-customer", str(ids["customer"]))
+                page.fill("#pos-disc", "5")
+                page.click('.pos-pay-btn[data-method="cash"]')
+                page.fill("#pos-tendered", "100")
+                page.wait_for_timeout(400)
+                m = page.evaluate(HEAVY_JS)
+                if plain < 3 or m["clipped"] or not m["pay"] or m["pageScroll"]:
+                    bad.append(f"{w}x{h}/{lang}: plain rows inside={plain}, clipped={m['clipped']}, tenders on screen={m['pay']}, pageScroll={m['pageScroll']}")
+        page.evaluate("(l) => AuraI18n.setLang(l)", "en")
+        page.wait_for_timeout(300)
+        assert not bad, "Large lost the heavy-sale fit: " + " | ".join(bad)
+
+    if not only:
+        B.check("Large: a heavy sale (promo + discount + customer + Change Due) keeps every money row and all six tenders on screen at 1366x768, 1440x900, 1280x720, 1280x800, EN and AR", heavy_sale_fits)
+
     # The control lives in Settings > Display and acts at once.
     def settings_control():
         page.set_viewport_size({"width": 1366, "height": 768})

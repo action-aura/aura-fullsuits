@@ -186,6 +186,8 @@ MUTANTS = {
     "large_body": ("html.ui-large body { font-size: 16px; }", "html.ui-large body { font-size: 14px; }", "**/main.css*"),
     "currency_no_resend": ("r = await R()._post('/api/sub/retail/settings/credit', { base_currency: code, confirm_existing_sales: true });", "r = r;", "**/settings-hub.js*"),
     "currency_cancel_applies": ("if (!yes) { sel.value = S.currency.code; say(''); return; }", "", "**/settings-hub.js*"),
+    "large_short_compaction": ("html.ui-large .pos-sum-row { line-height:1.2; }", ""),
+    "large_720_relax": ("@media (max-height: 740px) {", "@media (max-height: 1px) {"),
     "large_default": ("return 'large';", "return 'normal';", "**/"),
     "xlarge_cart_floor": ("html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }", "html.ui-xlarge .pos-cart-items { min-block-size:calc(5 * var(--pos-cart-row-min) + 8px); }"),
 }

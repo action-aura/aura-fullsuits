@@ -215,6 +215,16 @@ def reachable(page, locator, what=""):
     and (real_click) a real mouse click at that point is what gets sent."""
     locator.first.scroll_into_view_if_needed(timeout=3000)
     info = locator.first.evaluate(_CENTRE_JS)
+    if not info["inView"]:
+        # P1c: Chrome's scrollIntoViewIfNeeded treats a control that is clipped by
+        # less than half a pixel as "already visible" and does nothing, which left a
+        # card 0.28px past the bottom edge once Large's taller type shifted where an
+        # earlier step had left the scroll. A person would simply scroll it into view;
+        # so does this, with an explicit centre. The claim is unchanged: the box must
+        # END UP fully inside the viewport (a control taller than the viewport, or
+        # one that cannot be scrolled to, still fails on the assert below).
+        locator.first.evaluate("el => el.scrollIntoView({block: 'center'})")
+        info = locator.first.evaluate(_CENTRE_JS)
     assert info["inView"], f"{what}: box {info['box']} is outside the {info['vw']}x{info['vh']} viewport"
     assert info["hits"], f"{what}: elementFromPoint at its centre hits {info['hitDesc']}, not the element"
     return info
@@ -422,7 +432,9 @@ with sync_playwright() as p:
     plain_ctx, plainmgr = new_session(PLAIN_EMAIL, PLAIN_PW)
     print("SEEDING DONE.")
 
-    OWNER_SECTIONS = ["shop-receipt", "tax", "credit", "tills", "hardware", "team", "data-backup", "plan-devices"]
+    # P1c added "display" (Screen size: a per-DEVICE preference, offered to everyone who can
+    # open Settings -- it changes nothing in the shop's data).
+    OWNER_SECTIONS = ["shop-receipt", "tax", "credit", "tills", "hardware", "display", "team", "data-backup", "plan-devices"]
 
     # =========================================================================
     # 1. Reaching the hub and every section (owner)
@@ -438,6 +450,7 @@ with sync_playwright() as p:
             "credit": "#credit-mode",
             "tills": "#device-branch-card",
             "hardware": "#printer-card",
+            "display": "#display-card",
             "team": None,
             "data-backup": None,
             "plan-devices": None,
@@ -472,7 +485,7 @@ with sync_playwright() as p:
         nav_labels = owner.eval_on_selector_all("#sh-root .sh-nav-item", "els => els.map(e => e.textContent.trim())")
         assert nav_labels == [s["label"] for s in secs], (nav_labels, secs)
 
-    check("hub: owner reaches the hub from the gear and every one of the 8 sections by real click",
+    check("hub: owner reaches the hub from the gear and every one of the 9 sections by real click",
           owner_reaches_hub_from_the_gear_and_every_section)
 
     def open_api_lands_on_the_section():
@@ -589,6 +602,17 @@ with sync_playwright() as p:
         real_click(owner, "#sh-save", "Save")
         owner.wait_for_timeout(500)
         assert savebar_up(owner)
+        # P1c: the refusal's toast is a fixed overlay near the bottom edge, and with the
+        # taller Large controls the save bar can sit right under it for the few seconds
+        # it stays up. Wait until Discard is actually the topmost thing at its centre
+        # (the toast expires) instead of clicking through a transient overlay -- the
+        # reachability rule real_click enforces afterwards is unchanged. WHAT THIS CAN NO
+        # LONGER CATCH: a toast that never expires and permanently covers Discard (that
+        # fails here by timing out after 15s, so it is still caught).
+        owner.wait_for_function(
+            "() => { const b = document.getElementById('sh-discard'); if (!b) return false; const r = b.getBoundingClientRect();"
+            " const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!h && b.contains(h); }",
+            timeout=15000)
         real_click(owner, "#sh-discard", "Discard")
 
     check("hub: a refused Save (negative loyalty, zero limit) keeps the bar up and the server unchanged",
@@ -856,9 +880,12 @@ with sync_playwright() as p:
                                   "document.getElementById('device-branch-select').options.length > 0", timeout=15000)
         manager.wait_for_timeout(500)
         ids = manager.eval_on_selector_all("#sh-root .sh-nav-item", "els => els.map(e => e.dataset.sh)")
-        assert ids == ["tills", "team"], f"a delegated manager sees sections {ids}"
+        # P1c: Display (Screen size) is per-device and needs no authority, so a delegated
+        # manager sees it too. WHAT THIS CAN NO LONGER CATCH: "Display" being hidden from a
+        # manager -- it is not owner-data. Every owner-only section is still refused below.
+        assert ids == ["tills", "display", "team"], f"a delegated manager sees sections {ids}"
         secs = manager.evaluate("() => SettingsHub.sections().filter(s => s.visible).map(s => s.id)")
-        assert secs == ["tills", "team"], secs
+        assert secs == ["tills", "display", "team"], secs
         # owner-only sections refuse to open
         assert manager.evaluate("() => SettingsHub.open('credit')") is False
         for sel in ("#branding-card", "#default-tax-card", "#business-day-card", "#einvoicing-card",
@@ -877,7 +904,7 @@ with sync_playwright() as p:
         st, body = api(manager, "POST", "/api/sub/retail/settings/credit", {"loyalty_point_value": "9"})
         assert st == 403, f"expected 403 for a manager posting credit settings, got {st}: {body}"
 
-    check("gating: a delegated manager sees ONLY Tills and Team (and the server still refuses the rest)",
+    check("gating: a delegated manager sees ONLY Tills, Display and Team (and the server still refuses the rest)",
           manager_sees_only_tills_and_team)
 
     def cashier_gets_lock_panel():
