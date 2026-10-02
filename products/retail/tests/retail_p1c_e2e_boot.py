@@ -184,6 +184,8 @@ MUTANTS = {
     "large_charge_height": ("html.ui-large .pos-checkout-btn { min-block-size:60px;font-size:20px; }", "html.ui-large .pos-checkout-btn { min-block-size:44px;font-size:20px; }"),
     "large_card_name": ("html.ui-large .pos-card-name { font-size:16px; }", "html.ui-large .pos-card-name { font-size:14px; }"),
     "large_body": ("html.ui-large body { font-size: 16px; }", "html.ui-large body { font-size: 14px; }", "**/main.css*"),
+    "currency_no_resend": ("r = await R()._post('/api/sub/retail/settings/credit', { base_currency: code, confirm_existing_sales: true });", "r = r;", "**/settings-hub.js*"),
+    "currency_cancel_applies": ("if (!yes) { sel.value = S.currency.code; say(''); return; }", "", "**/settings-hub.js*"),
     "large_default": ("return 'large';", "return 'normal';", "**/"),
     "xlarge_cart_floor": ("html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }", "html.ui-xlarge .pos-cart-items { min-block-size:calc(5 * var(--pos-cart-row-min) + 8px); }"),
 }

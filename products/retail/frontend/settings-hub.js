@@ -488,6 +488,85 @@
     } catch (e) { console.error(e); }
   }
 
+  // ── Shop currency (P1c) ───────────────────────────────────────────────────
+  // The owner could not find where to change it: there was no field. Owner-only
+  // (the server enforces it; the card is simply not offered otherwise). Acts at
+  // once through its own button rather than the unsaved-changes bar, because a
+  // change over existing sales needs a deliberate confirmation of its own.
+  function currencyCard() {
+    return `
+      <div class="sub-chart-card" id="currency-card">
+        <h3 class="sh-card-title">${esc(t('Shop currency'))}</h3>
+        <p class="sh-card-lead">${esc(t('The currency your prices and receipts are shown in. Changing it never changes an amount already saved.'))}</p>
+        <div class="sh-inline-actions">
+          <div class="ret-field" style="margin:0"><label for="cur-select">${esc(t('Currency'))}</label>
+            <select id="cur-select" disabled><option>${esc(t('Loading…'))}</option></select></div>
+          <button type="button" class="ret-btn ret-btn-ghost" id="cur-apply" disabled>${esc(t('Change currency'))}</button>
+        </div>
+        <p class="sh-cat-status" id="cur-status" role="status" aria-live="polite"></p>
+      </div>`;
+  }
+
+  async function loadCurrency() {
+    const sel = $('cur-select');
+    if (!sel) return;
+    try {
+      const resp = await R()._get('/api/sub/retail/settings/tax');
+      const d = (resp && resp.data) || {};
+      S.currency = { code: d.base_currency || 'JOD', list: d.available_currencies || [] };
+      sel.innerHTML = S.currency.list.map((c) =>
+        `<option value="${esc(c.code)}">${esc(c.code)} — ${esc(t(c.name))} (${esc(c.symbol)})</option>`).join('');
+      sel.value = S.currency.code;
+      sel.disabled = false;
+      $('cur-apply').disabled = false;
+    } catch (e) { console.error(e); }
+  }
+
+  async function applyCurrency() {
+    const sel = $('cur-select');
+    const status = $('cur-status');
+    const say = (m) => { if (status) status.textContent = m; };
+    if (!sel || !S.currency) return;
+    const code = sel.value;
+    if (code === S.currency.code) { say(t('That is already the shop currency.')); return; }
+    const btn = $('cur-apply');
+    if (btn) btn.disabled = true;
+    try {
+      let r = await R()._post('/api/sub/retail/settings/credit', { base_currency: code });
+      if (r && r.code === 'CURRENCY_HAS_SALES') {
+        // The server refuses until the owner says yes. Plain words: nothing
+        // already saved is rewritten, only new sales use the new currency.
+        const yes = await R()._confirm({
+          title: t('Change the shop currency?'),
+          message: t('Your past sales and balances keep their old amounts; only new sales use the new currency. Change it?'),
+          confirmLabel: t('Change currency'),
+          danger: true,
+        });
+        if (!yes) { sel.value = S.currency.code; say(''); return; }
+        r = await R()._post('/api/sub/retail/settings/credit', { base_currency: code, confirm_existing_sales: true });
+      }
+      if (r && r.status === 'success') {
+        S.currency.code = code;
+        // The till and every screen read symbol/decimals from these two fields.
+        const t2 = await R()._get('/api/sub/retail/settings/tax');
+        const d = (t2 && t2.data) || {};
+        if (d.currency_symbol != null) R()._currencySymbol = d.currency_symbol;
+        if (d.currency_decimals != null) R()._currencyDecimals = d.currency_decimals;
+        say(t('The shop currency is now {code}.').replace('{code}', code));
+        toast(t('Shop currency changed'), 'success');
+      } else {
+        sel.value = S.currency.code;
+        say((r && r.message) || t('Could not change the currency.'));
+      }
+    } catch (e) {
+      console.error(e);
+      sel.value = S.currency.code;
+      say(t('Could not change the currency.'));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function loadCategories() {
     const sel = $('tax-cat-select');
     if (!sel) return;
@@ -1643,6 +1722,7 @@
           </aside>
         </div>`;
       const forms = $('sh-shop-forms');
+      if (owner) forms.insertAdjacentHTML('afterbegin', currencyCard());
       moveCard('branding-card', forms);
       moveCard('wa-reports-card', forms);
     }
@@ -1906,7 +1986,7 @@
     if (S.token !== token || !S.root || !S.root.isConnected) return;
     fillAdminPanes();
     if (isOwner()) {
-      await Promise.all([loadTaxMode(), loadCategories(), loadNumbering(), loadTills()]);
+      await Promise.all([loadTaxMode(), loadCategories(), loadNumbering(), loadTills(), loadCurrency()]);
     } else {
       await loadNumbering(); // a no-op without the owner-only card
     }
@@ -1982,6 +2062,7 @@
     if (el.id === 'sh-save') { save(); return; }
     if (el.id === 'sh-discard') { discard(); return; }
     if (el.id === 'tax-cat-apply') { applyCategoryRate(); return; }
+    if (el.id === 'cur-apply') { applyCurrency(); return; }
     if (el.dataset.tillAct) { tillAction(el.dataset.tillAct, el.dataset.tillUid); return; }
     if (el.id === 'till-number-all') { numberAllTills(); return; }
     if (el.dataset.shW) { S.pvWidth = Number(el.dataset.shW) === 58 ? 58 : 80; syncPreviewToggles(); schedulePreview(0); return; }

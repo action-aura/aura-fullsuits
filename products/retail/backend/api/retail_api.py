@@ -13184,6 +13184,43 @@ def _adjust_credit(conn, table, pid, cid, delta, currency=None):
     conn.execute(f"UPDATE {table} SET credit_balance=? WHERE id=? AND company_id=?", (float(newbal), pid, cid))
     return float(newbal)
 
+# ── Shop currency (P1c) ────────────────────────────────────────────────────────
+# The owner could not find where to change the currency: there was no field, and
+# the only writer (POST /settings/credit, below) stored whatever string it was
+# handed -- "dollars", "$", "" -- which then reached every formatter and every
+# report. The shop's currency is now chosen from a list.
+#
+# WHERE THE LIST COMES FROM. commercial_runtime/currency.py only tabulates the
+# EXCEPTIONS to two decimals (JOD, KWD ... JPY), and core/retail/pricing.py
+# tabulates the symbols it knows; neither carries a human NAME, and neither may
+# be edited from here (commercial_runtime is shared). So the list is the UNION
+# of those two tables (so a currency the server can already format correctly is
+# always offered), with the display names kept here. retail_currency_setting_
+# test.py asserts every code in either table has a name -- a currency added to
+# one of them without a name here fails that test instead of silently never
+# being offered.
+SHOP_CURRENCY_NAMES = {
+    'JOD': 'Jordanian dinar', 'USD': 'US dollar', 'EUR': 'Euro', 'GBP': 'Pound sterling',
+    'SAR': 'Saudi riyal', 'AED': 'UAE dirham', 'KWD': 'Kuwaiti dinar', 'BHD': 'Bahraini dinar',
+    'OMR': 'Omani rial', 'QAR': 'Qatari riyal', 'EGP': 'Egyptian pound', 'ILS': 'Israeli shekel',
+    'TRY': 'Turkish lira', 'JPY': 'Japanese yen', 'TND': 'Tunisian dinar', 'LYD': 'Libyan dinar',
+    'IQD': 'Iraqi dinar', 'KRW': 'South Korean won',
+}
+
+
+def _shop_currency_codes():
+    """Every code the server can already format, in a stable order (the shop's
+    home currency first, then alphabetical)."""
+    codes = set(tax_engine.CURRENCY_MINOR_UNITS) | set(tax_engine.CURRENCY_SYMBOLS)
+    return sorted(codes, key=lambda c: (c != 'JOD', c))
+
+
+def _available_currencies():
+    return [{'code': c, 'name': SHOP_CURRENCY_NAMES.get(c, c),
+             'decimals': -tax_engine.currency_quantum(c).as_tuple().exponent,
+             'symbol': tax_engine.currency_symbol(c)} for c in _shop_currency_codes()]
+
+
 # ── Settings (credit / currency) ──────────────────────────────────────────────
 @retail_bp.route('/settings/credit', methods=['GET'])
 @mt_login_required
@@ -13213,6 +13250,28 @@ def credit_settings_set():
         return admin_guard
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # P1c: the shop currency is validated HERE, before anything is written, so a
+    # request that mixes it with other keys is all-or-nothing.
+    if 'base_currency' in data:
+        new_cur = str(data['base_currency'] or '').strip().upper()
+        if new_cur not in _shop_currency_codes():
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'UNKNOWN_CURRENCY',
+                            'message': 'That currency is not one this till can format. Choose one from the list.',
+                            'available': [c['code'] for c in _available_currencies()]}), 400
+        data['base_currency'] = new_cur
+        current = str(_settings(conn, cid).get('base_currency') or 'JOD').strip().upper()
+        if new_cur != current:
+            # Changing the currency never rewrites a stored amount -- 12.500 stays
+            # 12.500, it is only LABELLED differently from now on. With sales
+            # already on the books that is a decision, not a click, so the server
+            # asks for it explicitly (the UI shows its warning and resends).
+            sales_n = conn.execute("SELECT COUNT(*) FROM sales WHERE company_id=? AND status='completed'", (cid,)).fetchone()[0]
+            if sales_n and data.get('confirm_existing_sales') is not True:
+                conn.close()
+                return jsonify({'status': 'error', 'code': 'CURRENCY_HAS_SALES', 'sales_count': sales_n,
+                                'message': 'This shop already has sales. Past sales and balances keep their amounts; '
+                                           'only new sales use the new currency. Confirm to change it.'}), 409
     # 'loyalty_point_value' rides this same endpoint rather than a new
     # '/settings/loyalty' route: retail_route_capability_matrix_test.py
     # freezes EXACT_MUTATION_CAPABILITIES as a closed dict keyed by view
@@ -13278,6 +13337,7 @@ def tax_settings_get():
         'base_currency': currency,
         'currency_decimals': -tax_engine.currency_quantum(currency).as_tuple().exponent,
         'currency_symbol': tax_engine.currency_symbol(currency),
+        'available_currencies': _available_currencies(),
         'default_tax_rate': default_tax_rate,
     }})
 
