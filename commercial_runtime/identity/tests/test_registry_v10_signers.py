@@ -108,8 +108,17 @@ def test_rebuild_copies_every_row_with_its_computed_key_and_is_idempotent(tmp_pa
     assert rebuild_quarantine_with_auth_key(conn) is True
     rows = {r[0]: r for r in conn.execute(
         "SELECT entity_id, auth_key, reason, detail, quarantined_at, payload FROM sync_apply_quarantine")}
-    assert rows["signed"][1] == authority.quarantine_auth_key(signed) and rows["signed"][1].startswith("sig:")
-    assert rows["unsigned"][1] == "" and rows["garbled"][1] == "" and rows["sig-not-text"][1] == ""
+    # Review V3r G2: an authority row's key is the content hash of its whole payload
+    # (it was "sig:<hash of the signature text>" for a signed row and '' for the
+    # rest). The migration calls the SAME function a live park does, so each row is
+    # compared with that function's answer. What this can no longer catch: a key
+    # that is '' for an unsigned authority row -- deliberately gone (a '' key let a
+    # copy of a signature replace a parked payload).
+    assert rows["signed"][1] == authority.quarantine_auth_key(signed, "user") and len(rows["signed"][1]) == 64
+    assert rows["unsigned"][1] == authority.quarantine_auth_key({"uid": "u2"}, "user") != ""
+    assert rows["garbled"][1] == authority.quarantine_auth_key(None, "user")
+    assert rows["sig-not-text"][1] == authority.quarantine_auth_key({"_auth": {"sig": 5}}, "user")
+    assert len({rows[k][1] for k in rows}) == 4
     assert rows["signed"][2:5] == ("owner_change_needs_main", "d1", "2026-01-01 10:00:00")     # nothing else moved
     assert rows["garbled"][3] is None and rows["garbled"][5] == "not json at all"
     assert len(rows) == 4
@@ -137,11 +146,11 @@ def test_a_failed_rebuild_rolls_back_to_the_old_shape(tmp_path, monkeypatch):
     calls = {"n": 0}
     real = authority.quarantine_auth_key
 
-    def boom(payload):
+    def boom(payload, entity_type=None):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("disk full")
-        return real(payload)
+        return real(payload, entity_type)
 
     monkeypatch.setattr(authority, "quarantine_auth_key", boom)
     with pytest.raises(RuntimeError):
@@ -178,7 +187,7 @@ def test_a_registry_that_reached_the_first_v10_is_brought_forward_by_the_chain(r
                             ).fetchone() == ("d", "2026-01-02T00:00:00+00:00", None)
     assert _cols(registry, "sync_signed_seen")
     assert "main_row_version" in _cols(registry, "users")
-    assert registry.execute("SELECT auth_key FROM sync_apply_quarantine").fetchone()[0].startswith("sig:")
+    assert registry.execute("SELECT auth_key FROM sync_apply_quarantine").fetchone()[0] ==         authority.quarantine_auth_key(_signed_payload(), "user")
     registry_db._migrate_registry_schema(registry)                  # and a second run is a no-op
     assert registry.execute("SELECT COUNT(*) FROM sync_apply_quarantine").fetchone()[0] == 1
     assert registry.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

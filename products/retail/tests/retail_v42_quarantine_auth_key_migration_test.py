@@ -98,9 +98,14 @@ def test_a_v41_database_is_rebuilt_with_auth_key_and_keeps_every_row(tmp_path):
             "SELECT entity_id, entity_type, event_type, payload, reason, detail, quarantined_at, auth_key "
             "FROM sync_apply_quarantine")}
         assert set(rows) == {"signed", "unsigned", "sale-child"}
-        assert rows["signed"]["auth_key"] == authority.quarantine_auth_key(SIGNED)
-        assert rows["signed"]["auth_key"].startswith("sig:")
-        assert rows["unsigned"]["auth_key"] == "" and rows["sale-child"]["auth_key"] == ""
+        # Review V3r G2: authority rows (signed OR unsigned) are keyed by the content
+        # hash of their payload; a non-authority row (the sale child) keeps ''. What
+        # this can no longer catch: '' for an unsigned authority row -- deliberately
+        # gone; the sale-child assertion still pins '' for everything else.
+        assert rows["signed"]["auth_key"] == authority.quarantine_auth_key(SIGNED, "user")
+        assert len(rows["signed"]["auth_key"]) == 64
+        assert rows["unsigned"]["auth_key"] == authority.quarantine_auth_key({"id": "a"}, "till_allocation") != ""
+        assert rows["sale-child"]["auth_key"] == ""
         assert (rows["signed"]["reason"], rows["signed"]["detail"], rows["signed"]["quarantined_at"]) == \
             ("owner_change_needs_main", "d1", "2026-01-01 10:00:00")
         assert json.loads(rows["signed"]["payload"]) == SIGNED
