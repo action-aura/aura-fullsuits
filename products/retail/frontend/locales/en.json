@@ -2284,6 +2284,7 @@
   "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again": "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again",
   "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so": "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so",
   "the sending computer's licence does not confirm which computer it is, so it may be pretending to be another one. Open Aura on that computer while it is online, then make the change again": "the sending computer's licence does not confirm which computer it is, so it may be pretending to be another one. Open Aura on that computer while it is online, then make the change again",
+  "a change named a staff account that belongs to a different shop on this computer. Nothing was changed": "a change named a staff account that belongs to a different shop on this computer. Nothing was changed",
   "Add the item you typed. With an empty search: go to payment": "Add the item you typed. With an empty search: go to payment",
   "Pick a search result, or a cart line when the search is empty": "Pick a search result, or a cart line when the search is empty",
   "One more or one fewer of the selected line": "One more or one fewer of the selected line",

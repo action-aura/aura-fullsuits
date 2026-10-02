@@ -19936,6 +19936,9 @@ _SYNC_REVIEW_REASONS = {
     # AUDIT-033 fix round (verifier V finding #1): Owner pins each computer's registry id into its
     # licence, and the signer's licence does not name the id it claims.
     'device_id_not_attested': ("the sending computer's licence does not confirm which computer it is, so it may be pretending to be another one. Open Aura on that computer while it is online, then make the change again", False),
+    # AUDIT-033 fix round 2 (review V3r G4): a user change named a uid that belongs to
+    # another company's row in this registry. Arabic wording flagged for a native reader.
+    'foreign_company_user': ('a change named a staff account that belongs to a different shop on this computer. Nothing was changed', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

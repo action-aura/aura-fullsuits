@@ -2284,6 +2284,7 @@
   "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again": "ليس لدى هذا الجهاز ترخيص خاص به بعد، فلا يستطيع التحقق ممن أرسل هذا. فعّل الترخيص على هذا الجهاز وسيحاول مجددًا",
   "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so": "أعلن جهاز أن جهازًا آخر تولّى دور الجهاز الرئيسي. الجهاز الذي يتولّى الدور وحده يستطيع قول ذلك",
   "the sending computer's licence does not confirm which computer it is, so it may be pretending to be another one. Open Aura on that computer while it is online, then make the change again": "ترخيص الجهاز المُرسِل لا يؤكد هويته، لذلك قد يكون ينتحل صفة جهاز آخر. افتح Aura على ذلك الجهاز وهو متصل بالإنترنت، ثم أعد إجراء التغيير",
+  "a change named a staff account that belongs to a different shop on this computer. Nothing was changed": "تغيير يخص حساب موظف ينتمي إلى متجر آخر على هذا الجهاز. لم يتم تغيير أي شيء",
   "Add the item you typed. With an empty search: go to payment": "أضف الصنف الذي كتبته. والبحث فارغ: انتقل إلى الدفع",
   "Pick a search result, or a cart line when the search is empty": "اختر نتيجة بحث، أو سطرًا من السلة عندما يكون البحث فارغًا",
   "One more or one fewer of the selected line": "زيادة أو إنقاص واحد في السطر المحدد",
