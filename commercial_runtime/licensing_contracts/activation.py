@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from .assertion_verifier import AssertionVerificationError, verify_assertion
+from .checkin_scheduler import note_registry_attestation, read_registry_device_id
 from .client import LicensingClient, LicensingClientError
 from .events import LicensingEventRecorder
 from .state_machine import LicenseState
@@ -135,6 +136,11 @@ def make_bundled_anchor_recovery(trust_anchor_path, trust_store: OwnerTrustStore
     return _recover
 
 
+def _registry_kwargs(provider: Optional[Callable[[], Optional[str]]]) -> dict:
+    registry_device_id = read_registry_device_id(provider)
+    return {"registry_device_id": registry_device_id} if registry_device_id else {}
+
+
 def perform_activation(
     *,
     client: LicensingClient,
@@ -149,6 +155,7 @@ def perform_activation(
     license_key: str,
     device_public_key_fingerprint: str,
     anchor_recovery: Optional[Callable[[], bool]] = None,
+    registry_device_id_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> ActivationResult:
     """Windows path: this process owns the device key, so it also owns the
     HTTP call. Calls Owner directly, then delegates to
@@ -171,6 +178,10 @@ def perform_activation(
             license_key=license_key,
             idempotency_key=idempotency_key,
             signer=signer,
+            # AUDIT-033 fix round (verifier V finding #1): activation is the
+            # race-free moment for Owner to pin this computer's registry id.
+            # Only when there is one (see LicensingClient.activate).
+            **_registry_kwargs(registry_device_id_provider),
         )
     except LicensingClientError as exc:
         event_recorder.record("ACTIVATION_FAILED", {"reason_code": exc.reason_code})
@@ -188,6 +199,7 @@ def perform_activation(
         device_public_key_fingerprint=device_public_key_fingerprint,
         trust_refresher=make_trust_manifest_refresher(client, trust_store),
         anchor_recovery=anchor_recovery,
+        registry_device_id_provider=registry_device_id_provider,
     )
 
 
@@ -202,6 +214,7 @@ def ingest_activation_response(
     device_public_key_fingerprint: str,
     trust_refresher: Optional[Callable[[], None]] = None,
     anchor_recovery: Optional[Callable[[], bool]] = None,
+    registry_device_id_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> ActivationResult:
     """Android path (Part U): the Kotlin layer already made the signed HTTP
     call to Owner (it holds the AndroidKeystore-wrapped device key, this
@@ -349,5 +362,6 @@ def ingest_activation_response(
 
     event_recorder.record("ACTIVATION_SUCCEEDED")
     event_recorder.record("ASSERTION_ACCEPTED")
+    note_registry_attestation(payload, registry_device_id_provider, event_recorder)
 
     return ActivationResult(state=LicenseState.ACTIVE_ONLINE, owner_installation_id=owner_installation_id)

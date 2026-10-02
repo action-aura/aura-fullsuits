@@ -74,6 +74,13 @@ def present_status(record: Optional[LicenseStateRecord]) -> dict:
         "start": payload.get("term_start") if isinstance(payload.get("term_start"), str) else None,
         "end": payload.get("term_end") if isinstance(payload.get("term_end"), str) else None,
     }
+    # AUDIT-033 fix round (verifier V finding #1): does the stored Owner lease
+    # name this computer's registry device id? False means this computer cannot
+    # sign shop-authority changes yet; the desktop shell uses it to ask Owner
+    # again right away at boot instead of waiting for the next poll. Not
+    # secret: it is a yes/no, never the id itself.
+    attested = payload.get("registry_device_id")
+    result["registry_device_attested"] = isinstance(attested, str) and bool(attested)
 
     if record.assertion_expires_at:
         result["assertion_expires_at"] = record.assertion_expires_at

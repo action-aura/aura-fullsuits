@@ -23,6 +23,64 @@ from .trusted_time import TrustedTimeAnchor, cache_fresh_anchor, get_cached_or_r
 
 logger = logging.getLogger(__name__)
 
+# AUDIT-033 fix round (verifier V finding #1): how long an identical
+# REGISTRY_DEVICE_ID_NOT_ATTESTED event suppresses a repeat. A computer waiting
+# on Owner checks in every few minutes; one event per check-in would bury the
+# licensing log. The WARNING log line is NOT deduplicated.
+_NOT_ATTESTED_EVENT_DEDUPE_SECONDS = 3600
+
+
+def read_registry_device_id(provider: Optional[Callable[[], Optional[str]]]) -> Optional[str]:
+    """The registry device id to send Owner, or None. Never raises: a broken
+    provider must not stop a check-in, which is also what keeps the licence
+    alive."""
+    if provider is None:
+        return None
+    try:
+        return provider() or None
+    except Exception:  # noqa: BLE001 -- best effort by design
+        logger.warning("registry_device_id provider failed; sending no registry id", exc_info=True)
+        return None
+
+
+def note_registry_attestation(
+    payload: dict, provider: Optional[Callable[[], Optional[str]]], events: LicensingEventRecorder
+) -> None:
+    """After a verified, non-stale assertion is persisted: if this computer has a
+    registry device id and the Owner-signed lease does not name it, say so.
+
+    WHY: a lease that does not attest this computer's id means this computer
+    cannot sign shop-authority changes (authority.local_signer_or_none), and
+    that otherwise looks like nothing at all from the outside. Typical causes:
+    Owner has not been upgraded yet, the first claim of this id was refused
+    (another computer of the licence holds it -- see Owner's
+    REGISTRY_DEVICE_ID_CLASH event), or this is the check-in that is about to
+    pin it."""
+    local = read_registry_device_id(provider)
+    if not local:
+        return
+    attested = payload.get("registry_device_id")
+    if attested == local:
+        return
+    logger.warning(
+        "licence lease does not attest this computer's registry id (attested=%s, local=%s): this computer cannot "
+        "sign shop-authority changes until Owner confirms its identity",
+        attested, local,
+    )
+    details = {"local": local, "attested": attested}
+    try:
+        cutoff = datetime.now(timezone.utc).timestamp() - _NOT_ATTESTED_EVENT_DEDUPE_SECONDS
+        for ev in events.recent(limit=20):
+            if (
+                ev.event_type == "REGISTRY_DEVICE_ID_NOT_ATTESTED"
+                and ev.occurred_at.timestamp() >= cutoff
+                and dict(ev.details) == details
+            ):
+                return
+    except Exception:  # noqa: BLE001 -- dedupe is an optimisation, never a reason to lose the event
+        logger.debug("could not read recent licensing events for dedupe", exc_info=True)
+    events.record("REGISTRY_DEVICE_ID_NOT_ATTESTED", details)
+
 # States in which there is no installation_id yet to check in with --
 # run_once() is a no-op (by design, not an error) in these states.
 _NOT_YET_ACTIVATED = frozenset(
@@ -178,8 +236,14 @@ class LicenseCheckInScheduler:
         device_public_key_fingerprint: str,
         local_safety_ceiling_seconds: Optional[int] = None,
         anchor_recovery: Optional[Callable[[], bool]] = None,
+        registry_device_id_provider: Optional[Callable[[], Optional[str]]] = None,
     ):
         self._client = client
+        # AUDIT-033 fix round (verifier V finding #1): where this computer's
+        # shop-authority registry device id comes from. Read at call time, never
+        # cached, and never created as a side effect (the retail app wires
+        # device_context.peek_local_device_uuid).
+        self._registry_device_id_provider = registry_device_id_provider
         self._signer = signer
         self._trust_store = trust_store
         self._state_repository = state_repository
@@ -242,7 +306,14 @@ class LicenseCheckInScheduler:
         self._refresh_trust_manifest_best_effort()
 
         try:
-            response = self._client.check_in(installation_id=record.owner_installation_id, signer=self._signer)
+            # Passed only when there IS one, so a client (or test double) that
+            # predates the registry id keeps working unchanged; LicensingClient
+            # itself omits a falsy id from the signed body anyway.
+            extra = {}
+            registry_device_id = read_registry_device_id(self._registry_device_id_provider)
+            if registry_device_id:
+                extra["registry_device_id"] = registry_device_id
+            response = self._client.check_in(installation_id=record.owner_installation_id, signer=self._signer, **extra)
         except LicensingClientError:
             self._events.record("CHECK_IN_FAILED")
             return self.reevaluate_only(checkin_ok=False)
@@ -353,6 +424,7 @@ class LicenseCheckInScheduler:
                     self._events.record("CHECK_IN_SUCCEEDED")
                     self._events.record("ASSERTION_ACCEPTED")
                     record = self._persist_fresh_assertion(record, envelope, verified)
+                    note_registry_attestation(verified.payload, self._registry_device_id_provider, self._events)
 
         new_state = self._reevaluate(record, checkin_ok)
         self._apply_state_transition(record, new_state)

@@ -94,6 +94,7 @@ class LicensingClient:
         license_key: str,
         idempotency_key: str,
         signer: DeviceSigner,
+        registry_device_id: Optional[str] = None,
     ) -> dict:
         body = {
             "contract_version": CONTRACT_VERSION,
@@ -111,6 +112,14 @@ class LicensingClient:
             "license_key": license_key,
             "idempotency_key": idempotency_key,
         }
+        # AUDIT-033 fix round (verifier V finding #1): ask Owner to pin and
+        # attest this computer's shop-authority registry device id. Added to
+        # the body BEFORE _post_signed so the device signature covers it (an
+        # on-path attacker cannot swap it). Only when we have one: an old
+        # Owner, or a build with no registry identity yet, sends exactly the
+        # body it always sent.
+        if registry_device_id:
+            body["registry_device_id"] = registry_device_id
         try:
             return self._post_signed("/activations", body, signer)
         finally:
@@ -120,7 +129,9 @@ class LicensingClient:
             body["license_key"] = None
             del body
 
-    def check_in(self, *, installation_id: str, signer: DeviceSigner) -> dict:
+    def check_in(
+        self, *, installation_id: str, signer: DeviceSigner, registry_device_id: Optional[str] = None
+    ) -> dict:
         body = {
             "contract_version": CONTRACT_VERSION,
             "request_id": str(uuid.uuid4()),
@@ -129,6 +140,10 @@ class LicensingClient:
             "nonce": _new_nonce(),
             "installation_id": installation_id,
         }
+        # See activate(): signed, and only when known. A check-in is also how
+        # an installation that existed before this release gets pinned.
+        if registry_device_id:
+            body["registry_device_id"] = registry_device_id
         return self._post_signed("/check-ins", body, signer)
 
     def deactivate(self, *, installation_id: str, idempotency_key: str, signer: DeviceSigner) -> dict:

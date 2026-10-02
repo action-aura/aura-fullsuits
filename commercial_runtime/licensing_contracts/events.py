@@ -42,6 +42,10 @@ EVENT_TYPES = frozenset(
         # it is recorded rather than done silently -- an unexplained one is
         # worth investigating.
         "TRUST_ANCHOR_READMITTED",
+        # AUDIT-033 fix round (verifier V finding #1): Owner's lease does not
+        # name THIS computer's registry device id, so this computer cannot sign
+        # shop-authority changes yet (authority.local_signer_or_none).
+        "REGISTRY_DEVICE_ID_NOT_ATTESTED",
     }
 )
 

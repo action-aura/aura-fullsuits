@@ -58,6 +58,7 @@ def make_licensing_blueprint(
     release_channel: Optional[str] = "rc",
     internal_shared_secret: Optional[str] = None,
     on_activation_success: Optional[Callable[[], object]] = None,
+    registry_device_id_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> Blueprint:
     """on_activation_success: an optional, product-supplied callback invoked
     once immediately after an activation is verified and persisted, on both
@@ -97,6 +98,15 @@ def make_licensing_blueprint(
     anywhere but 127.0.0.1), so the shared secret's job is narrower: proving
     a request came from THIS app's own Kotlin process, not some other app
     on the same device probing the loopback port.
+
+    registry_device_id_provider: AUDIT-033 fix round (verifier V finding #1).
+    Returns this computer's shop-authority registry device id (retail:
+    device_context.peek_local_device_uuid) or None. It is sent to Owner at
+    activation and every check-in so Owner can pin it and sign it into the
+    lease; receivers trust a signer's id only when its lease attests it. A
+    provider that PEEKS, never creates: minting an identity as a side effect of
+    a licence call was the AUDIT-032D bug. None (the default; Clinic and every
+    existing test) sends nothing and changes nothing.
     """
     bp = Blueprint("licensing", __name__, url_prefix="/api/licensing")
 
@@ -215,6 +225,7 @@ def make_licensing_blueprint(
                 # rescued by a manifest (nothing it trusts can countersign),
                 # only by the anchor its own build shipped with.
                 anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
+                registry_device_id_provider=registry_device_id_provider,
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
@@ -252,6 +263,7 @@ def make_licensing_blueprint(
             # exactly as it strands a new one; without this it would grind down
             # to RESTRICTED on a licence that is perfectly valid.
             anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
+            registry_device_id_provider=registry_device_id_provider,
         )
         scheduler.run_once()
         # present_status() only reflects the currently-persisted snapshot --
@@ -290,7 +302,7 @@ def make_licensing_blueprint(
     if internal_shared_secret:
         _register_internal_sync_routes(
             bp, internal_shared_secret, _build_context, product_code, platform,
-            on_activation_success, trust_anchor_path,
+            on_activation_success, trust_anchor_path, registry_device_id_provider,
         )
 
     return bp
@@ -318,6 +330,7 @@ def _register_internal_sync_routes(
     bp: Blueprint, shared_secret: str, build_context, product_code: str, platform: str,
     on_activation_success: Optional[Callable[[], object]] = None,
     trust_anchor_path=None,
+    registry_device_id_provider: Optional[Callable[[], Optional[str]]] = None,
 ) -> None:
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -360,6 +373,7 @@ def _register_internal_sync_routes(
                 # install trusts. Kotlin still supplies no trust material: the
                 # anchor read here is this build's own bundled file.
                 anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
+                registry_device_id_provider=registry_device_id_provider,
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
@@ -395,6 +409,7 @@ def _register_internal_sync_routes(
             # Same last resort as the Windows path above -- Kotlin supplies no
             # trust material; the anchor read here is this build's own file.
             anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
+            registry_device_id_provider=registry_device_id_provider,
         )
         # The twin of /_internal/sync-activation's identical line, and it must
         # stay that way. Kotlin made the Owner call, but this process still
@@ -409,6 +424,26 @@ def _register_internal_sync_routes(
             trust_refresher=make_trust_manifest_refresher(client, trust_store),
         )
         return jsonify(present_status(state_repository.load())), 200
+
+    @bp.route("/_internal/registry-device-id", methods=["GET"])
+    def internal_registry_device_id():
+        """The id Android's Kotlin layer must send Owner as `registry_device_id`.
+
+        ANDROID OWNS THE OWNER CALL (it holds the Keystore-wrapped device key
+        and signs the request), but PYTHON OWNS THE ID (the retail registry's
+        local_device_uuid lives in retail.db, which Kotlin never opens). The id
+        has to be inside the request the device signs, so Kotlin asks here
+        first. Same shared-secret check as every other /_internal route.
+
+        Returns {"registry_device_id": null} when there is nothing to send (no
+        provider wired, or this install has no registry identity yet): Kotlin
+        then sends the request without the field, exactly as before.
+        """
+        if not _authorized():
+            return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Unauthorized."}), 403
+        from .checkin_scheduler import read_registry_device_id
+
+        return jsonify({"registry_device_id": read_registry_device_id(registry_device_id_provider)}), 200
 
     @bp.route("/_internal/reevaluate", methods=["POST"])
     def internal_reevaluate():
