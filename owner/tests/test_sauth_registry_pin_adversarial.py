@@ -126,7 +126,8 @@ def _seed_history(app, license_id, main_iid, rid, *, days_before_now=2):
         inst.created_at = now - timedelta(days=days_before_now + 1)
         db_session.add(SyncEvent(id=uuid.uuid4(), license_id=license_id, device_id=uuid.UUID(main_iid), entity_type="device",
                                  entity_id=uuid.UUID(rid), event_type="create", payload={},
-                                 client_created_at=now - timedelta(days=days_before_now)))
+                                 client_created_at=now - timedelta(days=days_before_now),
+                                 created_at=now - timedelta(days=days_before_now)))  # FF (V4o G1/G2): server receipt time
         db_session.commit()
 
 
@@ -390,12 +391,51 @@ def test_extra_replacing_the_licence_does_not_reopen_the_mains_id(app, client, s
 
 # ═══ Q5: concurrent pins of the same id ═════════════════════════════════════
 
-def _race(app, monkeypatch, calls):
-    """Run each callable in its own thread (own scoped db session). Both threads
-    run the REAL rule-4 holder query, then wait for each other, then flush: the
-    exact interleaving the IntegrityError fallback exists for."""
+def _race(app, monkeypatch, calls, gate="before-lock"):
+    """Run each callable in its own thread (own scoped db session).
+
+    FF (review V4o G5): the pin path now takes a per-id advisory lock, so two
+    requests can no longer both sit between the holder query and the flush. The
+    gate therefore has two shapes, both kept:
+      * "before-lock": both threads meet BEFORE taking the lock, then race for it
+        (the real production interleaving; the lock serialises them).
+      * "no-lock-after-holder": the lock is patched to a no-op and both threads run
+        the REAL rule-4 holder query, then wait for each other, then flush: the
+        original interleaving, which now exercises the unique-index IntegrityError
+        fallback as defence in depth."""
     from app.licensing_service import registry_pin
 
+    if gate == "before-lock":
+        real_lock = registry_pin.lock_registry_id
+        lock_barrier = threading.Barrier(len(calls), timeout=30)
+        lock_seen = threading.local()
+
+        def gated_lock(session, rid):
+            if not getattr(lock_seen, "done", False):
+                lock_seen.done = True
+                lock_barrier.wait()
+            return real_lock(session, rid)
+
+        monkeypatch.setattr(registry_pin, "lock_registry_id", gated_lock)
+        results = [None] * len(calls)
+        errors = []
+
+        def run_locked(i, fn):
+            try:
+                results[i] = fn(app.test_client())
+            except Exception as exc:  # noqa: BLE001
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=run_locked, args=(i, fn)) for i, fn in enumerate(calls)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(90)
+        monkeypatch.setattr(registry_pin, "lock_registry_id", real_lock)
+        assert not errors, errors
+        return results
+
+    monkeypatch.setattr(registry_pin, "lock_registry_id", lambda session, rid: None)
     real = registry_pin._holder
     barrier = threading.Barrier(len(calls), timeout=30)
     seen = threading.local()
@@ -427,8 +467,9 @@ def _race(app, monkeypatch, calls):
     return results
 
 
+@pytest.mark.parametrize("gate", ["before-lock", "no-lock-after-holder"])
 @pytest.mark.parametrize("mode", ["checkin+checkin", "activation+checkin"])
-def test_q5_concurrent_pins_exactly_one_wins_and_the_loser_lease_is_clean(app, client, shop, monkeypatch, mode):
+def test_q5_concurrent_pins_exactly_one_wins_and_the_loser_lease_is_clean(app, client, shop, monkeypatch, mode, gate):
     a_key, b_key = make_device_keypair(), make_device_keypair()
     b_iid = _iid(_activate(client, b_key, shop["full_key"], "q5-b"))
     if mode == "checkin+checkin":
@@ -438,7 +479,7 @@ def test_q5_concurrent_pins_exactly_one_wins_and_the_loser_lease_is_clean(app, c
         a_iid = None
         first = lambda c: _activate(c, a_key, shop["full_key"], "q5-a", registry_device_id=RA)  # noqa: E731
     second = lambda c: _checkin(c, b_key, b_iid, registry_device_id=RA)  # noqa: E731
-    r1, r2 = _race(app, monkeypatch, [first, second])
+    r1, r2 = _race(app, monkeypatch, [first, second], gate)
     assert r1.status_code == 200 and r2.status_code == 200, (r1.status_code, r1.get_json(), r2.status_code, r2.get_json())
     a_iid = a_iid or r1.get_json()["installation_id"]
     named = [p.get("registry_device_id") for p in (_payload(r1), _payload(r2))]

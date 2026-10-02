@@ -3,8 +3,11 @@
 An installation activated AFTER the id already appeared in the shop's synced
 history cannot be the id's original computer, so it is never auto-pinned.
 Allow half: no history, history that starts after the installation, history
-inside the 10-minute clock-skew margin. Deny half: history older than the margin
-(both `device` and `admin_device` events), on the licence chain."""
+RECEIVED by Owner after the installation was created. Deny half: history Owner
+received before the installation was created (both `device` and `admin_device` events),
+on the licence chain. Review V4o G1/G2 (FF): the guard reads Owner's own receipt time
+(SyncEvent.created_at), so the old 10-minute device-clock skew margin is gone and the
+seeded `at` below is the RECEIPT time (client_created_at is set equal but is not read)."""
 from __future__ import annotations
 
 import json
@@ -89,7 +92,8 @@ def _event(app, license_id, *, etype, rid, at, via="entity"):
         db_session.add(SyncEvent(
             id=uuid.uuid4(), license_id=license_id, device_id=uuid.uuid4(), entity_type=etype,
             entity_id=uuid.UUID(rid) if via == "entity" else uuid.uuid4(), event_type="create",
-            payload={"device_id": rid} if via == "payload" else {}, client_created_at=at))
+            payload={"device_id": rid} if via == "payload" else {}, client_created_at=at,
+            created_at=at))  # FF (V4o G1/G2): the guard reads server receipt time, so seed that
         db_session.commit()
 
 
@@ -119,8 +123,12 @@ def test_history_that_starts_after_the_installation_still_pins(app, client, shop
     assert _payload(_checkin(client, key, iid, registry_device_id=RA))["registry_device_id"] == RA
 
 
-@pytest.mark.parametrize("minutes,pins", [(9, True), (11, False)], ids=["inside-margin-pins", "outside-margin-refused"])
-def test_the_skew_margin_edge(app, client, shop, minutes, pins):
+# FF (V4o G1/G2): was (9 min inside margin pins, 11 refused) for device clock skew. The
+# margin is now zero because the receipt time is Owner's own clock. This test can no
+# longer catch a re-introduced skew tolerance; test_sauth_registry_pin_round3_fixes.py
+# pins that the guard ignores client_created_at altogether.
+@pytest.mark.parametrize("minutes,pins", [(-1, True), (1, False)], ids=["received-after-pins", "received-before-refused"])
+def test_the_receipt_edge(app, client, shop, minutes, pins):
     key, iid = _unpinned(client, app, shop)
     _event(app, shop["license_id"], etype="device", rid=RA, at=T0 - timedelta(minutes=minutes))
     got = _payload(_checkin(client, key, iid, registry_device_id=RA))

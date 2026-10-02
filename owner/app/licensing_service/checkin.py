@@ -19,7 +19,7 @@ from app.licensing_service import device_identity, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize_bytes
 from app.licensing_service.entitlements import resolve_entitlements
-from app.licensing_service.registry_pin import audit_pin_outcome, record_pin_event, resolve_registry_device_pin
+from app.licensing_service.registry_pin import audit_pin_outcome, lock_requested_registry_id, record_pin_event, resolve_registry_device_pin
 from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy_for_subscription
 from app.models.installations import ActivationEvent, Installation
 from app.models.licensing_service import ActivationRequest
@@ -79,6 +79,14 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
     if public_key is None or not device_identity.verify_signature(public_key, canonical_bytes, body["signature"]):
         _log(body, source_ip, installation.id, "REJECTED", "INVALID_SIGNATURE")
         raise CheckInRejected("INVALID_SIGNATURE")
+
+    # AUDIT-033 / review V4o G5: per-registry-id advisory lock BEFORE any licence
+    # row is touched (uniform lock order with activation; see registry_pin.py).
+    # NOT mutation-provable today: rule 4's own lock already runs before any
+    # licence reference is flushed here, so removing this call changes nothing
+    # observable. It stays so a future flush before the pin cannot recreate the
+    # activation <-> check-in lock inversion.
+    lock_requested_registry_id(body.get("registry_device_id"))
 
     if installation.status == "SUSPENDED":
         raise CheckInRejected("INSTALLATION_SUSPENDED")

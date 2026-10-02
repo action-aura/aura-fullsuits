@@ -23,7 +23,7 @@ from app.licensing_service import device_identity, idempotency, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize, canonicalize_bytes
 from app.licensing_service.entitlements import resolve_entitlements
-from app.licensing_service.registry_pin import audit_pin_outcome, record_pin_event, resolve_registry_device_pin
+from app.licensing_service.registry_pin import audit_pin_outcome, lock_requested_registry_id, record_pin_event, resolve_registry_device_pin
 from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy_for_subscription
 from app.models.catalog import Platform, Product, ReleaseChannel
 from app.models.installations import ActivationEvent, Installation
@@ -170,6 +170,10 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         raise ActivationRejected("IDEMPOTENCY_CONFLICT", http_status=409)
     if existing is not None and existing.cached_response_json:
         return json.loads(existing.cached_response_json)
+
+    # AUDIT-033 / review V4o G5: per-registry-id advisory lock BEFORE the licence
+    # row lock below (uniform lock order with check-in; see registry_pin.py).
+    lock_requested_registry_id(body.get("registry_device_id"))
 
     # Steps 17-18: lock the license row, authoritative device-limit check,
     # register-or-reuse the installation -- all inside one transaction.

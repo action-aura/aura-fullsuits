@@ -63,14 +63,36 @@ In order:
 5. **History guard (R3).** Owner looks in the shop's synced event log (`owner_sync_events`,
    across the licence chain) for the earliest event naming the id: an
    `entity_type='device'` event whose `entity_id` is the id, or an `admin_device`
-   event whose payload `device_id` is the id. If that event's `client_created_at`
-   is earlier than the installation's `created_at` minus 10 minutes
-   (`HISTORY_SKEW_MARGIN`, the original computer's clock skew), the installation
-   was activated after the id was already in the shop's history, so it cannot be
-   the id's original computer: event `REGISTRY_DEVICE_ID_HISTORY_CONFLICT`, nothing
-   pinned, lease omits the key. (Index: `ix_owner_sync_events_license_entity`.)
-6. Otherwise pin it (inside a savepoint; a concurrent winner of the unique index
-   is treated as rule 4).
+   event whose payload `device_id` is the id ("earliest" = lowest `seq`). If **Owner
+   received** that event (`SyncEvent.created_at`, set by Postgres on insert) before
+   the installation's own `created_at`, the installation was activated after the id
+   was already in the shop's history, so it cannot be the id's original computer:
+   event `REGISTRY_DEVICE_ID_HISTORY_CONFLICT`, nothing pinned, lease omits the key.
+   The pushing device's own `client_created_at` is **never** read (review V4o
+   G1/G2: a member could date a forged `admin_device` event 2001 to veto the real
+   main, or 2099 and first to switch the guard off), so there is no device-clock
+   skew to forgive and `HISTORY_SKEW_MARGIN` is zero.
+   (Index: `ix_owner_sync_events_license_entity`.)
+6. Otherwise pin it with a conditional `UPDATE ... WHERE registry_device_id IS
+   NULL` inside a savepoint (0 rows = a concurrent writer pinned it first:
+   `REGISTRY_DEVICE_ID_CHANGE_REFUSED`; a concurrent winner of the unique index is
+   treated as rule 4).
+
+Rules 4 to 6 run under a **per-id advisory lock** (review V4o G5):
+`pg_advisory_xact_lock(k)` with `k` = the first 8 bytes of
+`sha256("aura-registry-pin:" + id)` read as a signed big-endian 64-bit integer
+(`registry_pin_lock_key`). It is transaction-scoped (released by the caller's
+commit) and the holder and the installation are re-read under it. The same lock
+guards the staff transfer, so the automatic pin and a transfer of one id never
+interleave, even across two licences of one chain (which the per-licence unique
+index cannot see).
+Lock order matters: activation and check-in take this advisory lock **first**
+(`lock_requested_registry_id`, before the licence row is locked or referenced),
+because activation holds the licence row `FOR UPDATE` for its whole decision;
+taking the advisory lock later (while holding it) let a concurrent check-in
+deadlock against it (found by the concurrent-pin tests, Postgres aborted one with
+a 500). The check-in's own early call is not separately provable today (rule 4's
+lock already precedes any licence reference there) and stays as ordering hygiene.
 
 ### R4. Staff transfer: the only way an id moves
 
@@ -79,12 +101,26 @@ actor_staff_user_id=, reason=)` in `registry_pin.py`, or from a shell:
 
     flask licensing transfer-registry-id --registry-device-id <id> --to <installation_id> --actor <staff email> --reason "<text>"
 
-Both installations must be on the same licence chain, a holder must exist, the
-target must not already be pinned to a different id, and a reason is required.
-The old holder is cleared and the target pinned in one transaction, an
-`ActivationEvent` `REGISTRY_ID_TRANSFERRED` is written on both installations and
-an audit row records actor, reason, from and to. Typical uses: the main's
-hardware died (slot replaced), or the shop's licence was replaced. After the
+Two shapes (review V4o G3):
+
+- **MOVE** - some installation on the target's licence chain holds the id (any
+  status). The old holder is cleared and the target pinned in one transaction, an
+  `ActivationEvent` `REGISTRY_ID_TRANSFERRED` is written on both installations and
+  an audit row records actor, reason, from and to. Typical uses: the main's
+  hardware died (slot replaced), or the shop's licence was replaced.
+- **ASSIGN** - nobody holds the id anywhere. This is the recovery for a computer
+  the history guard refused (rule 5 leaves the id unpinned, so there is no holder
+  to move it from). The target is pinned; the event (on the target only) and the
+  audit row are the same `REGISTRY_ID_TRANSFERRED` with `from_installation: null`.
+
+Refusals (stable `code`s, nothing changes): `REASON_REQUIRED`,
+`REGISTRY_DEVICE_ID_INVALID`, `ACTOR_NOT_ACTIVE_STAFF` (the actor must be an
+existing, `is_active`, not `disabled_at` staff account; its role codes, plus
+`super_admin`, are recorded as the audit row's role snapshot, review V4o G4),
+`TARGET_NOT_FOUND`, `TARGET_ALREADY_HOLDS_ID`, `TARGET_PINNED_TO_A_DIFFERENT_ID`,
+`HOLDER_ON_A_DIFFERENT_LICENCE_CHAIN` (the id is held on another chain) and
+`CONCURRENT_PIN_CHANGE` (the conditional UPDATEs matched 0 rows: someone changed
+the pin after it was read; the whole transaction is rolled back). After the
 transfer the new holder's next check-in returns a lease naming the id. An Owner UI
 button is a follow-up (Owner UI belongs to another owner of the code).
 
@@ -144,7 +180,8 @@ remains, stated as it really is:
 - Rule 5 can **refuse a legitimate computer**: one whose registry row was created
   and relayed by other computers (LAN-joined) before the computer itself activated
   with Owner. Its lease omits the id, `REGISTRY_DEVICE_ID_HISTORY_CONFLICT` is
-  recorded for staff, and the staff transfer (R4) resolves it.
+  recorded for staff, and the staff transfer (R4, ASSIGN shape, since nobody holds
+  the id) resolves it.
 - Mitigations unchanged: devices activated after this release pin at activation
   (race-free: a not-yet-activated device's id has never left the device); the
   retail shell asks Owner for one immediate check-in at boot while its lease does

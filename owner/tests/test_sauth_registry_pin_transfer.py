@@ -141,9 +141,11 @@ def test_transfer_to_a_target_pinned_to_another_id_is_refused(app, client, shop)
     assert _pin(app, a_iid) == RA and _pin(app, b_iid) == RB
 
 
-def test_transfer_with_no_holder_to_the_holder_itself_or_to_nothing_is_refused(app, client, shop):
+def test_transfer_to_the_holder_itself_or_to_nothing_is_refused(app, client, shop):
+    # FF (V4o G3): a transfer of an id NOBODY holds is now an ASSIGN, not a refusal
+    # (was `== "NO_CURRENT_HOLDER"` here). That deny is gone on purpose; the assign
+    # allow/deny halves live in test_sauth_registry_pin_round3_fixes.py.
     _, _, a_iid, b_iid = _two(client, shop)
-    assert _code(app, RB, b_iid, shop["actor"], "why") == "NO_CURRENT_HOLDER"
     assert _code(app, RA, a_iid, shop["actor"], "why") == "TARGET_ALREADY_HOLDS_ID"
     assert _code(app, RA, str(uuid.uuid4()), shop["actor"], "why") == "TARGET_NOT_FOUND"
     assert _code(app, "NOT-A-UUID", b_iid, shop["actor"], "why") == "REGISTRY_DEVICE_ID_INVALID"

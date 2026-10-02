@@ -232,9 +232,12 @@ def register_cli(app: Flask) -> None:
     @click.option("--actor", required=True, help="Email of the staff user performing (and accountable for) the transfer.")
     @click.option("--reason", required=True, help="Why this installation is the real computer for the id.")
     def transfer_registry_id_cmd(registry_device_id: str, to_installation_id: str, actor: str, reason: str):
-        """The only way a pinned registry device id changes installation
-        (AUDIT-033 / review V3o R4). Both installations must be on the same
-        licence chain; the move is audited with who, why, from and to."""
+        """The only way a registry device id changes installation or is handed
+        to one by staff (AUDIT-033 / review V3o R4, V4o G3). MOVE: the id's
+        current holder is on the same licence chain as --to. ASSIGN: nobody
+        holds the id (e.g. a computer the history guard refused). The actor
+        must be an ACTIVE staff account; the audit row records who, their
+        role, why, from (null for an assign) and to."""
         import uuid as _uuid
 
         from app.licensing_service.registry_pin import RegistryTransferError, transfer_registry_device_id
@@ -242,6 +245,8 @@ def register_cli(app: Flask) -> None:
         staff = db_session.execute(select(StaffUser).where(StaffUser.email == actor)).scalars().first()
         if staff is None:
             raise click.ClickException(f"No staff user with email {actor!r}.")
+        if not staff.is_active or staff.disabled_at is not None:
+            raise click.ClickException(f"Staff user {actor!r} is disabled and cannot be the accountable actor.")
         try:
             target_id = _uuid.UUID(to_installation_id)
         except ValueError:
