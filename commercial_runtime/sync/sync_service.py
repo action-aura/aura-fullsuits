@@ -330,6 +330,8 @@ lenient convention to itself.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import secrets
@@ -365,7 +367,9 @@ from commercial_runtime.identity.device_registry import (
     apply_device_event,
 )
 from commercial_runtime.identity.user_accounts import (
+    ROLE_ADMIN,
     enforce_cash_pair_after_apply,
+    normalize_role,
     sanitize_synced_user_fields,
     user_sync_apply_plan,
 )
@@ -1280,7 +1284,7 @@ class SyncService:
         return env
 
     def _authority_gate(self, conn, ev: dict, p: dict, local_company_id: Optional[str],
-                        entity_type: str):
+                        entity_type: str, from_quarantine: bool = False):
         """AUDIT-033 / S-AUTH: `None` when this authority event is signed by a
         member of THIS licence who is allowed to send this kind of event, else the
         `authority.Refusal` it must be parked with. Verification first (derives
@@ -1315,7 +1319,35 @@ class SyncService:
             clash = _authority.bind_signer(reg, cid, verdict)
             if clash is not None:
                 return clash
-            if env.local_dev is not None and verdict.dev == env.local_dev:
+            ctx = _authority.RuleContext(
+                reg=reg, company_id=cid, local_dev=env.local_dev,
+                retail=conn if own_reg else None)
+            if not from_quarantine:
+                # AUDIT-033 fix round (verifier V finding #6): proof of life comes
+                # ONLY from an event delivered now, never from re-judging one that
+                # was parked and is retried on every pull -- a main's old event
+                # sitting in the quarantine would otherwise keep a dead main alive
+                # for ever. `record_liveness` additionally ignores a signature it
+                # has already counted and a lease older than 14 days. It runs BEFORE
+                # the own-echo return below: a main's own echoes keep it alive.
+                _authority.record_liveness(reg, verdict)
+            # What the post-apply steps may trust about this event (set here, never
+            # read from the wire: `_apply_event` clears them on entry).
+            main = _authority._current_main(ctx)
+            signer_is_main = main is not None and verdict.dev == main
+            ev["_authority_signer_dev"] = verdict.dev
+            ev["_authority_signer_is_main"] = signer_is_main
+            # AUDIT-033 fix round (verifier V finding #5): an event is this device's
+            # OWN echo only when it was signed by THIS device's own signer -- same
+            # device id, installation AND key. Matching the device id alone let any
+            # signer who claimed the receiver's id (or, with no local signer at all,
+            # anybody) skip every rule. With no local signer nothing is exempt; an
+            # echo signed under an old key (a rotation) is judged by the rules.
+            own = (env.signer is not None and verdict.dev == env.signer.dev
+                   and verdict.inst == env.signer.inst
+                   and verdict.fingerprint == hashlib.sha256(
+                       base64.b64decode(env.signer.pk_b64)).hexdigest())
+            if own:
                 # THIS device's own event, handed back by the relay (a relay does not
                 # drop a device's own events from its pull). Nobody else can sign as
                 # this device, and the applier already treats a replay of its own row
@@ -1323,10 +1355,15 @@ class SyncService:
                 # the old main would otherwise park its own history as
                 # `needs_main_computer` for ever.
                 return None
-            ctx = _authority.RuleContext(
-                reg=reg, company_id=cid, local_dev=env.local_dev,
-                retail=conn if own_reg else None)
-            return _authority.authority_refusal(ev, verdict, ctx)
+            refusal = _authority.authority_refusal(ev, verdict, ctx)
+            if refusal is not None:
+                return refusal
+            if (entity_type == "user" and not signer_is_main
+                    and _authority.is_harmless_owner_edit(p, verdict, ctx)):
+                # Finding #3: a non-main computer's harmless edit of an owner row is
+                # applied WITHOUT touching row_version (see the user applier).
+                ev["_authority_harmless_owner_edit"] = True
+            return None
         except sqlite3.OperationalError as exc:
             logger.warning("SyncService: authority check could not read the registry (%s); parking %s",
                            exc, entity_type)
@@ -1891,7 +1928,8 @@ class SyncService:
     def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None,
                       branch_fallback_sink: Optional[list] = None,
                       conflict_sink: Optional[list] = None,
-                      schema_skew_sink: Optional[list] = None) -> bool:
+                      schema_skew_sink: Optional[list] = None,
+                      *, from_quarantine: bool = False) -> bool:
         """Applies one pulled event to a local table. Returns True when the
         event is FULLY handled -- inserted, upserted, a legitimate no-op
         (unknown entity_type, a non-`create` event on one of the five
@@ -2045,9 +2083,14 @@ class SyncService:
         # the assignment arrives, a forgery stays parked and harmless. The
         # applier then sees the payload WITHOUT `_auth` (nothing stores it), while
         # `_orig_payload` keeps the signed original for any later park.
-        ev.pop("_authority_verified", None)   # never trust a value that arrived with the event
+        # Never trust a value that arrived with the event: the gate below sets all of
+        # these, from the verified signature, and nothing else may.
+        for _private in ("_authority_verified", "_authority_signer_is_main",
+                         "_authority_signer_dev", "_authority_harmless_owner_edit"):
+            ev.pop(_private, None)
         if _authority.is_authority_event(ev):
-            refusal = self._authority_gate(conn, ev, p, local_company_id, entity_type)
+            refusal = self._authority_gate(conn, ev, p, local_company_id, entity_type,
+                                           from_quarantine=from_quarantine)
             if refusal is not None:
                 return self._quarantine_apply_event(
                     conn, ev, reason=refusal.reason, detail=refusal.detail)
@@ -3598,6 +3641,24 @@ class SyncService:
             # Returns a copy and never raises.
             p = sanitize_synced_user_fields(p)
             uid = p.get("uid")
+            if ev.get("_authority_harmless_owner_edit") is True:
+                # AUDIT-033 fix round (verifier V finding #3). A non-main computer
+                # may edit an owner's COSMETIC fields (the authority rule checked
+                # that no critical field changed), but a full upsert would also
+                # carry its `row_version`, and a huge one would make this receiver
+                # ignore every later change the main sends for that owner (the main
+                # sends local+1). A cap per event cannot work (a burst of +1 events
+                # each passes against the receiver's then-current value), so the
+                # owner row's version moves ONLY on main-signed events: this path
+                # writes display_name and language and nothing else -- never
+                # row_version, updated_at_utc, employee_id or a critical column.
+                # Last arrival wins on these two fields, which is acceptable.
+                conn.execute(
+                    "UPDATE users SET display_name=CASE WHEN ? THEN ? ELSE display_name END, "
+                    "language=COALESCE(?, language) WHERE uid=? AND company_id=?",
+                    (1 if "display_name" in p else 0, p.get("display_name"), p.get("language"),
+                     uid, local_company_id))
+                return True
             # 2026-09-05, the owner's decision "one owner login on every
             # device": the employee CODE is a per-device display label that
             # every install mints on its own (`ADMIN-0001` at first run,
@@ -3622,6 +3683,33 @@ class SyncService:
             user_plan = user_sync_apply_plan(
                 p, local_role_row[0] if local_role_row else None,
                 local_role_row[1] if local_role_row else None)
+            # AUDIT-033 fix round (verifier V finding #4). A MAIN-signed event that
+            # makes someone an owner beats a member-written row of that uid, even
+            # one with a higher row_version -- otherwise any member who writes the
+            # shop owner's uid first (before the main's real account arrives on a
+            # joining computer) squats it for good. `users.main_row_version`
+            # (device-local, never synced) is the highest version this receiver ever
+            # applied from a main-signed event; the override needs the incoming
+            # version to be ABOVE it (so replaying an old "X is admin" after the main
+            # demoted X cannot win) and the local row to have moved past it (it was
+            # written by someone else since). Ordinary users are never overridden, so
+            # concurrent member and main edits keep converging by version. A
+            # fixture registry without the column gets no override and no stamp.
+            signer_is_main = ev.get("_authority_signer_is_main") is True
+            has_main_rv = any(r[1] == "main_row_version"
+                              for r in conn.execute("PRAGMA table_info(users)").fetchall())
+            override = False
+            if (has_main_rv and signer_is_main and local_role_row
+                    and normalize_role(p.get("role")) == ROLE_ADMIN
+                    and normalize_role(local_role_row[0]) != ROLE_ADMIN):
+                cur_row = conn.execute(
+                    "SELECT row_version, main_row_version FROM users WHERE uid=? AND company_id=?",
+                    (uid, local_company_id)).fetchone()
+                if cur_row is not None:
+                    incoming_rv = self._as_int(p.get("row_version", 1), 0)
+                    main_rv = cur_row[1]
+                    override = (incoming_rv > (main_rv or 0)
+                                and (main_rv is None or self._as_int(cur_row[0], 0) > main_rv))
             try:
                 user_cursor = conn.execute(
                     "INSERT INTO users (id, company_id, uid, employee_id, email, role, status, "
@@ -3638,7 +3726,7 @@ class SyncService:
                     "updated_at_utc=excluded.updated_at_utc, "
                     "session_version=MAX(COALESCE(users.session_version,0), COALESCE(excluded.session_version,0)), "
                     "branch_scope_uid=excluded.branch_scope_uid "
-                    "WHERE excluded.row_version > users.row_version",
+                    "WHERE excluded.row_version > users.row_version OR ?",
                     (str(uuid.uuid4()), local_company_id, uid, employee_id, p.get("email"),
                      p.get("role", "cashier"), p.get("status", "active"),
                      p.get("require_password_change", 1), p.get("language", "en"),
@@ -3646,8 +3734,13 @@ class SyncService:
                      p.get("updated_at_utc"), p.get("session_version", 1), p.get("branch_scope_uid"),
                      p.get("display_name"), p.get("role_preset"),
                      1 if user_plan["has_display_name"] else 0,
-                     1 if user_plan["has_role_preset"] else 0),
+                     1 if user_plan["has_role_preset"] else 0,
+                     1 if override else 0),
                 )
+                if has_main_rv and signer_is_main and user_cursor.rowcount:
+                    conn.execute(
+                        "UPDATE users SET main_row_version=? WHERE uid=? AND company_id=?",
+                        (self._as_int(p.get("row_version", 1), 1), uid, local_company_id))
                 if user_plan["reset_books"] and user_cursor.rowcount:
                     # An OLD sender changed this person's role. It re-seeded
                     # only the eight codes it knows, so the four books rows
@@ -5591,7 +5684,7 @@ class SyncService:
     # signer_revoked, *_needs_main, second_admin_refused, release_ack_wrong_sender,
     # alias_origin_mismatch, takeover_*) is a forgery or abuse signal: it stays for a
     # human, whatever signed event arrives later.
-    _SUPERSEDABLE_PARK_REASONS = ("unsigned_authority_event", "main_unknown")
+    _SUPERSEDABLE_PARK_REASONS = tuple(sorted(_authority.SUPERSEDABLE_PARK_REASONS))
 
     @staticmethod
     def _as_int(value, default: int = 0) -> int:
@@ -5635,10 +5728,27 @@ class SyncService:
         p = _authority.strip_auth(ev.get("payload"))
         if not isinstance(p, dict):
             return 0
+        # AUDIT-033 fix round (verifier V finding #3/#4): only the computer whose
+        # word settles the matter may clear what is parked about it. A harmless
+        # owner edit by an ordinary member applying must never delete a parked
+        # main-signed change. So: the MAIN may clear any of these; a device may
+        # also clear parked copies of ITSELF, and a till of its own numbering book.
+        signer_dev = ev.get("_authority_signer_dev")
+        allowed = ev.get("_authority_signer_is_main") is True
+        if not allowed and entity_type == "device" and signer_dev and signer_dev == p.get("device_id"):
+            allowed = True
+        if (not allowed and entity_type == "doc_series" and signer_dev
+                and signer_dev == p.get("allocator_terminal_uid")):
+            allowed = True
+        if not allowed:
+            return 0
         placeholders = ",".join("?" * len(self._SUPERSEDABLE_PARK_REASONS))
+        keyed = self._quarantine_has_auth_key(conn)
         try:
             rows = conn.execute(
-                "SELECT entity_id, event_type, payload FROM sync_apply_quarantine "
+                "SELECT entity_id, event_type, payload, "
+                + ("auth_key" if keyed else "'' AS auth_key")
+                + " FROM sync_apply_quarantine "
                 f"WHERE entity_type=? AND reason IN ({placeholders})",
                 (entity_type, *self._SUPERSEDABLE_PARK_REASONS)).fetchall()
         except sqlite3.OperationalError as exc:
@@ -5676,9 +5786,14 @@ class SyncService:
                             <= self._as_int(p.get("row_version"), -1))
             if not same:
                 continue
-            conn.execute(
-                "DELETE FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
-                (row[0], row[1]))
+            if keyed:
+                conn.execute(
+                    "DELETE FROM sync_apply_quarantine WHERE entity_id=? AND event_type=? AND auth_key=?",
+                    (row[0], row[1], row[3]))
+            else:
+                conn.execute(
+                    "DELETE FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
+                    (row[0], row[1]))
             removed += 1
         if removed:
             logger.info("sync: cleared %d parked %s event(s) superseded by a signed one", removed, entity_type)
@@ -5735,18 +5850,89 @@ class SyncService:
         # carries exception text that can quote the offending value.
         reason = text(reason)
         detail = text(detail)
+        entity_id, entity_type, event_type = text(ev.get("entity_id")), text(ev.get("entity_type")), text(ev.get("event_type"))
+        # `_orig_payload` (set by the authority gate in `_apply_event`) is the
+        # payload AS RECEIVED, `_auth` included -- a retry must be able to
+        # re-verify the signature, so a park AFTER the gate stores it.
+        stored_payload = ev.get("_orig_payload", ev.get("payload")) or {}
+        payload_json = json.dumps(stored_payload, default=str)
+        auth_key = _authority.quarantine_auth_key(stored_payload)
+        evidence = tuple(sorted(_authority.EVIDENCE_PARK_REASONS))
+        supersedable = tuple(sorted(_authority.SUPERSEDABLE_PARK_REASONS))
+        ev_marks, sup_marks = ",".join("?" * len(evidence)), ",".join("?" * len(supersedable))
+        # AUDIT-033 fix round (verifier V findings #7/#8): the row is keyed by the
+        # signature as well, and EVIDENCE is sticky.
+        #   * Different signed events for one entity each keep their own row, so an
+        #     attested insider's signed junk can no longer displace a legitimate
+        #     parked main-signed change (V5b).
+        #   * An UNSIGNED copy of an authority event is never stored beside a signed
+        #     one for the same (entity_id, event_type): it would only add noise, and
+        #     it used to REPLACE the signed row (V5).
+        #   * A reason that is a forgery or abuse signal (`EVIDENCE_PARK_REASONS`) is
+        #     never rewritten into one a later signed event may clear
+        #     (`SUPERSEDABLE_PARK_REASONS`): the CASE keeps the stored reason and
+        #     detail (V6, V6b).
+        # `quarantined_at` is left alone on a re-park (first-seen time, as before).
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(sync_apply_quarantine)").fetchall()]
+        keyed = "auth_key" in columns
+        existing = conn.execute(
+            "SELECT payload, reason" + (", auth_key" if keyed else "")
+            + " FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
+            (entity_id, event_type)).fetchall()
+        if auth_key == "" and _authority.is_authority_event(ev):
+            for row in existing:
+                signed_before = (row[2] != "") if keyed else (
+                    _authority.quarantine_auth_key(SyncService._loads_or_none(row[0])) != "")
+                if signed_before:
+                    logger.info("sync: not parking an unsigned copy of %s %s: a signed one is already parked",
+                                ascii(entity_type), ascii(entity_id))
+                    return False
+        if not keyed:
+            # Old shape (a database that reached the previous v10/v42 before this
+            # fix): the primary key is still (entity_id, event_type), so the
+            # guards the key would have given are done by hand. Weaker -- between
+            # two DIFFERENT signers the first parked event is kept (residual R6).
+            for row in existing:
+                prior_auth = (SyncService._loads_or_none(row[0]) or {}).get(_authority.AUTH_KEY)
+                new_auth = stored_payload.get(_authority.AUTH_KEY) if isinstance(stored_payload, dict) else None
+                if (isinstance(prior_auth, dict) and prior_auth.get("sig")
+                        and isinstance(new_auth, dict) and new_auth.get("sig")
+                        and prior_auth.get("inst") != new_auth.get("inst")):
+                    logger.warning(
+                        "sync: keeping the first parked signed %s event for %s (signer %s); a second "
+                        "signer (%s) sent another -- old-shape quarantine cannot hold both",
+                        ascii(entity_type), ascii(entity_id), ascii(str(prior_auth.get("inst"))),
+                        ascii(str(new_auth.get("inst"))))
+                    return False
+        keep_case = (f"CASE WHEN sync_apply_quarantine.reason IN ({ev_marks}) AND excluded.reason IN ({sup_marks}) "
+                     "THEN sync_apply_quarantine.{col} ELSE excluded.{col} END")
         conn.execute(
             "INSERT INTO sync_apply_quarantine "
-            "(entity_id, entity_type, event_type, payload, reason, detail) VALUES (?,?,?,?,?,?) "
-            "ON CONFLICT(entity_id, event_type) DO UPDATE SET "
-            "payload=excluded.payload, reason=excluded.reason, detail=excluded.detail",
-            (text(ev.get("entity_id")), text(ev.get("entity_type")), text(ev.get("event_type")),
-             # `_orig_payload` (set by the authority gate in `_apply_event`) is
-             # the payload AS RECEIVED, `_auth` included -- a retry must be able
-             # to re-verify the signature, so a park AFTER the gate stores it.
-             json.dumps(ev.get("_orig_payload", ev.get("payload")) or {}, default=str), reason, detail),
+            "(entity_id, entity_type, event_type, payload, reason, detail"
+            + (", auth_key" if keyed else "") + ") VALUES (?,?,?,?,?,?" + (",?" if keyed else "") + ") "
+            "ON CONFLICT(entity_id, event_type" + (", auth_key" if keyed else "") + ") DO UPDATE SET "
+            "payload=excluded.payload, reason=" + keep_case.format(col="reason")
+            + ", detail=" + keep_case.format(col="detail"),
+            (entity_id, entity_type, event_type, payload_json, reason, detail)
+            + ((auth_key,) if keyed else ()) + evidence + supersedable + evidence + supersedable,
         )
         return False
+
+    @staticmethod
+    def _loads_or_none(raw):
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _quarantine_has_auth_key(conn) -> bool:
+        try:
+            return any(r[1] == "auth_key"
+                       for r in conn.execute("PRAGMA table_info(sync_apply_quarantine)").fetchall())
+        except sqlite3.OperationalError:
+            return False
 
     @staticmethod
     def _is_missing_table_error(exc: sqlite3.OperationalError) -> bool:
@@ -5810,24 +5996,27 @@ class SyncService:
         # second resolution, and a sale parked in the same second as its own
         # movements/journals MUST be retried first (the parked-children rule
         # depends on the parent leaving quarantine before the child is looked at).
+        keyed = self._quarantine_has_auth_key(conn)
         try:
             rows = conn.execute(
-                "SELECT entity_id, entity_type, event_type, payload FROM sync_apply_quarantine "
-                "ORDER BY quarantined_at, rowid"
+                "SELECT entity_id, entity_type, event_type, payload, "
+                + ("auth_key" if keyed else "'' AS auth_key")
+                + " FROM sync_apply_quarantine ORDER BY quarantined_at, rowid"
             ).fetchall()
         except sqlite3.OperationalError as exc:
             if self._is_missing_table_error(exc):
                 return
             raise
+        key_where = "entity_id=? AND event_type=?" + (" AND auth_key=?" if keyed else "")
         for row in rows:
+            key_args = (row["entity_id"], row["event_type"]) + ((row["auth_key"],) if keyed else ())
             # AUDIT-033 B2b: `rows` is a snapshot. An earlier retry in this same pass
             # may have applied a signed event that SUPERSEDED this parked one (see
             # `_supersede_parked_unsigned`) and deleted it. Re-trying it now would
             # re-park it (an upsert) and resurrect the very row that was just
             # cleared, so skip a row that is no longer there.
             if conn.execute(
-                    "SELECT 1 FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
-                    (row["entity_id"], row["event_type"])).fetchone() is None:
+                    f"SELECT 1 FROM sync_apply_quarantine WHERE {key_where}", key_args).fetchone() is None:
                 continue
             ev = {
                 "entity_id": row["entity_id"],
@@ -5837,15 +6026,14 @@ class SyncService:
             }
             if self._apply_event_guarded(conn, ev, local_company_id,
                                           branch_fallback_sink=branch_fallback_sink,
-                                          schema_skew_sink=schema_skew_sink):
-                # Keyed on BOTH columns -- entity_id alone would risk
+                                          schema_skew_sink=schema_skew_sink,
+                                          from_quarantine=True):
+                # Keyed on the WHOLE primary key -- entity_id alone would risk
                 # deleting a DIFFERENT still-blocked event_type that happens
-                # to share this entity_id (see the table's own CREATE
-                # comment for why the primary key itself is composite).
-                conn.execute(
-                    "DELETE FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
-                    (row["entity_id"], row["event_type"]),
-                )
+                # to share this entity_id, and since the signature joined the
+                # key (AUDIT-033 fix round) two signed events for one entity
+                # each own a row that only THEIR retry may delete.
+                conn.execute(f"DELETE FROM sync_apply_quarantine WHERE {key_where}", key_args)
 
     def run_once(self) -> None:
         """The one entry point the timer tick (and the manual/CLI caller)

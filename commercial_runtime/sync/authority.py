@@ -94,6 +94,18 @@ RELEASE_ACK_PREFIX = "till_release_ack:"
 #: consulted: a forger controls those.
 TAKEOVER_SILENCE_DAYS = 7
 
+#: AUDIT-033 fix round (verifier V finding #6). A verified event may say "this
+#: device is alive" only when it was signed under an Owner lease issued no more
+#: than this long ago. It equals the default offline grace (14 days): a main that
+#: has not reached Owner in 14 days is licence-restricted anyway, and a lease
+#: older than that is evidence of a replay, not of life.
+LIVENESS_MAX_LEASE_AGE = timedelta(days=14)
+#: `sync_signed_seen` rows older than the window cannot refresh anything any more
+#: (their lease is too old), so they are pruned a day past it.
+_LIVENESS_PRUNE_AGE = timedelta(days=15)
+#: "Bound, but never proven alive": a binding is not proof of life.
+_EPOCH_STAMP = "1970-01-01T00:00:00.000000+00:00"
+
 # ── refusal reasons (one place, so sync-review's sentence mapping can be checked
 # against it). Verification:
 REASON_UNSIGNED = "unsigned_authority_event"
@@ -114,6 +126,9 @@ REASON_OWNER_CHANGE_NEEDS_MAIN = "owner_change_needs_main"
 REASON_SECOND_ADMIN = "second_admin_refused"
 REASON_RELEASE_ACK_SENDER = "release_ack_wrong_sender"
 REASON_ALIAS_ORIGIN = "alias_origin_mismatch"
+# AUDIT-033 fix round (verifier V finding #1): the signer's Owner lease does not
+# name the registry device id the event claims to come from.
+REASON_DEV_NOT_ATTESTED = "device_id_not_attested"
 
 ALL_REFUSAL_REASONS = frozenset({
     REASON_UNSIGNED, REASON_BAD_SIGNATURE, REASON_FOREIGN_LICENCE, REASON_UNTRUSTED_LEASE,
@@ -121,8 +136,18 @@ ALL_REFUSAL_REASONS = frozenset({
     REASON_NEEDS_MAIN, REASON_MAIN_UNKNOWN, REASON_ADMIN_CLAIM_MISMATCH,
     REASON_TAKEOVER_MISMATCH, REASON_TAKEOVER_NOT_SILENT, REASON_DEVICE_CHANGE_NEEDS_MAIN,
     REASON_OWNER_CHANGE_NEEDS_MAIN, REASON_SECOND_ADMIN, REASON_RELEASE_ACK_SENDER,
-    REASON_ALIAS_ORIGIN,
+    REASON_ALIAS_ORIGIN, REASON_DEV_NOT_ATTESTED,
 })
+
+#: Park reasons a later SIGNED event of the same entity may clear (and that a
+#: stored evidence reason is never downgraded into). `unsigned_authority_event`
+#: is "an older build sent this without proof"; `main_unknown` is "I did not yet
+#: know who the main computer was" (a retry-by-itself state).
+SUPERSEDABLE_PARK_REASONS = frozenset({REASON_UNSIGNED, REASON_MAIN_UNKNOWN})
+#: Everything else a refusal can say is a forgery or abuse signal (EVIDENCE) and
+#: stays for a human, whatever happens later. `no_local_licence` is neither: it
+#: is a state of THIS device, which clears itself, so it may be overwritten.
+EVIDENCE_PARK_REASONS = ALL_REFUSAL_REASONS - SUPERSEDABLE_PARK_REASONS - {REASON_NO_LOCAL_LICENCE}
 
 
 @dataclass(frozen=True)
@@ -140,6 +165,13 @@ class VerifiedSigner:
     inst: str
     fingerprint: str
     licence: str = ""
+    #: issued_at of the verified Owner lease (None when unknown, e.g. a hand-built
+    #: signer in an older test). Newest-lease-wins binding and the liveness
+    #: window read it.
+    lease_issued_at: Optional[datetime] = None
+    #: sha256 hex of the signature text: the identity of THIS signed event, so a
+    #: replay or a retry of it can be recognised (`record_liveness`).
+    sig_sha256: str = ""
 
 
 @dataclass(frozen=True, eq=False)
@@ -166,6 +198,19 @@ def is_authority_event(event) -> bool:
         skey = payload.get("skey") if isinstance(payload, dict) else None
         return isinstance(skey, str) and skey.startswith(RELEASE_ACK_PREFIX)
     return True
+
+
+def quarantine_auth_key(payload) -> str:
+    """The quarantine row's third key column (AUDIT-033 fix round, verifier V
+    findings #7/#8): `sig:<first 32 hex of sha256(_auth.sig)>` for a payload that
+    carries a signature, else '' (an unsigned event). Two different signed events
+    for one entity therefore keep separate parked rows, and an unsigned copy
+    (key '') can be told apart from -- and never replace -- a signed one."""
+    auth = payload.get(AUTH_KEY) if isinstance(payload, dict) else None
+    sig = auth.get("sig") if isinstance(auth, dict) else None
+    if isinstance(sig, str) and sig:
+        return "sig:" + hashlib.sha256(sig.encode()).hexdigest()[:32]
+    return ""
 
 
 def strip_auth(payload):
@@ -307,12 +352,19 @@ def local_signer_or_none(app_data_dir=None, *, prepare_only: Optional[bool] = No
         lease_info = _local_lease(app)
         if lease_info is None:
             return None
-        lease, licence, inst, lease_fp = lease_info
+        lease, licence, inst, lease_fp, attested = lease_info
         from commercial_runtime.licensing_contracts.device_identity import fingerprint_of
         if lease_fp != fingerprint_of(base64.b64decode(pk_b64)):
             return None
         dev = _local_device_id(app)
         if not dev:
+            return None
+        if attested != dev:
+            # AUDIT-033 fix round (verifier V finding #1): receivers refuse an
+            # event whose signer's Owner lease does not NAME the id it claims, so
+            # sending one is pointless -- and sending it unsigned (which is what
+            # None means to the caller) is what the receiver can park honestly.
+            _warn_unattested_once(attested, dev)
             return None
         return LocalSigner(licence=licence, inst=inst, dev=dev, pk_b64=pk_b64, lease=lease, sign_fn=sign_fn)
     except Exception as exc:  # noqa: BLE001 -- see docstring: never raise out of the sync path
@@ -320,9 +372,25 @@ def local_signer_or_none(app_data_dir=None, *, prepare_only: Optional[bool] = No
         return None
 
 
+_UNATTESTED_WARNED: set = set()
+
+
+def _warn_unattested_once(attested, local) -> None:
+    key = (attested, local)
+    if key in _UNATTESTED_WARNED:
+        return
+    _UNATTESTED_WARNED.add(key)
+    logger.warning(
+        "authority: this computer's Owner lease does not attest its registry id "
+        "(attested=%s, local=%s): its authority events go out unsigned until the next "
+        "check-in brings a lease that names this computer", attested, local)
+
+
 def _local_lease(app: Path):
-    """`(envelope, licence_id, installation_id, device_key_fingerprint)` from this
-    install's stored lease, or None."""
+    """`(envelope, licence_id, installation_id, device_key_fingerprint,
+    registry_device_id_or_None)` from this install's stored lease, or None. The
+    last element is what Owner PINNED for this installation (AUDIT-033 fix round,
+    finding #1); None when the lease predates the pin or Owner did not confirm it."""
     db = app / "database" / "subsystems" / "licensing.db"
     if not db.exists():
         return None
@@ -339,7 +407,8 @@ def _local_lease(app: Path):
     fp = payload.get("device_key_fingerprint")
     if not (licence and inst and fp):
         return None
-    return envelope, str(licence), str(inst), str(fp)
+    attested = payload.get("registry_device_id")
+    return envelope, str(licence), str(inst), str(fp), (attested if isinstance(attested, str) and attested else None)
 
 
 def _local_device_id(app: Path) -> Optional[str]:
@@ -481,56 +550,141 @@ def verify_event(event: dict, *, trust_store, own_licence: Optional[str]) -> Uni
     from commercial_runtime.licensing_contracts.device_identity import verify_signature
     if not verify_signature(raw_pk, tbs, signature):
         return Refusal(REASON_BAD_SIGNATURE, "the signature does not match the event")
-    return VerifiedSigner(dev=dev, inst=inst, fingerprint=fingerprint, licence=str(licence))
+    # AUDIT-033 fix round (verifier V finding #1): `dev` is a field the signer
+    # CHOSE, and a signature by an insider's own key proves nothing about which
+    # computer it is. Owner pins the registry device id per installation and signs
+    # it into the lease, so the id the event claims must be the one the lease
+    # names. A lease that names nothing (an un-upgraded or not-yet-pinned
+    # computer) cannot vouch for any id.
+    attested = lease_payload.get("registry_device_id")
+    if not isinstance(attested, str) or not attested:
+        return Refusal(REASON_DEV_NOT_ATTESTED,
+                       "the signer's Owner lease does not confirm which computer it is")
+    if attested != dev:
+        return Refusal(REASON_DEV_NOT_ATTESTED,
+                       f"the signer's Owner lease names computer {attested!r}, but the event claims {dev!r}")
+    return VerifiedSigner(dev=dev, inst=inst, fingerprint=fingerprint, licence=str(licence),
+                          lease_issued_at=_parse_dt(lease_payload.get("issued_at")),
+                          sig_sha256=hashlib.sha256(sig_b64.encode()).hexdigest())
 
 
 # ── signer binding (registry v10) ────────────────────────────────────────────
 
 def _utc_iso(now: Optional[datetime] = None) -> str:
-    return (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+    when = now or datetime.now(timezone.utc)
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc)
+    return when.strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
 
 def _ensure_signers_table(reg: sqlite3.Connection) -> None:
-    # CREATE IF NOT EXISTS only: the real table comes from the v10 migration;
+    # CREATE IF NOT EXISTS only: the real tables come from the v10 migration;
     # this exists for a hand-built registry (tests, a half-migrated file) so a
     # missing table can never turn into an exception out of the apply loop.
-    from commercial_runtime.identity.sync_signers_schema import SYNC_SIGNERS_DDL
+    from commercial_runtime.identity.sync_signers_schema import (
+        SYNC_SIGNED_SEEN_DDL, SYNC_SIGNED_SEEN_INDEX, SYNC_SIGNERS_DDL)
     reg.execute(SYNC_SIGNERS_DDL)
+    if "lease_issued_at_utc" not in [r[1] for r in reg.execute("PRAGMA table_info(sync_signers)").fetchall()]:
+        reg.execute("ALTER TABLE sync_signers ADD COLUMN lease_issued_at_utc TEXT")
+    reg.execute(SYNC_SIGNED_SEEN_DDL)
+    reg.execute(SYNC_SIGNED_SEEN_INDEX)
 
 
 def bind_signer(reg: sqlite3.Connection, company_id: str, signer: VerifiedSigner,
-                now: Optional[datetime] = None, *, refresh_seen: bool = True) -> Optional[Refusal]:
-    """First binding wins, in both directions. A verified signer whose device id
-    or installation is already bound to something else is refused; the same
-    installation presenting a NEW key (Owner re-signed its lease after a key
-    reset -- the lease verified) just updates the fingerprint. Refreshes
-    `last_signed_seen_at_utc` on the RECEIVER's clock. No commit."""
+                now: Optional[datetime] = None, *, initial_seen_at: Optional[str] = None) -> Optional[Refusal]:
+    """Remember which installation speaks as which device id. The binding is a
+    CACHE of a fact Owner attested (the lease named this device id -- see
+    `verify_event`), not a first-come claim, so it follows Owner, not arrival
+    order:
+
+      * an installation already bound to a DIFFERENT device -> refused. Owner
+        never re-pins an installation, so a second id for it is not an Owner fact.
+      * a device id nobody holds -> bound. Its liveness starts at the EPOCH
+        sentinel (`initial_seen_at` overrides, used only for this device's own
+        self-bind): binding is not proof of life, `record_liveness` is.
+      * a device id held by a DIFFERENT installation -> moved to this one only
+        when this signer's lease is NEWER than the one that made the stored
+        binding (Owner re-pinned the id, e.g. after staff deactivated a squatter);
+        otherwise refused. Liveness resets: the new holder has not been heard.
+      * the same installation again -> key rotation updates the fingerprint, and
+        the lease stamp only moves forward.
+
+    No commit."""
     _ensure_signers_table(reg)
     stamp = _utc_iso(now)
+    lease_stamp = _utc_iso(signer.lease_issued_at) if signer.lease_issued_at is not None else None
     by_dev = reg.execute(
-        "SELECT installation_id, key_fingerprint FROM sync_signers WHERE device_id=?", (signer.dev,)).fetchone()
+        "SELECT installation_id, key_fingerprint, lease_issued_at_utc FROM sync_signers WHERE device_id=?",
+        (signer.dev,)).fetchone()
     by_inst = reg.execute(
         "SELECT device_id FROM sync_signers WHERE installation_id=?", (signer.inst,)).fetchone()
-    if by_dev is None and by_inst is None:
-        reg.execute(
-            "INSERT INTO sync_signers (device_id, company_id, installation_id, key_fingerprint, "
-            "first_bound_at_utc, last_signed_seen_at_utc) VALUES (?,?,?,?,?,?)",
-            (signer.dev, company_id, signer.inst, signer.fingerprint, stamp, stamp))
-        return None
-    if by_dev is not None and by_dev[0] != signer.inst:
-        return Refusal(REASON_BINDING_CLASH,
-                       f"device {signer.dev!r} is already bound to a different installation")
     if by_inst is not None and by_inst[0] != signer.dev:
         return Refusal(REASON_BINDING_CLASH,
                        f"installation {signer.inst!r} is already bound to a different device")
-    if refresh_seen:
+    if by_dev is None:
         reg.execute(
-            "UPDATE sync_signers SET key_fingerprint=?, last_signed_seen_at_utc=? WHERE device_id=?",
-            (signer.fingerprint, stamp, signer.dev))
+            "INSERT INTO sync_signers (device_id, company_id, installation_id, key_fingerprint, "
+            "first_bound_at_utc, last_signed_seen_at_utc, lease_issued_at_utc) VALUES (?,?,?,?,?,?,?)",
+            (signer.dev, company_id, signer.inst, signer.fingerprint, stamp,
+             initial_seen_at or _EPOCH_STAMP, lease_stamp))
+        return None
+    stored_lease = _parse_dt(by_dev[2])
+    newer = (signer.lease_issued_at is not None
+             and (stored_lease is None or signer.lease_issued_at > stored_lease))
+    if by_dev[0] != signer.inst:
+        if not newer:
+            return Refusal(REASON_BINDING_CLASH,
+                           f"device {signer.dev!r} is already bound to a different installation, "
+                           "and this signer's Owner lease is not newer than the one that bound it")
+        logger.warning("authority: Owner moved computer %s from installation %s to installation %s",
+                       signer.dev, by_dev[0], signer.inst)
+        reg.execute(
+            "UPDATE sync_signers SET installation_id=?, key_fingerprint=?, lease_issued_at_utc=?, "
+            "first_bound_at_utc=?, last_signed_seen_at_utc=? WHERE device_id=?",
+            (signer.inst, signer.fingerprint, lease_stamp, stamp, initial_seen_at or _EPOCH_STAMP, signer.dev))
+        return None
+    if newer:
+        reg.execute("UPDATE sync_signers SET key_fingerprint=?, lease_issued_at_utc=? WHERE device_id=?",
+                    (signer.fingerprint, lease_stamp, signer.dev))
     else:
         reg.execute("UPDATE sync_signers SET key_fingerprint=? WHERE device_id=?",
                     (signer.fingerprint, signer.dev))
     return None
+
+
+def record_liveness(reg: sqlite3.Connection, signer: VerifiedSigner, now: Optional[datetime] = None) -> bool:
+    """AUDIT-033 fix round (verifier V finding #6): say "this device was heard
+    from just now" -- on the RECEIVER's clock -- but only for evidence that cannot
+    be replayed:
+
+      * the event's signature has never been counted before (`sync_signed_seen`),
+        so replaying a captured event, or re-verifying the same parked event on
+        every pull, refreshes nothing; and
+      * it was signed under an Owner lease issued within `LIVENESS_MAX_LEASE_AGE`,
+        so an old lease cannot be dressed up as a live device.
+
+    A genuinely new event under a fresh lease IS indistinguishable from a real
+    one: that is exactly what a live main produces, and no rule could refuse it
+    while still accepting real liveness (this is why the verifier's original V9,
+    which replays an event the receiver never saw, is expected to stay red).
+    True when the row was refreshed. No commit."""
+    when = now or datetime.now(timezone.utc)
+    if not signer.sig_sha256 or signer.lease_issued_at is None:
+        return False
+    if when - signer.lease_issued_at > LIVENESS_MAX_LEASE_AGE:
+        return False
+    _ensure_signers_table(reg)
+    stamp = _utc_iso(when)
+    cur = reg.execute(
+        "INSERT OR IGNORE INTO sync_signed_seen (sig_sha256, device_id, lease_issued_at_utc, first_seen_at_utc) "
+        "VALUES (?,?,?,?)", (signer.sig_sha256, signer.dev, _utc_iso(signer.lease_issued_at), stamp))
+    if cur.rowcount != 1:
+        return False
+    reg.execute("DELETE FROM sync_signed_seen WHERE lease_issued_at_utc < ?",
+                (_utc_iso(when - _LIVENESS_PRUNE_AGE),))
+    reg.execute("UPDATE sync_signers SET last_signed_seen_at_utc=? WHERE device_id=? AND installation_id=?",
+                (stamp, signer.dev, signer.inst))
+    return True
 
 
 def ensure_self_bound(reg: sqlite3.Connection, company_id: str, signer: LocalSigner,
@@ -538,12 +692,17 @@ def ensure_self_bound(reg: sqlite3.Connection, company_id: str, signer: LocalSig
     """Pre-bind THIS device's own id to its own installation and key, so a peer
     can never get in first and claim it. True when bound (now or already).
     No commit."""
+    lease_payload = signer.lease.get("payload") if isinstance(signer.lease, dict) else None
     own = VerifiedSigner(dev=signer.dev, inst=signer.inst,
                          fingerprint=hashlib.sha256(base64.b64decode(signer.pk_b64)).hexdigest(),
-                         licence=signer.licence)
-    # refresh_seen=False: this runs on every judged event and at boot; only a
-    # VERIFIED event (including this device's own, echoed back) may say "alive".
-    refusal = bind_signer(reg, company_id, own, now, refresh_seen=False)
+                         licence=signer.licence,
+                         lease_issued_at=_parse_dt(lease_payload.get("issued_at")) if isinstance(lease_payload, dict) else None)
+    # `initial_seen_at=now`: the FIRST self-bind stamps "now" (a main that just
+    # started has, by definition, been heard from). Later calls never refresh it --
+    # this runs on every judged event and at boot, so a returning main must not be
+    # able to make itself look alive just by starting; only `record_liveness`
+    # (a verified, new event) may.
+    refusal = bind_signer(reg, company_id, own, now, initial_seen_at=_utc_iso(now))
     if refusal is not None:
         logger.error("authority: this device's own id cannot be bound: %s", refusal.detail)
         return False
@@ -570,16 +729,21 @@ def _current_main(ctx: RuleContext) -> Optional[str]:
     return str(assignment["device_id"]) if assignment else None
 
 
-def _local_admin_uid(ctx: RuleContext) -> Optional[str]:
-    """The owner: the one `users` row with role 'admin'."""
-    try:
-        row = ctx.reg.execute(
-            "SELECT uid FROM users WHERE company_id=? AND role='admin' AND deleted_at_utc IS NULL LIMIT 1",
-            (ctx.company_id,)).fetchone()
-    except sqlite3.OperationalError:
-        row = ctx.reg.execute(
-            "SELECT uid FROM users WHERE company_id=? AND role='admin' LIMIT 1", (ctx.company_id,)).fetchone()
-    return str(row[0]) if row and row[0] else None
+def _local_admin_uids(ctx: RuleContext) -> frozenset:
+    """EVERY owner account this device holds (AUDIT-033 fix round, verifier V
+    finding #2). The first version read ONE row (`LIMIT 1`), so a device with two
+    admin rows -- the shipped join scenario: its own first-run placeholder plus
+    the shop owner's real account from the main -- protected only one and treated
+    the other as an ordinary user any member could demote or re-password.
+
+    Not filtered by `deleted_at_utc`: a soft-deleted owner row is still the
+    owner's row, and its tombstone must not become a way to edit it. The role is
+    compared through `normalize_role` (what every capability check reads), so
+    'Admin ' and 'admin' are the same."""
+    from commercial_runtime.identity.user_accounts import ROLE_ADMIN, normalize_role
+    rows = ctx.reg.execute(
+        "SELECT uid, role FROM users WHERE company_id=? AND uid IS NOT NULL", (ctx.company_id,)).fetchall()
+    return frozenset(str(r[0]) for r in rows if normalize_role(r[1]) == ROLE_ADMIN)
 
 
 def _main_is_silent(ctx: RuleContext, main_dev: str) -> bool:
@@ -658,17 +822,22 @@ def _device_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optional[
     owner_change = False
     row = ctx.reg.execute(
         "SELECT status, device_label, admin_row_version FROM devices WHERE id=?", (claimed,)).fetchone()
+    try:
+        incoming_v = int(p.get("admin_row_version") or 1)
+    except (TypeError, ValueError):
+        incoming_v = 1
+    local_v = int(row[2] or 1) if row is not None else 1
     if p.get("reinstated_by_device_id"):
         owner_change = True
-    elif row is not None:
-        try:
-            incoming_v = int(p.get("admin_row_version") or 1)
-        except (TypeError, ValueError):
-            incoming_v = 1
-        if incoming_v > int(row[2] or 1):
-            status_differs = (p.get("status") or "active") != (row[0] or "active")
-            label_differs = bool(row[1]) and (p.get("device_label") or "") != row[1]
-            owner_change = status_differs or label_differs
+    elif incoming_v > local_v:
+        # AUDIT-033 fix round (verifier note): `admin_row_version` is the OWNER's
+        # version of the device's name/status, bumped only by the main. A device
+        # speaking about itself with a HIGHER one -- on an existing row, or on a
+        # fresh receiver with no row (above 1) -- is claiming an owner decision
+        # (and would otherwise lift the version past anything the main can send,
+        # freezing the main's later rename). A legitimate self-announce that
+        # carries a newer one simply parks until the main's own event lands.
+        owner_change = True
     if owner_change:
         main = _current_main(ctx)
         if main is not None and signer.dev == main:
@@ -679,48 +848,71 @@ def _device_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optional[
 
 
 def _user_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optional[Refusal]:
+    from commercial_runtime.identity.user_accounts import ROLE_ADMIN, normalize_role
     uid = p.get("uid")
-    role = p.get("role")
-    admin_uid = _local_admin_uid(ctx)
-    if role == "admin" and admin_uid is not None and uid != admin_uid:
-        # Only the MAIN computer may introduce an owner account that differs from
-        # the one already here. DEVIATION FROM THE WRITTEN PLAN ("refused always"),
-        # forced by a shipped, test-pinned scenario: a joining device that minted
-        # its own first-run admin must still receive the shop owner's real
-        # account from the main computer (test_a_colliding_admin_code_from_a_
-        # second_device_is_renumbered_not_parked). Refusing the main would leave
-        # that device without its owner for ever. Everyone else is still refused,
-        # and a forger cannot pose as the main: it is the SIGNATURE that says so.
-        main = _current_main(ctx)
-        if main is None:
-            return Refusal(REASON_MAIN_UNKNOWN,
-                           "a second administrator account needs the main computer, and this "
-                           "device does not know which one it is yet")
-        if signer.dev != main:
-            return Refusal(REASON_SECOND_ADMIN,
-                           "a second administrator account may only come from the main computer")
-        return None
-    if admin_uid is not None and uid == admin_uid:
+    incoming_admin = normalize_role(p.get("role")) == ROLE_ADMIN
+    admins = _local_admin_uids(ctx)
+    if uid in admins:
         # The payload is the WHOLE synced row, so judge it against the LOCAL owner
         # row: an event that leaves every owner-critical field as it already is
         # (a display-name or language edit, a row_version bump) is harmless and any
-        # verified member may send it. Only a change to a critical field -- who the
-        # owner is, whether they can sign in, or how -- needs the main computer.
+        # verified member may send it -- the gate flags it so the applier writes
+        # only the cosmetic columns (finding #3). Only a change to a critical
+        # field -- who the owner is, whether they can sign in, or how -- needs the
+        # main computer.
         if not _owner_critical_fields_changed(p, uid, ctx):
             return None
         return _needs_main(ctx, signer, REASON_OWNER_CHANGE_NEEDS_MAIN, "a change to the owner's account")
-    if role == "admin":
+    if incoming_admin:
+        if admins:
+            # Only the MAIN computer may introduce an owner account that differs from
+            # the one(s) already here. DEVIATION FROM THE WRITTEN PLAN ("refused
+            # always"), forced by a shipped, test-pinned scenario: a joining device
+            # that minted its own first-run admin must still receive the shop owner's
+            # real account from the main computer (test_a_colliding_admin_code_from_a_
+            # second_device_is_renumbered_not_parked). Refusing the main would leave
+            # that device without its owner for ever. Everyone else is still refused,
+            # and a forger cannot pose as the main: Owner's lease names the id.
+            main = _current_main(ctx)
+            if main is None:
+                return Refusal(REASON_MAIN_UNKNOWN,
+                               "a second administrator account needs the main computer, and this "
+                               "device does not know which one it is yet")
+            if signer.dev != main:
+                return Refusal(REASON_SECOND_ADMIN,
+                               "a second administrator account may only come from the main computer")
+            return None
         # An owner account this device does not have yet (fresh receiver): the
         # main computer introduces it.
         return _needs_main(ctx, signer, REASON_OWNER_CHANGE_NEEDS_MAIN, "a change to the owner's account")
     return None
 
 
+def is_harmless_owner_edit(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> bool:
+    """AUDIT-033 fix round (verifier V finding #3). True for an event that
+    touches an existing owner row without changing a critical field, sent by a
+    computer that is NOT the main (a None main counts as "not main"). The
+    applier gives such an event a restricted write: display_name and language
+    only, NEVER row_version -- see `sync_service`'s user applier for why a version
+    cap cannot work and this does."""
+    uid = p.get("uid")
+    if uid not in _local_admin_uids(ctx):
+        return False
+    if _owner_critical_fields_changed(p, uid, ctx):
+        return False
+    return signer.dev != _current_main(ctx)
+
+
 #: Fields whose change is a change of WHO THE OWNER IS or HOW THEY SIGN IN
 #: (planner amendment to D4, 2026-10-01). Everything else on a `user` row
 #: (display_name, language, updated_at_utc, row_version, ...) is harmless.
+#: `employee_id` is NOT here (fix round, verifier note): the code is a per-device
+#: display label every install re-numbers on a collision
+#: (`_resolve_employee_code`), so a receiver's stored code legitimately differs
+#: from the sender's and would make every harmless edit look critical. Nothing on
+#: the harmless path ever writes it (finding #3), so it cannot be used to change it.
 OWNER_CRITICAL_FIELDS = ("role", "status", "password_hash", "pin_hash", "email",
-                         "require_password_change", "session_version", "employee_id",
+                         "require_password_change", "session_version",
                          "branch_scope_uid", "role_preset")
 #: Keys an OLD sender legitimately omits, in which case the applier KEEPS the
 #: local value (`user_sync_apply_plan`: an absent role_preset means "unchanged").
@@ -744,14 +936,16 @@ def _owner_critical_fields_changed(p: dict, uid: str, ctx: RuleContext) -> bool:
         if key == "require_password_change":
             incoming, stored = (int(bool(incoming)) if incoming is not None else None,
                                 int(bool(stored)) if stored is not None else None)
+        elif key == "role":
+            from commercial_runtime.identity.user_accounts import normalize_role
+            incoming, stored = normalize_role(incoming), normalize_role(stored)
         if incoming != stored:
             return True
     return False
 
 
 def _user_permission_rule(p: dict, signer: VerifiedSigner, ctx: RuleContext) -> Optional[Refusal]:
-    admin_uid = _local_admin_uid(ctx)
-    if admin_uid is not None and p.get("user_uid") == admin_uid:
+    if p.get("user_uid") in _local_admin_uids(ctx):
         return _needs_main(ctx, signer, REASON_OWNER_CHANGE_NEEDS_MAIN, "a change to the owner's permissions")
     return None
 

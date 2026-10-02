@@ -58,7 +58,14 @@ from commercial_runtime.sync import authority
 logger = logging.getLogger(__name__)
 
 MARKER_NAME = "authority_reannounce.json"
-MARKER_VERSION = 1
+#: Version 2 (AUDIT-033 fix round, verifier V finding #1): receivers now refuse a
+#: signer whose Owner lease does not attest its registry id, so a re-announce done
+#: before this fix (under a lease that attested nothing) was judged by nobody and
+#: answered nothing. A version-1 marker is therefore treated as "never done" and
+#: the re-announce runs once more -- idempotent by construction. `run_if_due`
+#: already waits for `local_signer_or_none`, which now returns None until the
+#: lease attests this computer, so the re-announce waits for an attested lease.
+MARKER_VERSION = 2
 
 #: `retail_emit(is_main, device_id) -> int`: queues the RETAIL-stream part
 #: (till allocations, numbering books) and COMMITS it itself, returning how many
@@ -78,7 +85,7 @@ def read_marker(app_data_dir) -> dict:
         raw = json.loads(marker_path(app_data_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"v": MARKER_VERSION, "self_done": False, "main_done": []}
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or raw.get("v") != MARKER_VERSION:
         return {"v": MARKER_VERSION, "self_done": False, "main_done": []}
     main_done = raw.get("main_done")
     return {"v": MARKER_VERSION,

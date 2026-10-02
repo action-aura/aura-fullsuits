@@ -2268,6 +2268,26 @@ def _migrate_retail_schema(conn):
     # uid from). See the RETAIL_SCHEMA_VERSION v42 comment above and
     # _migrate_add_branch_identity_and_till_allocation's docstring.
     _migrate_add_branch_identity_and_till_allocation(conn)
+    # v42 EXTENSION (AUDIT-033 fix round, verifier V findings #7/#8): the
+    # unreleased v42 also gives `sync_apply_quarantine` its `auth_key` column
+    # and three-column primary key. Appended LAST and PRAGMA-gated, so a
+    # database that already reached v42 before this fix gets it the next time
+    # the chain re-runs (until then SyncService uses its old-shape fallback).
+    _migrate_quarantine_auth_key(conn)
+
+
+def _migrate_quarantine_auth_key(conn):
+    """Part of v42 (extended, not re-versioned: v42 is unreleased -- tags stop at
+    rc.7 and rc.8 is a draft; ROADMAP.md amended first). Rebuilds
+    `sync_apply_quarantine` with `auth_key TEXT NOT NULL DEFAULT ''` and the
+    primary key `(entity_id, event_type, auth_key)`, so one signed authority
+    event can never overwrite another parked one for the same entity, and an
+    unsigned copy can never replace or sit beside a signed one. The rebuild
+    itself lives in identity (`rebuild_quarantine_with_auth_key`), shared with
+    registry.db's v10 step. Idempotent: a table that already has the column,
+    or does not exist, is left alone."""
+    from commercial_runtime.identity.sync_signers_schema import rebuild_quarantine_with_auth_key
+    rebuild_quarantine_with_auth_key(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):

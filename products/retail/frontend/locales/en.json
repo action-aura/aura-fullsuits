@@ -2282,5 +2282,6 @@
   "The owner's own sign-in can only be changed at the main computer.": "The owner's own sign-in can only be changed at the main computer.",
   "a computer announced that another computer is the main computer. Only a computer can claim the main role for itself": "a computer announced that another computer is the main computer. Only a computer can claim the main role for itself",
   "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again": "this computer has no licence of its own yet, so it cannot check who sent this. Activate the licence on this computer and it will try again",
-  "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so": "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so"
+  "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so": "a computer announced that another computer took over as the main computer. Only the computer that takes over can say so",
+  "the sending computer's licence does not confirm which computer it is, so it may be pretending to be another one. Open Aura on that computer while it is online, then make the change again": "the sending computer's licence does not confirm which computer it is, so it may be pretending to be another one. Open Aura on that computer while it is online, then make the change again"
 }

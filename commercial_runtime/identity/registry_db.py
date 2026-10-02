@@ -122,6 +122,13 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # nothing, backfills nothing. A v9 build never reads the table and ignores the
 # new `_auth` block inside event payloads, so a mixed shop keeps syncing; the
 # v10 receiver simply parks authority events a v9 sender could not sign.
+# AUDIT-033 fix round (verifier V): the unreleased v10 is EXTENDED, not
+# re-versioned (ROADMAP.md amended first). The same single step now also adds
+# `sync_signers.lease_issued_at_utc`, the `sync_signed_seen` table,
+# `users.main_row_version` and `sync_apply_quarantine.auth_key` (three-column
+# primary key, rebuilt with the `*_new` idiom). Each part is gated on the live
+# shape, so a database that reached v10 before this fix is brought forward by
+# the next run of this chain. See sync_signers_schema.py.
 REGISTRY_SCHEMA_VERSION = 10
 
 
@@ -186,7 +193,8 @@ def _migrate_registry_schema(conn):
     apply_accounts_v9_schema(conn)
     apply_device_sync_schema(conn)
     # v10 (S-AUTH): appended LAST, never reordered. Independent of every step
-    # above -- it only creates one brand-new table nothing else reads.
+    # above, EXCEPT that it adds `users.main_row_version` (users exists by v3)
+    # and rebuilds `sync_apply_quarantine` (exists by v6) -- both already there.
     from commercial_runtime.identity.sync_signers_schema import apply_sync_signers_schema
     apply_sync_signers_schema(conn)
 
