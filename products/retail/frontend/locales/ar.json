@@ -2342,5 +2342,8 @@
   "Tunisian dinar": "دينار تونسي",
   "Libyan dinar": "دينار ليبي",
   "Iraqi dinar": "دينار عراقي",
-  "South Korean won": "وون كوري جنوبي"
+  "South Korean won": "وون كوري جنوبي",
+  "Sign out?": "تسجيل الخروج؟",
+  "A sale is in progress. Signing out will clear it.": "هناك عملية بيع قيد التنفيذ. تسجيل الخروج سيمسحها.",
+  "Sign out and clear sale": "تسجيل الخروج ومسح العملية"
 }

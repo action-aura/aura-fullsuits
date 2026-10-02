@@ -189,6 +189,10 @@ MUTANTS = {
     "large_short_compaction": ("html.ui-large .pos-sum-row { line-height:1.2; }", ""),
     "large_720_relax": ("@media (max-height: 740px) {", "@media (max-height: 1px) {"),
     "large_default": ("return 'large';", "return 'normal';", "**/"),
+    # till user-reset e2e: each breaks ONE guard (app-shell.js, served in memory only)
+    "till_reset_logout_removed": ("this._resetTillForNewUser('logout');", "", "**/app-shell.js*"),
+    "till_shell_reset_noop": ("window.RetailSystem._resetTillForNewUser(reason);", "", "**/app-shell.js*"),
+    "till_same_user_clears": ("const sameUser = !!now && !!keyOf(prev) && keyOf(now) === keyOf(prev);", "const sameUser = false;", "**/app-shell.js*"),
     "xlarge_cart_floor": ("html.ui-xlarge .pos-cart-items { min-block-size:calc(2 * var(--pos-cart-row-min) + 8px); }", "html.ui-xlarge .pos-cart-items { min-block-size:calc(5 * var(--pos-cart-row-min) + 8px); }"),
 }
 

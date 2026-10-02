@@ -1524,6 +1524,9 @@ const SubsystemApp = {
         }
         // Remember who is logged in (role + clinic_role) so the UI can gate
         // role-specific sections (e.g. clinic doctor vs secretary).
+        // init() re-runs on every re-login at menu level. A different person
+        // than the one this window last knew must not inherit their till.
+        this._resetTillIfUserChanged(this.currentUser, sess.user, 'user-change');
         this.currentUser = sess.user || {};
         this.role        = (sess.user && sess.user.role) || '';
         this.clinicRole  = (sess.user && sess.user.clinic_role) || '';
@@ -2058,6 +2061,35 @@ const SubsystemApp = {
     return null;
   },
 
+  // Identity of a session user for "is this the same person?" checks. id
+  // first, lower-cased email as the fallback; '' means "cannot tell".
+  _userKey(u) {
+    return (u && (u.id != null ? 'id:' + u.id : (u.email ? 'em:' + String(u.email).toLowerCase() : ''))) || '';
+  },
+
+  // The till keeps a sale in progress when a cashier merely leaves the till
+  // screen, so it would also survive a sign-out or a user switch in the same
+  // window. The previous cashier's sale must never be chargeable by the next
+  // one: every sign-out and every change of signed-in user lands here. Prints
+  // and charges nothing, it only forgets. No-op where the till is not loaded.
+  _resetTillForNewUser(reason) {
+    if (window.RetailSystem && typeof window.RetailSystem._resetTillForNewUser === 'function') {
+      window.RetailSystem._resetTillForNewUser(reason);
+    }
+  },
+
+  // A DIFFERENT person is now signed in over `prev`: wipe the till. The same
+  // person (a cashier who locked the screen, or whose session simply expired)
+  // keeps their cart. If either side is unknown we cannot prove it is the same
+  // person, and keeping a stranger's basket is the worse mistake.
+  _resetTillIfUserChanged(prev, next, reason) {
+    const a = this._userKey(prev);
+    const b = this._userKey(next);
+    if (!a) return;   // nobody was signed in before (first boot): nothing to protect
+    if (b && a === b) return;
+    this._resetTillForNewUser(reason);
+  },
+
   async logout() {
     // Signing out throws the screen away just as surely as navigating does:
     // unsaved Settings changes get the same question, and "stay" leaves the
@@ -2068,6 +2100,20 @@ const SubsystemApp = {
     // leaves the session exactly as it was -- the sync poll still running,
     // the session still live. Nothing below this line is reversible.
     if (!(await this._confirmSignOutWhileUnsynced())) return;
+    // A sale in progress dies with the sign-out (see _resetTillForNewUser), so
+    // ask first. Cancel is focused (danger dialog) -- the safe answer is the
+    // default one.
+    if (window.RetailSystem && typeof window.RetailSystem._hasSaleInProgress === 'function'
+        && window.RetailSystem._hasSaleInProgress()
+        && typeof window.RetailSystem._confirm === 'function') {
+      const ok = await window.RetailSystem._confirm({
+        title: t('Sign out?'),
+        message: t('A sale is in progress. Signing out will clear it.'),
+        confirmLabel: t('Sign out and clear sale'),
+        danger: true,
+      });
+      if (!ok) return;
+    }
     // Stopped BEFORE the logout fetch, not after: the global auth guard
     // intercepts any /api/ 401 and pops the relogin modal, so a sync-health
     // poll racing this logout would trigger a spurious relogin modal.
@@ -2083,6 +2129,8 @@ const SubsystemApp = {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } catch(e) {}
     this.active = null;
+    // Past the point of no return: the session is gone, so the sale goes too.
+    this._resetTillForNewUser('logout');
     document.getElementById('aura-relogin-modal')?.remove();
     this.showReloginModal('You have been logged out. Please sign in again.');
   },
@@ -3131,9 +3179,10 @@ const SubsystemApp = {
             sess = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' }).then(r => r.json());
           } catch (e) { sess = null; }
           const now = (sess && sess.authenticated && sess.user) || null;
-          const keyOf = (u) => (u && (u.id != null ? 'id:' + u.id : (u.email ? 'em:' + String(u.email).toLowerCase() : ''))) || '';
+          const keyOf = (u) => this._userKey(u);
           const sameUser = !!now && !!keyOf(prev) && keyOf(now) === keyOf(prev);
           if (!sameUser) {
+            this._resetTillForNewUser('user-change');
             this._allowUnload = true;   // no browser "leave this page?" for someone else's edits
             location.reload();
             return;

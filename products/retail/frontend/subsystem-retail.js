@@ -6195,6 +6195,40 @@ const RetailSystem = {
     this._refocusScan(true);
   },
 
+  // The till keeps a sale in progress when the cashier merely leaves the
+  // screen (see _renderPOS), so that survival must STOP at the person: the
+  // next cashier to sign in on this window must never see -- or be able to
+  // charge -- the previous cashier's basket, customer, discount or tender.
+  // app-shell.js calls this on every sign-out and whenever a DIFFERENT user
+  // signs in. It deliberately does NOT go through _clearCart's forced refocus
+  // and never prints, charges or holds anything: it only forgets. A cashier
+  // who merely locked the screen and signs back in as themselves does not
+  // reach here (that is the allow half; app-shell compares user ids first).
+  _resetTillForNewUser(reason) {
+    clearTimeout(this._posSearchTimer);
+    this._cart = [];
+    this._selLine = null;
+    this._resSel = null;
+    this._pendingQty = null;
+    this._qtyKeyBuffer = '';
+    this._qtyKeyLastAt = 0;
+    this._posResultsTerm = '';
+    this._heldSel = 0;
+    this._loyaltyBalance = 0;
+    this._loyaltyRedeemPoints = 0;
+    this._resetSaleControls();
+    const search = document.getElementById('pos-search');
+    if (search) search.value = '';
+    this._renderCart();
+    this._lastTillResetReason = reason || '';
+  },
+
+  // True while a sale is in progress (any line in the cart). app-shell asks
+  // this before signing out, to warn that the sale will be cleared.
+  _hasSaleInProgress() {
+    return Array.isArray(this._cart) && this._cart.length > 0;
+  },
+
   // ── Hold / Resume sale (park a cart, come back to it later) ────────────────
   // Real hands-on-testing feedback: a cashier mid-payment on one sale had no
   // way to set it aside, ring up a second customer, then come back and
