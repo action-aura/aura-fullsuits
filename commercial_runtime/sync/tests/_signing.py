@@ -208,6 +208,13 @@ def admin_claim_event(device_id: str, epoch: int = 1, **extra) -> dict:
 # when one is recorded, otherwise the device the payload names or a generic
 # member). Verification, binding and the rule table all still run for real.
 #
+# FIX-ROUND ADDENDUM (AUDIT-033, verifier V findings #3, #4, #6): every event these
+# files apply is signed by the main (or the legit author), so they also cannot observe
+# the harmless-owner-edit restriction, the main-row-version override or the liveness
+# rules. Those live in test_sync_authority_{attacks,fixround}.py. Verified: none of
+# the 11 files using this helper asserts the contents of `admin_device_assignment`
+# after an apply (the fixture's recorded main is not measured by any of them).
+#
 # WHAT THIS CANNOT CATCH (said plainly, per ENGINEERING.md section 2): it makes
 # every legacy-test event "authorised", so those files can no longer detect an
 # applier that is reached by an UNauthorised sender. That coverage lives in
