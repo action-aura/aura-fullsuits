@@ -506,3 +506,68 @@ def test_the_marker_is_a_local_file_nothing_syncs(shop, tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["self_done"] is True
     assert "authority_reannounce" not in " ".join(
         r["payload"] for r in shop.q("SELECT payload FROM sync_outbox")), "the marker must never ride the wire"
+
+
+# ═══ AUDIT-033 fix round (verifier V finding #1): the re-announce waits for an ATTESTED lease ═══
+
+def test_a_version_1_marker_is_redone_once(shop, tmp_path):
+    """Before the fix round a re-announce was done under a lease that attested nothing, so no
+    receiver could judge it. A v1 marker therefore reads as 'never done' and the re-announce
+    runs once more (idempotent: equal versions are a no-op where the row exists)."""
+    app = _App(tmp_path, shop.M.dev)
+    reannounce.write_marker(app.dir, {"v": 1, "self_done": True, "main_done": [f"{COMPANY}:1"]})
+    assert reannounce.read_marker(app.dir) == {"v": reannounce.MARKER_VERSION, "self_done": False, "main_done": []}
+    out = _run(shop, app, signer=shop.M.signer)
+    assert out["ran"] is True
+    again = reannounce.read_marker(app.dir)
+    assert again["self_done"] is True and again["v"] == reannounce.MARKER_VERSION
+    assert _run(shop, app, signer=shop.M.signer)["why"] == "nothing_due"          # a v2 marker is honoured
+
+
+def test_a_current_marker_is_read_back_unchanged(tmp_path):
+    reannounce.write_marker(tmp_path, {"v": reannounce.MARKER_VERSION, "self_done": True, "main_done": ["c:1"]})
+    assert reannounce.read_marker(tmp_path) == {"v": reannounce.MARKER_VERSION, "self_done": True,
+                                                 "main_done": ["c:1"]}
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="DPAPI is Windows-only")
+def test_run_if_due_waits_for_a_lease_that_attests_this_computer_then_runs_once(shop, tmp_path):
+    """The REAL `local_signer_or_none` (no monkeypatching): a computer whose Owner lease names no
+    registry id cannot sign, so the re-announce does nothing and writes no marker; once the
+    next check-in brings a lease that attests it, it runs exactly once."""
+    from commercial_runtime.licensing_contracts.device_identity import (
+        WindowsDpapiDeviceIdentityProvider, fingerprint_of)
+    from commercial_runtime.licensing_contracts.state_machine import LicenseState as LS
+    from commercial_runtime.licensing_contracts.state_repository import (
+        LICENSING_SCHEMA_VERSION, LicenseStateRecord, LicenseStateRepository)
+    import base64
+    from commercial_runtime.sync.tests._signing import make_lease
+
+    app = _App(tmp_path, "dev-real-reannounce")
+    provider = WindowsDpapiDeviceIdentityProvider(app.dir / "licensing")
+    provider.generate_new_key()
+    fp = fingerprint_of(base64.b64decode(provider.get_public_key_b64()))
+    repo = LicenseStateRepository(app.dir / "database" / "subsystems" / "licensing.db")
+
+    def store(lease):
+        repo.save(LicenseStateRecord(
+            licensing_schema_version=LICENSING_SCHEMA_VERSION, product_code="AURA_RETAIL", platform="WINDOWS",
+            current_state=LS.ACTIVE_ONLINE.value, assertion_envelope_json=json.dumps(lease)))
+
+    def run():
+        conn = shop.get_conn()
+        try:
+            return reannounce.run_if_due(conn, COMPANY, app_data_dir=app.dir)
+        finally:
+            conn.close()
+
+    store(make_lease(shop.world.owner_key, inst="inst-real-reannounce", fingerprint=fp))        # attests nothing
+    out = run()
+    assert (out["ran"], out["why"]) == (False, "no_signer")
+    assert _outbox_count(shop) == 0 and not reannounce.marker_path(app.dir).exists()
+
+    store(make_lease(shop.world.owner_key, inst="inst-real-reannounce", fingerprint=fp,
+                     registry_device_id="dev-real-reannounce"))                                  # the check-in
+    assert run()["ran"] is True
+    assert reannounce.read_marker(app.dir)["self_done"] is True
+    assert run()["why"] == "nothing_due"

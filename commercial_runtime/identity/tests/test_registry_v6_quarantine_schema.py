@@ -68,16 +68,24 @@ def test_v5_to_v6_upgrade_adds_sync_apply_quarantine(v5_registry_db, monkeypatch
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
+        # CHANGED (AUDIT-033 fix round, verifier V findings #7/#8). `init_registry_db`
+        # runs EVERY step of `_migrate_registry_schema` on any database behind the
+        # version, so this "v6 upgrade" also runs the unreleased v10's extension,
+        # which rebuilds the table with `auth_key` and the three-column key. What this
+        # test can no longer pin by itself is the v6 step's OWN two-column CREATE; that
+        # shape is pinned by `test_apply_registry_quarantine_schema_is_idempotent_...`
+        # below (which calls the v6 step directly) and the v6-then-v10 rebuild by
+        # test_registry_v10_signers.py.
         cols = {row[1] for row in conn.execute("PRAGMA table_info(sync_apply_quarantine)").fetchall()}
         assert cols == {
             "entity_id", "entity_type", "event_type", "payload", "reason",
-            "detail", "quarantined_at",
+            "detail", "quarantined_at", "auth_key",
         }
 
         pk_cols = {row[1] for row in conn.execute("PRAGMA table_info(sync_apply_quarantine)").fetchall()
                    if row[5] > 0}  # row[5] is the `pk` column, 1-indexed position when part of the PK
-        assert pk_cols == {"entity_id", "event_type"}, (
-            "composite PRIMARY KEY (entity_id, event_type) must match retail.db's own "
+        assert pk_cols == {"entity_id", "event_type", "auth_key"}, (
+            "composite PRIMARY KEY (entity_id, event_type, auth_key) must match retail.db's own "
             "sync_apply_quarantine verbatim -- entity_id alone would be too coarse"
         )
 
