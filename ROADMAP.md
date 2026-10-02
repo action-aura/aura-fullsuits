@@ -6693,3 +6693,13 @@ findings). Fix plan: job 255fb8da tmp/sauth/fix_plan.md.
   gets an attested lease and cannot sign authority events at all.
 - Residual R7: `branch_code:<uid>` retail settings are still unsigned - this
   BLOCKS switching readable receipt numbers on for any real shop.
+
+## 2026-10-02 — Owner Alembic revision `7c41d2e9a0b5` CLAIMED (S-AUTH Owner pin, round 2)
+
+down_revision `5f2c8e1a9b37` (checked: no ref contains 7c41d2e9a0b5, and nothing
+revises 5f2c8e1a9b37 yet). Review V3o found the pin reservation could be lost
+when an installation went terminal (REPLACED/DEACTIVATED), when the licence was
+replaced, or to a newer installation before the real computer checked in. This
+revision makes the per-licence unique index status-blind and indexes sync
+history for the new "activated after the id was already in history" guard.
+Plan: job 255fb8da tmp/sauth/fix_plan2_owner.md.
