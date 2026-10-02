@@ -1,7 +1,8 @@
 # Registry device id contract (AUDIT-033, S-AUTH fix round)
 
-Status: implemented on `feat/retail-ux-p0`, not yet deployed. Owner revision
-`5f2c8e1a9b37` (down_revision `54627d59dd59`).
+Status: implemented on `feat/retail-ux-p0`, not yet deployed. Owner revisions
+`5f2c8e1a9b37` (down_revision `54627d59dd59`) and, for the round-2 rules below
+(review V3o G1/G2/G3), `7c41d2e9a0b5` (down_revision `5f2c8e1a9b37`).
 
 ## What problem this closes
 
@@ -53,11 +54,39 @@ In order:
 3. The installation already has a pin: it is **immutable**. Same id again is a
    no-op; a different id records `REGISTRY_DEVICE_ID_CHANGE_REFUSED` and the lease
    keeps carrying the original pin.
-4. Another installation of the **same licence** holds the id and can still speak
-   (status not `DEACTIVATED`/`REPLACED`): event `REGISTRY_DEVICE_ID_CLASH`,
-   nothing pinned, lease omits the key.
-5. Otherwise pin it (inside a savepoint; a concurrent winner of the unique index
+4. **Reservation (R1/R2).** Another installation anywhere on the **licence chain**
+   holds the id, in **any status** (ACTIVE, SUSPENDED, DEACTIVATED, REPLACED, key
+   revoked): event `REGISTRY_DEVICE_ID_CLASH`, nothing pinned, lease omits the
+   key. The chain is every licence connected through `replaced_by_license_id`, in
+   both directions, so replacing the shop's licence does not reopen its ids.
+   A pinned id is reserved for its installation for good.
+5. **History guard (R3).** Owner looks in the shop's synced event log (`owner_sync_events`,
+   across the licence chain) for the earliest event naming the id: an
+   `entity_type='device'` event whose `entity_id` is the id, or an `admin_device`
+   event whose payload `device_id` is the id. If that event's `client_created_at`
+   is earlier than the installation's `created_at` minus 10 minutes
+   (`HISTORY_SKEW_MARGIN`, the original computer's clock skew), the installation
+   was activated after the id was already in the shop's history, so it cannot be
+   the id's original computer: event `REGISTRY_DEVICE_ID_HISTORY_CONFLICT`, nothing
+   pinned, lease omits the key. (Index: `ix_owner_sync_events_license_entity`.)
+6. Otherwise pin it (inside a savepoint; a concurrent winner of the unique index
    is treated as rule 4).
+
+### R4. Staff transfer: the only way an id moves
+
+`transfer_registry_device_id(session, registry_device_id=, to_installation_id=,
+actor_staff_user_id=, reason=)` in `registry_pin.py`, or from a shell:
+
+    flask licensing transfer-registry-id --registry-device-id <id> --to <installation_id> --actor <staff email> --reason "<text>"
+
+Both installations must be on the same licence chain, a holder must exist, the
+target must not already be pinned to a different id, and a reason is required.
+The old holder is cleared and the target pinned in one transaction, an
+`ActivationEvent` `REGISTRY_ID_TRANSFERRED` is written on both installations and
+an audit row records actor, reason, from and to. Typical uses: the main's
+hardware died (slot replaced), or the shop's licence was replaced. After the
+transfer the new holder's next check-in returns a lease naming the id. An Owner UI
+button is a follow-up (Owner UI belongs to another owner of the code).
 
 **None of these fail the activation or check-in.** Owner never bricks licensing
 over a pin problem. Every non-trivial outcome leaves an `ActivationEvent`
@@ -67,11 +96,11 @@ over a pin problem. Every non-trivial outcome leaves an `ActivationEvent`
 Storage: `owner_installations.registry_device_id` and
 `registry_device_id_pinned_at` (both nullable), plus the partial unique index
 `uq_owner_installations_license_registry_device` on `(license_id,
-registry_device_id)` where the id is not null and status is not
-`DEACTIVATED`/`REPLACED`. A deactivated or replaced installation frees its id, so
-a re-activated or slot-replaced computer that kept its app data can pin its own
-id again. `replace_device_key` does not touch the pin (it lives on the
-installation).
+registry_device_id)` where the id is not null, in **every** status (migration
+`7c41d2e9a0b5`; the first version of the index freed the id on
+`DEACTIVATED`/`REPLACED`, which review V3o G2 showed handed it to a lurking
+installation). `replace_device_key`, slot release and slot replacement never touch
+the pin (it lives on the installation); only the staff transfer moves it.
 
 ### Receivers (Crew A, for reference)
 
@@ -97,28 +126,50 @@ silent.
 Old LAN hubs reject post-fix leases in auto-join (the allowlist), so a shop's
 tills and hub must upgrade together, as already required.
 
-## Upgrade window (residual R1, not eliminated)
+## Residual risk after the round-2 rules
 
-For an installation that **existed before** this release, the first check-in that
-claims an id wins at Owner. An insider who upgrades and checks in with the main's
-registry id before the main does would be pinned to it, and receivers would then
-accept that insider as the main until staff act. Mitigations in place:
+The pin is first-claim-wins only when Owner has nothing to compare against. What
+remains, stated as it really is:
 
-- devices activated after this release pin at activation (race-free: a
-  not-yet-activated device's id has never left the device);
-- the retail shell asks Owner for one immediate check-in at boot while its lease
-  does not attest (narrows the window from up to 5 minutes to seconds);
-- the real main's refused pin raises `REGISTRY_DEVICE_ID_NOT_ATTESTED` locally and
-  a `REGISTRY_DEVICE_ID_CLASH` event at Owner.
+- **The race exists only for an installation older than the id's first synced
+  event, plus LAN-only shops.** For an installation that existed before this
+  release and has not pinned yet, the first check-in that claims an id wins unless
+  the shop's synced history already names that id from before the claimant
+  existed (rule 5). An insider whose installation is OLDER than the main's first
+  synced event, and who checks in with the main's id first, still wins. Shops
+  whose registry events never reached Owner (LAN-only, never relayed) have no
+  history, so rule 5 cannot help there at all. History is also pruned over time
+  (`owner/app/sync/pruning.py`), which only weakens the guard, never strengthens a
+  claim.
+- Rule 5 can **refuse a legitimate computer**: one whose registry row was created
+  and relayed by other computers (LAN-joined) before the computer itself activated
+  with Owner. Its lease omits the id, `REGISTRY_DEVICE_ID_HISTORY_CONFLICT` is
+  recorded for staff, and the staff transfer (R4) resolves it.
+- Mitigations unchanged: devices activated after this release pin at activation
+  (race-free: a not-yet-activated device's id has never left the device); the
+  retail shell asks Owner for one immediate check-in at boot while its lease does
+  not attest; a refused real main raises `REGISTRY_DEVICE_ID_NOT_ATTESTED` locally
+  and a `REGISTRY_DEVICE_ID_CLASH` / `..._HISTORY_CONFLICT` event at Owner.
+- `relay device_id` is the uploader, not the author, so the guard reads
+  `entity_id` / payload `device_id`, never the relay `device_id`.
 
-**Staff recovery:** deactivate or replace the squatter's installation (existing
-actions). That frees the id; the real computer pins on its next check-in and
-receivers rebind to the installation with the newest lease.
+**Staff recovery:** run the staff transfer (R4) to the real computer's installation.
+Deactivating or replacing the squatter no longer frees the id (that was the V3o
+G2 defect); it stays reserved to the squatter until transferred.
 
-It cannot be closed further without proof of pre-upgrade history that does not
-exist: Owner's relay `device_id` is the uploader, not the author, registry
-`device` events exist only since registry v9, and relay history is pruned. (The
-"earliest relay event" guard was considered and rejected for those reasons.)
+### Recorded, deliberately not fixed
+
+- **Automatic continuity across a licence replacement was not built.** The plan
+  proposed letting a computer on the replacement licence take its id over from the
+  old licence's installation when its device key fingerprint matched. That can
+  never fire: `owner_device_public_keys.fingerprint` is globally UNIQUE (a key
+  belongs to one installation ever) and activation answers
+  `DEVICE_ALREADY_REGISTERED` first. The staff transfer covers it.
+- `activation.py` refuses the main on a replaced licence with
+  `DEVICE_ALREADY_REGISTERED` while its key is still ACTIVE on the old licence:
+  staff must revoke the old installation's key first. Unchanged.
+- No Owner UI button for the transfer in this round (Owner UI is another person's
+  area); CLI and service only.
 
 ## Not covered
 
