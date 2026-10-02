@@ -25,7 +25,7 @@
     "pk": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
     "lease": {
      "payload": {
-      "assertion_id": "ae1104c9-e7a2-4cd8-958c-1bdbe1fdabc2",
+      "assertion_id": "7fcc4208-e5fd-45f5-b8e1-883380e4d853",
       "issuer": "aura-owner",
       "product_code": "AURA_RETAIL",
       "license_public_id": "lic-shop-1",
@@ -33,9 +33,9 @@
       "platform": "WINDOWS",
       "app_version_policy": "1.0.0",
       "release_channel": "rc",
-      "issued_at": "2026-10-02T13:26:05.660453+00:00",
-      "not_before": "2026-10-02T13:21:05.660453+00:00",
-      "expires_at": "2026-10-03T13:26:05.660453+00:00",
+      "issued_at": "2026-10-02T17:19:06.243926+00:00",
+      "not_before": "2026-10-02T17:14:06.243926+00:00",
+      "expires_at": "2026-10-03T17:19:06.243926+00:00",
       "license_status": "ACTIVE",
       "installation_status": "ACTIVE",
       "subscription_status": "ACTIVE",
@@ -57,12 +57,12 @@
      "signing_key_id": "owner-1",
      "algorithm": "ed25519",
      "assertion_version": 1,
-     "signature": "UzoubncYMxDIFwnssMohA05s8q+z6rZtNOvqB3+hdUGfb2GscjmQXPXQgRwTqSWDWH7jxxAvOE5gKVOJUvByDw=="
+     "signature": "Zny8yI+ai9OYtDWK73OwJqKdf6zyclABpVcTMjMnAxwaNEztKUso7kkIN12vxCCL7egw8wbVtsU1BvqsAD2dBg=="
     }
    }
   },
-  "auth_tbs_b64": "eyJjdHgiOiJhdXJhLXN5bmMtYXV0aG9yaXR5L3YxIiwiZGV2IjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwiZW50aXR5X2lkIjoiYWxsb2MtMSIsImVudGl0eV90eXBlIjoidGlsbF9hbGxvY2F0aW9uIiwiZXZlbnRfdHlwZSI6InVwZGF0ZSIsImluc3QiOiJpbnN0LWNyb3NzLWxhbmd1YWdlIiwibGljZW5jZSI6ImxpYy1zaG9wLTEiLCJwYXlsb2FkIjp7ImJpZyI6OTAwNzE5OTI1NDc0MDk5MywiZXBvY2giOjIsImhhbGYiOjEuNSwibm90ZSI6ImNhZsOpIiwicmF0aW8iOjIsInRlcm1pbmFsX3VpZCI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSJ9fQ=="
+  "auth_tbs_b64": "eyJjdHgiOiJhdXJhLXN5bmMtYXV0aG9yaXR5L3YyIiwiZGV2IjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwiZW50aXR5X2lkIjoiYWxsb2MtMSIsImVudGl0eV90eXBlIjoidGlsbF9hbGxvY2F0aW9uIiwiZXZlbnRfdHlwZSI6InVwZGF0ZSIsImluc3QiOiJpbnN0LWNyb3NzLWxhbmd1YWdlIiwibGVhc2Vfc2lnIjoiWm55OHlJK2FpOU9ZdERXSzczT3dKcUtkZjZ6eWNsQUJwVmNUTWpNbkF4d2FORXp0S1Vzbzdra0lOMTJ2eENDTDdlZ3c4d2JWdHNVMUJ2cXNBRDJkQmc9PSIsImxpY2VuY2UiOiJsaWMtc2hvcC0xIiwicGF5bG9hZCI6eyJiaWciOjkwMDcxOTkyNTQ3NDA5OTMsImVwb2NoIjoyLCJoYWxmIjoxLjUsIm5vdGUiOiJjYWbDqSIsInJhdGlvIjoyLCJ0ZXJtaW5hbF91aWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUifX0="
  },
- "tbs_b64": "eyJjdHgiOiJhdXJhLXN5bmMtYXV0aG9yaXR5L3YxIiwiZGV2IjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwiZW50aXR5X2lkIjoiYWxsb2MtMSIsImVudGl0eV90eXBlIjoidGlsbF9hbGxvY2F0aW9uIiwiZXZlbnRfdHlwZSI6InVwZGF0ZSIsImluc3QiOiJpbnN0LWNyb3NzLWxhbmd1YWdlIiwibGljZW5jZSI6ImxpYy1zaG9wLTEiLCJwYXlsb2FkIjp7ImJpZyI6OTAwNzE5OTI1NDc0MDk5MywiZXBvY2giOjIsImhhbGYiOjEuNSwibm90ZSI6ImNhZsOpIiwicmF0aW8iOjIsInRlcm1pbmFsX3VpZCI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSJ9fQ==",
- "sig_b64": "UyeDYaWZuJTJhHIUF2ub4dwkC/AaL5/e0XFLmZz/vqnxhCZIsLsYMH9bgBM/GHY4cbBswFcbafKKDtD9ViV4CA=="
+ "tbs_b64": "eyJjdHgiOiJhdXJhLXN5bmMtYXV0aG9yaXR5L3YyIiwiZGV2IjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwiZW50aXR5X2lkIjoiYWxsb2MtMSIsImVudGl0eV90eXBlIjoidGlsbF9hbGxvY2F0aW9uIiwiZXZlbnRfdHlwZSI6InVwZGF0ZSIsImluc3QiOiJpbnN0LWNyb3NzLWxhbmd1YWdlIiwibGVhc2Vfc2lnIjoiWm55OHlJK2FpOU9ZdERXSzczT3dKcUtkZjZ6eWNsQUJwVmNUTWpNbkF4d2FORXp0S1Vzbzdra0lOMTJ2eENDTDdlZ3c4d2JWdHNVMUJ2cXNBRDJkQmc9PSIsImxpY2VuY2UiOiJsaWMtc2hvcC0xIiwicGF5bG9hZCI6eyJiaWciOjkwMDcxOTkyNTQ3NDA5OTMsImVwb2NoIjoyLCJoYWxmIjoxLjUsIm5vdGUiOiJjYWbDqSIsInJhdGlvIjoyLCJ0ZXJtaW5hbF91aWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUifX0=",
+ "sig_b64": "csgx4HhPWiJ1eEuM8NgJ0FkC+pVQSySpOvXSyoigIg3pQ4T93EQKRxqFpejfpKqoqfDktdNxmn4wt7g7b5PhAg=="
 }

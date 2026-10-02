@@ -74,8 +74,10 @@ logger = logging.getLogger(__name__)
 
 #: Domain separator inside the signed document: a signature made for this
 #: purpose can never be replayed as any other signed object (a licence request,
-#: a roster), whatever bytes those happen to contain.
-AUTH_CONTEXT = "aura-sync-authority/v1"
+#: a roster), whatever bytes those happen to contain. v2 (review V3r G1) puts the
+#: Owner lease's own signature into the signed bytes; a v1-context event is
+#: refused as `bad_signature` -- S-AUTH is unreleased, so there is no shim.
+AUTH_CONTEXT = "aura-sync-authority/v2"
 AUTH_KEY = "_auth"
 _SENDER_VERSION_KEY = "_sender_schema_version"
 
@@ -129,6 +131,10 @@ REASON_ALIAS_ORIGIN = "alias_origin_mismatch"
 # AUDIT-033 fix round (verifier V finding #1): the signer's Owner lease does not
 # name the registry device id the event claims to come from.
 REASON_DEV_NOT_ATTESTED = "device_id_not_attested"
+# Review V3r G4: a user event names a uid that belongs to a DIFFERENT company's row
+# in this registry. Raised by the user applier (not the rule table), parked, never
+# written; a forgery/abuse signal, so it stays for a human.
+REASON_FOREIGN_COMPANY_USER = "foreign_company_user"
 
 ALL_REFUSAL_REASONS = frozenset({
     REASON_UNSIGNED, REASON_BAD_SIGNATURE, REASON_FOREIGN_LICENCE, REASON_UNTRUSTED_LEASE,
@@ -136,7 +142,7 @@ ALL_REFUSAL_REASONS = frozenset({
     REASON_NEEDS_MAIN, REASON_MAIN_UNKNOWN, REASON_ADMIN_CLAIM_MISMATCH,
     REASON_TAKEOVER_MISMATCH, REASON_TAKEOVER_NOT_SILENT, REASON_DEVICE_CHANGE_NEEDS_MAIN,
     REASON_OWNER_CHANGE_NEEDS_MAIN, REASON_SECOND_ADMIN, REASON_RELEASE_ACK_SENDER,
-    REASON_ALIAS_ORIGIN, REASON_DEV_NOT_ATTESTED,
+    REASON_ALIAS_ORIGIN, REASON_DEV_NOT_ATTESTED, REASON_FOREIGN_COMPANY_USER,
 })
 
 #: Park reasons a later SIGNED event of the same entity may clear (and that a
@@ -148,6 +154,18 @@ SUPERSEDABLE_PARK_REASONS = frozenset({REASON_UNSIGNED, REASON_MAIN_UNKNOWN})
 #: stays for a human, whatever happens later. `no_local_licence` is neither: it
 #: is a state of THIS device, which clears itself, so it may be overwritten.
 EVIDENCE_PARK_REASONS = ALL_REFUSAL_REASONS - SUPERSEDABLE_PARK_REASONS - {REASON_NO_LOCAL_LICENCE}
+
+
+#: Review V3r G2: the park reasons a flood of junk can be made of -- the event
+#: failed VERIFICATION, so it proves nothing about the shop. At most this many
+#: such rows are kept per (entity_type, entity_id); the newest beyond that are
+#: dropped (one WARNING per entity per process). Evidence rows (a verified
+#: signer broke a rule) and `main_unknown` are NEVER counted or dropped.
+VERIFICATION_FAILURE_REASONS = frozenset({
+    REASON_BAD_SIGNATURE, REASON_UNSIGNED, REASON_UNTRUSTED_LEASE,
+    REASON_FOREIGN_LICENCE, REASON_DEV_NOT_ATTESTED,
+})
+MAX_PARKED_VERIFICATION_FAILURES_PER_ENTITY = 50
 
 
 @dataclass(frozen=True)
@@ -169,8 +187,9 @@ class VerifiedSigner:
     #: signer in an older test). Newest-lease-wins binding and the liveness
     #: window read it.
     lease_issued_at: Optional[datetime] = None
-    #: sha256 hex of the signature text: the identity of THIS signed event, so a
-    #: replay or a retry of it can be recognised (`record_liveness`).
+    #: sha256 hex of the DECODED 64 signature bytes (not their base64 text, which
+    #: has 16 spellings): the identity of THIS signed event, so a replay or a retry
+    #: of it can be recognised (`record_liveness`).
     sig_sha256: str = ""
 
 
@@ -200,17 +219,34 @@ def is_authority_event(event) -> bool:
     return True
 
 
-def quarantine_auth_key(payload) -> str:
-    """The quarantine row's third key column (AUDIT-033 fix round, verifier V
-    findings #7/#8): `sig:<first 32 hex of sha256(_auth.sig)>` for a payload that
-    carries a signature, else '' (an unsigned event). Two different signed events
-    for one entity therefore keep separate parked rows, and an unsigned copy
-    (key '') can be told apart from -- and never replace -- a signed one."""
-    auth = payload.get(AUTH_KEY) if isinstance(payload, dict) else None
-    sig = auth.get("sig") if isinstance(auth, dict) else None
-    if isinstance(sig, str) and sig:
-        return "sig:" + hashlib.sha256(sig.encode()).hexdigest()[:32]
-    return ""
+def quarantine_auth_key(payload, entity_type=None) -> str:
+    """The quarantine row's third key column (AUDIT-033 fix round 2, review V3r G2).
+
+    For an AUTHORITY-bearing payload -- one that carries `_auth`, or whose
+    `entity_type` is an authority type -- the key is the sha256 hex of the
+    canonical bytes of the WHOLE stored payload, `_auth` included. It used to be
+    a hash of the signature TEXT alone, but a signature is public (it travels on
+    the relay), so an insider could copy it onto a junk payload, get the SAME key,
+    and have the parked legitimate event's payload replaced by the junk. Content
+    that differs now lands in its own row, and the same content is the same row.
+
+    Anything else (a sale child, a branch, ...) keeps '' -- those events carry no
+    signature to copy, and their parked payload deliberately follows the latest
+    attempt (see `_quarantine_apply_event`).
+
+    One function, because the migrations that add the column call it too."""
+    has_auth = isinstance(payload, dict) and AUTH_KEY in payload
+    if not has_auth:
+        probe = {"entity_type": entity_type, "payload": payload}
+        if not is_authority_event(probe):
+            return ""
+    try:
+        raw = canonicalize_bytes(payload)
+    except (CanonicalizationError, TypeError, ValueError):
+        # A stored payload canonicalisation cannot take (a float the signer never
+        # produced): fall back to plain sorted JSON so parking never raises.
+        raw = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def strip_auth(payload):
@@ -246,11 +282,23 @@ def build_tbs(event: dict, *, licence: str, inst: str, dev: str) -> bytes:
         payload = {}
     body = _integral_floats_as_ints(
         {k: v for k, v in payload.items() if k not in (AUTH_KEY, _SENDER_VERSION_KEY)})
+    # Review V3r G1: the Owner signature of the lease the event travels with is
+    # SIGNED. Without it the lease was swappable: an old event could be re-sent
+    # carrying the main's newest lease and borrow its freshness for the liveness
+    # window. Read from the event's own `_auth.lease` (an Owner-signed string a
+    # member cannot mint), so every signing and verifying path -- including
+    # Android, whose Kotlin signs the tbs bytes Python builds -- agrees without a
+    # new argument. A missing lease contributes "" (verification refuses such an
+    # event for its lease long before the signature matters).
+    auth = payload.get(AUTH_KEY)
+    lease = auth.get("lease") if isinstance(auth, dict) else None
+    lease_sig = lease.get("signature") if isinstance(lease, dict) else None
     return canonicalize_bytes({
         "ctx": AUTH_CONTEXT,
         "licence": licence,
         "inst": inst,
         "dev": dev,
+        "lease_sig": lease_sig if isinstance(lease_sig, str) else "",
         "entity_type": str(event.get("entity_type")),
         "entity_id": str(event.get("entity_id")).lower(),
         "event_type": str(event.get("event_type")),
@@ -272,7 +320,26 @@ def prepare_unsigned_auth(event: dict, signer: LocalSigner) -> Tuple[dict, bytes
             "lease": signer.lease}
     base[AUTH_KEY] = auth
     new_event = dict(event, payload=base)
-    return new_event, build_tbs(event, licence=signer.licence, inst=signer.inst, dev=signer.dev)
+    return new_event, build_tbs(new_event, licence=signer.licence, inst=signer.inst, dev=signer.dev)
+
+
+def _strict_b64(text, expected_len: Optional[int] = None) -> Optional[bytes]:
+    """Decode base64 only when `text` is the CANONICAL spelling of the bytes.
+    Python's `validate=True` still accepts 16 spellings of one 64-byte Ed25519
+    signature (the 4 unused low bits of the last data character), so a replay
+    could dodge any 'have I seen this signature' check by re-spelling it (review
+    V3r G1). Re-encoding the decoded bytes must give back exactly the text."""
+    if not isinstance(text, str):
+        return None
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if base64.b64encode(raw).decode("ascii") != text:
+        return None
+    if expected_len is not None and len(raw) != expected_len:
+        return None
+    return raw
 
 
 def _signature_is_ours(event: dict, signer: LocalSigner) -> bool:
@@ -527,11 +594,10 @@ def verify_event(event: dict, *, trust_store, own_licence: Optional[str]) -> Uni
         return Refusal(REASON_UNTRUSTED_LEASE, "this device has no Owner trust store to check the signer against")
     if not own_licence:
         return Refusal(REASON_NO_LOCAL_LICENCE, "this device has no licence of its own to compare the signer's against")
-    try:
-        raw_pk = base64.b64decode(pk_b64, validate=True)
-        signature = base64.b64decode(sig_b64, validate=True)
-    except (ValueError, binascii.Error):
-        return Refusal(REASON_BAD_SIGNATURE, "the signature or key is not valid base64")
+    raw_pk = _strict_b64(pk_b64)
+    signature = _strict_b64(sig_b64, 64)
+    if raw_pk is None or signature is None:
+        return Refusal(REASON_BAD_SIGNATURE, "the signature or key is not canonical base64")
     if len(raw_pk) != 32:
         return Refusal(REASON_BAD_SIGNATURE, "the signer's public key is the wrong length")
     fingerprint = hashlib.sha256(raw_pk).hexdigest()
@@ -565,7 +631,7 @@ def verify_event(event: dict, *, trust_store, own_licence: Optional[str]) -> Uni
                        f"the signer's Owner lease names computer {attested!r}, but the event claims {dev!r}")
     return VerifiedSigner(dev=dev, inst=inst, fingerprint=fingerprint, licence=str(licence),
                           lease_issued_at=_parse_dt(lease_payload.get("issued_at")),
-                          sig_sha256=hashlib.sha256(sig_b64.encode()).hexdigest())
+                          sig_sha256=hashlib.sha256(signature).hexdigest())
 
 
 # ── signer binding (registry v10) ────────────────────────────────────────────

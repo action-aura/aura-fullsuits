@@ -115,7 +115,13 @@ def test_an_attested_event_verifies_and_carries_the_lease_issue_time_and_signatu
     assert isinstance(verdict, authority.VerifiedSigner) and verdict.dev == "dev-attested"
     assert verdict.lease_issued_at == datetime.fromisoformat(dev.signer.lease["payload"]["issued_at"])
     import hashlib
-    assert verdict.sig_sha256 == hashlib.sha256(signed["payload"]["_auth"]["sig"].encode()).hexdigest()
+    # Review V3r G1: the liveness id is the hash of the DECODED 64 signature bytes.
+    # This used to pin sha256 of the base64 TEXT, which has 16 spellings; this
+    # assertion alone can no longer tell a regression back to hashing the text from
+    # the right answer for a canonical signature (they differ, but only the
+    # re-spelling tests in test_sync_authority_review3.py -- and the unit pin in
+    # test_sync_authority_review3_fixes.py -- exercise a NON-canonical text).
+    assert verdict.sig_sha256 == hashlib.sha256(base64.b64decode(signed["payload"]["_auth"]["sig"])).hexdigest()
 
 
 def test_signing_does_not_mutate_the_input_and_is_idempotent(world):

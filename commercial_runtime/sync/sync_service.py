@@ -811,6 +811,11 @@ class SyncFreshnessStore(NamedTuple):
     record_override: Callable[[sqlite3.Connection, str], None]
 
 
+#: (entity_type, entity_id) pairs already warned about for a quarantine flood, so
+#: the WARNING is one line per entity per process, not one per dropped event.
+_FLOOD_WARNED: set = set()
+
+
 class SyncService:
     def __init__(
         self,
@@ -1282,6 +1287,21 @@ class SyncService:
         env = _authority.default_authority_env()
         self._authority_env_cache = (now, env)
         return env
+
+    def _payload_verifier(self, ev: dict):
+        """`verify(payload) -> VerifiedSigner | Refusal` for another payload of the
+        same entity/event identity, under the receiver's CURRENT trust context. Used
+        by the old-shape quarantine fallback (review V3r G3) to ask whether a parked
+        row's stored `_auth` actually verifies, instead of reading its unverified
+        `inst` field."""
+        identity = {k: ev.get(k) for k in ("entity_type", "entity_id", "event_type")}
+
+        def verify(payload):
+            env = self._authority_env()
+            return _authority.verify_event(
+                dict(identity, payload=payload),
+                trust_store=env.trust_store, own_licence=env.own_licence)
+        return verify
 
     def _authority_gate(self, conn, ev: dict, p: dict, local_company_id: Optional[str],
                         entity_type: str, from_quarantine: bool = False):
@@ -2091,9 +2111,14 @@ class SyncService:
         if _authority.is_authority_event(ev):
             refusal = self._authority_gate(conn, ev, p, local_company_id, entity_type,
                                            from_quarantine=from_quarantine)
+            # Review V3r G3: a verifier for payloads of THIS event's identity, handed
+            # to the park only on a private COPY of the event (never the caller's
+            # dict -- a callable must not leak into anything that serialises events).
+            verify_for_park = self._payload_verifier(ev)
             if refusal is not None:
                 return self._quarantine_apply_event(
-                    conn, ev, reason=refusal.reason, detail=refusal.detail)
+                    conn, dict(ev, _authority_verify=verify_for_park),
+                    reason=refusal.reason, detail=refusal.detail)
             # Tell `_apply_event_guarded` this event passed verification AND the
             # rule table, so that once it APPLIES it may supersede the unsigned
             # copies of the same entity parked earlier (`_supersede_parked_
@@ -2103,7 +2128,8 @@ class SyncService:
             # flag is set here, after the gate, never read from the wire).
             ev["_authority_verified"] = True
             p = _authority.strip_auth(p)
-            ev = dict(ev, payload=p, _orig_payload=ev.get("payload"))
+            ev = dict(ev, payload=p, _orig_payload=ev.get("payload"),
+                      _authority_verify=verify_for_park)
         # Schema-version skew guard (module docstring's dedicated section) --
         # runs BEFORE any entity-specific branch, uniformly, for every
         # handled entity type: a structural compatibility precondition, not
@@ -3641,6 +3667,17 @@ class SyncService:
             # Returns a copy and never raises.
             p = sanitize_synced_user_fields(p)
             uid = p.get("uid")
+            # Review V3r G4: `ON CONFLICT(uid)` below is not company-scoped, and a
+            # registry can hold users of more than one company id (the owner-change
+            # rule, `_local_admin_uids`, is company-scoped, so another company's
+            # owner is invisible to it). A uid that already belongs to a DIFFERENT
+            # company is never written -- not by the harmless path, not by the upsert.
+            foreign = conn.execute(
+                "SELECT 1 FROM users WHERE uid=? AND company_id<>?", (uid, local_company_id)).fetchone()
+            if foreign is not None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason=_authority.REASON_FOREIGN_COMPANY_USER,
+                    detail=f"user {ascii(str(uid))} belongs to a different company on this computer")
             if ev.get("_authority_harmless_owner_edit") is True:
                 # AUDIT-033 fix round (verifier V finding #3). A non-main computer
                 # may edit an owner's COSMETIC fields (the authority rule checked
@@ -5856,62 +5893,106 @@ class SyncService:
         # re-verify the signature, so a park AFTER the gate stores it.
         stored_payload = ev.get("_orig_payload", ev.get("payload")) or {}
         payload_json = json.dumps(stored_payload, default=str)
-        auth_key = _authority.quarantine_auth_key(stored_payload)
+        auth_key = _authority.quarantine_auth_key(stored_payload, entity_type)
         evidence = tuple(sorted(_authority.EVIDENCE_PARK_REASONS))
         supersedable = tuple(sorted(_authority.SUPERSEDABLE_PARK_REASONS))
         ev_marks, sup_marks = ",".join("?" * len(evidence)), ",".join("?" * len(supersedable))
-        # AUDIT-033 fix round (verifier V findings #7/#8): the row is keyed by the
-        # signature as well, and EVIDENCE is sticky.
-        #   * Different signed events for one entity each keep their own row, so an
-        #     attested insider's signed junk can no longer displace a legitimate
-        #     parked main-signed change (V5b).
+        # AUDIT-033 fix rounds (verifier V findings #7/#8, review V3r G2): the row is
+        # keyed by the CONTENT of the whole stored payload (`_auth` included), and
+        # EVIDENCE is sticky.
+        #   * Different content for one entity keeps its own row, so a signed or
+        #     unsigned look-alike can never displace a legitimate parked change.
+        #     The key used to hash only the signature TEXT; a signature is public,
+        #     so copying it onto junk produced the same key and the junk's payload
+        #     replaced the legitimate event's (G2).
+        #   * IDENTICAL content is the same row, and on a re-park only reason and
+        #     detail may move -- never `payload` of an authority event.
         #   * An UNSIGNED copy of an authority event is never stored beside a signed
-        #     one for the same (entity_id, event_type): it would only add noise, and
-        #     it used to REPLACE the signed row (V5).
+        #     one for the same (entity_id, event_type): identified by the stored
+        #     payload having no `_auth`, not by an empty key (every authority row
+        #     now has a content key).
         #   * A reason that is a forgery or abuse signal (`EVIDENCE_PARK_REASONS`) is
         #     never rewritten into one a later signed event may clear
         #     (`SUPERSEDABLE_PARK_REASONS`): the CASE keeps the stored reason and
         #     detail (V6, V6b).
+        #   * A bound on junk: see `_authority.MAX_PARKED_VERIFICATION_FAILURES_PER_
+        #     ENTITY`.
         # `quarantined_at` is left alone on a re-park (first-seen time, as before).
+        # Events that are not authority events keep key '' and keep their payload
+        # following the latest attempt (P2S L2): nothing about them is signed.
         columns = [r[1] for r in conn.execute("PRAGMA table_info(sync_apply_quarantine)").fetchall()]
         keyed = "auth_key" in columns
         existing = conn.execute(
             "SELECT payload, reason" + (", auth_key" if keyed else "")
             + " FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
             (entity_id, event_type)).fetchall()
-        if auth_key == "" and _authority.is_authority_event(ev):
+        new_auth = stored_payload.get(_authority.AUTH_KEY) if isinstance(stored_payload, dict) else None
+        if new_auth is None and _authority.is_authority_event(ev):
             for row in existing:
-                signed_before = (row[2] != "") if keyed else (
-                    _authority.quarantine_auth_key(SyncService._loads_or_none(row[0])) != "")
-                if signed_before:
+                prior = SyncService._loads_or_none(row[0])
+                if isinstance(prior, dict) and prior.get(_authority.AUTH_KEY) is not None:
                     logger.info("sync: not parking an unsigned copy of %s %s: a signed one is already parked",
                                 ascii(entity_type), ascii(entity_id))
                     return False
         if not keyed:
             # Old shape (a database that reached the previous v10/v42 before this
             # fix): the primary key is still (entity_id, event_type), so the
-            # guards the key would have given are done by hand. Weaker -- between
-            # two DIFFERENT signers the first parked event is kept (residual R6).
-            for row in existing:
-                prior_auth = (SyncService._loads_or_none(row[0]) or {}).get(_authority.AUTH_KEY)
-                new_auth = stored_payload.get(_authority.AUTH_KEY) if isinstance(stored_payload, dict) else None
-                if (isinstance(prior_auth, dict) and prior_auth.get("sig")
-                        and isinstance(new_auth, dict) and new_auth.get("sig")
-                        and prior_auth.get("inst") != new_auth.get("inst")):
-                    logger.warning(
-                        "sync: keeping the first parked signed %s event for %s (signer %s); a second "
-                        "signer (%s) sent another -- old-shape quarantine cannot hold both",
-                        ascii(entity_type), ascii(entity_id), ascii(str(prior_auth.get("inst"))),
-                        ascii(str(new_auth.get("inst"))))
+            # guards the key would have given are done by hand. Review V3r G3 (R6
+            # restated): a parked row whose stored `_auth` VERIFIES is never
+            # overwritten by anything but another VERIFIED event from the SAME
+            # verified signer. The old guard compared the unverified `_auth.inst`,
+            # which an insider simply writes into its own junk. Where no verifier
+            # was handed in (a direct call), nothing can be proven and the old
+            # last-write behaviour stands.
+            verify = ev.get("_authority_verify")
+            if verify is not None:
+                for row in existing:
+                    prior = SyncService._loads_or_none(row[0])
+                    if prior is None or prior == stored_payload:
+                        continue
+                    prior_v = verify(prior)
+                    if not isinstance(prior_v, _authority.VerifiedSigner):
+                        continue
+                    new_v = verify(stored_payload)
+                    same_signer = (isinstance(new_v, _authority.VerifiedSigner)
+                                   and (new_v.dev, new_v.inst, new_v.fingerprint)
+                                   == (prior_v.dev, prior_v.inst, prior_v.fingerprint))
+                    if not same_signer:
+                        logger.warning(
+                            "sync: keeping the parked verified %s event for %s (signer %s); a different "
+                            "or unverifiable copy cannot replace it in an old-shape quarantine",
+                            ascii(entity_type), ascii(entity_id), ascii(prior_v.dev))
+                        return False
+        # The flood bound. Only a NEW row can grow the pile.
+        if reason in _authority.VERIFICATION_FAILURE_REASONS:
+            same_row = (any(r[2] == auth_key for r in existing) if keyed else bool(existing))
+            if not same_row:
+                marks = ",".join("?" * len(_authority.VERIFICATION_FAILURE_REASONS))
+                held = conn.execute(
+                    "SELECT COUNT(*) FROM sync_apply_quarantine WHERE entity_type=? AND entity_id=? "
+                    f"AND reason IN ({marks})",
+                    (entity_type, entity_id, *sorted(_authority.VERIFICATION_FAILURE_REASONS))).fetchone()[0]
+                if held >= _authority.MAX_PARKED_VERIFICATION_FAILURES_PER_ENTITY:
+                    flood_key = (entity_type, entity_id)
+                    if flood_key not in _FLOOD_WARNED:
+                        _FLOOD_WARNED.add(flood_key)
+                        logger.warning(
+                            "sync: %d unverifiable %s events are already parked for %s; dropping "
+                            "further ones (this is logged once per entity per run)",
+                            held, ascii(entity_type), ascii(entity_id))
                     return False
         keep_case = (f"CASE WHEN sync_apply_quarantine.reason IN ({ev_marks}) AND excluded.reason IN ({sup_marks}) "
                      "THEN sync_apply_quarantine.{col} ELSE excluded.{col} END")
+        # Authority rows: the stored payload is never replaced (identical content on
+        # a keyed table; on the old shape the guard above already decided).
+        payload_set = ("excluded.payload" if (auth_key == "" or not keyed)
+                       else "sync_apply_quarantine.payload")
         conn.execute(
             "INSERT INTO sync_apply_quarantine "
             "(entity_id, entity_type, event_type, payload, reason, detail"
             + (", auth_key" if keyed else "") + ") VALUES (?,?,?,?,?,?" + (",?" if keyed else "") + ") "
             "ON CONFLICT(entity_id, event_type" + (", auth_key" if keyed else "") + ") DO UPDATE SET "
-            "payload=excluded.payload, reason=" + keep_case.format(col="reason")
+            "payload=" + payload_set + ", reason=" + keep_case.format(col="reason")
             + ", detail=" + keep_case.format(col="detail"),
             (entity_id, entity_type, event_type, payload_json, reason, detail)
             + ((auth_key,) if keyed else ()) + evidence + supersedable + evidence + supersedable,

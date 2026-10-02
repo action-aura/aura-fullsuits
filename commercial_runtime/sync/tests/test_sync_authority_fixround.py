@@ -234,20 +234,29 @@ def _drop_main(shop):
     conn.close()
 
 
-def test_the_registry_quarantine_is_keyed_by_signature(shop):
+def test_the_registry_quarantine_is_keyed_by_content(shop):
+    # Review V3r G2: the key is sha256 of the whole stored payload (it was the first
+    # 32 hex of sha256(signature text) behind a "sig:" prefix). What this can no
+    # longer catch: a key that merely differs per signature -- which is exactly the
+    # defect; test_sync_authority_review3.py's copy-the-signature attacks catch the
+    # reverse.
     forged = shop.world.sign(shop.user_event(OWNER, password_hash="ATTACKER-HASH"), shop.A)
     shop.apply(forged)
     rows = shop.q("SELECT auth_key FROM sync_apply_quarantine")
     assert len(rows) == 1 and rows[0]["auth_key"] == authority.quarantine_auth_key(forged["payload"])
-    assert rows[0]["auth_key"].startswith("sig:") and len(rows[0]["auth_key"]) == 36
+    assert len(rows[0]["auth_key"]) == 64 and not rows[0]["auth_key"].startswith("sig:")
     shop.apply({"entity_type": "user", "entity_id": OWNER, "event_type": "update", "payload": {"uid": OWNER}})
     assert [r["auth_key"] for r in shop.q("SELECT auth_key FROM sync_apply_quarantine")] == [rows[0]["auth_key"]]
 
 
-def test_an_unsigned_event_alone_is_parked_under_the_empty_key(shop):
-    shop.apply({"entity_type": "user", "entity_id": OWNER, "event_type": "update",
-                "payload": {"uid": OWNER, "role": "cashier"}})
-    assert [r["auth_key"] for r in shop.q("SELECT auth_key FROM sync_apply_quarantine")] == [""]
+def test_an_unsigned_event_alone_is_parked_under_its_content_key(shop):
+    # Review V3r G2: an unsigned AUTHORITY event is keyed by its content like any
+    # other (it was ''). Non-authority events keep '' -- pinned by the v42 migration
+    # test's "sale-child" row and test_a_non_authority_event_still_follows_its_latest_payload.
+    payload = {"uid": OWNER, "role": "cashier"}
+    shop.apply({"entity_type": "user", "entity_id": OWNER, "event_type": "update", "payload": payload})
+    assert [r["auth_key"] for r in shop.q("SELECT auth_key FROM sync_apply_quarantine")] == [
+        authority.quarantine_auth_key(payload, "user")]
 
 
 def test_old_shape_an_unsigned_copy_never_replaces_a_signed_one(shop):
@@ -262,14 +271,15 @@ def test_old_shape_an_unsigned_copy_never_replaces_a_signed_one(shop):
 
 def test_old_shape_the_first_parked_signed_event_is_kept_against_a_second_signer(shop, caplog):
     """Residual R6, written down: the old key cannot hold two rows, so between two
-    DIFFERENT signers the first parked event wins -- and says so in the log."""
+    DIFFERENT verified signers the first parked event wins -- and says so in the
+    log. (Review V3r G3: decided on the VERIFIED signer, not on `_auth.inst`.)"""
     _make_old_shape(shop)
     shop.apply(shop.user_event(OWNER, password_hash="FIRST-SIGNER"), shop.A)
     with caplog.at_level(logging.WARNING, logger="commercial_runtime.sync.sync_service"):
         shop.apply(shop.user_event(OWNER, password_hash="SECOND-SIGNER", row_version=9), shop.B)
     rows = shop.q("SELECT payload FROM sync_apply_quarantine")
     assert len(rows) == 1 and "FIRST-SIGNER" in rows[0]["payload"]
-    assert any("keeping the first parked signed" in r.getMessage() for r in caplog.records)
+    assert any("keeping the parked verified" in r.getMessage() for r in caplog.records)
 
 
 def test_old_shape_evidence_is_never_downgraded_to_a_supersedable_reason(shop):

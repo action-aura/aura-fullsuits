@@ -112,11 +112,12 @@ def rebuild_quarantine_with_auth_key(conn: sqlite3.Connection) -> bool:
     could displace a legitimate parked main-signed owner change with its own
     junk, and an unsigned copy could rewrite a forgery signal into a reason a
     later signed event may clear. `auth_key` names the signature (see
-    `authority.quarantine_auth_key`), so different signed events each keep their
-    own row, and the unsigned copy (key '') is never stored beside a signed one.
+    `authority.quarantine_auth_key`; since review V3r G2 it hashes the whole stored
+    payload, not just the signature text), so different events each keep their own
+    row, and an unsigned copy is never stored beside a signed one.
 
     Rows are copied with `auth_key` computed in Python from the stored payload
-    (a signed row gets its signature's key, everything else ''), so the retry
+    and entity type (an authority row gets its content key, anything else ''), so the retry
     loop sees exactly what a live park would have written. The old table is
     swapped with DROP + RENAME of the `_new` name, in ONE transaction (the
     `_migrate_categories_to_uuid` idiom): a failure rolls back and leaves the
@@ -143,7 +144,7 @@ def rebuild_quarantine_with_auth_key(conn: sqlite3.Connection) -> bool:
             conn.execute(
                 "INSERT INTO sync_apply_quarantine_new (entity_id, entity_type, event_type, payload, "
                 "reason, detail, quarantined_at, auth_key) VALUES (?,?,?,?,?,?,?,?)",
-                (r[0], r[1], r[2], r[3], r[4], r[5], r[6], quarantine_auth_key(payload)))
+                (r[0], r[1], r[2], r[3], r[4], r[5], r[6], quarantine_auth_key(payload, r[1])))
         conn.execute("DROP TABLE sync_apply_quarantine")
         conn.execute("ALTER TABLE sync_apply_quarantine_new RENAME TO sync_apply_quarantine")
         if own_tx:
