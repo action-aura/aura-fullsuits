@@ -128,7 +128,12 @@ def _provision_signed_identity(app_data_dir: str) -> None:
     fingerprint = fingerprint_of(base64.b64decode(provider.get_public_key_b64()))
     device_id = device_context.local_device_uuid()
     installation = f"inst-{device_id}"
-    lease = make_lease(owner_key, licence=licence, inst=installation, fingerprint=fingerprint)
+    # AUDIT-033 fix round (verifier V finding #1): a real Owner pins each
+    # computer's own registry id into its lease (registry_pin.py). The harness
+    # models that pin by attesting this app-data's own local_device_uuid, so
+    # an insider process can only ever be attested as ITSELF.
+    lease = make_lease(owner_key, licence=licence, inst=installation, fingerprint=fingerprint,
+                       registry_device_id=device_id)
     repo = LicenseStateRepository(app / "database" / "subsystems" / "licensing.db")
     record = repo.load()
     repo.save(dataclasses.replace(

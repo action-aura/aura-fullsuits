@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -61,8 +61,14 @@ def _policy():
 
 
 def make_lease(owner_key, *, key_id="owner-1", licence=LICENCE, inst, fingerprint,
-               issued_at: Optional[datetime] = None, ttl=timedelta(hours=24)) -> dict:
-    """A real Owner-signed assertion envelope (24h TTL like production)."""
+               issued_at: Optional[datetime] = None, ttl=timedelta(hours=24),
+               registry_device_id: Optional[str] = None) -> dict:
+    """A real Owner-signed assertion envelope (24h TTL like production).
+
+    `registry_device_id` models Owner's PIN (AUDIT-033 fix round, verifier V
+    finding #1): Owner records which registry device id belongs to this
+    installation and signs it into the lease. The key is added only when given,
+    exactly as Owner omits it for a client that never sent the id."""
     issued = issued_at or datetime.now(timezone.utc)
     payload = {
         "assertion_id": str(uuid.uuid4()),
@@ -85,6 +91,8 @@ def make_lease(owner_key, *, key_id="owner-1", licence=LICENCE, inst, fingerprin
         "offline_policy": _policy(),
         "contract_version": "v1",
     }
+    if registry_device_id is not None:
+        payload["registry_device_id"] = registry_device_id
     sig = owner_key.sign(canonicalize_bytes(payload))
     return {"payload": payload, "signing_key_id": key_id, "algorithm": "ed25519",
             "assertion_version": 1, "signature": base64.b64encode(sig).decode("ascii")}
@@ -121,13 +129,18 @@ class SigningWorld:
     def new_device(self, dev: Optional[str] = None, *, inst: Optional[str] = None,
                    licence: Optional[str] = None, owner_key=None, key=None,
                    issued_at: Optional[datetime] = None, lease_fingerprint: Optional[str] = None,
-                   prepare_only: bool = False) -> TestDevice:
-        dev = dev or str(uuid.uuid4())
+                   prepare_only: bool = False, attest: Union[bool, str] = True) -> TestDevice:
+        """`attest` models Owner's pin of the registry device id in the lease:
+        True -> the lease names `dev` (a normal, pinned computer); False -> the
+        lease carries no id (an un-upgraded or not-yet-pinned computer); a str ->
+        the lease names THAT id (a computer Owner pinned to someone else's id)."""        dev = dev or str(uuid.uuid4())
         inst = inst or f"inst-{uuid.uuid4().hex[:10]}"
         key = key or Ed25519PrivateKey.generate()
         fp = hashlib.sha256(_raw_pub(key)).hexdigest()
         lease = make_lease(owner_key or self.owner_key, licence=licence or self.licence, inst=inst,
-                           fingerprint=lease_fingerprint or fp, issued_at=issued_at)
+                           fingerprint=lease_fingerprint or fp, issued_at=issued_at,
+                           registry_device_id=(dev if attest is True else (attest or None)
+                                               if isinstance(attest, str) else None))
 
         def sign_fn(data: bytes) -> str:
             return base64.b64encode(key.sign(data)).decode("ascii")
