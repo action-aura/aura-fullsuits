@@ -23,6 +23,7 @@ from app.licensing_service import device_identity, idempotency, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize, canonicalize_bytes
 from app.licensing_service.entitlements import resolve_entitlements
+from app.licensing_service.registry_pin import audit_pin_outcome, record_pin_event, resolve_registry_device_pin
 from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy_for_subscription
 from app.models.catalog import Platform, Product, ReleaseChannel
 from app.models.installations import ActivationEvent, Installation
@@ -341,6 +342,19 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         )
     )
 
+    # AUDIT-033 fix round (verifier V finding #1): pin the registry device id
+    # this computer claims, race-free at activation. Never raises and never
+    # fails the activation (registry_pin.py): a clash just omits the id from
+    # the lease and leaves a CLASH event for staff. The pending-review path
+    # above deliberately does not pin; its approval retry lands here.
+    # _safe_request_fingerprint is deliberately unchanged: a retry under the
+    # same idempotency key returns the cached response, which already carries
+    # the first attempt's outcome.
+    pin_outcome = resolve_registry_device_pin(installation=installation, requested=body.get("registry_device_id"))
+    record_pin_event(
+        pin_outcome, installation=installation, license_id=locked_license.id, correlation_id=body.get("correlation_id")
+    )
+
     # Step 20: entitlements
     entitlements = resolve_entitlements(locked_license, datetime.now(timezone.utc))
 
@@ -357,6 +371,7 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         device_fingerprint=device_key.fingerprint if device_key else None,
         entitlements=entitlements, offline_policy=serialized_policy,
         contract_version=body["contract_version"], ttl_seconds=config["assertion_ttl_seconds"],
+        registry_device_id=pin_outcome.attested_id,
     )
     envelope = sign_assertion(payload, config["signing_key_directory"])
     persist_assertion(envelope, locked_license, installation)
@@ -420,6 +435,7 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         after_state={"license_id": str(locked_license.id), "product_code": product.product_code},
         correlation_id=body.get("correlation_id"),
     )
+    audit_pin_outcome(pin_outcome, installation=installation, correlation_id=body.get("correlation_id"))
     return response
 
 

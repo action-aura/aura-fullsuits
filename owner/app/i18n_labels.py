@@ -674,6 +674,11 @@ def generic_audit_action_label(code: str) -> str:
         "EMPLOYEE_ACTIVATED": _("Employee activated"),
         "CHECK_IN_ACCEPTED": _("Check-in accepted"),
         "ACTIVATION_ACCEPTED": _("Activation accepted"),
+        # AUDIT-033 fix round (verifier V finding #1): registry device id pin outcomes
+        "REGISTRY_DEVICE_ID_PINNED": _("Computer identity confirmed"),
+        "REGISTRY_DEVICE_ID_CLASH": _("Computer identity refused: another active computer of this licence claims it"),
+        "REGISTRY_DEVICE_ID_CHANGE_REFUSED": _("Computer identity change refused"),
+        "REGISTRY_DEVICE_ID_INVALID": _("Computer identity malformed"),
         "DEVICE_SLOT_EXCEPTION_CREATED": _("Device-slot exception created"),
         # Phase 9.5E -- Expenses
         "EXPENSE_CREATED": _("Expense created"),

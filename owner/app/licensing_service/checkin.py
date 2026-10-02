@@ -19,6 +19,7 @@ from app.licensing_service import device_identity, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize_bytes
 from app.licensing_service.entitlements import resolve_entitlements
+from app.licensing_service.registry_pin import audit_pin_outcome, record_pin_event, resolve_registry_device_pin
 from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy_for_subscription
 from app.models.installations import ActivationEvent, Installation
 from app.models.licensing_service import ActivationRequest
@@ -106,6 +107,15 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
         )
     )
 
+    # AUDIT-033 fix round (verifier V finding #1): an installation that has not
+    # pinned a registry device id yet (every one that existed before this
+    # release) pins the first id it claims here; a pinned one keeps its pin.
+    # Never raises and never fails the check-in (registry_pin.py).
+    pin_outcome = resolve_registry_device_pin(installation=installation, requested=body.get("registry_device_id"))
+    record_pin_event(
+        pin_outcome, installation=installation, license_id=license_row.id, correlation_id=body.get("correlation_id")
+    )
+
     entitlements = resolve_entitlements(license_row, datetime.now(timezone.utc))
     offline_policy = get_policy_for_license(license_row)
     # Phase 8V-P6 (Part E): functional emergency-extension wiring -- overrides
@@ -119,6 +129,7 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
         license_row=license_row, installation_row=installation, device_fingerprint=device_key.fingerprint,
         entitlements=entitlements, offline_policy=serialized_policy,
         contract_version=body["contract_version"], ttl_seconds=config["assertion_ttl_seconds"],
+        registry_device_id=pin_outcome.attested_id,
     )
     envelope = sign_assertion(payload, config["signing_key_directory"])
     persist_assertion(envelope, license_row, installation)
@@ -136,6 +147,7 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
         actor_staff_user_id=None, actor_role_snapshot=None, action_code="CHECK_IN_ACCEPTED",
         entity_type="installation", entity_public_id=str(installation.id), correlation_id=body.get("correlation_id"),
     )
+    audit_pin_outcome(pin_outcome, installation=installation, correlation_id=body.get("correlation_id"))
 
     return {
         "contract_version": body["contract_version"],

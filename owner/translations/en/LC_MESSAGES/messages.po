@@ -993,6 +993,22 @@ msgid "Activation accepted"
 msgstr "Activation accepted"
 
 #: app/i18n_labels.py:677
+msgid "Computer identity confirmed"
+msgstr "Computer identity confirmed"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity refused: another active computer of this licence claims it"
+msgstr "Computer identity refused: another active computer of this licence claims it"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity change refused"
+msgstr "Computer identity change refused"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity malformed"
+msgstr "Computer identity malformed"
+
+#: app/i18n_labels.py:677
 msgid "Device-slot exception created"
 msgstr "Device-slot exception created"
 

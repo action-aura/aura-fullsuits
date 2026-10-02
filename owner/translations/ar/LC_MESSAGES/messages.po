@@ -986,6 +986,22 @@ msgid "Activation accepted"
 msgstr "تم قبول التفعيل"
 
 #: app/i18n_labels.py:677
+msgid "Computer identity confirmed"
+msgstr "تم تأكيد هوية الجهاز"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity refused: another active computer of this licence claims it"
+msgstr "رُفضت هوية الجهاز: جهاز نشط آخر ضمن هذا الترخيص يدّعيها"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity change refused"
+msgstr "رُفض تغيير هوية الجهاز"
+
+#: app/i18n_labels.py:677
+msgid "Computer identity malformed"
+msgstr "هوية الجهاز غير صالحة الصيغة"
+
+#: app/i18n_labels.py:677
 msgid "Device-slot exception created"
 msgstr "تم إنشاء استثناء فتحة الجهاز"
 

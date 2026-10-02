@@ -36,7 +36,7 @@ def _guard_payload(payload: dict) -> dict:
 
 def build_assertion_payload(
     *, license_row, installation_row, device_fingerprint: str, entitlements: dict, offline_policy: dict,
-    contract_version: str, ttl_seconds: int,
+    contract_version: str, ttl_seconds: int, registry_device_id: str | None = None,
 ) -> dict:
     # Launch-readiness (2026-09-04): an assertion without a device
     # fingerprint is not a degraded assertion, it is an unusable one -- every
@@ -86,6 +86,14 @@ def build_assertion_payload(
     # state on every call (activation AND check-in both call this
     # function), never cached or stored separately from the values above.
     payload.update(resolve_commercial_assertion_fields(license_row.subscription, as_of=now))
+    # AUDIT-033 fix round (verifier V finding #1): the Owner-pinned registry
+    # device id, signed so receivers can trust which computer this lease is.
+    # Added ONLY when registry_pin.py resolved one, never as null: an old
+    # client rejects unknown assertion fields (assertion_verifier.py's
+    # allowlist), so a request that never carried the id must get the exact
+    # payload shape it always got.
+    if registry_device_id is not None:
+        payload["registry_device_id"] = registry_device_id
     return _guard_payload(payload)
 
 
