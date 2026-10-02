@@ -181,10 +181,18 @@ def test_the_main_may_change_the_owners_password(shop):
     assert shop.parked() == []
 
 
+# AUDIT-033 fix round: `employee_id` is no longer in this list. It left
+# OWNER_CRITICAL_FIELDS because the code is a per-device label every install
+# re-numbers on a collision, so comparing it made every harmless edit look
+# critical. What this test used to prove (a non-main cannot change the owner's
+# employee code) is now proven more strongly by
+# `test_a_non_mains_harmless_owner_edit_never_writes_the_employee_code` in
+# test_sync_authority_attacks.py: the harmless path simply never writes the
+# column, so a parked-then-retried event cannot either.
 @pytest.mark.parametrize("field,value", [
     ("status", "suspended"), ("email", "evil@x.com"), ("pin_hash", "EVILPIN"),
     ("role", "cashier"), ("require_password_change", 1), ("session_version", 9),
-    ("employee_id", "ADMIN-0099"), ("branch_scope_uid", "branch-x"), ("role_preset", "accountant"),
+    ("branch_scope_uid", "branch-x"), ("role_preset", "accountant"),
 ])
 def test_every_owner_critical_field_needs_the_main(shop, field, value):
     assert shop.apply(shop.user_event(OWNER, **{field: value}), shop.A) is False
@@ -492,16 +500,49 @@ def test_a_revoked_signers_events_are_refused(shop):
     assert shop.user(CASHIER)["role"] == "cashier"
 
 
+def _older_lease():
+    """AUDIT-033 fix round: a device id bound to installation X moves to another
+    installation only on a NEWER Owner lease naming it (the binding follows Owner,
+    not arrival order). An installation that merely arrives second therefore has
+    to present an OLDER lease to be refused, which is what these deny tests now
+    build. (A fresh `new_device` lease is newer than the fixture's, and would
+    legitimately move the id -- see `test_a_newer_attested_lease_moves_the_device_id`.)"""
+    return datetime.now(timezone.utc) - timedelta(days=3)
+
+
 def test_a_second_installation_cannot_speak_as_a_bound_device(shop):
+    # CHANGED (fix round): the impostor's lease is OLDER than the bound one. What
+    # this test can no longer catch on its own is an EQUAL-or-NEWER lease being
+    # refused -- by design that moves the id; the unit tests in test_sync_authority.py
+    # (`test_an_older_or_equal_lease_cannot_take_a_bound_device_id_back`) pin the
+    # equal case and `test_a_newer_attested_lease_moves_the_device_id` the newer one.
     assert shop.apply(shop.user_event(CASHIER, display_name="one"), shop.A) is True
-    impostor = shop.world.new_device(shop.A.dev, inst="impostor-installation")
+    impostor = shop.world.new_device(shop.A.dev, inst="impostor-installation", issued_at=_older_lease())
     assert shop.apply(shop.user_event(CASHIER, display_name="two", row_version=5), impostor) is False
     assert shop.parked("user") == ["signer_binding_clash"]
     assert shop.user(CASHIER)["display_name"] == "one"
 
 
+def test_a_newer_attested_lease_moves_the_device_id(shop):
+    """The allow half of the deny test above (AUDIT-033 fix round, finding #1): Owner
+    re-pinned the id to another installation (staff deactivated the squatter), so
+    the lease that names it is newer and the receiver follows. The new holder has
+    not been heard yet (liveness resets to the epoch)."""
+    assert shop.apply(shop.user_event(CASHIER, display_name="one"), shop.A) is True
+    moved = shop.world.new_device(shop.A.dev, inst="owner-moved-it-here")
+    assert shop.apply(shop.user_event(CASHIER, display_name="two", row_version=5), moved) is True
+    row = shop.q("SELECT installation_id, last_signed_seen_at_utc FROM sync_signers WHERE device_id=?",
+                 (shop.A.dev,))[0]
+    assert row["installation_id"] == "owner-moved-it-here"
+    # ... and the OLD holder is now the one refused
+    assert shop.apply(shop.user_event(CASHIER, display_name="three", row_version=9), shop.A) is False
+    assert shop.parked("user") == ["signer_binding_clash"]
+
+
 def test_the_receivers_own_id_cannot_be_claimed_by_a_peer(shop):
-    impostor = shop.world.new_device(shop.R.dev, inst="impostor-of-the-receiver")
+    # (fix round: an OLDER lease -- see `_older_lease`; a newer one naming the
+    # receiver's id would be Owner re-pinning it, which the receiver follows)
+    impostor = shop.world.new_device(shop.R.dev, inst="impostor-of-the-receiver", issued_at=_older_lease())
     assert shop.apply(shop.user_event(CASHIER, role="manager"), impostor) is False
     assert shop.parked("user") == ["signer_binding_clash"]
 
@@ -561,9 +602,16 @@ def test_forged_raw_outbox_rows_change_nothing(shop):
     assert shop.counts() == before
     assert shop.user(OWNER) == owner_before
     assert shop.main() == (shop.M.dev, 1)
-    # a re-park refreshes the SAME quarantine row (keyed on entity_id + event_type), now
-    # saying why the unsigned copy was refused
-    assert shop.parked() == ["unsigned_authority_event"] * 4
+    # CHANGED (fix round, verifier V findings #7/#8). This used to say a re-park
+    # refreshes the SAME quarantine row, "now saying why the unsigned copy was
+    # refused" -- i.e. an unsigned copy REPLACED the signed forgery's reason. That
+    # was the hole: the evidence is sticky now, and an unsigned copy of an
+    # authority event is never stored beside (or over) a signed one for the same
+    # entity. What this test can no longer catch is the unsigned copy's own reason
+    # being recorded: that reason is covered where no signed row exists, by
+    # `test_unsigned_authority_events_are_parked_for_every_registry_type`.
+    assert shop.parked() == ["second_admin_refused", "owner_change_needs_main",
+                             "needs_main_computer", "owner_change_needs_main"]
 
 
 def test_unsigned_authority_events_park_but_the_same_payload_signed_by_the_main_applies(shop):
@@ -655,6 +703,9 @@ def test_an_echo_of_this_devices_own_event_is_not_re_judged_by_the_rules(shop):
     assert shop.apply(shop.user_event(OWNER, password_hash="PEER-CHANGE", row_version=9), shop.A) is False
     assert shop.parked("user") == ["owner_change_needs_main"]
     # a forged copy "from" this device (wrong key) is still refused
-    impostor = shop.world.new_device(shop.R.dev, inst="impostor")
+    impostor = shop.world.new_device(shop.R.dev, inst="impostor", issued_at=_older_lease())
     assert shop.apply(shop.user_event(OWNER, password_hash="X", row_version=12), impostor) is False
-    assert shop.parked("user") == ["signer_binding_clash"]
+    # CHANGED (fix round, finding #7): the impostor's event used to REPLACE the peer's
+    # parked row (one row per entity); two different signed events now each keep
+    # their own row, so BOTH reasons are on record.
+    assert sorted(shop.parked("user")) == ["owner_change_needs_main", "signer_binding_clash"]

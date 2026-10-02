@@ -81,6 +81,43 @@ def test_round_trip_derives_the_signer_from_the_signature(world):
     assert (verdict.dev, verdict.inst, verdict.fingerprint) == (dev.dev, dev.inst, dev.fingerprint)
 
 
+# ── the registry device id must be attested by the Owner-signed lease ────────
+# AUDIT-033 fix round (verifier V finding #1): `_auth.dev` is a field the signer
+# chooses, so the Owner-pinned `registry_device_id` in the lease must equal it.
+
+def test_a_lease_that_attests_nothing_cannot_vouch_for_any_device_id(world):
+    dev = world.new_device(attest=False)
+    verdict = _verify(world, world.sign(_event(), dev))
+    assert isinstance(verdict, authority.Refusal) and verdict.reason == authority.REASON_DEV_NOT_ATTESTED
+
+
+def test_a_lease_that_attests_another_id_cannot_vouch_for_this_one(world):
+    insider = world.new_device("dev-insider", attest="dev-the-main")
+    verdict = _verify(world, world.sign(_event(), insider))     # signs as dev-insider, lease names dev-the-main
+    assert isinstance(verdict, authority.Refusal) and verdict.reason == authority.REASON_DEV_NOT_ATTESTED
+    assert "dev-the-main" in verdict.detail and "dev-insider" in verdict.detail
+
+
+def test_a_lease_attesting_an_empty_string_is_not_an_attestation(world):
+    dev = world.new_device("dev-x", attest="")
+    # attest="" builds a lease WITHOUT the key (make_lease adds it only when truthy-given)
+    assert "registry_device_id" not in dev.signer.lease["payload"]
+    verdict = _verify(world, world.sign(_event(), dev))
+    assert isinstance(verdict, authority.Refusal) and verdict.reason == authority.REASON_DEV_NOT_ATTESTED
+
+
+def test_an_attested_event_verifies_and_carries_the_lease_issue_time_and_signature_id(world):
+    """The allow half: the attested id is accepted, and the verdict exposes what
+    the binding and liveness rules need."""
+    dev = world.new_device("dev-attested")
+    signed = world.sign(_event(), dev)
+    verdict = _verify(world, signed)
+    assert isinstance(verdict, authority.VerifiedSigner) and verdict.dev == "dev-attested"
+    assert verdict.lease_issued_at == datetime.fromisoformat(dev.signer.lease["payload"]["issued_at"])
+    import hashlib
+    assert verdict.sig_sha256 == hashlib.sha256(signed["payload"]["_auth"]["sig"].encode()).hexdigest()
+
+
 def test_signing_does_not_mutate_the_input_and_is_idempotent(world):
     dev = world.new_device()
     ev = _event()
@@ -273,8 +310,11 @@ def test_registry_is_at_v10_and_has_the_table(reg):
     assert registry_db.REGISTRY_SCHEMA_VERSION == 10
     assert reg.execute("PRAGMA user_version").fetchone()[0] == 10
     cols = [r[1] for r in reg.execute("PRAGMA table_info(sync_signers)").fetchall()]
+    # AUDIT-033 fix round: the unreleased v10 grew `lease_issued_at_utc` (newest
+    # Owner lease wins a rebind). The assertion is the same exact-list check, so a
+    # column added or dropped without a decision still fails here.
     assert cols == ["device_id", "company_id", "installation_id", "key_fingerprint",
-                    "first_bound_at_utc", "last_signed_seen_at_utc"]
+                    "first_bound_at_utc", "last_signed_seen_at_utc", "lease_issued_at_utc"]
 
 
 def test_first_binding_wins_and_is_recorded(reg):
@@ -283,13 +323,155 @@ def test_first_binding_wins_and_is_recorded(reg):
     assert tuple(row) == ("inst-a", "f" * 64)
 
 
-def test_the_same_signer_again_is_fine_and_refreshes_last_seen(reg):
+def test_the_same_signer_again_is_fine_and_binding_never_refreshes_last_seen(reg):
+    """REPLACES `..._and_refreshes_last_seen` (AUDIT-033 fix round, finding #6).
+    That test pinned that merely binding an already-bound signer refreshed
+    `last_signed_seen_at_utc`; refreshing on a bare binding is exactly the replay
+    hole, so the intended behaviour is now the opposite and the refresh moved to
+    `record_liveness` (tested below). What this test can no longer catch is a
+    binding that forgets to refresh -- by design."""
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     authority.bind_signer(reg, COMPANY, _signer("dev-a", "inst-a"), now=t0)
     assert authority.bind_signer(reg, COMPANY, _signer("dev-a", "inst-a"), now=t0 + timedelta(days=3)) is None
     first, last = reg.execute(
         "SELECT first_bound_at_utc, last_signed_seen_at_utc FROM sync_signers").fetchone()
-    assert first.startswith("2026-01-01") and last.startswith("2026-01-04")
+    assert first.startswith("2026-01-01")
+    assert last.startswith("1970-01-01"), f"binding is not proof of life, yet last_seen={last}"
+
+
+def test_a_peer_binding_starts_with_the_epoch_sentinel_but_a_self_bind_stamps_now(reg, world):
+    me = world.new_device("dev-me")
+    now = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    authority.ensure_self_bound(reg, COMPANY, me.signer, now=now)
+    authority.bind_signer(reg, COMPANY, _signer("dev-peer", "inst-peer"), now=now)
+    seen = dict(reg.execute("SELECT device_id, last_signed_seen_at_utc FROM sync_signers").fetchall())
+    assert seen["dev-me"].startswith("2026-03-01") and seen["dev-peer"].startswith("1970-01-01")
+    # a returning main must not make itself look alive just by booting again
+    authority.ensure_self_bound(reg, COMPANY, me.signer, now=now + timedelta(days=30))
+    assert reg.execute("SELECT last_signed_seen_at_utc FROM sync_signers WHERE device_id='dev-me'"
+                       ).fetchone()[0].startswith("2026-03-01")
+
+
+def _lease_signer(dev, inst, issued, fp="f" * 64):
+    return authority.VerifiedSigner(dev=dev, inst=inst, fingerprint=fp, licence=LICENCE,
+                                    lease_issued_at=issued)
+
+
+def test_a_newer_owner_lease_moves_a_device_id_to_its_new_installation_and_resets_liveness(reg):
+    """Owner re-pinned the id (staff deactivated the squatter): the newest lease
+    naming it wins, and the new holder has not been heard yet."""
+    t0 = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-squatter", t0), now=t0)
+    authority.record_liveness(reg, authority.VerifiedSigner(
+        dev="dev-a", inst="inst-squatter", fingerprint="f" * 64, licence=LICENCE,
+        lease_issued_at=t0, sig_sha256="s1"), now=t0 + timedelta(hours=1))
+    assert authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-real", t0 + timedelta(days=2)),
+                                 now=t0 + timedelta(days=2)) is None
+    row = reg.execute("SELECT installation_id, first_bound_at_utc, last_signed_seen_at_utc, lease_issued_at_utc "
+                      "FROM sync_signers WHERE device_id='dev-a'").fetchone()
+    assert row[0] == "inst-real"
+    assert row[1].startswith("2026-05-03") and row[2].startswith("1970-01-01") and row[3].startswith("2026-05-03")
+
+
+@pytest.mark.parametrize("offset_days", [0, -3])
+def test_an_older_or_equal_lease_cannot_take_a_bound_device_id_back(reg, offset_days):
+    t0 = datetime(2026, 5, 10, tzinfo=timezone.utc)
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-first", t0), now=t0)
+    clash = authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-other", t0 + timedelta(days=offset_days)))
+    assert clash is not None and clash.reason == authority.REASON_BINDING_CLASH
+    assert reg.execute("SELECT installation_id FROM sync_signers WHERE device_id='dev-a'").fetchone()[0] == "inst-first"
+
+
+def test_a_signer_with_no_lease_time_can_never_rebind(reg):
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-first", datetime(2026, 5, 10, tzinfo=timezone.utc)))
+    clash = authority.bind_signer(reg, COMPANY, _signer("dev-a", "inst-other"))
+    assert clash is not None and clash.reason == authority.REASON_BINDING_CLASH
+
+
+def test_a_row_bound_before_the_lease_stamp_existed_can_be_rebound_by_a_newer_lease(reg):
+    """A row migrated from before the fix has `lease_issued_at_utc` NULL."""
+    reg.execute("INSERT INTO sync_signers (device_id, company_id, installation_id, key_fingerprint, "
+                "first_bound_at_utc, last_signed_seen_at_utc) VALUES ('dev-a', ?, 'inst-old', ?, ?, ?)",
+                (COMPANY, "f" * 64, "2026-01-01T00:00:00.000000+00:00", "2026-01-01T00:00:00.000000+00:00"))
+    assert authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-new", datetime(2026, 6, 1, tzinfo=timezone.utc))) is None
+    assert reg.execute("SELECT installation_id FROM sync_signers WHERE device_id='dev-a'").fetchone()[0] == "inst-new"
+
+
+def test_an_installation_bound_to_one_device_cannot_claim_another_even_with_a_newer_lease(reg):
+    """Owner never re-pins an installation, so a second id for it is not an Owner fact."""
+    t0 = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-x", "inst-a", t0))
+    clash = authority.bind_signer(reg, COMPANY, _lease_signer("dev-y", "inst-a", t0 + timedelta(days=9)))
+    assert clash is not None and clash.reason == authority.REASON_BINDING_CLASH
+    assert reg.execute("SELECT COUNT(*) FROM sync_signers").fetchone()[0] == 1
+
+
+def test_key_rotation_under_the_same_installation_updates_the_fingerprint_and_only_moves_the_lease_forward(reg):
+    t0 = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-a", t0, "1" * 64))
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-a", t0 + timedelta(days=4), "2" * 64))
+    authority.bind_signer(reg, COMPANY, _lease_signer("dev-a", "inst-a", t0 + timedelta(days=1), "3" * 64))
+    fp, lease = reg.execute("SELECT key_fingerprint, lease_issued_at_utc FROM sync_signers").fetchone()
+    assert fp == "3" * 64                         # the fingerprint always follows the verified key
+    assert lease.startswith("2026-05-05"), lease   # but an OLDER lease never moves the stamp back
+
+
+# ── liveness: record_liveness is the only thing that refreshes last_seen ──────
+
+def _live(dev="dev-a", inst="inst-a", sig="sig-1", issued=None):
+    return authority.VerifiedSigner(dev=dev, inst=inst, fingerprint="f" * 64, licence=LICENCE,
+                                    lease_issued_at=issued, sig_sha256=sig)
+
+
+def _last_seen(reg, dev="dev-a"):
+    return reg.execute("SELECT last_signed_seen_at_utc FROM sync_signers WHERE device_id=?", (dev,)).fetchone()[0]
+
+
+def test_a_new_signature_under_a_recent_lease_refreshes_liveness_once(reg):
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    issued = now - timedelta(hours=2)
+    authority.bind_signer(reg, COMPANY, _live(issued=issued), now=now - timedelta(days=9))
+    assert authority.record_liveness(reg, _live(issued=issued), now=now) is True
+    assert _last_seen(reg).startswith("2026-07-01")
+    later = now + timedelta(days=3)
+    assert authority.record_liveness(reg, _live(issued=issued), now=later) is False       # the same signature
+    assert _last_seen(reg).startswith("2026-07-01")
+    assert authority.record_liveness(reg, _live(sig="sig-2", issued=issued), now=later) is True   # a new one
+    assert _last_seen(reg).startswith("2026-07-04")
+
+
+@pytest.mark.parametrize("issued_days_ago,expected", [(13, True), (15, False), (20, False)])
+def test_a_lease_older_than_the_window_is_not_proof_of_life(reg, issued_days_ago, expected):
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    issued = now - timedelta(days=issued_days_ago)
+    authority.bind_signer(reg, COMPANY, _live(issued=issued), now=now)
+    assert authority.record_liveness(reg, _live(issued=issued), now=now) is expected
+    assert _last_seen(reg).startswith("2026-07-01" if expected else "1970-01-01")
+
+
+def test_no_lease_time_or_no_signature_id_is_never_proof_of_life(reg):
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    authority.bind_signer(reg, COMPANY, _live(issued=now), now=now)
+    assert authority.record_liveness(reg, _live(issued=None), now=now) is False
+    assert authority.record_liveness(reg, _live(sig="", issued=now), now=now) is False
+    assert _last_seen(reg).startswith("1970-01-01")
+
+
+def test_liveness_for_an_unbound_signer_is_recorded_but_moves_nothing(reg):
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    assert authority.record_liveness(reg, _live(issued=now), now=now) is True     # signature counted ...
+    assert reg.execute("SELECT COUNT(*) FROM sync_signers").fetchone()[0] == 0    # ... no row invented
+
+
+def test_old_seen_signatures_are_pruned_so_the_table_stays_bounded(reg):
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    authority.bind_signer(reg, COMPANY, _live(issued=now - timedelta(days=14)), now=now)
+    old_issued = now - timedelta(days=14)
+    authority.record_liveness(reg, _live(sig="old", issued=old_issued), now=now)
+    # 2 days later the same signature's lease is 16 days old: past the 15-day prune bound
+    authority.record_liveness(reg, _live(sig="new", issued=now + timedelta(days=1)), now=now + timedelta(days=2))
+    ids = {r[0] for r in reg.execute("SELECT sig_sha256 FROM sync_signed_seen").fetchall()}
+    assert ids == {"new"}, ids
 
 
 def test_a_second_installation_cannot_speak_as_a_bound_device(reg):
@@ -331,7 +513,12 @@ def test_binding_table_survives_a_registry_without_the_migration(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only")
 class TestLocalSigner:
-    def _build(self, tmp_path, world, *, lease_for_other_key=False, with_lease=True, with_device=True):
+    def _build(self, tmp_path, world, *, lease_for_other_key=False, with_lease=True, with_device=True,
+               attest="dev-real"):
+        # `attest` (AUDIT-033 fix round): what Owner pinned into the lease. The
+        # default names the local device id, i.e. a normal, pinned computer; None
+        # models an un-upgraded one. Every pre-existing case keeps meaning what it
+        # meant because it builds the normal, attested computer.
         from commercial_runtime.licensing_contracts.device_identity import (
             WindowsDpapiDeviceIdentityProvider, fingerprint_of)
         from commercial_runtime.licensing_contracts.state_machine import LicenseState as LS
@@ -346,7 +533,8 @@ class TestLocalSigner:
             (app / "device" / "local_device.json").write_text(json.dumps({"device_uuid": "dev-real"}))
         if with_lease:
             lease = make_lease(world.owner_key, inst="inst-real",
-                               fingerprint=("0" * 64) if lease_for_other_key else fp)
+                               fingerprint=("0" * 64) if lease_for_other_key else fp,
+                               registry_device_id=attest)
             repo = LicenseStateRepository(app / "database" / "subsystems" / "licensing.db")
             repo.save(LicenseStateRecord(
                 licensing_schema_version=LICENSING_SCHEMA_VERSION, product_code="AURA_RETAIL",
@@ -379,3 +567,23 @@ class TestLocalSigner:
 
     def test_none_for_an_empty_directory(self, tmp_path):
         assert authority.local_signer_or_none(tmp_path / "nothing") is None
+
+    @pytest.mark.parametrize("attest", [None, "dev-someone-else"])
+    def test_none_when_the_lease_does_not_attest_this_computers_id(self, tmp_path, world, attest, caplog):
+        """AUDIT-033 fix round (finding #1): a lease that names nothing, or another
+        id, cannot be used to sign -- every receiver would refuse the event, so the
+        computer sends it unsigned and says why once."""
+        import logging
+        authority._UNATTESTED_WARNED.clear()
+        app = self._build(tmp_path, world, attest=attest)
+        with caplog.at_level(logging.WARNING, logger=authority.logger.name):
+            assert authority.local_signer_or_none(app) is None
+            assert authority.local_signer_or_none(app) is None
+        warnings = [r for r in caplog.records if "does not attest" in r.getMessage()]
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+
+    def test_a_signer_is_built_when_the_lease_attests_this_computers_id(self, tmp_path, world):
+        app = self._build(tmp_path, world, attest="dev-real")
+        signer = authority.local_signer_or_none(app)
+        assert signer is not None and signer.dev == "dev-real"
+        assert isinstance(_verify(world, authority.sign_event(_event(), signer)), authority.VerifiedSigner)
