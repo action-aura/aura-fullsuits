@@ -611,6 +611,8 @@ def _on_licence_activated():
         _start_sync_after_activation()
 
 
+from commercial_runtime.identity.device_context import peek_local_device_uuid as _peek_registry_device_id  # noqa: E402
+
 app.register_blueprint(make_licensing_blueprint(
     product_code='AURA_RETAIL',
     platform=LICENSING_PLATFORM,
@@ -634,6 +636,13 @@ app.register_blueprint(make_licensing_blueprint(
     # rebind that only ran at migration time would silently never happen.
     # See _on_licence_activated above.
     on_activation_success=_on_licence_activated,
+    # AUDIT-033 fix round (verifier V finding #1): tell Owner which registry
+    # device id this computer claims, at activation and every check-in, so
+    # Owner can pin it and sign it into the lease (receivers trust a signer's
+    # id only when its lease attests it). PEEK, never create: minting an
+    # identity as a side effect of a licence call is the AUDIT-032D bug, and a
+    # computer with no id yet simply sends none.
+    registry_device_id_provider=_peek_registry_device_id,
 ))
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull

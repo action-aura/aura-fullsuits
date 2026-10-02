@@ -5068,6 +5068,28 @@ const SubsystemApp = {
     // did a fresh GET /api/licensing/status at boot; this timer is only for
     // catching a change Owner makes WHILE the app is already running.
     this._licenseCheckInTimer = setInterval(() => this._pollLicenseCheckIn(), this.LICENSE_CHECKIN_POLL_MS);
+    this._checkInNowIfUnattested();
+  },
+
+  // AUDIT-033 fix round (verifier V finding #1): Owner pins this computer's
+  // shop-authority id on the first activation/check-in that claims it, and
+  // signs it into the lease. A lease that does not name this computer's id
+  // (every install that existed before this release) means it cannot sign
+  // shop-authority changes yet, and the pin is first-come-first-served for
+  // installations that predate the release. Waiting for the 5-minute timer
+  // above widens that window for nothing, so ask Owner ONCE, immediately at
+  // boot, while attestation is pending. Costs one extra Owner call per boot
+  // only while pending: `registry_device_attested` is true forever after, and
+  // an install with no Owner configured (or never activated) never calls.
+  async _checkInNowIfUnattested() {
+    if (this._attestationCheckInDone) return;
+    this._attestationCheckInDone = true;               // once per page load, whatever happens
+    try {
+      const st = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+      if (st && st.owner_configured && st.installation_id && st.registry_device_attested === false) {
+        await this._pollLicenseCheckIn();
+      }
+    } catch (e) { /* best effort: the 5-minute poll still runs */ }
   },
 
   _stopLicenseCheckInPoll() {
