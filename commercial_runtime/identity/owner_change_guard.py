@@ -54,6 +54,36 @@ def _blocked_here(conn, company_id) -> bool:
         return True
 
 
+def owner_row_version_frozen_here(conn, company_id, target_role) -> bool:
+    """True when a cosmetic edit of the OWNER's row (display name, language) made
+    on THIS computer must NOT move that row's row_version / updated_at_utc.
+
+    AUDIT-033 fix round (verifier V finding #3). A non-main computer may still
+    rename the owner or change the owner's language, and the event it queues
+    reaches every receiver. But receivers decide whether a `user` event beats
+    their copy by row_version, and a non-main computer's harmless edit used to
+    bump the OWNER row to local+1, so a hostile (or merely busy) computer could
+    push the owner row's version arbitrarily high with "harmless" edits and
+    make every later main-signed owner change lose the version race. The
+    receiver (sync_service, harmless-owner-edit path) therefore writes ONLY
+    display_name and language for such an event and never moves the version.
+
+    This is the SENDER's matching half: if this computer bumped its own copy to
+    local+1 while the receivers kept theirs, the main's next change (also
+    local+1, from the same base) would tie with this computer's own row and be
+    ignored here. So the version of the owner row is moved by main-signed
+    changes only: it stays frozen exactly where the receiver's rule does.
+
+    Same condition as owner_change_refusal (an owner row, a main assigned, this
+    computer is not it); the same fail-closed/fail-open choices apply. A shop
+    with no main assigned, the main itself, and every ordinary user are
+    unaffected and bump as they always did.
+    """
+    if _accounts.normalize_role(target_role) != _accounts.ROLE_ADMIN:
+        return False
+    return _blocked_here(conn, company_id)
+
+
 def owner_change_refusal(conn, company_id, target_role):
     """None when the change may go ahead, else a ready (response, 409) tuple.
 

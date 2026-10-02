@@ -33,6 +33,7 @@ from commercial_runtime.identity.mt_auth import create_session, mt_login_require
 from commercial_runtime.identity import user_accounts as _accounts
 from commercial_runtime.identity import verification as _verification
 from commercial_runtime.identity.owner_change_guard import owner_change_refusal as _owner_change_refusal
+from commercial_runtime.identity.owner_change_guard import owner_row_version_frozen_here
 # Launch-readiness account-hierarchy design §2.4/§4.2 D1 -- the install-
 # stable device UUID `EMP-<dev4>-NNNN` derives its fragment from. Imported
 # at module scope (unlike mt_auth.py's deferred `user_accounts` import):
@@ -2113,15 +2114,21 @@ def update_name(user_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id FROM users WHERE id=? AND company_id=?",
+            "SELECT role FROM users WHERE id=? AND company_id=?",
             (user_id, session['company_id']),
         ).fetchone()
         if not row:
             return jsonify({'error': 'User not found.'}), 404
+        # AUDIT-033 fix round (verifier V finding #3): a non-main computer's
+        # rename of the OWNER must not move the owner row's version (see
+        # owner_row_version_frozen_here). The event is still queued below, so
+        # the name still reaches every till.
+        frozen = 1 if owner_row_version_frozen_here(conn, session['company_id'], row[0]) else 0
         conn.execute(
-            "UPDATE users SET display_name=?, row_version=COALESCE(row_version, 1)+1, "
-            "updated_at_utc=? WHERE id=? AND company_id=?",
-            (name, _accounts.now_utc_iso(), user_id, session['company_id']),
+            "UPDATE users SET display_name=?, "
+            "row_version=CASE WHEN ? THEN row_version ELSE COALESCE(row_version, 1)+1 END, "
+            "updated_at_utc=CASE WHEN ? THEN updated_at_utc ELSE ? END WHERE id=? AND company_id=?",
+            (name, frozen, frozen, _accounts.now_utc_iso(), user_id, session['company_id']),
         )
         _accounts._queue_user_sync_event(conn, user_id, 'update')
         # L5: a rename changes what every till and every report calls a person,

@@ -231,6 +231,60 @@ def test_display_name_and_language_stay_allowed_on_a_non_main_computer(admin, db
     assert row["display_name"] == "Owner Renamed" and row['language'] == 'ar'
 
 
+def _version(db_path, uid):
+    r = _q(db_path, "SELECT row_version, updated_at_utc FROM users WHERE id=?", (uid,))[0]
+    return r['row_version'], r['updated_at_utc']
+
+
+def _outbox(db_path):
+    return _q(db_path, "SELECT COUNT(*) AS n FROM sync_outbox")[0]['n']
+
+
+def _rename(c, db, oid):
+    return c.put(f'/api/admin/employees/{oid}/name', json={'name': f'Name {_outbox(db)}'})
+
+
+def _language(c, db, oid):
+    return c.post('/api/auth/language', json={'language': 'ar'})
+
+
+@pytest.mark.parametrize('edit', [_rename, _language], ids=['rename', 'language'])
+def test_a_non_main_computer_does_not_move_the_owner_rows_version(admin, db_path, edit):
+    """AUDIT-033 fix round (verifier V finding #3), sender half. The owner row's
+    version is moved by main-signed changes only: otherwise this computer's own
+    copy sits at local+1 while every receiver keeps its value, and the main's
+    next change (also local+1) ties with it and is ignored here. The edit
+    itself still lands AND still goes out (the name has to reach every till)."""
+    _set_main(db_path, 'other')
+    oid = _owner(db_path)['id']
+    before, outbox_before = _version(db_path, oid), _outbox(db_path)
+    r = edit(admin, db_path, oid)
+    assert r.status_code == 200, r.get_json()
+    assert _version(db_path, oid) == before, "row_version/updated_at_utc must stay frozen"
+    assert _outbox(db_path) == outbox_before + 1, "the event must still be queued"
+
+
+@pytest.mark.parametrize('mode', ['main', 'none'])
+@pytest.mark.parametrize('edit', [_rename, _language], ids=['rename', 'language'])
+def test_the_main_and_a_fresh_install_still_bump_the_owner_rows_version(admin, db_path, edit, mode):
+    _set_main(db_path, mode)
+    oid = _owner(db_path)['id']
+    before = _version(db_path, oid)
+    assert edit(admin, db_path, oid).status_code == 200
+    after = _version(db_path, oid)
+    assert after[0] == before[0] + 1 and after[1] != before[1], f"{mode}: the version must move as it always did"
+
+
+def test_an_ordinary_user_still_bumps_on_a_non_main_computer(admin, db_path):
+    r = admin.post('/api/admin/employees', json={'name': 'Cash', 'email': 'cash2@test.local', 'role': 'cashier'})
+    assert r.status_code == 200, r.get_json()
+    cid = _q(db_path, "SELECT id FROM users WHERE email='cash2@test.local'")[0]['id']
+    _set_main(db_path, 'other')
+    before = _version(db_path, cid)
+    assert _rename(admin, db_path, cid).status_code == 200
+    assert _version(db_path, cid)[0] == before[0] + 1, "only the OWNER row is frozen, not staff"
+
+
 def test_a_non_owner_is_never_refused_by_the_owner_guard(admin, db_path):
     """The deny-half must not spill onto staff: a cashier's PIN changes on any computer."""
     r = admin.post('/api/admin/employees', json={

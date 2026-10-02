@@ -92,10 +92,18 @@ def set_language():
         return jsonify({'success': True, 'language': lang})
     try:
         conn = get_conn()
+        # AUDIT-033 fix round (verifier V finding #3): on a non-main computer
+        # the OWNER's own language change must not move the owner row's
+        # version -- see owner_change_guard.owner_row_version_frozen_here.
+        # The event is still queued, so the language still reaches every till.
+        from commercial_runtime.identity.owner_change_guard import owner_row_version_frozen_here
+        me = conn.execute("SELECT role, company_id FROM users WHERE id=?", (uid,)).fetchone()
+        frozen = 1 if (me and owner_row_version_frozen_here(conn, me[1], me[0])) else 0
         conn.execute(
-            "UPDATE users SET language=?, row_version=COALESCE(row_version, 1)+1, "
-            "updated_at_utc=? WHERE id=?",
-            (lang, _accounts.now_utc_iso(), uid),
+            "UPDATE users SET language=?, "
+            "row_version=CASE WHEN ? THEN row_version ELSE COALESCE(row_version, 1)+1 END, "
+            "updated_at_utc=CASE WHEN ? THEN updated_at_utc ELSE ? END WHERE id=?",
+            (lang, frozen, frozen, _accounts.now_utc_iso(), uid),
         )
         _accounts._queue_user_sync_event(conn, uid, 'update')
         conn.commit()
