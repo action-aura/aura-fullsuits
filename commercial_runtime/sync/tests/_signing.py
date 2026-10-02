@@ -133,7 +133,8 @@ class SigningWorld:
         """`attest` models Owner's pin of the registry device id in the lease:
         True -> the lease names `dev` (a normal, pinned computer); False -> the
         lease carries no id (an un-upgraded or not-yet-pinned computer); a str ->
-        the lease names THAT id (a computer Owner pinned to someone else's id)."""        dev = dev or str(uuid.uuid4())
+        the lease names THAT id (a computer Owner pinned to someone else's id)."""
+        dev = dev or str(uuid.uuid4())
         inst = inst or f"inst-{uuid.uuid4().hex[:10]}"
         key = key or Ed25519PrivateKey.generate()
         fp = hashlib.sha256(_raw_pub(key)).hexdigest()
