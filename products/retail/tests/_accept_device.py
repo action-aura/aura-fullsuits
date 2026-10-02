@@ -702,6 +702,19 @@ def main() -> None:
                 rconn.close()
             results.append({"announced": out["announced"], "device": dict(out["device"])})
 
+        elif op == "app_announce":
+            # The REAL app seam (`app._announce_device`): announce + self-bind +
+            # the signed authority re-announce (AUDIT-033 B2b). The harness
+            # provisions a signing identity only AFTER `init_app()`, so the boot
+            # call inside `init_app()` always runs signer-less here; a test that
+            # models "the shop upgrades, then the computer ticks" calls this op
+            # once the identity exists. Returns the device-local marker so the
+            # test can see whether the re-announce ran.
+            _app_module._announce_device(action.get("reason", "heartbeat"))
+            _marker = Path(app_data_dir) / "device" / "authority_reannounce.json"
+            results.append({"marker": json.loads(_marker.read_text(encoding="utf-8"))
+                            if _marker.exists() else None})
+
         elif op in ("reg_push", "reg_pull"):
             if registry_service is None:
                 raise RuntimeError("registry stream not configured: pass options.registry_relay")
