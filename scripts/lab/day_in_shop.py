@@ -22,10 +22,10 @@ Facts this script encodes, each learned by running the app (not assumed):
     sign up FIRST (unlicensed), THEN seed an active licence into licensing.db
     (commercial_runtime.licensing_contracts.test_support.seed_active_license).
     No AURA_* / OWNER_* variable reaches the backend process.
-  * The till has no split-tender: one `payment_method` per sale (S3 is therefore
-    a FINDING, not a step that can be performed).
-  * A cashier holds no discount capability (POST /sales with discount_pct is
-    403), so S4 (discount at F8) is rung by the owner in a second browser.
+  * S3 is a real split tender (card 5 + cash), typed on the keyboard.
+  * A cashier holds no discount capability, so by default POST /sales with
+    discount_pct is 403. S4 has the OWNER set "Most a cashier can discount" to
+    10% in Settings, then Rana (cashier) gives 10% at F8 and is stopped at 15%.
 """
 from __future__ import annotations
 
@@ -258,8 +258,15 @@ def dismiss_intro(page):
 
 def ui_login(page, email, password=PWD):
     page.locator("#rl-email").wait_for(state="visible", timeout=NAV_WAIT)
-    page.fill("#rl-email", email)
-    page.fill("#rl-pass", password)
+    # A late 401 from the page that was just signed out can re-draw the login
+    # form AFTER it was filled (seen in the day run once the till made a little
+    # more traffic), blanking the email. Fill, settle, and re-check.
+    for _ in range(5):
+        page.fill("#rl-email", email)
+        page.fill("#rl-pass", password)
+        page.wait_for_timeout(500)
+        if page.input_value("#rl-email") == email and page.input_value("#rl-pass") == password:
+            break
     page.press("#rl-pass", "Enter")
     page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=NAV_WAIT)
 
@@ -550,13 +557,16 @@ class Day:
         page.keyboard.press("Control+A")
         page.keyboard.type(tendered, delay=20)
 
-    def record_sale(self, sid, lines, method, by, tendered=None, disc=0, cust=None, note=""):
+    def record_sale(self, sid, lines, method, by, tendered=None, disc=0, cust=None, note="", split=None):
         e = calc(lines, disc)
-        self.sales.append(dict(id=sid, lines=lines, method=method, by=by, tendered=tendered, disc=disc, cust=cust, exp=e, note=note))
+        self.sales.append(dict(id=sid, lines=lines, method=method, by=by, tendered=tendered, disc=disc, cust=cust, exp=e, note=note, split=split or {}))
         for sku, q in lines:
             self.stock[sku] -= q
         if method == "cash":
             self.cash_expected += e["total"]       # net of change
+        if method == "split":
+            # the non-cash parts never touch the drawer; the cash part is net of change
+            self.cash_expected += e["total"] - sum(split.values(), D(0))
         if method == "credit":
             self.cust_balance += e["total"]
         return e
@@ -630,16 +640,49 @@ class Day:
         rec.step("S2", "S2 card sale completes with F2 then F10", True, "receipt", "receipt", rec.shot(p, "S2-receipt"))
         new_sale(p)
 
-        # ---- S3 split tender -------------------------------------------------
-        has_split = p.evaluate("() => /split/i.test(document.querySelector('#pos-product-grid')?.closest('body')?.innerText || '') || !!document.querySelector('[data-method=\"split\"], .pos-split')")
-        s = rec.shot(p, "S3-no-split-tender")
-        rec.step("S3", "S3 split cash+card tender", "SKIPPED", "split tender available", f"split control present: {has_split}", s,
-                 "till takes ONE payment_method per sale (POS_PAYMENT_METHODS + _checkout payload)")
-        rec.finding("BLOCKS-CASHIER", "No split tender: a customer cannot pay part cash, part card",
-                    "Looked at the till's six tender buttons F1-F6 and the sale payload.",
-                    "A way to pay one sale with cash + card (S3).",
-                    "Only one tender per sale exists; the sale payload carries a single payment_method and amount_paid. A customer paying half and half has to be rung as two sales or all on one tender.",
-                    s, "products/retail/frontend/subsystem-retail.js:7032 (POS_PAYMENT_METHODS), :8425 (_checkout payload)")
+        # ---- S3 split tender: card 5 + cash, all from the keyboard -----------
+        scan(p, CATALOG["P4"][1]); scan(p, CATALOG["P3"][1])
+        wait_no_toasts(p)
+        e3 = self.record_sale("S3", [("P4", 1), ("P3", 1)], "split", "rana", split={"card": D("5")})
+        self.check_totals("S3", p, e3, rec.shot(p, "S3-cart"))
+        p.keyboard.press("Enter")                          # empty search -> go to pay
+        p.wait_for_function("() => document.activeElement && document.activeElement.id === 'pos-tendered'", timeout=4000)
+        p.keyboard.press("Control+A"); p.keyboard.type("5", delay=15)
+        p.keyboard.press("F2")                             # 5 typed + F2 = a card PART
+        p.wait_for_function("() => RetailSystem._tenderParts.length === 1", timeout=3000)
+        parts = p.evaluate("() => JSON.parse(JSON.stringify(RetailSystem._tenderParts))")
+        rem_txt = p.evaluate("() => (document.getElementById('pos-remaining') || {}).textContent || ''")
+        rem_exp = f"{(e3['total'] - D('5')):.3f}"
+        s = rec.shot(p, "S3-part-taken")
+        rec.step("S3-part", "S3 '5' then F2 takes a card part; the till shows what is left",
+                 parts == [{"method": "card", "minor": 5000}] and rem_exp in rem_txt, f"[card 5.000], remaining {rem_exp}", f"{parts} remaining {rem_txt!r}", s)
+        # take a wrong part back with Backspace in the empty box
+        p.keyboard.type("3", delay=15)
+        p.keyboard.press("F1")                             # cash part of 3
+        p.wait_for_function("() => RetailSystem._tenderParts.length === 2", timeout=3000)
+        p.keyboard.press("Backspace")                      # empty box -> removes the last part
+        p.wait_for_function("() => RetailSystem._tenderParts.length === 1", timeout=3000)
+        left = p.evaluate("() => RetailSystem._tenderParts.map(x => x.method)")
+        s = rec.shot(p, "S3-undo")
+        rec.step("S3-undo", "S3 Backspace in the empty amount box removes the last part (cash 3), the card part stays", left == ["card"], ["card"], left, s)
+        p.keyboard.type("10", delay=15)
+        p.keyboard.press("Enter")                          # cash 10 pays the rest; change comes back
+        wait_receipt(p)
+        rt3 = receipt_text(p)
+        s = rec.shot(p, "S3-receipt")
+        SEEN_TEXTS.append(("S3 receipt", rt3))
+        exp_chg = D("10") - (e3["total"] - D("5"))
+        has_lines = bool(re.search(r"Card\s*\n?\s*(?:JD|JOD)?\s*5\.000", rt3)) and bool(re.search(r"Cash\s*\n?\s*(?:JD|JOD)?\s*10\.000", rt3))
+        rec.step("S3", "S3 split receipt shows Card 5.000 + Cash 10.000 and the change", has_lines and receipt_change(rt3) == exp_chg,
+                 f"Card 5.000, Cash 10.000, change {exp_chg}", f"lines={has_lines} change={receipt_change(rt3)}", s)
+        sales_now = self.owner.data("GET", R + "/sales/recent?limit=200")["data"]
+        sp = [x for x in sales_now if x["payment_method"] == "split"]
+        det = self.owner.data("GET", R + f"/sales/{sp[-1]['id']}")["data"] if sp else {}
+        tl = [(t["method"], D(str(t["amount"]))) for t in (det.get("sale", {}).get("tenders") or [])]
+        rec.step("S3-server", "S3 server holds ONE split sale with a card row and a cash row (cash net of change)",
+                 len(sp) == 1 and tl == [("card", D("5")), ("cash", e3["total"] - D("5"))],
+                 [("card", "5"), ("cash", str(e3["total"] - D("5")))], [(m, str(a)) for m, a in tl])
+        new_sale(p)
 
         # ---- S4 discount (owner, in a second browser) ------------------------
         self.s4_owner()
@@ -737,41 +780,73 @@ class Day:
         op.goto(BASE, wait_until="domcontentloaded")
         dismiss_intro(op)
         ui_login(op, OWNER_EMAIL)
-        open_till(op)
-        # Rana first: does F8 let a cashier discount?
+        # S4-setup: the OWNER sets how much a cashier may discount, in the Settings screen.
+        op.evaluate("() => SettingsHub.open('credit')")
+        op.wait_for_selector("#credit-cashier-disc", state="visible", timeout=NAV_WAIT)
+        op.fill("#credit-cashier-disc", "10")
+        s = rec.shot(op, "S4-setup-owner-limit")
+        op.click("#sh-save")
+        op.wait_for_timeout(900)
+        got = self.owner.data("GET", R + "/settings/credit")["data"].get("cashier_discount_limit_pct")
+        rec.step("S4-setup", "S4 owner sets 'Most a cashier can discount' = 10 in Settings > Credit & loyalty and saves",
+                 str(got) in ("10", "10.0"), "10", got, s)
+        rana_api = Api().login("rana@day.test")
+        st, _b = rana_api.call("POST", R + "/settings/credit", {"cashier_discount_limit_pct": "50"})
+        rec.step("S4-deny-setting", "S4 a cashier cannot raise the limit herself (POST /settings/credit -> 403)", st == 403, 403, st)
+
+        # Rana's till learns the limit when the till loads: leave and come back.
         p = self.rana
+        p.evaluate("() => SubsystemApp._navigate('dashboard')")
+        p.wait_for_function("() => window.RetailSystem && RetailSystem._section === 'dashboard'", timeout=NAV_WAIT)
+        p.wait_for_timeout(1500)                           # let the dashboard finish its own fetches
+        open_till(p)
         scan(p, CATALOG["P3"][1])
         p.keyboard.press("F8")
-        p.wait_for_timeout(500)
-        focused = p.evaluate("() => document.activeElement && document.activeElement.id")
-        toast = p.evaluate("() => Array.from(document.querySelectorAll('.toast, [class*=toast]')).map(e => e.innerText).join(' | ')")
+        p.wait_for_function("() => document.activeElement && document.activeElement.id === 'pos-disc'", timeout=4000)
+        hint = p.evaluate("() => (document.querySelector('.pos-disc-cap') || {}).innerText || ''")
         s = rec.shot(p, "S4-rana-F8")
-        rec.step("S4a", "S4 Rana (cashier) presses F8: no discount field gets focus", focused != "pos-disc", "refused/explained", f"focus={focused!r} toast={toast[:80]!r}", s)
-        rec.finding("MINOR", "A cashier cannot give any discount at all (F8 refused) - S4 had to be rung by the owner",
-                    "Rana pressed F8 on a one-item cart.", "Cashier applies a discount (S4 as written).",
-                    f"No discount field; message: {toast[:100]!r}. API agrees: POST /sales with discount_pct as a cashier -> 403 'You do not have permission to apply a discount.' Probably policy (CAP_DISCOUNT), but the plan's S4 is impossible for Rana.",
-                    s, "products/retail/backend/api/retail_api.py (create_sale CAP_DISCOUNT), subsystem-retail.js _explainDiscountNeedsManager")
-        clear_cart(p)
+        rec.step("S4a", "S4 Rana (cashier) presses F8: the discount box takes focus and shows the cap", "10%" in hint, "box focused, '<= 10%' shown", f"hint={hint!r}", s)
+        p.keyboard.press("Control+A"); p.keyboard.type("15", delay=30)
+        p.keyboard.press("Enter")                          # over the limit: refused with a toast
+        p.wait_for_timeout(700)
+        toast = p.evaluate("() => document.body.innerText")
+        before = len(self.owner.data("GET", R + "/sales/recent?limit=200")["data"])
+        p.keyboard.press("F10")
+        p.wait_for_timeout(800)
+        after = len(self.owner.data("GET", R + "/sales/recent?limit=200")["data"])
+        s = rec.shot(p, "S4-rana-15pct-stopped")
+        rec.step("S4b", "S4 Rana types 15: the till says the limit and F10 sells nothing", "at most 10% discount" in toast and after == before,
+                 "toast 'at most 10%', no new sale", f"toast shown={'at most 10% discount' in toast} sales {before}->{after}", s)
+        p.keyboard.press("Escape")                         # hand the keyboard back to the scan box
+        wait_no_toasts(p)
+        focus_scan(p)
+        st, body = rana_api.call("POST", R + "/sales", {"items": [{"product_id": self.pid["P3"], "quantity": 1, "discount_pct": 15}],
+                                                       "payment_method": "cash", "amount_paid": 100})
+        rec.step("S4c", "S4 the server agrees: a cashier's 15% -> 403 DISCOUNT_OVER_LIMIT", st == 403 and (body or {}).get("code") == "DISCOUNT_OVER_LIMIT", "403 DISCOUNT_OVER_LIMIT", f"{st} {(body or {}).get('code')}")
 
-        scan(op, CATALOG["P3"][1]); scan(op, CATALOG["P5"][1])
-        op.keyboard.press("F8")
-        op.wait_for_function("() => document.activeElement && document.activeElement.id === 'pos-disc'", timeout=4000)
-        op.keyboard.press("Control+A"); op.keyboard.type("10", delay=30)
-        op.keyboard.press("Enter")
-        op.wait_for_timeout(300)
-        e4 = self.record_sale("S4", [("P3", 1), ("P5", 1)], "cash", "owner", tendered=D("6"), disc=10)
-        s = rec.shot(op, "S4-discount-10pct")
-        t = read_totals(op)
+        # the allowed half: Rana gives 10% and the sale goes through
+        scan(p, CATALOG["P5"][1])
+        p.keyboard.press("F8")
+        p.wait_for_function("() => document.activeElement && document.activeElement.id === 'pos-disc'", timeout=4000)
+        p.keyboard.press("Control+A"); p.keyboard.type("10", delay=30)
+        p.keyboard.press("Enter")
+        p.wait_for_timeout(300)
+        e4 = self.record_sale("S4", [("P3", 1), ("P5", 1)], "cash", "rana", tendered=D("6"), disc=10)
+        s = rec.shot(p, "S4-discount-10pct")
+        t = read_totals(p)
         ok = t["total"] in (e4["total"], e4["total_alt"])
-        rec.step("S4-totals", "S4 owner: 10% discount at F8 -> till total", ok, f"total {e4['total']} (discount {e4['discount']})", f"total {t['total']}", s)
-        op.keyboard.press("F1")
-        op.wait_for_function("() => document.activeElement && document.activeElement.id === 'pos-tendered'", timeout=3000)
-        op.keyboard.press("Control+A"); op.keyboard.type("6", delay=15)
-        op.keyboard.press("Enter")
-        wait_receipt(op)
-        rt = receipt_text(op)
-        rec.step("S4", "S4 discounted cash sale: change", receipt_change(rt) == D("6") - e4["total"], D("6") - e4["total"], receipt_change(rt), rec.shot(op, "S4-receipt"))
-        new_sale(op)
+        rec.step("S4-totals", "S4 Rana: 10% discount at F8 -> till total", ok, f"total {e4['total']} (discount {e4['discount']})", f"total {t['total']}", s)
+        p.keyboard.press("F1")
+        p.wait_for_function("() => document.activeElement && document.activeElement.id === 'pos-tendered'", timeout=3000)
+        p.keyboard.press("Control+A"); p.keyboard.type("6", delay=15)
+        p.keyboard.press("Enter")
+        wait_receipt(p)
+        rt = receipt_text(p)
+        rec.step("S4", "S4 discounted cash sale by the cashier: change", receipt_change(rt) == D("6") - e4["total"], D("6") - e4["total"], receipt_change(rt), rec.shot(p, "S4-receipt"))
+        new_sale(p)
+        log = json.dumps(self.owner.data("GET", R + "/audit-log?limit=300")["data"])
+        rec.step("S4-audit", "S4 the owner's audit log records the cashier discount with its limit",
+                 "SALE_DISCOUNT_BY_CASHIER" in log and "limit 10%" in log, "SALE_DISCOUNT_BY_CASHIER ... limit 10%", "present" if "SALE_DISCOUNT_BY_CASHIER" in log else "missing")
 
     def returns_and_payments(self):
         rec = self.rec
@@ -994,6 +1069,11 @@ class Day:
         om = Api().login("omar@day.test")
         x = om.data("GET", R + f"/cash-sessions/{self.session_id}/x-report")["data"]
         got = D(str(x["expected_cash"]))
+        card_exp = sum((q["exp"]["total"] for q in self.sales if q["method"] == "card"), D(0)) + \
+            sum((q["split"].get("card", D(0)) for q in self.sales), D(0))
+        tt = {k: D(str(v)) for k, v in (x.get("tender_totals") or {}).items()}
+        rec.step("E1-tender-totals", "E1 X report: card taken = every card sale + the 5.000 card part of the split sale",
+                 tt.get("card") == card_exp, str(card_exp), str(tt.get("card")))
         # E1 via the real X-report modal, keyboard (Shift+F3)
         focus_scan(p)
         p.keyboard.press("Shift+F3")
@@ -1011,7 +1091,7 @@ class Day:
         rec.step("E1", "E1 X report expected cash = float + cash sales - refund + customer cash payment - paid-out (own sum)",
                  got == self.cash_expected, self.cash_expected, f"API {got}; screen {shown}", s)
         rec.step("E1-screen", "E1 the X-report on screen agrees with the API", shown == got, got, shown, s)
-        own_cash_sales = sum((x_["exp"]["total"] for x_ in self.sales if x_["method"] == "cash"), D(0))
+        own_cash_sales = sum((x_["exp"]["total"] for x_ in self.sales if x_["method"] == "cash"), D(0)) +             sum((x_["exp"]["total"] - sum(x_["split"].values(), D(0)) for x_ in self.sales if x_["method"] == "split"), D(0))
         phantom = D(str(x["cash_sales"])) - own_cash_sales
         s8_total = next(x_["exp"]["total"] for x_ in self.sales if x_["id"] == "S8")
         rec.step("E1-cash-sales", "E1 X-report 'cash sales' = the cash sales actually rung (own sum, net of change)", phantom == 0, own_cash_sales, x["cash_sales"], s)
@@ -1196,7 +1276,6 @@ def main():
     rec.meta["scope_notes"] = [
         "Selling S1-S9, S12-drawer keys, S13, the sign-out hand-over, the X report and the close (E1/E2) were driven in the real UI with the keyboard.",
         "Done over the HTTP API, NOT through screens: M2-M4 (staff, catalogue, purchase), S10 (return), S11 (customer payment), the owner's approve (E2), E3 report reads and E4 supplier payment. Their screens were not looked at.",
-        "S3 (split tender) cannot be performed: the till has no split tender.",
     ]
     be = Backend(data_dir)
     rc = 0
