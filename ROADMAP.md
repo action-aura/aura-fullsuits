@@ -6759,3 +6759,31 @@ Residuals (written down, not fixed):
 - R10 — retail tests that read `AURA_*` from the environment must clear it
   themselves (monkeypatch.delenv), so a developer's machine settings cannot make
   them fail.
+
+## 2026-10-03 — retail schema v43 CLAIMED (DAY-1: drawer counts customer cash; returns reverse tax)
+
+Claimed before any builder starts. Checked all 109 local and origin refs
+(fetched): none contains `RETAIL_SCHEMA_VERSION = 43` or higher; head is 42.
+No registry bump, no Owner revision.
+
+Why: the first "day in the shop" run (`scripts/lab/day_in_shop.py`, 154a6610,
+real app, real browser) found four money defects that every suite missed:
+
+- DAY-1a: an on-account (credit) sale rung AT THE TILL never charges the
+  customer: the till sends `amount_paid = total` for every non-cash tender
+  (subsystem-retail.js ~8483), so `balance_due` is 0, nothing is owed, and
+- DAY-1b: the server records that "paid" amount as a CASH payment, so the
+  drawer expects money that never came in (cashier looks short by the sale).
+- DAY-1c: cash a customer pays on account at the till never reaches the
+  drawer's expected cash; `payments` has no link to the cash session, and the
+  X/Z query only counts sale payments. Books (GL Cash) and drawer disagree.
+- DAY-1d: `general_ledger.post_return` debits the whole settled refund to
+  Sales Returns; no part reverses Tax Payable. GL tax owed stays above the
+  tax report's own figure by the refunded tax.
+
+**Retail v43** adds one nullable column `payments.cash_session_id TEXT`
+(shape-gated, idempotent), stamped when a cash payment is taken while that
+till has an open drawer session; the drawer report adds non-sale cash
+received in that session. 1a/1b/1d need no schema. Plan: job f8252b48
+tmp/day/fix_plan.md. Already-posted return journals in existing test shops are
+NOT rewritten (no real shop has run v38+ books yet); recorded, not backfilled.
