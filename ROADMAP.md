@@ -6703,3 +6703,59 @@ replaced, or to a newer installation before the real computer checked in. This
 revision makes the per-licence unique index status-blind and indexes sync
 history for the new "activated after the id was already in history" guard.
 Plan: job 255fb8da tmp/sauth/fix_plan2_owner.md.
+
+## 2026-10-03 — S-AUTH CASHED IN (registry v10, retail v42 extension, Owner `5f2c8e1a9b37` + `7c41d2e9a0b5`), AUDIT-033 closed for authority events
+
+All three claims above are now delivered on `feat/retail-ux-p0` (code through
+894efb95, lab proof script 40040065). Four adversarial review rounds (V, V2/V3o/V3r,
+V4o/V4r) each found real gaps; every HIGH/CRITICAL one was fixed and its reviewer
+test turned red->green. Round-4 LOW items were fixed without a fifth review (owner
+decision 2026-10-03: no further review rounds for LOW findings; the reviewer tests
+are the proof).
+
+Measured on 894efb95:
+- Retail suite: 335/337 files pass. The other two (`retail_einvoicing_regression_test.py`,
+  `retail_sync_relay_url_validation_test.py`) fail ONLY because the developer
+  laptop has user-level `AURA_SYNC_RELAY_URL` / `AURA_OWNER_LICENSING_URL` set;
+  with every `AURA_*` variable removed they pass 28/28. Not an S-AUTH regression,
+  but a test-isolation gap (see residual R10).
+- Owner full suite 1417 pass; sync 49/49, identity 36/36, licensing 26/26.
+- Installer built from a `git archive` of 894efb95: the packaged exe, started
+  with no `AURA_*`/`OWNER_*` variables on a blank data dir, was ready in 5.45s,
+  served `GET /` 200, and migrated registry v0->v10 and retail v0->v42 with a
+  backup before each. Draft release `v1.0.0-rc.8-test-20261003`.
+- Real lab (Owner on HEAD code, two real tills, a freshly issued 2-device
+  licence, cloud relay): till A is main on both tills; the Owner DB pinned
+  exactly A's registry device id (`owner_installations.registry_device_id` ==
+  A's `/api/devices/me` id); a product made on A reached B; a cashier made on A
+  signed in on B with a real password (HTTP 200). Evidence:
+  `C:\Users\MSI\AuraLab\proof\sauth\result.md` + 15 screenshots.
+
+Residuals (written down, not fixed):
+- **R0 — the DENY half is proven in-process only, not on the real relay.** The
+  forged / insider event being parked, the 401, and the mutation red run exist in
+  `retail_s_insider_binding_multiprocess_test.py`, `retail_s_devices_twodevice_test.py`
+  and `retail_s_fresh_join_after_upgrade_test.py` (three real processes, real
+  HTTP), but the lab-rig version against the real Owner relay was not built.
+  `lab_sauth_proof.py` proves only the ALLOW half.
+- R1 — upgrade-window pin race, narrowed not closed: until the upgraded main
+  checks in with its registry id, another device on the same licence could pin
+  that id first. The app shell now checks in immediately at boot while
+  unattested (window: seconds, was up to 5 min), the history guard refuses an
+  id already seen in sync history, and the recovery is staff deactivating the
+  squatter (newest lease wins).
+- R2 — LAN-only shops (never reached the Owner) have no signed history to guard with.
+- R3 — storage for recoverable apply failures is bounded per signer (1000) and
+  permanent junk at 200; a determined insider can still fill those caps.
+- R4 — Arabic labels added in this wave need a native reader before release.
+- R5 — no Owner UI for the staff transfer of a pinned device id (CLI only).
+- R7 (from 2026-10-02) — `branch_code:<uid>` settings are still unsigned; this
+  still BLOCKS switching readable receipt numbers on for a real shop.
+- R8 — per-USER authority stays by design: a member till can still edit
+  non-owner staff.
+- R9 — Android signing uses the real Keystore path but was never run on a phone
+  (gradle unit tests only); the rc.8 lab APK at 894efb95 is built, not yet
+  installed/activated.
+- R10 — retail tests that read `AURA_*` from the environment must clear it
+  themselves (monkeypatch.delenv), so a developer's machine settings cannot make
+  them fail.
