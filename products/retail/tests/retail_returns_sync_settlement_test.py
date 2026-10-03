@@ -418,3 +418,46 @@ def test_second_return_after_sync_cannot_double_pay_tender():
         f"the remaining $50 of this return's value must be forgiven as AR "
         f"(balance_due_remaining 60 - 10 already forgiven = 50), got {d2['ar_forgiven_amount']}"
     )
+
+
+# ── 5. returns.tax_refunded travels both ways (DAY-1d review F1) ───────────
+
+def test_tax_refunded_is_emitted_and_applied_but_an_older_payload_leaves_null():
+    """The tax a return gave back is a business fact (the sending device's books
+    reversed exactly that much), unlike the device-local cash_session_id. Emit
+    side: the real create_return queues it in the 'return' payload. Apply side:
+    the real _apply_event writes it. An OLDER device's payload (no key) and an
+    explicit null both land NULL -- never 0, which would claim 'reversed no tax'
+    and stop the report falling back for that row."""
+    import json
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=16.0, stock=10)
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 2}], 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['tax_amount'] == 32.0, sale
+    r = _return(client, sale['id'], pid, quantity=1)
+    assert r.status_code == 200, r.get_json()
+    ret_id = r.get_json()['data']['id']
+    conn = get_retail_conn()
+    try:
+        uid = conn.execute("SELECT uid FROM returns WHERE id=?", (ret_id,)).fetchone()[0]
+        payload = json.loads(conn.execute(
+            "SELECT payload FROM sync_outbox WHERE entity_type='return' AND entity_id=?", (uid,)).fetchone()[0])
+    finally:
+        conn.close()
+    assert payload['tax_refunded'] == 16.0, payload
+
+    def stored(u):
+        c = get_retail_conn()
+        try:
+            return c.execute("SELECT tax_refunded FROM returns WHERE uid=?", (u,)).fetchone()[0]
+        finally:
+            c.close()
+
+    with_key = _apply_synced_return(cid, sale['id'], bid, {'tax_refunded': 7.25})
+    assert stored(with_key) == 7.25
+    absent = _apply_synced_return(cid, sale['id'], bid, {})
+    assert stored(absent) is None
+    explicit_null = _apply_synced_return(cid, sale['id'], bid, {'tax_refunded': None})
+    assert stored(explicit_null) is None

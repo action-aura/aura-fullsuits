@@ -2296,6 +2296,32 @@ def _migrate_retail_schema(conn):
     # them, so it is correct whether they exist yet or not. See the
     # RETAIL_SCHEMA_VERSION v43 comment above.
     _migrate_add_payment_cash_session(conn)
+    # v43 EXTENSION (DAY-1d review F1; v43 is unreleased so it is extended, not
+    # re-versioned): `returns.tax_refunded`. Also re-run on every boot by
+    # init_retail (below), because a database that already reached v43 before
+    # this column existed never re-enters this chain.
+    _migrate_add_return_tax_refunded(conn)
+
+
+def _migrate_add_return_tax_refunded(conn):
+    """v43 extension (DAY-1d review F1): the nullable `returns.tax_refunded
+    REAL` -- the ONE stored figure for the tax a return gives back, written by
+    create_return from each line's snapshotted rate and read by BOTH the
+    general ledger (post_return) and the tax report (metrics.refunded_tax), so
+    the two can no longer disagree. No backfill: a return made before the
+    column existed keeps NULL and the report falls back to its old formula for
+    exactly those rows.
+
+    Idempotent and shape-gated like every step here: skipped when `returns`
+    does not exist yet or the column is already there. Never an unconditional
+    ALTER."""
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'returns' not in tables:
+        return
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(returns)').fetchall()}
+    if 'tax_refunded' not in cols:
+        conn.execute('ALTER TABLE returns ADD COLUMN tax_refunded REAL')
 
 
 def _migrate_add_payment_cash_session(conn):
@@ -7783,6 +7809,14 @@ def _init_retail(conn):
         conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, _migrate_retail_schema,
         backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
     )
+
+    # v43 extension (DAY-1d review F1), NOT version-gated: a database that
+    # reached v43 BEFORE `returns.tax_refunded` existed never re-enters the
+    # chain (the version gate sees 43 == 43), so the same shape-gated,
+    # idempotent step is run here on every boot -- the way v16/v42
+    # reconciliations below are. A no-op in one PRAGMA when the column exists.
+    _migrate_add_return_tax_refunded(conn)
+    conn.commit()
 
     # NOT version-gated, and deliberately outside the block above: this is a
     # boot-time reconciliation, not a one-time migration step, and it must

@@ -1790,7 +1790,7 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
 
 def post_return(conn, cid, branch_id, return_id, return_number, currency,
                  tender_refund_amount, ar_credit_amount, business_date=None,
-                 posted_by=None, return_tax_amount=0, return_gross_amount=0):
+                 posted_by=None, tax_refunded=0):
     """Cr Cash (cash physically refunded) + Cr Accounts Receivable
     (`ar_forgiven_amount + store_credit_amount` combined -- both are, in
     `_adjust_credit` terms, the SAME `-amount` adjustment to
@@ -1818,15 +1818,18 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     Tax Payable for the tax it collected; a refund is tax-inclusive, so
     debiting ALL of it to Sales Returns left Tax Payable overstated by the tax
     inside every refund and revenue understated by the same amount (measured
-    in the day-in-shop run: GL Tax Payable did not equal the tax report, which
-    nets returns through `metrics.refunded_tax`). `return_tax_amount` /
-    `return_gross_amount` are that SAME figure and the refund it sits inside
-    (the caller derives them with metrics.refunded_tax's own rule, so the
-    books and the tax report share one basis, not two). The settled amount is
-    split pro rata: Dr Tax Payable `settled * tax / gross`, Dr Sales Returns
-    the rest. Both debits sum to `settled`, so the journal still balances by
-    construction. A return with no tax (or no gross) splits nothing. Journals
-    already posted are NOT rewritten.
+    in the day-in-shop run).
+
+    DAY-1d review F1 -- ONE STORED FIGURE. `tax_refunded` is `returns.
+    tax_refunded`, decided once by create_return from the sale lines'
+    snapshotted rates and capped at what this return settles; this function
+    does NOT derive a ratio of its own (the first cut did, and disagreed with
+    the tax report for mixed-rate baskets and points-paid sales). The tax
+    report reads the same stored column, so the books and the report cannot
+    drift. Dr Tax Payable `tax_refunded`, Dr Sales Returns `settled -
+    tax_refunded`: both debits sum to `settled`, so the journal balances by
+    construction. A return with no tax splits nothing. Journals already posted
+    are NOT rewritten.
     """
     settled = Decimal('0')
     lines = []
@@ -1846,13 +1849,10 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
         # this case, so the GL agreeing by posting nothing is the two
         # ledgers staying in sync, not a gap.
         return None
-    tax_part = Decimal('0')
-    if return_tax_amount and return_gross_amount and return_gross_amount > 0:
-        quant = currency_quantum(currency or DEFAULT_BASE_CURRENCY)
-        tax_part = (settled * Decimal(str(return_tax_amount))
-                    / Decimal(str(return_gross_amount))).quantize(quant, rounding=ROUND_HALF_UP)
-        # Never more than was settled (float noise at the edges), never negative.
-        tax_part = max(Decimal('0'), min(tax_part, settled))
+    quant = currency_quantum(currency or DEFAULT_BASE_CURRENCY)
+    # Defensive only: the caller already capped it at `settled`.
+    tax_part = max(Decimal('0'), min(
+        Decimal(str(tax_refunded or 0)).quantize(quant, rounding=ROUND_HALF_UP), settled))
     if tax_part > 0:
         lines.append({'account_code': ACCOUNT_TAX_PAYABLE, 'debit': tax_part,
                        'memo': f'Tax on return {return_number}'})

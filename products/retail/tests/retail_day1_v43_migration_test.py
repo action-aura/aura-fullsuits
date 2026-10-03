@@ -56,6 +56,10 @@ def _cols(conn):
     return {r[1] for r in conn.execute('PRAGMA table_info(payments)').fetchall()}
 
 
+def _rcols(conn):
+    return {r[1] for r in conn.execute('PRAGMA table_info(returns)').fetchall()}
+
+
 def _make_v42(db, with_lazy_columns):
     conn = _open(db)
     try:
@@ -65,10 +69,15 @@ def _make_v42(db, with_lazy_columns):
                     conn.execute(f'ALTER TABLE payments ADD COLUMN {col} {decl}')
         if 'cash_session_id' in _cols(conn):
             conn.execute('ALTER TABLE payments DROP COLUMN cash_session_id')
+        # DAY-1d review F1: the v43 extension's column is absent from a v42 DB too.
+        if 'tax_refunded' in _rcols(conn):
+            conn.execute('ALTER TABLE returns DROP COLUMN tax_refunded')
         conn.execute("INSERT INTO payments (company_id, method, amount) VALUES (1, 'cash', 5.0)")
+        conn.execute("INSERT INTO returns (company_id, return_number, refund_amount) VALUES (1, 'RET-OLD', 7.0)")
         conn.execute('PRAGMA user_version = 42')
         conn.commit()
         assert 'cash_session_id' not in _cols(conn), 'precondition: this is a v42-shaped payments table'
+        assert 'tax_refunded' not in _rcols(conn), 'precondition: no returns.tax_refunded yet'
     finally:
         conn.close()
 
@@ -93,6 +102,9 @@ def _check(sch, db):
         assert 'cash_session_id' in _cols(conn)
         row = conn.execute('SELECT amount, cash_session_id FROM payments').fetchone()
         assert row['amount'] == 5.0 and row['cash_session_id'] is None, 'existing rows keep their data and get NULL'
+        assert 'tax_refunded' in _rcols(conn)
+        old = conn.execute("SELECT refund_amount, tax_refunded FROM returns WHERE return_number='RET-OLD'").fetchone()
+        assert old['refund_amount'] == 7.0 and old['tax_refunded'] is None,             'a pre-existing return keeps its data and gets NULL (the report falls back for it)'
     finally:
         conn.close()
 
@@ -134,3 +146,29 @@ def test_a_database_with_no_payments_table_is_left_alone():
     sch._migrate_add_payment_cash_session(conn)          # must not raise
     assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='payments'").fetchone()[0] == 0
     conn.close()
+
+
+def test_a_database_already_at_v43_without_returns_tax_refunded_gains_it_on_boot():
+    """DAY-1d review F1: the v43 extension. A database that reached v43 BEFORE
+    the column existed has user_version == 43, so ensure_schema_version's fast
+    path never re-enters the chain -- init_retail's boot step must add it."""
+    sch, db = _install()
+    conn = _open(db)
+    try:
+        conn.execute('ALTER TABLE returns DROP COLUMN tax_refunded')
+        conn.execute('PRAGMA user_version = 43')
+        conn.commit()
+        assert 'tax_refunded' not in _rcols(conn)
+    finally:
+        conn.close()
+    sch.init_retail()
+    conn = _open(db)
+    try:
+        assert 'tax_refunded' in _rcols(conn)
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 43
+        assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        before = _rcols(conn)
+        sch._migrate_add_return_tax_refunded(conn)       # replay: no-op
+        assert _rcols(conn) == before
+    finally:
+        conn.close()

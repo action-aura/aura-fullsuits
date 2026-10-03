@@ -1080,40 +1080,42 @@ def gross_tax(conn, cid, period, branch_id=None, currency=None):
 
 
 def refunded_tax(conn, cid, period, branch_id=None, currency=None):
-    """The tax inside this period's refunds, apportioned on the returned
-    VALUE against the original sale's own figures.
+    """The tax inside this period's refunds: SUM(returns.tax_refunded), the
+    ONE figure create_return stores per return and general_ledger.post_return
+    books, so this report and the books cannot disagree (DAY-1d review F1).
 
-    IT HAS TO BE DERIVED. `return_items` carries quantity, unit_price and
-    line_total and NO tax column (schema.py), so the tax inside a refund is
-    not stored anywhere and cannot simply be summed.
+    That stored figure is line-exact (each returned line's tax from the
+    sale_items.tax_rate SNAPSHOTTED at sale time -- not products.tax_rate as
+    it stands now, so a later rate change does not restate history), capped by
+    what the sale actually collected and by what the return settled, and the
+    return that completes a sale takes the exact remainder.
 
-    THE BASIS, because this is a real decision and not an obvious one:
+    FALLBACK for rows with tax_refunded NULL (returns made before v43's
+    extension added the column; nothing can be reconstructed for them): the
+    old value-basis rule
 
         return_tax = refund_amount * (sales.tax_amount / sales.total)
 
-    That rule is not invented here. It is the SAME proportional-on-returned-
-    value rule create_return already applies to its loyalty reversal
-    ("Settled PROPORTIONALLY on the returned VALUE ... against the ORIGINAL
-    sale's `total`"), reused rather than a second basis nobody reconciles
-    with the first. Both inputs are immutable columns on the sale, so the
-    figure is stable however long after the sale the return happens -- which
-    the obvious alternative is not: deriving it line-exactly would read
-    `products.tax_rate` AS IT STANDS NOW, and a rate changed after the sale
-    would silently restate history. That is the same stale-rate trap this
-    module's own KNOWN GAP section documents for `cost_price`.
+    on immutable sale columns -- the same proportional rule create_return's
+    loyalty reversal uses. Its limit: for a mixed-rate sale of which only some
+    lines came back it can differ from a line-exact figure; that is why new
+    returns no longer use it. A database without the column at all (a
+    hand-built fixture) is treated as all-NULL.
 
-    ITS LIMIT, stated rather than left to be found: for a sale whose lines
-    carry DIFFERENT tax rates and of which only SOME come back, apportioning
-    by value can differ from a line-exact computation. Value-basis on
-    immutable columns is still the more defensible of the two.
-
-    `s.total > 0` guards the division: a zero-value sale has no tax to
-    apportion, and a degenerate row must not make the whole report 500.
+    `s.total > 0` guards the fallback division: a zero-value sale has no tax
+    to apportion, and a degenerate row must not make the whole report 500.
     """
     where, params = _scope(cid, period, business_day(conn, cid), branch_id, alias='r')
+    try:
+        has_col = any(row[1] == 'tax_refunded'
+                      for row in conn.execute('PRAGMA table_info(returns)').fetchall())
+    except sqlite3.Error:
+        has_col = False
+    stored = "r.tax_refunded" if has_col else "NULL"
     rows = _returns_query(conn, f"""
         SELECT COALESCE(SUM(
-            r.refund_amount * CASE WHEN s.total > 0 THEN s.tax_amount / s.total ELSE 0 END
+            COALESCE({stored},
+                     r.refund_amount * CASE WHEN s.total > 0 THEN s.tax_amount / s.total ELSE 0 END)
         ), 0)
         FROM returns r JOIN sales s ON s.id = r.sale_id
         WHERE {where}""", params)

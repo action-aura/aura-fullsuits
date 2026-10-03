@@ -3130,19 +3130,27 @@ class SyncService:
             _store_credit_amount = p.get("store_credit_amount")
             if _store_credit_amount is None:
                 _store_credit_amount = 0
+            # DAY-1d review F1: the tax this return gave back is a business
+            # fact (the sending device's books reversed exactly this much), so
+            # it travels. An OLDER device's payload has no key: NULL, which the
+            # tax report treats as "pre-v43 row" and falls back for. An explicit
+            # null is the same NULL, never coerced to 0 (0 would claim "this
+            # return reversed no tax").
+            _tax_refunded = p.get("tax_refunded")
             try:
                 conn.execute(
                     "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
                     "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
                     "uid, actor_user_uid, terminal_id, created_at_utc, "
-                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?) "
+                    "tender_refund_amount, ar_forgiven_amount, store_credit_amount, tax_refunded) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
                      p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
                      p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
                      p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc"),
-                     _tender_refund_amount, _ar_forgiven_amount, _store_credit_amount),
+                     _tender_refund_amount, _ar_forgiven_amount, _store_credit_amount,
+                     _tax_refunded),
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34) -- identical

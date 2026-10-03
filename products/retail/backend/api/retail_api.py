@@ -8980,6 +8980,50 @@ def create_return():
             refund, tender_available, refund_method,
             balance_due_remaining, current_balance, bool(sale['customer_id']), currency)
 
+        # DAY-1d review F1 -- THE ONE STORED, LINE-EXACT REVERSED-TAX FIGURE.
+        # The tax this return gives back is decided HERE, once, and stored in
+        # returns.tax_refunded; post_return (the books) and metrics.refunded_tax
+        # (the tax report) both read that stored figure, so they cannot disagree.
+        # The first DAY-1d cut had three formulas (a refund/total ratio here, a
+        # settled/gross ratio in post_return, the ratio on the full refund in
+        # metrics): wrong for a mixed-rate basket (returning the only taxed line
+        # reversed a pro-rata share of the tax of a line it did not touch),
+        # divergent when settled < refund (points-paid sales), and over-reversing
+        # through per-return rounding (ten single-unit returns reversed more tax
+        # than the sale ever collected).
+        #   line-exact : sum of resolved_items[*].tax_amount, each computed above
+        #                from the sale line's SNAPSHOTTED sale_items.tax_rate;
+        #   remainder  : prior = tax already reversed by this sale's earlier
+        #                returns (NULL = 0); remaining = sale.tax - prior, never < 0;
+        #   completing return : the return that brings every line to fully
+        #                returned takes exactly `remaining`, so rounding residue
+        #                can neither strand tax nor over-reverse it;
+        #   otherwise  : min(line-exact, remaining);
+        #   never more than `settled` (tender + AR credit) -- the amount
+        #                post_return actually books, so the journal balances.
+        _tq = tax_engine.currency_quantum(currency)
+        _prior_tax = float(cur.execute(
+            "SELECT COALESCE(SUM(COALESCE(tax_refunded,0)),0) FROM returns "
+            "WHERE sale_id=? AND company_id=? AND status='completed'",
+            (sale_id, cid)).fetchone()[0] or 0)
+        _tax_remaining = max(Decimal(str(sale['tax_amount'] or 0)) - Decimal(str(_prior_tax)), Decimal('0'))
+        _sold_qty = Decimal(str(cur.execute(
+            "SELECT COALESCE(SUM(quantity),0) FROM sale_items WHERE sale_id=?",
+            (sale_id,)).fetchone()[0] or 0))
+        _back_qty = Decimal(str(cur.execute(
+            "SELECT COALESCE(SUM(ri.quantity),0) FROM return_items ri "
+            "JOIN returns r ON ri.return_id = r.id WHERE r.sale_id=? AND r.company_id=?",
+            (sale_id, cid)).fetchone()[0] or 0)) + sum(
+            (Decimal(str(i['quantity'])) for i in resolved_items), Decimal('0'))
+        _line_tax = sum((Decimal(str(i['tax_amount'])) for i in resolved_items), Decimal('0'))
+        if _back_qty >= _sold_qty - Decimal('0.0001'):
+            _tax_part = _tax_remaining
+        else:
+            _tax_part = min(_line_tax, _tax_remaining)
+        _settled_total = Decimal(str(tender_refund)) + Decimal(str(ar_forgiven + store_credit))
+        return_tax_refunded = float(max(
+            min(_tax_part, _settled_total), Decimal('0')).quantize(_tq, rounding=ROUND_HALF_UP))
+
         # Defensive, matches this file's "loud refusal beats a silent wrong
         # number" convention (the modifiers ambiguous-line refusal a few
         # hundred lines above).
@@ -9076,12 +9120,14 @@ def create_return():
                                  reason,refund_method,refund_amount,
                                  tender_refund_amount,ar_forgiven_amount,store_credit_amount,
                                  status,idempotency_key,created_at,
-                                 session_id,uid,actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?)
+                                 session_id,uid,actor_user_uid,terminal_id,created_at_utc,
+                                 tax_refunded)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
               data.get('reason','Customer return'), refund_method, refund,
               tender_refund, ar_forgiven, store_credit, idem, now_local,
-              cash_session_id, ret_uid, actor, terminal, utc_now))
+              cash_session_id, ret_uid, actor, terminal, utc_now,
+              return_tax_refunded))
         ret_id = cur.lastrowid
 
         # ── Phase 5 sync emission: the return itself ─────────────────────────
@@ -9102,6 +9148,10 @@ def create_return():
             # void_payment's AUDIT-032A comment.
             'tender_refund_amount': tender_refund, 'ar_forgiven_amount': ar_forgiven,
             'store_credit_amount': store_credit,
+            # DAY-1d review F1: a business fact (the tax the books reversed),
+            # unlike cash_session_id -- the receiving device's tax report must
+            # read the same figure this device's books did.
+            'tax_refunded': return_tax_refunded,
             'status': 'completed', 'created_at': now_local,
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
         })
@@ -9368,15 +9418,11 @@ def create_return():
         # (core/retail/general_ledger.py) for why the debit is derived from
         # the credits rather than from `refund` itself.
         #
-        # DAY-1d: the tax inside this refund, by metrics.refunded_tax's OWN
-        # rule (refund * sale.tax_amount / sale.total, both immutable sale
-        # columns) so the books and the tax report share one basis. post_return
-        # splits the settled amount into Dr Tax Payable / Dr Sales Returns.
-        _sale_total = float(sale['total'] or 0)
-        _return_tax = (refund * float(sale['tax_amount'] or 0) / _sale_total) if _sale_total > 0 else 0.0
+        # DAY-1d review F1: post_return takes the STORED tax figure
+        # (returns.tax_refunded, decided above) -- no ratio is recomputed.
         gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
                         tender_refund, ar_forgiven + store_credit,
-                        return_tax_amount=_return_tax, return_gross_amount=refund)
+                        tax_refunded=return_tax_refunded)
 
         # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
         # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost
