@@ -18842,6 +18842,24 @@ def void_payment(pid):
                                     'screen (bounce, cancel or reinstate the cheque) instead.',
                          'code': 'CHEQUE_PAYMENT_NOT_VOIDABLE'}), 409
 
+    # DAY-1 review F3: customer cash is stamped with the drawer that took it
+    # (payments.cash_session_id, DAY-1c) and the drawer's X/Z figure is
+    # RECOMPUTED from active payments. Voiding the row after that drawer was
+    # CLOSED would silently move a closed, counted, signed-off report away from
+    # the count stored at close (measured: stored 120.000, report 100.000
+    # after the void). A closed drawer is history -- the honest correction is
+    # a refund or a paid-out in the CURRENT drawer. Open drawer: void allowed
+    # (the report drops it, which is right). Unstamped (back-office): as before.
+    _stamped = p['cash_session_id'] if 'cash_session_id' in p.keys() else None
+    if _stamped:
+        _sess = conn.execute("SELECT status FROM cash_sessions WHERE id=?", (_stamped,)).fetchone()
+        if _sess and (_sess['status'] or '') == 'closed':
+            conn.close()
+            return jsonify({'status': 'error',
+                             'message': 'This cash was counted in a drawer that is already closed. '
+                                        'Record a refund or paid-out instead.',
+                             'code': 'PAYMENT_IN_CLOSED_DRAWER'}), 409
+
     # AUDIT: the authority to reverse must equal the authority to create --
     # the same principle retail.discount is enforced under in create_sale
     # and update_customer above. The decorator above this handler is only

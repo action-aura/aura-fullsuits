@@ -205,3 +205,31 @@ def test_customer_cash_payment_is_not_synced_with_a_session_id():
     rec = inspect.getsource(retail_api._record_payment)
     payload = rec[rec.index("_queue_sync_event(conn, 'payment'"):]
     assert 'cash_session_id' not in payload, 'the payment sync payload must not carry the session id'
+
+
+def _the_payment_id(cust):
+    return _count("SELECT id FROM payments WHERE party_id=? AND method='cash' AND direction='in'", (cust,))
+
+
+def test_voiding_customer_cash_in_an_open_drawer_is_allowed_and_drops_it_from_the_report(client):
+    """DAY-1 review F3, allow half: the deny rule is only for a CLOSED drawer.
+    An open drawer's report is live, so the void is a correction and the
+    report simply stops counting the cash."""
+    pid = _product(client, 100.0)
+    cust = _owing_customer(client, pid)
+    sid = _open(client, 100.0)
+    assert _pay(client, cust, 20.0).status_code == 200
+    assert _x(client, sid)['expected_cash'] == 120.0
+    v = client.post(f'{API}/payments/{_the_payment_id(cust)}/void', json={'reason': 'typo'})
+    assert v.status_code == 200, v.get_json()
+    assert _x(client, sid)['expected_cash'] == 100.0
+
+
+def test_voiding_unstamped_back_office_cash_is_still_allowed(client):
+    """F3, allow half: cash taken with NO drawer open carries no session id and
+    sits in no drawer report -- voiding it is untouched by the closed-drawer rule."""
+    pid = _product(client, 100.0)
+    cust = _owing_customer(client, pid)
+    assert _pay(client, cust, 10.0).status_code == 200
+    v = client.post(f'{API}/payments/{_the_payment_id(cust)}/void', json={'reason': 'typo'})
+    assert v.status_code == 200, v.get_json()
