@@ -7845,8 +7845,12 @@ def create_sale():
             # frontend decision (_receiptIdentityBlock in
             # subsystem-retail.js), not something this endpoint pre-filters.
             'employee_name': employee_name, 'customer_id': customer_id, 'customer_name': customer_name,
-            'tenders': _sale_tender_lines(conn, cid, sale_id),
         }
+        if split_tenders:
+            # Only a sale paid in parts carries `tenders`: every other sale's
+            # response stays byte-for-byte what it was (several regression
+            # tests pin that exact key set, and a single tender needs no list).
+            response_data['tenders'] = _sale_tender_lines(conn, cid, sale_id)
         if quotation_id:
             # (d)/(g): every line where quoted and live differed, and which
             # side won. C8: this is NOT the conversion sheet's source of
@@ -8416,11 +8420,14 @@ def get_sale(sale_id):
         FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
         WHERE si.sale_id=?
     """, (sale_id,)).fetchall()
-    tender_lines = _sale_tender_lines(conn, cid, sale_id)
+    # Split-tender sales only (see create_sale's response): receipts and the
+    # returns picker need the per-tender lines; nothing else changes shape.
+    tender_lines = _sale_tender_lines(conn, cid, sale_id) if sale['payment_method'] == 'split' else None
     conn.close()
 
     payload = dict(sale)
-    payload['tenders'] = tender_lines
+    if tender_lines is not None:
+        payload['tenders'] = tender_lines
     actor_uid = payload.get('actor_user_uid')
     identity = _resolve_actor_identities(cid, [actor_uid]).get(actor_uid, _UNRESOLVED_IDENTITY)
     # Android reads the two raw columns (it distinguishes "account deleted

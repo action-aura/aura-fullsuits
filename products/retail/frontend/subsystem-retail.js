@@ -9665,6 +9665,12 @@ const RetailSystem = {
     // that has never opened this setting prints exactly what it always has.
     const rt = this._receiptTranslator(branding.branding_receipt_language);
     const identityBlock = this._receiptIdentityBlock(branding, saleData, rt);
+    // Split tender: one line per tender instead of the single "Paid" line ('' for
+    // an ordinary sale, which then prints "Paid" exactly as before).
+    const printTenderRows = this._receiptTenderRows(saleData, rt);
+    const printTenderHtml = printTenderRows
+      ? printTenderRows.map(r => '<div class="rcpt-line"><span>' + this._esc(r.label) + '</span><span>' + this._fmt(r.amount) + '</span></div>').join('')
+      : '';
     // EVERY LABEL BELOW MUST BE WRAPPED IN rt() BY HAND, and that is not the
     // usual rule in this file. AuraI18n.apply() translates by sweeping the
     // TEXT NODES of `document.body` and re-sweeping additions through a
@@ -9711,12 +9717,7 @@ const RetailSystem = {
       ${printDiscBreakdown.discount > printHalfMinorUnit ? `<div class="rcpt-line"><span>${rt('Discount')}</span><span>-${this._fmt(printDiscBreakdown.discount)}</span></div>` : ''}
       ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
       <div class="rcpt-line rcpt-bold"><span>${rt('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
-      ${(() => {
-        const tenderRows = this._receiptTenderRows(saleData, rt);
-        return tenderRows
-          ? tenderRows.map(r => `<div class="rcpt-line"><span>${this._esc(r.label)}</span><span>${this._fmt(r.amount)}</span></div>`).join('')
-          : `<div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>`;
-      })()}
+      ${printTenderHtml || `<div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>`}
       ${saleData.change > 0 ? `<div class="rcpt-line"><span>${rt('Change due')}</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
       <div class="rcpt-center">${rt('Thank you')}</div>
