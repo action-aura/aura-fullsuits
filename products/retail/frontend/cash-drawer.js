@@ -595,6 +595,7 @@ const CashDrawer = {
     return `
       <div class="cd-report-row"><span>${t('Opening float')}</span><b>${this._money(r.opening_float)}</b></div>
       <div class="cd-report-row"><span>${t('Cash sales')}</span><b>${this._money(r.cash_sales)}</b></div>
+      <div class="cd-report-row"><span>${t('Customer payments (cash)')}</span><b>${this._money(r.customer_cash_in || 0)}</b></div>
       <div class="cd-report-row"><span>${t('Cash refunds')}</span><b>${this._money(-Math.abs(Number(r.cash_refunds) || 0))}</b></div>
       <div class="cd-report-row"><span>${t('Float in')}</span><b>${this._money(r.movements.float_in)}</b></div>
       <div class="cd-report-row"><span>${t('Float out')}</span><b>${this._money(-Math.abs(Number(r.movements.float_out) || 0))}</b></div>

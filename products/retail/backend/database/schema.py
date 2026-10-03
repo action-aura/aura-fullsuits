@@ -1143,7 +1143,21 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # commercial_runtime/sync/sync_service.py, a separate crew's file. A v41
 # peer parks every v42 event through the schema-skew guard, so a shop's
 # tills must upgrade together.
-RETAIL_SCHEMA_VERSION = 42
+#
+# v43 (2026-10-03, DAY-1c -- A CUSTOMER'S CASH PAID ON ACCOUNT REACHES THE
+# DRAWER). One nullable column, `payments.cash_session_id TEXT`, no backfill.
+# The drawer's expected cash summed only `related_type='sale'` payments, so a
+# customer who walked up and paid 20.000 off their account at the till put
+# real banknotes in the drawer that no X/Z figure counted -- the count came
+# out 20.000 OVER with nothing to explain it (measured in the day-in-shop
+# run). The column stamps which cash session took the money, at write time,
+# by the same terminal-scoped resolver the sale path uses
+# (`_open_cash_session_id`); a payment taken with no drawer open stays NULL
+# (a back-office receipt, correctly in no drawer). It is DEVICE-LOCAL: a
+# session id means nothing on another till, so the sync payload for a
+# `payment` event does not carry it and the apply side never writes it.
+# See `_migrate_add_payment_cash_session` for the exact guard.
+RETAIL_SCHEMA_VERSION = 43
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2274,6 +2288,35 @@ def _migrate_retail_schema(conn):
     # database that already reached v42 before this fix gets it the next time
     # the chain re-runs (until then SyncService uses its old-shape fallback).
     _migrate_quarantine_auth_key(conn)
+    # v42 -> v43 (DAY-1c): appended LAST, same convention as every step above
+    # except v37 itself. One ADD COLUMN on `payments`, PRAGMA-gated, so a
+    # replay of the whole chain is a no-op. Independent of the lazy
+    # `payments` columns retail_api's `_ensure_credit_schema` adds at runtime
+    # (party_type, related_type, ...): it neither reads nor needs any of
+    # them, so it is correct whether they exist yet or not. See the
+    # RETAIL_SCHEMA_VERSION v43 comment above.
+    _migrate_add_payment_cash_session(conn)
+
+
+def _migrate_add_payment_cash_session(conn):
+    """One-time migration (schema v42 -> v43, DAY-1c): adds the nullable
+    `payments.cash_session_id TEXT`, the drawer session that physically took a
+    customer's cash payment. No backfill: a payment taken before this column
+    existed cannot be attributed to a drawer after the fact (a time-range guess
+    is exactly what the `sales.session_id` FK stamp exists to avoid), so
+    history keeps NULL and the X/Z report simply does not count it -- the same
+    answer it gave before.
+
+    Idempotent and shape-gated: skipped when `payments` does not exist yet
+    (nothing to alter) or the column is already there. Never an unconditional
+    ALTER."""
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'payments' not in tables:
+        return
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(payments)').fetchall()}
+    if 'cash_session_id' not in cols:
+        conn.execute('ALTER TABLE payments ADD COLUMN cash_session_id TEXT')
 
 
 def _migrate_quarantine_auth_key(conn):

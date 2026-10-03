@@ -1134,6 +1134,21 @@ EXCLUSIONS = {
                      "something this file adds unilaterally to only the send "
                      "side while sync_service.py is owned and actively edited "
                      "elsewhere.",
+        'cash_session_id': "DEVICE-LOCAL BY DESIGN (schema v43, DAY-1c): which "
+                           "cash drawer on THIS till physically took a "
+                           "customer's cash. A cash_sessions id means nothing "
+                           "on another till -- sessions are per terminal, and "
+                           "stamping a peer's payment with a session it never "
+                           "opened is exactly the cross-till contamination "
+                           "_open_cash_session_id's terminal predicate exists "
+                           "to prevent (a phone's takings landing in the "
+                           "desktop's Z report). The money fact itself "
+                           "(amount, method, direction) converges through the "
+                           "payload as before; only the drawer attribution "
+                           "stays local. Proven, not asserted: "
+                           "retail_day1_customer_cash_drawer_test.py reads the "
+                           "payload dict and the sync apply source and fails "
+                           "if either mentions the column.",
     },
     # reorder_requests joined this ratchet 2026-09-22 (SECOND-SHAPE WIDENING
     # -- see this module's docstring). All three exclusions below were

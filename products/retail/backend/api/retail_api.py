@@ -1146,6 +1146,28 @@ def _open_cash_session_id(conn, cid, bid, terminal=_UNSET):
     except Exception:
         return None
 
+def _this_terminal_open_session_id(conn, cid):
+    """DAY-1c: the OPEN cash_sessions row THIS terminal holds, in any branch,
+    or None. `_open_cash_session_id` needs a branch id, which a back-office
+    style money route (a customer paying off their account) does not carry --
+    and guessing `_default_branch` there would miss a till whose drawer was
+    opened in another branch. The terminal predicate is the part that matters
+    (see `_open_cash_session_id`'s Phase-4 comment: "any open session in the
+    branch" is how a phone's takings landed in the desktop's Z report), so
+    this keeps it and drops only the branch. A terminal holds one open drawer
+    at a time. Never raises; None means "no drawer open here", which is the
+    correct answer for a payment taken with the drawer closed."""
+    try:
+        row = conn.execute(
+            "SELECT id FROM cash_sessions "
+            f"WHERE company_id=? AND {_TERMINAL_IS} AND status='open' "
+            "ORDER BY opened_at DESC LIMIT 1",
+            (cid, _this_terminal())
+        ).fetchone()
+        return row['id'] if row else None
+    except Exception:
+        return None
+
 def _audit(conn, action, entity, entity_id, details=''):
     try:
         conn.execute(
@@ -10185,7 +10207,7 @@ def _cash_session_report(conn, cid, sess):
     session between "compute expected" and "lock the session").
 
     expected_cash = opening_float
-                    + cash_sales - cash_refunds
+                    + cash_sales + customer_cash_in - cash_refunds
                     + float_in - float_out + paid_in - paid_out
 
     cash_sales is read from the SAME unified `payments` ledger daily_cash()
@@ -10216,6 +10238,13 @@ def _cash_session_report(conn, cid, sess):
     used to pay a delivery driver COD) really does leave the drawer, and
     omitting it from the math would leave a permanent phantom variance at
     close for any install that actually uses that movement type.
+
+    customer_cash_in (DAY-1c) is cash a customer paid on their account while
+    this drawer was open (payments.cash_session_id, stamped by
+    _record_payment; direction='in', method='cash', not a sale's own payment).
+    cash_sales never saw it because it is not a sale, yet the notes are in the
+    drawer. Cash paid OUT to suppliers from a till is NOT here yet (known
+    residual) -- use paid_out for it.
     """
     session_id = sess['id']
     bid = sess['branch_id']
@@ -10234,6 +10263,19 @@ def _cash_session_report(conn, cid, sess):
           AND p.direction='in' AND p.method='cash' AND p.related_type='sale'
           AND COALESCE(p.status,'active')='active'
     """, (cid, bid, session_id)).fetchone()[0]
+
+    # DAY-1c: cash a CUSTOMER handed over to pay down their account while
+    # this drawer was open. Not a sale (related_type != 'sale'), so cash_sales
+    # above never saw it, yet the notes are physically in the drawer -- the
+    # count came out over by exactly this with nothing to explain it.
+    # Stamped at write time by _record_payment (payments.cash_session_id).
+    customer_cash_in = conn.execute("""
+        SELECT COALESCE(SUM(amount),0) FROM payments
+        WHERE company_id=? AND cash_session_id=?
+          AND direction='in' AND method='cash'
+          AND COALESCE(related_type,'') != 'sale'
+          AND COALESCE(status,'active')='active'
+    """, (cid, session_id)).fetchone()[0]
 
     # DEFECT 1 fix: `tender_refund_amount`, NOT `refund_amount`. `refund_
     # amount` is the full recomputed VALUE of the goods returned (correct,
@@ -10269,7 +10311,7 @@ def _cash_session_report(conn, cid, sess):
     # differences are noise.
     currency = _company_currency(conn, cid)
     expected = _money(
-        opening_float + cash_sales - cash_refunds
+        opening_float + cash_sales + customer_cash_in - cash_refunds
         + movements['float_in'] - movements['float_out']
         + movements['paid_in'] - movements['paid_out'],
         currency,
@@ -10326,6 +10368,7 @@ def _cash_session_report(conn, cid, sess):
         'is_this_terminal': (session_terminal == _this_terminal()),
         'opening_float': opening_float,
         'cash_sales': _money(cash_sales, currency),
+        'customer_cash_in': _money(customer_cash_in, currency),
         'cash_refunds': _money(cash_refunds, currency),
         'movements': {k: _money(v, currency) for k, v in movements.items()},
         'expected_cash': expected,
@@ -13120,13 +13163,25 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     created_by = _uid()
     created_at = _now()
     sale_id_fk = related_id if related_type == 'sale' else None
+    # DAY-1c: a customer's CASH paid on account physically lands in the drawer
+    # of the till that took it, but the X/Z report only ever summed
+    # related_type='sale' payments, so that cash was an unexplained overage at
+    # close. Stamp the session that took it, by the same terminal-scoped
+    # resolver the sale path uses. A sale's own payment is excluded (its
+    # session rides on sales.session_id), and no open drawer -> NULL: a
+    # back-office receipt is correctly in no drawer. Device-local on purpose:
+    # NOT in the sync payload below, NOT written by the apply side.
+    cash_session_id = None
+    if method == 'cash' and direction == 'in' and related_type != 'sale':
+        cash_session_id = _this_terminal_open_session_id(conn, cid)
     conn.execute("""INSERT INTO payments
         (company_id,reference,party_type,party_id,direction,amount,currency,fx_rate,method,
-         related_type,related_id,sale_id,notes,status,created_by,device,created_at,uid)
-        VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?, ?)""",
+         related_type,related_id,sale_id,notes,status,created_by,device,created_at,uid,
+         cash_session_id)
+        VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?, ?, ?)""",
         (cid, ref, party_type, party_id, direction, amt, cur, method,
          related_type, related_id, sale_id_fk,
-         notes, created_by, device, created_at, pay_uid))
+         notes, created_by, device, created_at, pay_uid, cash_session_id))
 
     # ── Phase 5 sync emission: the payment itself ────────────────────────────
     # ONE funnel, every money movement (see this function's own comment
