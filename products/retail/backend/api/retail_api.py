@@ -8600,7 +8600,7 @@ def create_return():
         # comment for the full defect.
         sale = cur.execute(
             "SELECT id, uid, branch_id, customer_id, total, amount_paid, payment_method, "
-            "points_redeemed_amount "
+            "points_redeemed_amount, tax_amount "
             "FROM sales WHERE id=? AND company_id=?",
             (sale_id, cid)
         ).fetchone()
@@ -9367,8 +9367,16 @@ def create_return():
         # what was settled. See post_return's own docstring
         # (core/retail/general_ledger.py) for why the debit is derived from
         # the credits rather than from `refund` itself.
+        #
+        # DAY-1d: the tax inside this refund, by metrics.refunded_tax's OWN
+        # rule (refund * sale.tax_amount / sale.total, both immutable sale
+        # columns) so the books and the tax report share one basis. post_return
+        # splits the settled amount into Dr Tax Payable / Dr Sales Returns.
+        _sale_total = float(sale['total'] or 0)
+        _return_tax = (refund * float(sale['tax_amount'] or 0) / _sale_total) if _sale_total > 0 else 0.0
         gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
-                        tender_refund, ar_forgiven + store_credit)
+                        tender_refund, ar_forgiven + store_credit,
+                        return_tax_amount=_return_tax, return_gross_amount=refund)
 
         # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
         # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost

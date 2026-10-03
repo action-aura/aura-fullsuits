@@ -1790,7 +1790,7 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
 
 def post_return(conn, cid, branch_id, return_id, return_number, currency,
                  tender_refund_amount, ar_credit_amount, business_date=None,
-                 posted_by=None):
+                 posted_by=None, return_tax_amount=0, return_gross_amount=0):
     """Cr Cash (cash physically refunded) + Cr Accounts Receivable
     (`ar_forgiven_amount + store_credit_amount` combined -- both are, in
     `_adjust_credit` terms, the SAME `-amount` adjustment to
@@ -1813,6 +1813,20 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     can produce, and it is also the more honest entry: it records exactly
     the value the shop's own books can account for, not a notional goods
     value the return never actually collected consideration for.
+
+    DAY-1d -- THE RETURN GIVES BACK ITS SHARE OF THE TAX. The sale credited
+    Tax Payable for the tax it collected; a refund is tax-inclusive, so
+    debiting ALL of it to Sales Returns left Tax Payable overstated by the tax
+    inside every refund and revenue understated by the same amount (measured
+    in the day-in-shop run: GL Tax Payable did not equal the tax report, which
+    nets returns through `metrics.refunded_tax`). `return_tax_amount` /
+    `return_gross_amount` are that SAME figure and the refund it sits inside
+    (the caller derives them with metrics.refunded_tax's own rule, so the
+    books and the tax report share one basis, not two). The settled amount is
+    split pro rata: Dr Tax Payable `settled * tax / gross`, Dr Sales Returns
+    the rest. Both debits sum to `settled`, so the journal still balances by
+    construction. A return with no tax (or no gross) splits nothing. Journals
+    already posted are NOT rewritten.
     """
     settled = Decimal('0')
     lines = []
@@ -1832,7 +1846,17 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
         # this case, so the GL agreeing by posting nothing is the two
         # ledgers staying in sync, not a gap.
         return None
-    lines.append({'account_code': ACCOUNT_SALES_RETURNS, 'debit': settled,
+    tax_part = Decimal('0')
+    if return_tax_amount and return_gross_amount and return_gross_amount > 0:
+        quant = currency_quantum(currency or DEFAULT_BASE_CURRENCY)
+        tax_part = (settled * Decimal(str(return_tax_amount))
+                    / Decimal(str(return_gross_amount))).quantize(quant, rounding=ROUND_HALF_UP)
+        # Never more than was settled (float noise at the edges), never negative.
+        tax_part = max(Decimal('0'), min(tax_part, settled))
+    if tax_part > 0:
+        lines.append({'account_code': ACCOUNT_TAX_PAYABLE, 'debit': tax_part,
+                       'memo': f'Tax on return {return_number}'})
+    lines.append({'account_code': ACCOUNT_SALES_RETURNS, 'debit': settled - tax_part,
                    'memo': f'Return {return_number}'})
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          'return', return_id, currency, lines,
