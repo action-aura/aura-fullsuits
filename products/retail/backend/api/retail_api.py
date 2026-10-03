@@ -7115,13 +7115,20 @@ def create_sale():
         # whichever client sends it, so refuse it loudly BEFORE any write
         # rather than coercing amount_paid: a quiet fix here would hide a
         # client that is still lying about what was handed over.
-        if pm == 'credit' and balance_due <= _eps:
+        #
+        # DAY-1 review F2: ... but ONLY when money handed over is what covers
+        # it (`paid > _eps`). A sale whose points redemption covers the whole
+        # amount with amount_paid 0 is a legitimate zero-debt sale -- nothing
+        # owed, nothing in the drawer, which is exactly what is recorded -- and
+        # the first cut refused it with a message ("the amount paid covers the
+        # whole sale") that was false: nothing was paid.
+        if pm == 'credit' and balance_due <= _eps and paid > _eps:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message': (
                 'A sale on account must leave an amount owed. The amount paid '
-                'covers the whole sale, so nothing would be charged to the '
-                'customer. Send the upfront deposit actually taken (0 if none) '
-                'as amount_paid, or use a different payment method.')}), 400
+                'covers the whole sale, so nothing would be owed. Use cash or '
+                'card instead, or send only the upfront deposit actually taken '
+                'as amount_paid.')}), 400
         warning = None
         if is_credit:
             if not customer_id:

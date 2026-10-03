@@ -254,10 +254,17 @@ def test_the_identical_shape_on_a_two_decimal_currency_is_still_correctly_nothin
     # property THIS test owns -- a sub-cent remainder is not carried as a
     # receivable on a 2-decimal currency -- is tender-independent, so it is
     # rung with 'cash' instead: if the epsilon were ever made finer than half
-    # a cent, balance_due would exceed it, `is_credit` would flip on for this
-    # cash sale and the balance below would be 0.004, so the assertion still
-    # discriminates. What it no longer exercises: the `pm == 'credit'` branch
-    # with a sub-quantum remainder (now a refusal, covered by the DAY-1a file).
+    # a cent ... CORRECTED (DAY-1 review F4): that claim was FALSE and is
+    # withdrawn. create_sale rounds amount_paid to the currency's minor unit
+    # FIRST (9.996 -> 10.00, asserted below), so balance_due is exactly 0.0 here
+    # for ANY epsilon, however fine -- a finer epsilon cannot flip is_credit or
+    # make the balance 0.004 on this sale. What this test CAN catch: a sub-cent
+    # tender no longer being quantized to cents (amount_paid != 10.0, or a
+    # nonzero balance appearing). What it CANNOT catch: the epsilon itself being
+    # made finer; that gate is pinned by the 3dp (JOD) tests in this file, where
+    # a 4-fil remainder survives the rounding. It also no longer exercises the
+    # `pm == 'credit'` branch with a sub-quantum remainder (now a refusal,
+    # covered by the DAY-1a file).
     sale = _sell(client, customer_id, pid, amount_paid=9.996, payment_method='cash')
     assert sale['amount_paid'] == 10.0, (
         f"precondition: USD quantizes the tender to cents, got {sale['amount_paid']!r}")
