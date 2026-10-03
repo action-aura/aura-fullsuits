@@ -1169,6 +1169,27 @@ def _this_terminal_open_session_id(conn, cid):
     except Exception:
         return None
 
+def _cashier_discount_limit_pct(conn, cid):
+    """The owner-set ceiling (percent) on a discount from a session that lacks
+    retail.discount. FAILS CLOSED: a missing, non-numeric or non-finite stored
+    value reads as 0 (no discount allowed) -- never as "unlimited" -- because a
+    corrupted setting must not quietly hand every cashier a free hand on
+    price. Clamped to 0..100."""
+    raw = _settings(conn, cid).get('cashier_discount_limit_pct')
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(v):
+        return 0.0
+    return min(100.0, max(0.0, v))
+
+
+def _pct_text(v):
+    """10.0 -> '10', 7.5 -> '7.5' (for messages)."""
+    return ('%.2f' % float(v)).rstrip('0').rstrip('.')
+
+
 def _audit(conn, action, entity, entity_id, details=''):
     try:
         conn.execute(
@@ -6355,9 +6376,28 @@ def create_sale():
             tax_engine.clamp_discount_pct(item.get('discount_pct', 0)) > 0
             for item in items_in if isinstance(item, dict)
         )
+        # Owner-set cashier limit: a session WITHOUT retail.discount may still
+        # discount up to `cashier_discount_limit_pct` (default 0 = refused, the
+        # old behaviour, with the SAME message and no new code). Per-line
+        # percent, judged on the largest clamped line (the till sends one pct
+        # on every line). Promotions are not counted (matches the discount
+        # check's own scope above). Loyalty redemption and the quotation
+        # discount/expiry overrides still need CAP_DISCOUNT -- they are not
+        # covered by this limit.
+        cashier_discount = None
         if wants_discount and not session_has_capability(CAP_DISCOUNT):
-            conn.close()
-            return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+            limit_pct = _cashier_discount_limit_pct(conn, cid)
+            asked_pct = max(tax_engine.clamp_discount_pct(i.get('discount_pct', 0))
+                            for i in items_in if isinstance(i, dict))
+            if limit_pct <= 0:
+                conn.close()
+                return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+            if asked_pct > limit_pct + 1e-9:
+                conn.close()
+                return jsonify({'status': 'error', 'code': 'DISCOUNT_OVER_LIMIT',
+                                'message': f'You can give at most {_pct_text(limit_pct)}% discount. Ask a manager for more.',
+                                'data': {'limit_pct': limit_pct, 'requested_pct': asked_pct}}), 403
+            cashier_discount = (asked_pct, limit_pct)
 
         # ── Split tender: validate the SHAPE of `tenders` before any write ────
         # A sale may be paid by several methods ({'tenders': [{'method':
@@ -7284,6 +7324,10 @@ def create_sale():
               pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
               sale_uid, actor, terminal, utc_now))
         sale_id = cur.lastrowid
+        if cashier_discount:
+            _audit(conn, 'SALE_DISCOUNT_BY_CASHIER', 'sale', sale_id,
+                   f'{sale_number}: {_pct_text(cashier_discount[0])}% '
+                   f'(limit {_pct_text(cashier_discount[1])}%), discount {discount}')
 
         # ── Phase 5 sync emission: the sale itself ───────────────────────────
         # `company_id`, `idempotency_key` and `session_id` are all
@@ -13009,6 +13053,13 @@ _DEFAULT_SETTINGS = {
     'default_credit_mode': 'none',      # none | limited | unlimited
     'default_credit_limit': '0',
     'enforce_credit_limit': 'warn',     # warn | block
+    # Most a session WITHOUT retail.discount (a cashier) may take off a line,
+    # in percent. '0' = off: such a session is refused any discount, exactly
+    # as before this setting existed (opt-in, invisible until the owner sets
+    # it). Managers and the owner hold retail.discount and are not limited.
+    # Syncs like every retail_setting; it is NOT an authority-signed event
+    # (authority.py signs only till_release_ack: keys) -- recorded S-AUTH residual.
+    'cashier_discount_limit_pct': '0',
     # 'after_discount' (default) | 'before_discount' -- see core/retail/pricing.py,
     # the single source of truth for what these two modes mean and compute.
     'tax_calculation_mode': tax_engine.DEFAULT_MODE,
@@ -13540,8 +13591,26 @@ def credit_settings_set():
     # every other settings key here already uses -- so a dedicated write
     # route is a later, additive step, not a blocker for the redemption
     # logic itself, which only ever READS this key via _settings().
+    # Validated BEFORE any write (all-or-nothing, like base_currency above).
+    # Owner-only by the same _require_company_admin guard as the rest of this
+    # route -- a branch manager cannot raise the ceiling on their own cashiers.
+    if 'cashier_discount_limit_pct' in data:
+        try:
+            _lim = float(data['cashier_discount_limit_pct'])
+            _ok = math.isfinite(_lim) and 0 <= _lim <= 100
+        except (TypeError, ValueError):
+            _ok = False
+        if not _ok:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'INVALID_DISCOUNT_LIMIT',
+                            'message': 'The cashier discount limit must be a number from 0 to 100.'}), 400
+        data['cashier_discount_limit_pct'] = ('%.2f' % _lim).rstrip('0').rstrip('.') or '0'
+        _old_lim = _pct_text(_cashier_discount_limit_pct(conn, cid))
+        if _old_lim != data['cashier_discount_limit_pct']:
+            _audit(conn, 'CASHIER_DISCOUNT_LIMIT_CHANGED', 'retail_setting', 'cashier_discount_limit_pct',
+                   f"{_old_lim}% -> {data['cashier_discount_limit_pct']}%")
     for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
-              'loyalty_point_value'):
+              'loyalty_point_value', 'cashier_discount_limit_pct'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",

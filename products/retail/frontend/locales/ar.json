@@ -2359,8 +2359,15 @@
   "Take part of the payment that way; the rest stays due": "خذ جزءاً من الدفع بهذه الطريقة ويبقى الباقي مستحقاً",
   "In an empty amount box: remove the last part payment": "في خانة مبلغ فارغة: إزالة آخر دفعة جزئية",
   "Amount, then F1 – F6": "المبلغ ثم F1 – F6",
-  "Backspace": "Backspace",
   "This sale was paid in parts ({parts}). Refund it all by {method}?": "دُفع هذا البيع على أجزاء ({parts}). هل تريد إرجاع المبلغ كاملاً عبر {method}؟",
   "This sale was paid in parts. Choose how to refund it.": "دُفع هذا البيع على أجزاء. اختر طريقة الإرجاع.",
-  "On account": "آجل"
+  "On account": "آجل",
+  "Cashier discounts": "خصومات الكاشير",
+  "Most a cashier can discount (%)": "أقصى خصم للكاشير (%)",
+  "The most a cashier can take off a sale, in percent. Managers and the owner are not limited. 0 means cashiers cannot give discounts.": "أقصى نسبة خصم يمنحها الكاشير على البيع. المدير والمالك غير مقيّدين. 0 يعني أن الكاشير لا يمنح خصماً.",
+  "The cashier discount limit must be a number from 0 to 100.": "يجب أن يكون حد خصم الكاشير رقماً من 0 إلى 100.",
+  "You can give at most {n}% discount. Ask a manager for more.": "يمكنك منح خصم بحد أقصى {n}%. اطلب من المدير خصماً أكبر.",
+  "Discount (up to {n}%)": "خصم (حتى {n}%)",
+  "Discount given by cashier": "خصم منحه الكاشير",
+  "Cashier discount limit changed": "تم تغيير حد خصم الكاشير"
 }

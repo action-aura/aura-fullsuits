@@ -132,7 +132,7 @@
     taxRate: { section: 'tax', fields: ['tax-default-rate'], save: () => R()._saveDefaultTaxRate() },
     credit: {
       section: 'credit',
-      fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty'],
+      fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty', 'credit-cashier-disc'],
       save: () => saveCredit(),
     },
     deviceBranch: { section: 'tills', fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
@@ -425,6 +425,8 @@
     const enforce = $('credit-enforce').value;
     const limitRaw = $('credit-limit').value.trim();
     const loyaltyRaw = $('credit-loyalty').value.trim();
+    const discRaw = $('credit-cashier-disc').value.trim();
+    const cashierDisc = discRaw === '' ? 0 : Number(discRaw);
     const limit = limitRaw === '' ? 0 : Number(limitRaw);
     const loyalty = loyaltyRaw === '' ? 0 : Number(loyaltyRaw);
     if (!Number.isFinite(limit) || limit < 0) {
@@ -439,12 +441,17 @@
       toast(t('The loyalty point value must be a number, zero or more.'), 'error');
       return false;
     }
+    if (!Number.isFinite(cashierDisc) || cashierDisc < 0 || cashierDisc > 100) {
+      toast(t('The cashier discount limit must be a number from 0 to 100.'), 'error');
+      return false;
+    }
     try {
       const resp = await R()._post('/api/sub/retail/settings/credit', {
         default_credit_mode: mode,
         default_credit_limit: String(limit),
         enforce_credit_limit: enforce,
         loyalty_point_value: String(loyalty),
+        cashier_discount_limit_pct: String(cashierDisc),
       });
       if (!resp || resp.status !== 'success') {
         toast((resp && resp.message) || t('Could not save the credit settings.'), 'error');
@@ -474,6 +481,7 @@
       $('credit-limit').value = d.default_credit_limit != null && Number(d.default_credit_limit) > 0 ? d.default_credit_limit : '';
       $('credit-enforce').value = d.enforce_credit_limit === 'block' ? 'block' : 'warn';
       $('credit-loyalty').value = d.loyalty_point_value != null && Number(d.loyalty_point_value) > 0 ? d.loyalty_point_value : '';
+      $('credit-cashier-disc').value = d.cashier_discount_limit_pct != null && Number(d.cashier_discount_limit_pct) > 0 ? d.cashier_discount_limit_pct : '';
     } catch (e) { console.error(e); }
     syncCreditLimitVisibility();
     rebaseline('credit');
@@ -1820,6 +1828,12 @@
         <p class="sh-card-lead">${esc(t('What one point is worth when a customer spends points. Leave empty or 0 to turn spending points off.'))}</p>
         <div class="ret-field" style="margin:0"><label for="credit-loyalty">${esc(t('Loyalty point value'))}</label>
           <input type="number" id="credit-loyalty" min="0" step="0.001" dir="ltr" /></div>
+      </div>
+      <div class="sub-chart-card" id="cashier-discount-card">
+        <h3 class="sh-card-title">${esc(t('Cashier discounts'))}</h3>
+        <p class="sh-card-lead">${esc(t('The most a cashier can take off a sale, in percent. Managers and the owner are not limited. 0 means cashiers cannot give discounts.'))}</p>
+        <div class="ret-field" style="margin:0"><label for="credit-cashier-disc">${esc(t('Most a cashier can discount (%)'))}</label>
+          <input type="number" id="credit-cashier-disc" min="0" max="100" step="0.5" dir="ltr" /></div>
       </div>`;
   }
 

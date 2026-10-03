@@ -3385,6 +3385,66 @@ const RetailSystem = {
   // RTL is by construction, not by chase: padding-inline / border-block /
   // border-inline-start / text-align:end / inset-inline throughout, so the
   // mirrored Arabic layout is correct without a single rule in rtl.css.
+  // ── Discount control (P1a item #3 + owner-set cashier limit) ─────────────
+  // Three states, decided by capability and the shop's cashier limit:
+  //   full  -- holds retail.discount: the % box, 0-100 (unchanged)
+  //   limit -- no capability but the owner allowed up to N%: the same box,
+  //            capped at N, with the cap printed beside it
+  //   none  -- no capability, limit 0: the quiet "needs a manager" link
+  // The server is the authority (create_sale refuses over-limit with
+  // DISCOUNT_OVER_LIMIT); this only stops the cashier finding out at Charge.
+  _hasDiscountCap() { return !window.SubsystemApp || SubsystemApp.hasCapability('retail.discount'); },
+  _discountLimitFor() { return this._hasDiscountCap() ? 100 : (this._cashierDiscountLimit || 0); },
+  _discountMode() {
+    if (this._hasDiscountCap()) return 'full';
+    const lim = this._cashierDiscountLimit || 0;
+    return lim > 0 ? `limit:${lim}` : 'none';
+  },
+  _pctText(n) { return String(Math.round(Number(n) * 100) / 100); },
+  _overLimitMessage(lim) {
+    return t('You can give at most {n}% discount. Ask a manager for more.').replace('{n}', this._pctText(lim));
+  },
+  // The limit if the typed discount is over it, else null.
+  _discountOverLimit() {
+    const raw = parseFloat(document.getElementById('pos-disc')?.value || 0);
+    if (!(raw > 0)) return null;
+    const lim = this._discountLimitFor();
+    return Math.min(100, raw) > lim + 1e-9 ? lim : null;
+  },
+  _discountControlHtml() {
+    const mode = this._discountMode();
+    if (mode === 'none') {
+      return `<button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-disc-link"
+                  style="font-size:11px;padding-block:2px;padding-inline:8px;color:var(--text-dim)"
+                  onclick="RetailSystem._explainDiscountNeedsManager()">${t('Discount… (needs a manager)')}</button>`;
+    }
+    const limited = mode !== 'full';
+    const lim = this._cashierDiscountLimit || 0;
+    const aria = limited ? t('Discount (up to {n}%)').replace('{n}', this._pctText(lim)) : t('Discount');
+    return `<span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-dim)">
+                  <input type="number" id="pos-disc" value="0" min="0" max="${limited ? lim : 100}" step="0.5"
+                    ${limited ? `data-limit="${lim}"` : ''}
+                    class="pos-mini-input" style="inline-size:64px;padding-inline:8px;font-size:13px"
+                    aria-label="${this._esc(aria)}"
+                    oninput="RetailSystem._renderCart()" /> %
+                  ${limited ? `<span class="pos-disc-cap">≤ ${this._pctText(lim)}%</span>` : ''}
+                </span>`;
+  },
+  // Re-draws the control only when its mode changed (the cashier limit
+  // arrives with the settings fetch, after the first render), keeping any
+  // value already typed.
+  _syncDiscountControl() {
+    const slot = document.getElementById('pos-disc-slot');
+    if (!slot || !slot.getAttribute) return;
+    const mode = this._discountMode();
+    if (slot.getAttribute('data-mode') === mode) return;
+    const prev = document.getElementById('pos-disc')?.value;
+    slot.innerHTML = this._discountControlHtml();
+    slot.setAttribute('data-mode', mode);
+    const d = document.getElementById('pos-disc');
+    if (d && prev) d.value = prev;
+  },
+
   // P1a item #3: the quiet link a cashier without retail.discount sees
   // instead of the % box. Explains the state rather than doing nothing
   // silently on click (a button with no feedback at all reads as broken,
@@ -4110,6 +4170,8 @@ const RetailSystem = {
            own comment for the other piece of this same fix. */
         .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-block-end:8px; }
         .pos-tender-parts { margin-block-end:6px;font-size:13px; }
+        .pos-disc-cap { font-size:11px;color:var(--text-muted);white-space:nowrap; }
+        .pos-mini-input.pos-disc-over { outline:2px solid var(--danger, #c00);outline-offset:1px; }
         .pos-tender-parts[hidden] { display:none; }
         .pos-tender-part { display:flex;align-items:center;gap:8px;padding-block:2px; }
         .pos-tender-part > span:first-child { flex:1; }
@@ -4851,24 +4913,7 @@ const RetailSystem = {
               <span>${t('Subtotal')}</span>
               <span style="display:flex;gap:10px;align-items:center">
                 <span class="pos-sum-val money" id="pos-sub">${this._esc(this._moneyDigits(0))}</span>
-                ${canDiscount ? `<span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-dim)">
-                  <input type="number" id="pos-disc" value="0" min="0" max="100" step="0.5"
-                    class="pos-mini-input" style="inline-size:64px;padding-inline:8px;font-size:13px"
-                    aria-label="${this._esc(t('Discount'))}"
-                    oninput="RetailSystem._renderCart()" /> %
-                </span>` : `<!-- P1a item #3: no #pos-disc at all for a cashier without
-                     retail.discount -- not a disabled input (which would still
-                     name a % a cashier cannot use) but a quiet link to the
-                     Phase 3 manager-PIN override, doing nothing destructive
-                     today per the owner's 2026-09-28 decision (contract.md:
-                     "Do not build the PIN flow now"). Every #pos-disc reader
-                     in this file already reads it through
-                     document.getElementById('pos-disc')?.value -- optional
-                     chaining -- so its absence here reads as 0%, the correct
-                     answer for someone who cannot discount at all. -->
-                <button type="button" class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-disc-link"
-                  style="font-size:11px;padding-block:2px;padding-inline:8px;color:var(--text-dim)"
-                  onclick="RetailSystem._explainDiscountNeedsManager()">${t('Discount… (needs a manager)')}</button>`}
+                <span id="pos-disc-slot" data-mode="${this._discountMode()}">${this._discountControlHtml()}</span>
               </span>
             </div>
             <!-- Phase 0 #8 (interface I-2): _recalc used to fold a
@@ -5256,6 +5301,11 @@ const RetailSystem = {
       // retail_api.py. parseFloat('0')=0, parseFloat(undefined)=NaN -> `|| 0`
       // covers both an unopened setting and a malformed value the same way.
       this._loyaltyPointValue = parseFloat(creditSettings && creditSettings.data && creditSettings.data.loyalty_point_value) || 0;
+      // Owner-set most-a-cashier-may-discount (percent). Anything unreadable
+      // is 0 = no discount, matching the server (it fails closed too).
+      const _cdl = parseFloat(creditSettings && creditSettings.data && creditSettings.data.cashier_discount_limit_pct);
+      this._cashierDiscountLimit = Number.isFinite(_cdl) ? Math.min(100, Math.max(0, _cdl)) : 0;
+      this._syncDiscountControl();
       // P1a item #3 ("Credit greys out and shows its reason"): the SAME
       // fallback create_sale (retail_api.py) applies server-side --
       // `credit_mode = cust['credit_mode'] or settings['default_credit_mode']`
@@ -6928,6 +6978,12 @@ const RetailSystem = {
       checkoutBtn.disabled = false;   // re-enable after a sale so the next receipt can be charged
     }
     this._dropStaleTenderParts();
+    const _discEl = document.getElementById('pos-disc');
+    if (_discEl && _discEl.setAttribute) {
+      const _over = this._discountOverLimit() != null;
+      _discEl.setAttribute('aria-invalid', _over ? 'true' : 'false');
+      if (_discEl.classList) _discEl.classList.toggle('pos-disc-over', _over);
+    }
     this._calcChange();
     // Every cart/discount/loyalty edit funnels through this one recompute, so
     // this is the single place that keeps the customer-facing display (if one
@@ -8103,7 +8159,17 @@ const RetailSystem = {
         if (!e.repeat) this._chargeNow();
         return;
       }
-      if (el && el.id === 'pos-disc') { e.preventDefault(); this._refocusScan(true); return; }
+      if (el && el.id === 'pos-disc') {
+        e.preventDefault();
+        const overBy = this._discountOverLimit();
+        if (overBy != null) {
+          SubsystemApp.showToast(this._overLimitMessage(overBy), 'error');
+          try { if (typeof el.select === 'function') el.select(); } catch (err) { /* courtesy */ }
+          return;
+        }
+        this._refocusScan(true);
+        return;
+      }
       // Any other form control or button: Enter belongs to THAT control. A
       // focused qty button, product tile or tender button used to fall through
       // to "charge the sale" here -- the cashier who tabbed to a button and
@@ -8650,6 +8716,13 @@ const RetailSystem = {
         && this._paymentMethod === 'cash' && tendered > 0 && tendered < amountDue) {
       SubsystemApp.showToast(t('Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.'), 'error'); return;
     }
+    const discOver = this._discountOverLimit();
+    if (discOver != null) {
+      SubsystemApp.showToast(this._overLimitMessage(discOver), 'error');
+      const dEl = document.getElementById('pos-disc');
+      try { if (dEl && typeof dEl.focus === 'function') dEl.focus(); } catch (err) { /* courtesy */ }
+      return;
+    }
     const builtTenders = this._buildTenderPayload();
     if (!builtTenders.ok) { SubsystemApp.showToast(builtTenders.error, 'error'); return; }
     const customerId = document.getElementById('pos-customer')?.value || null;
@@ -8846,7 +8919,11 @@ const RetailSystem = {
           }).catch(e => console.error('Cash-drawer kick failed:', e));
         }
       } else {
-        SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
+        if (data.code === 'DISCOUNT_OVER_LIMIT' && data.data && data.data.limit_pct != null) {
+          SubsystemApp.showToast(this._overLimitMessage(data.data.limit_pct), 'error');
+        } else {
+          SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
+        }
         if (btn) { btn.textContent = this._checkoutLabel(this._chargeAmount()); btn.disabled = false; }
       }
     } catch(e) {
@@ -14436,6 +14513,8 @@ const RetailSystem = {
   // get a real, hand-written English sentence to translate rather than a
   // mechanically split one.
   _AUDIT_ACTION_LABEL: {
+    SALE_DISCOUNT_BY_CASHIER: 'Discount given by cashier',
+    CASHIER_DISCOUNT_LIMIT_CHANGED: 'Cashier discount limit changed',
     BRANCH_PIN_UNRESOLVED: 'Branch pin unresolved', BRANCH_RETIRED: 'Branch retired',
     CASH_DRAWER_KICKED: 'Cash drawer kicked', CASH_MOVEMENT_RECORDED: 'Cash movement recorded',
     CASH_SESSION_ENDED: 'Cash session ended', CASH_SESSION_OPENED: 'Cash session opened',

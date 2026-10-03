@@ -2359,8 +2359,15 @@
   "Take part of the payment that way; the rest stays due": "Take part of the payment that way; the rest stays due",
   "In an empty amount box: remove the last part payment": "In an empty amount box: remove the last part payment",
   "Amount, then F1 – F6": "Amount, then F1 – F6",
-  "Backspace": "Backspace",
   "This sale was paid in parts ({parts}). Refund it all by {method}?": "This sale was paid in parts ({parts}). Refund it all by {method}?",
   "This sale was paid in parts. Choose how to refund it.": "This sale was paid in parts. Choose how to refund it.",
-  "On account": "On account"
+  "On account": "On account",
+  "Cashier discounts": "Cashier discounts",
+  "Most a cashier can discount (%)": "Most a cashier can discount (%)",
+  "The most a cashier can take off a sale, in percent. Managers and the owner are not limited. 0 means cashiers cannot give discounts.": "The most a cashier can take off a sale, in percent. Managers and the owner are not limited. 0 means cashiers cannot give discounts.",
+  "The cashier discount limit must be a number from 0 to 100.": "The cashier discount limit must be a number from 0 to 100.",
+  "You can give at most {n}% discount. Ask a manager for more.": "You can give at most {n}% discount. Ask a manager for more.",
+  "Discount (up to {n}%)": "Discount (up to {n}%)",
+  "Discount given by cashier": "Discount given by cashier",
+  "Cashier discount limit changed": "Cashier discount limit changed"
 }
