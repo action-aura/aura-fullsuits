@@ -6787,3 +6787,22 @@ till has an open drawer session; the drawer report adds non-sale cash
 received in that session. 1a/1b/1d need no schema. Plan: job f8252b48
 tmp/day/fix_plan.md. Already-posted return journals in existing test shops are
 NOT rewritten (no real shop has run v38+ books yet); recorded, not backfilled.
+## 2026-10-03 — retail v43 (unreleased) EXTENDED: returns.tax_refunded (DAY-1d review round)
+
+An adversarial review of DAY-1a..d (job f8252b48 tmp/day/rev) found DAY-1d's
+return tax split wrong: it spread tax by `refund * sale.tax / sale.total`, which
+is wrong for a basket mixing 0% and 16% lines (returning the only taxed line
+left 7.407 of 16.000 tax "owed"), disagrees with the tax report when less than
+the refund is settled (points-paid sale), and over-reverses through per-return
+rounding (10 single-unit returns of a 0.168-tax sale reversed 0.170). The tax
+report (`metrics.refunded_tax`) carried the same ratio flaw from before.
+
+The same single v43 step (still unreleased, no build shipped with it) is
+EXTENDED, not re-claimed: one more shape-gated, idempotent column
+`returns.tax_refunded REAL` (NULL for pre-v43 returns). create_return stores the
+LINE-EXACT tax actually reversed (from each sale line's snapshotted
+`sale_items.tax_rate`), clamped so a sale's total reversed tax never exceeds its
+own tax, with the final return taking exactly the remainder; GL post_return and
+the tax report both read that one stored figure (old rows fall back to the old
+ratio), so the books and the report agree by construction. RETAIL_SCHEMA_VERSION
+stays 43. Plan: job f8252b48 tmp/day/fix_plan2.md.
