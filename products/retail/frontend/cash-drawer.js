@@ -604,7 +604,24 @@ const CashDrawer = {
       <div class="cd-report-row cd-report-total">
         <span>${t('Expected cash in drawer')}</span><b>${this._money(r.expected_cash)}</b>
       </div>
+      ${this._otherTendersRows(r)}
       ${this._contaminationNote(r)}`;
+  },
+
+  // What this drawer's sales took by methods OTHER than cash (card, mobile,
+  // ...), from the server's tender_totals. Informational only -- it is not
+  // part of the expected-cash arithmetic above, which counts cash alone --
+  // but a sale paid in parts is labelled just 'split', so this is the only
+  // place a manager can see "Card 5.000" for it. Hidden when there is none,
+  // so a cash-only shift's report is unchanged.
+  _otherTendersRows(r) {
+    const totals = (r && r.tender_totals) || {};
+    const rows = Object.keys(totals).filter(m => m !== 'cash' && Number(totals[m]) > 0);
+    if (!rows.length) return '';
+    const label = (m) => (window.RetailSystem && RetailSystem._paymentMethodLabel)
+      ? RetailSystem._paymentMethodLabel(m) : String(m).replace(/[<>&"]/g, '');
+    return `<p class="cd-warn-note" style="color:var(--text-muted)">${t('Taken by other methods')}</p>` +
+      rows.map(m => `<div class="cd-report-row"><span>${label(m)}</span><b>${this._money(totals[m])}</b></div>`).join('');
   },
 
   /**

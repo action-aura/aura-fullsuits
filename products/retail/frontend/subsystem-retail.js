@@ -237,6 +237,10 @@ function axisMoney(v) {
 
 const RetailSystem = {
   _cart: [],
+  // Split tender: part payments taken so far on the sale being rung, in the
+  // order taken, as integer MINOR units ({method, minor}) so adding parts
+  // never drifts by a fil. Empty = every sale behaves exactly as before.
+  _tenderParts: [],
   _products: [],
   _categories: [],
   _customers: [],
@@ -4105,6 +4109,13 @@ const RetailSystem = {
            with a non-scrolling footer at 1366x768; see .pos-checkout-footer's
            own comment for the other piece of this same fix. */
         .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-block-end:8px; }
+        .pos-tender-parts { margin-block-end:6px;font-size:13px; }
+        .pos-tender-parts[hidden] { display:none; }
+        .pos-tender-part { display:flex;align-items:center;gap:8px;padding-block:2px; }
+        .pos-tender-part > span:first-child { flex:1; }
+        .pos-tender-part-x { border:0;background:transparent;cursor:pointer;color:var(--text-muted);padding:2px 6px;border-radius:4px; }
+        .pos-tender-part-x:hover, .pos-tender-part-x:focus-visible { background:var(--danger-soft, rgba(200,0,0,.12));color:var(--danger, #c00); }
+        .pos-tender-remaining { font-weight:700;border-block-start:1px solid var(--border, rgba(128,128,128,.3));margin-block-start:2px;padding-block-start:4px; }
         /* button.pos-pay-btn (element-qualified), not bare .pos-pay-btn: this
            mirrors css/main.css's own "TOUCH, SECOND AXIS" rule (that file's
            comment on button.pos-cat-btn/button.pos-pay-btn/... explains why
@@ -4971,8 +4982,9 @@ const RetailSystem = {
                have to fight the tender grid for. -->
           <div class="pos-checkout-footer">
             <div class="pos-pay-btns" id="pos-pay-btns">${this._renderPayButtons()}</div>
+            <div class="pos-tender-parts" id="pos-tender-parts" hidden aria-live="polite"></div>
             <div class="pos-sum-row" id="pos-tendered-row">
-              <span>${t('Cash Tendered')}</span>
+              <span id="pos-amount-label">${t('Cash Tendered')}</span>
               <span style="display:flex;gap:10px;align-items:baseline">
                 <input type="number" id="pos-tendered" placeholder="${(0).toFixed(this._currencyDp())}" min="0" step="${(1 / Math.pow(10, this._currencyDp())).toFixed(this._currencyDp())}"
                   class="pos-mini-input" style="inline-size:100px;padding-inline:10px;font-size:14px"
@@ -6131,6 +6143,8 @@ const RetailSystem = {
   // sale left behind.
   _resetSaleControls() {
     this._posDraft = null;
+    this._tenderParts = [];
+    this._renderTenderParts();
     const discInput = document.getElementById('pos-disc');
     if (discInput) discInput.value = 0;
     const tenderedInput = document.getElementById('pos-tendered');
@@ -6913,6 +6927,7 @@ const RetailSystem = {
       checkoutBtn.textContent = this._checkoutLabel(total);
       checkoutBtn.disabled = false;   // re-enable after a sale so the next receipt can be charged
     }
+    this._dropStaleTenderParts();
     this._calcChange();
     // Every cart/discount/loyalty edit funnels through this one recompute, so
     // this is the single place that keeps the customer-facing display (if one
@@ -7007,7 +7022,8 @@ const RetailSystem = {
     // (several existing tests hand-set `_currentTotals` directly with only
     // subtotal/discount/tax/total), which reproduces the exact pre-existing
     // behaviour whenever no redemption is in play.
-    const amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : (this._currentTotals.total || 0);
+    let amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : (this._currentTotals.total || 0);
+    if (this._tenderParts && this._tenderParts.length) amountDue = this._fromMinor(this._remainingMinor());
     const changeRow = document.getElementById('pos-change-row');
     const changeEl  = document.getElementById('pos-change');
     if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= amountDue) {
@@ -7049,7 +7065,7 @@ const RetailSystem = {
   _PAYMENT_METHOD_LABEL: null,   // built lazily by _paymentMethodLabel below
   _paymentMethodLabel(key) {
     if (!this._PAYMENT_METHOD_LABEL) {
-      const map = { store_credit: 'Store Credit' };
+      const map = { store_credit: 'Store Credit', split: 'Split' };
       this.POS_PAYMENT_METHODS.forEach(m => { map[m.method] = m.label; });
       this._PAYMENT_METHOD_LABEL = map;
     }
@@ -7110,7 +7126,7 @@ const RetailSystem = {
       return `
       <button class="pos-pay-btn${method === 'cash' ? ' active' : ''}" data-method="${method}"
         ${reason ? `aria-disabled="true" title="${this._esc(reason)}" data-credit-reason="${this._esc(reason)}"` : ''}
-        onclick="RetailSystem._setPayment('${method}',this)">
+        onclick="RetailSystem._pickTender('${method}',this)">
         <span class="pos-pay-icon" aria-hidden="true">${this._icon(icon, 16, emoji)}</span>
         <span class="pos-pay-label">${t(label)}</span>
         ${reasonEl}<span class="pos-pay-kbd" aria-hidden="true">${fkey}</span>
@@ -7246,6 +7262,185 @@ const RetailSystem = {
     // Picking a tender is a button press, not a typing target — hand the
     // keyboard back to the scanner.
     this._refocusScan();
+  },
+
+  // ══ SPLIT TENDER ══════════════════════════════════════════════════════════
+  // One sale paid by several methods. The gesture is the one a cashier
+  // already makes: type the amount, press the method's key. If the amount is
+  // LESS than what is left it is taken as a PART by that method; if it is the
+  // whole remainder (or more) nothing changes from today. Parts live in
+  // this._tenderParts as integer minor units; the final tender (whatever is
+  // selected when Charge is pressed) covers the remainder. See
+  // core/retail/tenders.py for how the server settles the list.
+  _toMinor(x) { return Math.round((Number(x) || 0) * Math.pow(10, this._currencyDp())); },
+  _fromMinor(n) { return n / Math.pow(10, this._currencyDp()); },
+  _amountDueMinor() {
+    const cu = this._currentTotals || {};
+    return this._toMinor(cu.amountDue != null ? cu.amountDue : (cu.total || 0));
+  },
+  _partsMinor() { return (this._tenderParts || []).reduce((a, p) => a + p.minor, 0); },
+  _remainingMinor() { return Math.max(0, this._amountDueMinor() - this._partsMinor()); },
+
+  // The click / F1-F6 entry point. Deliberately NOT inside _setPayment:
+  // _syncCreditButtonState calls _setPayment('cash') internally and must
+  // never be able to add a part.
+  _pickTender(method, btn) {
+    if (this._tryAddTenderPart(method)) return;
+    this._setPayment(method, btn);
+  },
+
+  // Returns true when the keypress was consumed as a part (or refused as one).
+  _tryAddTenderPart(method) {
+    const box = document.getElementById('pos-tendered');
+    const raw = box && box.value !== '' ? parseFloat(box.value) : NaN;
+    if (!(raw > 0)) return false;
+    const minor = this._toMinor(raw);
+    if (minor <= 0 || minor >= this._remainingMinor()) return false;   // the whole remainder: today's behaviour
+    if (method === 'credit') {
+      SubsystemApp.showToast(t('On account takes whatever is left. Take the other parts first, then press F5.'), 'error');
+      return true;
+    }
+    const parts = (this._tenderParts || []).map(p => ({ ...p }));
+    const same = parts.find(p => p.method === method);
+    if (same) same.minor += minor; else parts.push({ method, minor });
+    this._tenderParts = parts;
+    // Back to Cash for the next part / the remainder, with the box empty and
+    // the caret in it.
+    this._paymentMethod = 'cash';
+    document.querySelectorAll('.pos-pay-btn').forEach(b => {
+      b.classList.toggle('active', !!(b.dataset && b.dataset.method === 'cash'));
+    });
+    this._syncTenderUI('cash');
+    box.value = '';
+    this._renderTenderParts();
+    this._calcChange();
+    this._focusTendered();
+    return true;
+  },
+
+  // Split tender: part payments were taken against an earlier amount due.
+  // If the cart changed so the parts now cover (or exceed) the whole sale,
+  // they no longer describe a payment -- drop them and say so, rather than
+  // let a stale part ride into the charge. An emptied cart (a sale just
+  // completed) clears them silently. Called from _recalc.
+  _dropStaleTenderParts() {
+    if (!(this._tenderParts && this._tenderParts.length)) return;
+    if (!this._cart.length) {
+      this._tenderParts = [];
+    } else if (this._partsMinor() >= this._amountDueMinor()) {
+      this._tenderParts = [];
+      SubsystemApp.showToast(t('Cart changed - part payments cleared'), 'error');
+    }
+    this._renderTenderParts();
+  },
+
+  _removeTenderPart(i) {
+    const parts = (this._tenderParts || []).map(p => ({ ...p }));
+    if (i < 0 || i >= parts.length) return;
+    const [gone] = parts.splice(i, 1);
+    this._tenderParts = parts;
+    this._renderTenderParts();
+    this._calcChange();
+    SubsystemApp.showToast(
+      t('Part removed: {part}').replace('{part}', `${this._plainMethodLabel(gone.method)} ${this._fmt(this._fromMinor(gone.minor))}`),
+      'info');
+  },
+
+  // _paymentMethodLabel returns HTML-escaped text (for innerHTML); a toast
+  // wants plain text.
+  _plainMethodLabel(method) {
+    const el = document.createElement ? document.createElement('span') : null;
+    const html = this._paymentMethodLabel(method);
+    if (!el) return String(html);
+    el.innerHTML = html;
+    return el.textContent;
+  },
+
+  // Receipt lines for a sale paid in parts: [{label, amount}], or null for an
+  // ordinary single-tender sale (callers then print today's "Paid" line).
+  // `tenders` comes from the server (create_sale's response and GET
+  // /sales/<id>): cash carries what was HANDED OVER (`tendered`, so the
+  // receipt can show Change due beneath it truthfully), every other method
+  // what was charged, and a part left on account arrives as method 'credit'.
+  // `tr` is the caller's translator (t for screens, the receipt-language rt
+  // for print).
+  _receiptTenderRows(saleData, tr) {
+    const list = saleData && Array.isArray(saleData.tenders) ? saleData.tenders : [];
+    if (list.length < 2) return null;
+    const entry = (m) => this.POS_PAYMENT_METHODS.find(x => x.method === m);
+    return list.map(x => ({
+      label: tr(x.method === 'credit' ? 'On account'
+        : (entry(x.method) ? entry(x.method).label : String(x.method))),
+      amount: x.method === 'cash' && x.tendered != null ? x.tendered : x.amount,
+    }));
+  },
+
+  _renderTenderParts() {
+    const parts = this._tenderParts || [];
+    const remaining = this._fromMinor(this._remainingMinor());
+    const host = document.getElementById('pos-tender-parts');
+    if (host) {
+      if (!parts.length) {
+        host.hidden = true;
+        host.innerHTML = '';
+      } else {
+        host.hidden = false;
+        host.innerHTML = parts.map((p, i) => `
+          <div class="pos-tender-part">
+            <span>${this._paymentMethodLabel(p.method)}</span>
+            <span class="money">${this._esc(this._fmt(this._fromMinor(p.minor)))}</span>
+            <button type="button" class="pos-tender-part-x" aria-label="${this._esc(t('Remove part'))}"
+              onclick="RetailSystem._removeTenderPart(${i})">✕</button>
+          </div>`).join('') + `
+          <div class="pos-tender-part pos-tender-remaining">
+            <span>${t('Remaining')}</span>
+            <span class="money" id="pos-remaining">${this._esc(this._fmt(remaining))}</span>
+          </div>`;
+      }
+    }
+    const lbl = document.getElementById('pos-amount-label');
+    if (lbl) lbl.textContent = parts.length ? t('Amount') : t('Cash Tendered');
+    const box = document.getElementById('pos-tendered');
+    if (box) {
+      const dp = this._currencyDp();
+      box.placeholder = (parts.length ? remaining : 0).toFixed(dp);
+      if (box.setAttribute) box.setAttribute('aria-label', parts.length ? t('Amount') : t('Cash Tendered'));
+    }
+    const btn = document.getElementById('pos-checkout-btn');
+    if (btn && !btn.disabled) btn.textContent = this._checkoutLabel(this._chargeAmount());
+  },
+
+  // What the Charge button should say it will take: the remainder while
+  // parts exist, else the whole amount (today).
+  _chargeAmount() {
+    if (this._tenderParts && this._tenderParts.length) return this._fromMinor(this._remainingMinor());
+    return (this._currentTotals && this._currentTotals.total) || 0;
+  },
+
+  // Pure-ish: turns parts + the selected final tender + the amount box into
+  // the `tenders` list create_sale takes. {ok:true, tenders:null} when there
+  // are no parts (the legacy payload is then sent untouched).
+  _buildTenderPayload() {
+    const parts = this._tenderParts || [];
+    if (!parts.length) return { ok: true, tenders: null };
+    const remaining = this._remainingMinor();
+    if (remaining <= 0) return { ok: false, error: t('Cart changed - part payments cleared') };
+    const method = this._paymentMethod;
+    let finalMinor = remaining;
+    if (method === 'cash') {
+      const box = document.getElementById('pos-tendered');
+      const raw = box && box.value !== '' ? parseFloat(box.value) : NaN;
+      if (raw > 0) {
+        finalMinor = this._toMinor(raw);
+        if (finalMinor < remaining) {
+          return { ok: false, error: t('Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.') };
+        }
+      }
+    }
+    const list = parts.map(p => ({ ...p }));
+    const same = list.find(p => p.method === method);
+    if (same) same.minor += finalMinor; else list.push({ method, minor: finalMinor });
+    return { ok: true, tenders: list.map(p => ({ method: p.method, amount: this._fromMinor(p.minor) })) };
   },
 
   // ══ BARCODE SCANNER ENGINE ════════════════════════════════════════════════
@@ -7663,6 +7858,7 @@ const RetailSystem = {
       customerId: sel ? sel.value : '',
       disc: disc ? disc.value : '0',
       method: this._paymentMethod,
+      parts: (this._tenderParts || []).map(p => ({ ...p })),
     };
   },
 
@@ -7671,6 +7867,7 @@ const RetailSystem = {
     if (d) {
       const disc = document.getElementById('pos-disc');
       if (disc && d.disc != null) disc.value = d.disc;
+      this._tenderParts = Array.isArray(d.parts) ? d.parts.map(p => ({ ...p })) : [];
     }
     // Same toggles _exactCashCharge / _resetSaleControls use to show the tender.
     document.querySelectorAll('.pos-pay-btn').forEach(b => {
@@ -7678,6 +7875,7 @@ const RetailSystem = {
     });
     this._syncTenderUI(this._paymentMethod);
     this._renderCart();
+    this._renderTenderParts();
   },
 
   // Layout-independent key name for the till's key handlers.
@@ -7854,6 +8052,17 @@ const RetailSystem = {
 
     if (code === 'Escape') { this._onEscapeKey(e, el); return; }
 
+    // Split tender: Backspace in an EMPTY amount box takes back the last
+    // part. A number input holding a half-typed non-number reports
+    // value '' with validity.badInput -- that Backspace belongs to the
+    // field, so it is left alone.
+    if (code === 'Backspace' && el && el.id === 'pos-tendered' && el.value === ''
+        && !(el.validity && el.validity.badInput) && this._tenderParts && this._tenderParts.length) {
+      e.preventDefault();
+      this._removeTenderPart(this._tenderParts.length - 1);
+      return;
+    }
+
     // ── Function keys ────────────────────────────────────────────────────
     // THESE RUN BEFORE THE TEXT-FIELD GUARD BELOW, and that ordering is the
     // whole point. The till deliberately parks focus in #pos-search so a
@@ -8015,7 +8224,7 @@ const RetailSystem = {
       document.querySelectorAll('.pos-pay-btn').forEach(b => {
         if (b.dataset && b.dataset.method === entry.method) btn = b;
       });
-      if (btn) this._setPayment(entry.method, btn);
+      if (btn) this._pickTender(entry.method, btn);
       // Cash is the tender with a field to fill: F1 also lands the caret there.
       if (btn && entry.method === 'cash' && this._paymentMethod === 'cash') this._focusTendered();
       return true;
@@ -8197,6 +8406,8 @@ const RetailSystem = {
     ['Delete', 'Remove the selected line (or the last one)'],
     ['Ctrl+Delete', 'Void the whole sale'],
     ['F1 – F6', 'Choose how the customer pays'],
+    ['Amount, then F1 – F6', 'Take part of the payment that way; the rest stays due'],
+    ['Backspace', 'In an empty amount box: remove the last part payment'],
     ['F10 / Ctrl+Enter', 'Charge the sale'],
     ['X', 'Exact cash: charge at once'],
     ['F7', 'Choose a customer'],
@@ -8432,9 +8643,15 @@ const RetailSystem = {
     // pre-existing behaviour whenever no redemption is in play.
     const amountDue = this._currentTotals.amountDue != null ? this._currentTotals.amountDue : total;
     const tendered = parseFloat(document.getElementById('pos-tendered')?.value || 0);
-    if (this._paymentMethod === 'cash' && tendered > 0 && tendered < amountDue) {
-      SubsystemApp.showToast(t('Cash tendered is less than total'), 'error'); return;
+    // With parts taken, "short" is judged against what is LEFT, and by
+    // _buildTenderPayload (below); without parts it is today's check, with a
+    // message that now says how to take the cash as a part instead.
+    if (!(this._tenderParts && this._tenderParts.length)
+        && this._paymentMethod === 'cash' && tendered > 0 && tendered < amountDue) {
+      SubsystemApp.showToast(t('Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.'), 'error'); return;
     }
+    const builtTenders = this._buildTenderPayload();
+    if (!builtTenders.ok) { SubsystemApp.showToast(builtTenders.error, 'error'); return; }
     const customerId = document.getElementById('pos-customer')?.value || null;
     // AUDIT: mirrors retail_api.py's credit-sale rule ("Credit sales require
     // a customer (walk-in not allowed).") on this side of the wire too.
@@ -8498,6 +8715,13 @@ const RetailSystem = {
       points_redeemed:  this._loyaltyRedeemPoints || 0,
       items: this._cart.map(i => ({ ...i, discount_pct: discPct })),
     };
+    if (builtTenders.tenders) {
+      // Split tender: the server settles paid/change/balance from the parts,
+      // so no client-computed amount_paid goes along.
+      payload.payment_method = 'split';
+      payload.tenders = builtTenders.tenders;
+      delete payload.amount_paid;
+    }
     try {
       const data = await this._post('/api/sub/retail/sales', payload);
       if (data.status === 'success') {
@@ -8623,7 +8847,7 @@ const RetailSystem = {
         }
       } else {
         SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
-        if (btn) { btn.textContent = this._checkoutLabel(total); btn.disabled = false; }
+        if (btn) { btn.textContent = this._checkoutLabel(this._chargeAmount()); btn.disabled = false; }
       }
     } catch(e) {
       // AUDIT: this used to reset the button with zero visible feedback on
@@ -8637,7 +8861,7 @@ const RetailSystem = {
       // on the single most consequential action on this screen.
       console.error('Checkout failed:', e);
       SubsystemApp.showToast(t('Checkout failed — check the connection and try again'), 'error');
-      if (btn) { btn.textContent = this._checkoutLabel(total); btn.disabled = false; }
+      if (btn) { btn.textContent = this._checkoutLabel(this._chargeAmount()); btn.disabled = false; }
     }
   },
 
@@ -8662,6 +8886,7 @@ const RetailSystem = {
         total: sale.total, subtotal: sale.subtotal,
         discount_amount: sale.discount_amount, tax_amount: sale.tax_amount,
         amount_paid: sale.amount_paid, change: sale.change_amount,
+        tenders: sale.tenders,
         points_redeemed_amount: sale.points_redeemed_amount,
         // `name` intentionally left as bare `product_name` (no id fallback
         // here) -- _showReceipt's own fallback chain (server name -> cart
@@ -8914,6 +9139,9 @@ const RetailSystem = {
                  between" shape and were missed the first pass; retail_p0_
                  till_e2e.py's own nowrap check reads every such span in this
                  dialog, not just the item lines, and caught it red. -->
+            ${(this._receiptTenderRows(saleData, t) || []).map(r => `<div style="display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:var(--text-secondary)">${this._esc(r.label)}</span><span style="font-weight:700;white-space:nowrap">${this._fmt(r.amount)}</span>
+            </div>`).join('')}
             ${saleData.points_redeemed_amount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
               <span style="color:var(--text-secondary)">${t('Points Redeemed')}</span><span style="color:var(--text-money-positive);font-weight:700;white-space:nowrap">-${this._fmt(saleData.points_redeemed_amount)}</span>
             </div>` : ''}
@@ -9406,7 +9634,12 @@ const RetailSystem = {
       ${printDiscBreakdown.discount > printHalfMinorUnit ? `<div class="rcpt-line"><span>${rt('Discount')}</span><span>-${this._fmt(printDiscBreakdown.discount)}</span></div>` : ''}
       ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>${rt('Tax')}</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
       <div class="rcpt-line rcpt-bold"><span>${rt('Total')}</span><span>${this._fmt(saleData.total)}</span></div>
-      <div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>
+      ${(() => {
+        const tenderRows = this._receiptTenderRows(saleData, rt);
+        return tenderRows
+          ? tenderRows.map(r => `<div class="rcpt-line"><span>${this._esc(r.label)}</span><span>${this._fmt(r.amount)}</span></div>`).join('')
+          : `<div class="rcpt-line"><span>${rt('Paid')}</span><span>${this._fmt(saleData.amount_paid)}</span></div>`;
+      })()}
       ${saleData.change > 0 ? `<div class="rcpt-line"><span>${rt('Change due')}</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
       <div class="rcpt-center">${rt('Thank you')}</div>
@@ -14481,6 +14714,7 @@ const RetailSystem = {
             <select id="ret-refund-method">
               <option value="cash">${t('Cash')}</option><option value="card">${t('Card')}</option>
             </select>
+            <div id="ret-split-note" hidden style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
           </div>
         </div>
         <div class="ret-field"><label for="ret-reason">Return Reason</label>
@@ -14501,6 +14735,7 @@ const RetailSystem = {
     this._returnItems = [];
     this._returnSaleId = null;
     this._returnSaleOriginalMethod = null;
+    this._returnSaleTenders = null;
     document.getElementById('ret-sale-search')?.focus();
     document.getElementById('ret-sale-search')?.addEventListener('keydown', e => {
       if (e.key==='Enter') RetailSystem._findSaleForReturn();
@@ -14593,7 +14828,30 @@ const RetailSystem = {
       // create_return's own default/coercion), so this is a UX fix, not
       // the money-safety boundary -- but a careless click must no longer
       // reproduce the bug that server-side default now closes.
-      let originalMethod = full.payment_method || 'cash';
+      // `full` is GET /sales/<id>'s {sale, items} envelope -- the method lives
+      // on `full.sale`. This used to read `full.payment_method`, which is
+      // always undefined, so the "pre-select the original method" fix above
+      // silently fell back to 'cash' for every sale (found while adding split
+      // tender; a card sale now genuinely preselects Card).
+      const fullSale = full.sale || {};
+      let originalMethod = fullSale.payment_method || 'cash';
+      // Split tender: no single original method. Preselect cash when part of
+      // it was cash (the common walk-up refund), else the first real tender;
+      // the server refuses a split-sale return with no explicit method, and
+      // _saveReturn always confirms for one.
+      this._returnSaleTenders = null;
+      if (originalMethod === 'split') {
+        const tl = Array.isArray(fullSale.tenders) ? fullSale.tenders : [];
+        this._returnSaleTenders = tl;
+        const real = tl.filter(x => x.method !== 'credit');
+        originalMethod = real.some(x => x.method === 'cash') ? 'cash' : (real[0] ? real[0].method : 'cash');
+      }
+      const splitNote = document.getElementById('ret-split-note');
+      if (splitNote) {
+        const parts = this._returnSaleTenders ? this._returnPartsText(this._returnSaleTenders) : '';
+        splitNote.textContent = parts ? `${t('Paid in parts')}: ${parts}` : '';
+        splitNote.hidden = !parts;
+      }
       if (originalMethod === 'credit') originalMethod = 'cash';
       this._returnSaleOriginalMethod = originalMethod;
       // `methodSel.options` guard: a stub DOM (this screen's own test
@@ -14676,6 +14934,11 @@ const RetailSystem = {
     } catch(e) { SubsystemApp.showToast(t('Error looking up sale'),'error'); }
   },
 
+  // "Cash 6.832 + Card 5.000" for a split sale's tenders (plain text).
+  _returnPartsText(tenders) {
+    return (tenders || []).map(x => `${x.method === 'credit' ? t('On account') : this._plainMethodLabel(x.method)} ${this._fmt(x.amount)}`).join(' + ');
+  },
+
   async _saveReturn() {
     if (!this._returnSaleId) { SubsystemApp.showToast(t('Look up a sale first'),'error'); return; }
     const checked = [...document.querySelectorAll('.ret-item-cb:checked')];
@@ -14693,7 +14956,18 @@ const RetailSystem = {
     // silently. The server still computes and caps the real amount either
     // way (see create_return); this is a "are you sure" for an unusual
     // action, not the money-safety boundary itself.
-    if (this._returnSaleOriginalMethod && chosenMethod !== this._returnSaleOriginalMethod) {
+    if (this._returnSaleTenders) {
+      // Paid in parts: there is no "original method" to compare with, so ask
+      // every time -- the whole refund goes out through the ONE method chosen.
+      if (!(await this._confirm({
+        title: t('Change Refund Method'),
+        message: t('This sale was paid in parts ({parts}). Refund it all by {method}?')
+          .replace('{parts}', this._returnPartsText(this._returnSaleTenders))
+          .replace('{method}', this._plainMethodLabel(chosenMethod)),
+        confirmLabel: t('Refund'),
+        danger: false,
+      }))) return;
+    } else if (this._returnSaleOriginalMethod && chosenMethod !== this._returnSaleOriginalMethod) {
       if (!(await this._confirm({
         title: t('Change Refund Method'),
         message: t(`This sale was paid by ${this._returnSaleOriginalMethod}. Refund via ${chosenMethod} instead?`),
@@ -15129,6 +15403,7 @@ const RetailSystem = {
               ${sale.tax_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Tax</span><span style="color:var(--text-money)">${this._fmt(sale.tax_amount)}</span></div>`:''}
               <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1px dashed var(--border-default);padding-top:8px;margin-top:4px"><span style="color:var(--text-primary)">Total</span><span style="color:var(--text-money)">${this._fmt(sale.total)}</span></div>
               <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">Paid</span><span style="color:var(--text-money)">${this._fmt(sale.amount_paid)}</span></div>
+              ${(this._receiptTenderRows(sale, t) || []).map(r => `<div style="display:flex;justify-content:space-between;font-size:12px;margin-inline-start:12px"><span style="color:var(--text-muted)">${this._esc(r.label)}</span><span style="color:var(--text-money)">${this._fmt(r.amount)}</span></div>`).join('')}
               ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">${t('Change due')}</span><span style="color:var(--text-money-positive)">${this._fmt(sale.change_amount)}</span></div>`:''}
               ${sale.due_date?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Due date</span><span style="color:var(--state-warning-text)">${sale.due_date}</span></div>`:''}
             </div>
@@ -15170,6 +15445,7 @@ const RetailSystem = {
       total:           sale.total,
       amount_paid:     sale.amount_paid,
       change:          sale.change_amount,
+      tenders:         sale.tenders,
       // employee_name/customer_id/customer_name: GET /sales/<id> already
       // resolves both (see get_sale's own docstring) -- POST /sales's
       // immediate checkout response does not, so a receipt printed right

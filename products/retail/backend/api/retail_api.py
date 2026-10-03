@@ -147,6 +147,7 @@ from core.retail import doc_series
 # full reasoning. Pure module, no database access, same contract as every
 # other core.retail import on this list.
 from core.retail import returns_settlement
+from core.retail import tenders as tender_engine
 # Schema v38, ROADMAP.md's "retail schema v38 CLAIMED: a real general
 # ledger" entry -- the double-entry posting core. UNLIKE returns_settlement
 # above, this one DOES take a connection and write (the reorder_hook.py /
@@ -6358,6 +6359,29 @@ def create_sale():
             conn.close()
             return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
 
+        # ── Split tender: validate the SHAPE of `tenders` before any write ────
+        # A sale may be paid by several methods ({'tenders': [{'method':
+        # 'card','amount':5}, {'method':'cash','amount':10}]}). Absent key =
+        # today's path, byte for byte. One entry is the ordinary single-tender
+        # sale in another spelling, so it is rewritten to the legacy fields
+        # (credit sends amount_paid 0, exactly as the till does) and takes the
+        # legacy path unchanged. Two or more are settled in create_sale below
+        # by tender_engine.settle_tenders. Refused here, before BEGIN
+        # IMMEDIATE, so a bad payload never takes the write lock.
+        split_tenders = None
+        if 'tenders' in data:
+            _norm_tenders, _t_code, _t_msg = tender_engine.normalize_tenders(data.get('tenders'))
+            if _t_code:
+                conn.close()
+                return jsonify({'status': 'error', 'code': _t_code, 'message': _t_msg}), 400
+            if len(_norm_tenders) == 1:
+                _only = _norm_tenders[0]
+                data = dict(data)
+                data['payment_method'] = _only['method']
+                data['amount_paid'] = 0 if _only['method'] == 'credit' else float(_only['amount'])
+            else:
+                split_tenders = _norm_tenders
+
         # ── Launch-readiness Phase 7 stage 7c-ii: the 72-hour offline stop ───
         # "It is a block with an override, NOT an absolute refusal." (design
         # note, docs/launch-readiness/phase7-offline-ux.md "Decision 2") --
@@ -6975,7 +6999,7 @@ def create_sale():
         # `points_redeemed` request, and `paid`/`change`/`balance_due`
         # further down still read both in the same order they always have.
         customer_id = data.get('customer_id')
-        pm        = data.get('payment_method', 'cash')
+        pm        = 'split' if split_tenders else data.get('payment_method', 'cash')
 
         # ── Launch-readiness "loyalty redemption, wave 1" (schema v27,
         # ROADMAP.md's 2026-08-31 "retail schema v27 CLAIMED for loyalty
@@ -7087,9 +7111,23 @@ def create_sale():
         # currency-blind 2dp default here shorted or overpaid a JOD
         # customer by up to 5 fils on their change, the exact defect class
         # `_money`'s own docstring warns about for a drawer count.
-        paid      = max(0.0, _money(data.get('amount_paid', amount_due_after_points), currency))
-        change    = max(0.0, _money(paid - amount_due_after_points, currency))
-        balance_due = _money(amount_due_after_points - paid, currency)
+        split_settlement = None
+        if split_tenders:
+            # Split tender: the parts decide paid/change/balance_due, never a
+            # client-sent amount_paid. See core/retail/tenders.py.
+            split_settlement = tender_engine.settle_tenders(
+                split_tenders, amount_due_after_points, currency)
+            if not split_settlement['ok']:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': split_settlement['code'],
+                                'message': split_settlement['message']}), 400
+            paid = float(split_settlement['paid'])
+            change = float(split_settlement['change'])
+            balance_due = float(split_settlement['balance_due'])
+        else:
+            paid      = max(0.0, _money(data.get('amount_paid', amount_due_after_points), currency))
+            change    = max(0.0, _money(paid - amount_due_after_points, currency))
+            balance_due = _money(amount_due_after_points - paid, currency)
 
         # ── Credit-sale rules (Accounts Receivable) ──────────────────────────
         # A credit sale leaves an unpaid balance owed by a NAMED customer. Walk-ins
@@ -7559,7 +7597,21 @@ def create_sale():
         # the customer's OWN points as cash the drawer received, failing
         # the Z-report by exactly the redeemed amount on every redemption.
         net_received = min(paid, amount_due_after_points)
-        if net_received > _eps:
+        if split_settlement:
+            # Split tender: ONE payments row per tender, each at the amount
+            # RETAINED (cash minus change; card/mobile as charged). One row
+            # per tender is the contract everything downstream reads: the
+            # drawer's cash_sales sums method='cash' rows only, a return's
+            # tender cap sums them all, and sync replays them per uid. The
+            # on-account part is AR (via _adjust_credit below), not a payment.
+            for _t_method, _t_retained in split_settlement['rows']:
+                if float(_t_retained) <= _eps:
+                    continue
+                _record_payment(conn, cid, ('customer' if customer_id else None), customer_id, 'in',
+                                float(_t_retained), method=_t_method,
+                                related_type='sale', related_id=sale_id, doc_type='receipt',
+                                currency=currency)
+        elif net_received > _eps:
             # DEFECT 2 fix: `currency` (resolved once above at
             # `currency = _s.get('base_currency')`, the same value
             # `amount_due_after_points` uses) -- an omitted currency here
@@ -7749,6 +7801,7 @@ def create_sale():
             # frontend decision (_receiptIdentityBlock in
             # subsystem-retail.js), not something this endpoint pre-filters.
             'employee_name': employee_name, 'customer_id': customer_id, 'customer_name': customer_name,
+            'tenders': _sale_tender_lines(conn, cid, sale_id),
         }
         if quotation_id:
             # (d)/(g): every line where quoted and live differed, and which
@@ -8319,9 +8372,11 @@ def get_sale(sale_id):
         FROM sale_items si LEFT JOIN products p ON si.product_id=p.id
         WHERE si.sale_id=?
     """, (sale_id,)).fetchall()
+    tender_lines = _sale_tender_lines(conn, cid, sale_id)
     conn.close()
 
     payload = dict(sale)
+    payload['tenders'] = tender_lines
     actor_uid = payload.get('actor_user_uid')
     identity = _resolve_actor_identities(cid, [actor_uid]).get(actor_uid, _UNRESOLVED_IDENTITY)
     # Android reads the two raw columns (it distinguishes "account deleted
@@ -8982,6 +9037,24 @@ def create_return():
         if _original_method == 'credit':
             _original_method = 'cash'
         refund_method = data.get('refund_method', _original_method)
+        # Split tender: a sale paid in parts has no single method to default
+        # to, and guessing one would route the refund through a channel the
+        # cashier never chose (the DEFECT-1 shape). The pool the refund may
+        # draw on is still the sale's WHOLE tender (`tender_available` above);
+        # only WHERE it is paid out is the cashier's explicit pick. Refunding
+        # across several methods would need a schema change -- out of scope.
+        if _original_method == 'split':
+            _chosen = str(data.get('refund_method') or '').strip().lower()
+            if not _chosen:
+                _lines = _sale_tender_lines(conn, cid, sale_id)
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': 'REFUND_METHOD_REQUIRED',
+                                'message': 'This sale was paid in parts. Choose how to refund it.',
+                                'data': {'tenders': _lines}}), 400
+            if _chosen == 'split':
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'code': 'REFUND_METHOD_INVALID',
+                                'message': 'Choose one way to refund this sale, not "split".'}), 400
 
         tender_refund, ar_forgiven, store_credit = returns_settlement.split_return_settlement(
             refund, tender_available, refund_method,
@@ -10338,6 +10411,21 @@ def _cash_session_report(conn, cid, sess):
           AND COALESCE(status,'active')='active'
     """, (cid, session_id)).fetchone()[0]
 
+    # Split tender: what this drawer's sales took, by method. INFORMATIONAL
+    # only -- expected_cash below is built from cash_sales, never from this --
+    # but it is the only place a manager can see "Card 5.000" for sales that
+    # were paid in parts (sales.payment_method says only 'split').
+    tender_totals = {
+        r['method']: r['amount'] for r in conn.execute("""
+            SELECT p.method AS method, COALESCE(SUM(p.amount),0) AS amount FROM payments p
+            JOIN sales s ON p.sale_id = s.id
+            WHERE p.company_id=? AND s.branch_id=? AND s.session_id=?
+              AND p.direction='in' AND p.related_type='sale'
+              AND COALESCE(p.status,'active')='active'
+            GROUP BY p.method
+        """, (cid, bid, session_id)).fetchall()
+    }
+
     # DEFECT 1 fix: `tender_refund_amount`, NOT `refund_amount`. `refund_
     # amount` is the full recomputed VALUE of the goods returned (correct,
     # and load-bearing for metrics.py's revenue netting -- never change its
@@ -10429,6 +10517,7 @@ def _cash_session_report(conn, cid, sess):
         'is_this_terminal': (session_terminal == _this_terminal()),
         'opening_float': opening_float,
         'cash_sales': _money(cash_sales, currency),
+        'tender_totals': {m: _money(v, currency) for m, v in tender_totals.items()},
         'customer_cash_in': _money(customer_cash_in, currency),
         'cash_refunds': _money(cash_refunds, currency),
         'movements': {k: _money(v, currency) for k, v in movements.items()},
@@ -13150,6 +13239,41 @@ def _seed_methods(conn, cid):
             conn.execute("INSERT INTO payment_methods (company_id,name,type,is_active,sort_order) VALUES (?,?,?,1,?)",
                          (cid, name, typ, i))
 
+def _sale_tender_lines(conn, cid, sale_id):
+    """The tenders a sale was paid with, for receipts and for the returns
+    picker: [{'method', 'amount', 'tendered'}], in the order they were taken.
+
+    `amount` is what the shop RETAINED (the payments row); `tendered` is what
+    the customer handed over -- for the cash row that is amount + the sale's
+    change, so a receipt can show "Cash 10.000 / Change 3.168" truthfully. A
+    part left on account is not a payment row; it is appended as a 'credit'
+    line (total - points - amount_paid) so the receipt adds up to the total.
+    Additive on every sale (a plain cash sale yields one line), so a client
+    never has to special-case 'split' to read it.
+    """
+    srow = conn.execute(
+        "SELECT total, amount_paid, change_amount, points_redeemed_amount FROM sales "
+        "WHERE id=? AND company_id=?", (sale_id, cid)).fetchone()
+    if not srow:
+        return []
+    currency = _settings(conn, cid)['base_currency']
+    change = float(srow['change_amount'] or 0)
+    out = []
+    for r in conn.execute(
+            "SELECT method, amount FROM payments WHERE company_id=? AND sale_id=? "
+            "AND direction='in' AND related_type='sale' AND COALESCE(status,'active')='active' "
+            "ORDER BY id", (cid, sale_id)).fetchall():
+        amt = float(r['amount'] or 0)
+        tendered = amt + change if r['method'] == 'cash' else amt
+        out.append({'method': r['method'], 'amount': _money(amt, currency),
+                    'tendered': _money(tendered, currency)})
+    on_acct = _money(float(srow['total'] or 0) - float(srow['points_redeemed_amount'] or 0)
+                     - float(srow['amount_paid'] or 0), currency)
+    if on_acct > _money_epsilon(currency):
+        out.append({'method': 'credit', 'amount': on_acct, 'tendered': on_acct})
+    return out
+
+
 def _record_payment(conn, cid, party_type, party_id, direction, amount, method='cash',
                     related_type=None, related_id=None, notes='', device=None, doc_type='receipt',
                     currency=None, pay_uid=None):
@@ -13940,16 +14064,24 @@ def printer_kick():
                 'reason': 'No ESC/POS printer is configured on this device.',
             }})
 
-        # This codebase stores ONE payment_method string per sale (create_sale's
-        # `pm` local, `sales.payment_method` -- there is no split/mixed-tender
-        # table anywhere in retail's schema; see `_record_payment`'s single
-        # `method=` argument per sale). So "does this sale carry any cash
-        # tender" is exactly `payment_method == 'cash'`, no partial-cash case
-        # to widen for. A card/credit/bank sale reaching this route is normal
+        # `sales.payment_method` is ONE string per sale. A single-tender sale
+        # carries any cash tender exactly when it is 'cash'; a split-tender
+        # sale is labelled 'split' and its real tenders are its payments rows
+        # (handled just below, where a cash row widens this to 'cash'). A card/credit/bank sale reaching this route is normal
         # (the till calls it after every cash sale it rings, whether or not the
         # shop has this setting on) and refused the same non-error way as "no
         # printer" above.
         payment_method = sale['payment_method'] or 'cash'
+        if payment_method == 'split':
+            # Split tender: kick only when part of it really was cash (an
+            # active 'in' cash payments row exists for the sale); a
+            # card + mobile split opens nothing, same as a pure card sale.
+            _cash_part = conn.execute(
+                "SELECT 1 FROM payments WHERE company_id=? AND sale_id=? AND direction='in' "
+                "AND related_type='sale' AND method='cash' AND COALESCE(status,'active')='active' LIMIT 1",
+                (cid, sale_id)).fetchone()
+            if _cash_part:
+                payment_method = 'cash'
         if payment_method != 'cash':
             return jsonify({'status': 'success', 'data': {
                 'kicked': False,

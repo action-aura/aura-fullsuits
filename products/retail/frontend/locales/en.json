@@ -2346,5 +2346,21 @@
   "South Korean won": "South Korean won",
   "Sign out?": "Sign out?",
   "A sale is in progress. Signing out will clear it.": "A sale is in progress. Signing out will clear it.",
-  "Sign out and clear sale": "Sign out and clear sale"
+  "Sign out and clear sale": "Sign out and clear sale",
+  "Split": "Split",
+  "Remaining": "Remaining",
+  "Remove part": "Remove part",
+  "Part removed: {part}": "Part removed: {part}",
+  "Paid in parts": "Paid in parts",
+  "Taken by other methods": "Taken by other methods",
+  "Cart changed - part payments cleared": "Cart changed - part payments cleared",
+  "Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.": "Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.",
+  "On account takes whatever is left. Take the other parts first, then press F5.": "On account takes whatever is left. Take the other parts first, then press F5.",
+  "Take part of the payment that way; the rest stays due": "Take part of the payment that way; the rest stays due",
+  "In an empty amount box: remove the last part payment": "In an empty amount box: remove the last part payment",
+  "Amount, then F1 – F6": "Amount, then F1 – F6",
+  "Backspace": "Backspace",
+  "This sale was paid in parts ({parts}). Refund it all by {method}?": "This sale was paid in parts ({parts}). Refund it all by {method}?",
+  "This sale was paid in parts. Choose how to refund it.": "This sale was paid in parts. Choose how to refund it.",
+  "On account": "On account"
 }

@@ -1453,7 +1453,13 @@ def revenue_by_payment_method(conn, cid, period, branch_id=None, currency=None):
     handed back over the counter reduces the cash taken that day even if the
     sale it reverses was on card. That is also what the cash drawer already
     assumes (_cash_expected subtracts cash refunds from the cash float), so
-    this keeps the chart and the drawer telling the same story."""
+    this keeps the chart and the drawer telling the same story.
+
+    A sale paid by several methods is bucketed as 'split' (its
+    sales.payment_method), not apportioned per method: the per-method truth
+    for a drawer is the X/Z report's tender_totals, built from payments rows.
+    The bucket sum still equals total revenue, which is what the identity in
+    retail_metrics_consistency_test.py pins."""
     buckets = _bucketed(conn, cid, period, branch_id,
                         'payment_method', 'refund_method', business_day(conn, cid), currency)
     rows = [{'payment_method': method,

@@ -2346,5 +2346,21 @@
   "South Korean won": "وون كوري جنوبي",
   "Sign out?": "تسجيل الخروج؟",
   "A sale is in progress. Signing out will clear it.": "هناك عملية بيع قيد التنفيذ. تسجيل الخروج سيمسحها.",
-  "Sign out and clear sale": "تسجيل الخروج ومسح العملية"
+  "Sign out and clear sale": "تسجيل الخروج ومسح العملية",
+  "Split": "مقسّم",
+  "Remaining": "المتبقي",
+  "Remove part": "إزالة الجزء",
+  "Part removed: {part}": "أُزيل الجزء: {part}",
+  "Paid in parts": "مدفوع على أجزاء",
+  "Taken by other methods": "مقبوض بطرق أخرى",
+  "Cart changed - part payments cleared": "تغيّرت السلة - أُلغيت الدفعات الجزئية",
+  "Cash is less than what is left. To take it as part of the payment, press F1, then choose how the rest is paid.": "النقد أقل من المتبقي. لاعتباره جزءاً من الدفع اضغط F1 ثم اختر طريقة دفع الباقي.",
+  "On account takes whatever is left. Take the other parts first, then press F5.": "الآجل يأخذ المبلغ المتبقي. خذ الأجزاء الأخرى أولاً ثم اضغط F5.",
+  "Take part of the payment that way; the rest stays due": "خذ جزءاً من الدفع بهذه الطريقة ويبقى الباقي مستحقاً",
+  "In an empty amount box: remove the last part payment": "في خانة مبلغ فارغة: إزالة آخر دفعة جزئية",
+  "Amount, then F1 – F6": "المبلغ ثم F1 – F6",
+  "Backspace": "Backspace",
+  "This sale was paid in parts ({parts}). Refund it all by {method}?": "دُفع هذا البيع على أجزاء ({parts}). هل تريد إرجاع المبلغ كاملاً عبر {method}؟",
+  "This sale was paid in parts. Choose how to refund it.": "دُفع هذا البيع على أجزاء. اختر طريقة الإرجاع.",
+  "On account": "آجل"
 }

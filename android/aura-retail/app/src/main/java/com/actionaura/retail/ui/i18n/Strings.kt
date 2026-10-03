@@ -177,6 +177,7 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Payment method" to "طريقة الدفع",
     "Cash" to "نقدًا",
     "Card" to "بطاقة",
+    "Split" to "مقسّم",
     // The five payment-method names retail_api.py's _DEFAULT_METHODS seeds for every
     // company; a shop's own custom method name has no entry here and tr() falls back
     // to that name itself, which is fine since it was never translated either way.
