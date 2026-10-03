@@ -247,7 +247,18 @@ def test_the_identical_shape_on_a_two_decimal_currency_is_still_correctly_nothin
     client, cid, _bid, pid = _make_admin(currency='USD', sell_price=10.0)
     customer_id = _make_credit_customer(cid)
 
-    sale = _sell(client, customer_id, pid, amount_paid=9.996)
+    # DAY-1a UPDATE: this used to ring the sale with payment_method='credit'.
+    # create_sale now refuses a 'credit' sale that leaves nothing owed (400 --
+    # see retail_day1_credit_sale_test.py), and on USD a 9.996 tender against
+    # 10.00 leaves exactly nothing, so that call is correctly refused. The
+    # property THIS test owns -- a sub-cent remainder is not carried as a
+    # receivable on a 2-decimal currency -- is tender-independent, so it is
+    # rung with 'cash' instead: if the epsilon were ever made finer than half
+    # a cent, balance_due would exceed it, `is_credit` would flip on for this
+    # cash sale and the balance below would be 0.004, so the assertion still
+    # discriminates. What it no longer exercises: the `pm == 'credit'` branch
+    # with a sub-quantum remainder (now a refusal, covered by the DAY-1a file).
+    sale = _sell(client, customer_id, pid, amount_paid=9.996, payment_method='cash')
     assert sale['amount_paid'] == 10.0, (
         f"precondition: USD quantizes the tender to cents, got {sale['amount_paid']!r}")
 

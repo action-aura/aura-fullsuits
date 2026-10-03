@@ -7084,6 +7084,22 @@ def create_sale():
         # `original_balance_due` comment, which cites this line by name.
         _eps = _money_epsilon(currency)
         is_credit = (pm == 'credit') or (balance_due > _eps)
+        # DAY-1a: a sale ON ACCOUNT must leave something owed. The till used
+        # to post amount_paid = the whole amount for payment_method='credit',
+        # so balance_due came out 0 here, `is_credit` was True only through
+        # `pm == 'credit'`, the customer was charged NOTHING, and the "paid"
+        # amount was recorded as a cash deposit that fed the drawer's
+        # cash_sales (measured in the day-in-shop run). That is a money bug
+        # whichever client sends it, so refuse it loudly BEFORE any write
+        # rather than coercing amount_paid: a quiet fix here would hide a
+        # client that is still lying about what was handed over.
+        if pm == 'credit' and balance_due <= _eps:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': (
+                'A sale on account must leave an amount owed. The amount paid '
+                'covers the whole sale, so nothing would be charged to the '
+                'customer. Send the upfront deposit actually taken (0 if none) '
+                'as amount_paid, or use a different payment method.')}), 400
         warning = None
         if is_credit:
             if not customer_id:

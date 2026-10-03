@@ -1245,6 +1245,15 @@ def test_a_deleted_customer_cannot_be_sold_to_on_credit(client, a_conn):
     sale = client.post('/api/sub/retail/sales', json={
         'items': [{'product_id': pid, 'quantity': 1}],
         'customer_id': cust_id, 'payment_method': 'credit',
+        # DAY-1a UPDATE: a credit sale that omits amount_paid defaults to
+        # "paid in full", leaves nothing owed, and is now refused with a 400
+        # BEFORE the customer is looked up -- so this test never reached the
+        # tombstone check it exists for. 0 is the legitimate on-account shape
+        # (nothing handed over), which lets the request reach that check. It
+        # still catches a regression in the tombstone filter; what it no
+        # longer covers is the omitted-amount default (retail_day1_credit_
+        # sale_test.py owns the refusal).
+        'amount_paid': 0,
     })
     assert sale.status_code == 404, "a deleted customer must not be extended credit"
     assert 'not found' in sale.get_json()['message'].lower()

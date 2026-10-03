@@ -8480,7 +8480,12 @@ const RetailSystem = {
       // compute a phantom change equal to the redeemed value, which is
       // "THE CASH TRAP" that comment warns about, wearing a client-payload
       // shape instead of a server-formula one.
-      amount_paid:      this._paymentMethod === 'cash' ? Math.max(tendered, amountDue) : amountDue,
+      // DAY-1a: 'credit' (a sale ON ACCOUNT) sends 0 -- this till has no
+      // upfront-deposit field, so nothing was handed over. Sending amountDue
+      // here made the server compute balance_due = 0: the customer was
+      // charged nothing and the "payment" landed in the drawer as cash.
+      amount_paid:      this._paymentMethod === 'cash' ? Math.max(tendered, amountDue)
+                        : (this._paymentMethod === 'credit' ? 0 : amountDue),
       payment_method:   this._paymentMethod,
       // Loyalty redemption wave 1 (schema v27): an integer COUNT of points,
       // never a money amount -- create_sale (retail_api.py) resolves this
