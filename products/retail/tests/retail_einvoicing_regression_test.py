@@ -266,6 +266,12 @@ RETURNS_TABLE_COLUMNS = [
     # introduced -- the same ordering note the session_id comment above
     # already makes.
     'tender_refund_amount', 'ar_forgiven_amount', 'store_credit_amount',
+    # DAY-1 review F1 (schema v43 extension): the stored, line-exact tax a
+    # return gave back. Deliberate and reviewed: unrelated to e-invoicing. It is
+    # added by the boot-time chain, so (like the three above) it precedes the
+    # lazy idempotency_key. This test still catches what it exists for -- an
+    # e-invoicing migration touching a Retail table -- for every other column.
+    'tax_refunded',
     'idempotency_key',
 ]
 BASELINE_THREAD_NAMES = {'MainThread'}
