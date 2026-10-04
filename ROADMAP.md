@@ -6806,3 +6806,55 @@ own tax, with the final return taking exactly the remainder; GL post_return and
 the tax report both read that one stored figure (old rows fall back to the old
 ratio), so the books and the report agree by construction. RETAIL_SCHEMA_VERSION
 stays 43. Plan: job f8252b48 tmp/day/fix_plan2.md.
+## 2026-10-05 — DAY-1 money fixes CASHED IN (retail v43), plus split tender and the cashier discount limit
+
+Delivered on `feat/retail-ux-p0` (pushed through 54b5cebc on 2026-10-04; rounds 3-4
+local until the next push). Driven by `scripts/lab/day_in_shop.py` (real app, real
+browser, keyboard-only day): last run 101 PASS / 4 FAIL, every money row green
+(drawer variance, AR, statement, Tax Payable, P&L, COGS, trial balance); the 4
+FAILs are UI-only and are the DAY-UI wave.
+
+- DAY-1a/1b (b4d96f44): an on-account sale at the till charges the customer and is
+  not recorded as cash.
+- DAY-1c (1f73dacd, v43 `payments.cash_session_id`): customer cash taken on account
+  reaches the drawer's expected cash.
+- DAY-1d (v43 EXTENDED `returns.tax_refunded`; 251c1aa1, d8263b4c, 470e207d,
+  12f5b09b): returns reverse the line-exact tax; books and tax report read one figure.
+- Round 3 (second adversarial review, 8f63fb85, f50db4c9, d5ceadd6, d5247a10):
+  R1 the sync suite's hand-built `returns` table gained the column (CI was 4 red);
+  R2 one shared per-row rule `metrics.reversed_tax_of_return_row` so a NULL
+  (pre-upgrade / older-peer) return is read the same way by the report and by the
+  completing return (was: tax reversed twice, report -16.0); R3 points given back
+  on a return are booked (Cr Loyalty Program Expense) and count as settled, so a
+  points-paid taxed line's tax is no longer stranded and the result no longer
+  depends on return order.
+- Round 4 (c1ea1b95) — PRE-EXISTING over-refund, found by the orchestrator's own
+  probe, not by a suite: a sale paid 100 points + 100 cash, half returned, paid
+  back 100 CASH and 50 points (150 of value for 100 of goods; same at 54b5cebc).
+  The refund now comes back in the same mix it was paid: only `refund - points
+  share` goes through the tender/AR split. Half return = 50 cash + 50 points.
+- Split tender (f74f4a73, 54b5cebc): one sale paid by several methods.
+- Owner-set cashier discount limit (00c4f279; managers unlimited by owner decision).
+
+Measured: full CI list (`run_all_tests.py retail commercial_runtime
+licensing_contracts sync einvoicing identity notifications -j 8`) 491/492; the one
+TIMEOUT is `retail_p1b_numbering_twodevice_test.py`, which passes 8/8 alone in
+17m18s (log job f8252b48 tmp/day/numbering_probe.log) — slow, not broken (residual D6).
+
+Residuals (written down, not fixed):
+- D1 (was R4) — two tills each returning part of one sale OFFLINE can strand or
+  over-reverse 1 minor unit of tax (completion is only known locally). Strict
+  xfail in `retail_day1_f1_adversarial_test.py`.
+- D2 — a refund across several methods needs a schema change; a split-paid sale is
+  refunded through ONE method the cashier picks (owner decision).
+- D3 — money-policy settings are unsigned, including `cashier_discount_limit_pct`
+  (same gap as S-AUTH R7): a member till's copy could be edited locally.
+- D4 — paying a supplier in cash does not take it out of the till drawer.
+- D5 — the KMP/Android app has no split tender (how a desktop split sale looks
+  there after sync was not checked).
+- D6 — `retail_p1b_numbering_twodevice_test.py` runs ~17 min alone and exceeds the
+  runner's 1200 s budget under `-j 8`; shorten it or give it its own budget.
+- D7 — `retail_money_sync_test.py` only passes with `AURA_SITE_RELAY_ENABLED=0`
+  (the runner sets it; bare pytest fails 6): the file should set it itself (R10 shape).
+- D8 — CLAUDE.md's "licensing unset = fully unlocked" is stale: a fresh install is
+  READ-ONLY (403 LICENSE_INACTIVE) until a licence exists.
