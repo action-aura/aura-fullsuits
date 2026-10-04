@@ -9157,7 +9157,32 @@ def create_return():
             _tax_part = _tax_remaining
         else:
             _tax_part = min(_line_tax, _tax_remaining)
-        _settled_total = Decimal(str(tender_refund)) + Decimal(str(ar_forgiven + store_credit))
+        # DAY-1d round 3 R3 -- POINTS GIVEN BACK ARE SETTLEMENT TOO. A sale paid
+        # partly in loyalty points booked Dr Loyalty Program Expense for those
+        # points (post_sale); this return restores its share of them to the
+        # customer (loyalty block below) but post_return booked no leg for it, so
+        # `settled` (cash + AR) excluded the points value, the min(.., settled)
+        # cap below stranded the tax of a points-paid taxed line for good, and
+        # the answer depended on the ORDER the lines were returned in. The money
+        # value of the points restored is computed HERE, with the loyalty block's
+        # own proportion/gates, and passed to post_return as a Cr to the same
+        # account post_sale debited -- so it is part of `settled` in both places.
+        _points_restored_value = Decimal('0')
+        _orig_total_pts = float(sale['total'] or 0)
+        if sale['customer_id'] and _orig_total_pts > 0 and float(sale['points_redeemed_amount'] or 0) > 0:
+            _redeemed_pts = float(cur.execute(
+                "SELECT COALESCE(SUM(CASE WHEN entry_type='redeem' THEN -points_delta ELSE 0 END), 0) "
+                "FROM loyalty_ledger WHERE company_id=? AND customer_id=? AND sale_id=?",
+                (cid, sale['customer_id'], sale_id)).fetchone()[0] or 0)
+            _prop = min(Decimal('1'), Decimal(str(refund)) / Decimal(str(_orig_total_pts)))
+            # Same gate as the loyalty block: points only come back when the
+            # quantized point giveback is non-zero.
+            if _redeemed_pts and (Decimal(str(_redeemed_pts)) * _prop).quantize(
+                    Decimal('0.0001'), rounding=ROUND_HALF_UP) != 0:
+                _points_restored_value = (Decimal(str(sale['points_redeemed_amount'])) * _prop).quantize(
+                    _tq, rounding=ROUND_HALF_UP)
+        _settled_total = (Decimal(str(tender_refund)) + Decimal(str(ar_forgiven + store_credit))
+                          + _points_restored_value)
         return_tax_refunded = float(max(
             min(_tax_part, _settled_total), Decimal('0')).quantize(_tq, rounding=ROUND_HALF_UP))
 
@@ -9559,7 +9584,8 @@ def create_return():
         # (returns.tax_refunded, decided above) -- no ratio is recomputed.
         gl.post_return(conn, cid, bid, ret_id, ret_num, currency,
                         tender_refund, ar_forgiven + store_credit,
-                        tax_refunded=return_tax_refunded)
+                        tax_refunded=return_tax_refunded,
+                        points_restored_value=float(_points_restored_value))
 
         # Schema v39 (cost basis for COGS): the MIRROR of create_sale's own
         # COGS posting -- Cr Cost of Goods Sold / Dr Inventory for the cost

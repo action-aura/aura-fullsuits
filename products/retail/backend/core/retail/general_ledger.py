@@ -1790,7 +1790,7 @@ def post_sale(conn, cid, branch_id, sale_id, sale_number, currency,
 
 def post_return(conn, cid, branch_id, return_id, return_number, currency,
                  tender_refund_amount, ar_credit_amount, business_date=None,
-                 posted_by=None, tax_refunded=0):
+                 posted_by=None, tax_refunded=0, points_restored_value=0):
     """Cr Cash (cash physically refunded) + Cr Accounts Receivable
     (`ar_forgiven_amount + store_credit_amount` combined -- both are, in
     `_adjust_credit` terms, the SAME `-amount` adjustment to
@@ -1830,6 +1830,16 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
     tax_refunded`: both debits sum to `settled`, so the journal balances by
     construction. A return with no tax splits nothing. Journals already posted
     are NOT rewritten.
+
+    DAY-1d round 3 R3 -- POINTS GIVEN BACK. `points_restored_value` is the money
+    value of the loyalty points THIS return restores to the customer. post_sale
+    debited Loyalty Program Expense for the points a sale redeemed; giving them
+    back must credit the same account, or the expense stays booked for points
+    the customer got back (and `settled` excluded that value, so the tax of a
+    points-paid taxed line was stranded and the result depended on return
+    order). It is part of `settled`: Cr Loyalty Program Expense
+    `points_restored_value`, and the debits (Tax Payable + Sales Returns) cover
+    cash + AR + points, so the journal still balances by construction.
     """
     settled = Decimal('0')
     lines = []
@@ -1841,6 +1851,10 @@ def post_return(conn, cid, branch_id, return_id, return_number, currency,
         lines.append({'account_code': ACCOUNT_AR, 'credit': ar_credit_amount,
                        'memo': 'AR forgiven / store credit issued'})
         settled += Decimal(str(ar_credit_amount))
+    if points_restored_value and points_restored_value > 0:
+        lines.append({'account_code': ACCOUNT_LOYALTY_EXPENSE, 'credit': points_restored_value,
+                       'memo': 'Loyalty points given back'})
+        settled += Decimal(str(points_restored_value))
     if settled <= 0:
         # Nothing was actually settled against this return (the DEFECT-1B
         # edge case, or a return the caller should not have posted at
