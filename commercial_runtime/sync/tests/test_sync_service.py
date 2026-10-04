@@ -284,6 +284,15 @@ CREATE TABLE returns (
     tender_refund_amount REAL DEFAULT 0,
     ar_forgiven_amount REAL DEFAULT 0,
     store_credit_amount REAL DEFAULT 0,
+    -- Retail schema v43 (_migrate_add_return_tax_refunded, DAY-1d): nullable
+    -- REAL, NO default -- NULL means "return predates the column", which the
+    -- tax maths treats differently from a stored 0. This fixture is meant to
+    -- be a copy of the product table; it drifted again when the sync apply
+    -- INSERT started naming this column (4 tests failed with "table returns
+    -- has no column named tax_refunded"). Real databases always have it (boot
+    -- reconcile), so the fixture is fixed, not sync_service made to sniff
+    -- the table's shape.
+    tax_refunded REAL,
     FOREIGN KEY (sale_id) REFERENCES sales(id)
 );
 CREATE UNIQUE INDEX idx_returns_uid ON returns(uid) WHERE uid IS NOT NULL;
