@@ -9133,10 +9133,16 @@ def create_return():
         #   never more than `settled` (tender + AR credit) -- the amount
         #                post_return actually books, so the journal balances.
         _tq = tax_engine.currency_quantum(currency)
-        _prior_tax = float(cur.execute(
-            "SELECT COALESCE(SUM(COALESCE(tax_refunded,0)),0) FROM returns "
-            "WHERE sale_id=? AND company_id=? AND status='completed'",
-            (sale_id, cid)).fetchone()[0] or 0)
+        # DAY-1d round 3 R2: a NULL tax_refunded (return made before the column
+        # existed) is NOT 0 -- the tax report reads it as the legacy ratio, so
+        # this sum must too, through the SAME helper, or the completing return
+        # reverses that tax a second time.
+        _prior_tax = sum(
+            metrics.reversed_tax_of_return_row(_r[0], _r[1], sale['total'], sale['tax_amount'])
+            for _r in cur.execute(
+                "SELECT tax_refunded, refund_amount FROM returns "
+                "WHERE sale_id=? AND company_id=? AND status='completed'",
+                (sale_id, cid)).fetchall())
         _tax_remaining = max(Decimal(str(sale['tax_amount'] or 0)) - Decimal(str(_prior_tax)), Decimal('0'))
         _sold_qty = Decimal(str(cur.execute(
             "SELECT COALESCE(SUM(quantity),0) FROM sale_items WHERE sale_id=?",

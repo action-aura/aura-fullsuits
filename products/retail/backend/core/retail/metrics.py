@@ -1079,6 +1079,31 @@ def gross_tax(conn, cid, period, branch_id=None, currency=None):
     return _money(row[0], currency)
 
 
+def reversed_tax_of_return_row(tax_refunded, refund_amount, sale_total, sale_tax):
+    """The tax ONE return row gave back: its stored `returns.tax_refunded`, or,
+    when that is NULL (a return made before v43's extension added the column),
+    the legacy value-basis ratio refund_amount * sale_tax / sale_total.
+
+    SINGLE SOURCE (DAY-1d round 3 R2). Two readers need this per-row figure:
+    `refunded_tax` below (the tax report) and create_return's sum of "tax
+    already reversed by this sale's earlier returns", which decides how much the
+    COMPLETING return reverses. create_return used to read NULL as 0 while this
+    report read NULL as the ratio, so after an upgrade a pre-upgrade partial
+    return was reversed once by the report's ratio and AGAIN by the completing
+    return's remainder (fully returned sale reported tax -16.0). Both now call
+    this one function, so the two cannot diverge again.
+
+    `sale_total > 0` guards the division: a zero-value sale has no tax to
+    apportion, and a degenerate row must not make the report 500.
+    """
+    if tax_refunded is not None:
+        return float(tax_refunded)
+    total = float(sale_total or 0)
+    if total <= 0:
+        return 0.0
+    return float(refund_amount or 0) * float(sale_tax or 0) / total
+
+
 def refunded_tax(conn, cid, period, branch_id=None, currency=None):
     """The tax inside this period's refunds: SUM(returns.tax_refunded), the
     ONE figure create_return stores per return and general_ledger.post_return
@@ -1113,13 +1138,15 @@ def refunded_tax(conn, cid, period, branch_id=None, currency=None):
         has_col = False
     stored = "r.tax_refunded" if has_col else "NULL"
     rows = _returns_query(conn, f"""
-        SELECT COALESCE(SUM(
-            COALESCE({stored},
-                     r.refund_amount * CASE WHEN s.total > 0 THEN s.tax_amount / s.total ELSE 0 END)
-        ), 0)
+        SELECT {stored}, r.refund_amount, s.total, s.tax_amount
         FROM returns r JOIN sales s ON s.id = r.sale_id
         WHERE {where}""", params)
-    return _money(rows[0][0], currency) if rows else 0.0
+    # Summed in Python through the ONE shared per-row rule (DAY-1d round 3 R2):
+    # create_return's "tax already reversed by earlier returns" sum uses the
+    # same helper, so the report and the completing-return remainder can never
+    # read a NULL row two different ways again.
+    total = sum((reversed_tax_of_return_row(*row) for row in rows), 0.0)
+    return _money(total, currency) if rows else 0.0
 
 
 def tax_collected(conn, cid, period, branch_id=None, currency=None):
