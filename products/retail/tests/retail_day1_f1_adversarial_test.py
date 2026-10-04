@@ -7,6 +7,7 @@ The rest are probes that held.
 Run (repo venv, every AURA_* env var removed), one file per process:
     pytest products/retail/tests/retail_day1_f1_adversarial_test.py -q
 """
+import datetime
 import os
 import shutil
 import sys
@@ -192,12 +193,19 @@ def _apply_older_peer_return(c, sale, pid, qty, refund, with_tax_key=None):
     OLDER device (no tax_refunded key) or a current one (with_tax_key)."""
     bid, buid = _branch(sale['id'])
     ruid = str(uuid.uuid4())
+    _now_utc = datetime.datetime.now(datetime.timezone.utc)
     payload = {'uid': ruid, 'sale_uid': _sale_uid(sale['id']), 'return_number': f'RET-PEER-{ruid[:8]}',
                'branch_id': bid, 'branch_uid': buid, 'cashier': 'POS', 'reason': 'peer',
                'refund_method': 'cash', 'refund_amount': refund, 'tender_refund_amount': refund,
                'ar_forgiven_amount': 0.0, 'store_credit_amount': 0.0,
-               'status': 'completed', 'created_at': '2026-10-03 10:00:00',
-               'actor_user_uid': None, 'terminal_id': None, 'created_at_utc': '2026-10-03T07:00:00Z'}
+               # NOW, not a hardcoded date: the tax report reads `days=1`, so a
+               # fixed 2026-10-03 stamp fell out of the window once the calendar
+               # rolled over and the synced return silently vanished from the
+               # report (both tests below went red at midnight with no code
+               # change -- found by the DAY-1d round 3 full-suite run).
+               'status': 'completed', 'created_at': _now_utc.strftime('%Y-%m-%d %H:%M:%S'),
+               'actor_user_uid': None, 'terminal_id': None,
+               'created_at_utc': _now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}
     if with_tax_key is not None:
         payload['tax_refunded'] = with_tax_key
     _apply(c.test_company_id, {'entity_type': 'return', 'event_type': 'create', 'payload': payload})
