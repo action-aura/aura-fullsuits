@@ -303,6 +303,50 @@ def test_RED_fully_points_paid_sale_fully_returned_leaves_no_tax(client):
         f'Loyalty Program Expense {_acct(tb, gl.ACCOUNT_LOYALTY_EXPENSE)} after the points were given back')
 
 
+def _return_row(sale_id, n):
+    """(tender_refund, points value restored) of the n-th (0-based) return on the
+    sale. Points restored = the positive loyalty_ledger 'adjust' row stamped with
+    that return's id (point value is 1 in these tests, so points == money)."""
+    conn = get_retail_conn()
+    try:
+        rid, tender = conn.execute(
+            "SELECT id, tender_refund_amount FROM returns WHERE sale_id=? ORDER BY id LIMIT 1 OFFSET ?",
+            (sale_id, n)).fetchone()
+        pts = conn.execute(
+            "SELECT COALESCE(SUM(points_delta),0) FROM loyalty_ledger "
+            "WHERE return_id=? AND entry_type='adjust' AND points_delta>0", (rid,)).fetchone()[0]
+        return float(tender), float(pts)
+    finally:
+        conn.close()
+
+
+def test_RED_half_return_of_points_and_cash_sale_refunds_in_the_same_mix(client):
+    """DAY-1d round 4. 2 x 100 untaxed = 200, 100 paid in points + 100 cash.
+    Returning ONE unit (100 of goods) used to refund 100 cash AND restore 50
+    points (150 of value). It must come back 50 cash + 50 points = 100; the
+    second unit then brings the totals to 100 cash + 100 points with no loyalty
+    expense left and Sales Returns == 200."""
+    cust = _points_customer(client, 100)
+    p0 = _product(client, 100.0, tax_rate=0)
+    sale = _sale(client, [{'product_id': p0, 'quantity': 2}], customer_id=cust,
+                 points_redeemed=100, amount_paid=100)
+    _return(client, sale['id'], [{'product_id': p0, 'quantity': 1}])
+    cash1, pts1 = _return_row(sale['id'], 0)
+    assert (cash1, pts1) == (50.0, 50.0), f'first half refunded cash {cash1} + points {pts1}'
+    assert cash1 + pts1 == 100.0
+    tb = _tb(client)
+    assert tb['is_balanced'] is True
+    assert _acct(tb, '4900') == 100.0, f'Sales Returns {_acct(tb, "4900")}'
+
+    _return(client, sale['id'], [{'product_id': p0, 'quantity': 1}])
+    cash2, pts2 = _return_row(sale['id'], 1)
+    assert (cash1 + cash2, pts1 + pts2) == (100.0, 100.0), (cash1 + cash2, pts1 + pts2)
+    tb = _tb(client)
+    assert tb['is_balanced'] is True
+    assert _acct(tb, gl.ACCOUNT_LOYALTY_EXPENSE) == 0.0
+    assert _acct(tb, '4900') == 200.0
+
+
 # ── PROBES expected GREEN (what held) ─────────────────────────────────────────
 
 @pytest.mark.parametrize('seq', [
