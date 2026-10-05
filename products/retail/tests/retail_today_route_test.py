@@ -462,7 +462,15 @@ def test_collect_card_is_what_the_aging_report_calls_over_thirty_days(full):
 def test_collect_survives_a_stale_credit_balance_cache(full):
     """A receive-only computer reads customers.credit_balance as 0. The card
     must come from the ledger, so zeroing the cache changes nothing."""
+    from core.retail import party_balance
     conn = get_retail_conn()
+    # First make the cache AGREE with the ledger (what the post-pull refresh
+    # leaves behind) and prove it is non-zero, so that zeroing it below is a
+    # real change and not a no-op on a column that was never populated.
+    party_balance.refresh_cache(conn, full['cid'], 'customers', currency='JOD')
+    conn.commit()
+    stored = conn.execute("SELECT credit_balance FROM customers WHERE id=?", (full['hala'],)).fetchone()[0]
+    assert stored == 70.0, stored
     conn.execute("UPDATE customers SET credit_balance=0 WHERE company_id=?", (full['cid'],))
     conn.commit(); conn.close()
     c = _card(_data(full['client']), 'collect')
