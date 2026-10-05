@@ -74,6 +74,8 @@ from commercial_runtime.notifications.outbox import EmailOutboxRepository as _Em
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
 from database.schema import (
     get_retail_conn, sub_create, local_terminal_id,
+    # v44: "is this a one-computer shop" -- payables' networked-shop note.
+    _single_computer_shop,
     # diagnostics_export's own version field, below -- imported rather than
     # re-spelled, matching this file's `now_utc_iso`/status constants
     # discipline immediately above.
@@ -12436,10 +12438,10 @@ def report_whatsapp():
             # customer owe anything" and "which of their sales is unpaid" the
             # same way.
             _eps = _money_epsilon(_company_currency(conn, cid))
-            parties = conn.execute(
-                "SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>?",
-                (cid, _eps),
-            ).fetchall()
+            # v44: derived balances (one batch), not the per-computer stored
+            # column a receive-only computer reads as 0.
+            parties, _unused_total = _derived_party_rows(
+                conn, cid, 'customers', "id", _company_currency(conn, cid), _eps)
             today = datetime.now()
             overdue_total = 0.0
             bucket_90_plus = 0.0
@@ -13533,6 +13535,27 @@ def _refresh_party_balance(conn, table, pid, cid, currency=None):
     party_balance.refresh_cache(conn, cid, table, [pid], currency)
     return float(party_balance.customer_balance(conn, cid, pid, currency)
                  if table == 'customers' else party_balance.supplier_balance(conn, cid, pid, currency))
+
+
+def _derived_party_rows(conn, cid, table, columns, currency, eps):
+    """v44: the debtor/creditor book from the derivation, in ONE batch (a
+    GROUP BY per source, no per-party query). Returns (rows, total):
+    rows = dicts of `columns` plus `credit_balance` (the derived figure, key
+    name unchanged so every client keeps working) for each party whose derived
+    balance exceeds `eps`, largest first (name breaks ties); total = the sum of
+    exactly those rows, in Decimal, so the total always equals the rows shown."""
+    derived = (party_balance.customer_balances if table == 'customers'
+               else party_balance.supplier_balances)(conn, cid, currency)
+    rows, total = [], Decimal('0')
+    for r in conn.execute(f"SELECT {columns} FROM {table} WHERE company_id=?", (cid,)).fetchall():
+        d = dict(r)
+        bal = derived.get(str(d['id']), Decimal('0'))
+        if float(bal) > eps:
+            d['credit_balance'] = float(bal)
+            rows.append(d)
+            total += bal
+    rows.sort(key=lambda d: (-d['credit_balance'], str(d.get('name') or '')))
+    return rows, float(total)
 
 
 def _adjust_credit(*_args, **_kwargs):
@@ -16993,23 +17016,18 @@ def customers_receivables():
     # for why a hardcoded 0.005 in a 3-decimal currency hid up to five fils
     # of real debt from the debtor book entirely.
     _eps = _money_epsilon(_company_currency(conn, cid))
-    rows = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers "
-                        "WHERE company_id=? AND COALESCE(credit_balance,0) > ? ORDER BY credit_balance DESC", (cid, _eps)).fetchall()
-    # Must use the same epsilon filter as the rows query above. Without it, a
-    # customer with a negative (overpaid) credit_balance -- reachable because
-    # customer_payment() below only validates amount>0 and never caps it at
-    # the outstanding balance -- silently nets against and understates the
-    # genuine receivables of every other customer, so total_receivable no
-    # longer equals the sum of the rows actually shown to the user.
-    total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM customers "
-                         "WHERE company_id=? AND COALESCE(credit_balance,0) > ?", (cid, _eps)).fetchone()[0]
-    # Currency-aware since 2026-09-05: this total was the last family of
-    # figures still quantized to 0.01 after the 2026-09-03 waves, so a JOD
-    # shop's "what am I owed" was wrong by up to 5 fils while every row
-    # under it was right. See ROADMAP "Money precision beyond the cash drawer".
+    # v44: the rows and the total come from the shop-wide DERIVATION (one
+    # batch query set, no per-customer loop), with the column key name
+    # `credit_balance` kept on the wire. Reading the stored column here showed
+    # a receive-only computer an empty debtor book for debts its peers rang.
     currency = _company_currency(conn, cid)
+    rows, total = _derived_party_rows(
+        conn, cid, 'customers', "id,name,phone,credit_mode,credit_limit", currency, _eps)
+    # The total is filtered with the SAME epsilon as the rows (an overpaid,
+    # negative-balance customer must not net against and understate the total
+    # shown) -- _derived_party_rows applies one filter to both.
     conn.close()
-    return jsonify({'status': 'success', 'total_receivable': _money(total, currency), 'data': [dict(r) for r in rows]})
+    return jsonify({'status': 'success', 'total_receivable': _money(total, currency), 'data': rows})
 
 # ── FIFO ageing of ONE customer's debt (Phase 1a, crew D round 6) ─────────────
 #
@@ -17218,6 +17236,10 @@ def _customer_aging_from_events(events, credit_balance, boundary, date_cache=Non
         date_cache = {}
     dated = []
     for e in events:
+        if e.get('undated'):
+            # v44 carried balance: no business date, ages as current.
+            dated.append(dict(e, date=None))
+            continue
         key = (e.get('created_at_utc'), e.get('created_at'))
         if key not in date_cache:
             date_cache[key] = _event_business_date(e, boundary)
@@ -17278,8 +17300,12 @@ def _statement_events(conn, cid, cust_id, _eps):
     if cust_id is not None:
         scope, scope_params = "= ?", (cust_id,)
     else:
-        scope = "IN (SELECT id FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>?)"
-        scope_params = (cid, _eps)
+        # v44: every customer of the company, NOT "those whose stored
+        # credit_balance exceeds eps" -- the stored column is a per-computer
+        # cache a receive-only computer reads as 0, which hid its debtors'
+        # events from the ageing. Callers filter by the DERIVED balance.
+        scope = "IN (SELECT id FROM customers WHERE company_id=?)"
+        scope_params = (cid,)
     # THE CHARGE IS THE AR THIS SALE ACTUALLY CREATED -- term for term the
     # figure create_sale credited: `balance_due = amount_due_after_points -
     # paid`, where `amount_due_after_points = total - points_redeemed_amount`
@@ -17419,8 +17445,24 @@ def _statement_events(conn, cid, cust_id, _eps):
         "WHERE r.company_id=? AND s.company_id=? AND s.customer_id " + scope + " AND r.status='completed' "
         "AND COALESCE(r.store_credit_amount,0) > ?) ORDER BY rid, half",
         (cid, cid, *scope_params, _eps, cid, cid, *scope_params, _eps)).fetchall()
+    # v44: the party_balance_adjustments group -- the 4th and last term of
+    # party_balance's customer formula (an upgrade carry that preserved a
+    # pre-v44 stored balance no event explained). Without it the statement's
+    # last running balance would disagree with the derived figure by exactly
+    # the carry. Shown as a dated line `balance_carried_owed` (+) /
+    # `balance_carried_credit` (-); `undated` tells the FIFO ageing to treat
+    # it as current (it carries no business date a bucket could be chosen by).
+    adjustments = []
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='party_balance_adjustments'").fetchone():
+        adjustments = conn.execute(
+            "SELECT uid, reason AS ref, created_at, created_at_utc, party_id AS cust, ABS(amount) AS amount, "
+            "CASE WHEN amount >= 0 THEN 'balance_carried_owed' ELSE 'balance_carried_credit' END AS kind, "
+            "CASE WHEN amount >= 0 THEN 1 ELSE -1 END AS sign, 1 AS undated "
+            "FROM party_balance_adjustments WHERE company_id=? AND party_type='customer' AND party_id " + scope + " "
+            "ORDER BY created_at, uid",
+            (cid, *scope_params)).fetchall()
     by_customer = {}
-    for group in (charges, receipts, settlements):
+    for group in (charges, receipts, settlements, adjustments):
         for r in group:
             by_customer.setdefault(str(r['cust']), []).append(dict(r))
     for events in by_customer.values():
@@ -17592,16 +17634,21 @@ def customer_statement(cust_id):
     # the printed statement must agree with `/reports/aging` on -- one
     # allocation, three readers. Additive: the wire shape Android's
     # StatementEvent parses is untouched.
+    #
+    # v44: the balance (and the FIFO's target) is the DERIVED figure, not the
+    # stored cache. The cache is per computer; the derivation is the sum of the
+    # same shop-wide rows these events come from, so `unbooked_amount` below is
+    # 0 by construction (the key stays on the wire for the clients that read it).
+    derived_balance = float(party_balance.customer_balance(conn, cid, cust_id, currency))
     boundary = metrics.business_day(conn, cid)
-    view = _customer_aging_from_events(events, cust['credit_balance'], boundary)
-    aging = _aging_fields(view, cust['credit_balance'], _eps, _shop_today(conn, cid), currency)
-    # The part of the stored balance no event on THIS computer explains
-    # (imports, pre-v36 backfill, sales synced from another till). /reports/aging
-    # already returned it per customer; the statement modal needs the same
-    # number so it can say so instead of silently disagreeing with its own list.
+    view = _customer_aging_from_events(events, derived_balance, boundary)
+    aging = _aging_fields(view, derived_balance, _eps, _shop_today(conn, cid), currency)
     aging['unbooked_amount'] = _money(float(view['unbooked']), currency)
     conn.close()
-    return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency), **aging}})
+    cust_out = dict(cust)
+    cust_out['credit_balance'] = derived_balance
+    return jsonify({'status': 'success', 'data': {'customer': cust_out, 'events': out,
+                                                  'balance': _money(derived_balance, currency), **aging}})
 
 @retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
 @mt_login_required
@@ -17664,16 +17711,22 @@ def suppliers_payables():
     # One epsilon, read once, bound into both queries -- the supplier mirror
     # of customers_receivables above. See `_money_epsilon`.
     _eps = _money_epsilon(_company_currency(conn, cid))
-    rows = conn.execute("SELECT id,name,phone,payment_terms,credit_balance FROM suppliers "
-                        "WHERE company_id=? AND COALESCE(credit_balance,0) > ? ORDER BY credit_balance DESC", (cid, _eps)).fetchall()
-    # Same fix as customers_receivables() above -- filter the total the same
-    # way as the listed rows so an overpaid (negative-balance) supplier can't
-    # silently net against and understate the total_payable shown to the user.
-    total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM suppliers "
-                         "WHERE company_id=? AND COALESCE(credit_balance,0) > ?", (cid, _eps)).fetchone()[0]
+    # v44: derived, see customers_receivables (same helper, same one filter
+    # for the rows and the total).
     currency = _company_currency(conn, cid)
+    rows, total = _derived_party_rows(
+        conn, cid, 'suppliers', "id,name,phone,payment_terms", currency, _eps)
+    networked = not _single_computer_shop(conn, cid)
     conn.close()
-    return jsonify({'status': 'success', 'total_payable': _money(total, currency), 'data': [dict(r) for r in rows]})
+    body = {'status': 'success', 'total_payable': _money(total, currency), 'data': rows}
+    if networked:
+        # v44 (owner decision Q2, assumed): purchase orders do not sync yet, so
+        # on a shop with more than one computer a supplier's figure counts the
+        # purchase orders entered ON THIS COMPUTER (its payments are shop-wide).
+        # The screen shows a short note when this key is present; it is absent
+        # on a one-computer shop, where the figure is complete.
+        body['supplier_balance_scope'] = 'this_computer_pos'
+    return jsonify(body)
 
 @retail_bp.route('/suppliers/<string:sid>/statement', methods=['GET'])
 @mt_login_required
@@ -17685,81 +17738,62 @@ def supplier_statement(sid):
                        (sid, cid)).fetchone()
     if not sup:
         conn.close(); return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
-    # `purchase_orders.amount_paid` is MUTABLE -- pay_purchase_order UPDATEs
-    # it on every instalment -- so unlike the customer side's immutable
-    # `sales.amount_paid`, this charge is the PO's LIVE outstanding balance
-    # and already reflects every payment made against it. That is why the
-    # duplicate-counting fix below excludes the PO's payment rows rather than
-    # widening this charge: the two statements reach the same invariant from
-    # opposite ends, and swapping the treatments would double-count on both.
-    # Threshold bound from `_money_epsilon(currency)`, the same value
-    # create_purchase_order / pay_purchase_order use to decide whether a PO
-    # still owes anything -- see `_money_epsilon` for the sweep that replaced
-    # the hardcoded 0.005 every one of these carried.
-    _eps = _money_epsilon(_company_currency(conn, cid))
+    # v44: REWRITTEN to the same formula party_balance.supplier_balances sums,
+    # term for term, so the last running balance IS the balance:
+    #   + every purchase order's FULL total (> eps)
+    #   - every ACTIVE payment to the supplier, ALL related types (a PO's own
+    #     down-payment and instalments included), 'out' reduces, 'in' (a
+    #     returned issued cheque) adds back
+    #   +/- party_balance_adjustments (an upgrade carry)
+    # The old statement charged each PO its LIVE `total - amount_paid` and
+    # excluded the PO's payment rows, which was only right while
+    # `purchase_orders.amount_paid` and the payment rows moved together: voiding
+    # a PO instalment added the money back to the balance (void_payment) but
+    # left `amount_paid` untouched, so the statement and the balance disagreed.
+    # `amount_paid` is no longer read here at all. Threshold from
+    # `_money_epsilon(currency)`, the one create_purchase_order uses.
+    currency = _company_currency(conn, cid)
+    _eps = _money_epsilon(currency)
     charges = conn.execute(
-        "SELECT po_number AS ref, created_at, (total - COALESCE(amount_paid,0)) AS amount, 'charge' AS kind, 1 AS sign "
-        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total - COALESCE(amount_paid,0)) > ?",
+        "SELECT po_number AS ref, created_at, total AS amount, 'charge' AS kind, 1 AS sign "
+        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND total > ?",
         (cid, sid, _eps)).fetchall()
-    # Aseel-parity wave A-PAR (schema v32) FORCED FIX -- see
-    # customer_statement's identical comment above for the full reasoning.
-    # The settling direction is the MIRROR of the customer statement's: for
-    # a supplier, PAYING them ('out') reduces what the shop owes, so 'out'
-    # reads as 'payment' and a bounced/cancelled issued cheque ('in', the
-    # money coming back) reads as 'reversal'.
-    #
-    # `COALESCE(related_type,'') <> 'po'` -- the SAME double-count
-    # customer_statement carries for a sale's own tender, in its supplier
-    # mirror. BOTH writers of a PO's money also move `purchase_orders.
-    # amount_paid`, which the `charges` query above reads live:
-    # create_purchase_order records its down-payment and stores it in
-    # `amount_paid`; pay_purchase_order UPDATEs `amount_paid` and writes a
-    # payment row. So every PO payment was subtracted twice -- once by
-    # shrinking the charge, once as its own line -- and a PO paid in full
-    # left no charge at all while its payment lines remained, driving the
-    # statement negative against a `credit_balance` of 0.
-    #
-    # A direct supplier payment (supplier_payment) stores related_type NULL
-    # and stays, which is correct: it reduces `credit_balance` without
-    # touching any PO's `amount_paid`, so nothing else here accounts for it.
-    # Cheques (related_type='cheque') stay for the same reason, in both
-    # directions. `COALESCE(...)` rather than a bare `<>` because `NULL <>
-    # 'po'` is NULL, not TRUE -- a bare comparison would have dropped every
-    # direct payment, which is the whole AP settlement path.
+    # The settling direction is the MIRROR of the customer statement's: PAYING
+    # a supplier ('out') reduces what the shop owes, so 'out' reads as
+    # 'payment' and a returned issued cheque ('in') as 'reversal'.
     payments = conn.execute(
         "SELECT id, reference AS ref, created_at, amount, direction, "
         "CASE WHEN direction='out' THEN 'payment' ELSE 'reversal' END AS kind, "
         "CASE WHEN direction='out' THEN -1 ELSE 1 END AS sign "
         "FROM payments WHERE company_id=? AND party_type='supplier' AND party_id=? "
-        "AND COALESCE(status,'active')='active' AND COALESCE(related_type,'') <> 'po'",
+        "AND COALESCE(status,'active')='active'",
         (cid, sid)).fetchall()
-    events = [dict(r) for r in charges] + [dict(r) for r in payments]
+    adjustments = []
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='party_balance_adjustments'").fetchone():
+        adjustments = conn.execute(
+            "SELECT reason AS ref, created_at, ABS(amount) AS amount, "
+            "CASE WHEN amount >= 0 THEN 'balance_carried_owed' ELSE 'balance_carried_credit' END AS kind, "
+            "CASE WHEN amount >= 0 THEN 1 ELSE -1 END AS sign "
+            "FROM party_balance_adjustments WHERE company_id=? AND party_type='supplier' AND party_id=?",
+            (cid, str(sid))).fetchall()
+    events = [dict(r) for r in charges] + [dict(r) for r in payments] + [dict(r) for r in adjustments]
     events.sort(key=lambda e: e.get('created_at') or '')
-    # Same treatment as customer_statement's identical loop above -- see
-    # that function's comment, including why 'reversal' moves the balance
-    # the same way 'charge' does (a returned issued cheque restores what
-    # the shop owes).
-    currency = _company_currency(conn, cid)
     quant = tax_engine.currency_quantum(currency)
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
         # Per-row `sign` from the query that knows what the row means, never
         # re-inferred from `kind` here -- see customer_statement's identical
-        # loop for why the membership-test-with-catch-all-else this replaces
-        # is a trap rather than a style preference.
+        # loop for why a membership test with a catch-all else is a trap.
         run = run + (amt if int(e.get('sign', 1)) > 0 else -amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
                     'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
+    derived_balance = float(party_balance.supplier_balance(conn, cid, sid, currency))
     conn.close()
-    # There is no supplier mirror of customer_statement's `settlements` query:
-    # no route adjusts a SUPPLIER's credit_balance without a `payments` row
-    # (verified against every `_adjust_credit(conn, 'suppliers', ...)` call
-    # site -- create_purchase_order, supplier_payment, pay_purchase_order,
-    # the cheque money leg and void_payment, all five of which write or void
-    # one). A purchase-return path that forgave AP the way create_return
-    # forgives AR would need its own event kind here.
-    return jsonify({'status': 'success', 'data': {'supplier': dict(sup), 'events': out, 'balance': _money(sup['credit_balance'], currency)}})
+    sup_out = dict(sup)
+    sup_out['credit_balance'] = derived_balance
+    return jsonify({'status': 'success', 'data': {'supplier': sup_out, 'events': out,
+                                                  'balance': _money(derived_balance, currency)}})
 
 @retail_bp.route('/suppliers/<string:sid>/payments', methods=['POST'])
 @mt_login_required
@@ -18534,10 +18568,10 @@ def aging_report():
         currency = _company_currency(conn, cid)
         boundary = metrics.business_day(conn, cid)
         today = _shop_today(conn, cid)
-        debtors = conn.execute(
-            "SELECT id, name, phone, credit_balance FROM customers "
-            "WHERE company_id=? AND COALESCE(credit_balance,0)>? ORDER BY credit_balance DESC, name",
-            (cid, _eps)).fetchall()
+        # v44: debtors and their balances from the shop-wide derivation (one
+        # batch), not the per-computer stored column.
+        debtors, _unused_total = _derived_party_rows(
+            conn, cid, 'customers', "id,name,phone", currency, _eps)
         totals = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
         rows = []
         # SET-BASED (ROUND 7, F1): every debtor's events in one fixed set of
@@ -18572,7 +18606,9 @@ def aging_report():
     # `_money_epsilon`, and a hardcoded 0.005 in a query string is how this
     # family drifted apart before the sweep.
     _eps = _money_epsilon(_company_currency(conn, cid))
-    parties = conn.execute("SELECT id, credit_balance FROM suppliers WHERE company_id=? AND COALESCE(credit_balance,0)>?", (cid, _eps)).fetchall()
+    # v44: derived balances (one batch), not the stored column.
+    parties, _unused_total = _derived_party_rows(
+        conn, cid, 'suppliers', "id", _company_currency(conn, cid), _eps)
     oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>?"
     for p in parties:
         oldest = conn.execute(oldest_sql, (cid, p['id'], _eps)).fetchone()[0]

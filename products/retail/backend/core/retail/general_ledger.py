@@ -1697,11 +1697,14 @@ def subledger_tie(conn, cid, tb):
             # table -- see docstring's "GUARDED ON credit_balance EXISTING".
             # Nothing to tie back to.
             return 0.0
-        row = conn.execute(
-            f"SELECT COALESCE(SUM(credit_balance),0) FROM {table} WHERE company_id=?",
-            (cid,)
-        ).fetchone()
-        return float(row[0] or 0)
+        # v44: the subledger side is the DERIVED per-party balances summed
+        # (every party, negatives included -- exactly what SUM(credit_balance)
+        # covered), not the per-computer stored cache. On a computer that only
+        # received a debtor's sales by sync the cache said 0 while the synced
+        # books held the AR, so the tie broke on every non-originating computer.
+        from core.retail import party_balance as _pb
+        derive = _pb.customer_balances if table == 'customers' else _pb.supplier_balances
+        return float(sum(derive(conn, cid, tb['currency']).values(), Decimal('0')))
 
     ar_sub = _credit_balance_sum('customers')
     ap_sub = _credit_balance_sum('suppliers')
