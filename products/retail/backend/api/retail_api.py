@@ -4387,6 +4387,11 @@ def receive_purchase_order(po_id):
     return jsonify({'status': 'success'})
 
 
+#: the note accept_reorder_request writes on the PO it drafts; cancel_purchase_order
+#: reads the request id back out of it (STOCK-BOOKS verify F7).
+_REORDER_PO_NOTE_PREFIX = 'Auto-drafted from reorder request '
+
+
 @retail_bp.route('/purchase-orders/<int:po_id>/cancel', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -4414,7 +4419,7 @@ def cancel_purchase_order(po_id):
     try:
         conn.execute("BEGIN IMMEDIATE")
         cur = conn.cursor()
-        po = cur.execute("SELECT id, status, po_number FROM purchase_orders WHERE id=? AND company_id=?",
+        po = cur.execute("SELECT id, status, po_number, notes FROM purchase_orders WHERE id=? AND company_id=?",
                          (po_id, cid)).fetchone()
         if not po:
             conn.rollback()
@@ -4442,6 +4447,33 @@ def cancel_purchase_order(po_id):
         sup = cur.execute("SELECT supplier_id FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
         if sup and sup['supplier_id']:
             _refresh_party_balance(conn, 'suppliers', sup['supplier_id'], cid, currency)
+        # STOCK-BOOKS verify F7: a PO drafted by accept_reorder_request leaves its
+        # reorder request 'accepted'. The partial unique index
+        # idx_reorder_requests_open allows ONE pending-or-accepted request per
+        # product, so after the cancel the product could never raise a new request
+        # while the stock it needed never arrived. Move that request to 'declined'
+        # (the existing terminal status; the index exempts it). The link is the
+        # note accept_reorder_request writes on the PO it drafts.
+        _rid = None
+        _note = po['notes'] or ''
+        if _note.startswith(_REORDER_PO_NOTE_PREFIX):
+            _rid = _note[len(_REORDER_PO_NOTE_PREFIX):].strip()
+        if _rid:
+            _req = cur.execute(
+                "SELECT * FROM reorder_requests WHERE id=? AND company_id=? AND status='accepted'",
+                (_rid, cid)).fetchone()
+            if _req:
+                _now = datetime.now(timezone.utc).isoformat()
+                cur.execute(
+                    "UPDATE reorder_requests SET status='declined', resolved_at=?, "
+                    "row_version=row_version+1, updated_at_utc=? WHERE id=?", (_now, _now, _rid))
+                _rv = cur.execute("SELECT row_version FROM reorder_requests WHERE id=?", (_rid,)).fetchone()
+                _queue_sync_event(cur, 'reorder_request', _rid, 'update', {
+                    'id': _rid, 'branch_id': _req['branch_id'], 'product_id': _req['product_id'],
+                    'status': 'declined', 'draft_message': _req['draft_message'], 'resolved_at': _now,
+                    'row_version': _rv['row_version'], 'updated_at_utc': _now,
+                    '_changed_fields': ['status', 'resolved_at'],
+                })
         _audit(conn, 'PO_CANCELLED', 'purchase_order', po_id, po['po_number'])
         conn.commit()
     except sqlite3.DatabaseError as exc:
@@ -5514,7 +5546,7 @@ def accept_reorder_request(rid):
                                          ordered_at,amount_paid,payment_status)
             VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid')
         """, (cid, po_number, supplier_id, branch_id, 'pending', total, total,
-              f'Auto-drafted from reorder request {rid}',
+              f'{_REORDER_PO_NOTE_PREFIX}{rid}',
               datetime.now().strftime('%Y-%m-%d')))
         po_id = cur.lastrowid
         cur.execute("""
