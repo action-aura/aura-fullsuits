@@ -19101,8 +19101,28 @@ def install_party_balance_refresh(sync_service):
         return sync_service
     original = sync_service.apply_pull_result
 
+    def _parked_count(conn):
+        try:
+            return conn.execute("SELECT COUNT(*) FROM sync_apply_quarantine").fetchone()[0]
+        except Exception:  # noqa: BLE001 -- no table yet: nothing parked
+            return 0
+
     def apply_pull_result_then_refresh(conn, result, *args, **kwargs):
+        parked_before = _parked_count(conn)
         out = original(conn, result, *args, **kwargs)
+        # Skip the whole-company re-derivation when this pull changed nothing:
+        # no events arrived AND no parked event was applied by the quarantine
+        # retry (an applied retry DELETEs its row, so the count drops). Measured
+        # (v44 T5, 500 debtors / 20k sales): refresh_all_companies costs ~161 ms
+        # inside the pull's transaction, and most pulls on a quiet LAN are
+        # empty -- paying that on every idle poll was the over-budget path.
+        # Any doubt refreshes: an unreadable result counts as "events arrived".
+        try:
+            arrived = bool((result or {}).get('events')) if isinstance(result, dict) else True
+        except Exception:  # noqa: BLE001
+            arrived = True
+        if not arrived and _parked_count(conn) >= parked_before:
+            return out
         try:
             conn.execute("SAVEPOINT party_balance_refresh")
             try:

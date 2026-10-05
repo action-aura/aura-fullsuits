@@ -341,3 +341,41 @@ def test_adjust_credit_cannot_be_called_any_more():
     from api import retail_api
     with pytest.raises(RuntimeError):
         retail_api._adjust_credit(None, 'customers', 1, 1, 5.0)
+
+
+class _FakeSync:
+    """Stands in for SyncService: apply_pull_result only runs `effect`."""
+    def __init__(self, effect=None):
+        self._effect = effect
+
+    def apply_pull_result(self, conn, result):
+        if self._effect:
+            self._effect(conn)
+
+
+@pytest.mark.parametrize('result, effect, expect', [
+    # An idle poll: nothing arrived, nothing parked was applied -> no re-derivation.
+    ({'events': [], 'cursor': 7}, None, 0),
+    # Events arrived -> re-derive.
+    ({'events': [{'entity_type': 'payment'}], 'cursor': 8}, None, 1),
+    # Nothing new, but the quarantine retry applied a parked event (its row is
+    # DELETEd) -> re-derive, or a parked sale that finally applied would leave
+    # the cache stale until the next boot.
+    ({'events': [], 'cursor': 8},
+     lambda c: c.execute("DELETE FROM sync_apply_quarantine WHERE entity_id='p1'"), 1),
+    # An unreadable result counts as "something arrived".
+    (None, None, 1),
+])
+def test_post_pull_refresh_runs_exactly_when_the_pull_changed_something(monkeypatch, result, effect, expect):
+    """v44 T5 follow-up: refresh_all_companies measured ~161 ms at 500 debtors /
+    20k sales, so the post-pull hook skips it on an idle pull. Counts the CALLS
+    (not an outcome) so a hook that never refreshes cannot pass the allow rows,
+    and one that always refreshes cannot pass the idle row."""
+    calls = []
+    monkeypatch.setattr(pb, 'refresh_all_companies', lambda conn: calls.append(1) or 0)
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE sync_apply_quarantine (entity_id TEXT, event_type TEXT)")
+    conn.execute("INSERT INTO sync_apply_quarantine VALUES ('p1','create')")
+    svc = retail_api.install_party_balance_refresh(_FakeSync(effect))
+    svc.apply_pull_result(conn, result)
+    assert len(calls) == expect, (result, len(calls))
