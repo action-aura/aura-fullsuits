@@ -6999,3 +6999,24 @@ Residuals:
   dashboard body survives as a fallback until retired with its tests.
 - T6 — `scripts/ui-sweep/retail_ui_sweep.py` reports 16 problems not from Today
   (audit-log header, cashier header) — not verified against the pre-Today tree.
+
+## 2026-10-05 — STOCK-BOOKS wave (stock moves in the books): no schema claim
+
+Registered before dispatch. No schema change: `inventory_movements.movement_type`,
+`purchase_orders.status` and `gl_journals.source_type` carry no CHECK constraint, and
+the four new accounts (1250 Stock in Transit, 1260 Goods Ordered Not Received, 3900
+Opening Balance Equity, 5910 Shrinkage and Adjustments) are seeded through
+`DEFAULT_CHART`. RETAIL_SCHEMA_VERSION stays 44.
+
+Why (audit 2026-10-05, verified in code): a purchase order debits Inventory when it is
+PLACED and receiving posts nothing, with no way to cancel; a transfer shortage is never
+written off; stock adjustments and stock entered at create/import post nothing while
+every sale credits Inventory, so GL Inventory goes negative with a full shelf. Adds:
+order -> 1260, receipt -> 1200, PO cancel route, transfer send/receive/recall through
+1250 with shortages to 5910, adjustments to 5910, opening entries to 3900, and an
+Inventory tie beside AR/AP. Pre-existing PD1 recorded (a voided PO-creation down
+payment posts no GL). Plan: job f8252b48 tmp/stockbooks/plan.md.
+
+Owner decisions ASSUMED (to confirm): shrinkage is its own line below gross profit;
+a PO with a live payment cannot be cancelled until the payment is voided; stock
+entered before this wave stays "not opened" until a go-live step.
