@@ -2803,7 +2803,7 @@ class SyncService:
                 # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
                 # row_version/updated_at_utc carried through. Distinct from
                 # credit_balance, which never appears in this payload -- see
-                # retail_api.py's `_adjust_credit`.
+                # retail_api.py's `_refresh_party_balance` (v44: a derived cache).
                 # stage 6a-ii (this stage): `WHERE excluded.row_version >
                 # suppliers.row_version` gate, NULL-tolerant + `MAX`-protected
                 # -- see the category branch's comment above for the full
@@ -3217,17 +3217,18 @@ class SyncService:
                 # only because it does NOT reopen that hole.
                 if p.get("status") != "voided" or not p.get("uid"):
                     return True
-                # THE VOID MUST ALSO MOVE THE ACCOUNT BALANCE, ONCE. The local
-                # void_payment route flips the status AND puts the payment's
-                # amount back on the party's `credit_balance`; before this
-                # the engine did only the first, so a payment taken on
-                # computer B and voided on computer A left B's `credit_balance`
-                # short by the payment forever while its books (the reversal
-                # journal) had gone back -- B's AR/AP subledger tie broke.
-                # Adjust on the TRANSITION only: a row that is already voided
-                # (this device voided it itself, or this is a replayed /
-                # doubly-delivered event) must not move the balance a second
-                # time. `_apply_voided_payment_credit` documents the rest.
+                # v44: the void used to ALSO move `credit_balance` here (a
+                # signed delta on the party), and that was the one apply path
+                # that did -- sale/payment/return creates pulled from a peer
+                # never touched the balance, so a receive-only computer read 30
+                # where the shop was owed 80. The balance is now DERIVED from the
+                # shop-wide rows (retail core/party_balance.py: voided payments
+                # drop out of the sum) and refreshed after every pull by
+                # retail_api.install_party_balance_refresh, so the status flip
+                # below is all the engine has to do; moving the cache by a delta
+                # here as well would double-count against the derivation.
+                # The flip still happens on the TRANSITION only, so a replayed
+                # or doubly-delivered event is a no-op.
                 before = conn.execute(
                     "SELECT id, status, party_type, party_id, direction, amount, related_type "
                     "FROM payments WHERE uid=? AND company_id=?",
@@ -3236,7 +3237,6 @@ class SyncService:
                     conn.execute(
                         "UPDATE payments SET status='voided' WHERE uid=? AND company_id=?",
                         (p.get("uid"), local_company_id))
-                    self._apply_voided_payment_credit(conn, local_company_id, before)
                     return True
                 if before is not None:
                     return True  # already voided here: nothing to do, nothing to move
@@ -4653,63 +4653,6 @@ class SyncService:
                         (journal_id, line_account_ids[code], float(debit), float(credit), line_memo),
                     )
         return True
-
-    def _apply_voided_payment_credit(self, conn, local_company_id, pay) -> None:
-        """Put a voided account payment back on the party's `credit_balance`,
-        exactly as retail_api.void_payment does for a void made on THIS device.
-
-        Called ONLY on the active -> voided transition (never for a row that
-        was already voided), so a doubly-delivered event or a void this device
-        made itself cannot move the balance twice. The arithmetic is a copy of
-        the route's, not a reinterpretation: `reduced` is True when the
-        payment had LOWERED what the party owes/is owed (a customer paying in,
-        a supplier being paid out), and the void undoes that.
-
-        KNOWN LIMIT, deliberately not papered over: `credit_balance` is a
-        device-local accumulator that no event carries (see `_adjust_credit`
-        in retail_api.py). The device that TOOK the payment reduced it and now
-        gets it back, which is the case that used to break the AR/AP tie. A
-        device that only ever received the payment as a synced fact never
-        reduced its own balance, so it also never held the debt; its
-        subledger cannot tie to the synced books either way.
-
-        Only account payments are adjusted: `void_payment` refuses a
-        sale-tied or cheque-tied receipt, so a void event for one carries no
-        balance change. The column is created lazily by retail_api
-        (`_ensure_credit_schema`), so its absence is a no-op, not an error.
-        """
-        if pay["related_type"] in ("sale", "cheque"):
-            return
-        party_type, party_id = pay["party_type"], pay["party_id"]
-        if not party_id or party_type not in ("customer", "supplier"):
-            return
-        table = "customers" if party_type == "customer" else "suppliers"
-        try:
-            columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-        except sqlite3.Error:
-            return
-        if "credit_balance" not in columns:
-            return
-        try:
-            row = conn.execute(
-                "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
-                (local_company_id,)).fetchone()
-            currency = (row[0] if row and row[0] else None) or DEFAULT_BASE_CURRENCY
-        except sqlite3.Error:
-            currency = DEFAULT_BASE_CURRENCY
-        quantum = currency_quantum(currency)
-        amount = Decimal(str(pay["amount"] or 0)).quantize(quantum, rounding=ROUND_HALF_UP)
-        reduced = (party_type == "customer") == (pay["direction"] == "in")
-        delta = amount if reduced else -amount
-        current = conn.execute(
-            f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?",
-            (party_id, local_company_id)).fetchone()
-        if current is None:
-            return  # the party has not arrived here: nothing of ours to correct
-        base = Decimal(str(current[0] if current[0] is not None else 0))
-        conn.execute(
-            f"UPDATE {table} SET credit_balance=? WHERE id=? AND company_id=?",
-            (float((base + delta).quantize(quantum, rounding=ROUND_HALF_UP)), party_id, local_company_id))
 
     _GL_JOURNAL_TEXT_FIELDS = (
         "uid", "business_date", "reference", "memo", "source_type", "source_uid",

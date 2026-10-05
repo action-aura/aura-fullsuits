@@ -72,7 +72,7 @@ def main() -> None:
     flask_app = _app_module.init_app()
     flask_app.config["TESTING"] = True
 
-    from api.retail_api import _ensure_credit_schema, install_void_reversal_sweep
+    from api.retail_api import _ensure_credit_schema, install_void_reversal_sweep, install_party_balance_refresh
     from commercial_runtime.identity.registry_db import get_conn as registry_conn
     from commercial_runtime.security.passwords import hash_password
     from commercial_runtime.sync.sync_service import SyncService, local_company_id_from_registry
@@ -89,6 +89,7 @@ def main() -> None:
         stock_exception_recorder=record_or_refresh_stock_exception,
     )
     install_void_reversal_sweep(service)
+    install_party_balance_refresh(service)  # v44: same wiring app.py gives both retail sync services
 
     API = "/api/sub/retail"
     client = flask_app.test_client()

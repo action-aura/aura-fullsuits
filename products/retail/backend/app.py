@@ -195,7 +195,7 @@ from commercial_runtime.identity.company_rebind import (
     registry_tenant_ids as registry_company_tenant_ids,
 )
 from commercial_runtime.identity.registry_db import get_conn as get_registry_conn
-from api.retail_api import retail_bp, _ensure_credit_schema, install_void_reversal_sweep
+from api.retail_api import retail_bp, _ensure_credit_schema, install_void_reversal_sweep, install_party_balance_refresh
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
@@ -940,6 +940,10 @@ def _build_windows_sync_services(relay_base_url):
     # post-apply hook, so the sweep is wrapped onto this instance. The
     # registry stream below never carries GL journals and is not wrapped.
     install_void_reversal_sweep(_sync_service)
+    # v44: re-derive the customers'/suppliers' balance cache from the shop-wide
+    # rows a pull just brought in (a receive-only computer otherwise keeps the
+    # figure it had before the pull).
+    install_party_balance_refresh(_sync_service)
 
     # Phase 5 wave B2, Decision 6 (docs/launch-readiness/
     # phase5-waveb2-user-sync.md): a SECOND SyncService instance, pulling
@@ -1072,6 +1076,7 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
                                         stock_exception_recorder=record_or_refresh_stock_exception)  # client_factory never used -- see comment above
     # F3b: same post-pull void-reversal sweep as the Windows retail service.
     install_void_reversal_sweep(_android_sync_service)
+    install_party_balance_refresh(_android_sync_service)  # v44, same as the Windows service
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,

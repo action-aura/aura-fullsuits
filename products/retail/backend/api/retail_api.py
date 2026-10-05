@@ -3812,10 +3812,12 @@ def create_purchase_order():
                             method=data.get('method', 'cash'), related_type='po', related_id=po_id,
                             doc_type='supplier_payment', currency=currency)
         balance = _money(total - amount_paid, currency)
-        if balance > _eps and supplier_id:
-            _adjust_credit(conn, 'suppliers', supplier_id, cid, balance, currency)
+        if supplier_id:
+            # v44: the PO row and its down-payment are written above, so the
+            # supplier's figure is re-derived from them (never moved by delta).
+            _refresh_party_balance(conn, 'suppliers', supplier_id, cid, currency)
         # Schema v38 (general ledger core): Dr Inventory / Cr Cash + Cr AP.
-        # `ap_balance_for_gl` mirrors the EXACT `_adjust_credit` gate just
+        # `ap_balance_for_gl` mirrors the EXACT old AP-credit gate just
         # above rather than the raw `balance` -- see post_purchase_order's
         # own docstring for why (supplier_id is optional here, and a
         # supplier-less unpaid balance is untracked by the subledger too).
@@ -7246,7 +7248,11 @@ def create_sale():
                 limit = float(cust['credit_limit'] if cust['credit_limit'] is not None else (settings['default_credit_limit'] or 0))
             except Exception:
                 limit = 0.0
-            cur_bal = float(cust['credit_balance'] or 0)
+            # v44: DERIVED, in this same transaction. The stored column is a
+            # per-computer cache a computer that only received the debtor's
+            # sales by sync reads as 0, which let a customer already at the
+            # limit buy again (retail_party_balance_threedevice_test).
+            cur_bal = float(party_balance.customer_balance(conn, cid, customer_id, currency))
             if credit_mode == 'none':
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'This customer is not allowed to buy on credit.'}), 400
@@ -7675,14 +7681,16 @@ def create_sale():
                             method=(pm if pm != 'credit' else 'cash'),
                             related_type='sale', related_id=sale_id, doc_type='receipt',
                             currency=currency)
-        if is_credit and balance_due > _eps and customer_id:
-            # DEFECT 2 fix: `currency` (resolved once above, same variable
-            # create_return's identical call below now also passes) -- an
-            # omitted currency here quantized a JOD balance_due to 2dp
-            # (cents) instead of 3dp (fils), silently losing the fils on
-            # the very column credit-limit enforcement and the UI both
-            # read. See _adjust_credit's own docstring for the full history.
-            _adjust_credit(conn, 'customers', customer_id, cid, balance_due, currency)
+        if customer_id:
+            # v44: the sale row (total, points, amount_paid) is already
+            # written, so the customer's figure is RE-DERIVED from the shop's
+            # records instead of moved by `+balance_due`. A delta can only be
+            # right on the computer that rang the sale; the derivation is the
+            # same on every computer holding these rows. Refreshed for every
+            # named-customer sale (not only credit ones): a cash sale cannot
+            # change the figure, so this is a cheap no-op that also heals a
+            # stale cache.
+            _refresh_party_balance(conn, 'customers', customer_id, cid, currency)
 
         # Schema v38 (general ledger core): Dr Cash (net_received) + Dr AR
         # (mirrors the `_adjust_credit` gate immediately above -- NOT
@@ -9059,10 +9067,12 @@ def create_return():
             float(sale['total']) - float(sale['points_redeemed_amount'] or 0) - float(sale['amount_paid'] or 0),
             currency))
         balance_due_remaining = max(0.0, original_balance_due - float(_prior[1]))
-        current_balance = float(cur.execute(
-            "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=? AND company_id=?",
-            (sale['customer_id'], cid)
-        ).fetchone()[0]) if sale['customer_id'] else 0.0
+        # v44: DERIVED from the shop's records, not read from the per-computer
+        # cache. On a computer that only RECEIVED the sale by sync the cache
+        # said 0, so this split capped ar_forgiven at 0 and paid the whole
+        # unpaid portion out as store credit (retail_party_balance_threedevice_test).
+        current_balance = float(party_balance.customer_balance(
+            conn, cid, sale['customer_id'], currency)) if sale['customer_id'] else 0.0
 
         # refund_method default: the ORIGINAL sale's own payment_method, not
         # a hardcoded 'cash' -- the hardcoded default was HALF of DEFECT 1:
@@ -9436,10 +9446,12 @@ def create_return():
         # customer_statement's `settlements` query mirrors these two gates so
         # the statement reports an event if and only if the balance moved
         # here; if either gate changes, that query changes with it.
-        if ar_forgiven > _eps:
-            _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_forgiven, currency)
-        if store_credit > _eps:
-            _adjust_credit(conn, 'customers', sale['customer_id'], cid, -store_credit, currency)
+        if sale['customer_id']:
+            # v44: the return row (with its ar_forgiven_amount /
+            # store_credit_amount, status 'completed') is already written, so
+            # the customer's figure is re-derived from it; the same two eps
+            # gates now live in party_balance._customer_minor.
+            _refresh_party_balance(conn, 'customers', sale['customer_id'], cid, currency)
 
         # ── Loyalty reversal (ROADMAP.md's 2026-08-31 "RETURNS AGAINST A
         # SALE THAT USED POINTS -- decided, not yet built" entry, now
@@ -13504,50 +13516,32 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     })
     return ref
 
-def _adjust_credit(conn, table, pid, cid, delta, currency=None):
-    """Decimal-safe balance update (avoids SQL float accumulation). Returns new balance.
+def _refresh_party_balance(conn, table, pid, cid, currency=None):
+    """v44: rewrite one customer's/supplier's `credit_balance` display cache
+    from the shop-wide derivation (core/retail/party_balance.py) and return
+    the new figure. Call it AFTER the event row (sale, payment, return, PO,
+    void) is written, in the same transaction. Replaces `_adjust_credit`.
 
-    launch-readiness Phase 6 stage 6a-i: `credit_balance` is a SECOND
-    accumulator column, on both `customers` and `suppliers`, found by
-    searching every UPDATE against these five tables rather than trusting
-    the design doc's own count -- it is not in SYNCED_CUSTOMER_FIELDS or
-    SYNCED_SUPPLIER_FIELDS above, sync_service.py's customer/supplier apply
-    branches never mention it, and this function's own callers never queue
-    a catalogue sync event around this call. Structurally identical to
-    total_spent/loyalty_points at create_sale's loyalty-accumulator UPDATE
-    (see that site's own comment): device-local, never synced, and this
-    UPDATE deliberately touches ONLY `credit_balance`, so it correctly stays
-    outside every row_version bump this stage adds -- there is nothing to
-    change here, and that omission is the point, not an oversight.
-
-    `currency` is OPTIONAL and defaults to None, the identical contract
-    `_money` and `_record_payment` carry (see their own docstrings): this
-    function used to quantize to a HARDCODED `Decimal('0.01')` regardless of
-    what currency it was being asked about, which is the same class of bug
-    `_money`'s own default used to be -- and a more damaging copy of it,
-    because this is the SECOND stage a JOD payment's fils could be lost at.
-    Converting only `_money()` at the payment call sites was not sufficient
-    on its own: `_record_payment` could persist a payment of 12.345 JOD
-    correctly, and this function would still round the customer's/
-    supplier's `credit_balance` it is computed from to 12.35 the moment it
-    got here, because the quantum below never looked at the currency the
-    caller was working in.
-
-    DEFECT 2 (launch-readiness money-reconciliation pass): the two callers
-    named here as "still out of scope" in an earlier revision of this
-    docstring -- create_sale's own balance_due credit and create_return's
-    AR-forgiveness/store-credit calls -- now both pass `currency` too. Every
-    caller of this function is currency-aware as of that pass; there is no
-    longer a byte-for-byte-2dp caller left. See
-    retail_payment_money_precision_test.py's create_sale/create_return
-    section for the fils-precision regression tests this closes.
+    WHY NOT A DELTA. `credit_balance += x` is only right on the computer that
+    performed the event; the same event arriving by sync never ran it, so the
+    column drifted per computer (a receive-only computer showed 30 where the
+    shop owed 80). The derivation is identical on every computer holding the
+    same rows, and re-deriving also heals any earlier drift.
     """
-    row = conn.execute(f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?", (pid, cid)).fetchone()
-    base = Decimal(str(row['credit_balance'] if row and row['credit_balance'] is not None else 0))
-    quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
-    newbal = (base + Decimal(str(delta))).quantize(quant, rounding=ROUND_HALF_UP)
-    conn.execute(f"UPDATE {table} SET credit_balance=? WHERE id=? AND company_id=?", (float(newbal), pid, cid))
-    return float(newbal)
+    if currency is None:
+        currency = _company_currency(conn, cid)
+    party_balance.refresh_cache(conn, cid, table, [pid], currency)
+    return float(party_balance.customer_balance(conn, cid, pid, currency)
+                 if table == 'customers' else party_balance.supplier_balance(conn, cid, pid, currency))
+
+
+def _adjust_credit(*_args, **_kwargs):
+    """REMOVED in v44 -- raises on purpose so no future caller can move the
+    cache by a delta again. Write the event row, then call
+    `_refresh_party_balance`. (See that function's docstring for why a delta
+    cannot be right on more than one computer.)"""
+    raise RuntimeError("_adjust_credit was removed in v44; use _refresh_party_balance")
+
 
 # ── Shop currency (P1c) ────────────────────────────────────────────────────────
 # The owner could not find where to change the currency: there was no field, and
@@ -17644,7 +17638,10 @@ def customer_payment(cust_id):
         ref = _record_payment(conn, cid, 'customer', cust_id, 'in', amt, method=data.get('method', 'cash'),
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='receipt',
                               currency=currency, pay_uid=pay_uid)
-        newbal = _adjust_credit(conn, 'customers', cust_id, cid, -amt, currency)
+        # v44: the payments row is written, so the figure is re-derived (the
+        # receipt is an 'in' payment on the customer, counted by
+        # party_balance), not moved by -amt.
+        newbal = _refresh_party_balance(conn, 'customers', cust_id, cid, currency)
         # Schema v38 (general ledger core): Dr Cash / Cr AR. No branch
         # context on this route (an account payment is not tied to a
         # terminal or a branch), so branch_id is None -- matches
@@ -17799,7 +17796,7 @@ def supplier_payment(sid):
         ref = _record_payment(conn, cid, 'supplier', sid, 'out', amt, method=data.get('method', 'cash'),
                               notes=data.get('notes', ''), device=data.get('device'), doc_type='supplier_payment',
                               currency=currency, pay_uid=pay_uid)
-        newbal = _adjust_credit(conn, 'suppliers', sid, cid, -amt, currency)
+        newbal = _refresh_party_balance(conn, 'suppliers', sid, cid, currency)  # v44: re-derived, see customer_payment
         # Schema v38 (general ledger core): Dr AP / Cr Cash. See
         # customer_payment's identical comment just above -- same
         # reasoning, no branch context on this route.
@@ -17852,9 +17849,11 @@ def pay_purchase_order(po_id):
                               device=data.get('device'), doc_type='supplier_payment', currency=currency,
                               pay_uid=pay_uid)
         if po['supplier_id']:
-            _adjust_credit(conn, 'suppliers', po['supplier_id'], cid, -amt, currency)
+            # v44: re-derived (the instalment is a 'po' payment row, which
+            # the supplier formula counts), not moved by -amt.
+            _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
             # Schema v38 (general ledger core): Dr AP / Cr Cash. Gated on
-            # the IDENTICAL `if po['supplier_id']:` the _adjust_credit call
+            # the IDENTICAL `if po['supplier_id']:` the refresh call
             # just above is, for the identical reason create_purchase_
             # order's own GL wiring documents: a supplier-less PO's
             # payment is untracked by the subledger too (no _adjust_credit
@@ -18032,8 +18031,11 @@ def _apply_cheque_event(conn, cid, cheque, event_type, *, occurred_on=None, bank
             # moved no money at all.
             raise RuntimeError(f"cheque {cheque['id']}: money leg silently skipped for amount<=0")
         table = 'customers' if party_type == 'customer' else 'suppliers'
-        delta = -cheque['amount'] if side_to else cheque['amount']
-        _adjust_credit(conn, table, party_id, cid, delta, cheque['currency'])
+        # v44: the money-leg payment row is written above (a bounce/cancel
+        # reversal is the opposite-direction row), so the party's figure is
+        # re-derived instead of moved by -/+amount.
+        if party_id:
+            _refresh_party_balance(conn, table, party_id, cid, cheque['currency'])
 
     ev_id = _new_uid()
     now_utc = now_utc_iso()
@@ -19040,6 +19042,49 @@ def install_void_reversal_sweep(sync_service):
     return sync_service
 
 
+def install_party_balance_refresh(sync_service):
+    """v44: wrap `sync_service.apply_pull_result` so that after every pull the
+    customers'/suppliers' display cache (`credit_balance`) is re-derived from
+    the rows the pull just brought in.
+
+    WHY. A sale, payment, return or carry adjustment pulled from a peer used to
+    leave the receiving computer's `credit_balance` untouched (the only apply
+    path that moved it was the void reversal, which is why a receive-only
+    computer read 30 where the books said 80). The balance is now a function of
+    shop-wide rows (core/retail/party_balance.py); this hook keeps the cache in
+    step with them on the computer that did not ring the event. Every DECISION
+    and report derives on its own -- this refresh is only so the plain list
+    screens, which read the column, are right too.
+
+    Same shape as install_void_reversal_sweep (the pattern is copied on
+    purpose): SAVEPOINT, log and swallow -- a refresh failure must never fail a
+    pull that already applied (the next pull, the next sale on this computer
+    and the boot refresh each re-derive it). Installing twice is a no-op. The
+    caller of `apply_pull_result` commits."""
+    if getattr(sync_service, '_party_balance_refresh_installed', False):
+        return sync_service
+    original = sync_service.apply_pull_result
+
+    def apply_pull_result_then_refresh(conn, result, *args, **kwargs):
+        out = original(conn, result, *args, **kwargs)
+        try:
+            conn.execute("SAVEPOINT party_balance_refresh")
+            try:
+                party_balance.refresh_all_companies(conn)
+                conn.execute("RELEASE SAVEPOINT party_balance_refresh")
+            except Exception:
+                conn.execute("ROLLBACK TO SAVEPOINT party_balance_refresh")
+                conn.execute("RELEASE SAVEPOINT party_balance_refresh")
+                raise
+        except Exception:  # noqa: BLE001 -- see docstring
+            log.exception('party-balance refresh failed after pull')
+        return out
+
+    sync_service.apply_pull_result = apply_pull_result_then_refresh
+    sync_service._party_balance_refresh_installed = True
+    return sync_service
+
+
 @retail_bp.route('/payments/<int:pid>/void', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -19221,9 +19266,11 @@ def void_payment(pid):
             # and cheques are refused above; a peer's synced row could still
             # carry one), so voiding must take it back DOWN -- a hardcoded
             # +amount doubled it instead.
-            reduced = (p['party_type'] == 'customer') == (p['direction'] == 'in')
-            void_amt = _money(p['amount'], void_currency)
-            _adjust_credit(conn, table, p['party_id'], cid, void_amt if reduced else -void_amt, void_currency)
+            # v44: the row is already status='voided' (UPDATE above), and
+            # party_balance counts ACTIVE payments only with the sign of the
+            # row's direction, so the re-derivation applies exactly the
+            # reversal the old signed delta did -- for every direction.
+            _refresh_party_balance(conn, table, p['party_id'], cid, void_currency)
             # The books half (see _reverse_payment_journal): gated on the very
             # branch that moved the subledger, so the two cannot diverge again.
             _reverse_payment_journal(conn, cid, p)

@@ -316,3 +316,28 @@ def test_diagnostic_route_and_cli_report_drift_without_repairing_it():
     c2 = app.test_client()
     assert c2.post('/api/auth/login', json={'email': cashier_email, 'password': 'CashierPW1x'}).status_code == 200
     assert c2.get('/api/sub/retail/reports/party-balance-check').status_code == 403
+
+
+# ── v44 step 5: writers ────────────────────────────────────────────────────────
+def test_app_py_installs_the_party_balance_refresh_on_both_retail_sync_services():
+    """The harness installs the refresh itself (_money_void_device.py), so
+    nothing in the three-computer test proves app.py does. Pin the wiring the
+    way test_app_py_installs_the_sweep_on_both_retail_sync_services does: each
+    retail SyncService that pulls into retail.db is followed by its install
+    call. Without it a computer that only RECEIVES a sale keeps the stale
+    display figure on every list screen after a pull (mutation M4)."""
+    import re
+    src = (BACKEND_DIR / 'app.py').read_text(encoding='utf-8')
+    assert re.search(r"^from api\.retail_api import .*\binstall_party_balance_refresh\b", src, re.M)
+    for name in ("_sync_service", "_android_sync_service"):
+        assert re.search(rf"^\s+install_party_balance_refresh\({name}\)", src, re.M), (
+            f"app.py never calls install_party_balance_refresh({name})")
+
+
+def test_adjust_credit_cannot_be_called_any_more():
+    """The delta writer is gone on purpose: a caller that moved the cache by
+    +/-x would silently re-introduce per-computer drift. It must raise, not
+    quietly work."""
+    from api import retail_api
+    with pytest.raises(RuntimeError):
+        retail_api._adjust_credit(None, 'customers', 1, 1, 5.0)

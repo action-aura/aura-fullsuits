@@ -8023,6 +8023,22 @@ def _init_retail(conn):
     _migrate_add_return_tax_refunded(conn)
     conn.commit()
 
+    # v44: boot refresh of the customers'/suppliers' balance display cache from
+    # the shop-wide derivation (core/retail/party_balance.py). Runs AFTER
+    # ensure_schema_version so the v44 carry adjustments are already in place
+    # (a refresh before them would derive the pre-carry figure and show it).
+    # Not version-gated: pulled rows may have landed while the app was closed,
+    # and a refresh that changes nothing is one read per party. Never blocks a
+    # boot -- every decision and report derives on its own; this only keeps the
+    # plain list screens (which read the column) right.
+    try:
+        from core.retail import party_balance as _pb_boot
+        _pb_boot.refresh_all_companies(conn)
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        conn.rollback()
+        logging.getLogger(__name__).exception('v44 boot party-balance refresh failed')
+
     # NOT version-gated, and deliberately outside the block above: this is a
     # boot-time reconciliation, not a one-time migration step, and it must
     # run every launch regardless of whether `user_version` moved this time.
