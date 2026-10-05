@@ -2560,6 +2560,39 @@ def delete_product(pid):
             (now, now, pid, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Product not found'}), 404
+        # STOCK-BOOKS verify F4: a deleted product drops out of the stock value
+        # (metrics.inventory_value skips tombstones) but its units were still on
+        # Inventory (1200) -- the tie read "differs" for ever. Write what is left
+        # off: one stock_out movement per branch for the remaining quantity at the
+        # cost it carries there, the balance to zero, and the books move Inventory
+        # to Shrinkage (5910) exactly like a manual stock-out. Same transaction as
+        # the tombstone, so a failure leaves both untouched.
+        _del_currency = _company_currency(conn, cid)
+        _del_actor, _del_terminal, _del_utc = _stamp()
+        for _bal in conn.execute(
+                "SELECT branch_id, quantity_on_hand FROM inventory_balances "
+                "WHERE company_id=? AND product_id=? AND quantity_on_hand > 0",
+                (cid, pid)).fetchall():
+            _del_bid, _del_qty = _bal['branch_id'], float(_bal['quantity_on_hand'])
+            _del_cost = float(stock_books.effective_unit_cost(conn, cid, pid, _del_bid, _del_currency))
+            _del_uid = _new_uid()
+            conn.execute(
+                "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ? "
+                "WHERE company_id=? AND product_id=? AND branch_id=?",
+                (_del_qty, cid, pid, _del_bid))
+            conn.execute("""
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'stock_out',?,?,?,?,?,?,?,?,?)
+            """, (cid, pid, _del_bid, -_del_qty, _del_cost, 'DELETE', 'Product deleted', _uid(),
+                  _del_uid, _del_actor, _del_terminal, _del_utc))
+            gl.post_stock_adjustment(conn, cid, _del_bid, _del_uid, -_del_qty, _del_cost, 'DELETE', _del_currency)
+            _queue_sync_event(cur, 'inventory_movement', _del_uid, 'create', {
+                'uid': _del_uid, 'product_id': pid, 'branch_id': _del_bid, 'branch_uid': _branch_uid(conn, _del_bid),
+                'movement_type': 'stock_out', 'quantity': -_del_qty, 'unit_cost': _del_cost,
+                'reference': 'DELETE', 'notes': 'Product deleted', 'created_by': _uid(),
+                'actor_user_uid': _del_actor, 'terminal_id': _del_terminal, 'created_at_utc': _del_utc,
+            })
         _audit(conn, 'PRODUCT_DELETED', 'product', pid, 'Product deactivated')
         row = conn.execute("SELECT row_version FROM products WHERE id=?", (pid,)).fetchone()
         # `_changed_fields` names only `deleted_at_utc` now -- `status` no
