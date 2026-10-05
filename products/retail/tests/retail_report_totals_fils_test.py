@@ -110,15 +110,32 @@ def _seed_fixture_rows():
     `COALESCE(status,'active')='active'`, unlike the export routes' seed
     helpers in retail_accounting_export_test.py, which test a different
     surface with a different filter."""
+    # v44 (plan step 8): the customer's and supplier's 12.345 used to be a
+    # directly inserted `credit_balance`. Balances are derived from shop-wide
+    # rows now, so that column is overwritten and the reports answered 0. The
+    # same 12.345 is an append-only adjustment row per party (the only way a
+    # balance with no sale/PO behind it exists), refreshed into the cache as the
+    # boot sweep does. Every asserted figure (12.345, fils kept) is unchanged;
+    # what this can no longer catch is nothing about rounding -- only the
+    # fixture's way of owing changed.
+    from core.retail import party_balance
     conn = get_retail_conn()
     conn.execute(
-        "INSERT INTO customers (company_id, name, credit_balance) VALUES (?,?,?)",
-        (COMPANY_ID, 'Fils Test Customer', FILS_AMOUNT),
+        "INSERT INTO customers (company_id, name, credit_balance) VALUES (?,?,0)",
+        (COMPANY_ID, 'Fils Test Customer'),
     )
     conn.execute(
-        "INSERT INTO suppliers (company_id, name, credit_balance) VALUES (?,?,?)",
-        (COMPANY_ID, 'Fils Test Supplier', FILS_AMOUNT),
+        "INSERT INTO suppliers (company_id, name, credit_balance) VALUES (?,?,0)",
+        (COMPANY_ID, 'Fils Test Supplier'),
     )
+    cust_id = conn.execute("SELECT id FROM customers WHERE company_id=? AND name='Fils Test Customer'",
+                           (COMPANY_ID,)).fetchone()[0]
+    sup_id = conn.execute("SELECT id FROM suppliers WHERE company_id=? AND name='Fils Test Supplier'",
+                          (COMPANY_ID,)).fetchone()[0]
+    party_balance.insert_carry(conn, COMPANY_ID, 'customer', cust_id, FILS_AMOUNT)
+    party_balance.insert_carry(conn, COMPANY_ID, 'supplier', sup_id, FILS_AMOUNT)
+    party_balance.refresh_cache(conn, COMPANY_ID, 'customers', currency='JOD')
+    party_balance.refresh_cache(conn, COMPANY_ID, 'suppliers', currency='JOD')
     conn.execute(
         "INSERT INTO payments (company_id, method, amount, status, direction, created_at) "
         "VALUES (?,?,?,?,?,?)",

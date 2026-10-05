@@ -93,6 +93,14 @@ INTENTIONALLY_UNREACHABLE = {
         'Seeds demo data. Deliberately absent from every customer-facing UI: a '
         'shop must never find a button that invents fake sales in its own '
         'ledger. Reached by demo/packaging tooling only.',
+    'reports/party-balance-check':
+        'GET /reports/party-balance-check (v44, CAP_REPORTS, read-only): '
+        'stored-vs-derived balance drift per customer/supplier. An operator '
+        'diagnostic for support and the lab (scripts/diag/party_balance_check.py '
+        'is its file-level twin), deliberately given no screen -- a shopkeeper '
+        'has no use for a drift list, and a button for it would invite '
+        'reading a support tool as a business report. Read and decided here '
+        'rather than added to make the test green.',
     'sync/offline-override':
         'Manager approval of the offline-sales stop. Reached through the '
         'offline banner flow rather than by a literal path in client source, so '

@@ -168,6 +168,10 @@ def _assert_nothing_destroyed(before, after, *, exempt_columns=frozenset()):
 _CHECK_SAFE_VALUES = {
     ('till_allocations', 'status'): 'active',
     ('till_allocations', 'till_number'): 1,
+    # v44's `party_balance_adjustments.party_type` is CHECK IN ('customer',
+    # 'supplier'); same reasoning as above -- the table stays inside the guard,
+    # the override only picks a valid value.
+    ('party_balance_adjustments', 'party_type'): 'customer',
 }
 
 
