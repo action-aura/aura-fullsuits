@@ -98,6 +98,13 @@ _IMPORT_RESTRICTED_ALLOWLIST = frozenset()
 # "declare exactly what is on hand" on a fractional-unit product purely
 # because of accumulated IEEE-754 residue.
 from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
+# STOCK-BOOKS B6: imported stock enters the books like stock typed on the
+# product form (see retail_api.py::create_product). Imported by module, not
+# from retail_api, for the peer-module reason above.
+from core.retail import general_ledger as _gl
+from core.retail import stock_books as _stock_books
+from core.retail import pricing as _tax_engine
+from commercial_runtime.currency import quantize_money as _quantize_money
 
 import_bp = Blueprint('import_api', __name__, url_prefix='/api/import')
 
@@ -1383,6 +1390,14 @@ def _handle_retail_products(records):
     ).fetchone()
     _default_tax_rate_raw = ((_default_tax_rate_row['svalue'] if _default_tax_rate_row else '') or '').strip()
     default_tax_rate = float(_default_tax_rate_raw) if _default_tax_rate_raw else 0
+    # STOCK-BOOKS B6: the shop's currency, once per run -- same lookup and same
+    # default as retail_api.py::_company_currency (never raises).
+    try:
+        _cur_row = conn.execute(
+            "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'", (cid,)).fetchone()
+        currency = (_cur_row[0] if _cur_row and _cur_row[0] else None) or _tax_engine.DEFAULT_BASE_CURRENCY
+    except Exception:
+        currency = _tax_engine.DEFAULT_BASE_CURRENCY
     imported, skipped, dupes, cat_cache = 0, 0, 0, {}
     # Products whose declared opening stock could NOT be applied. Structured,
     # not prose: the wizard translates the fixed `reason` sentence out of the
@@ -1690,17 +1705,23 @@ def _handle_retail_products(records):
             dupes += 1
         else:
             pid = str(_uuid.uuid4())
+            # STOCK-BOOKS B6: a new product declared WITH stock and a cost starts
+            # its cost basis at that cost (same rule as create_product).
+            _decl = rec.get('initial_stock')
+            _cost = float(rec.get('cost_price') or 0)
+            new_open_cost = (float(_quantize_money(_cost, currency))
+                             if _decl is not None and float(_decl) > _QTY_TOLERANCE and _cost > 0 else 0.0)
             # launch-readiness Phase 6 stage 6a-i: stamped at creation, same
             # reasoning as retail_api.py's create_product.
             cur.execute("""
                 INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,
                                       sell_price,tax_rate,unit,reorder_level,status,
-                                      row_version,updated_at_utc)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)
+                                      row_version,updated_at_utc,avg_cost)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?)
             """, (pid, cid, sku, rec.get('barcode',''), rec.get('name',''), cat_id,
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                   _resolve_import_tax_rate(rec, default_tax_rate), rec.get('unit','pcs') or 'pcs',
-                  rec.get('reorder_level') or 5, 1, utc_now))
+                  rec.get('reorder_level') or 5, 1, utc_now, new_open_cost))
             # Mirrors create_product's payload key-for-key. supplier_id is
             # None (the import schema has no supplier column) and
             # reorder_method is 'none' (the INSERT above never sets it, so
@@ -1740,7 +1761,9 @@ def _handle_retail_products(records):
                 # widening: this event had no entry for the column at all,
                 # so a bulk-imported product's cost basis never reached a
                 # second device.
-                'avg_cost': 0,
+                # STOCK-BOOKS B6: the cost basis the declared stock enters at
+                # (0 when none) -- see the INSERT above.
+                'avg_cost': new_open_cost,
                 # `tax_rate`: the SAME `_resolve_import_tax_rate(rec,
                 # default_tax_rate)` call the INSERT above uses, never
                 # `rec.get('tax_rate') or 0` again (P0 item #13 reviewer
@@ -1854,9 +1877,9 @@ def _handle_retail_products(records):
             declared = float(init_stock)
             is_new = not existing
             cur.execute("""
-                INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
-                VALUES (?,?,?,0)
-            """, (cid, pid, bid))
+                INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand,avg_cost)
+                VALUES (?,?,?,0,?)
+            """, (cid, pid, bid, new_open_cost if is_new else 0))
             already_declared = 0.0
             if not is_new:
                 declared_row = conn.execute(
@@ -1903,13 +1926,22 @@ def _handle_retail_products(records):
                 movement_reference = 'OPENING' if is_new else _IMPORT_STOCK_REFERENCE
                 movement_notes = '' if is_new else f'Declared stock changed by bulk import ({already_declared} -> {declared})'
                 movement_uid = _new_uid()
+                # STOCK-BOOKS B6: a NEW product's declared stock enters at the
+                # cost it was declared with; a re-declared figure on an EXISTING
+                # product moves at what a unit costs right now. Both book against
+                # Opening Balance Equity (3900) -- a declaration is the shop
+                # restating what it started with, not a count (that is 5910).
+                move_cost = (new_open_cost if is_new
+                             else float(_stock_books.effective_unit_cost(conn, cid, pid, bid, currency)))
                 cur.execute("""
                     INSERT INTO inventory_movements
-                        (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                        (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
                          uid,actor_user_uid,terminal_id,created_at_utc)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (cid, pid, bid, movement_type, delta, movement_reference, movement_notes,
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (cid, pid, bid, movement_type, delta, move_cost, movement_reference, movement_notes,
                       _uid(), movement_uid, actor, terminal, utc_now))
+                _gl.post_opening_entry(conn, cid, bid, movement_uid, delta, move_cost,
+                                       movement_reference, currency)
                 # Wave B (AUDIT parity with the 2026-08-19 fix noted on
                 # `_queue_sync_event` above): this is the sixth and highest-
                 # leverage writer into inventory_movements in the product
@@ -1920,7 +1952,7 @@ def _handle_retail_products(records):
                 _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                     'uid': movement_uid, 'product_id': pid, 'branch_id': bid,
                     'branch_uid': import_branch_uid,
-                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': 0,
+                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': move_cost,
                     'reference': movement_reference, 'notes': movement_notes, 'created_by': _uid(),
                     'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
                 })

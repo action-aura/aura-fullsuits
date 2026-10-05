@@ -169,6 +169,7 @@ from core.retail import financial_statements as fin_statements
 # v44: customer/supplier balances DERIVED from shop-wide records (the column
 # is a display cache). See core/retail/party_balance.py's own docstring.
 from core.retail import party_balance
+from core.retail import stock_books
 from core.retail import today_cards
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
@@ -2231,16 +2232,29 @@ def create_product():
             tax_rate = float(_default_rate_raw) if _default_rate_raw else 0
         else:
             tax_rate = _tax_rate_in
+        # STOCK-BOOKS B6: stock entered WITH a known cost starts the cost basis
+        # at that cost (products.avg_cost and the branch's avg_cost), so a later
+        # edit of cost_price cannot re-value stock already counted and booked.
+        # No cost, or no stock: avg stays 0 exactly as before (an unknown cost is
+        # never invented -- the books skip it and the Inventory card says
+        # "Stock not opened yet").
+        try:
+            _entered_cost = float(data.get('cost_price', 0) or 0)
+        except (TypeError, ValueError):
+            _entered_cost = 0.0
+        _open_currency = _company_currency(conn, cid)
+        open_cost = (_money(_entered_cost, _open_currency)
+                     if initial_stock > 0 and _entered_cost > _money_epsilon(_open_currency) else 0.0)
         cur.execute("""
             INSERT INTO products (id,company_id,sku,barcode,name,category_id,supplier_id,cost_price,
                                   sell_price,tax_rate,unit,reorder_level,reorder_method,status,
                                   parent_product_id,variant_label,
-                                  row_version,updated_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)
+                                  row_version,updated_at_utc,avg_cost)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)
         """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
               data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
               tax_rate, data.get('unit','pcs'), data.get('reorder_level',5),
-              data.get('reorder_method','none'), parent_product_id, variant_label, 1, now))
+              data.get('reorder_method','none'), parent_product_id, variant_label, 1, now, open_cost))
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _resolve_working_branch), so a sale
         # always decrements the row this created. Self-heals a branch on fresh/standalone
@@ -2249,9 +2263,9 @@ def create_product():
         # client, so there is only the pin/default tiers here, never the explicit one.
         bid, _ = _resolve_working_branch(conn, cid)
         conn.execute("""
-            INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
-            VALUES (?,?,?,?)
-        """, (cid, pid, bid, initial_stock))
+            INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand,avg_cost)
+            VALUES (?,?,?,?,?)
+        """, (cid, pid, bid, initial_stock, open_cost))
         # `initial_stock` (validated above), never `data.get(...)` again --
         # re-reading the raw client value here is what let the balance and
         # the movement disagree about the same number in the first place.
@@ -2267,18 +2281,22 @@ def create_product():
             # they are both supposed to be recording.
             movement_qty = initial_stock
             conn.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
-                VALUES (?,?,?,'opening_stock',?,?,?,?,?,?,?)
-            """, (cid, pid, bid, movement_qty, 'OPENING', _uid(),
+                VALUES (?,?,?,'opening_stock',?,?,?,?,?,?,?,?)
+            """, (cid, pid, bid, movement_qty, open_cost, 'OPENING', _uid(),
                   movement_uid, actor, terminal, utc_now))
+            # STOCK-BOOKS B6: Dr Inventory / Cr Opening Balance Equity (3900).
+            # Posts nothing at cost 0 (unknown cost is silence, not a guess).
+            gl.post_opening_entry(conn, cid, bid, movement_uid, movement_qty, open_cost,
+                                  'OPENING', _open_currency)
             # Wave B: every writer into inventory_movements queues the
             # matching sync event, this one included -- see the module-wide
             # note at create_sale's own inventory_movement emission below for
             # the shape every one of these six sites shares.
             _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                 'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
-                'movement_type': 'opening_stock', 'quantity': movement_qty, 'unit_cost': 0,
+                'movement_type': 'opening_stock', 'quantity': movement_qty, 'unit_cost': open_cost,
                 'reference': 'OPENING', 'notes': None, 'created_by': _uid(),
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
             })
@@ -2294,7 +2312,9 @@ def create_product():
             # the wire explicitly anyway, matching every other column in
             # this payload, rather than relying on the receiving device's
             # own local schema default to happen to agree.
-            'avg_cost': 0,
+            # STOCK-BOOKS B6: the cost basis the opening stock was entered at
+            # (0 when none), so a peer starts from the same average.
+            'avg_cost': open_cost,
             # `tax_rate` (the RESOLVED local, never `data.get('tax_rate', 0)`
             # again -- P0 item #13 reviewer finding): re-reading the raw
             # client field here is the exact "balance and movement disagree
@@ -2774,19 +2794,27 @@ def adjust_stock(pid):
         actor, terminal, utc_now = _stamp()
         movement_type = 'stock_in' if qty > 0 else 'stock_out'
         movement_uid = _new_uid()
+        # STOCK-BOOKS B5: value the adjustment at what a unit costs HERE and now
+        # (branch average -> company average -> cost price), not at the product's
+        # typed cost_price: a unit received at 3.000 on a 2.000 product must
+        # leave the books at 3.000. The movement carries that cost (it used to
+        # say 0), and the books move Inventory against Shrinkage (5910).
+        adj_currency = _company_currency(conn, cid)
+        adj_cost = float(stock_books.effective_unit_cost(conn, cid, pid, bid, adj_currency))
         conn.execute("""
-            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
                                              uid,actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (cid, pid, bid,
               movement_type,
-              qty, 'ADJ', reason, _uid(),
+              qty, adj_cost, 'ADJ', reason, _uid(),
               movement_uid, actor, terminal, utc_now))
+        gl.post_stock_adjustment(conn, cid, bid, movement_uid, qty, adj_cost, 'ADJ', adj_currency)
         # Wave B: queue the matching sync event -- see create_sale's own
         # inventory_movement emission for the shape every writer shares.
         _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
             'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
-            'movement_type': movement_type, 'quantity': qty, 'unit_cost': 0,
+            'movement_type': movement_type, 'quantity': qty, 'unit_cost': adj_cost,
             'reference': 'ADJ', 'notes': reason, 'created_by': _uid(),
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
         })
@@ -4042,6 +4070,13 @@ def receive_purchase_order(po_id):
         if po['status'] == 'received':
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO already received'}), 409
+        # STOCK-BOOKS B2: a CANCELLED order's goods were never coming -- its
+        # order journal has been reversed, so receiving it would put stock on
+        # the shelves with no books entry behind it. This test used to read
+        # only 'received', which is exactly what let a cancelled PO be received.
+        if po['status'] == 'cancelled':
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be received'}), 409
 
         items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
         # `po['branch_id']` is a trusted value from THIS company's own PO row
@@ -4283,11 +4318,16 @@ def receive_purchase_order(po_id):
             cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
 
         cur.execute("UPDATE purchase_orders SET status='received', received_at=? "
-                    "WHERE id=? AND company_id=? AND status<>'received'",
+                    "WHERE id=? AND company_id=? AND status NOT IN ('received','cancelled')",
                     (datetime.now().strftime('%Y-%m-%d'), po_id, cid))
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO already received'}), 409
+        # STOCK-BOOKS B1: goods arrived -- move the order's 1260 amount into
+        # Inventory (1200). Posts nothing for a legacy PO (its order journal
+        # already debited 1200) -- see gl.post_po_receipt. Same transaction as
+        # the stock movements above, so the books and the shelves cannot part.
+        gl.post_po_receipt(conn, cid, bid, po_id, po['po_number'], currency)
         _audit(conn, 'PO_RECEIVED', 'purchase_order', po_id, po['po_number'])
         conn.commit()
     except sqlite3.DatabaseError as exc:
@@ -4297,6 +4337,72 @@ def receive_purchase_order(po_id):
     finally:
         conn.close()
     _emit('StockReceived', {'po_id': po_id, 'po_number': po['po_number']})
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/purchase-orders/<int:po_id>/cancel', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def cancel_purchase_order(po_id):
+    """STOCK-BOOKS B2: cancel a purchase order that has not been received.
+
+    Before this route a wrong order could never be undone: it sat 'pending' for
+    ever, its amount stuck in Goods Ordered (1260) and in what the shop owes the
+    supplier. Cancelling reverses the ORDER journal exactly (gl.reverse_journal:
+    1260 and AP for a new order, 1200 and AP for a legacy one, and the cash leg
+    of a down payment that was already voided), and the PO drops out of the
+    supplier's balance, statement and aging (party_balance and the two routes
+    filter status='cancelled').
+
+    REFUSED while an ACTIVE payment is tied to the order (409
+    PO_HAS_PAYMENTS): the cash that went out must be voided first, otherwise
+    cancelling would leave the supplier owing the shop money nobody recorded.
+    Also refused when already received or already cancelled. BEGIN IMMEDIATE and
+    a status-guarded UPDATE, like receive, so a double click cancels once.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        po = cur.execute("SELECT id, status, po_number FROM purchase_orders WHERE id=? AND company_id=?",
+                         (po_id, cid)).fetchone()
+        if not po:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO not found'}), 404
+        if po['status'] in ('received', 'cancelled'):
+            conn.rollback()
+            return jsonify({'status': 'error',
+                            'message': f"Cannot cancel a purchase order that is {po['status']}."}), 409
+        paid = cur.execute(
+            "SELECT COUNT(*) FROM payments WHERE company_id=? AND related_type='po' AND related_id=? "
+            "AND COALESCE(status,'active')='active'", (cid, po_id)).fetchone()[0]
+        if paid:
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_HAS_PAYMENTS',
+                            'message': 'This order has a payment. Void the payment first.'}), 409
+        cur.execute("UPDATE purchase_orders SET status='cancelled' "
+                    "WHERE id=? AND company_id=? AND status NOT IN ('received','cancelled')", (po_id, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO already received or cancelled'}), 409
+        order = gl.po_order_journal(conn, cid, po_id)
+        if order:
+            gl.reverse_journal(conn, cid, order['id'], memo=f"Purchase order {po['po_number']} cancelled")
+        currency = _company_currency(conn, cid)
+        sup = cur.execute("SELECT supplier_id FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+        if sup and sup['supplier_id']:
+            _refresh_party_balance(conn, 'suppliers', sup['supplier_id'], cid, currency)
+        _audit(conn, 'PO_CANCELLED', 'purchase_order', po_id, po['po_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("cancel_purchase_order(%s) failed: %s", po_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not cancel this purchase order.'}), 400
+    finally:
+        conn.close()
     return jsonify({'status': 'success'})
 
 @retail_bp.route('/purchase-orders/split-preview', methods=['POST'])
@@ -4717,6 +4823,7 @@ def send_stock_transfer(transfer_id):
         # same reasoning receive_purchase_order's identical line already
         # states.
         currency = _company_currency(conn, cid)
+        sent_lines = []  # STOCK-BOOKS B4: (product_id, qty, unit_cost) for the send journal
         for item in items:
             pid = item['product_id']
             qty = float(item['quantity_sent'])
@@ -4789,6 +4896,7 @@ def send_stock_transfer(transfer_id):
                 "UPDATE stock_transfer_items SET unit_cost=? WHERE id=?",
                 (transfer_unit_cost, item['id'])
             )
+            sent_lines.append((pid, qty, transfer_unit_cost))
             # v13 stamp + ledger row, identical shape to adjust_stock's own
             # INSERT above -- 'transfer_out' is a new, self-describing
             # movement_type; movement_type carries no CHECK constraint in
@@ -4828,6 +4936,10 @@ def send_stock_transfer(transfer_id):
             # order's identical double-guard.
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'Transfer already sent.'}), 409
+        # STOCK-BOOKS B4: the stock is now in a van, not on a shelf -- Dr Stock
+        # in Transit (1250) / Cr Inventory (1200) at the cost just snapshotted
+        # on each line. Same transaction as the movements above.
+        gl.post_transfer_send(conn, cid, source_bid, transfer_id, sent_lines, currency)
         _audit(conn, 'STOCK_TRANSFER_SENT', 'stock_transfer', transfer_id,
                f'{len(items)} line(s) from branch {source_bid} to {transfer["destination_branch_id"]}')
         conn.commit()
@@ -4937,10 +5049,12 @@ def receive_stock_transfer(transfer_id):
         # quantized at.
         currency = _company_currency(conn, cid)
         shortages = []
+        recv_lines = []  # STOCK-BOOKS B4: keyed by ITEM id (a transfer may repeat a product)
         for item in items:
             pid = item['product_id']
             qty_sent = float(item['quantity_sent'])
             qty_received = received_by_item_id[item['id']]
+            recv_lines.append((item['id'], qty_sent, qty_received, float(item['unit_cost'] or 0)))
             cur.execute(
                 "UPDATE stock_transfer_items SET quantity_received=? WHERE id=?",
                 (qty_received, item['id'])
@@ -5037,6 +5151,16 @@ def receive_stock_transfer(transfer_id):
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'Transfer already received.'}), 409
+        # STOCK-BOOKS B4: Dr Inventory (received) / Cr Stock in Transit (exactly
+        # what the send journal debited) / the difference to Shrinkage (5910).
+        # A shortage used to vanish: the stock left the source and never arrived
+        # and nothing recorded the loss. A transfer sent before this wave has no
+        # send journal; the helper then posts nothing (1250 never goes negative).
+        _journal_id, written_off = gl.post_transfer_receive(
+            conn, cid, dest_bid, transfer_id, recv_lines, currency)
+        for s, line in zip(shortages, [l for l in recv_lines
+                                       if l[2] < l[1] - stock_reconciliation.DEFAULT_TOLERANCE]):
+            s['written_off_value'] = float(written_off.get(line[0], 0))
         _audit(conn, 'STOCK_TRANSFER_RECEIVED', 'stock_transfer', transfer_id,
                f'{len(items)} line(s) at branch {dest_bid}'
                + (f'; {len(shortages)} short' if shortages else ''))
@@ -5098,6 +5222,102 @@ def cancel_stock_transfer(transfer_id):
         conn.rollback()
         current_app.logger.exception("cancel_stock_transfer(%s) failed: %s", transfer_id, exc)
         return jsonify({'status': 'error', 'message': 'Could not cancel this transfer.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/stock-transfers/<string:transfer_id>/recall', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.transfer.cancel", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def recall_stock_transfer(transfer_id):
+    """STOCK-BOOKS B4: in_transit -> cancelled. Bring a sent transfer back to
+    the source branch before the destination has received it.
+
+    cancel_stock_transfer refuses once stock has left (a pending transfer has
+    touched nothing; a sent one has moved stock and, now, a books entry), so a
+    wrongly sent transfer used to be stuck in transit for ever. Recall puts
+    every line back: one `transfer_in` movement per line at the cost the line
+    left at, the source balance's average re-weighted exactly like a receipt,
+    and the books reverse the SEND journal (1250 back to 1200). A transfer sent
+    before this wave has no send journal and the books post nothing.
+    Status-guarded under BEGIN IMMEDIATE, so a recall racing a receive can only
+    win once.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        transfer = cur.execute("SELECT * FROM stock_transfers WHERE id=? AND company_id=?",
+                               (transfer_id, cid)).fetchone()
+        if not transfer:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer not found'}), 404
+        if transfer['status'] != 'in_transit':
+            conn.rollback()
+            return jsonify({'status': 'error',
+                            'message': f"Cannot recall a transfer that is {transfer['status']}."}), 409
+        items = cur.execute("SELECT * FROM stock_transfer_items WHERE transfer_id=?", (transfer_id,)).fetchall()
+        source_bid = transfer['source_branch_id']
+        reference = f'XFER-{transfer_id}'
+        actor, terminal, utc_now = _stamp()
+        source_branch_uid = _branch_uid(conn, source_bid)
+        currency = _company_currency(conn, cid)
+        for item in items:
+            pid = item['product_id']
+            qty = float(item['quantity_sent'])
+            unit_cost = float(item['unit_cost'] or 0)
+            cur.execute("INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) "
+                        "VALUES (?,?,?,0)", (cid, pid, source_bid))
+            bal = cur.execute("SELECT quantity_on_hand, avg_cost FROM inventory_balances "
+                              "WHERE company_id=? AND product_id=? AND branch_id=?",
+                              (cid, pid, source_bid)).fetchone()
+            on_hand = float(bal['quantity_on_hand'] or 0)
+            old_avg = float(bal['avg_cost'] or 0)
+            denom = on_hand + qty
+            if denom > 0:
+                new_avg = (Decimal(str(on_hand)) * Decimal(str(old_avg))
+                           + Decimal(str(qty)) * Decimal(str(unit_cost))) / Decimal(str(denom))
+                if new_avg < 0:
+                    new_avg = Decimal(str(unit_cost))
+                new_avg_cost = _money(new_avg, currency)
+            else:
+                new_avg_cost = _money(old_avg, currency)
+            cur.execute("UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ? "
+                        "WHERE company_id=? AND product_id=? AND branch_id=?",
+                        (qty, new_avg_cost, cid, pid, source_bid))
+            movement_uid = _new_uid()
+            note = 'Recalled'
+            cur.execute("""
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'transfer_in',?,?,?,?,?,?,?,?,?)
+            """, (cid, pid, source_bid, qty, unit_cost, reference, note, _uid(),
+                  movement_uid, actor, terminal, utc_now))
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': pid, 'branch_id': source_bid, 'branch_uid': source_branch_uid,
+                'movement_type': 'transfer_in', 'quantity': qty, 'unit_cost': unit_cost,
+                'reference': reference, 'notes': note, 'created_by': _uid(),
+                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
+        cur.execute("UPDATE stock_transfers SET status='cancelled' "
+                    "WHERE id=? AND company_id=? AND status='in_transit'", (transfer_id, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Transfer already received or recalled.'}), 409
+        send = gl.send_journal(conn, cid, transfer_id)
+        if send:
+            gl.reverse_journal(conn, cid, send['id'], memo=f'Transfer {transfer_id} recalled')
+        _audit(conn, 'STOCK_TRANSFER_RECALLED', 'stock_transfer', transfer_id,
+               f'{len(items)} line(s) back to branch {source_bid}')
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("recall_stock_transfer(%s) failed: %s", transfer_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not recall this transfer.'}), 400
     finally:
         conn.close()
     return jsonify({'status': 'success'})
@@ -11781,8 +12001,12 @@ def report_trial_balance():
         conn.close()
         return jsonify({'status': 'error', 'message': str(exc)}), 400
     subledger = gl.subledger_tie(conn, cid, tb)
+    # STOCK-BOOKS B7: does Inventory (1200) agree with the stock on the shelves?
+    # A SIBLING key, not new keys on `subledger` (that dict is pinned exactly by
+    # retail_gl_route_test.py). Same `tb`, never a second SUM over the ledger.
+    inventory = gl.inventory_tie(conn, cid, tb)
     conn.close()
-    data = dict(tb, subledger=subledger)
+    data = dict(tb, subledger=subledger, inventory=inventory)
     return jsonify({'success': True, 'data': data})
 
 # core/retail/financial_statements.py exposed read-only, the same wave and
@@ -17775,7 +17999,8 @@ def supplier_statement(sid):
     _eps = _money_epsilon(currency)
     charges = conn.execute(
         "SELECT po_number AS ref, created_at, total AS amount, 'charge' AS kind, 1 AS sign "
-        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND total > ?",
+        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND total > ? "
+        "AND COALESCE(status,'')<>'cancelled'",
         (cid, sid, _eps)).fetchall()
     # The settling direction is the MIRROR of the customer statement's: PAYING
     # a supplier ('out') reduces what the shop owes, so 'out' reads as
@@ -17882,10 +18107,14 @@ def pay_purchase_order(po_id):
     if amt <= 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
-    po = conn.execute("SELECT id,supplier_id,total,COALESCE(amount_paid,0) AS amount_paid,po_number FROM purchase_orders WHERE id=? AND company_id=?",
+    po = conn.execute("SELECT id,supplier_id,total,COALESCE(amount_paid,0) AS amount_paid,po_number,status FROM purchase_orders WHERE id=? AND company_id=?",
                       (po_id, cid)).fetchone()
     if not po:
         conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
+    # STOCK-BOOKS B3: a cancelled order owes the supplier nothing -- paying it
+    # would create a supplier credit with no debt behind it.
+    if po['status'] == 'cancelled':
+        conn.close(); return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
     try:
         new_paid = _money(po['amount_paid'] + amt, currency)
         # The SAME epsilon create_purchase_order sets this column with -- the
@@ -18645,7 +18874,7 @@ def aging_report():
     # v44: derived balances (one batch), not the stored column.
     parties, _unused_total = _derived_party_rows(
         conn, cid, 'suppliers', "id", _company_currency(conn, cid), _eps)
-    oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>?"
+    oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>? AND COALESCE(status,'')<>'cancelled'"
     for p in parties:
         oldest = conn.execute(oldest_sql, (cid, p['id'], _eps)).fetchone()[0]
         days = 0
@@ -20637,19 +20866,26 @@ def resolve_stock_exception(exception_id):
                 actor, terminal, utc_now = _stamp()
                 movement_type = 'stock_in' if delta > 0 else 'stock_out'
                 movement_uid = _new_uid()
+                # STOCK-BOOKS B5: a counted correction is valued at the unit
+                # cost HERE and now and booked against Shrinkage (5910) -- see
+                # adjust_stock, which this mirrors.
+                exc_currency = _company_currency(conn, cid)
+                exc_cost = float(stock_books.effective_unit_cost(conn, cid, pid, bid, exc_currency))
                 conn.execute("""
-                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,notes,created_by,
                                                      uid,actor_user_uid,terminal_id,created_at_utc)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (cid, pid, bid,
                       movement_type,
-                      delta, 'EXCEPTION_RESOLVE', note, _uid(),
+                      delta, exc_cost, 'EXCEPTION_RESOLVE', note, _uid(),
                       movement_uid, actor, terminal, utc_now))
+                gl.post_stock_adjustment(conn, cid, bid, movement_uid, delta, exc_cost,
+                                         'EXCEPTION_RESOLVE', exc_currency)
                 # Wave B shape, identical to adjust_stock's own emission just
                 # above: the correction is only useful if it travels.
                 _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
                     'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
-                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': 0,
+                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': exc_cost,
                     'reference': 'EXCEPTION_RESOLVE', 'notes': note, 'created_by': _uid(),
                     'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
                 })

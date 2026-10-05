@@ -140,6 +140,12 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'delete_supplier_contact': CAP_STOCK,
     'create_purchase_order': CAP_STOCK,
     'receive_purchase_order': CAP_STOCK,
+    # STOCK-BOOKS B2/B4: cancelling an unreceived PO and recalling a sent transfer
+    # are stock authority, the same as receive / cancel-transfer they sit beside.
+    # Both are reachable only by a holder of retail.stock.adjust (test_t3_cashier_
+    # cannot_cancel in retail_stock_books_routes_test.py proves the deny half).
+    'cancel_purchase_order': CAP_STOCK,
+    'recall_stock_transfer': CAP_STOCK,
     'preview_po_split': CAP_STOCK,
     'accept_reorder_request': CAP_STOCK,
     'decline_reorder_request': CAP_STOCK,
