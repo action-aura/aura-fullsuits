@@ -7020,3 +7020,51 @@ payment posts no GL). Plan: job f8252b48 tmp/stockbooks/plan.md.
 Owner decisions ASSUMED (to confirm): shrinkage is its own line below gross profit;
 a PO with a live payment cannot be cancelled until the payment is voided; stock
 entered before this wave stays "not opened" until a go-live step.
+
+## 2026-10-05 — STOCK-BOOKS wave CASHED IN (stock moves in the books) — no schema claim
+
+Delivered on `feat/retail-ux-p0` (2613a3f0..1fcae8ff; plan job f8252b48
+tmp/stockbooks/plan.md). A purchase order now books to 1260 Goods Ordered Not
+Received and moves to 1200 Inventory only when RECEIVED (legacy orders already on
+1200 post nothing at receipt); new PO cancel route (refused while a live payment
+exists; reverses the order journal; cancelled POs leave supplier balances,
+statement and aging; a reorder request behind it is released). Transfers book
+1200 -> 1250 Stock in Transit at send and back at receipt, shortages and
+over-receipts to 5910; new Recall for a sent transfer. Stock adjustments,
+stock-exception counts and deleting a product with stock post to 5910; stock
+entered at create/import posts an opening entry to 3900 (never 'opening_balance').
+New Inventory tie beside AR/AP (ties / rounding / not opened / differs; "not
+opened" is never red). One shared average-cost rule (`commercial_runtime/stock_cost.py`)
+for every writer AND the sync apply, so a second computer prices stock exactly like
+the first; returns restock into the average at their sale-snapshot cost. A purchase
+order bought on credit must name a supplier (409 SUPPLIER_REQUIRED_FOR_CREDIT_PO).
+Target chart: docs/launch-readiness/target-chart-of-accounts.md.
+
+Owner decisions ASSUMED (to confirm): shrinkage is its own line below gross profit;
+a PO with a live payment cannot be cancelled until the payment is voided; stock
+entered before the wave stays "not opened" until a go-live step; a credit PO must
+name its supplier.
+
+Measured: core 25, routes 30 + PD1 strict xfail, two-device 5 (peer matches A to
+the fil, uids equal, peer posts nothing, delete writes off once), UI 8 claims with
+mutants; day_in_shop 106/0; lab DB copies: three show "not opened", the day-shop copy
+ties at 103.900. Import of 2,000 rows 1.4 s -> 3.1 s (one journal per row).
+Adversarial verifier: 11 mutations re-proved; its HIGH (peer average cost diverged
+-> wrong COGS on a second computer, also an out-of-order product/movement event)
+and MEDIUMs fixed (a5c493ac..e829575a), each with a mutation proof.
+
+Residuals:
+- S1 — partial receive / "close short" on a PO is not built (belongs with W4a: AP at
+  receipt and PO sync).
+- S2 — PD1: voiding a PO-creation down payment posts no GL (strict xfail); cancelling
+  the PO repairs it, an open PO does not.
+- S3 — one unbooked movement (stock entered before the wave, zero-cost stock-in)
+  makes the whole tie read "not opened", hiding a real difference, until the go-live
+  wizard exists.
+- S4 — moving-average rounding accumulates in 1200 (amber "rounding"; a busy shop can
+  drift into "differs"); a period-close true-up to 5910 is needed later. The sync
+  apply rounds the average to 0.0001, local writers to the currency unit.
+- S5 — in-transit stock and PO cancels are this-computer only until W3b/W4a; a
+  sibling's receipt sharing a PO number with a local PO resolves to the local PO.
+- S6 — Android/KMP have no PO cancel / transfer recall; Arabic account names are not
+  shown on screen.
