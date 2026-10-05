@@ -691,14 +691,18 @@
 
     let data = null;
     let failed = false;
+    let failure = null;
     try {
       const resp = await rs._get(ROUTE);
       if (resp && resp.status === 'success' && resp.data) data = resp.data; else failed = true;
     } catch (e) {
       failed = true;
-      console.error(e);
+      failure = e;
     }
     if (token !== undefined && rs._isStaleRender(token)) return undefined;
+    // Logged only for the render that is still current: a fetch cut off because
+    // the person already navigated away is not an error worth a console line.
+    if (failure) console.error(failure);
     const body = el('td-body');
     if (!body) return undefined;
     if (failed) {
