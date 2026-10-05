@@ -6907,3 +6907,53 @@ to confirm: Q1 networked shops take the shop-wide figure (old figures kept as a
 record); Q2 supplier balances get an on-screen note on networked shops until purchase
 orders sync, no new restriction; Q3 customer Statement/Remind switched back on for
 networked shops.
+
+## 2026-10-05 — retail v44 CASHED IN (shop-wide customer/supplier balances)
+
+Delivered on `feat/retail-ux-p0`, 6cf9bc42..e9150089 (plan: job f8252b48
+tmp/ledger/plan.md). Balances are derived by `core/retail/party_balance.py` from
+synced rows (integer minor units, order-independent); `credit_balance` is a display
+cache refreshed after every local write, after every pull that changed something,
+and at boot; every money decision and report derives. `_adjust_credit` now raises;
+the sync engine's void delta (`_apply_voided_payment_credit`) is gone.
+
+Measured:
+- Three-computer test (B rings a credit sale 100/20 paid + payment 30, A voids the
+  payment): was 30 on A and C vs books 80; now 80 on all three in customers,
+  receivables, statement, aging and trial-balance ties; credit limit on C denies
+  30 / allows 20; a return on C forgives 80 of debt, 0 store credit.
+- Lab databases (copies): the S-AUTH pair stored 4.007 and -2.004 for one customer
+  whose records derive 2.003 on both; the day-in-the-shop shop: no drift.
+- Full CI list (-j 5): 499 files, 498 pass; the one failure was the new timing
+  benchmark under load (now opt-in, below). After that run: verify fixes F1/F4
+  (targeted files green) and two JS tests re-anchored that DAY-UI U7 had broken
+  (fe2f3541; the v44 run had wrongly reported them pre-existing). day_in_shop 106/0.
+- Adversarial verifier (independent, from scratch): no CRITICAL/HIGH; M1, M3, M4,
+  M5, M6, M7, M8, M11 and the idle-gate mutation each turned a named test red.
+  F1 (accepted reorder POs never reached the GL, AP stopped tying) fixed 2233be02.
+- Perf alone, 500 debtors / 20k sales: receivables 192 ms, post-pull refresh
+  147-160 ms (budget 100 — over; skipped on idle pulls since 1b9a89a6), single
+  party 1.5 ms, credit sale +4.5 %.
+
+Residuals (written down, not fixed):
+- V1 — purchase orders do not sync, and a 'po' payment carries only the LOCAL
+  integer `related_id` of its PO, synced verbatim. So (a) supplier balances are
+  complete only on the computer that entered the PO, and on other computers the
+  supplier can show a CREDIT equal to its instalments (verify F3; the payables note
+  covers it in words only); (b) on a receiving computer that `related_id` may name
+  an unrelated local PO. Root fix = PO sync with a uid carried on the payment (W4a).
+- V2 — two computers that both qualify as "single" at upgrade keep different carry
+  amounts for one party (first insert wins, ON CONFLICT DO NOTHING). Needs e.g. a
+  backup restore to reach; fix = park a same-uid/different-amount carry as a conflict.
+- V3 — the post-pull refresh is ~150 ms on a 20k-sale shop whenever events arrive;
+  the remaining cost is the shop-wide derivation itself.
+- V4 — `party_balance_adjustment` is not a signed authority event, and there is no
+  reverse-adjustment route (append-only, R10 of the plan); demo-wipe leaves orphans.
+- V5 — the timing benchmark is opt-in (AURA_RUN_PERF=1): CI no longer catches a
+  performance regression on these paths; run it alone before a release.
+- V6 — cheque money legs move party balances but post no GL journal (pre-existing):
+  T1 asserts the exact gap and will go red the day cheque posting lands.
+- V7 — `retail_v42_till_allocation_test.py` runs 28 min alone (14/14) — same shape as D6.
+- V8 — Android statement kinds edited, not built; KMP app keeps its own running total.
+- Plan residuals R2 (credit limits are per-computer), R3 (offline over-extension),
+  R7 (carried amounts age as current) stand.
