@@ -2492,5 +2492,21 @@
   "WhatsApp messages sent: {count}": "WhatsApp messages sent: {count}",
   "Emails sent: {count}": "Emails sent: {count}",
   "E-invoices prepared for the tax office: {count}": "E-invoices prepared for the tax office: {count}",
-  "Could not load Today. Check the connection and try again.": "Could not load Today. Check the connection and try again."
+  "Could not load Today. Check the connection and try again.": "Could not load Today. Check the connection and try again.",
+  "Cancel Purchase Order": "Cancel Purchase Order",
+  "Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.": "Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.",
+  "Purchase order cancelled": "Purchase order cancelled",
+  "This order has a payment. Void the payment first.": "This order has a payment. Void the payment first.",
+  "Recall": "Recall",
+  "Recall Transfer": "Recall Transfer",
+  "Bring this transfer back to the source branch? The stock returns to where it left from.": "Bring this transfer back to the source branch? The stock returns to where it left from.",
+  "Transfer recalled": "Transfer recalled",
+  "written off": "written off",
+  "Inventory Reconciliation": "Inventory Reconciliation",
+  "GL Inventory": "GL Inventory",
+  "Stock Value (Shelves)": "Stock Value (Shelves)",
+  "Stock in Transit (GL)": "Stock in Transit (GL)",
+  "Stock not opened yet": "Stock not opened yet",
+  "Rounding difference": "Rounding difference",
+  "Some stock was entered before the books tracked it, so the two figures are not compared yet.": "Some stock was entered before the books tracked it, so the two figures are not compared yet."
 }

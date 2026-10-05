@@ -11365,6 +11365,7 @@ const RetailSystem = {
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._viewPO(${po.id})">View</button>
           ${po.status==='pending'?`<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._receivePO(${po.id},'${po.po_number}')">Receive</button>`:''}
+          ${po.status==='pending'?`<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelPO(${po.id},'${po.po_number}')">${t('Cancel')}</button>`:''}
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -11671,6 +11672,33 @@ const RetailSystem = {
     } catch(e) {}
   },
 
+  // STOCK-BOOKS B8: cancel a purchase order that has not been received. The
+  // server refuses (409, code PO_HAS_PAYMENTS) while a payment is still active
+  // on it -- that refusal is shown in the shop's own language, never the raw
+  // server sentence, because it tells the owner exactly what to do next.
+  async _cancelPO(poId, poNumber) {
+    if (!(await this._confirm({
+      title: t('Cancel Purchase Order'),
+      message: `${poNumber}: ${t('Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.')}`,
+      confirmLabel: t('Cancel Purchase Order'),
+      danger: true,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/purchase-orders/${poId}/cancel`, {});
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Purchase order cancelled'), 'success');
+        this._loadPurchaseOrders();
+      } else if (d.code === 'PO_HAS_PAYMENTS') {
+        SubsystemApp.showToast(t('This order has a payment. Void the payment first.'), 'error');
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
   async _viewPO(poId) {
     try {
       const resp = (await this._get(`/api/sub/retail/purchase-orders/${poId}`)).data || {};
@@ -11797,6 +11825,8 @@ const RetailSystem = {
           actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelTransfer('${this._esc(xfer.id)}')">${t('Cancel')}</button>`;
         } else if (xfer.status === 'in_transit') {
           actions += `<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openReceiveTransfer('${this._esc(xfer.id)}')">${t('Receive')}</button>`;
+          // STOCK-BOOKS B4/B8: a sent transfer can be brought back before it is received.
+          actions += `<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._recallTransfer('${this._esc(xfer.id)}')">${t('Recall')}</button>`;
         }
         return `<tr>
           <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi((xfer.id||'').slice(0,8), xfer.id)}</td>
@@ -12100,7 +12130,11 @@ const RetailSystem = {
         // being folded into a plain success message that would bury it.
         // 'info' rather than 'error', for the same reason: this did not fail.
         if (shortages.length) {
-          SubsystemApp.showToast(`${shortages.length} ${t('line(s) came up short')}`, 'info');
+          // STOCK-BOOKS B4/B8: the value written off to Shrinkage, so the loss
+          // is stated in money, not just a line count.
+          const writtenOff = shortages.reduce((s, x) => s + (Number(x.written_off_value) || 0), 0);
+          SubsystemApp.showToast(`${shortages.length} ${t('line(s) came up short')}` +
+            (writtenOff > 0 ? ` · ${this._fmt(writtenOff)} ${t('written off')}` : ''), 'info');
         } else {
           SubsystemApp.showToast(t('Transfer received'), 'success');
         }
@@ -12124,6 +12158,27 @@ const RetailSystem = {
       const d = await this._post(`/api/sub/retail/stock-transfers/${id}/cancel`, {});
       if (d.status === 'success') {
         SubsystemApp.showToast(t('Transfer cancelled'), 'success');
+        this._loadTransfers();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
+  },
+
+  async _recallTransfer(id) {
+    if (!(await this._confirm({
+      title: t('Recall Transfer'),
+      message: t('Bring this transfer back to the source branch? The stock returns to where it left from.'),
+      confirmLabel: t('Recall Transfer'),
+      danger: true,
+    }))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/stock-transfers/${id}/recall`, {});
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Transfer recalled'), 'success');
         this._loadTransfers();
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
@@ -19497,6 +19552,10 @@ const RetailSystem = {
       <div class="sub-chart-card">
         <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">${t('Subledger Reconciliation')}</div>
         <div id="tb-subledger" style="color:var(--text-muted)">${t('Loading…')}</div>
+        <!-- STOCK-BOOKS B8: Inventory (1200) against the stock on the shelves,
+             beside the AR/AP ties above. -->
+        <div style="color:var(--text-primary);font-weight:600;margin:18px 0 10px">${t('Inventory Reconciliation')}</div>
+        <div id="tb-inventory" style="color:var(--text-muted)">${t('Loading…')}</div>
       </div>`;
     await this._loadTrialBalance();
   },
@@ -19676,6 +19735,7 @@ const RetailSystem = {
             </div>`;
         }
       }
+      this._renderInventoryTie(data.inventory);
     } catch (e) {
       // VISIBLE failure, matching _loadPartyLedger's identical fix above --
       // this file already found and fixed the "silently stuck on Loading…
@@ -19696,6 +19756,8 @@ const RetailSystem = {
       }
       const subEl = document.getElementById('tb-subledger');
       if (subEl) subEl.textContent = t('Could not load this list. Check the connection and try again.');
+      const invEl = document.getElementById('tb-inventory');
+      if (invEl) invEl.textContent = t('Could not load this list. Check the connection and try again.');
       const statusEl = document.getElementById('tb-status');
       if (statusEl) statusEl.innerHTML = '';
       const debitEl = document.getElementById('tb-total-debit');
@@ -19705,6 +19767,51 @@ const RetailSystem = {
       const asOfLineEl = document.getElementById('tb-as-of-line');
       if (asOfLineEl) asOfLineEl.textContent = '';
     }
+  },
+
+  // STOCK-BOOKS B8: Inventory (1200) against the stock on the shelves. Four
+  // states from the server's `inventory.status`, none of them guessed here:
+  //   ties        green   the books and the shelves agree
+  //   rounding    amber   a few fils of moving-average rounding, no action
+  //   not_opened  neutral stock was entered before the books tracked it --
+  //                       NEVER red: missing history is not an error
+  //   differs     red     a real difference
+  // `not_applicable` (a later-dated journal exists) states that the two are not
+  // comparable for this date, in the same words the AR/AP block uses.
+  _renderInventoryTie(inv) {
+    const el = document.getElementById('tb-inventory');
+    if (!el) return;
+    if (!inv) { el.textContent = '—'; return; }
+    if (inv.status === 'not_applicable' || inv.applicable === false) {
+      el.innerHTML = `<div style="color:var(--text-muted)">
+        <div style="font-weight:600;color:var(--text)">${this._esc(t('Not comparable for this date'))}</div>
+        <div style="font-size:12px;margin-top:4px">${this._esc(t('A transaction dated after this filter affects the total, so it cannot be compared yet.'))}</div>
+      </div>`;
+      return;
+    }
+    const badge = {
+      ties: this._badge(t('Ties'), 'green'),
+      rounding: this._badge(t('Rounding difference'), 'yellow'),
+      not_opened: this._badge(t('Stock not opened yet'), 'purple'),
+      differs: this._badge(t('Does Not Tie'), 'red'),
+    }[inv.status] || '';
+    const note = inv.status === 'not_opened'
+      ? `<div style="font-size:12px;margin-top:6px;color:var(--text-muted)">${this._esc(t('Some stock was entered before the books tracked it, so the two figures are not compared yet.'))}</div>`
+      : '';
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('GL Inventory')}</div>
+          <div style="font-weight:600;color:var(--text-money)">${this._fmt(inv.inventory_gl)}</div>
+          <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;margin-top:8px">${t('Stock Value (Shelves)')}</div>
+          <div style="font-weight:600;color:var(--text-money)">${this._fmt(inv.stock_value)}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">${t('Stock in Transit (GL)')}</div>
+          <div style="font-weight:600;color:var(--text-money)">${this._fmt(inv.in_transit_gl)}</div>
+          <div style="margin-top:8px">${badge}</div>
+        </div>
+      </div>${note}`;
   },
 
   // account_type -> translated label. Falls back to a FIXED safe label

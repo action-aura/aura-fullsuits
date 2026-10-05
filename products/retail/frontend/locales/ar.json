@@ -2492,5 +2492,21 @@
   "WhatsApp messages sent: {count}": "رسائل واتساب أُرسلت: {count}",
   "Emails sent: {count}": "رسائل بريد أُرسلت: {count}",
   "E-invoices prepared for the tax office: {count}": "فواتير إلكترونية جُهّزت لدائرة الضريبة: {count}",
-  "Could not load Today. Check the connection and try again.": "تعذّر تحميل شاشة اليوم. تحقّق من الاتصال وحاول مجددًا."
+  "Could not load Today. Check the connection and try again.": "تعذّر تحميل شاشة اليوم. تحقّق من الاتصال وحاول مجددًا.",
+  "Cancel Purchase Order": "إلغاء أمر الشراء",
+  "Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.": "إلغاء هذا الطلب؟ لم يُستلم شيء، لذا سيُزال المبلغ المستحق للمورّد.",
+  "Purchase order cancelled": "تم إلغاء أمر الشراء",
+  "This order has a payment. Void the payment first.": "على هذا الطلب دفعة. أبطل الدفعة أولًا.",
+  "Recall": "سحب",
+  "Recall Transfer": "سحب التحويل",
+  "Bring this transfer back to the source branch? The stock returns to where it left from.": "إعادة هذا التحويل إلى الفرع المصدر؟ سيعود المخزون إلى المكان الذي خرج منه.",
+  "Transfer recalled": "تم سحب التحويل",
+  "written off": "شُطب",
+  "Inventory Reconciliation": "مطابقة المخزون",
+  "GL Inventory": "المخزون في الدفاتر",
+  "Stock Value (Shelves)": "قيمة المخزون الفعلي (الرفوف)",
+  "Stock in Transit (GL)": "بضاعة في الطريق (الدفاتر)",
+  "Stock not opened yet": "لم يُفتتح المخزون في الدفاتر بعد",
+  "Rounding difference": "فرق تقريب",
+  "Some stock was entered before the books tracked it, so the two figures are not compared yet.": "أُدخل بعض المخزون قبل أن تتتبّعه الدفاتر، لذا لا تُقارن القيمتان بعد."
 }
