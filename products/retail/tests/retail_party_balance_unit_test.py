@@ -269,3 +269,50 @@ def test_minor_unit_sum_is_order_independent_and_equals_the_decimal_sum():
 @pytest.mark.parametrize('currency', [None, 'JOD', 'USD', 'KWD', 'JPY', 'EUR', 'XXX'])
 def test_epsilon_equals_retail_api_money_epsilon(currency):
     assert pb.money_epsilon(currency) == retail_api._money_epsilon(currency)
+
+
+# ── 4. the diagnostic route and CLI measure, and never repair ─────────────────
+
+def test_diagnostic_route_and_cli_report_drift_without_repairing_it():
+    import subprocess
+    client, cid, _bid, pid = _make_admin(price=100.0)
+    cust = _customer(cid, 'Drifted')
+    _sell(client, cust, pid, 0.0)
+    rconn = get_retail_conn()
+    rconn.execute("UPDATE customers SET credit_balance=250 WHERE id=?", (cust,))
+    rconn.commit()
+
+    body = client.get('/api/sub/retail/reports/party-balance-check').get_json()
+    assert body['status'] == 'success'
+    assert body['drifted'] == 1
+    assert body['data'][0]['party_id'] == cust
+    assert body['data'][0]['stored'] == 250.0 and body['data'][0]['derived'] == 100.0
+    assert body['totals']['customer'] == {'stored': 250.0, 'derived': 100.0}
+
+    # CLI on a COPY (sqlite backup API, consistent even though the app has the file open)
+    copy = DATA / 'diag_copy.db'
+    dst = sqlite3.connect(str(copy))
+    rconn.backup(dst)
+    dst.close()
+    rconn.close()
+    script = SUITE_ROOT / 'scripts' / 'diag' / 'party_balance_check.py'
+    out = subprocess.run([sys.executable, str(script), str(copy)], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert 'stored=     250.000 derived=     100.000' in out.stdout, out.stdout
+
+    # measuring never repaired: the route answers the same a second time
+    again = client.get('/api/sub/retail/reports/party-balance-check').get_json()
+    assert again['data'][0]['stored'] == 250.0
+
+    # the report is a report-tier read: a cashier is refused
+    cashier_email = f"pbc-{uuid.uuid4().hex[:8]}@test.local"
+    reg = registry_conn()
+    reg.execute(
+        "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change) "
+        "VALUES (?,?,?,?,?,?,?,0)",
+        (str(uuid.uuid4()), cid, "EMP-0002", cashier_email, hash_password("CashierPW1x"), "cashier", "active"))
+    reg.commit()
+    reg.close()
+    c2 = app.test_client()
+    assert c2.post('/api/auth/login', json={'email': cashier_email, 'password': 'CashierPW1x'}).status_code == 200
+    assert c2.get('/api/sub/retail/reports/party-balance-check').status_code == 403

@@ -449,6 +449,8 @@ EXPECTED_READ_CAPABILITIES = {
     'customers_receivables': CAP_REPORTS,
     'suppliers_payables': CAP_REPORTS,
     'supplier_statement': CAP_REPORTS,
+    # v44: read-only stored-vs-derived diagnostic over every party's money.
+    'party_balance_check': CAP_REPORTS,
     # Also owner-only since Phase 1b (see EXPECTED_COMPANY_ADMIN_ROUTES): the
     # capability is kept as a second layer and so the money-disclosure sweep
     # keeps seeing a gated route.

@@ -164,6 +164,9 @@ from core.retail import general_ledger as gl
 # later, unclaimed wave" note on `trial_balance`'s own docstring. See that
 # module's own docstring for the full design.
 from core.retail import financial_statements as fin_statements
+# v44: customer/supplier balances DERIVED from shop-wide records (the column
+# is a display cache). See core/retail/party_balance.py's own docstring.
+from core.retail import party_balance
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -17465,6 +17468,36 @@ def _link_cheque_reversals(conn, cid, by_customer):
                 hit = wanted.get(cheque_engine.money_uid(row['id'], k))
                 if hit is not None:
                     hit['undoes'] = cheque_engine.money_uid(row['id'], k - 1)
+
+
+@retail_bp.route('/reports/party-balance-check', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def party_balance_check():
+    """v44 diagnostic: every customer/supplier whose stored `credit_balance`
+    differs from the figure derived from the shop's synced records, plus the
+    totals of each side. READ-ONLY (never refreshes the cache): its job is to
+    show how wrong the device-local column was BEFORE anything repairs it, so
+    the answer cannot be changed by looking. `?all=1` also lists parties that
+    agree. Company-scoped like every report."""
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    try:
+        currency = _company_currency(conn, cid)
+        everyone = party_balance.drift_report(conn, cid, currency, include_equal=True)
+    finally:
+        conn.close()
+    _eps = _money_epsilon(currency)
+    # Totals cover every party with a nonzero figure either way, so they read
+    # as "the whole book, stored vs derived", not just the drifted slice.
+    sums = {'customer': {'stored': 0.0, 'derived': 0.0}, 'supplier': {'stored': 0.0, 'derived': 0.0}}
+    for r in everyone:
+        sums[r['party_type']]['stored'] += r['stored']
+        sums[r['party_type']]['derived'] += r['derived']
+    totals = {k: {m: _money(v, currency) for m, v in d.items()} for k, d in sums.items()}
+    drifted = [r for r in everyone if abs(r['diff']) > _eps]
+    rows = everyone if request.args.get('all') == '1' else drifted
+    return jsonify({'status': 'success', 'data': rows, 'totals': totals, 'drifted': len(drifted)})
 
 
 @retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
