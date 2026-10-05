@@ -6876,3 +6876,34 @@ Residuals:
   (no such string in frontend or locales).
 - U3 — S2-toast proves "nothing covered", not "no toast": a toast storm that
   stays top-anchored would still pass.
+
+## 2026-10-05 — retail schema v44 CLAIMED (customer/supplier balances derived from shop-wide records)
+
+Claimed before any builder starts. Checked all 109 local and origin refs (fetched):
+the highest `RETAIL_SCHEMA_VERSION` anywhere is 43 (this branch). No other ref has
+touched `commercial_runtime/sync/sync_service.py` since 2026-09-15. No registry bump,
+no Owner revision.
+
+Why (closes 2026-09-30 open item 2, wider than written there): `credit_balance` is
+mutated only by the computer that performs the event; a sync pull of a sale, payment
+or return never moves it, and the ONE apply path that does
+(`_apply_voided_payment_credit`) is what makes a receive-only computer show 30 where
+the books say 80 (`retail_payment_void_twodevice_test.py`). The credit-limit check and
+the return split read that wrong number on every computer except the one that rang
+the sale.
+
+**Retail v44** adds `party_balance_adjustments` (synced, append-only: carried balances
+only), `party_balance_upgrade_report` (local record of stored vs derived at upgrade)
+and `idx_returns_sale_id`. Balances are derived from synced event rows by one module
+(`core/retail/party_balance.py`, integer minor units, order-independent); the column
+stays as a display cache refreshed after every local write, every sync pull and at
+boot; every money decision and report reads the derivation. A single-computer shop's
+exact old balance is carried forward by one fixed-uid adjustment; a networked shop
+switches to the shop-wide figure with the old per-computer numbers kept as a record.
+Plan: job f8252b48 tmp/ledger/plan.md.
+
+Owner decisions ASSUMED (2026-10-05, owner asleep; no real shop runs the app yet) —
+to confirm: Q1 networked shops take the shop-wide figure (old figures kept as a
+record); Q2 supplier balances get an on-screen note on networked shops until purchase
+orders sync, no new restriction; Q3 customer Statement/Remind switched back on for
+networked shops.
