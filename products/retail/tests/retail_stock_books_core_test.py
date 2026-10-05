@@ -462,6 +462,12 @@ def test_t9_rounding_then_differs_then_not_applicable(conn, gl):
         {'account_code': '1200', 'debit': 1.0}, {'account_code': '3000', 'credit': 1.0}])
     assert _tie(conn, gl)['status'] == 'differs'
 
+    # the same gap with stock the books have never heard of (a movement no
+    # journal names) is missing history, not an error: 'not_opened', never red
+    # (M16 -- without the detection this reads 'differs')
+    _move(conn, pid, 'stock_in', 1, 1.001)
+    assert _tie(conn, gl)['status'] == 'not_opened'
+
     # a journal dated after as_of -> the comparison is not applicable
     tb = gl.trial_balance(conn, CID, '2000-01-01')
     out = gl.inventory_tie(conn, CID, tb)
