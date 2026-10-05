@@ -21,8 +21,15 @@ this same file in a detached worktree at 5ee7357a (the commit before the
 writers were switched) and at HEAD; the figures are in the commit message. Here
 the route only has an absolute ceiling.
 
-Run (one file per process; see run_all_tests.py):
-    python -m pytest products/retail/tests/retail_party_balance_perf_test.py -v -s
+OPT-IN (2026-10-05). Wall-clock timings are only meaningful on a quiet
+machine: inside the full parallel run (`run_all_tests.py -j 5`) the same
+refresh measured 358 ms against ~160 ms alone, a fail with no code change. So
+the file only runs when AURA_RUN_PERF=1 is set. What that costs: the default
+suite and CI can no longer catch a performance regression on these paths;
+run this file alone before a release (ROADMAP v44 residuals).
+
+Run (alone, quiet machine):
+    AURA_RUN_PERF=1 python -m pytest products/retail/tests/retail_party_balance_perf_test.py -v -s
 """
 import os
 import shutil
@@ -35,6 +42,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+if os.environ.get('AURA_RUN_PERF') != '1':
+    pytest.skip('timing benchmark: opt-in with AURA_RUN_PERF=1 on a quiet machine '
+                '(see module docstring)', allow_module_level=True)
 
 PRODUCT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = PRODUCT_DIR / 'backend'
