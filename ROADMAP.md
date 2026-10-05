@@ -7068,3 +7068,30 @@ Residuals:
   sibling's receipt sharing a PO number with a local PO resolves to the local PO.
 - S6 — Android/KMP have no PO cancel / transfer recall; Arabic account names are not
   shown on screen.
+
+## 2026-10-06 — retail schema v45 CLAIMED (W4a: purchase orders shared between computers)
+
+Claimed before any builder starts. Checked all 109 local and origin refs (fetched):
+the highest `RETAIL_SCHEMA_VERSION` anywhere is 44 (this branch). Since 2026-10-01
+only this branch has touched `sync_service.py`, `retail_api.py` or `schema.py`.
+No registry bump, no Owner revision.
+
+Why: a purchase order lives only on the computer that typed it (no wire identity,
+`purchase_orders.id` is a per-computer integer). A sibling therefore cannot see,
+receive or cancel it; a supplier instalment paid on the sibling points its
+`payments.related_id` at whatever local PO happens to share the integer; the
+stored `amount_paid` is incremented in place and is never corrected by a void;
+and two computers that both receive one order would each add the stock.
+
+**Retail v45** (`_migrate_add_purchase_order_sync`, appended last):
+- moves the lazily-added `amount_paid`/`payment_status`/`due_date` into the chain;
+- `purchase_orders.uid`, `purchase_order_items.uid` (partial unique, backfilled),
+  `purchase_orders.order_journal_uid` (backfilled from the local order journal),
+  `purchase_orders.sync_backfill_pending` (1 on every pre-v45 row: the boot step
+  sends those once, then clears it).
+New sync types `purchase_order` (create + status update) and `purchase_order_item`;
+the payment event carries `po_uid`; `amount_paid`/`payment_status` become a cache
+recomputed from the local active PO payments after every write and every apply;
+receipt movements get deterministic uids so a double receive moves stock once.
+In scope deliberately NOT: AP at receipt time and partial receive (ROADMAP S1) --
+next wave W4a-2. Plan: job 54e80fc2 tmp/W4A-PLAN.md.
