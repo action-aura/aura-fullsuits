@@ -5261,6 +5261,24 @@ def accept_reorder_request(rid):
         # Deliberately NOT _queue_sync_event(...) for this PO -- see this
         # route's own docstring above.
 
+        # v44 F1 (verifier finding): this PO is a purchase_orders row, and
+        # v44's supplier formula counts EVERY purchase_orders.total > eps as
+        # owed. create_purchase_order books that same debt in the general
+        # ledger (Dr Inventory / Cr AP) in the same transaction; this second
+        # mint site posted NOTHING, so the supplier subledger said "owed
+        # <total>" while the books said 0 and the AP tie went false. Fix at
+        # the root: call the SAME posting create_purchase_order calls, with
+        # the same gate (`ap_balance` only when a supplier exists and the
+        # total is above the money epsilon; a reorder PO is born with no
+        # down-payment so amount_paid is 0), inside this transaction, then
+        # re-derive the supplier's display cache like every other writer.
+        _po_currency = _company_currency(conn, cid)
+        _po_eps = _money_epsilon(_po_currency)
+        if supplier_id:
+            _refresh_party_balance(conn, 'suppliers', supplier_id, cid, _po_currency)
+        gl.post_purchase_order(conn, cid, branch_id, po_id, po_number, _po_currency,
+                               0.0, total if (total > _po_eps and supplier_id) else 0.0)
+
         now = datetime.now(timezone.utc).isoformat()
         # launch-readiness Phase 6 stage 6a-i: `status`/`resolved_at` are
         # both synced reorder_request fields (sync_service.py's apply

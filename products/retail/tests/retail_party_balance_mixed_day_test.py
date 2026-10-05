@@ -348,5 +348,58 @@ def test_the_trial_balance_subledger_ties_on_a_mixed_day(day):
     assert Decimal(str(sub['ap_gl'])) - Decimal(str(sub['ap_subledger'])) == CHEQUE_NET_AP, sub
 
 
+def _tb(client):
+    return client.get(f'{API}/reports/trial-balance').get_json()['data']['subledger']
+
+
+def test_an_accepted_reorder_po_is_booked_and_ties():  # v44 F1
+    """Accepting a reorder request drafts a purchase order through a SECOND
+    mint site. v44 counts every purchase_orders.total as owed to the supplier,
+    and create_purchase_order books that debt in the general ledger; the
+    reorder path posted nothing, so the AP subledger (derived) rose by the PO
+    total while the books did not and ap_ties went False (verifier probe,
+    red on 1b9a89a6). Own fresh company: the shared `day` fixture carries a
+    known cheque gap that would mask a tie failure here.
+
+    Both directions: the accepted PO makes the supplier owed exactly its total
+    AND the books agree; a part payment through /pay still ties."""
+    client, cid, pid = _make_admin(price=10.0, stock=0)
+    sid = _supplier(cid, 'Reorder Sup')
+    rconn = get_retail_conn()
+    rconn.execute("UPDATE products SET supplier_id=?, reorder_level=5, cost_price=4 WHERE id=?", (sid, pid))
+    bid = rconn.execute("SELECT id FROM branches WHERE company_id=? LIMIT 1", (cid,)).fetchone()[0]
+    rid = str(uuid.uuid4())
+    rconn.execute("INSERT INTO reorder_requests (id,company_id,branch_id,product_id,status) VALUES (?,?,?,?, 'pending')",
+                  (rid, cid, bid, pid))
+    rconn.commit()
+    rconn.close()
+    r = client.post(f'{API}/reorder-requests/{rid}/accept', json={})
+    assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['purchase_order_id']
+    po_total = Decimal('20.000')  # reorder_level 5 x cost 4
+    conn = get_retail_conn()
+    try:
+        assert pb.supplier_balance(conn, cid, sid, 'JOD') == po_total
+        assert _stored('suppliers', sid) == po_total
+        # exactly ONE journal for the PO, booked to AP
+        n = conn.execute("SELECT COUNT(*) FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
+                         "AND source_id=?", (cid, str(po_id))).fetchone()[0]
+        assert n == 1, n
+    finally:
+        conn.close()
+    sub = _tb(client)
+    assert sub['ap_ties'] is True, sub
+    assert Decimal(str(sub['ap_gl'])) == po_total and Decimal(str(sub['ap_subledger'])) == po_total, sub
+    assert client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 8}).status_code == 200
+    sub = _tb(client)
+    assert sub['ap_ties'] is True, sub
+    assert Decimal(str(sub['ap_subledger'])) == Decimal('12.000'), sub
+    conn = get_retail_conn()
+    try:
+        assert pb.supplier_balance(conn, cid, sid, 'JOD') == Decimal('12.000')
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "-x"]))
