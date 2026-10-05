@@ -85,13 +85,29 @@ def unbooked_movement_count(conn, cid):
             ','.join('?' * len(_MOVEMENT_KEYED_JOURNALS))),
         (cid, *_MOVEMENT_KEYED_TYPES, *_MOVEMENT_KEYED_JOURNALS)
     ).fetchone()[0]
+    # STOCK-BOOKS verify F6: a receipt is matched to its journal by the LOCAL
+    # purchase order id, not by the po_number text alone. Two computers can
+    # both mint "PO-0001" (a configured document series has no per-computer
+    # fragment), and the other computer's SYNCED journal carries that same
+    # text with source_id NULL -- text matching let it "book" this computer's
+    # own unbooked receipt. So: when a PO with that number exists HERE, only a
+    # journal whose source_id is that PO's local id counts; only when no such
+    # PO exists here (the receipt itself came from a sibling) is the text
+    # match against the synced journal the only possible link.
     purchased = conn.execute(
         "SELECT COUNT(*) FROM inventory_movements m "
         "WHERE m.company_id=? AND m.movement_type='purchase_in' "
-        "AND NOT EXISTS (SELECT 1 FROM gl_journals j "
-        "                 WHERE j.company_id=m.company_id AND j.reference=m.reference "
-        "                   AND j.source_type IN (%s))" % ','.join('?' * len(_PURCHASE_JOURNALS)),
-        (cid, *_PURCHASE_JOURNALS)
+        "AND NOT ( "
+        "  EXISTS (SELECT 1 FROM purchase_orders p JOIN gl_journals j "
+        "            ON j.company_id=p.company_id AND j.source_id=p.id AND j.source_type IN (%(js)s) "
+        "           WHERE p.company_id=m.company_id AND p.po_number=m.reference) "
+        "  OR (NOT EXISTS (SELECT 1 FROM purchase_orders p2 "
+        "                   WHERE p2.company_id=m.company_id AND p2.po_number=m.reference) "
+        "      AND EXISTS (SELECT 1 FROM gl_journals j2 "
+        "                   WHERE j2.company_id=m.company_id AND j2.reference=m.reference "
+        "                     AND j2.source_type IN (%(js)s))) "
+        ")" % {'js': ','.join('?' * len(_PURCHASE_JOURNALS))},
+        (cid, *_PURCHASE_JOURNALS, *_PURCHASE_JOURNALS)
     ).fetchone()[0]
     return int(moved) + int(purchased)
 
