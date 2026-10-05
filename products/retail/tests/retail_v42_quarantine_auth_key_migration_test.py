@@ -92,7 +92,7 @@ def test_a_v41_database_is_rebuilt_with_auth_key_and_keeps_every_row(tmp_path):
     sch.init_retail()                                      # the REAL v41 -> v42 upgrade, backup and checks included
     conn = _open(sch)
     try:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 43   # DAY-1c: head is v43 (see retail_day1_v43_migration_test.py)
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 44   # v44: head is v44 (see retail_v44_party_balance_migration_test.py)
         assert _pk(conn) == {"entity_id", "event_type", "auth_key"}
         rows = {r["entity_id"]: dict(r) for r in conn.execute(
             "SELECT entity_id, entity_type, event_type, payload, reason, detail, quarantined_at, auth_key "
@@ -129,7 +129,7 @@ def test_the_pre_migration_backup_still_holds_the_old_shape(tmp_path):
     sch = _rewound_install(tmp_path)
     sch.init_retail()
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v43' in n)   # DAY-1c: head is v43
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v44' in n)   # v44: head is v44
     assert names, os.listdir(bdir)
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:

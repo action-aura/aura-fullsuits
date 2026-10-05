@@ -1157,7 +1157,27 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # session id means nothing on another till, so the sync payload for a
 # `payment` event does not carry it and the apply side never writes it.
 # See `_migrate_add_payment_cash_session` for the exact guard.
-RETAIL_SCHEMA_VERSION = 43
+#
+# v44 (2026-10-05, CUSTOMER / SUPPLIER BALANCES DERIVED FROM SHOP-WIDE
+# RECORDS; claimed in ROADMAP.md "retail schema v44 CLAIMED"). Two tables and
+# one index, no column changes on any existing table:
+#
+#   * `party_balance_adjustments` -- append-only, SYNCED. Holds ONLY the
+#     balance a single-computer shop already had when it upgraded (one
+#     `upgrade_v44_carry` row per party whose stored `credit_balance` was not
+#     explained by its own sales/payments/returns/purchase orders, e.g. an
+#     imported opening balance). Without it the new derivation
+#     (core/retail/party_balance.py) would silently drop that figure.
+#   * `party_balance_upgrade_report` -- LOCAL, never synced. One row per party
+#     whose stored figure disagreed with the derived one at upgrade, with the
+#     classification (`carried` / `networked_no_carry`). A networked shop's old
+#     per-computer figures are kept here as a record only.
+#   * `idx_returns_sale_id` -- the derivation joins returns to sales.
+#
+# `customers.credit_balance` / `suppliers.credit_balance` stay as a display
+# CACHE refreshed from the derivation; every money decision derives. See
+# `_migrate_add_party_balance_ledger` for the capture rules.
+RETAIL_SCHEMA_VERSION = 44
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2301,6 +2321,191 @@ def _migrate_retail_schema(conn):
     # init_retail (below), because a database that already reached v43 before
     # this column existed never re-enters this chain.
     _migrate_add_return_tax_refunded(conn)
+    # v43 -> v44 (balances derived from shop-wide records): appended LAST, same
+    # convention as every step above except v37 itself. It must stay after
+    # `_migrate_add_return_tax_refunded` and every other step because its
+    # capture reads sales/payments/returns/purchase_orders and the lazily-added
+    # `payments` columns, none of which a step ABOVE this line may still be
+    # changing. Capture runs only on a genuine upgrade (user_version < 44) so a
+    # later chain replay can never mint a carry from a cache that has merely
+    # drifted. See the RETAIL_SCHEMA_VERSION v44 comment above.
+    _migrate_add_party_balance_ledger(conn)
+
+
+def _single_computer_shop(conn, company_id):
+    """True only when this file provably belongs to a one-computer shop for
+    `company_id`: the registry lists at most one active device for it AND this
+    computer has never pulled anything (`sync_cursor.last_seq = 0`). ANY doubt
+    (registry unreadable, cursor unreadable) answers False -- "networked" is
+    the safe direction, because a carry minted on a computer that has peers
+    would be counted on top of the shop-wide figure the peers also derive."""
+    try:
+        cursor = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
+        if cursor is None or int(cursor[0] or 0) != 0:
+            return False
+    except Exception:
+        return False
+    try:
+        from commercial_runtime.identity.registry_db import get_conn as _registry_conn
+        reg = _registry_conn()
+        try:
+            n = reg.execute(
+                "SELECT COUNT(*) FROM devices WHERE CAST(company_id AS TEXT)=? AND COALESCE(status,'active')='active'",
+                (str(company_id),)).fetchone()[0]
+        finally:
+            reg.close()
+        return int(n) <= 1
+    except Exception:
+        return False
+
+
+def _migrate_add_party_balance_ledger(conn):
+    """One-time migration (schema v43 -> v44). Claimed in ROADMAP.md before
+    dispatch ("retail schema v44 CLAIMED"). See the RETAIL_SCHEMA_VERSION v44
+    comment for the why; this docstring is the mechanics.
+
+    TABLES / INDEX -- all `IF NOT EXISTS`, so a replay of the whole chain is a
+    no-op. `party_balance_adjustments` is append-only by trigger, but the
+    UPDATE trigger is VALUE-CONDITIONAL on every column except `company_id`,
+    exactly like `trg_gl_journals_no_update`: the table carries `company_id`,
+    so `rebind_company_id()` legitimately issues `UPDATE ... SET company_id=?`
+    over it on a shop that activates a licence later, and an unconditional
+    trigger would refuse that already-shipped path alongside real tampering.
+    `idx_returns_sale_id` is created only when `returns` has `sale_id`.
+
+    CAPTURE (v44's one data step). For every company, every customer and
+    supplier whose STORED balance differs from the DERIVED one by more than
+    half a minor unit gets a `party_balance_upgrade_report` row. ONLY IF the
+    shop is a single computer (`_single_computer_shop`) is the difference
+    ALSO carried: one `party_balance_adjustments` row with the fixed uid
+    `uuid5(NS, "<type>:<party_id>:v44-carry")` -- no company_id in it, so two
+    computers that both believed they were alone mint the SAME uid and the
+    sync apply collapses them -- queued to sync, with NO GL journal (the v38
+    opening journal already booked the stored total this carry preserves). A
+    networked shop gets no carry: its per-computer stored figures were each
+    wrong about the shop (measured on a real two-computer pair: 4.007 and
+    -2.004 for a customer whose records derive 2.003 on both), so balances
+    become the shop-wide derived figure and the old numbers stay in the
+    report table as a record.
+
+    WHY ONLY ON A GENUINE UPGRADE. Capture is skipped when the database was
+    already at v44 on entry (`PRAGMA user_version >= 44`): a chain replay on a
+    later bump would otherwise compare a cache that has merely drifted (a
+    crash between a write and its refresh) against the derivation and carry
+    the drift as if it were an opening balance. Idempotency is therefore
+    belt-and-braces: the entry-version guard AND the fixed uid (ON CONFLICT DO
+    NOTHING) AND the report table's primary key.
+
+    GUARDS (shape-gated, never raises for a missing shape): `customers` and
+    `suppliers` must exist and carry `credit_balance` (that column is added
+    lazily by retail_api's `_ensure_credit_schema`, NOT by this chain -- a
+    database that never ran it has nothing to capture), and the `payments`
+    columns the derivation reads must exist (the derivation itself no-ops on
+    a missing column, which would read as "derived 0" and fabricate a carry
+    of the full stored balance -- so absent columns skip capture entirely).
+    """
+    entry_user_version = conn.execute('PRAGMA user_version').fetchone()[0]
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS party_balance_adjustments (
+            uid            TEXT PRIMARY KEY,
+            company_id     TEXT NOT NULL,
+            party_type     TEXT NOT NULL CHECK (party_type IN ('customer','supplier')),
+            party_id       TEXT NOT NULL,
+            amount         REAL NOT NULL,
+            reason         TEXT NOT NULL,
+            created_at     TEXT,
+            created_at_utc TEXT,
+            created_by     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_party_balance_adjustments_party
+            ON party_balance_adjustments(company_id, party_type, party_id);
+
+        CREATE TABLE IF NOT EXISTS party_balance_upgrade_report (
+            company_id     TEXT NOT NULL,
+            party_type     TEXT NOT NULL,
+            party_id       TEXT NOT NULL,
+            stored_before  REAL NOT NULL,
+            derived        REAL NOT NULL,
+            carried        REAL NOT NULL,
+            classification TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL,
+            PRIMARY KEY (company_id, party_type, party_id)
+        );
+
+        -- Append-only. VALUE-CONDITIONAL on every column but company_id (see
+        -- this migration's docstring: rebind_company_id must keep working).
+        DROP TRIGGER IF EXISTS trg_party_balance_adjustments_no_update;
+        CREATE TRIGGER trg_party_balance_adjustments_no_update
+        BEFORE UPDATE ON party_balance_adjustments
+        WHEN OLD.uid            IS NOT NEW.uid
+          OR OLD.party_type     IS NOT NEW.party_type
+          OR OLD.party_id       IS NOT NEW.party_id
+          OR OLD.amount         IS NOT NEW.amount
+          OR OLD.reason         IS NOT NEW.reason
+          OR OLD.created_at     IS NOT NEW.created_at
+          OR OLD.created_at_utc IS NOT NEW.created_at_utc
+          OR OLD.created_by     IS NOT NEW.created_by
+        BEGIN
+            SELECT RAISE(ABORT, 'party_balance_adjustments is append-only: add a new adjustment, never UPDATE one');
+        END;
+        DROP TRIGGER IF EXISTS trg_party_balance_adjustments_no_delete;
+        CREATE TRIGGER trg_party_balance_adjustments_no_delete
+        BEFORE DELETE ON party_balance_adjustments
+        BEGIN
+            SELECT RAISE(ABORT, 'party_balance_adjustments is append-only: add a new adjustment, never DELETE one');
+        END;
+    """)
+    existing = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'returns' in existing and 'sale_id' in {r[1] for r in conn.execute('PRAGMA table_info(returns)').fetchall()}:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_returns_sale_id ON returns(sale_id)")
+
+    if entry_user_version >= 44:
+        return
+    if not {'customers', 'suppliers', 'payments'} <= existing:
+        return
+    for table in ('customers', 'suppliers'):
+        if 'credit_balance' not in {r[1] for r in conn.execute(f'PRAGMA table_info({table})').fetchall()}:
+            return
+    pay_cols = {r[1] for r in conn.execute('PRAGMA table_info(payments)').fetchall()}
+    if not {'party_type', 'party_id', 'direction', 'amount', 'related_type', 'status'} <= pay_cols:
+        return
+    _capture_party_balances(conn)
+
+
+def _capture_party_balances(conn):
+    """The data half of `_migrate_add_party_balance_ledger` (see its
+    docstring). Writes report rows for every drifted party and, on a
+    single-computer shop only, the carry adjustments."""
+    from core.retail import party_balance as _pb
+    now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    companies = []
+    for table in ('customers', 'suppliers'):
+        for (cid,) in conn.execute(f"SELECT DISTINCT company_id FROM {table}").fetchall():
+            if cid not in companies:
+                companies.append(cid)
+    for cid in companies:
+        currency = _pb._currency_of(conn, cid)
+        eps = _pb.money_epsilon(currency)
+        single = _single_computer_shop(conn, cid)
+        for table, kind in (('customers', 'customer'), ('suppliers', 'supplier')):
+            derived = _pb._derive(conn, cid, table, currency, None)
+            for row in conn.execute(
+                    f"SELECT id, credit_balance FROM {table} WHERE company_id=?", (cid,)).fetchall():
+                stored = float(row[1] or 0)
+                der = float(derived.get(str(row[0]), 0))
+                if abs(stored - der) <= eps:
+                    continue
+                carried = 0.0
+                if single:
+                    quant = _pb.tax_engine.currency_quantum(currency)
+                    carry = (Decimal(str(stored)) - Decimal(str(der))).quantize(quant)
+                    if _pb.insert_carry(conn, cid, kind, row[0], carry):
+                        carried = float(carry)
+                conn.execute(
+                    "INSERT OR IGNORE INTO party_balance_upgrade_report (company_id, party_type, party_id, "
+                    "stored_before, derived, carried, classification, created_at_utc) VALUES (?,?,?,?,?,?,?,?)",
+                    (cid, kind, str(row[0]), stored, der, carried,
+                     'carried' if single else 'networked_no_carry', now_utc))
 
 
 def _migrate_add_return_tax_refunded(conn):

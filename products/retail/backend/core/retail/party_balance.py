@@ -48,12 +48,67 @@ test pins the two together, because the gates here have to agree with the
 gates create_sale / create_return used when they decided a sale became a
 debt.
 """
+import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from core.retail import pricing as tax_engine
 
 log = logging.getLogger(__name__)
+
+#: v44: the fixed namespace every carry uid is derived under. A literal, never
+#: regenerated: two computers that both carry the same party must mint the SAME
+#: uid so the sync apply's ON CONFLICT(uid) DO NOTHING collapses them into one
+#: fact. (Mutation M7, a random uid here, turns the two-computer test red.)
+CARRY_NAMESPACE = uuid.UUID('b44c2f0e-9d1a-5a7e-8c33-0f6d4a1e44ba')
+
+CARRY_REASON = 'upgrade_v44_carry'
+
+
+def carry_uid(party_type, party_id):
+    """The uid of a party's one-and-only upgrade carry. Deliberately has NO
+    company_id in it: a party is global to the shop (its id is a uuid that
+    syncs), and the receiver stamps its own company_id on apply, so including
+    the sender's company here would make the same carry look like two facts."""
+    return str(uuid.uuid5(CARRY_NAMESPACE, f"{party_type}:{party_id}:v44-carry"))
+
+
+def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
+    """Same one INSERT retail_api's helper of this name does (this module
+    cannot import retail_api: core/retail must not depend on api/)."""
+    cur.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), entity_type, str(entity_id), event_type,
+         json.dumps(payload), datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def insert_carry(conn, company_id, party_type, party_id, amount, created_by='system:v44'):
+    """Insert one party's upgrade carry (and queue its sync event) if it is not
+    already there. Returns True when a row was inserted, False when the fixed
+    uid already existed. Does NOT commit. No GL journal: the v38 opening
+    journal already booked the stored balance this carry preserves."""
+    uid = carry_uid(party_type, party_id)
+    now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    amt = float(amount)
+    cur = conn.execute(
+        "INSERT INTO party_balance_adjustments (uid, company_id, party_type, party_id, amount, reason, "
+        "created_at, created_at_utc, created_by) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
+        (uid, company_id, party_type, str(party_id), amt, CARRY_REASON, now_local, now_utc, created_by))
+    if cur.rowcount != 1:
+        return False
+    has_outbox = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_outbox'").fetchone()
+    if has_outbox:
+        _queue_sync_event(conn, 'party_balance_adjustment', uid, 'create', {
+            'uid': uid, 'party_type': party_type, 'party_id': str(party_id), 'amount': amt,
+            'reason': CARRY_REASON, 'created_at': now_local, 'created_at_utc': now_utc,
+            'created_by': created_by,
+        })
+    return True
 
 #: Max ids bound into one `IN (...)` (SQLite's default variable limit is
 #: 999 on older builds; 400 leaves room for the other parameters).

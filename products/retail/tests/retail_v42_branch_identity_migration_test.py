@@ -271,7 +271,8 @@ def _rows(sch, sql, params=()):
 
 def _assert_money_neutral(before, after):
     # DAY-1c UPDATE: the head is now v43 (payments.cash_session_id), so a v41 database boots all the way to 43 and the pre-migration backup is named v41-to-v43. This is the head-version tripwire, hard-coded on purpose; v43's own migration is proved by retail_day1_v43_migration_test.py, and what this line cannot catch is a v43 defect.
-    assert after['user_version'] == 43
+    # v44 UPDATE: the head is now v44 (party_balance tables); same tripwire, same caveat -- v44's own migration is proved by retail_v44_party_balance_migration_test.py.
+    assert after['user_version'] == 44
     for t in MONEY_TABLES:
         assert before['money'][t] == after['money'][t], f'{t}: rows changed across the v42 boot'
     assert after['drift'] == before['drift']
@@ -283,8 +284,8 @@ def _assert_money_neutral(before, after):
 
 def _assert_backup_is_the_pre_migration_state(sch, before_branches):
     bdir = os.path.join(sch.BASE_DIR, 'migration_backups')
-    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v43' in n)   # DAY-1c: head is v43
-    assert names, f'no v41-to-v43 backup in {os.listdir(bdir)}'
+    names = sorted(n for n in os.listdir(bdir) if 'v41-to-v44' in n)   # v44: head is v44
+    assert names, f'no v41-to-v44 backup in {os.listdir(bdir)}'
     conn = sqlite3.connect(f'file:{os.path.join(bdir, names[-1])}?mode=ro', uri=True)
     try:
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 41
@@ -416,7 +417,7 @@ def test_a_fresh_shop_with_no_branches_yet_skips_quietly(tmp_path):
     conn.close()
     sch.init_retail()
     sch.init_retail()
-    assert _rows(sch, 'PRAGMA user_version') == [(43,)]   # DAY-1c: head is v43
+    assert _rows(sch, 'PRAGMA user_version') == [(44,)]   # v44: head is v44
     assert _aliases(sch) == [] and _skip_audits(sch) == []
 
 
@@ -521,9 +522,9 @@ def test_census_copy_migrates_money_neutral(name, tmp_path):
         assert before['money'][t] == after['money'][t], f'{name}: {t} changed'
     assert after['drift'] == before['drift']
     assert after['trial_balance'] == before['trial_balance']
-    assert after['integrity'] == 'ok' and after['user_version'] == 43   # DAY-1c: head is v43
+    assert after['integrity'] == 'ok' and after['user_version'] == 44   # v44: head is v44
     assert [b[:4] for b in before['branches']] == [b[:4] for b in after['branches']]
-    assert any('v41-to-v43' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))
+    assert any('v41-to-v44' in n for n in os.listdir(os.path.join(sch.BASE_DIR, 'migration_backups')))
     # At most one branch changed uid, and only to the licence-derived one.
     changed = [(b, a) for b, a in zip(before['branches'], after['branches']) if b[4] != a[4]]
     assert len(changed) <= 1

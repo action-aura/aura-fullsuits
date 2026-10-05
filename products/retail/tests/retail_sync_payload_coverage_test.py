@@ -865,6 +865,9 @@ TRACKED_TABLES = {
     # than the `_is_queue_call` machinery every table above this comment
     # uses.
     'reorder_requests': [('reorder_request', 'create')],
+    # v44: the one entity that carries a single-computer shop's balance across
+    # the switch to derived balances; emitted by core/retail/party_balance.py.
+    'party_balance_adjustments': [('party_balance_adjustment', 'create')],
 }
 
 MIN_REASON_LEN = 40
@@ -1175,6 +1178,15 @@ EXCLUSIONS = {
                           "INSERT (core/retail/reorder_hook.py) that produced "
                           "the row in the first place.",
     },
+    # v44: party_balance_adjustments' payload (core/retail/party_balance.py's
+    # `insert_carry`) carries every column but the tenant key.
+    'party_balance_adjustments': {
+        'company_id': "Tenant-isolation key; sync_service.py's "
+                      "party_balance_adjustment apply branch INSERTs the "
+                      "receiver's own local_company_id, never a value read "
+                      "off the incoming payload, identical to every other "
+                      "synced entity in this file.",
+    },
 }
 
 
@@ -1316,6 +1328,10 @@ def test_payments_outbox_payload_covers_every_column():
 
 def test_reorder_requests_outbox_payload_covers_every_column():
     _assert_full_coverage('reorder_requests')
+
+
+def test_party_balance_adjustments_outbox_payload_covers_every_column():
+    _assert_full_coverage('party_balance_adjustments')
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────

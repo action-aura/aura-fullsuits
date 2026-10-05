@@ -663,6 +663,18 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # them and parks them via the schema-skew gate (`schema_version_too_new`).
     "branch_alias",
     "till_allocation",
+    # Schema v44 -- "party_balance_adjustment": the ONLY entity type v44 adds.
+    # A customer's / supplier's balance is DERIVED from the shop's synced
+    # sales/payments/returns/purchase orders (core/retail/party_balance.py);
+    # this append-only fact carries what those rows cannot explain -- the
+    # balance a single-computer shop already had when it upgraded -- so every
+    # computer derives the same figure. CREATE-ONLY, keyed on `uid` (a fixed
+    # uuid5 for the upgrade carry, so two computers that both carried the same
+    # party collapse into one fact): there is no update or delete, ever. Needs
+    # `company_id` (the receiver stamps ITS OWN), so it is NOT in
+    # `_ENTITY_TYPES_WITHOUT_COMPANY_ID`. A v43 peer does not know the type and
+    # parks it via the unknown-type schema-skew gate (`schema_version_too_new`).
+    "party_balance_adjustment",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -4392,6 +4404,8 @@ class SyncService:
         elif entity_type == "till_allocation":
             return self._apply_till_allocation(
                 conn, ev, p, event_type, local_company_id, conflict_sink)
+        elif entity_type == "party_balance_adjustment":
+            return self._apply_party_balance_adjustment(conn, ev, p, event_type, local_company_id)
         elif entity_type == "gl_journal":
             # BOOKS-WAVE1 W1 (schema v41), plan §2.5. INLINE, no dedicated
             # hook method -- see the RETAIL_SYNC_ENTITY_TYPES comment above
@@ -5350,6 +5364,64 @@ class SyncService:
             "ON CONFLICT(alias_uid) DO NOTHING",
             (alias, canon, cid, reason, created, origin, now))
         _normalise_branch_uid_refs(conn, cid)
+        return True
+
+    def _apply_party_balance_adjustment(self, conn, ev: dict, p: dict, event_type: str,
+                                        local_company_id: Optional[str]) -> bool:
+        """v44 `party_balance_adjustment` create: one append-only fact that
+        adds `amount` to a customer's or supplier's DERIVED balance.
+
+        Create-only (anything else is ignored: the type never has an update or
+        delete). Inserted under THIS device's company_id, never the payload's,
+        `ON CONFLICT(uid) DO NOTHING` so a replay, an echo of our own event or
+        the second computer's copy of the same fixed-uid carry is one fact.
+        Emit-free: a receiver never re-announces what it applied.
+
+        Validated BEFORE the write and parked, never raised: a non-finite or
+        non-numeric amount would poison every balance derived for that party on
+        every computer (SUM over a NaN), so a malformed payload is quarantined
+        with its reason rather than stored."""
+        if event_type != "create":
+            return True
+        uid = self._bounded_text(p.get("uid"), 64)
+        party_id = self._bounded_text(p.get("party_id"), 64)
+        party_type = p.get("party_type")
+        amount = p.get("amount")
+        problem = None
+        try:
+            # Exact canonical form, not merely parseable: an upper-case copy of
+            # the same uuid is a DIFFERENT TEXT key, so ON CONFLICT(uid) would
+            # keep both and the party's balance would count the carry twice.
+            if uid is None or str(uuid.UUID(uid)) != uid:
+                problem = "uid is not a canonical uuid"
+        except (ValueError, AttributeError, TypeError):
+            problem = "uid is not a canonical uuid"
+        if problem is None and party_id is None:
+            problem = "party_id missing or too long"
+        if problem is None and party_type not in ("customer", "supplier"):
+            problem = f"party_type {party_type!r} is not customer/supplier"
+        if problem is None and (isinstance(amount, bool) or not isinstance(amount, (int, float))
+                                or amount != amount or abs(amount) > 1e12):
+            problem = f"amount {amount!r} is not a finite number"
+        if problem is not None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="malformed_party_balance_adjustment", detail=problem)
+        cid = str(local_company_id or self._get_local_company_id() or "")
+        if not cid:
+            return True
+        reason = self._bounded_text(p.get("reason"), 64) or "peer"
+        try:
+            conn.execute(
+                "INSERT INTO party_balance_adjustments (uid, company_id, party_type, party_id, amount, "
+                "reason, created_at, created_at_utc, created_by) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) DO NOTHING",
+                (uid, cid, party_type, party_id, float(amount), reason,
+                 self._bounded_text(p.get("created_at"), 40), self._bounded_text(p.get("created_at_utc"), 40),
+                 self._bounded_text(p.get("created_by"), 64)))
+        except sqlite3.OperationalError as exc:
+            if self._is_missing_table_error(exc):
+                return True
+            raise
         return True
 
     @staticmethod

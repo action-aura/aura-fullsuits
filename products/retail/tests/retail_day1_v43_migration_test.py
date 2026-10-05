@@ -96,8 +96,11 @@ def _migrate(sch, db):
 def _check(sch, db):
     conn = _open(db)
     try:
-        assert sch.RETAIL_SCHEMA_VERSION == 43
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 43
+        # v44 UPDATE: the head moved on to 44 (party_balance tables); this file
+        # still proves v43's own column, and can no longer catch the head
+        # drifting past 44 (that tripwire lives with the v44 migration test).
+        assert sch.RETAIL_SCHEMA_VERSION == 44
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 44
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert 'cash_session_id' in _cols(conn)
         row = conn.execute('SELECT amount, cash_session_id FROM payments').fetchone()
@@ -165,7 +168,8 @@ def test_a_database_already_at_v43_without_returns_tax_refunded_gains_it_on_boot
     conn = _open(db)
     try:
         assert 'tax_refunded' in _rcols(conn)
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 43
+        # v44 UPDATE: a v43 database booted by this build now continues to v44.
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 44
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         before = _rcols(conn)
         sch._migrate_add_return_tax_refunded(conn)       # replay: no-op

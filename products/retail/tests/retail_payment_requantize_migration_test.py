@@ -425,8 +425,12 @@ def test_the_real_chain_advances_the_version_and_keeps_integrity():
         # every bump before it: this only proves the constant and this file's
         # chain agree; v43's own migration is retail_day1_v43_migration_test.py's
         # job. The requantize assertion below still proves v37 ran.
-        assert sch.RETAIL_SCHEMA_VERSION == 43, (
-            f"this suite is written against v43; constant is {sch.RETAIL_SCHEMA_VERSION}")
+        # Bumped 43 -> 44 (v44: two new tables + one index for derived party
+        # balances; no change to `payments`). Same caveat: only proves the
+        # constant and this file's chain agree; v44's own migration is
+        # retail_v44_party_balance_migration_test.py's job.
+        assert sch.RETAIL_SCHEMA_VERSION == 44, (
+            f"this suite is written against v44; constant is {sch.RETAIL_SCHEMA_VERSION}")
         assert _amount(conn, pay_id) == 4.007, (
             f"the chain must have applied the correction, got {_amount(conn, pay_id)!r}")
     finally:
