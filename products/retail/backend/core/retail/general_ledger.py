@@ -139,6 +139,44 @@ def reversal_uid(original_journal_uid):
     device, every run."""
     return str(uuid.uuid5(_GL_REVERSAL_NAMESPACE, f"{original_journal_uid}:reversal"))
 
+
+#: Deterministic uuid5 NAMESPACE for the STOCK-BOOKS journals' own `uid`
+#: (opening entries, adjustments, transfer send/receive, PO receipt). Same
+#: idea as `_GL_REVERSAL_NAMESPACE`: the uid is a pure function of WHAT the
+#: journal books, so a re-post (retry, double click, two computers) mints
+#: the SAME uid and the sync apply's `ON CONFLICT(uid) DO NOTHING` collapses
+#: it. Fixed literal, never regenerated.
+_GL_STOCK_NAMESPACE = uuid.UUID('9a7e4c1d-2b6f-5e38-8d40-6c1f3a5b7e92')
+
+
+def stock_journal_uid(key, kind):
+    """The deterministic uid of the stock journal of `kind` for `key`.
+
+    `key` MUST be globally unique across computers: an inventory movement's
+    uid, a stock transfer's id (a UUID), or the PO ORDER JOURNAL's uid --
+    NEVER a `purchase_orders.id` (a per-computer integer) or a PO number,
+    which two computers can hand out to different documents."""
+    return str(uuid.uuid5(_GL_STOCK_NAMESPACE, f"{key}:{kind}"))
+
+
+def _post_once(conn, cid, uid, branch_id, business_date, source_type, source_id,
+               currency, lines, reference=None, memo=None, posted_by=None,
+               source_uid=None):
+    """`post_journal` with a deterministic `uid`, idempotent: if a journal
+    with this uid already exists for the company, return ITS id and post
+    nothing. This is what makes every STOCK-BOOKS helper safe to call twice
+    (a retried request, a re-run after a crash) without booking the stock
+    event twice."""
+    existing = conn.execute(
+        "SELECT id FROM gl_journals WHERE company_id=? AND uid=?", (cid, uid)
+    ).fetchone()
+    if existing:
+        return existing['id']
+    return post_journal(conn, cid, branch_id, business_date, source_type,
+                        source_id, currency, lines, reference=reference,
+                        memo=memo, posted_by=posted_by, uid=uid,
+                        source_uid=source_uid)
+
 #: `source_type` -> the LOCAL table whose own `uid` column is this journal's
 #: `source_uid`, for every source type that names a real document row.
 #: `'reversal'` is handled separately (its `source_uid` is the REVERSED
@@ -165,6 +203,13 @@ ACCOUNT_SALES_REVENUE = '4000'
 ACCOUNT_SALES_RETURNS = '4900'
 ACCOUNT_LOYALTY_EXPENSE = '5000'
 ACCOUNT_COGS = '5900'
+# STOCK-BOOKS wave: the four accounts the stock events post to. Flat (no
+# parent) -- see docs/launch-readiness/target-chart-of-accounts.md for the
+# naming/normal-balance rules and the rest of the planned chart.
+ACCOUNT_STOCK_IN_TRANSIT = '1250'
+ACCOUNT_GOODS_ORDERED = '1260'
+ACCOUNT_OPENING_EQUITY = '3900'
+ACCOUNT_SHRINKAGE = '5910'
 
 #: (code, name, account_type, normal_balance, parent_code). Parents are
 #: listed before children -- `ensure_default_chart` inserts in this order
@@ -214,6 +259,12 @@ DEFAULT_CHART = (
     ('4900', 'Sales Returns and Allowances', 'revenue', 'debit', '4000'),
     ('5000', 'Loyalty Program Expense', 'expense', 'debit', None),
     ('5900', 'Cost of Goods Sold', 'expense', 'debit', None),
+    # STOCK-BOOKS wave -- ONLY the codes that wave posts to. Names/types are
+    # frozen once released: INSERT OR IGNORE never overwrites a seeded row.
+    ('1250', 'Stock in Transit', 'asset', 'debit', None),
+    ('1260', 'Goods Ordered Not Received', 'asset', 'debit', None),
+    ('3900', 'Opening Balance Equity', 'equity', 'credit', None),
+    ('5910', 'Shrinkage and Adjustments', 'expense', 'debit', None),
 )
 
 
@@ -1933,8 +1984,18 @@ def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
 
 def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
                          amount_paid, ap_balance, business_date=None, posted_by=None):
-    """Dr Inventory against Cr Cash (any down payment) + Cr Accounts
-    Payable (whatever remains).
+    """Dr Goods Ordered Not Received (1260) against Cr Cash (any down
+    payment) + Cr Accounts Payable (whatever remains).
+
+    STOCK-BOOKS: an ORDER is not stock. The debit used to land on Inventory
+    (1200) the moment the PO was written, so the books claimed shelves the
+    shop did not yet have (and a cancelled order left them overstated). It
+    now lands on 1260; `post_po_receipt` moves it to 1200 when the goods
+    are actually received. INTERIM, stated plainly: Accounts Payable is
+    still recognised at ORDER time (the v44 supplier subledger counts the PO
+    total at order) -- moving AP to receipt time belongs with W4a. A PO
+    posted before this wave keeps its old Dr 1200 journal untouched
+    (`po_order_journal` reports which account it debited).
 
     THE DEBIT IS `amount_paid + ap_balance` -- what the credits actually
     sum to -- NOT the PO's own `total`, and that is the identical
@@ -1962,7 +2023,7 @@ def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
     if accounted <= 0:
         return None
     lines = [
-        {'account_code': ACCOUNT_INVENTORY, 'debit': accounted,
+        {'account_code': ACCOUNT_GOODS_ORDERED, 'debit': accounted,
          'memo': f'Purchase order {po_number}'},
     ]
     if amount_paid and amount_paid > 0:
@@ -2046,3 +2107,260 @@ def post_cogs(conn, cid, branch_id, source_type, source_id, reference, currency,
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          source_type, source_id, currency, lines,
                          reference=reference, posted_by=posted_by)
+
+
+# ── STOCK-BOOKS: stock events in the books ───────────────────────────────
+#
+# Every helper below is ONCE-ONLY (`_post_once`: a deterministic uid from
+# `stock_journal_uid`, so a repeat call returns the existing journal) and
+# posts NOTHING at an amount at or below half the currency's minor unit --
+# exactly like `post_cogs`: an unknown/zero cost is silence, never an invented
+# figure and never a blocked document. The caller (api/retail_api.py) passes
+# figures it already wrote on the document; these helpers do not re-derive
+# stock or cost, EXCEPT where noted (the transfer receipt reads the send
+# journal's own amount back, and the PO receipt reads the order journal's).
+
+def _stock_amount(qty, unit_cost, currency):
+    return quantize_money(abs(Decimal(str(qty or 0))) * Decimal(str(unit_cost or 0)), currency)
+
+
+def po_order_journal(conn, cid, po_id):
+    """The ORDER journal of purchase order `po_id` on THIS computer, or None:
+    {'id', 'uid', 'debit_code', 'debit_amount'} where `debit_code` is the
+    account its (single) debit line hit -- '1260' for an order posted by this
+    wave, '1200' for a legacy PO posted before it -- and `debit_amount` is
+    that line's amount as a Decimal.
+
+    Looked up by `source_type='purchase_order' AND source_id=po_id`: safe
+    because POs are local to the computer that wrote them, and a synced
+    journal arrives with `source_id` NULL so it can never match a local PO
+    id. Reversal journals have their own `source_type`, so the first row is
+    always the original; the earliest id wins if a PO somehow has several."""
+    row = conn.execute(
+        "SELECT id, uid FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
+        "AND source_id=? AND reversed_journal_id IS NULL ORDER BY id LIMIT 1",
+        (cid, po_id)
+    ).fetchone()
+    if not row:
+        return None
+    debit = conn.execute(
+        "SELECT a.code AS code, l.debit AS debit FROM gl_journal_lines l "
+        "JOIN gl_accounts a ON a.id = l.account_id "
+        "WHERE l.journal_id=? AND l.debit > 0 ORDER BY l.id LIMIT 1",
+        (row['id'],)
+    ).fetchone()
+    if not debit:
+        return None
+    return {'id': row['id'], 'uid': row['uid'], 'debit_code': debit['code'],
+            'debit_amount': Decimal(str(debit['debit']))}
+
+
+def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=None):
+    """Goods ordered have arrived: Dr Inventory (1200) / Cr Goods Ordered Not
+    Received (1260), for the ORDER journal's own 1260 debit (NOT qty x cost:
+    a supplier-less, partly paid PO booked only the accounted part, and the
+    receipt must move exactly what the order put into 1260, no more).
+
+    Posts NOTHING (returns None) for a legacy PO (its order journal already
+    debited Inventory directly -- booking again would count the stock twice)
+    and for a PO with no order journal at all. Once-only on a uid derived from
+    the ORDER journal's uid (never the PO's per-computer integer id)."""
+    order = po_order_journal(conn, cid, po_id)
+    if not order or order['debit_code'] != ACCOUNT_GOODS_ORDERED or not order['uid']:
+        return None
+    amount = order['debit_amount']
+    if amount <= _gl_epsilon(currency):
+        return None
+    lines = [
+        {'account_code': ACCOUNT_INVENTORY, 'debit': amount,
+         'memo': f'Goods received, purchase order {po_number}'},
+        {'account_code': ACCOUNT_GOODS_ORDERED, 'credit': amount,
+         'memo': f'Order {po_number} received'},
+    ]
+    return _post_once(conn, cid, stock_journal_uid(order['uid'], 'po_receipt'),
+                      branch_id, _today(), 'po_receipt', po_id, currency, lines,
+                      reference=po_number, posted_by=posted_by,
+                      source_uid=order['uid'])
+
+
+def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency):
+    """Stock leaves the source branch: Dr Stock in Transit (1250) / Cr
+    Inventory (1200) for the sum of quantize(qty x unit_cost) over `lines`
+    (a list of (product_id, qty, unit_cost)) -- per-line rounding, because the
+    receipt reads THIS journal's total back and must credit exactly it.
+    `branch_id` is the SOURCE branch. None when the total is at or below the
+    currency's half-unit floor (a cost-less transfer is not booked)."""
+    amount = sum((_stock_amount(q, c, currency) for _pid, q, c in lines), Decimal('0'))
+    if amount <= _gl_epsilon(currency):
+        return None
+    jl = [
+        {'account_code': ACCOUNT_STOCK_IN_TRANSIT, 'debit': amount,
+         'memo': f'Transfer {transfer_id} sent'},
+        {'account_code': ACCOUNT_INVENTORY, 'credit': amount,
+         'memo': 'Stock left the branch'},
+    ]
+    return _post_once(conn, cid, stock_journal_uid(transfer_id, 'transfer_send'),
+                      branch_id, _today(), 'stock_transfer', None, currency, jl,
+                      reference=str(transfer_id), source_uid=str(transfer_id))
+
+
+def send_journal(conn, cid, transfer_id):
+    """The send journal of `transfer_id`, or None (a transfer sent before this
+    wave, or one sent at zero cost): {'id', 'uid', 'amount'} where `amount` is
+    its 1250 debit as a Decimal. Found by its deterministic uid, so it is the
+    same journal on every computer."""
+    row = conn.execute(
+        "SELECT id, uid FROM gl_journals WHERE company_id=? AND uid=?",
+        (cid, stock_journal_uid(transfer_id, 'transfer_send'))
+    ).fetchone()
+    if not row:
+        return None
+    debit = conn.execute(
+        "SELECT l.debit FROM gl_journal_lines l JOIN gl_accounts a ON a.id=l.account_id "
+        "WHERE l.journal_id=? AND a.code=? AND l.debit > 0 ORDER BY l.id LIMIT 1",
+        (row['id'], ACCOUNT_STOCK_IN_TRANSIT)
+    ).fetchone()
+    if not debit:
+        return None
+    return {'id': row['id'], 'uid': row['uid'], 'amount': Decimal(str(debit[0]))}
+
+
+def post_transfer_receive(conn, cid, branch_id, transfer_id, lines, currency):
+    """Stock arrives at the destination: Dr Inventory (1200) for what was
+    received, Cr Stock in Transit (1250) for EXACTLY what the send journal
+    debited (READ BACK, never recomputed -- per-line rounding makes a fresh
+    sum drift from it by a minor unit), and the difference to Shrinkage and
+    Adjustments (5910): a shortage debits it, an over-receipt credits it.
+    `lines` is [(product_id, qty_sent, qty_received, unit_cost)];
+    `branch_id` is the DESTINATION branch.
+
+    Returns (journal_id, {product_id: written_off}) -- `written_off` per
+    product is quantize(sent x cost) - quantize(received x cost): positive
+    for a shortage, negative for an over-receipt. A transfer with NO send
+    journal (sent before this wave, or at zero cost) posts nothing and
+    returns (None, {}): its stock never entered 1250, so there is nothing to
+    clear and 1250 can never go negative."""
+    send = send_journal(conn, cid, transfer_id)
+    if not send:
+        return None, {}
+    received_total = Decimal('0')
+    written_off = {}
+    for product_id, qty_sent, qty_received, unit_cost in lines:
+        recv = _stock_amount(qty_received, unit_cost, currency)
+        written_off[product_id] = _stock_amount(qty_sent, unit_cost, currency) - recv
+        received_total += recv
+    difference = send['amount'] - received_total
+    jl = [
+        {'account_code': ACCOUNT_INVENTORY, 'debit': received_total,
+         'memo': f'Transfer {transfer_id} received'},
+        {'account_code': ACCOUNT_STOCK_IN_TRANSIT, 'credit': send['amount'],
+         'memo': 'Stock arrived'},
+    ]
+    if difference > 0:
+        jl.append({'account_code': ACCOUNT_SHRINKAGE, 'debit': difference,
+                   'memo': 'Transfer shortage written off'})
+    elif difference < 0:
+        jl.append({'account_code': ACCOUNT_SHRINKAGE, 'credit': -difference,
+                   'memo': 'Transfer over-receipt'})
+    journal_id = _post_once(
+        conn, cid, stock_journal_uid(transfer_id, 'transfer_receive'), branch_id,
+        _today(), 'stock_transfer', None, currency, jl,
+        reference=str(transfer_id), source_uid=str(transfer_id))
+    return journal_id, written_off
+
+
+def _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
+                           reference, currency, kind, source_type, offset_code):
+    amount = _stock_amount(qty, unit_cost, currency)
+    if amount <= _gl_epsilon(currency):
+        return None
+    if Decimal(str(qty)) > 0:
+        jl = [{'account_code': ACCOUNT_INVENTORY, 'debit': amount, 'memo': kind},
+              {'account_code': offset_code, 'credit': amount, 'memo': kind}]
+    else:
+        jl = [{'account_code': offset_code, 'debit': amount, 'memo': kind},
+              {'account_code': ACCOUNT_INVENTORY, 'credit': amount, 'memo': kind}]
+    return _post_once(conn, cid, stock_journal_uid(movement_uid, kind), branch_id,
+                      _today(), source_type, None, currency, jl,
+                      reference=reference, source_uid=movement_uid)
+
+
+def post_stock_adjustment(conn, cid, branch_id, movement_uid, qty, unit_cost,
+                          reference, currency):
+    """A manual stock in/out or a counted exception: +qty is Dr Inventory /
+    Cr Shrinkage and Adjustments (5910), -qty is Dr 5910 / Cr Inventory, at
+    abs(qty) x `unit_cost` (callers pass `stock_books.effective_unit_cost`).
+    Keyed on the MOVEMENT's uid, so only the computer that wrote the movement
+    posts it and a synced peer never does."""
+    return _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
+                                  reference, currency, 'stock_adjustment',
+                                  'stock_adjustment', ACCOUNT_SHRINKAGE)
+
+
+def post_opening_entry(conn, cid, branch_id, movement_uid, qty, unit_cost,
+                       reference, currency):
+    """Stock entered at product create/import: +qty is Dr Inventory / Cr
+    Opening Balance Equity (3900), -qty the mirror. NEVER source_type
+    'opening_balance' -- that name belongs to the v38 AR/AP backfill and the
+    sheets treat it specially."""
+    return _post_movement_journal(conn, cid, branch_id, movement_uid, qty, unit_cost,
+                                  reference, currency, 'opening_entry',
+                                  'opening_entry', ACCOUNT_OPENING_EQUITY)
+
+
+def inventory_tie(conn, cid, tb):
+    """Does Inventory (1200) agree with the stock on the shelves? Returns
+        {'inventory_gl', 'stock_value', 'in_transit_gl', 'in_transit_stock',
+         'difference', 'unbooked_movements', 'status', 'applicable'}
+    (plus 'reason' when not applicable). `tb` must be this company's
+    `trial_balance(...)`, like `subledger_tie`; a SIBLING of `subledger_tie`
+    rather than new keys on it, because that dict is pinned exactly by
+    retail_gl_route_test.py.
+
+    `status`, first match wins:
+      1. 'not_applicable' -- any journal is dated after `tb['as_of']`: stock
+         value is a live figure, the GL slice is a past one (same reasoning
+         and same data-driven test as `subledger_tie`);
+      2. 'not_opened' -- unbooked stock movements exist: the books have never
+         been told about some stock, so a difference is missing history, not
+         an error. NEUTRAL on screen, never red;
+      3. 'ties' -- |difference| within half a minor unit;
+      4. 'rounding' -- within that plus half a quantum per unit on hand (the
+         moving average's own rounding); amber;
+      5. 'differs' -- red.
+    `difference` = inventory_gl - stock_value. The in-transit pair is
+    reported for display; it does not feed `status` (the in-transit stock
+    figure is this computer's only -- R5)."""
+    from core.retail import stock_books
+    currency = tb['currency']
+    inv_gl = Decimal(str(_account_balance_in(tb, ACCOUNT_INVENTORY)))
+    transit_gl = Decimal(str(_account_balance_in(tb, ACCOUNT_STOCK_IN_TRANSIT)))
+    stock = stock_books.stock_value(conn, cid, currency)
+    transit_stock = stock_books.in_transit_stock_value(conn, cid, currency)
+    unbooked = stock_books.unbooked_movement_count(conn, cid)
+    difference = inv_gl - stock
+    result = {
+        'inventory_gl': float(inv_gl), 'stock_value': float(stock),
+        'in_transit_gl': float(transit_gl), 'in_transit_stock': float(transit_stock),
+        'difference': float(difference), 'unbooked_movements': unbooked,
+        'applicable': True,
+    }
+    future = conn.execute(
+        "SELECT 1 FROM gl_journals WHERE company_id=? AND business_date > ? LIMIT 1",
+        (cid, tb['as_of']),
+    ).fetchone() if tb.get('as_of') is not None else None
+    if future is not None:
+        result.update(applicable=False, status='not_applicable', reason=(
+            'a journal is business-dated after as_of; stock value is a current '
+            'figure and not comparable with a past slice of the books'))
+        return result
+    eps = _gl_epsilon(currency)
+    if unbooked > 0:
+        result['status'] = 'not_opened'
+    elif abs(difference) <= eps:
+        result['status'] = 'ties'
+    elif abs(difference) <= eps + stock_books.rounding_allowance(conn, cid, currency):
+        result['status'] = 'rounding'
+    else:
+        result['status'] = 'differs'
+    return result

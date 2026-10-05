@@ -344,9 +344,17 @@ def test_purchase_on_credit_increases_inventory_and_payable_and_still_balances(c
     assert r.status_code == 200, r.get_json()
 
     data = _balance_sheet(cid, _today())
+    # STOCK-BOOKS: a purchase ORDER is an asset (Goods Ordered Not Received,
+    # 1260), not Inventory (1200) -- the sheet still carries the 40 on the
+    # asset side and still balances against AP. The old `Inventory == 40`
+    # line moved here; what it can no longer catch is an order wrongly
+    # landing in 1200, which the `inventory is None` check now guards (a
+    # zero-balance 1200 has no row on the sheet).
+    ordered = _account(data['assets'], gl.ACCOUNT_GOODS_ORDERED)
     inventory = _account(data['assets'], gl.ACCOUNT_INVENTORY)
     ap = _account(data['liabilities'], gl.ACCOUNT_AP)
-    assert inventory is not None and inventory['amount'] == 40.0
+    assert ordered is not None and ordered['amount'] == 40.0
+    assert inventory is None or inventory['amount'] == 0.0
     assert ap is not None and ap['amount'] == 40.0
     # Nothing paid, nothing sold yet -- no revenue/expense activity at all,
     # so retained_earnings must still read exactly 0, and Cash must be

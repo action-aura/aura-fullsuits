@@ -414,7 +414,14 @@ def test_purchase_order_with_down_payment_posts_inventory_cash_ap(client):
     assert r.status_code == 200, r.get_json()
 
     tb = _assert_ap_ties(cid)
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 40.0
+    # STOCK-BOOKS: an ORDER is not stock -- it books to Goods Ordered Not
+    # Received (1260); Inventory (1200) moves only on receipt (see the
+    # receive test in retail_stock_books_routes_test.py). This replaces the
+    # old `1200 == 40`. What it can no longer catch: nothing here -- the
+    # "stock reaches 1200" half is asserted at receipt, and the 1200 == 0
+    # line below is what proves the order did NOT inflate Inventory.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
 
@@ -470,7 +477,10 @@ def test_purchase_order_with_a_negative_amount_paid_does_not_inflate_ap(client):
         f'the shop owes the PO total, not total + |amount_paid|; got {owed}')
 
     tb = _assert_ap_ties(cid)
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 40.0
+    # STOCK-BOOKS: 40 of goods ordered (1260), not yet stock (1200 == 0);
+    # nothing is lost -- receipt moves it, asserted in the routes test.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 40.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 0.0
 
@@ -488,7 +498,9 @@ def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
     tb = _trial_balance(cid)
     assert tb['is_balanced']
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 40.0
+    # STOCK-BOOKS: paid-in-full order -> 1260 (not yet received), 1200 == 0.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
 
 
@@ -510,7 +522,9 @@ def test_purchase_order_with_no_supplier_still_balances(client):
     # Only the accounted-for amount (the down payment) is booked -- see
     # post_purchase_order's own docstring for why the unpaid 30 is not
     # invented as Inventory the subledger cannot explain either.
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 10.0
+    # STOCK-BOOKS: the accounted-for 10 sits in 1260 until received.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 10.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -10.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
 
