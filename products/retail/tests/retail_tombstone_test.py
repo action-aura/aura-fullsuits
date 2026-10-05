@@ -1084,7 +1084,24 @@ def test_a_deleted_customers_debt_is_still_counted_in_receivables(client, a_conn
     # this cheap GET is what makes `credit_balance` a real column to UPDATE
     # below, without duplicating that migration's trigger logic here.
     client.get('/api/sub/retail/customers')
-    a_conn.execute("UPDATE customers SET credit_balance=250.0 WHERE id=?", (cust_id,))
+    # v44 (plan step 8): was `UPDATE customers SET credit_balance=250.0`. The
+    # balance is derived from shop-wide rows now, so a poked column is
+    # overwritten and the debtor would vanish from receivables for the wrong
+    # reason. The 250 debt is an append-only adjustment row instead, INSERTed
+    # directly (NOT via party_balance.insert_carry): insert_carry also queues a
+    # `party_balance_adjustment` sync_outbox event, which would contaminate the
+    # shared install-A outbox exactly the way the docstring above says a real
+    # credit sale would. The refresh stands in for the boot / post-pull sweep.
+    # The assertion below is unchanged and still proves the read-path filter
+    # (a soft-deleted customer's debt stays counted).
+    from core.retail import party_balance
+    _cid = a_conn.execute("SELECT company_id FROM customers WHERE id=?", (cust_id,)).fetchone()[0]
+    a_conn.execute(
+        "INSERT INTO party_balance_adjustments (uid, company_id, party_type, party_id, amount, reason, "
+        "created_at, created_at_utc, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+        (str(uuid.uuid4()), _cid, 'customer', str(cust_id), 250.0, 'test_fixture_opening_debt',
+         '2026-10-05 00:00:00', '2026-10-05T00:00:00Z', 'test'))
+    party_balance.refresh_cache(a_conn, _cid, 'customers', ids=[cust_id])
     a_conn.commit()
 
     delete = client.delete(f'/api/sub/retail/customers/{cust_id}')

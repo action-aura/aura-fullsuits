@@ -264,6 +264,23 @@ def _credit_balance(customer_id):
     return bal
 
 
+def _plant_balance(cid, customer_id, amount):
+    """v44: put `amount` on a customer's balance the only way a balance with no
+    sale/payment behind it can exist now -- an append-only
+    `party_balance_adjustments` row (what the v44 upgrade carry is), followed by
+    the cache refresh the boot / post-pull sweep does in production.
+
+    This REPLACES the old `UPDATE customers SET credit_balance=...` fixtures:
+    since v44 every report derives the balance from shop-wide rows, so a
+    directly poked column is simply overwritten by the next refresh and tells
+    these tests nothing. An adjustment row is a real, derivable fact."""
+    from core.retail import party_balance
+    rconn = get_retail_conn()
+    party_balance.insert_carry(rconn, cid, 'customer', customer_id, amount)
+    party_balance.refresh_cache(rconn, cid, 'customers', ids=[customer_id])
+    rconn.commit(); rconn.close()
+
+
 def _aging(client, kind='receivable'):
     with _frozen():
         r = client.get(f"{API}/reports/aging?type={kind}")
@@ -479,15 +496,22 @@ def test_a_balance_nobody_booked_is_surfaced_and_buckets_still_add_up():
     client, cid, bid = _make_shop()
     c = _customer(cid)
     _credit_sale(client, cid, bid, c, 10.0, 20)
-    rconn = get_retail_conn()
-    rconn.execute("UPDATE customers SET credit_balance=14.5 WHERE id=?", (c,))
-    rconn.commit(); rconn.close()
+    # v44 (plan step 8): the 4.5 is now planted as an adjustment row, not a
+    # poked column. Every expected FIGURE below is unchanged (stored 14.5,
+    # buckets 1_30=10 / current=4.5, oldest 10 at 20 days, overdue 10). The one
+    # thing that moved: the 4.5 now has an event behind it (a carried-forward
+    # line, undated), so `unbooked_amount` is 0 by construction and the
+    # statement closes at the full 14.5. What this can no longer catch: the
+    # old "stored balance exceeds the events" gap -- it cannot exist any more
+    # because the balance IS the events. What it still catches: a carried
+    # amount aging as overdue, or being dropped from the buckets.
+    _plant_balance(cid, c, 4.5)
 
-    _aging_all, row, stmt = _assert_reconciles(client, c, 14.5, unbooked=4.5)
-    assert row['unbooked_amount'] == 4.5
-    # The statement modal must report the SAME unexplained amount the aging
-    # row does (the till shows it on both); it was missing from the statement.
-    assert stmt['unbooked_amount'] == 4.5
+    _aging_all, row, stmt = _assert_reconciles(client, c, 14.5, unbooked=0.0)
+    assert row['unbooked_amount'] == 0.0
+    assert stmt['unbooked_amount'] == 0.0
+    carried = [e for e in stmt['events'] if e['kind'] == 'balance_carried_owed']
+    assert len(carried) == 1 and carried[0]['amount'] == 4.5, stmt['events']
     assert row['buckets']['1_30'] == 10.0 and row['buckets']['current'] == 4.5
     assert row['oldest_unpaid_date'] == _iso(20)
     assert row['oldest_unpaid_amount'] == 10.0
@@ -497,14 +521,17 @@ def test_a_balance_nobody_booked_is_surfaced_and_buckets_still_add_up():
 def test_a_balance_with_no_events_at_all_is_all_current_and_never_overdue():
     client, cid, _bid = _make_shop()
     c = _customer(cid)
-    rconn = get_retail_conn()
-    rconn.execute("UPDATE customers SET credit_balance=12.345 WHERE id=?", (c,))
-    rconn.commit(); rconn.close()
+    # v44 (plan step 8): planted as an adjustment row (see _plant_balance); the
+    # figure 12.345 and "all current, never overdue" are unchanged. Only
+    # `unbooked_amount` differs: the balance now has a carried event behind it,
+    # so nothing is unexplained (0). It can no longer catch an unexplained
+    # stored balance -- that state no longer exists.
+    _plant_balance(cid, c, 12.345)
 
     aging = _aging(client)
     row = _row(aging, c)
     assert row['buckets']['current'] == 12.345 and sum(row['buckets'].values()) == 12.345
-    assert row['unbooked_amount'] == 12.345
+    assert row['unbooked_amount'] == 0.0
     assert row['oldest_unpaid_date'] is None and row['overdue_amount'] == 0.0 and row['days_overdue'] == 0
 
 
@@ -802,7 +829,14 @@ def test_the_report_issues_a_fixed_number_of_queries_however_many_debtors_there_
     many = _statements_run(None, 40)
     print(f"\nAGING_STATEMENTS 4 debtors: {len(few)}, 40 debtors: {len(many)}")
     assert len(few) == len(many), (len(few), len(many))
-    assert sum(1 for s in many if 'FROM returns' in s) == 1, [s[:80] for s in many if 'FROM returns' in s]
+    # v44 (plan step 8): was `== 1`. The shop-wide derivation (party_balance)
+    # reads `returns` twice more, once for the batch customer balances and once
+    # for the statement events' all-debtor pass -- a CONSTANT 3, measured. The
+    # 4-debtor == 40-debtor equality above is still the N+1 guard and is
+    # untouched. What this can no longer catch: up to two EXTRA constant
+    # `returns` scans sneaking in. It still catches any per-debtor query (the
+    # count would grow with the debtor count and break the equality above).
+    assert sum(1 for s in many if 'FROM returns' in s) == 3, [s[:80] for s in many if 'FROM returns' in s]
 
 
 # -- F2: a balance LOWER than its events -------------------------------------
@@ -843,14 +877,28 @@ def test_a_synced_sale_the_balance_never_booked_does_not_shorten_the_oldest_debt
     _credit_sale(client, cid, bid, c, 10.0, 80)
     rconn = get_retail_conn()
     _plant_sale(rconn, cid, bid, c, 20.0, 5)
+    # v44 (plan step 8): the premise of this test -- "a synced sale moves no
+    # balance on the receiving computer" -- IS the bug v44 fixes: the balance is
+    # now derived from the shop-wide rows, so the synced 20 counts. The refresh
+    # below is what the post-pull hook does in production. Expected figures
+    # therefore CHANGE (this is the one test in the file where they must):
+    # balance 30 (was 10), unbooked 0 (was -20), buckets 61_90=10 + 1_30=20.
+    # The behaviour this test exists for is unchanged and still asserted: the
+    # 80-day debt is NOT shortened by the newer sale (oldest 10 @ 80 days stays
+    # in 61_90). What it can no longer catch at route level: the NEGATIVE
+    # unbooked path (balance lower than events) -- it cannot occur any more;
+    # that allocation rule stays pinned by the two fifo_unit tests above, which
+    # feed `_fifo_open_charges` a lower balance directly.
+    from core.retail import party_balance
+    party_balance.refresh_cache(rconn, cid, 'customers', ids=[c])
     rconn.commit(); rconn.close()
 
-    _aging_all, row, stmt = _assert_reconciles(client, c, 10.0, unbooked=-20.0)
-    assert row['unbooked_amount'] == -20.0
-    assert stmt['unbooked_amount'] == -20.0
-    assert row['buckets'] == {'current': 0.0, '1_30': 0.0, '31_60': 0.0, '61_90': 10.0, '90_plus': 0.0}
+    _aging_all, row, stmt = _assert_reconciles(client, c, 30.0, unbooked=0.0)
+    assert row['unbooked_amount'] == 0.0
+    assert stmt['unbooked_amount'] == 0.0
+    assert row['buckets'] == {'current': 0.0, '1_30': 20.0, '31_60': 0.0, '61_90': 10.0, '90_plus': 0.0}
     assert row['oldest_unpaid_date'] == _iso(80) and row['days_overdue'] == 80
-    assert row['oldest_unpaid_amount'] == 10.0 and row['overdue_amount'] == 10.0
+    assert row['oldest_unpaid_amount'] == 10.0 and row['overdue_amount'] == 30.0
     _same_four(row, stmt)
 
 
@@ -1115,8 +1163,15 @@ def test_the_void_sign_follows_the_rows_direction_for_a_customer_row_that_raised
 def _supplier(cid, balance):
     rconn = get_retail_conn()
     sid = str(uuid.uuid4())
-    rconn.execute("INSERT INTO suppliers (id,company_id,name,credit_balance) VALUES (?,?,?,?)",
-                  (sid, cid, f'Sup {sid[:6]}', balance))
+    # v44 (plan step 8): the opening payable is an adjustment row (what the v44
+    # upgrade carry is), not a poked `credit_balance` -- the supplier balance is
+    # derived from shop-wide rows now, so a bare column is overwritten by the
+    # next refresh. Same figure, same polarity (+ = we owe the supplier).
+    from core.retail import party_balance
+    rconn.execute("INSERT INTO suppliers (id,company_id,name,credit_balance) VALUES (?,?,?,0)",
+                  (sid, cid, f'Sup {sid[:6]}'))
+    party_balance.insert_carry(rconn, cid, 'supplier', sid, balance)
+    party_balance.refresh_cache(rconn, cid, 'suppliers', ids=[sid])
     rconn.commit(); rconn.close()
     return sid
 
@@ -1145,7 +1200,11 @@ def test_a_supplier_payment_still_voids_and_reopens_the_payable_and_the_opposite
 
     rconn = get_retail_conn()
     odd = _plant_payment(rconn, cid, 'supplier', sid, 'in', 8.0, 3)
-    rconn.execute("UPDATE suppliers SET credit_balance=48.0 WHERE id=?", (sid,))
+    # v44: the planted 'in' row raises the DERIVED payable to 48; the refresh
+    # stands in for the boot / post-pull sweep (was `UPDATE ... =48.0`).
+    from core.retail import party_balance
+    party_balance.refresh_cache(rconn, cid, 'suppliers', ids=[sid])
     rconn.commit(); rconn.close()
+    assert _supplier_balance(sid) == 48.0
     assert _void(client, odd).status_code == 200
     assert _supplier_balance(sid) == 40.0

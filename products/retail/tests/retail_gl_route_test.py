@@ -246,11 +246,23 @@ def test_ar_ties_reports_false_when_subledger_diverges_from_gl(client):
     tied = _trial_balance(client)
     assert tied['subledger']['ar_ties'] is True
 
-    # Corrupt the subledger directly -- no route does this, which is the
+    # Desync the subledger from the GL -- no route does this, which is the
     # point: a real bug that desynced the two ledgers would look exactly
     # like this from the GL's point of view.
+    #
+    # v44 (plan step 8): was `UPDATE customers SET credit_balance =
+    # credit_balance + 0.003`. The subledger is now DERIVED from shop-wide rows,
+    # so a poked column is overwritten and would no longer diverge anything.
+    # The same 0.003 is now an append-only adjustment row with NO GL journal
+    # behind it (exactly what a real desync looks like: a subledger fact the GL
+    # never booked), refreshed into the cache as the boot / post-pull sweep
+    # does. The 0.003 size and the `ar_ties is False` expectation are
+    # unchanged, so the epsilon proof this test carries still bites.
+    from core.retail import party_balance
     conn = get_retail_conn()
-    conn.execute("UPDATE customers SET credit_balance = credit_balance + 0.003 WHERE id=?", (cust_id,))
+    cid = conn.execute("SELECT company_id FROM customers WHERE id=?", (cust_id,)).fetchone()[0]
+    party_balance.insert_carry(conn, cid, 'customer', cust_id, 0.003)
+    party_balance.refresh_cache(conn, cid, 'customers', ids=[cust_id])
     conn.commit(); conn.close()
 
     diverged = _trial_balance(client)

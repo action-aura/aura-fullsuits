@@ -336,8 +336,19 @@ def test_the_supplier_statement_mirrors_the_customer_one_for_an_issued_cheque(cl
     starts at 0 regardless of credit_balance; only the MOVEMENT the bounce
     causes is asserted, exactly like the customer statement test above."""
     supplier_id = _create_supplier(client)
+    # v44 (plan step 8): was `UPDATE suppliers SET credit_balance=500.0`. The
+    # supplier balance is derived from shop-wide rows now, so a poked column is
+    # overwritten and the cheque payment would leave -500, not 0. The 500 debt
+    # is an append-only adjustment row (what the upgrade carry is), refreshed
+    # into the cache as the boot / post-pull sweep does. The statement now
+    # SHOWS that opening line, so its running total starts at 500 rather than
+    # 0 (the docstring's "starts at 0" is the old state); the DELTA assertion
+    # below is kept exactly as it was and still pins the bounce's +500 reversal.
+    from core.retail import party_balance
     conn = get_retail_conn()
-    conn.execute("UPDATE suppliers SET credit_balance=500.0 WHERE id=?", (supplier_id,))
+    cid = conn.execute("SELECT company_id FROM suppliers WHERE id=?", (supplier_id,)).fetchone()[0]
+    party_balance.insert_carry(conn, cid, 'supplier', supplier_id, 500.0)
+    party_balance.refresh_cache(conn, cid, 'suppliers', ids=[supplier_id])
     conn.commit()
     conn.close()
 

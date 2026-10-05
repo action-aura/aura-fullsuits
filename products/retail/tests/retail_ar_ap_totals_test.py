@@ -97,12 +97,29 @@ def db_conn():
     conn.close()
 
 
+def _seed_owed(db_conn, table, party_id, amount):
+    """Seed a genuine owed balance as an append-only adjustment row, then
+    refresh the cache the way the boot / post-pull sweep does.
+
+    v44 (plan step 8): this REPLACES `UPDATE <table> SET credit_balance=...`.
+    Balances are derived from shop-wide rows now, so a directly poked column is
+    overwritten by the next refresh and the route would not see it. What these
+    tests guard is unchanged -- the TOTAL must exclude an overpaid party's
+    negative balance exactly as the rows list does -- and the figures asserted
+    below are unchanged (1000 / 500)."""
+    from core.retail import party_balance
+    kind = 'customer' if table == 'customers' else 'supplier'
+    cid = db_conn.execute(f"SELECT company_id FROM {table} WHERE id=?", (party_id,)).fetchone()[0]
+    party_balance.insert_carry(db_conn, cid, kind, party_id, amount)
+    party_balance.refresh_cache(db_conn, cid, table, ids=[party_id])
+    db_conn.commit()
+
+
 def test_total_receivable_ignores_an_overpaid_customers_negative_balance(client, db_conn):
     # Customer A genuinely owes $1000 (as a completed credit sale would leave
     # behind).
     owing = client.post('/api/sub/retail/customers', json={'name': 'Owes Money'}).get_json()['data']['id']
-    db_conn.execute("UPDATE customers SET credit_balance=1000.00 WHERE id=?", (owing,))
-    db_conn.commit()
+    _seed_owed(db_conn, 'customers', owing, 1000.00)
 
     # Customer B starts at a $0 balance and is overpaid by $200 through the
     # real payment route -- exactly the path the finding calls out:
@@ -131,8 +148,7 @@ def test_total_receivable_ignores_an_overpaid_customers_negative_balance(client,
 
 def test_total_payable_ignores_an_overpaid_suppliers_negative_balance(client, db_conn):
     owing = client.post('/api/sub/retail/suppliers', json={'name': 'Owed Money'}).get_json()['data']['id']
-    db_conn.execute("UPDATE suppliers SET credit_balance=500.00 WHERE id=?", (owing,))
-    db_conn.commit()
+    _seed_owed(db_conn, 'suppliers', owing, 500.00)
 
     overpaid = client.post('/api/sub/retail/suppliers', json={'name': 'Overpaid Supplier'}).get_json()['data']['id']
     pay = client.post(f'/api/sub/retail/suppliers/{overpaid}/payments', json={'amount': 75})

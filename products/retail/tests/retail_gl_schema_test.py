@@ -385,8 +385,21 @@ def test_journal_entries_fossil_still_exists_and_is_still_writable():
 
 # ── 6. Opening-balance backfill on a real UPGRADE ────────────────────────
 
-def test_opening_balance_backfill_fires_on_upgrade_and_ties_to_subledger():
-    """The core promise of v38's "ties back to the AR/AP subledger" claim,
+def test_opening_balance_backfill_fires_on_upgrade_and_ties_to_subledger(monkeypatch, tmp_path):
+    """v44 (plan step 8): this test now declares what it always assumed -- ONE
+    computer. The seeded balances are stored figures with no sale or payment
+    behind them, so the v44 upgrade (which runs after v38 in this same boot)
+    can only PRESERVE them by carrying the difference, and it carries only when
+    the registry proves a single-computer shop; with an unreadable registry it
+    answers "networked", mints no carry, and the balances become the (empty)
+    derivation -- 0, which is the right answer for a shop whose peers' rows it
+    cannot see, and the wrong one for this test's premise. An isolated registry
+    with exactly one active device for company 1 is therefore added below.
+    Every expected figure (GL AR 100.25, AP 45.0, the tie to the subledger) is
+    unchanged; what the added fixture can no longer catch is nothing -- it only
+    states the shop shape the test was always about.
+
+    The core promise of v38's "ties back to the AR/AP subledger" claim,
     proved at the schema layer: an install that already had real AR/AP
     history BEFORE v38 shipped must have that history reflected in the GL
     immediately after upgrading, not silently start the GL at zero while
@@ -401,8 +414,32 @@ def test_opening_balance_backfill_fires_on_upgrade_and_ties_to_subledger():
     path -- the SAME code path a genuine upgrade takes, not a direct call
     to the migration function in isolation.
     """
+    from commercial_runtime.identity import device_registry, registry_db
+    reg_dir = tmp_path / 'registry_db'
+    reg_dir.mkdir()
+    monkeypatch.setattr(registry_db, '_db_dir', str(reg_dir))
+    monkeypatch.setattr(registry_db, 'DB_PATH', str(reg_dir / 'registry.db'))
+    rconn = registry_db.get_conn()
+    device_registry.apply_identity_device_schema(rconn)
+    rconn.execute("INSERT INTO devices (id, company_id, first_seen_at, status) VALUES ('dev-only', '1', "
+                  "'2026-10-05T00:00:00Z', 'active')")
+    rconn.commit()
+    rconn.close()
+
     sch, db_path = _install()
     conn = _open(db_path)
+    # A real upgraded install has already run the app, which lazily adds the
+    # 13 `payments` columns (and `retail_settings`) the party-balance derivation
+    # reads (`_ensure_credit_schema`, NOT schema.py). A bare init_retail() DB
+    # lacks them, so v44's capture would (correctly) refuse to run -- give the
+    # fixture the shape every real upgrade has.
+    import api.retail_api as _ra
+    _prev = _ra._CREDIT_SCHEMA_READY
+    _ra._CREDIT_SCHEMA_READY = False
+    try:
+        _ra._ensure_credit_schema(conn)
+    finally:
+        _ra._CREDIT_SCHEMA_READY = _prev
     conn.execute("INSERT INTO customers (id, company_id, name) VALUES (1, 1, 'Cust A')")
     conn.execute("INSERT INTO customers (id, company_id, name) VALUES (2, 1, 'Cust B')")
     conn.execute("UPDATE customers SET credit_balance=120.500 WHERE id=1")

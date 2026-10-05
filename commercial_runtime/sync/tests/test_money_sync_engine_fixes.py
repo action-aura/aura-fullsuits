@@ -180,36 +180,72 @@ def _void_ev(uid):
             "payload": {"uid": uid, "status": "voided"}}
 
 
-def test_synced_void_of_a_customer_payment_puts_the_amount_back_once(install):
-    """The origin computer took a 30 payment (balance 80 -> 50). A peer's void
-    arrives: 50 -> 80. Delivered twice, still 80."""
+# v44 (plan step 8). These three tests used to pin the engine-level DELTA a
+# synced void applied to `customers/suppliers.credit_balance` (the only apply
+# path that ever moved the balance -- which was the bug: create-sale / payment /
+# return events pulled from a peer never moved it, so a receive-only computer
+# started at 0 for a debtor). v44 removed that delta: the stored balance is a
+# cache of a derivation over shop-wide rows, refreshed by the retail post-pull
+# hook (`install_party_balance_refresh`), so the engine must NOT touch it. They
+# now assert exactly that -- the void flips the payment's status and leaves the
+# column alone, however many times it is delivered.
+#
+# What they can no longer catch: a wrong void arithmetic at the engine level
+# (there is none). "A synced void puts the amount back exactly once" is owned by
+# the retail tests that run the real refresh on real pulled rows:
+#   products/retail/tests/retail_party_balance_threedevice_test.py   (A voids, B and C pull)
+#   products/retail/tests/retail_party_balance_samedevice_test.py    (same-process refresh)
+# The 3-decimal-place precision this file used to pin (12.345) is covered by
+# retail_party_balance_unit_test.py's random fils-amount minor-unit sum, which
+# is the arithmetic that now produces the figure.
+
+def _payment_status(install, uid):
+    conn = install()
+    try:
+        return conn.execute("SELECT status FROM payments WHERE uid=?", (uid,)).fetchone()["status"]
+    finally:
+        conn.close()
+
+
+def test_synced_void_of_a_customer_payment_no_longer_moves_the_stored_balance(install):
+    """A peer's void arrives. The engine flips the payment to voided and leaves
+    credit_balance alone (the retail post-pull refresh owns it). Delivered
+    twice, still untouched."""
     cust = _party(install, "customers", 50.0)
     pay = _payment_ev("customer", cust, "in", 30.0)
     assert _apply(install, pay) is True
     assert _balance(install, "customers", cust) == 50.0, "creating the payment row must not move it"
     assert _apply(install, _void_ev(pay["payload"]["uid"])) is True
-    assert _balance(install, "customers", cust) == 80.0
+    # The void really applied (status flipped) -- otherwise "balance unchanged"
+    # would also hold for a void that was never applied.
+    assert _payment_status(install, pay["payload"]["uid"]) == "voided"
+    assert _balance(install, "customers", cust) == 50.0, \
+        "the engine-level void must not move credit_balance any more (the retail refresh owns it)"
     assert _apply(install, _void_ev(pay["payload"]["uid"])) is True
-    assert _balance(install, "customers", cust) == 80.0, "a second delivery moved the balance again"
+    assert _balance(install, "customers", cust) == 50.0, "a second delivery moved the balance"
 
 
-def test_synced_void_of_a_supplier_payment_puts_the_amount_back(install):
-    """Supplier side: paying a supplier out lowered what we owe them, the void
-    restores it (same arithmetic as the local route)."""
+def test_synced_void_of_a_supplier_payment_no_longer_moves_the_stored_balance(install):
+    """Supplier side: same -- the void flips the status, the column is the
+    retail refresh's to rewrite."""
     sup = _party(install, "suppliers", 70.0)
     pay = _payment_ev("supplier", sup, "out", 30.0)
     assert _apply(install, pay) is True
     assert _apply(install, _void_ev(pay["payload"]["uid"])) is True
-    assert _balance(install, "suppliers", sup) == 100.0
+    assert _payment_status(install, pay["payload"]["uid"]) == "voided"
+    assert _balance(install, "suppliers", sup) == 70.0
 
 
-def test_synced_void_keeps_the_currency_precision(install):
-    """JOD has three decimal places: 12.345 must come back as 12.345."""
+def test_synced_void_leaves_a_three_decimal_balance_untouched(install):
+    """JOD has three decimal places: a 12.345 payment's void must not nudge the
+    column by a float residue either (it used to re-add 12.345 to the stored
+    figure; now nothing is added at all)."""
     cust = _party(install, "customers", 0.0)
     pay = _payment_ev("customer", cust, "in", 12.345)
     _apply(install, pay)
     _apply(install, _void_ev(pay["payload"]["uid"]))
-    assert _balance(install, "customers", cust) == 12.345
+    assert _payment_status(install, pay["payload"]["uid"]) == "voided"
+    assert _balance(install, "customers", cust) == 0.0
 
 
 def test_a_payment_already_voided_here_is_not_adjusted_again(install):
