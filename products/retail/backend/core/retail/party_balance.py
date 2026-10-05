@@ -298,11 +298,23 @@ def refresh_cache(conn, cid, table, ids=None, currency=None):
     f = _factor(currency)
     derived = _derive(conn, cid, table, currency, ids)
     changed = 0
+    # v44 F4: the stored figures are read in ONE company-scoped query (a
+    # scoped call reads its ids in chunked IN queries) instead of one SELECT
+    # per party -- on a 500-debtor shop the per-party read was the bulk of the
+    # steady-state sweep. Only rows whose stored figure differs are UPDATEd.
+    stored = {}
+    if ids is None:
+        for row in conn.execute(f"SELECT id, credit_balance FROM {table} WHERE company_id=?", (cid,)).fetchall():
+            stored[str(row[0])] = row[1]
+    else:
+        for clause, extra in _scoped(ids):
+            q = f"SELECT id, credit_balance FROM {table} WHERE company_id=?" + clause.replace("{col}", "id")
+            for row in conn.execute(q, (cid, *extra)).fetchall():
+                stored[str(row[0])] = row[1]
     for key, val in derived.items():
-        row = conn.execute(f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?", (key, cid)).fetchone()
-        if row is None:
+        if key not in stored:
             continue
-        stored_minor = int(round(float(row[0] or 0) * f))
+        stored_minor = int(round(float(stored[key] or 0) * f))
         want_minor = int((val * f).to_integral_value())
         if stored_minor != want_minor:
             conn.execute(f"UPDATE {table} SET credit_balance=? WHERE id=? AND company_id=?",
