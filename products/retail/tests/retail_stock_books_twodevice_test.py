@@ -139,3 +139,59 @@ def test_t8_transfer_journals_match_on_the_sibling_and_1250_clears_once(tmp_path
         rows = _read_device(app, "SELECT COUNT(*) AS n FROM gl_journals WHERE company_id=? "
                                  "AND source_type='stock_transfer'", (cid,))
         assert rows[0]["n"] == 2, rows
+
+
+# ── STOCK-BOOKS verify F1: the sibling values the same stock the same way ───────────────────
+# The verifier found a peer ended with a different average cost than the computer that
+# made the movements: A (10 @ 2.000, adjust -3, receive PO 7 @ 4.000) averages 3.000, but the
+# sync apply blended only purchase_in/transfer_in, so B never blended the opening stock and
+# valued 14 units at 4.000 = 56 against books of 42. One shared rule now
+# (commercial_runtime/stock_cost.py) governs both.
+
+def _po_receipt_on_a(app_a, relay_db, boot_a, pid):
+    login = {"op": "login", "email": boot_a["email"], "password": boot_a["password"]}
+    _, sup = run_device(PY, app_a, relay_db, [
+        login, {"op": "http", "method": "POST", "path": "/suppliers", "json": {"name": "F1 Sup"}}])
+    sid = sup["body"]["data"]["id"]
+    _, po = run_device(PY, app_a, relay_db, [
+        login, {"op": "http", "method": "POST", "path": "/purchase-orders", "json": {
+            "supplier_id": sid, "items": [{"product_id": pid, "quantity": 7, "unit_cost": 4.0}]}}])
+    assert po["status_code"] == 200, po
+    _, rcv = run_device(PY, app_a, relay_db, [
+        login, {"op": "http", "method": "POST",
+                "path": f"/purchase-orders/{po['body']['data']['id']}/receive"}])
+    assert rcv["status_code"] == 200, rcv
+
+
+def _assert_f1_converged(app_a, boot_a, app_b, boot_b, relay_db, pid):
+    for app, boot in ((app_a, boot_a), (app_b, boot_b)):
+        bal = _read_device(app, "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
+                                "WHERE product_id=?", (pid,))
+        # Hand-computed: 10 @ 2.000, -3 -> 7 @ 2.000; +7 @ 4.000 -> 14 units, (14+28)/14 = 3.000.
+        assert [(r["quantity_on_hand"], r["avg_cost"]) for r in bal] == [(14.0, 3.0)], (app, bal)
+        inv = _trial_balance(app, relay_db, boot["email"], boot["password"])["inventory"]
+        # Books: opening 20 - adjust 6 + receipt 28 = 42 = 14 x 3.000.
+        assert inv["stock_value"] == 42.0 and inv["inventory_gl"] == 42.0, (app, inv)
+        assert inv["status"] == "ties", (app, inv)
+
+
+def test_f1_peer_average_matches_after_one_pull(tmp_path):
+    """Out-of-order shape: B learns product, opening, adjustment and receipt in ONE pull."""
+    relay_db = tmp_path / 'relay.db'
+    app_a, boot_a, pid, _branch = _provision_a(tmp_path, relay_db)
+    _po_receipt_on_a(app_a, relay_db, boot_a, pid)
+    run_device(PY, app_a, relay_db, [{"op": "push"}])
+    app_b, boot_b = _b_pulls(tmp_path, relay_db, times=1)
+    _assert_f1_converged(app_a, boot_a, app_b, boot_b, relay_db, pid)
+
+
+def test_f1_peer_average_matches_when_receipt_arrives_in_a_later_pull(tmp_path):
+    """In-order shape: B holds the opening stock first, the receipt comes later."""
+    relay_db = tmp_path / 'relay.db'
+    app_a, boot_a, pid, _branch = _provision_a(tmp_path, relay_db)
+    run_device(PY, app_a, relay_db, [{"op": "push"}])
+    app_b, boot_b = _b_pulls(tmp_path, relay_db, times=2)
+    _po_receipt_on_a(app_a, relay_db, boot_a, pid)
+    run_device(PY, app_a, relay_db, [{"op": "push"}])
+    run_device(PY, app_b, relay_db, [{"op": "pull"}, {"op": "pull"}])
+    _assert_f1_converged(app_a, boot_a, app_b, boot_b, relay_db, pid)

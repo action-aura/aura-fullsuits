@@ -1406,7 +1406,15 @@ def test_list_products_cost_basis_matches_the_books_never_the_raw_cost_price(cli
     counted at `cost_price` in the 'Stock value at cost' header total. Both
     figures must come from the identical fallback chain
     `metrics.inventory_value` already uses."""
-    pid = _seed_product(client, sell_price=10.0, cost_price=4.0, initial_stock=49)
+    # STOCK-BOOKS B6: stock entered AT CREATE with a cost now starts the cost
+    # basis (avg_cost = cost_price), so a product created with initial_stock is
+    # no longer the "never received, avg_cost 0" case this test is about. Build
+    # that case the other way: create empty, then add the 49 units by a manual
+    # stock adjustment (stock_in carries no cost, avg_cost stays 0). Every
+    # assertion below is unchanged.
+    pid = _seed_product(client, sell_price=10.0, cost_price=4.0, initial_stock=0)
+    adj = client.post(f'{API}/products/{pid}/stock-adjust', json={'quantity': 49, 'reason': 'test'})
+    assert adj.status_code == 200, adj.get_json()
 
     products = client.get(f'{API}/products').get_json()['data']
     row = next(p for p in products if p['id'] == pid)

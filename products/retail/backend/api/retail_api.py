@@ -170,6 +170,7 @@ from core.retail import financial_statements as fin_statements
 # is a display cache). See core/retail/party_balance.py's own docstring.
 from core.retail import party_balance
 from core.retail import stock_books
+from commercial_runtime.stock_cost import blended_unit_cost as _blended_unit_cost
 from core.retail import today_cards
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
@@ -2294,7 +2295,13 @@ def create_product():
             # matching sync event, this one included -- see the module-wide
             # note at create_sale's own inventory_movement emission below for
             # the shape every one of these six sites shares.
-            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+            # STOCK-BOOKS verify F1: QUEUED AFTER THE PRODUCT EVENT (see below).
+            # A peer applies events in order; a movement for a product it has
+            # not learnt yet is quarantined and retried only after everything
+            # else in the batch, so the opening stock landed LAST -- after the
+            # later adjustment and PO receipt -- and the peer's moving average
+            # was blended out of order (2.571 instead of 3.000).
+            _opening_move_event = (movement_uid, {
                 'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
                 'movement_type': 'opening_stock', 'quantity': movement_qty, 'unit_cost': open_cost,
                 'reference': 'OPENING', 'notes': None, 'created_by': _uid(),
@@ -2345,6 +2352,8 @@ def create_product():
             'parent_product_id': parent_product_id, 'variant_label': variant_label,
             'row_version': 1, 'updated_at_utc': now,
         })
+        if initial_stock > 0:
+            _queue_sync_event(cur, 'inventory_movement', _opening_move_event[0], 'create', _opening_move_event[1])
         conn.commit(); conn.close()
         _emit('ProductCreated', {'product_id': pid})
         _sync_nudge()
@@ -4271,6 +4280,9 @@ def receive_purchase_order(po_id):
             ).fetchone()
             branch_qty_on_hand = float(branch_bal_row['quantity_on_hand']) if branch_bal_row else 0.0
             branch_old_avg = float(branch_bal_row['avg_cost'] or 0) if branch_bal_row else 0.0
+            # STOCK-BOOKS verify F1: the blend is the ONE shared rule
+            # (commercial_runtime/stock_cost.py) every writer and the sync
+            # apply use -- free/negative prior stock takes the incoming cost.
             branch_denom = branch_qty_on_hand + float(qty)
             # Same zero/negative-denominator and negative-numerator guards
             # as the company-wide block above, applied per branch -- see
@@ -4280,16 +4292,8 @@ def receive_purchase_order(po_id):
             # branch's own balance (create_sale's `on_hand` read is already
             # branch-scoped), so the same corruption this guards against
             # company-wide can equally happen to a single branch.
-            if branch_denom > 0:
-                branch_new_avg = (
-                    Decimal(str(branch_qty_on_hand)) * Decimal(str(branch_old_avg))
-                    + Decimal(str(qty)) * Decimal(str(item['unit_cost']))
-                ) / Decimal(str(branch_denom))
-                if branch_new_avg < 0:
-                    branch_new_avg = Decimal(str(item['unit_cost']))
-                branch_new_avg_cost = _money(branch_new_avg, currency)
-            else:
-                branch_new_avg_cost = _money(branch_old_avg, currency)
+            branch_new_avg_cost = _money(_blended_unit_cost(
+                branch_qty_on_hand, branch_old_avg, qty, item['unit_cost']), currency)
 
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
@@ -5101,16 +5105,9 @@ def receive_stock_transfer(transfer_id):
                 # gives it exactly the sender's cost" falls out of the
                 # weighted-average arithmetic with no special-casing needed,
                 # the same way a first PO receipt does.
-                if dest_denom > 0:
-                    dest_new_avg = (
-                        Decimal(str(dest_qty_on_hand)) * Decimal(str(dest_old_avg))
-                        + Decimal(str(qty_received)) * Decimal(str(incoming_unit_cost))
-                    ) / Decimal(str(dest_denom))
-                    if dest_new_avg < 0:
-                        dest_new_avg = Decimal(str(incoming_unit_cost))
-                    dest_new_avg_cost = _money(dest_new_avg, currency)
-                else:
-                    dest_new_avg_cost = _money(dest_old_avg, currency)
+                # STOCK-BOOKS verify F1: shared rule (commercial_runtime/stock_cost.py).
+                dest_new_avg_cost = _money(_blended_unit_cost(
+                    dest_qty_on_hand, dest_old_avg, qty_received, incoming_unit_cost), currency)
                 cur.execute(
                     "UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ? "
                     "WHERE company_id=? AND product_id=? AND branch_id=?",
@@ -5277,15 +5274,11 @@ def recall_stock_transfer(transfer_id):
                               (cid, pid, source_bid)).fetchone()
             on_hand = float(bal['quantity_on_hand'] or 0)
             old_avg = float(bal['avg_cost'] or 0)
-            denom = on_hand + qty
-            if denom > 0:
-                new_avg = (Decimal(str(on_hand)) * Decimal(str(old_avg))
-                           + Decimal(str(qty)) * Decimal(str(unit_cost))) / Decimal(str(denom))
-                if new_avg < 0:
-                    new_avg = Decimal(str(unit_cost))
-                new_avg_cost = _money(new_avg, currency)
-            else:
-                new_avg_cost = _money(old_avg, currency)
+            # STOCK-BOOKS verify F1+F2: the shared rule; a line that left at
+            # unit_cost <= 0 (a legacy transfer, cost unknown) carries NO cost
+            # information, so the source average stays exactly as it was
+            # rather than being blended toward 0.
+            new_avg_cost = _money(_blended_unit_cost(on_hand, old_avg, qty, unit_cost), currency)
             cur.execute("UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ? "
                         "WHERE company_id=? AND product_id=? AND branch_id=?",
                         (qty, new_avg_cost, cid, pid, source_bid))
@@ -9632,16 +9625,26 @@ def create_return():
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
             """, (cid, pid, bid))
+            # STOCK-BOOKS verify F1(b): a restock blends into the branch average
+            # at the line's SNAPSHOT cost (what the unit cost when it was sold),
+            # by the shared rule -- the same figure the books reverse COGS at
+            # (cogs_reversal_amount below). Read BEFORE the quantity moves.
+            ret_cost = float(line.get('unit_cost_snapshot') or 0)
+            _rb = cur.execute(
+                "SELECT quantity_on_hand, avg_cost FROM inventory_balances "
+                "WHERE company_id=? AND product_id=? AND branch_id=?", (cid, pid, bid)).fetchone()
+            ret_new_avg = _money(_blended_unit_cost(
+                _rb['quantity_on_hand'], _rb['avg_cost'], qty, ret_cost), currency)
             cur.execute("""
-                UPDATE inventory_balances SET quantity_on_hand=quantity_on_hand+?
+                UPDATE inventory_balances SET quantity_on_hand=quantity_on_hand+?, avg_cost=?
                 WHERE company_id=? AND product_id=? AND branch_id=?
-            """, (qty, cid, pid, bid))
+            """, (qty, ret_new_avg, cid, pid, bid))
             movement_uid = _new_uid()
             cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
-                VALUES (?,?,?,'return_in',?,?,?,?,?,?,?)
-            """, (cid, pid, bid, qty, ret_num, _uid(),
+                VALUES (?,?,?,'return_in',?,?,?,?,?,?,?,?)
+            """, (cid, pid, bid, qty, ret_cost, ret_num, _uid(),
                   movement_uid, actor, terminal, utc_now))
             # Wave B: queue the matching sync event -- see create_sale's own
             # inventory_movement emission for the shape every writer shares.
@@ -9649,7 +9652,7 @@ def create_return():
             # `return` event itself (AUDIT-032C).
             _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
                 'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': branch_uid,
-                'movement_type': 'return_in', 'quantity': qty, 'unit_cost': 0,
+                'movement_type': 'return_in', 'quantity': qty, 'unit_cost': ret_cost,
                 'reference': ret_num, 'notes': None, 'created_by': _uid(),
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
                 'source_type': 'return', 'source_uid': ret_uid,

@@ -210,7 +210,12 @@ def test_a_batch_delivered_in_reversed_order_still_converges_in_one_pull(tmp_pat
     ])
     rows = outbox["rows"]
     by_type = {r["entity_type"]: r for r in rows}
-    assert set(by_type) == {"product", "branch", "inventory_movement"}, by_type
+    # STOCK-BOOKS B5: a manual stock adjustment now also posts a journal
+    # (Inventory vs Shrinkage), which syncs as a 'gl_journal' event. It is NOT
+    # part of this test's claim (the movement/branch/product ordering and the
+    # quarantine retry), so it is expected here and left out of the reversed
+    # delivery below; the three entities the claim is about are unchanged.
+    assert set(by_type) == {"product", "branch", "inventory_movement", "gl_journal"}, by_type
 
     # Deliver them to a FRESH relay in DELIBERATELY REVERSED order: the
     # movement first (before its product AND before its branch), branch
@@ -294,7 +299,11 @@ def test_applying_the_same_batch_three_times_is_byte_identical(tmp_path):
          "event_type": r["event_type"], "payload": json.loads(r["payload"])}
         for r in outbox["rows"]
     ]
-    assert len(events) == 3  # product, branch, movement
+    # product, branch, movement + (STOCK-BOOKS B5) the stock-adjustment journal.
+    # The replay claim is "applying the identical batch N times is byte-identical",
+    # so the journal event is part of the batch and is replayed with the rest.
+    assert len(events) == 4
+    assert sorted(e["entity_type"] for e in events) == ["branch", "gl_journal", "inventory_movement", "product"]
 
     [bootstrap] = run_accept_device(PY, device_b, relay_db, [{"op": "bootstrap"}])
 
