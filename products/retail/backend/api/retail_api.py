@@ -2301,12 +2301,13 @@ def create_product():
             # else in the batch, so the opening stock landed LAST -- after the
             # later adjustment and PO receipt -- and the peer's moving average
             # was blended out of order (2.571 instead of 3.000).
-            _opening_move_event = (movement_uid, {
-                'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
-                'movement_type': 'opening_stock', 'quantity': movement_qty, 'unit_cost': open_cost,
-                'reference': 'OPENING', 'notes': None, 'created_by': _uid(),
-                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
-            })
+            # Only the branch uid is resolved here (it reads the same
+            # connection the movement INSERT used); the payload itself is built
+            # as a LITERAL dict at the _queue_sync_event call below, because
+            # retail_sync_payload_coverage_test's AST ratchet can only see the
+            # keys of a literal dict -- a payload hidden in a variable made it
+            # refuse to certify inventory_movements at all.
+            _opening_branch_uid = _branch_uid(conn, bid)
         _audit(conn, 'PRODUCT_CREATED', 'product', pid, data['name'])
         _queue_sync_event(cur, 'product', pid, 'create', {
             'id': pid, 'sku': data['sku'], 'barcode': data.get('barcode', ''), 'name': data['name'],
@@ -2353,7 +2354,12 @@ def create_product():
             'row_version': 1, 'updated_at_utc': now,
         })
         if initial_stock > 0:
-            _queue_sync_event(cur, 'inventory_movement', _opening_move_event[0], 'create', _opening_move_event[1])
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _opening_branch_uid,
+                'movement_type': 'opening_stock', 'quantity': movement_qty, 'unit_cost': open_cost,
+                'reference': 'OPENING', 'notes': None, 'created_by': _uid(),
+                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
         conn.commit(); conn.close()
         _emit('ProductCreated', {'product_id': pid})
         _sync_nudge()
