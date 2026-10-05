@@ -429,6 +429,12 @@ EXPECTED_MUTATION_CAPABILITIES = {
 #: pinned here so it cannot be quietly dropped.
 EXPECTED_READ_CAPABILITIES = {
     'dashboard_stats': CAP_REPORTS,
+    # Aura Today (the owner's home): today's takings and profit, the 14-day
+    # trend, who owes the shop money and which cheques fall due -- strictly
+    # more than dashboard_stats discloses, so strictly the same gate. A
+    # cashier must get a 403 here and the client sends them to the cashier
+    # landing; see retail_today_route_test.py::test_a_cashier_is_refused.
+    'report_today': CAP_REPORTS,
     'report_sales_trend': CAP_REPORTS,
     'report_top_products': CAP_REPORTS,
     'report_payment_methods': CAP_REPORTS,

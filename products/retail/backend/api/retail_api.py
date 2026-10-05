@@ -169,6 +169,7 @@ from core.retail import financial_statements as fin_statements
 # v44: customer/supplier balances DERIVED from shop-wide records (the column
 # is a display cache). See core/retail/party_balance.py's own docstring.
 from core.retail import party_balance
+from core.retail import today_cards
 from config import (
     DATABASE_DIR, APP_VERSION, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -18561,6 +18562,38 @@ def daily_cash():
         'by_method': [dict(r) for r in rows],
     }})
 
+def _receivable_aging(conn, cid, currency, eps, today):
+    """The receivable half of the aging report, as `[(debtor_row, fifo_view,
+    {bucket_key: Decimal})]` -- one entry per customer who owes (derived
+    balance above `eps`), the FIFO open remainders of each aged into the
+    report's buckets in the shop's business days.
+
+    Extracted from `aging_report` UNCHANGED so that the report and the Today
+    screen's "Collect" card read ONE implementation: the card's total is
+    buckets 31_60 + 61_90 + 90_plus by construction, not by two loops that
+    happen to agree.
+
+    v44: debtors and their balances come from the shop-wide derivation (one
+    batch), not the per-computer stored column. SET-BASED (ROUND 7, F1): every
+    debtor's events in one fixed set of company-scoped queries, then FIFO per
+    customer in Python -- the old per-debtor query loop scanned `returns` once
+    per debtor."""
+    boundary = metrics.business_day(conn, cid)
+    debtors, _unused_total = _derived_party_rows(
+        conn, cid, 'customers', "id,name,phone", currency, eps)
+    events_by = _statement_events(conn, cid, None, eps)
+    date_cache = {}
+    out = []
+    for d in debtors:
+        view = _customer_aging_from_events(events_by.get(str(d['id']), []), d['credit_balance'],
+                                           boundary, date_cache)
+        mine = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
+        for r in view['open']:
+            mine[_aging_bucket(_remainder_age(r, today))] += r['amount']
+        out.append((d, view, mine))
+    return out
+
+
 @retail_bp.route('/reports/aging', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -18584,26 +18617,11 @@ def aging_report():
     if kind != 'payable':
         _eps = _money_epsilon(_company_currency(conn, cid))
         currency = _company_currency(conn, cid)
-        boundary = metrics.business_day(conn, cid)
         today = _shop_today(conn, cid)
-        # v44: debtors and their balances from the shop-wide derivation (one
-        # batch), not the per-computer stored column.
-        debtors, _unused_total = _derived_party_rows(
-            conn, cid, 'customers', "id,name,phone", currency, _eps)
         totals = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
         rows = []
-        # SET-BASED (ROUND 7, F1): every debtor's events in one fixed set of
-        # company-scoped queries, then FIFO per customer in Python. The old
-        # per-debtor query loop scanned `returns` once per debtor.
-        events_by = _statement_events(conn, cid, None, _eps)
-        date_cache = {}
         money = _money_for(currency)
-        for d in debtors:
-            view = _customer_aging_from_events(events_by.get(str(d['id']), []), d['credit_balance'],
-                                               boundary, date_cache)
-            mine = {k: Decimal('0') for k in _AGING_BUCKET_KEYS}
-            for r in view['open']:
-                mine[_aging_bucket(_remainder_age(r, today))] += r['amount']
+        for d, view, mine in _receivable_aging(conn, cid, currency, _eps, today):
             for k in _AGING_BUCKET_KEYS:
                 totals[k] += mine[k]
             rows.append({'id': d['id'], 'name': d['name'], 'phone': d['phone'],
@@ -18642,6 +18660,500 @@ def aging_report():
     currency = _company_currency(conn, cid)
     conn.close()
     return jsonify({'status': 'success', 'type': kind, 'data': {k: _money(v, currency) for k, v in buckets.items()}})
+
+# ── Aura Today -- the owner's home ───────────────────────────────────────────
+#
+# ONE route that answers "how is the shop doing, and what needs me?" so the
+# home screen is one request, not six. Every figure comes from a source that
+# already exists and is already tested -- metrics.py for money, the aging FIFO
+# for what customers owe, the cheque fold for cheques, the drawer variance
+# state for drawers -- this block only ASSEMBLES them. Card shaping/ordering
+# lives in core/retail/today_cards.py (no database there); the server writes no
+# sentences, the client words everything with t().
+#
+# Read-only, gated exactly like /dashboard/stats (retail.reports): a cashier
+# never reaches it, and the money-disclosure ratchet in
+# retail_route_capability_matrix_test.py pins that.
+#
+# Fixed number of queries however big the shop is -- no per-row query anywhere.
+# Cheque events come in 400-id IN() chunks; drawer reports are computed only
+# for OPEN drawers (LIMIT 20). A Server-Timing header gives one entry per
+# section so a slow shop can be diagnosed from the browser's network tab.
+
+#: A customer's debt is chased once it is older than this many shop days
+#: (age >= 31, the same edge as the aging report's 31_60 bucket).
+_TODAY_COLLECT_AFTER_DAYS = 30
+#: A cheque is "this week" when due within 6 days from today, overdue included.
+_TODAY_CHEQUE_WEEK_DAYS = 6
+#: ...and "next week" up to 13 days out; farther is not shown.
+_TODAY_CHEQUE_LOOKAHEAD_DAYS = 13
+_TODAY_CHEQUE_CANDIDATE_CAP = 5000
+_TODAY_IN_CHUNK = 400
+_TODAY_DRAWER_WINDOW_DAYS = 30
+_TODAY_DRAWER_LIMIT = 50
+_TODAY_OPEN_DRAWER_LIMIT = 20
+_TODAY_TREND_DAYS = 14
+
+
+def _today_wall(raw, boundary):
+    """A stored ISO instant (a naive one is UTC, as every outbox writes it) as
+    a naive datetime on the SHOP's wall clock, or None when unreadable."""
+    try:
+        inst = datetime.fromisoformat(str(raw).strip().replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        return None
+    if inst.tzinfo is None:
+        inst = inst.replace(tzinfo=timezone.utc)
+    inst = inst.astimezone(boundary.zone) if boundary.zone is not None else inst.astimezone()
+    return inst.replace(tzinfo=None)
+
+
+def _today_walls_of_today(conn, sql, params, boundary, today_date):
+    """Shop-wall datetimes, from the single timestamp column `sql` selects, that
+    fall on today's BUSINESS date. `sql` already prefilters to rows no older
+    than yesterday (a text bound, cheap); the exact business-day test is here
+    because a UTC string cannot say which shop day it was."""
+    shift = timedelta(hours=boundary.day_start_hour)
+    out = []
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as exc:
+        if 'no such table' in str(exc).lower():
+            return out
+        raise
+    for row in rows:
+        wall = _today_wall(row[0], boundary)
+        if wall is not None and (wall - shift).date() == today_date:
+            out.append(wall)
+    return out
+
+
+def _today_hero(conn, cid, shop_now, branch_id, currency, money):
+    """Today so far, net, with the same-moment-yesterday comparison."""
+    today_p = metrics.period_today(shop_now)
+    yest_p = metrics.period_yesterday(shop_now)
+    cutoff = shop_now.strftime('%H:%M:%S')
+    boundary = metrics.business_day(conn, cid)
+    gross = metrics.gross_sales(conn, cid, today_p, branch_id, currency)
+    refunded = metrics.refunds(conn, cid, today_p, branch_id, currency)
+    # Same formula as metrics.revenue() (net of refunds, #1) over the two
+    # figures already in hand rather than two more scans for the same answer.
+    revenue = money(gross - refunded)
+    txns = metrics.transactions(conn, cid, today_p, branch_id)
+    cost = metrics.cogs(conn, cid, today_p, branch_id, currency)
+    profit = money(revenue - cost)
+    yby = metrics.revenue_until(conn, cid, yest_p, cutoff, branch_id, currency)
+    where, params = metrics._scope(cid, today_p, boundary, branch_id, alias='s')
+    # A sold line whose cost resolves to 0 (no snapshot AND no cost_price) makes
+    # the profit figure an over-statement; say so instead of printing a clean one.
+    unknown = conn.execute(f"""
+        SELECT COUNT(*) FROM sale_items si
+        JOIN sales s ON si.sale_id=s.id
+        LEFT JOIN products p ON si.product_id=p.id
+        WHERE {where} AND COALESCE(NULLIF(si.unit_cost, 0), p.cost_price, 0) = 0
+    """, params).fetchone()[0] or 0
+    tenders = [{'method': t['payment_method'], 'revenue': t['revenue'],
+                'share_pct': today_cards.share_pct(t['revenue'], revenue)}
+               for t in metrics.revenue_by_payment_method(conn, cid, today_p, branch_id, currency)]
+    return {
+        'revenue': revenue, 'gross_sales': gross, 'refunds': refunded, 'transactions': txns,
+        'avg_ticket': metrics.avg_ticket(revenue, txns, currency),
+        'yesterday_by_now': yby, 'change_pct': today_cards.pct_change(revenue, yby),
+        'gross_profit': profit, 'margin_pct': today_cards.margin_pct(profit, revenue),
+        'cost_known': unknown == 0, 'tenders': tenders,
+    }
+
+
+def _today_trend(conn, cid, shop_now, branch_id, currency, money, yby):
+    """Fourteen shop days ending today, zero-filled, plus the average of the
+    thirteen COMPLETE days (zeros included -- a closed day is a real zero)."""
+    first = shop_now.date() - timedelta(days=_TODAY_TREND_DAYS - 1)
+    by_day = {d['day']: d for d in metrics.revenue_by_day(
+        conn, cid, metrics.period_days(_TODAY_TREND_DAYS - 1, shop_now), branch_id, currency)}
+    days = []
+    for i in range(_TODAY_TREND_DAYS):
+        key = (first + timedelta(days=i)).isoformat()
+        got = by_day.get(key)
+        days.append({'day': key, 'revenue': got['revenue'] if got else 0.0,
+                     'transactions': got['transactions'] if got else 0})
+    complete = days[:-1]
+    average = money(sum(Decimal(str(d['revenue'])) for d in complete) / len(complete))
+    return {'days': days, 'average': average, 'yesterday_by_now': yby}
+
+
+def _today_branches(conn, cid, shop_now, currency, shop_revenue):
+    """Per-branch strip: today, share of the shop, and each branch's own
+    yesterday-by-now. Empty unless there are at least two active branches."""
+    today_p = metrics.period_today(shop_now)
+    cutoff = shop_now.strftime('%H:%M:%S')
+    rows = metrics.revenue_by_branch(conn, cid, today_p, currency)
+    if len(rows) < 2:
+        return []
+    by_now = metrics.revenue_until_by_branch(conn, cid, metrics.period_yesterday(shop_now), cutoff, currency)
+    out = []
+    for r in rows:
+        yby = by_now.get(r['branch_id'], 0.0)
+        out.append({'branch_id': r['branch_id'], 'name': r['branch_name'], 'revenue': r['revenue'],
+                    'transactions': r['transactions'],
+                    'share_pct': today_cards.share_pct(r['revenue'], shop_revenue),
+                    'yesterday_by_now': yby,
+                    'change_pct': today_cards.pct_change(r['revenue'], yby)})
+    return out
+
+
+def _today_collect(conn, cid, currency, money, eps, today):
+    """Customers whose debt has been open more than 30 shop days. One FIFO
+    (`_receivable_aging`, the very loop the aging report prints), so this
+    total is buckets 31_60 + 61_90 + 90_plus by construction -- and it is
+    derived from the ledger, never from the per-computer `credit_balance`
+    cache a receive-only computer reads as 0."""
+    aged = []
+    owed = Decimal('0')
+    for d, view, mine in _receivable_aging(conn, cid, currency, eps, today):
+        owed += Decimal(str(d['credit_balance'] or 0))
+        amount = mine['31_60'] + mine['61_90'] + mine['90_plus']
+        if amount <= Decimal(str(eps)):
+            continue
+        fields = _aging_fields(view, d['credit_balance'], eps, today, currency, money)
+        aged.append({'id': d['id'], 'name': d['name'], 'has_phone': bool((d['phone'] or '').strip()),
+                     'amount': money(amount), 'days_overdue': fields['days_overdue']})
+    aged.sort(key=lambda r: (-r['amount'], r['name'] or ''))
+    stake = money(sum((Decimal(str(r['amount'])) for r in aged), Decimal('0')))
+    return aged, stake, money(owed)
+
+
+def _today_cheque_events(conn, ids):
+    """{cheque_id: [event rows]} for `ids`, in IN() chunks -- a fixed handful
+    of queries however many cheques, where list_cheques folds one query each."""
+    out = {}
+    for start in range(0, len(ids), _TODAY_IN_CHUNK):
+        chunk = ids[start:start + _TODAY_IN_CHUNK]
+        marks = ','.join('?' * len(chunk))
+        for ev in conn.execute(
+                "SELECT cheque_id, id, event_type, from_status, to_status, occurred_on, created_at_utc "
+                f"FROM cheque_events WHERE cheque_id IN ({marks})", chunk).fetchall():
+            out.setdefault(ev['cheque_id'], []).append(ev)
+    return out
+
+
+def _today_party_names(conn, cid, rows):
+    """{(party_type, party_id): name} for the (at most three) shown cheques."""
+    names = {}
+    for ptype, table in (('customer', 'customers'), ('supplier', 'suppliers')):
+        ids = sorted({r['party_id'] for r in rows if r['party_type'] == ptype})
+        if not ids:
+            continue
+        marks = ','.join('?' * len(ids))
+        for p in conn.execute(
+                f"SELECT id, name FROM {table} WHERE company_id=? AND id IN ({marks})", [cid, *ids]).fetchall():
+            names[(ptype, p['id'])] = p['name']
+    return names
+
+
+def _today_cheques(conn, cid, today_date, money):
+    """Cheques taken from customers that fall due within a week (overdue
+    included), folded to their real status; plus next week's and what the shop
+    itself owes out, for the card's footnote."""
+    week_end = (today_date + timedelta(days=_TODAY_CHEQUE_WEEK_DAYS)).isoformat()
+    look_end = (today_date + timedelta(days=_TODAY_CHEQUE_LOOKAHEAD_DAYS)).isoformat()
+    # Newest-due first so that, on a shop with more than the cap of old
+    # cheques, it is the long-dead ones that fall off, not this week's.
+    cands = conn.execute(
+        "SELECT id, direction, party_type, party_id, bank_name, cheque_number, due_date, amount "
+        "FROM cheques WHERE company_id=? AND direction IN ('in','out') AND due_date<=? "
+        "ORDER BY due_date DESC LIMIT ?", (cid, look_end, _TODAY_CHEQUE_CANDIDATE_CAP)).fetchall()
+    events = _today_cheque_events(conn, [c['id'] for c in cands])
+    due, next_week, out_due = [], [], []
+    for c in cands:
+        if cheque_engine.fold(events.get(c['id'], [])).status != 'pending':
+            continue
+        if c['direction'] == 'out':
+            if c['due_date'] <= week_end:
+                out_due.append(c)
+        elif c['due_date'] <= week_end:
+            due.append(c)
+        else:
+            next_week.append(c)
+    due.sort(key=lambda c: (c['due_date'], c['cheque_number'] or ''))
+    names = _today_party_names(conn, cid, due[:today_cards.MAX_CARD_ROWS])
+
+    def total(rows):
+        return money(sum((Decimal(str(c['amount'] or 0)) for c in rows), Decimal('0')))
+    rows = [{'id': c['id'], 'party_name': names.get((c['party_type'], c['party_id'])),
+             'bank_name': c['bank_name'], 'cheque_number': c['cheque_number'],
+             'due_date': c['due_date'], 'amount': money(c['amount'])} for c in due]
+    extra = {'next_week_count': len(next_week), 'next_week_amount': total(next_week),
+             'out_due_count': len(out_due), 'out_due_amount': total(out_due)}
+    return rows, total(due), extra
+
+
+def _today_restock(conn, cid, branch_id, money):
+    """Products at or below their reorder level, per branch -- the same
+    predicate as core/retail/reorder_hook.py. The stake is what restocking back
+    up to the level would cost at cost price (the very quantity
+    accept_reorder_request drafts: max(reorder_level, 1))."""
+    sql = ("SELECT p.id AS product_id, p.name, p.reorder_level, p.cost_price, p.supplier_id, "
+           "ib.branch_id, b.name AS branch_name, ib.quantity_on_hand AS on_hand "
+           "FROM inventory_balances ib "
+           "JOIN products p ON p.id = ib.product_id "
+           "JOIN branches b ON b.id = ib.branch_id "
+           "WHERE ib.company_id=? AND p.company_id=? AND b.company_id=? "
+           "AND p.status='active' AND p.deleted_at_utc IS NULL AND b.status='active' "
+           "AND p.reorder_level > 0 AND ib.quantity_on_hand <= p.reorder_level")
+    params = [cid, cid, cid]
+    if branch_id not in (None, ''):
+        sql += " AND ib.branch_id=?"
+        params.append(branch_id)
+    found = conn.execute(sql, params).fetchall()
+    found = sorted(found, key=lambda r: (float(r['on_hand'] or 0) / float(r['reorder_level']), r['name'] or ''))
+    stake = money(sum((Decimal(str(max(float(r['reorder_level'] or 0), 1))) * Decimal(str(r['cost_price'] or 0))
+                       for r in found), Decimal('0')))
+    pending_sql = "SELECT COUNT(*) FROM reorder_requests WHERE company_id=? AND status='pending'"
+    pending_params = [cid]
+    if branch_id not in (None, ''):
+        pending_sql += " AND branch_id=?"
+        pending_params.append(branch_id)
+    extra = {'supplier_count': len({r['supplier_id'] for r in found if r['supplier_id']}),
+             'pending_requests': conn.execute(pending_sql, pending_params).fetchone()[0] or 0}
+    rows = [{'product_id': r['product_id'], 'name': r['name'], 'branch_name': r['branch_name'],
+             'on_hand': float(r['on_hand'] or 0), 'reorder_level': float(r['reorder_level'] or 0)}
+            for r in found]
+    return rows, stake, extra
+
+
+def _today_drawers(conn, cid, today_date, money):
+    """Drawers that were ended and still need somebody's eyes: counted with a
+    difference nobody accepted (unverified), or closed without a count (not
+    counted -- UNKNOWN, so it adds nothing to the stake). THIS computer's
+    reading: cash sessions do not sync."""
+    since = (today_date - timedelta(days=_TODAY_DRAWER_WINDOW_DAYS)).isoformat()
+    stamp = "COALESCE(ended_at, closed_at, opened_at)"
+    sessions = conn.execute(
+        f"SELECT * FROM cash_sessions WHERE company_id=? AND status=? AND substr({stamp},1,10) >= ? "
+        f"ORDER BY {stamp} DESC LIMIT ?",
+        (cid, CASH_SESSION_STATUS_ENDED, since, _TODAY_DRAWER_LIMIT)).fetchall()
+    flagged = []
+    for s in sessions:
+        pub = _cash_session_public(s)
+        if pub['variance_status'] in (VARIANCE_UNVERIFIED, VARIANCE_NOT_COUNTED):
+            flagged.append(pub)
+    unverified = [p for p in flagged if p['variance_status'] == VARIANCE_UNVERIFIED]
+    stake = money(sum((abs(Decimal(str(p['variance'] or 0))) for p in unverified), Decimal('0')))
+    # Differences first, biggest first; the uncounted ones after. `sessions`
+    # is already newest-first and sort() is stable, so equal keys keep that.
+    flagged.sort(key=lambda p: (p['variance_status'] != VARIANCE_UNVERIFIED,
+                                -abs(float(p['variance'] or 0))))
+    rows = [{'session_id': p['id'], 'terminal_short': p['terminal_short'], 'ended_at': p['ended_at'],
+             'variance_status': p['variance_status'],
+             'variance': None if p['variance_status'] == VARIANCE_NOT_COUNTED
+             else money(p['variance'])} for p in flagged]
+    open_rows = conn.execute(
+        "SELECT * FROM cash_sessions WHERE company_id=? AND status=? ORDER BY opened_at DESC LIMIT ?",
+        (cid, CASH_SESSION_STATUS_OPEN, _TODAY_OPEN_DRAWER_LIMIT)).fetchall()
+    expected = Decimal('0')
+    if flagged:
+        # Only the open card's footnote needs the money; a calm screen does not
+        # pay for six queries per open drawer.
+        for s in open_rows:
+            expected += Decimal(str(_cash_session_report(conn, cid, s)['expected_cash'] or 0))
+    extra = {'open_count': len(open_rows), 'open_expected_cash': money(expected),
+             'not_counted': len(flagged) - len(unverified)}
+    return rows, stake, extra
+
+
+def _today_tax(conn, cid, today_date, boundary, sales_today):
+    """JoFotara reporting, honestly. None when e-invoicing is not part of this
+    build / cannot be read (nothing true to say). Otherwise `(reason, rows,
+    count)`, reason None meaning connected with nothing stuck."""
+    state, data = _jofotara_state()
+    if state in ('absent', 'unreadable'):
+        return None
+    counts = (data.get('counts_by_state') or {}) if data else {}
+    waiting = sum(int(counts.get(k) or 0) for k in
+                  ('QUEUED', 'SUBMITTING', 'SUBMITTING_UNKNOWN', 'AWAITING_CLEARANCE'))
+    since = (today_date - timedelta(days=1)).isoformat()
+    reported = len(_today_walls_of_today(
+        conn, "SELECT COALESCE(cleared_at, updated_at) FROM einvoice_outbox "
+              "WHERE company_id=? AND status='CLEARED' AND substr(COALESCE(cleared_at, updated_at),1,10) >= ?",
+        (cid, since), boundary, today_date))
+    rows = [{'key': 'sales_today', 'n': sales_today}, {'key': 'reported_today', 'n': reported},
+            {'key': 'waiting', 'n': waiting}]
+    if state != 'connected':
+        return state, rows, sales_today
+    queued = int(counts.get('QUEUED') or 0)
+    if queued > 0:
+        return 'backlog', rows, queued
+    rejected = int(counts.get('FAILED_PERMANENT') or 0)
+    if rejected > 0:
+        return 'rejected', rows, rejected
+    return None, rows, 0
+
+
+def _today_aura_did(conn, cid, boundary, today_date, branch_id):
+    """What the app did on its own today, from the logs that already exist.
+    Only kinds with a count. Reorder suggestions are the shop's; everything
+    else was done by THIS computer."""
+    since = (today_date - timedelta(days=1)).isoformat()
+    shift = timedelta(hours=boundary.day_start_hour)
+    reorder_sql = "SELECT created_at FROM reorder_requests WHERE company_id=? AND created_at >= ?"
+    reorder_params = [cid, since]
+    if branch_id not in (None, ''):
+        reorder_sql += " AND branch_id=?"
+        reorder_params.append(branch_id)
+    found = [
+        ('reorder_suggested', 'shop', _today_walls_of_today(conn, reorder_sql, reorder_params, boundary, today_date)),
+        ('backup_made', 'this_computer', _today_backup_walls(boundary, today_date, shift)),
+        ('whatsapp_sent', 'this_computer', _today_walls_of_today(
+            conn, "SELECT sent_at FROM whatsapp_outbox WHERE company_id=? AND status='SENT' AND sent_at >= ?",
+            (cid, since), boundary, today_date)),
+        ('email_sent', 'this_computer', _today_walls_of_today(
+            conn, "SELECT sent_at FROM email_outbox WHERE company_id=? AND status='SENT' AND sent_at >= ?",
+            (cid, since), boundary, today_date)),
+        ('einvoices_prepared', 'this_computer', _today_walls_of_today(
+            conn, "SELECT created_at FROM einvoice_outbox WHERE company_id=? AND created_at >= ?",
+            (cid, since), boundary, today_date)),
+    ]
+    return [{'kind': kind, 'count': len(walls), 'last_at': max(walls).strftime('%H:%M'), 'scope': scope}
+            for kind, scope, walls in found if walls]
+
+
+def _today_backup_walls(boundary, today_date, shift):
+    """Shop-wall times of today's backup files (their modified time)."""
+    backup_dir = os.environ.get('AURA_BACKUP_DIR') or os.path.join(os.path.dirname(DATABASE_DIR), 'backups')
+    out = []
+    try:
+        names = [n for n in os.listdir(backup_dir)
+                 if n.startswith('aura-retail-backup-') and n.endswith('.zip')]
+    except OSError:
+        return out
+    for name in names:
+        try:
+            stamp = datetime.fromtimestamp(os.path.getmtime(os.path.join(backup_dir, name)), timezone.utc)
+        except OSError:
+            continue
+        wall = _today_wall(stamp.isoformat(), boundary)
+        if wall is not None and (wall - shift).date() == today_date:
+            out.append(wall)
+    return out
+
+
+@retail_bp.route('/reports/today', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def report_today():
+    """The owner's home: today so far against yesterday at this moment, a
+    fourteen-day trend, and the few things that need a decision -- as cards.
+    Read-only. See the block comment above for the shape of the contract."""
+    cid = _cid()
+    conn = get_retail_conn()
+    _ensure_credit_schema(conn)
+    try:
+        branch_id, scope_err = _coerce_branch_id_for_scope(conn, cid, request.args.get('branch_id'))
+        if scope_err:
+            return scope_err
+        # ONE instant for the whole response, read through THIS module's
+        # `datetime` (the seam tests freeze), then onto the shop's clock.
+        now = datetime.now(timezone.utc)
+        boundary = metrics.business_day(conn, cid)
+        shop_now = metrics.business_now(conn, cid, now)
+        today_date = shop_now.date()
+        currency = _company_currency(conn, cid)
+        money = _money_for(currency)
+        eps = _money_epsilon(currency)
+        timings = []
+
+        def timed(name, fn, *args):
+            started = time.perf_counter()
+            try:
+                return fn(*args)
+            finally:
+                timings.append((name, (time.perf_counter() - started) * 1000.0))
+
+        try:
+            scoped = session_branch_scope() is not None
+        except BranchScopeLookupError:
+            scoped = True
+        shop_view = branch_id in (None, '')
+
+        hero = timed('hero', _today_hero, conn, cid, shop_now, branch_id, currency, money)
+        trend = timed('trend', _today_trend, conn, cid, shop_now, branch_id, currency, money,
+                      hero['yesterday_by_now'])
+        branches = timed('branches', _today_branches, conn, cid, shop_now, currency, hero['revenue']) \
+            if shop_view else []
+
+        open_cards, resolved = [], {}
+
+        collect_rows, collect_stake, owed = timed('collect', _today_collect, conn, cid, currency, money, eps, today_date)
+        if collect_rows:
+            open_cards.append(today_cards.build_card('collect', len(collect_rows), collect_rows,
+                                                     stake=collect_stake, amount=collect_stake))
+        else:
+            resolved['collect'] = {'owed': owed}
+
+        chq_rows, chq_stake, chq_extra = timed('cheques', _today_cheques, conn, cid, today_date, money)
+        if chq_rows:
+            open_cards.append(today_cards.build_card('cheques', len(chq_rows), chq_rows,
+                                                     stake=chq_stake, amount=chq_stake, extra=chq_extra))
+        else:
+            resolved['cheques'] = {'next_week_count': chq_extra['next_week_count'],
+                                   'next_week_amount': chq_extra['next_week_amount']}
+
+        rs_rows, rs_stake, rs_extra = timed('restock', _today_restock, conn, cid, branch_id, money)
+        if rs_rows:
+            open_cards.append(today_cards.build_card('restock', len(rs_rows), rs_rows,
+                                                     stake=rs_stake, amount=rs_stake, extra=rs_extra))
+        else:
+            resolved['restock'] = {'pending_requests': rs_extra['pending_requests']}
+
+        dr_rows, dr_stake, dr_extra = timed('drawers', _today_drawers, conn, cid, today_date, money)
+        if dr_rows:
+            open_cards.append(today_cards.build_card('drawers', len(dr_rows), dr_rows,
+                                                     stake=dr_stake, amount=dr_stake, extra=dr_extra))
+        else:
+            resolved['drawers'] = {'open_count': dr_extra['open_count']}
+
+        tax = timed('tax', _today_tax, conn, cid, today_date, boundary, hero['transactions'])
+        if tax is not None:
+            reason, tax_rows, tax_count = tax
+            if reason:
+                open_cards.append(today_cards.build_card('tax', tax_count, tax_rows, extra={'reason': reason}))
+            else:
+                resolved['tax'] = {'sales_today': tax_rows[0]['n'], 'reported_today': tax_rows[1]['n']}
+
+        if branches:
+            quiet = [{'branch_id': b['branch_id'], 'name': b['name'], 'yesterday_by_now': b['yesterday_by_now']}
+                     for b in branches if b['transactions'] == 0]
+            if hero['transactions'] > 0 and quiet:
+                open_cards.append(today_cards.build_card('branches', len(quiet), quiet))
+            else:
+                resolved['branches'] = {'trading': sum(1 for b in branches if b['transactions'] > 0)}
+
+        cards = today_cards.order_cards(open_cards)
+        branch_name = None
+        if not shop_view:
+            row = conn.execute("SELECT name FROM branches WHERE id=? AND company_id=?", (branch_id, cid)).fetchone()
+            branch_name = row['name'] if row else None
+        branch_count = conn.execute(
+            "SELECT COUNT(*) FROM branches WHERE company_id=? AND status='active'", (cid,)).fetchone()[0]
+        aura_did = timed('aura_did', _today_aura_did, conn, cid, boundary, today_date, branch_id)
+        data = {
+            'currency': currency,
+            'business_date': today_date.isoformat(),
+            'as_of': (shop_now + timedelta(hours=boundary.day_start_hour)).strftime('%H:%M'),
+            'scope': {'branch_id': None if shop_view else branch_id, 'branch_name': branch_name,
+                      'scoped': bool(scoped), 'branch_count': branch_count},
+            'hero': hero, 'trend': trend, 'branches': branches,
+            'cards': cards, 'needs_count': len(cards),
+            'all_clear': today_cards.build_all_clear(resolved),
+            'aura_did': aura_did,
+        }
+    finally:
+        conn.close()
+    resp = jsonify({'status': 'success', 'data': data})
+    resp.headers['Server-Timing'] = ', '.join(f'{name};dur={ms:.1f}' for name, ms in timings)
+    return resp
+
 
 # ── Accounting export -- CSV, for a finance department's own ERP/auditor ──────
 #
@@ -21425,24 +21937,45 @@ def _checklist_jofotara():
     reads "Connected" without ever talking to Jordan. Production builds wire the
     real provider, where the same field means real credentials are present
     (review finding F5)."""
+    state, _data = _jofotara_state()
+    if state == 'absent':
+        return _checklist_step('jofotara', None, 'E-invoicing is not part of this build.')
+    if state == 'unreadable':
+        return _checklist_step('jofotara', None, 'The e-invoicing status could not be read.')
+    if state == 'paused':
+        return _checklist_step('jofotara', False, 'E-invoicing is paused on this computer.')
+    if state == 'switched_off':
+        return _checklist_step('jofotara', False, 'Jordan e-invoicing is not switched on.')
+    if state == 'not_connected':
+        return _checklist_step('jofotara', False, 'Switched on, but the connection is not finished.')
+    return _checklist_step('jofotara', True, 'Connected.')
+
+
+def _jofotara_state():
+    """`(state, status_data)` -- the ONE reading of e-invoicing's `_status`
+    view, shared by the setup checklist and the Today screen's tax card so the
+    two cannot give a shopkeeper different answers about "is my tax reporting
+    working". state is one of 'absent' | 'unreadable' | 'paused' |
+    'switched_off' | 'not_connected' | 'connected'; the rules are
+    `_checklist_jofotara`'s, moved here unchanged."""
     view = current_app.view_functions.get('einvoicing_api._status')
     if view is None:
-        return _checklist_step('jofotara', None, 'E-invoicing is not part of this build.')
+        return 'absent', {}
     try:
         resp = view()
         if isinstance(resp, tuple):
-            return _checklist_step('jofotara', None, 'The e-invoicing status could not be read.')
+            return 'unreadable', {}
         data = (resp.get_json() or {}).get('data') or {}
     except Exception:
-        return _checklist_step('jofotara', None, 'The e-invoicing status could not be read.')
+        return 'unreadable', {}
     if os.environ.get('AURA_EINVOICING_DISABLED') == '1' or (data.get('killswitch') or {}).get('disabled'):
-        return _checklist_step('jofotara', False, 'E-invoicing is paused on this computer.')
+        return 'paused', data
     if not data.get('enabled'):
-        return _checklist_step('jofotara', False, 'Jordan e-invoicing is not switched on.')
+        return 'switched_off', data
     if (data.get('provider') == 'unconfigured' or data.get('provider_in_use') == 'unconfigured'
             or not data.get('provider_configured')):
-        return _checklist_step('jofotara', False, 'Switched on, but the connection is not finished.')
-    return _checklist_step('jofotara', True, 'Connected.')
+        return 'not_connected', data
+    return 'connected', data
 
 
 @retail_bp.route('/setup-checklist', methods=['GET'])
