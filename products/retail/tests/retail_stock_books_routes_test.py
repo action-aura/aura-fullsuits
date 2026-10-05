@@ -645,3 +645,351 @@ def test_t7_rounding_the_1250_credit_equals_the_send_debit_to_the_fil(client):
     assert _xfer_receive(client, tid, [0.5, 0.5]).status_code == 200
     assert _bal(cid, gl.ACCOUNT_STOCK_IN_TRANSIT) == 0.0
     assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 0.0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STOCK-BOOKS verify round (F1b, F2, F3, F4, F5, F6, F7)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sell(c, pid, qty):
+    r = c.post(f'{API}/sales', json={'items': [{'product_id': pid, 'quantity': qty}], 'payment_method': 'cash',
+                                    'amount_paid': 100.0, 'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']
+
+
+def _return(c, sale, pid, qty):
+    r = c.post(f'{API}/returns', json={'sale_id': sale['id'], 'items': [{'product_id': pid, 'quantity': qty}],
+                                      'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+
+
+def _branch_avg(cid, pid, bid):
+    conn = get_retail_conn()
+    try:
+        row = conn.execute("SELECT quantity_on_hand, avg_cost FROM inventory_balances WHERE company_id=? AND "
+                           "product_id=? AND branch_id=?", (cid, pid, bid)).fetchone()
+        return float(row[0]), float(row[1])
+    finally:
+        conn.close()
+
+
+def _working_branch(cid, pid):
+    conn = get_retail_conn()
+    try:
+        return conn.execute("SELECT branch_id FROM inventory_balances WHERE company_id=? AND product_id=?",
+                            (cid, pid)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_f1b_return_restock_blends_at_the_sale_snapshot_and_the_books_agree(client):
+    """10 @ 2.000; sell 4 (snapshot 2.000) -> 6 left @ 2.000; receive 6 @ 6.000 ->
+    12 @ (12+36)/12 = 4.000; return the 4: (12 x 4.000 + 4 x 2.000)/16 = 3.500.
+    Books: opening 20 - COGS 8 + PO 36 + COGS reversal 8 = 56 = 16 x 3.500."""
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client, cost_price=2.0, initial_stock=10)
+    bid = _working_branch(cid, pid)
+    sale = _sell(client, pid, 4)
+    po = _make_po(client, sid, pid, qty=6, cost=6.0)
+    assert client.post(f'{API}/purchase-orders/{po}/receive').status_code == 200
+    assert _branch_avg(cid, pid, bid) == (12.0, 4.0)
+    _return(client, sale, pid, 4)
+    assert _branch_avg(cid, pid, bid) == (16.0, 3.5)
+    tie = _inventory_tie(client)
+    assert tie['inventory_gl'] == 56.0 and tie['stock_value'] == 56.0 and tie['status'] == 'ties', tie
+    # The restock movement carries the snapshot cost it was blended at (it said 0
+    # before, so a peer could not blend it the same way).
+    conn = get_retail_conn()
+    cost = conn.execute("SELECT unit_cost FROM inventory_movements WHERE company_id=? AND "
+                        "movement_type='return_in'", (cid,)).fetchone()[0]
+    conn.close()
+    assert cost == 2.0
+
+
+def test_f1b_verifier_m4_case_is_a_rounding_difference_not_a_real_one(client):
+    """10 @ 2, sell 2, receive 8 @ 6, return 1 (the verifier's case). 3dp cannot
+    hold 66/17, so the shelf value is 17 x 3.882 = 65.994 against books of 66 --
+    a 6 fil rounding gap inside the 17 x 0.0005 allowance, shown amber. Before the
+    fix the restock was not blended at all: avg stayed 4.000, shelf 68 vs books 66,
+    a real 'differs'."""
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client, cost_price=2.0, initial_stock=10)
+    bid = _working_branch(cid, pid)
+    sale = _sell(client, pid, 2)
+    po = _make_po(client, sid, pid, qty=8, cost=6.0)
+    assert client.post(f'{API}/purchase-orders/{po}/receive').status_code == 200
+    _return(client, sale, pid, 1)
+    assert _branch_avg(cid, pid, bid) == (17.0, 3.882)
+    tie = _inventory_tie(client)
+    assert tie['inventory_gl'] == 66.0 and tie['stock_value'] == 65.994, tie
+    assert tie['status'] == 'rounding', tie
+
+
+def test_f2_recall_of_a_zero_cost_transfer_keeps_the_source_average(client):
+    """A transfer sent before costs were recorded has unit_cost 0 on its lines.
+    Recalling it put 4 units back 'at 0' and blended the source average from 2.000
+    to (6 x 2 + 4 x 0)/10 = 1.200 -- cost invented out of thin air. Now: 10 @ 2.000."""
+    cid = client.test_company_id
+    pid, src, dest = _two_branch_shop(client, cost=2.0, qty=10)
+    tid = _xfer(client, src, dest, [(pid, 4)])
+    assert client.post(f'{API}/stock-transfers/{tid}/send').status_code == 200
+    conn = get_retail_conn()
+    conn.execute("UPDATE stock_transfer_items SET unit_cost=0 WHERE transfer_id=?", (tid,))
+    conn.commit(); conn.close()
+    assert _branch_avg(cid, pid, src) == (6.0, 2.0)
+    assert client.post(f'{API}/stock-transfers/{tid}/recall').status_code == 200
+    assert _branch_avg(cid, pid, src) == (10.0, 2.0)
+    assert _inventory_tie(client)['status'] == 'ties'
+
+
+def test_f2_recall_with_a_real_cost_still_blends(client):
+    """Allow half: a line that left at a real cost blends back exactly as before.
+    6 on hand @ 3.000 after a send of 4 @ 3.000 costed line -> back to 10 @ 3.000."""
+    cid = client.test_company_id
+    pid, src, dest = _two_branch_shop(client, cost=2.0, qty=10)
+    tid = _xfer(client, src, dest, [(pid, 4)])
+    assert client.post(f'{API}/stock-transfers/{tid}/send').status_code == 200
+    conn = get_retail_conn()
+    conn.execute("UPDATE inventory_balances SET avg_cost=3 WHERE company_id=? AND product_id=? AND branch_id=?",
+                 (cid, pid, src))
+    conn.execute("UPDATE stock_transfer_items SET unit_cost=1 WHERE transfer_id=?", (tid,))
+    conn.commit(); conn.close()
+    assert client.post(f'{API}/stock-transfers/{tid}/recall').status_code == 200
+    # (6 x 3.000 + 4 x 1.000) / 10 = 2.200
+    assert _branch_avg(cid, pid, src) == (10.0, 2.2)
+
+
+def test_f3_credit_po_without_a_supplier_is_refused_but_a_fully_paid_one_is_not(client):
+    cid = client.test_company_id
+    pid = _seed_product(client, cost_price=2.0)
+    items = [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}]
+    n_before = len(_journals(cid))
+    # Deny: nothing paid, and part paid -- both leave an unpaid remainder.
+    for paid in (0, 15):
+        body = {'items': items}
+        if paid:
+            body['amount_paid'] = paid
+        r = client.post(f'{API}/purchase-orders', json=body)
+        assert r.status_code == 409, r.get_json()
+        assert r.get_json()['code'] == 'SUPPLIER_REQUIRED_FOR_CREDIT_PO'
+        assert r.get_json()['message'] == 'Choose the supplier you will owe, or pay the order in full.'
+    assert len(_journals(cid)) == n_before            # refused before anything was booked
+    # Allow: paid in full, no supplier -> nothing is owed to anyone.
+    r = client.post(f'{API}/purchase-orders', json={'items': items, 'amount_paid': 40})
+    assert r.status_code == 200, r.get_json()
+    assert _bal(cid, gl.ACCOUNT_GOODS_ORDERED) == 40.0
+    po = r.get_json()['data']['id']
+    assert client.post(f'{API}/purchase-orders/{po}/receive').status_code == 200
+    assert _inventory_tie(client)['status'] == 'ties'  # 10 x 4.000 on the shelf and in the books
+    # And with a supplier the unpaid order still goes through.
+    sid = _seed_supplier(client)
+    assert client.post(f'{API}/purchase-orders', json={'supplier_id': sid, 'items': items}).status_code == 200
+
+
+def _raise_reorder_request(cid, pid):
+    rid = str(uuid.uuid4())
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO reorder_requests (id,company_id,branch_id,product_id,status) "
+                 "VALUES (?,?,?,?, 'pending')", (rid, cid, None, pid))
+    conn.commit(); conn.close()
+    return rid
+
+
+def test_f3_accepting_a_reorder_for_a_product_without_a_supplier_is_refused(client):
+    cid = client.test_company_id
+    pid = _seed_product(client, cost_price=2.0, reorder_level=5)
+    rid = _raise_reorder_request(cid, pid)
+    n_po = len(client.get(f'{API}/purchase-orders').get_json()['data'])
+    r = client.post(f'{API}/reorder-requests/{rid}/accept', json={})
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json()['code'] == 'SUPPLIER_REQUIRED_FOR_CREDIT_PO'
+    assert r.get_json()['message'] == 'Set a supplier for this product first.'
+    assert len(client.get(f'{API}/purchase-orders').get_json()['data']) == n_po     # no PO drafted
+    # The request is still pending (nothing was consumed).
+    conn = get_retail_conn()
+    assert conn.execute("SELECT status FROM reorder_requests WHERE id=?", (rid,)).fetchone()[0] == 'pending'
+    conn.close()
+    # Allow half: give the product a supplier and the same request accepts.
+    sid = _seed_supplier(client)
+    assert client.patch(f'{API}/products/{pid}', json={'supplier_id': sid}).status_code == 200
+    assert client.post(f'{API}/reorder-requests/{rid}/accept', json={}).status_code == 200
+
+
+def test_f4_deleting_a_product_with_stock_writes_it_off(client):
+    cid = client.test_company_id
+    keep = _seed_product(client, cost_price=1.0, initial_stock=3)
+    pid = _seed_product(client, cost_price=2.0, initial_stock=5)
+    assert _bal(cid, gl.ACCOUNT_INVENTORY) == 13.0          # 3 x 1.000 + 5 x 2.000
+    bid = _working_branch(cid, pid)
+    assert client.delete(f'{API}/products/{pid}').status_code == 200
+    # 5 x 2.000 = 10.000 left Inventory for Shrinkage; the 3 x 1.000 stay.
+    assert _bal(cid, gl.ACCOUNT_INVENTORY) == 3.0
+    assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 10.0
+    assert _branch_avg(cid, pid, bid)[0] == 0.0
+    tie = _inventory_tie(client)
+    assert tie['inventory_gl'] == 3.0 and tie['stock_value'] == 3.0 and tie['status'] == 'ties', tie
+    assert _tb(cid)['is_balanced']
+    # Allow half: deleting a product with NO stock books nothing.
+    empty = _seed_product(client, cost_price=2.0, initial_stock=0)
+    n = len(_journals(cid))
+    assert client.delete(f'{API}/products/{empty}').status_code == 200
+    assert len(_journals(cid)) == n
+    # And a second delete of the first is the usual 404, with no second write-off.
+    assert client.delete(f'{API}/products/{pid}').status_code == 404
+    assert _bal(cid, gl.ACCOUNT_SHRINKAGE) == 10.0
+    assert keep
+
+
+def test_f5_pay_checks_the_status_inside_the_write_transaction(client, monkeypatch):
+    """COUNT THE CHECK (ENGINEERING.md shape 1): a 409 for 'cancelled' cannot tell a
+    status read that ran under the write lock from one that ran before it. Record
+    the statements pay_purchase_order issues and prove the order: BEGIN IMMEDIATE,
+    THEN the purchase_orders read, THEN an UPDATE that carries the status guard."""
+    import api.retail_api as ra
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid)
+    seen = []
+    real = ra.get_retail_conn
+
+    def traced():
+        c = real()
+        c.set_trace_callback(lambda s: seen.append(' '.join(str(s).split())))
+        return c
+
+    monkeypatch.setattr(ra, 'get_retail_conn', traced)
+    r = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 5})
+    assert r.status_code == 200, r.get_json()
+    begin = [i for i, s in enumerate(seen) if s.upper().startswith('BEGIN IMMEDIATE')]
+    read = [i for i, s in enumerate(seen) if s.upper().startswith('SELECT') and 'FROM purchase_orders' in s
+            and 'po_number,status' in s]
+    upd = [i for i, s in enumerate(seen) if s.upper().startswith('UPDATE PURCHASE_ORDERS SET AMOUNT_PAID')]
+    assert len(begin) == 1 and len(read) == 1 and len(upd) == 1, seen
+    assert begin[0] < read[0] < upd[0], 'the status read must happen inside the write transaction'
+    assert "<> 'cancelled'" in seen[upd[0]], seen[upd[0]]
+
+
+def test_f5_cancel_then_pay_is_refused_and_pays_nothing(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid)
+    assert client.post(f'{API}/purchase-orders/{po_id}/cancel').status_code == 200
+    n = len(_journals(cid))
+    r = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 5})
+    assert r.status_code == 409
+    assert _po_payment_ids(cid, po_id) == [] and len(_journals(cid)) == n
+    assert _supplier_balance(client, sid) == 0.0
+
+
+def _movement(cid, pid, bid, reference, mtype='purchase_in', qty=1, cost=4.0):
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,"
+                 "unit_cost,reference,created_by,uid) VALUES (?,?,?,?,?,?,?,?,?)",
+                 (cid, pid, bid, mtype, qty, cost, reference, 'test', str(uuid.uuid4())))
+    conn.commit(); conn.close()
+
+
+def _synced_style_journal(cid, source_type, reference):
+    """A journal as the sync apply writes it: no local source_id at all."""
+    conn = get_retail_conn()
+    gl.post_journal(conn, cid, None, '2026-01-01', source_type, None, 'JOD',
+                    [{'account_code': gl.ACCOUNT_INVENTORY, 'debit': 4},
+                     {'account_code': gl.ACCOUNT_GOODS_ORDERED, 'credit': 4}], reference=reference)
+    conn.commit(); conn.close()
+
+
+def _local_po_row(cid, sid, po_number):
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO purchase_orders (company_id,po_number,supplier_id,status,subtotal,total,ordered_at,"
+                 "amount_paid,payment_status) VALUES (?,?,?,'received',4,4,'2026-01-01',0,'unpaid')",
+                 (cid, po_number, sid))
+    conn.commit(); conn.close()
+
+
+def test_f6_two_computers_with_the_same_po_number_do_not_book_each_other(client):
+    """Computer A's PO-DUP journal arrives here (synced: source_id NULL, reference
+    'PO-DUP'). THIS computer also has its own PO-DUP, received before the wave, with
+    no journal. Matching on the number text let A's journal 'book' our unbooked
+    receipt; matching on the LOCAL PO id does not."""
+    from core.retail import stock_books
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client, cost_price=4.0, initial_stock=1)   # gives the company its working branch
+    bid = _working_branch(cid, pid)
+    ref = 'PO-DUP'
+    _local_po_row(cid, sid, ref)
+    _movement(cid, pid, bid, ref)
+    _synced_style_journal(cid, 'po_receipt', ref)
+    conn = get_retail_conn()
+    try:
+        # The seed product's opening stock is booked; the PO-DUP receipt is the one unbooked movement.
+        unbooked_with_dup = stock_books.unbooked_movement_count(conn, cid)
+        assert unbooked_with_dup == 1
+    finally:
+        conn.close()
+    # Allow half 1: a receipt whose journal IS this computer's own (source_id = the
+    # local PO id) is booked.
+    ref2 = 'PO-OWN'
+    _local_po_row(cid, sid, ref2)
+    conn = get_retail_conn()
+    own_id = conn.execute("SELECT id FROM purchase_orders WHERE po_number=?", (ref2,)).fetchone()[0]
+    gl.post_journal(conn, cid, None, '2026-01-01', 'po_receipt', own_id, 'JOD',
+                    [{'account_code': gl.ACCOUNT_INVENTORY, 'debit': 4},
+                     {'account_code': gl.ACCOUNT_GOODS_ORDERED, 'credit': 4}], reference=ref2)
+    conn.commit(); conn.close()
+    _movement(cid, pid, bid, ref2)
+    # Allow half 2: a receipt whose PO does NOT exist here (it came from a sibling)
+    # is booked by the sibling's synced journal -- the text match is the only link.
+    _synced_style_journal(cid, 'po_receipt', 'PO-SIBLING')
+    _movement(cid, pid, bid, 'PO-SIBLING')
+    conn = get_retail_conn()
+    try:
+        assert stock_books.unbooked_movement_count(conn, cid) == unbooked_with_dup
+    finally:
+        conn.close()
+
+
+def test_f7_cancelling_a_reorder_drafted_po_frees_the_request(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client, cost_price=2.0, reorder_level=5, supplier_id=sid)
+    other = _seed_product(client, cost_price=2.0, reorder_level=5, supplier_id=sid)
+    rid = _raise_reorder_request(cid, pid)
+    rid_other = _raise_reorder_request(cid, other)
+    po = client.post(f'{API}/reorder-requests/{rid}/accept', json={}).get_json()['data']['purchase_order_id']
+    po_other = client.post(f'{API}/reorder-requests/{rid_other}/accept', json={}).get_json()['data']['purchase_order_id']
+
+    def status(r):
+        conn = get_retail_conn()
+        try:
+            return conn.execute("SELECT status FROM reorder_requests WHERE id=?", (r,)).fetchone()[0]
+        finally:
+            conn.close()
+
+    def raise_again(p):
+        conn = get_retail_conn()
+        try:
+            conn.execute("INSERT INTO reorder_requests (id,company_id,branch_id,product_id,status) "
+                         "VALUES (?,?,?,?, 'pending')", (str(uuid.uuid4()), cid, None, p))
+            conn.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    assert status(rid) == 'accepted' and raise_again(pid) is False      # the slot is held while accepted
+    assert client.post(f'{API}/purchase-orders/{po}/cancel').status_code == 200
+    assert status(rid) == 'declined'
+    assert raise_again(pid) is True                                      # a new request can be raised
+    # Deny half: cancelling one PO leaves another product's accepted request alone.
+    assert status(rid_other) == 'accepted'
+    # And a PO NOT drafted from a request leaves every request untouched.
+    plain = _make_po(client, sid, other)
+    assert client.post(f'{API}/purchase-orders/{plain}/cancel').status_code == 200
+    assert status(rid_other) == 'accepted'
+    assert po_other

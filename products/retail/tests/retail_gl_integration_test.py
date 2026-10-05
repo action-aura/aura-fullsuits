@@ -431,8 +431,12 @@ def test_purchase_order_with_down_payment_posts_inventory_cash_ap(client):
     # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
     # seed product's opening stock (offset in 3900), not a cent more. (Plain
     # `== 0` would break the moment a product's opening stock is booked.)
-    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
-            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
+    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
+    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
+    # numbers that move together, so it passed while the PO added to BOTH or
+    # neither; 100.000 on each fails if the order leaks into 1200 at all.
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+    assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
 
@@ -494,8 +498,12 @@ def test_purchase_order_with_a_negative_amount_paid_does_not_inflate_ap(client):
     # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
     # seed product's opening stock (offset in 3900), not a cent more. (Plain
     # `== 0` would break the moment a product's opening stock is booked.)
-    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
-            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
+    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
+    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
+    # numbers that move together, so it passed while the PO added to BOTH or
+    # neither; 100.000 on each fails if the order leaks into 1200 at all.
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+    assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 40.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 0.0
 
@@ -518,8 +526,12 @@ def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
     # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
     # seed product's opening stock (offset in 3900), not a cent more. (Plain
     # `== 0` would break the moment a product's opening stock is booked.)
-    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
-            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
+    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
+    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
+    # numbers that move together, so it passed while the PO added to BOTH or
+    # neither; 100.000 on each fails if the order leaks into 1200 at all.
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+    assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
 
 
@@ -546,8 +558,12 @@ def test_purchase_order_with_no_supplier_still_balances(client):
     # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
     # seed product's opening stock (offset in 3900), not a cent more. (Plain
     # `== 0` would break the moment a product's opening stock is booked.)
-    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
-            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
+    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
+    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
+    # numbers that move together, so it passed while the PO added to BOTH or
+    # neither; 100.000 on each fails if the order leaks into 1200 at all.
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+    assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -10.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
 

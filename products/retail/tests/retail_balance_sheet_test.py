@@ -357,7 +357,11 @@ def test_purchase_on_credit_increases_inventory_and_payable_and_still_balances(c
     # Inventory holds only the seed product's opening stock (500 @ 1.0, offset
     # in 3900), not the 40 on order. `or 0` = no row on the sheet.
     opening = _account(data['equity'], gl.ACCOUNT_OPENING_EQUITY)
-    assert (inventory['amount'] if inventory else 0.0) == (opening['amount'] if opening else 0.0)
+    # STOCK-BOOKS verify F8: absolute, hand-computed (500 units x 1.000 = 500.000
+    # on each side). The old `(inv or 0) == (opening or 0)` also passed when BOTH
+    # rows were missing from the sheet, and could not see the order leak into 1200.
+    assert inventory is not None and inventory['amount'] == 500.0
+    assert opening is not None and opening['amount'] == 500.0
     assert ap is not None and ap['amount'] == 40.0
     # Nothing paid, nothing sold yet -- no revenue/expense activity at all,
     # so retained_earnings must still read exactly 0, and Cash must be
