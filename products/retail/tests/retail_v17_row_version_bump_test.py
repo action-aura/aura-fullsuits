@@ -400,6 +400,12 @@ def test_reorder_request_created_by_post_sale_hook_stamps_row_version_1(client, 
 
 def test_accept_reorder_request_bumps_row_version_and_emits_the_new_value(client, db_conn):
     pid = _make_product(client, reorder_level=8, reorder_method='whatsapp', initial_stock=10)
+    # STOCK-BOOKS verify F3: accepting drafts an unpaid PO, which must name a
+    # supplier; this test is about the request's row_version, so give it one.
+    sup = client.post('/api/sub/retail/suppliers', json={'name': f'V17 Supplier {uuid.uuid4().hex[:6]}'})
+    assert sup.status_code == 200, sup.get_json()
+    assert client.patch(f'/api/sub/retail/products/{pid}',
+                        json={'supplier_id': sup.get_json()['data']['id']}).status_code == 200
     _sell(client, pid, 5)
     req = db_conn.execute("SELECT id FROM reorder_requests WHERE product_id=?", (pid,)).fetchone()
     v1, u1 = _row_version(db_conn, 'reorder_requests', req['id'])

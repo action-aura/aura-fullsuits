@@ -243,7 +243,13 @@ def test_a_po_with_no_supplier_is_still_created_and_still_listed(client_and_comp
     c, _cid = client_and_company
     product_id = _seed_product(c)
 
-    r = _create_po(c, product_id)
+    # STOCK-BOOKS verify F3: an UNPAID supplier-less PO is refused now (nobody to
+    # owe). A supplier-less PO PAID IN FULL (5.0 = the whole total) is still
+    # legitimate and is exactly the row shape the LEFT JOIN claim needs, so the
+    # claim under test is unchanged. What this can no longer show: an unpaid
+    # supplier-less PO being created -- that refusal is asserted in
+    # retail_stock_books_routes_test.py (f3).
+    r = _create_po(c, product_id, amount_paid=5.0)
     assert r.status_code == 200, r.get_json()
     po_id = r.get_json()['data']['id']
 

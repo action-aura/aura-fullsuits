@@ -14070,6 +14070,10 @@ const RetailSystem = {
         // it kept saying "No purchase orders yet" right under a success toast
         // (P1b verifier F5). Missing #po-table (older host screens) is a no-op.
         await this._loadPurchaseOrders();
+      } else if (d && d.code === 'SUPPLIER_REQUIRED_FOR_CREDIT_PO') {
+        // STOCK-BOOKS verify F3: a reorder PO is born unpaid, so it needs a supplier.
+        // Shown in the shop's own language, never the raw server sentence.
+        SubsystemApp.showToast(t('Set a supplier for this product first.'), 'error');
       } else {
         SubsystemApp.showToast((d && d.message) || t('Could not accept this request.'), 'error');
       }

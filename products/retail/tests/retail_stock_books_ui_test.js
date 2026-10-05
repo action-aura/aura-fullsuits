@@ -157,6 +157,21 @@ async function cancelRefusedToast(source) {
   return ctx;
 }
 
+async function acceptNeedsSupplierToast(source) {
+  const ctx = load({
+    source,
+    routes: [
+      { match: '/reorder-requests/r1/accept', method: 'POST', status: 409,
+        payload: { status: 'error', code: 'SUPPLIER_REQUIRED_FOR_CREDIT_PO', message: 'raw server sentence' } },
+      { match: '/reorder-requests', payload: { data: [] } },
+      { match: '/purchase-orders', payload: { data: [] } },
+    ],
+  });
+  await ctx.rs._acceptReorderRequest('r1');
+  await settle();
+  return ctx;
+}
+
 async function shortReceiptToast(source) {
   const ctx = load({
     source,
@@ -209,6 +224,12 @@ const CLAIMS = {
     assert.strictEqual(ctx.toasts[0].msg, 'This order has a payment. Void the payment first.');
     assert.strictEqual(ctx.toasts[0].kind, 'error');
   },
+  async acceptRefusalNamesTheSupplierStep(src) {
+    const ctx = await acceptNeedsSupplierToast(src);
+    assert.strictEqual(ctx.toasts.length, 1, 'one toast: ' + JSON.stringify(ctx.toasts));
+    assert.strictEqual(ctx.toasts[0].msg, 'Set a supplier for this product first.');
+    assert.strictEqual(ctx.toasts[0].kind, 'error');
+  },
   async shortReceiptStatesTheMoneyWrittenOff(src) {
     const ctx = await shortReceiptToast(src);
     assert.ok(ctx.toasts.some((x) => /written off/.test(x.msg) && /2/.test(x.msg)), JSON.stringify(ctx.toasts));
@@ -232,6 +253,8 @@ const MUTANTS = [
     "} else if (xfer.status === 'in_transit') {", "} else {"],
   ['payment refusal shows the raw server text', 'rawRefusal', 'paymentRefusalIsShownTranslated',
     "} else if (d.code === 'PO_HAS_PAYMENTS') {", "} else if (false) {"],
+  ['reorder accept refusal shows the raw server text', 'rawSupplierRefusal', 'acceptRefusalNamesTheSupplierStep',
+    "} else if (d && d.code === 'SUPPLIER_REQUIRED_FOR_CREDIT_PO') {", "} else if (false) {"],
   ['written-off money dropped from the toast', 'noWrittenOff', 'shortReceiptStatesTheMoneyWrittenOff',
     "(writtenOff > 0 ?", "(false ?"],
 ];

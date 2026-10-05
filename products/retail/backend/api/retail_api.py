@@ -3777,6 +3777,16 @@ def create_purchase_order():
             if not valid_supplier:
                 return jsonify({'status': 'error',
                                  'message': f'Unknown supplier_id: {supplier_id}'}), 400
+        # STOCK-BOOKS verify F3: an order with an UNPAID remainder must name the
+        # supplier it is owed to. A supplier-less credit PO books Dr 1260 for
+        # only the paid part (the unpaid part has no AP line -- the supplier
+        # subledger cannot hold it), so the goods would arrive worth more than
+        # the books ever recorded and the Inventory tie would read "differs".
+        # A FULLY PAID supplier-less order stays allowed: nothing is owed.
+        _po_total_check = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items), currency)
+        if not supplier_id and (_po_total_check - amount_paid) > _eps:
+            return jsonify({'status': 'error', 'code': 'SUPPLIER_REQUIRED_FOR_CREDIT_PO',
+                            'message': 'Choose the supplier you will owe, or pay the order in full.'}), 409
 
         # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the
         # multi-branch capture defect" entry): same cross-tenant leak shape
@@ -5431,6 +5441,12 @@ def accept_reorder_request(rid):
         # never stored.
         total = _money(unit_cost * qty, _company_currency(conn, cid))
         supplier_id = product['supplier_id']
+        # STOCK-BOOKS verify F3: a reorder PO is born unpaid, so it is a credit
+        # order -- it must name whom it is owed to (see create_purchase_order's
+        # matching refusal for why). Nothing is written yet at this point.
+        if not supplier_id and total > _money_epsilon(_company_currency(conn, cid)):
+            return jsonify({'status': 'error', 'code': 'SUPPLIER_REQUIRED_FOR_CREDIT_PO',
+                            'message': 'Set a supplier for this product first.'}), 409
         # `req['branch_id']` is a trusted value from THIS company's own
         # reorder_requests row -- the fallback below only applies to a
         # legacy row with no branch_id at all. Launch-readiness chain wave

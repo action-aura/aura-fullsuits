@@ -2497,6 +2497,8 @@
   "Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.": "إلغاء هذا الطلب؟ لم يُستلم شيء، لذا سيُزال المبلغ المستحق للمورّد.",
   "Purchase order cancelled": "تم إلغاء أمر الشراء",
   "This order has a payment. Void the payment first.": "على هذا الطلب دفعة. أبطل الدفعة أولًا.",
+  "Set a supplier for this product first.": "حدّد مورّدًا لهذا المنتج أولًا.",
+  "Choose the supplier you will owe, or pay the order in full.": "اختر المورّد الذي ستدين له، أو ادفع قيمة الطلب كاملة.",
   "Recall": "سحب",
   "Recall Transfer": "سحب التحويل",
   "Bring this transfer back to the source branch? The stock returns to where it left from.": "إعادة هذا التحويل إلى الفرع المصدر؟ سيعود المخزون إلى المكان الذي خرج منه.",

@@ -139,7 +139,13 @@ def db_conn():
 
 
 def _make_product(client, *, reorder_level=5, reorder_method='none', initial_stock=10, sell_price=10.0):
+    # STOCK-BOOKS verify F3: accepting a reorder drafts an unpaid PO, which must
+    # name a supplier. These tests are about the request/sync lifecycle, so the
+    # product simply has one; nothing they assert depends on it.
+    sup = client.post('/api/sub/retail/suppliers', json={'name': f'Reorder Supplier {uuid.uuid4().hex[:6]}'})
+    assert sup.status_code == 200, sup.get_json()
     resp = client.post('/api/sub/retail/products', json={
+        'supplier_id': sup.get_json()['data']['id'],
         'name': f'Reorder Test Widget {uuid.uuid4().hex[:6]}',
         'sku': f'REORD-{uuid.uuid4().hex[:8]}',
         'cost_price': 2, 'sell_price': sell_price,

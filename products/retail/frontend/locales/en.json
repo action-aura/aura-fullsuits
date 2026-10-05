@@ -2497,6 +2497,8 @@
   "Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.": "Cancel this order? Nothing has been received, so the amount owed to the supplier is removed.",
   "Purchase order cancelled": "Purchase order cancelled",
   "This order has a payment. Void the payment first.": "This order has a payment. Void the payment first.",
+  "Set a supplier for this product first.": "Set a supplier for this product first.",
+  "Choose the supplier you will owe, or pay the order in full.": "Choose the supplier you will owe, or pay the order in full.",
   "Recall": "Recall",
   "Recall Transfer": "Recall Transfer",
   "Bring this transfer back to the source branch? The stock returns to where it left from.": "Bring this transfer back to the source branch? The stock returns to where it left from.",

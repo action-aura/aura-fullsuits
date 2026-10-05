@@ -127,10 +127,19 @@ def client_and_company():
     return _make_admin_client('ponum-solo')
 
 
+def _seed_supplier(c):
+    r = c.post('/api/sub/retail/suppliers', json={'name': f'PONUM Supplier {uuid.uuid4().hex[:6]}'})
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']['id']
+
+
 def _seed_product(c, **kw):
+    # STOCK-BOOKS verify F3: a credit PO (and a reorder-drafted one) must name a
+    # supplier now. These tests are about po_number minting, not suppliers, so
+    # every product carries one -- the numbering behaviour under test is unchanged.
     payload = {
         'name': 'PO Number Test Widget', 'sku': f'PONUM-{uuid.uuid4().hex[:8]}',
-        'cost_price': 5.0, 'sell_price': 10.0,
+        'cost_price': 5.0, 'sell_price': 10.0, 'supplier_id': _seed_supplier(c),
     }
     payload.update(kw)
     r = c.post('/api/sub/retail/products', json=payload)
@@ -139,7 +148,8 @@ def _seed_product(c, **kw):
 
 
 def _create_po(c, product_id, **kw):
-    payload = {'items': [{'product_id': product_id, 'quantity': 1, 'unit_cost': 5.0}]}
+    payload = {'items': [{'product_id': product_id, 'quantity': 1, 'unit_cost': 5.0}],
+               'supplier_id': _seed_supplier(c)}   # STOCK-BOOKS verify F3: see _seed_product
     payload.update(kw)
     return c.post('/api/sub/retail/purchase-orders', json=payload)
 
