@@ -169,6 +169,9 @@ from core.retail import financial_statements as fin_statements
 # v44: customer/supplier balances DERIVED from shop-wide records (the column
 # is a display cache). See core/retail/party_balance.py's own docstring.
 from core.retail import party_balance
+# W4a: the three rules a purchase order shares with the sync apply (derived
+# paid figure, deterministic receipt-movement uid, forward-only status rank).
+from core.retail import purchase_orders as po_core
 from core.retail import stock_books
 from commercial_runtime.stock_cost import blended_unit_cost as _blended_unit_cost
 from core.retail import today_cards
@@ -3613,6 +3616,119 @@ def list_purchase_orders():
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
 
+def _po_stamp_and_queue_create(cur, po_id, order_journal_id):
+    """W4a: finish a freshly-written purchase order for sync -- store the uid of
+    the journal its order posted, then queue the order and every line.
+
+    WHY THIS EXISTS. A PO lived only on the computer that typed it
+    (`purchase_orders.id` is a per-computer integer and nothing was queued), so
+    a sibling could not see, receive or cancel it, and an instalment typed there
+    named the writer's integer and landed on an unrelated local PO. Both mint
+    sites (create_purchase_order, accept_reorder_request) and the legacy boot
+    backfill funnel through here so the wire shape cannot drift between them.
+
+    `order_journal_id` is the id `gl.post_purchase_order` returned (None when
+    it posted nothing, e.g. a zero-value order): the sibling needs the journal's
+    UID, because the journal's own `source_id` is the writer's integer and
+    means nothing there (the receipt and the cancel look the order journal up
+    by this uid, see gl.po_order_journal).
+
+    The payloads are LITERAL dicts at the call sites on purpose: the payload-
+    coverage ratchet (retail_sync_payload_coverage_test.py) reads keys from
+    literal dicts only (see 051bbfc4, where a tuple-stashed payload made it
+    refuse to certify a whole table). `amount_paid` / `payment_status` are
+    deliberately NOT on the wire: they are derived from the synced payments
+    (po_core.recompute_po_paid) on every computer, so sending the writer's
+    figure would only invite it to disagree with the rows that produce it.
+    """
+    if order_journal_id is not None:
+        jrow = cur.execute("SELECT uid FROM gl_journals WHERE id=?", (order_journal_id,)).fetchone()
+        if jrow and jrow['uid']:
+            cur.execute("UPDATE purchase_orders SET order_journal_uid=? WHERE id=?",
+                        (jrow['uid'], po_id))
+    po = cur.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+    branch_uid = _branch_uid(cur.connection, po['branch_id']) if po['branch_id'] else None
+    _queue_sync_event(cur, 'purchase_order', po['uid'], 'create', {
+        'uid': po['uid'], 'po_number': po['po_number'], 'supplier_id': po['supplier_id'],
+        'branch_uid': branch_uid, 'status': po['status'], 'subtotal': po['subtotal'],
+        'tax_total': po['tax_total'], 'total': po['total'], 'notes': po['notes'],
+        'ordered_at': po['ordered_at'], 'received_at': po['received_at'],
+        'created_at': po['created_at'], 'due_date': po['due_date'],
+        'order_journal_uid': po['order_journal_uid'],
+        'split_group_id': po['split_group_id'], 'split_index': po['split_index'],
+        'split_count': po['split_count'], 'routing_status': po['routing_status'],
+        'routed_channel': po['routed_channel'], 'routed_at': po['routed_at'],
+        'routed_to': po['routed_to'], 'idempotency_key': po['idempotency_key'],
+    })
+    for it in cur.execute("SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY id",
+                          (po_id,)).fetchall():
+        _queue_sync_event(cur, 'purchase_order_item', it['uid'], 'create', {
+            'uid': it['uid'], 'po_uid': po['uid'], 'product_id': it['product_id'],
+            'quantity': it['quantity'], 'unit_cost': it['unit_cost'], 'total': it['total'],
+            'received_qty': it['received_qty'],
+        })
+
+
+def backfill_legacy_purchase_orders(conn):
+    """W4a boot step: announce every purchase order that existed BEFORE v45.
+
+    Schema v45 stamps a uid on every legacy order and sets
+    `sync_backfill_pending=1`; nothing was ever queued for them, so a second
+    computer joining later would never learn them (and a payment event would
+    name an order it has never seen). This queues, per pending order and in ONE
+    transaction each: the order + its lines (`_po_stamp_and_queue_create`), a
+    status `update` when the order is no longer pending, and a `po_link` for
+    every payment that names it, then clears the flag. Running it again emits
+    nothing -- the flag is the once-only latch -- and a failure on one order
+    rolls back just that order, so the next boot retries it.
+
+    The `po_link` is how a pre-v45 PAYMENT (its `create` event carried only the
+    writer's integer `related_id`, never a uid) gets pinned to the right order on
+    the receiver. It is narrowed to payments whose supplier is the order's
+    supplier: `related_id` is a bare per-computer integer, so without that match
+    a payment of ANOTHER supplier that happens to carry the same integer would
+    be linked too. RESIDUAL, recorded not fixed: a different payment of the SAME
+    supplier with the same integer id from a sibling can still mis-link.
+
+    Emitted even on a single-computer shop (harmless; the outbox is how a later
+    second computer learns the history) -- same stance as
+    gl.backfill_legacy_journals. Returns the number of orders announced."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(purchase_orders)").fetchall()}
+    if 'sync_backfill_pending' not in cols or 'uid' not in cols:
+        return 0          # pre-v45 shape: nothing stamped yet, retry next boot
+    done = 0
+    pending = [r[0] for r in conn.execute(
+        "SELECT id FROM purchase_orders WHERE sync_backfill_pending=1 ORDER BY id").fetchall()]
+    for po_id in pending:
+        cur = conn.cursor()
+        try:
+            cur.execute("SAVEPOINT po_backfill")
+            po = cur.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+            _po_stamp_and_queue_create(cur, po_id, None)
+            if po['status'] and po['status'] != 'pending':
+                _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
+                    'uid': po['uid'], 'status': po['status'], 'received_at': po['received_at']})
+            for pay in cur.execute(
+                    "SELECT uid FROM payments WHERE company_id=? AND related_type='po' AND related_id=? "
+                    "AND party_type='supplier' AND party_id IS ? AND uid IS NOT NULL ORDER BY id",
+                    (po['company_id'], po_id, po['supplier_id'])).fetchall():
+                _queue_sync_event(cur, 'payment', pay['uid'], 'po_link',
+                                  {'uid': pay['uid'], 'po_uid': po['uid']})
+            cur.execute("UPDATE purchase_orders SET sync_backfill_pending=0 WHERE id=?", (po_id,))
+            cur.execute("RELEASE SAVEPOINT po_backfill")
+            done += 1
+        except Exception:  # noqa: BLE001 -- one order must not stop the rest, nor the boot
+            log.exception('purchase-order sync backfill failed for PO %s -- will retry next boot', po_id)
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT po_backfill")
+                cur.execute("RELEASE SAVEPOINT po_backfill")
+            except Exception:  # noqa: BLE001
+                pass
+    if done:
+        conn.commit()
+    return done
+
+
 @retail_bp.route('/purchase-orders', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -3881,25 +3997,35 @@ def create_purchase_order():
         # the payment row and the AP credit can never disagree about whether
         # a figure is zero.
         payment_status = 'paid' if amount_paid >= total - _eps else ('partial' if amount_paid > _eps else 'unpaid')
+        # W4a: the order carries its own wire identity (`uid`) from birth, and
+        # so does every line -- a sibling names them by uid, never by this
+        # computer's integer id. `amount_paid`/`payment_status` are inserted at
+        # 0/'unpaid' and DERIVED from the down-payment row below by
+        # recompute_po_paid, the same function every other computer runs, so
+        # the figure is never a stored increment that can drift.
+        po_uid = _new_uid()
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
-                                         amount_paid,payment_status,due_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                                         amount_paid,payment_status,due_date,uid)
+            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid',?,?)
         """, (cid, po_number, supplier_id, branch_id,
               'pending', total, total, data.get('notes',''),
-              datetime.now().strftime('%Y-%m-%d'), amount_paid, payment_status, data.get('due_date')))
+              datetime.now().strftime('%Y-%m-%d'), data.get('due_date'), po_uid))
         po_id = cur.lastrowid
         for item in items:
             line = float(item.get('unit_cost',0)) * float(item.get('quantity',0))
             cur.execute("""
-                INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total)
-                VALUES (?,?,?,?,?)
-            """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line))
+                INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total,uid)
+                VALUES (?,?,?,?,?,?)
+            """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line, _new_uid()))
         # AP ledger: record any down-payment now; push the unpaid balance onto supplier AP.
         if amount_paid > _eps:
             _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
                             method=data.get('method', 'cash'), related_type='po', related_id=po_id,
                             doc_type='supplier_payment', currency=currency)
+        # Derived, not stored-by-hand (see the insert above). Equals the figure
+        # computed from the request, by construction: the one payment row.
+        _, payment_status = po_core.recompute_po_paid(conn, cid, po_id, _eps)
         balance = _money(total - amount_paid, currency)
         if supplier_id:
             # v44: the PO row and its down-payment are written above, so the
@@ -3911,8 +4037,12 @@ def create_purchase_order():
         # own docstring for why (supplier_id is optional here, and a
         # supplier-less unpaid balance is untracked by the subledger too).
         ap_balance_for_gl = balance if (balance > _eps and supplier_id) else 0.0
-        gl.post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
-                                amount_paid, ap_balance_for_gl)
+        order_journal_id = gl.post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
+                                                  amount_paid, ap_balance_for_gl, po_uid=po_uid)
+        # W4a: store the journal's uid on the order and queue order + lines, in
+        # THIS transaction, so the outbox rows and the rows they describe land
+        # or roll back together.
+        _po_stamp_and_queue_create(cur, po_id, order_journal_id)
         _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -3928,7 +4058,7 @@ def create_purchase_order():
         return jsonify({'status': 'error', 'message': 'Could not create this purchase order.'}), 400
     finally:
         conn.close()
-    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py (only queues an event when amount_paid > 0)
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py (W4a: the PO, its lines and any down-payment are queued)
     return jsonify({'status': 'success', 'data': {'id': po_id, 'po_number': po_number, 'payment_status': payment_status}})
 
 @retail_bp.route('/purchase-orders/<int:po_id>', methods=['GET'])
@@ -4092,29 +4222,37 @@ def receive_purchase_order(po_id):
     receipt whenever this device was behind, as the one case that hazard
     was thought to be preventable in.
 
-    RETRACTED (2026-08-29): that premise is false, and the code already
-    said so. `purchase_orders` does not merely fail to sync its `status`
-    column -- the WHOLE TABLE is local-only and never queued to the sync
-    outbox at all (see sync_service.py's module docstring: "`purchase_orders`
-    ... stays local-only and is never pushed through this outbox at all";
-    accept_reorder_request's docstring above says the identical thing for
-    every PO created through this same route). A purchase order therefore
-    exists on exactly ONE device: the one that created it. There is no
-    second device holding a copy of it to double-receive ON, so the
-    cross-device hazard this guard blocked was unreachable -- and blocking
-    it anyway meant a shop whose device was simply behind on sync for
-    something else entirely (a product edit, another sale) could not book
-    in a delivery that had physically arrived. The guard has been removed.
-    `_is_device_behind_on_sync()` itself is untouched and still guards
-    create_sale's stage 7d-iii oversell relaxation, where the hazard IS
-    real -- balances, unlike purchase orders, do sync.
+    RETRACTED (2026-08-29), then SUPERSEDED (W4a, schema v45). That 2026-08-29
+    retraction was right for its day -- `purchase_orders` was local-only, a PO
+    existed on exactly ONE device, so there was no second copy to double-
+    receive on, and blocking receipt whenever this device was behind on sync
+    stopped a shop booking in a delivery that had physically arrived. The
+    stale-device guard stays removed. But since W4a the order DOES sync, so
+    the hazard exists in a different shape: two computers can each receive the
+    same order while offline. The answer is not a "behind on sync" refusal; it
+    is that the receipt cannot count twice:
 
-    The two guards immediately above -- BEGIN IMMEDIATE plus the
-    conditional `status<>'received'` UPDATE -- are the guards that were
-    ever real for THIS route, and they are untouched: they still stop the
-    one race that is actually reachable, a double-clicked Receive button or
-    two requests against the SAME shared database, regardless of this
-    device's sync state.
+      * the movement uid is DETERMINISTIC (po_core.receipt_movement_uid of
+        order uid + line uid), so two computers that each receive mint the
+        SAME uid and the second insert collides on the unique index;
+      * the movement is inserted FIRST with ON CONFLICT(uid) DO NOTHING and
+        the stock/avg-cost updates run only when `rowcount == 1`. When the
+        other computer's identical receipt is already here (its movement
+        arrived by sync, and the sync apply added the stock), this one adds
+        nothing and queues nothing -- stock moves once, everywhere;
+      * a PO that arrived here before its order JOURNAL did (`order_journal_
+        uid` names a journal this computer does not hold) is refused with 409
+        PO_BOOKS_NOT_ARRIVED, because posting the 1260 -> 1200 receipt without
+        the order it moves would book a receipt against nothing.
+
+    `_is_device_behind_on_sync()` itself is untouched and still guards
+    create_sale's stage 7d-iii oversell relaxation.
+
+    BEGIN IMMEDIATE plus the conditional `status NOT IN ('received',
+    'cancelled')` UPDATE still stop the same-database race (a double-clicked
+    Receive button). Two computers receiving offline and then syncing both end
+    up 'received' (the status merge is forward-only, see po_core.
+    PO_STATUS_RANK) with the stock added once.
     """
     cid  = _cid()
     conn = get_retail_conn()
@@ -4135,6 +4273,15 @@ def receive_purchase_order(po_id):
         if po['status'] == 'cancelled':
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be received'}), 409
+        # W4a: this order reached us by sync but the journal it posted has not
+        # (events are applied in batches and a journal can park). Receiving now
+        # would book Dr 1200 / Cr 1260 against an order this computer has never
+        # seen -- refuse, write nothing, and let a later sync make it possible.
+        if po['order_journal_uid'] and gl.po_order_journal_missing(conn, cid, po['order_journal_uid']):
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_BOOKS_NOT_ARRIVED',
+                            'message': "This order's bookkeeping has not reached this computer yet. "
+                                       "Sync, then try again."}), 409
 
         items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
         # `po['branch_id']` is a trusted value from THIS company's own PO row
@@ -4159,6 +4306,36 @@ def receive_purchase_order(po_id):
         currency = _company_currency(conn, cid)
         for item in items:
             qty = item['quantity']
+            # W4a: the receipt's movement is written FIRST, under a uid that is
+            # a pure function of (order uid, line uid) -- the same on every
+            # computer. `ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING`
+            # repeats the partial unique index's predicate exactly as
+            # sync_service.py's inventory_movement apply does (SQLite refuses
+            # the conflict target otherwise). `rowcount == 0` means another
+            # computer's identical receipt has ALREADY put this stock here (its
+            # movement arrived by sync, and the apply added the quantity), so
+            # this receipt must add NOTHING: no balance bump, no avg-cost
+            # blend, no queued event -- the stock moves once, everywhere. Only
+            # the line's `received_qty` is stamped (it is a fact about the
+            # order, true either way). Skipping this gate doubles the stock,
+            # silently, with ledger and balance still agreeing on the doubled
+            # number -- the failure retail_po_sync_routes_test.py R4 pins.
+            #
+            # A line with no uid cannot exist after v45 (every row is stamped);
+            # the fallback keeps a hand-built fixture working but then offers no
+            # cross-computer protection for that line, as before.
+            movement_uid = (po_core.receipt_movement_uid(po['uid'], item['uid'])
+                            if po['uid'] and item['uid'] else _new_uid())
+            ins = cur.execute("""
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'purchase_in',?,?,?,?,?,?,?,?)
+                ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING
+            """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid(),
+                  movement_uid, actor, terminal, utc_now))
+            if ins.rowcount == 0:
+                cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
+                continue
             # Schema v39: maintain `products.avg_cost` as a MOVING WEIGHTED
             # AVERAGE at the moment stock actually arrives -- see database/
             # schema.py's v39 migration docstring for why a weighted average
@@ -4352,13 +4529,9 @@ def receive_purchase_order(po_id):
                 UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?, avg_cost = ?
                 WHERE company_id=? AND product_id=? AND branch_id=?
             """, (qty, branch_new_avg_cost, cid, item['product_id'], bid))
-            movement_uid = _new_uid()
-            cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
-                                                 uid,actor_user_uid,terminal_id,created_at_utc)
-                VALUES (?,?,?,'purchase_in',?,?,?,?,?,?,?,?)
-            """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid(),
-                  movement_uid, actor, terminal, utc_now))
+            # (The movement row itself was inserted at the top of this loop
+            # body -- W4a. Its sync event is queued here, after the balance
+            # it describes has moved, as before.)
             # Wave B: queue the matching sync event -- see create_sale's own
             # inventory_movement emission for the shape every writer shares.
             _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
@@ -4370,9 +4543,10 @@ def receive_purchase_order(po_id):
             })
             cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
 
+        received_on = datetime.now().strftime('%Y-%m-%d')
         cur.execute("UPDATE purchase_orders SET status='received', received_at=? "
                     "WHERE id=? AND company_id=? AND status NOT IN ('received','cancelled')",
-                    (datetime.now().strftime('%Y-%m-%d'), po_id, cid))
+                    (received_on, po_id, cid))
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO already received'}), 409
@@ -4380,7 +4554,18 @@ def receive_purchase_order(po_id):
         # Inventory (1200). Posts nothing for a legacy PO (its order journal
         # already debited 1200) -- see gl.post_po_receipt. Same transaction as
         # the stock movements above, so the books and the shelves cannot part.
-        gl.post_po_receipt(conn, cid, bid, po_id, po['po_number'], currency)
+        # W4a: `order_journal_uid` finds the order journal on a computer whose
+        # copy arrived by sync (its `source_id` is the writer's integer and
+        # names nothing here); the receipt journal's own uid is still derived
+        # from the order's uid, so two computers receiving post it once.
+        gl.post_po_receipt(conn, cid, bid, po_id, po['po_number'], currency,
+                           order_journal_uid=po['order_journal_uid'])
+        # W4a: tell the other computers the order is received. The receiver
+        # merges forward-only (po_core.PO_STATUS_RANK) and never moves stock or
+        # posts books from this event -- the movements and journals sync
+        # themselves. A literal dict, like every other queued payload.
+        _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
+            'uid': po['uid'], 'status': 'received', 'received_at': received_on})
         _audit(conn, 'PO_RECEIVED', 'purchase_order', po_id, po['po_number'])
         conn.commit()
     except sqlite3.DatabaseError as exc:
@@ -4425,7 +4610,8 @@ def cancel_purchase_order(po_id):
     try:
         conn.execute("BEGIN IMMEDIATE")
         cur = conn.cursor()
-        po = cur.execute("SELECT id, status, po_number, notes FROM purchase_orders WHERE id=? AND company_id=?",
+        po = cur.execute("SELECT id, status, po_number, notes, uid, order_journal_uid "
+                         "FROM purchase_orders WHERE id=? AND company_id=?",
                          (po_id, cid)).fetchone()
         if not po:
             conn.rollback()
@@ -4434,6 +4620,15 @@ def cancel_purchase_order(po_id):
             conn.rollback()
             return jsonify({'status': 'error',
                             'message': f"Cannot cancel a purchase order that is {po['status']}."}), 409
+        # W4a: same guard as receive -- an order that reached this computer
+        # before its journal did cannot be reversed here (there is nothing yet
+        # to reverse), and cancelling without reversing would strand 1260 and
+        # the supplier's debt. Refuse and write nothing.
+        if po['order_journal_uid'] and gl.po_order_journal_missing(conn, cid, po['order_journal_uid']):
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_BOOKS_NOT_ARRIVED',
+                            'message': "This order's bookkeeping has not reached this computer yet. "
+                                       "Sync, then try again."}), 409
         paid = cur.execute(
             "SELECT COUNT(*) FROM payments WHERE company_id=? AND related_type='po' AND related_id=? "
             "AND COALESCE(status,'active')='active'", (cid, po_id)).fetchone()[0]
@@ -4446,9 +4641,16 @@ def cancel_purchase_order(po_id):
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO already received or cancelled'}), 409
-        order = gl.po_order_journal(conn, cid, po_id)
+        # W4a: found by uid when the order names one (works on a computer whose
+        # copy of the journal arrived by sync, `source_id` NULL there), by the
+        # old source_id lookup for a legacy order.
+        order = gl.po_order_journal(conn, cid, po_id, order_journal_uid=po['order_journal_uid'])
         if order:
             gl.reverse_journal(conn, cid, order['id'], memo=f"Purchase order {po['po_number']} cancelled")
+        # W4a: tell the other computers (merged forward-only; `received` beats
+        # `cancelled` there, see po_core.PO_STATUS_RANK). Literal dict.
+        _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
+            'uid': po['uid'], 'status': 'cancelled', 'received_at': None})
         currency = _company_currency(conn, cid)
         sup = cur.execute("SELECT supplier_id FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
         if sup and sup['supplier_id']:
@@ -5444,18 +5646,19 @@ def list_reorder_requests():
 @require_license_capability("retail.reorder.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_STOCK_ADJUST)
 def accept_reorder_request(rid):
-    """Accepts a pending reorder request: creates a purchase_order LOCALLY
-    ONLY -- deliberately never queued to sync_outbox. See
-    database/schema.py's _migrate_add_reorder_automation_foundation
-    docstring for exactly why: purchase_orders.id is still INTEGER
-    AUTOINCREMENT, and Owner's relay (owner/app/sync/routes.py) 400-rejects
-    the WHOLE push batch on the first non-UUID entity_id it sees -- syncing
-    this PO would permanently jam every other entity's sync behind it. Only
-    the reorder_requests status change itself is synced below -- that row's
-    id IS a real client-generated UUID, so it safely crosses devices; the PO
-    it spawns stays this device's own local procurement record, exactly
-    like every PO created through the ordinary /purchase-orders route
-    today (which was never synced either -- this doesn't regress anything).
+    """Accepts a pending reorder request: drafts a purchase_order and queues
+    it for sync, exactly like POST /purchase-orders does.
+
+    W4a (schema v45): this used to say the PO was "deliberately never queued"
+    because `purchase_orders.id` is a per-computer INTEGER AUTOINCREMENT and
+    Owner's relay 400-rejects the WHOLE push batch on the first non-UUID
+    entity_id (see database/schema.py's _migrate_add_reorder_automation_
+    foundation). That reason is gone: v45 gives the order (and each line) a
+    real `uid`, and the wire identity is the uid, never the integer id. So a
+    reorder-drafted PO now crosses computers like any other and a sibling can
+    receive or cancel it. The same events as create_purchase_order are queued,
+    through the same helper (`_po_stamp_and_queue_create`), so the two mint
+    sites cannot drift.
     """
     cid = _cid()
     conn = get_retail_conn()
@@ -5547,20 +5750,21 @@ def accept_reorder_request(rid):
             po_number = doc_series.allocate(conn, _po_series)
         else:
             po_number = _mint_legacy_doc_number(conn, cid, 'po')
+        po_uid = _new_uid()   # W4a: wire identity from birth (see this route's docstring)
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,
-                                         ordered_at,amount_paid,payment_status)
-            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid')
+                                         ordered_at,amount_paid,payment_status,uid)
+            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid',?)
         """, (cid, po_number, supplier_id, branch_id, 'pending', total, total,
               f'{_REORDER_PO_NOTE_PREFIX}{rid}',
-              datetime.now().strftime('%Y-%m-%d')))
+              datetime.now().strftime('%Y-%m-%d'), po_uid))
         po_id = cur.lastrowid
         cur.execute("""
-            INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total)
-            VALUES (?,?,?,?,?)
-        """, (po_id, product['id'], qty, unit_cost, total))
-        # Deliberately NOT _queue_sync_event(...) for this PO -- see this
-        # route's own docstring above.
+            INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total,uid)
+            VALUES (?,?,?,?,?,?)
+        """, (po_id, product['id'], qty, unit_cost, total, _new_uid()))
+        # Queued below, once the order journal exists and its uid can ride along
+        # (`_po_stamp_and_queue_create`) -- same transaction as these rows.
 
         # v44 F1 (verifier finding): this PO is a purchase_orders row, and
         # v44's supplier formula counts EVERY purchase_orders.total > eps as
@@ -5577,8 +5781,10 @@ def accept_reorder_request(rid):
         _po_eps = _money_epsilon(_po_currency)
         if supplier_id:
             _refresh_party_balance(conn, 'suppliers', supplier_id, cid, _po_currency)
-        gl.post_purchase_order(conn, cid, branch_id, po_id, po_number, _po_currency,
-                               0.0, total if (total > _po_eps and supplier_id) else 0.0)
+        _order_journal_id = gl.post_purchase_order(
+            conn, cid, branch_id, po_id, po_number, _po_currency,
+            0.0, total if (total > _po_eps and supplier_id) else 0.0, po_uid=po_uid)
+        _po_stamp_and_queue_create(cur, po_id, _order_journal_id)
 
         now = datetime.now(timezone.utc).isoformat()
         # launch-readiness Phase 6 stage 6a-i: `status`/`resolved_at` are
@@ -5625,7 +5831,7 @@ def accept_reorder_request(rid):
 def decline_reorder_request(rid):
     """Declines a pending reorder request -- marks it declined and queues
     the sync event. Creates nothing else; unlike accept, there is no
-    purchase_order to (deliberately not) sync here."""
+    purchase_order to queue here (W4a: accept now queues its PO)."""
     cid = _cid()
     conn = get_retail_conn()
     try:
@@ -13674,6 +13880,20 @@ def _ensure_credit_schema(conn):
     addcol('returns', 'ar_forgiven_amount', "REAL DEFAULT 0")
     addcol('returns', 'store_credit_amount', "REAL DEFAULT 0")
     conn.commit()
+    # W4a BOOT STEP: announce purchase orders that pre-date v45 (the migration
+    # only flags them `sync_backfill_pending=1`; queuing needs this module's
+    # payload code, and database/schema.py cannot import api/). This function
+    # is the one place that already runs at every boot (app.py's
+    # `_ensure_runtime_schema_for_sync`, before any sync service starts) and
+    # again from the first request, gated by the process flag below. NOT
+    # version-gated on purpose, same reasoning as gl.backfill_legacy_journals:
+    # it must be safe to retry on every boot, and the per-order flag makes a
+    # re-run emit nothing. A failure is logged, never raised -- it must not
+    # stop the shop opening; the flag stays set so the next boot retries.
+    try:
+        backfill_legacy_purchase_orders(conn)
+    except Exception:  # noqa: BLE001
+        log.exception('purchase-order sync backfill failed this boot -- will retry next boot')
     _CREDIT_SCHEMA_READY = True
 
 def _settings(conn, cid):
@@ -13842,10 +14062,20 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     if related_type == 'sale' and related_id:
         row = conn.execute("SELECT uid FROM sales WHERE id=? AND company_id=?", (related_id, cid)).fetchone()
         sale_uid = row['uid'] if row else None
+    # W4a: a PO payment's `related_id` is THIS computer's integer PO id, which
+    # on a sibling names an UNRELATED order (or none). The wire name for the
+    # order is its uid; the receiver resolves it to its own id and recomputes
+    # that order's paid figure. None for every non-PO payment.
+    po_uid = None
+    if related_type == 'po' and related_id:
+        row = conn.execute("SELECT uid FROM purchase_orders WHERE id=? AND company_id=?",
+                           (related_id, cid)).fetchone()
+        po_uid = row['uid'] if row else None
     _queue_sync_event(conn, 'payment', pay_uid, 'create', {
         'uid': pay_uid, 'reference': ref, 'party_type': party_type, 'party_id': party_id,
         'direction': direction, 'amount': amt, 'currency': cur, 'method': method,
         'related_type': related_type, 'related_id': related_id, 'sale_uid': sale_uid,
+        'po_uid': po_uid,
         'notes': notes, 'status': 'active', 'created_by': created_by, 'device': device,
         'created_at': created_at,
     })
@@ -18213,17 +18443,16 @@ def pay_purchase_order(po_id):
     if po['status'] == 'cancelled':
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
     try:
-        new_paid = _money(po['amount_paid'] + amt, currency)
-        # The SAME epsilon create_purchase_order sets this column with -- the
-        # two writers of `payment_status` must agree on when a PO is settled,
-        # or an instalment route calls 'paid' what the create route would
-        # have called 'partial'. A hardcoded 0.005 here called a JOD PO with
-        # five fils outstanding fully paid.
-        status = 'paid' if new_paid >= _money(po['total'], currency) - _money_epsilon(currency) else 'partial'
+        # STOCK-BOOKS verify F5, kept: the status guard is still a WRITE under
+        # the lock, with its rowcount checked, ahead of the money moving. It
+        # used to be the `amount_paid` increment itself; that increment is gone
+        # (W4a, below), so the guard is now a status-conditional no-op write
+        # that fails closed if the order is not payable. Statement shape is
+        # pinned by retail_stock_books_routes_test.py::test_f5_pay_checks_*.
         _paid_upd = conn.execute(
-            "UPDATE purchase_orders SET amount_paid=?, payment_status=? "
+            "UPDATE purchase_orders SET payment_status=payment_status "
             "WHERE id=? AND company_id=? AND COALESCE(status,'') <> 'cancelled'",
-            (new_paid, status, po_id, cid))
+            (po_id, cid))
         if _paid_upd.rowcount != 1:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
@@ -18232,6 +18461,20 @@ def pay_purchase_order(po_id):
                               related_type='po', related_id=po_id, notes=data.get('notes', ''),
                               device=data.get('device'), doc_type='supplier_payment', currency=currency,
                               pay_uid=pay_uid)
+        # W4a: `amount_paid`/`payment_status` are DERIVED from the active
+        # payments that name this order, never `amount_paid + amt`. The stored
+        # increment was right only on the computer that took the instalment: a
+        # void never corrected it (void_payment's old "stays stale" admission),
+        # and an instalment synced from a sibling never ran it, so each computer
+        # showed a different figure. Recomputing after the payment row exists
+        # gives every computer the same answer from the same rows. The status
+        # uses the SAME epsilon create_purchase_order does (half a fil on JOD);
+        # a hardcoded 0.005 once called a JOD PO with five fils outstanding paid.
+        # The cancelled check is the one read under BEGIN IMMEDIATE above, which
+        # holds the write lock until commit, so no cancel can land in between.
+        # NOTHING is queued for the PO header: the figure is derived on every
+        # computer from the synced payment rows.
+        new_paid, status = po_core.recompute_po_paid(conn, cid, po_id, _money_epsilon(currency))
         if po['supplier_id']:
             # v44: re-derived (the instalment is a 'po' payment row, which
             # the supplier formula counts), not moved by -amt.
@@ -20210,6 +20453,18 @@ def void_payment(pid):
             # The books half (see _reverse_payment_journal): gated on the very
             # branch that moved the subledger, so the two cannot diverge again.
             _reverse_payment_journal(conn, cid, p)
+        # W4a: a voided PO payment must bring the order's paid figure back
+        # down. `purchase_orders.amount_paid` used to be a stored increment
+        # (pay_purchase_order) that this route never touched, so a void left the
+        # order reading paid while the supplier's balance (derived from active
+        # payments) had grown back -- two screens, two answers. It is now
+        # DERIVED from the active payments naming the order, and the row was
+        # marked voided above, so recomputing in this same transaction fixes it.
+        # (The synced void on a sibling recomputes in the apply; see
+        # sync_service.py's payment branch.)
+        if p['related_type'] == 'po' and p['related_id']:
+            po_core.recompute_po_paid(conn, cid, p['related_id'],
+                                      _money_epsilon(_company_currency(conn, cid)))
         # F3b: the payment is 'voided' now; complete any pair whose journal
         # is here but unreversed (idempotent -- a no-op when the line above
         # already did the work).
@@ -20516,6 +20771,11 @@ def _require_confirmation(expected_prefix, cid):
 # scoped only through their parent row's company_id (sale_id/return_id/
 # po_id FK) -- so they must be deleted via a subquery against the parent,
 # not a direct `WHERE company_id=?` (that would raise "no such column").
+#
+# W4a: purchase orders now sync, so a demo wipe deletes THIS computer's copy
+# only and queues no delete event -- exactly like every other table in this
+# tuple (sales, products, payments ... all of which sync and none of which
+# emit a wipe tombstone). A sibling keeps its copies until it is wiped too.
 _WIPE_STATEMENTS = (
     ('return_items', 'DELETE FROM return_items WHERE return_id IN (SELECT id FROM returns WHERE company_id=?)'),
     ('returns', 'DELETE FROM returns WHERE company_id=?'),

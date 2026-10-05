@@ -183,10 +183,11 @@ def _post_once(conn, cid, uid, branch_id, business_date, source_type, source_id,
 #: JOURNAL's own `uid`, not a row in either table below) -- see
 #: `_derive_source_uid`. Every other source type (`customer_payment`,
 #: `supplier_payment`, `po_payment`, `purchase_order`, `opening_balance`)
-#: has no cross-device row identity to point at yet (purchase orders are
-#: still INTEGER-id-only as of Wave 1 -- see BOOKS-WAVE1-PLAN.md section 3,
-#: W4a) and gets `source_uid = NULL`, which is exactly what BOOKS-WAVE1-
-#: PLAN.md section 2.2's "source_id" row states ("Otherwise NULL").
+#: has no cross-device row identity to point at yet and gets `source_uid =
+#: NULL`, which is exactly what BOOKS-WAVE1-PLAN.md section 2.2's "source_id"
+#: row states ("Otherwise NULL"). W4a: `purchase_order` now HAS a uid but is
+#: still not in this map -- `post_purchase_order` is handed it explicitly
+#: (`po_uid=`), one mechanism instead of two.
 _SOURCE_UID_TABLES = {'sale': 'sales', 'return': 'returns'}
 
 # ── Chart of accounts -- codes, referenced by both retail_api.py call sites
@@ -1983,7 +1984,8 @@ def post_supplier_payment(conn, cid, branch_id, reference, currency, amount,
 
 
 def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
-                         amount_paid, ap_balance, business_date=None, posted_by=None):
+                         amount_paid, ap_balance, business_date=None, posted_by=None,
+                         po_uid=None):
     """Dr Goods Ordered Not Received (1260) against Cr Cash (any down
     payment) + Cr Accounts Payable (whatever remains).
 
@@ -1993,7 +1995,8 @@ def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
     now lands on 1260; `post_po_receipt` moves it to 1200 when the goods
     are actually received. INTERIM, stated plainly: Accounts Payable is
     still recognised at ORDER time (the v44 supplier subledger counts the PO
-    total at order) -- moving AP to receipt time belongs with W4a. A PO
+    total at order) -- moving AP to receipt time is NOT part of W4a (W4a only
+    gave the order a uid, so `source_uid` is now set for POs). A PO
     posted before this wave keeps its old Dr 1200 journal untouched
     (`po_order_journal` reports which account it debited).
 
@@ -2018,6 +2021,15 @@ def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
     PO simply books the goods at what was actually accounted for, which is
     the honest figure rather than a total the shop's own books cannot
     currently explain either.
+
+    `po_uid` (W4a): the order's own `uid`, stamped as this journal's
+    `source_uid` so the journal names the order across computers. Passed
+    EXPLICITLY rather than derived through `_SOURCE_UID_TABLES` ('purchase_
+    order' is deliberately not in that map): the caller already holds the uid,
+    and one mechanism is enough -- a second, implicit lookup by `source_id`
+    would only matter if the PO row were inserted after its journal. The
+    journal's own uid is read back by the caller (`SELECT uid FROM gl_journals
+    WHERE id=?`) and stored on the order as `order_journal_uid`.
     """
     accounted = Decimal(str(amount_paid or 0)) + Decimal(str(ap_balance or 0))
     if accounted <= 0:
@@ -2034,7 +2046,8 @@ def post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
                        'memo': 'Balance owed to supplier'})
     return post_journal(conn, cid, branch_id, business_date or _today(),
                          'purchase_order', po_id, currency, lines,
-                         reference=po_number, posted_by=posted_by)
+                         reference=po_number, posted_by=posted_by,
+                         source_uid=po_uid)
 
 
 def post_cogs(conn, cid, branch_id, source_type, source_id, reference, currency,
@@ -2124,23 +2137,52 @@ def _stock_amount(qty, unit_cost, currency):
     return quantize_money(abs(Decimal(str(qty or 0))) * Decimal(str(unit_cost or 0)), currency)
 
 
-def po_order_journal(conn, cid, po_id):
+def po_order_journal_missing(conn, cid, order_journal_uid):
+    """W4a: True when the order says it posted a journal (`order_journal_uid`
+    is given) but NO journal with that uid is on THIS computer yet -- the
+    order has synced here and its bookkeeping has not. The caller turns that
+    into a 409 ("sync, then try again") instead of receiving/cancelling an
+    order whose books it cannot move: a receipt would silently post nothing and
+    leave 1260 stuck. A PO with no `order_journal_uid` (posted at zero, or
+    before the books) is never "missing" one."""
+    if not order_journal_uid:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM gl_journals WHERE company_id=? AND uid=?",
+        (cid, order_journal_uid)
+    ).fetchone()
+    return row is None
+
+
+def po_order_journal(conn, cid, po_id, order_journal_uid=None):
     """The ORDER journal of purchase order `po_id` on THIS computer, or None:
     {'id', 'uid', 'debit_code', 'debit_amount'} where `debit_code` is the
     account its (single) debit line hit -- '1260' for an order posted by this
     wave, '1200' for a legacy PO posted before it -- and `debit_amount` is
     that line's amount as a Decimal.
 
-    Looked up by `source_type='purchase_order' AND source_id=po_id`: safe
-    because POs are local to the computer that wrote them, and a synced
-    journal arrives with `source_id` NULL so it can never match a local PO
-    id. Reversal journals have their own `source_type`, so the first row is
-    always the original; the earliest id wins if a PO somehow has several."""
-    row = conn.execute(
-        "SELECT id, uid FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
-        "AND source_id=? AND reversed_journal_id IS NULL ORDER BY id LIMIT 1",
-        (cid, po_id)
-    ).fetchone()
+    W4a: when `order_journal_uid` is given the journal is found BY THAT UID
+    (`company_id=? AND uid=?`). A purchase order now exists on every computer,
+    but the journal that arrives from a sibling has `source_id` NULL -- its
+    integer id means nothing here -- so the integer lookup below can only ever
+    find a journal THIS computer posted. The uid works on both.
+
+    Without a uid: looked up by `source_type='purchase_order' AND
+    source_id=po_id` (a legacy order, or the computer that wrote it). Reversal
+    journals have their own `source_type`, so the first row is always the
+    original; the earliest id wins if a PO somehow has several."""
+    if order_journal_uid:
+        row = conn.execute(
+            "SELECT id, uid FROM gl_journals WHERE company_id=? AND uid=? "
+            "AND source_type='purchase_order' AND reversed_journal_id IS NULL",
+            (cid, order_journal_uid)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id, uid FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
+            "AND source_id=? AND reversed_journal_id IS NULL ORDER BY id LIMIT 1",
+            (cid, po_id)
+        ).fetchone()
     if not row:
         return None
     debit = conn.execute(
@@ -2155,7 +2197,8 @@ def po_order_journal(conn, cid, po_id):
             'debit_amount': Decimal(str(debit['debit']))}
 
 
-def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=None):
+def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=None,
+                    order_journal_uid=None):
     """Goods ordered have arrived: Dr Inventory (1200) / Cr Goods Ordered Not
     Received (1260), for the ORDER journal's own 1260 debit (NOT qty x cost:
     a supplier-less, partly paid PO booked only the accounted part, and the
@@ -2164,8 +2207,13 @@ def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=
     Posts NOTHING (returns None) for a legacy PO (its order journal already
     debited Inventory directly -- booking again would count the stock twice)
     and for a PO with no order journal at all. Once-only on a uid derived from
-    the ORDER journal's uid (never the PO's per-computer integer id)."""
-    order = po_order_journal(conn, cid, po_id)
+    the ORDER journal's uid (never the PO's per-computer integer id), which is
+    why two computers receiving the same order post ONE receipt journal.
+
+    `order_journal_uid` (W4a): find the order journal by uid, so a computer
+    that holds only the SYNCED order journal (source_id NULL) can still book
+    the receipt. See `po_order_journal`."""
+    order = po_order_journal(conn, cid, po_id, order_journal_uid=order_journal_uid)
     if not order or order['debit_code'] != ACCOUNT_GOODS_ORDERED or not order['uid']:
         return None
     amount = order['debit_amount']

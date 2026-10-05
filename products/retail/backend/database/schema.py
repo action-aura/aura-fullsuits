@@ -1177,7 +1177,36 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # `customers.credit_balance` / `suppliers.credit_balance` stay as a display
 # CACHE refreshed from the derivation; every money decision derives. See
 # `_migrate_add_party_balance_ledger` for the capture rules.
-RETAIL_SCHEMA_VERSION = 44
+#
+# v45 (2026-10-06, W4a -- PURCHASE ORDERS SHARED BETWEEN COMPUTERS; claimed in
+# ROADMAP.md "retail schema v45 CLAIMED"). A purchase order was a per-computer
+# integer row nothing queued: a sibling could not see, receive or cancel it, a
+# sibling's instalment carried `related_id=<writer's integer>` and landed on an
+# UNRELATED local order, `amount_paid` was a stored increment a void never
+# corrected, and two computers receiving one order would each add the stock.
+# Columns only (plus indexes), no data rewrite of any money figure:
+#
+#   * `purchase_orders.uid` / `purchase_order_items.uid` -- the wire identity,
+#     backfilled with uuid4 for every legacy row, UNIQUE partial index
+#     (`idx_<table>_uid`, the v13 shape via `_ensure_unique_uid_index`).
+#   * `purchase_orders.order_journal_uid` -- the uid of the books journal the
+#     order posted ('purchase_order', not a reversal), so a computer that only
+#     holds the SYNCED journal (source_id NULL) can still reverse/receive it.
+#   * `purchase_orders.sync_backfill_pending` -- 1 on exactly the rows that
+#     existed at upgrade: the boot step (retail_api) announces each one to the
+#     outbox once, then clears the flag. Rows written by v45 code stay 0.
+#   * `amount_paid` / `payment_status` / `due_date` -- until now added lazily
+#     by retail_api._ensure_credit_schema; added here too (shape-gated) so the
+#     sync apply and the recompute never depend on a request having run first.
+#     `amount_paid`/`payment_status` become DERIVED figures
+#     (core/retail/purchase_orders.recompute_po_paid), never synced columns.
+#   * `idx_poi_po` -- order lines are always read by their order.
+#
+# Appended LAST and shape-gated, so a replay of the whole chain is a no-op.
+# The fresh-install DDL deliberately does NOT carry these columns: like v13's
+# `uid` on sales and v41's `gl_journals.uid`, a brand-new database reaches the
+# shape by running this chain. See `_migrate_add_purchase_order_sync`.
+RETAIL_SCHEMA_VERSION = 45
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2330,6 +2359,93 @@ def _migrate_retail_schema(conn):
     # later chain replay can never mint a carry from a cache that has merely
     # drifted. See the RETAIL_SCHEMA_VERSION v44 comment above.
     _migrate_add_party_balance_ledger(conn)
+    # v44 -> v45 (purchase orders shared between computers, W4a): appended LAST.
+    # It stamps `uid` on legacy orders and reads `gl_journals.uid` (added by
+    # v41), so it must run after every step above. See the v45 comment on
+    # RETAIL_SCHEMA_VERSION.
+    _migrate_add_purchase_order_sync(conn)
+
+
+def _migrate_add_purchase_order_sync(conn):
+    """One-time migration (schema v44 -> v45). See the v45 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Every step is shape-gated (`PRAGMA table_info`, `IF NOT EXISTS`), so the
+    whole chain replaying -- the normal case after a failed launch, since
+    `ensure_schema_version` leaves `user_version` un-advanced -- is a no-op.
+    Returns early when `purchase_orders` does not exist (a hand-built minimal
+    fixture, same hazard `_migrate_add_shift_cash_drawer` guards for).
+
+    THE BACKFILL IS `uid IS NULL` ONLY, and it sets `sync_backfill_pending=1`
+    in the SAME statement as the uid. Both facts matter: backfilling every row
+    would reissue every uid on each replay (a sibling would then know the order
+    by a different identity each boot), and stamping pending in a separate step
+    could re-arm a flag the boot backfill had already cleared. A row that
+    already has a uid was written by v45 code (the writer stamped it) and is
+    never pending.
+
+    `order_journal_uid` is the uid of the EARLIEST non-reversal
+    `purchase_order` journal whose `source_id` is the order's local id -- the
+    same lookup `general_ledger.po_order_journal` has always done by integer.
+    A PO with no journal (posted at zero, or before the books existed) keeps
+    NULL, and a database whose `gl_journals` has no `uid` column yet skips the
+    step silently (the next launch, after v41, fills it)."""
+    import uuid as _uuid
+
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'purchase_orders' not in live:
+        return
+
+    def _columns(table):
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+    po_cols = _columns('purchase_orders')
+    for column, decl in (
+        ('amount_paid', 'REAL DEFAULT 0'),
+        ('payment_status', "TEXT DEFAULT 'unpaid'"),
+        ('due_date', 'TEXT'),
+        ('uid', 'TEXT'),
+        ('order_journal_uid', 'TEXT'),
+        ('sync_backfill_pending', 'INTEGER DEFAULT 0'),
+    ):
+        if column not in po_cols:
+            conn.execute(f'ALTER TABLE purchase_orders ADD COLUMN {column} {decl}')
+
+    tables = ['purchase_orders']
+    if 'purchase_order_items' in live:
+        if 'uid' not in _columns('purchase_order_items'):
+            conn.execute('ALTER TABLE purchase_order_items ADD COLUMN uid TEXT')
+        tables.append('purchase_order_items')
+
+    for table in tables:
+        # Pending only where this very statement mints the uid (see docstring).
+        pending_sql = ', sync_backfill_pending=1' if table == 'purchase_orders' else ''
+        while True:
+            todo = conn.execute(
+                f'SELECT rowid FROM "{table}" WHERE uid IS NULL OR TRIM(uid) = \'\' '
+                f'LIMIT {_UID_BACKFILL_CHUNK}'
+            ).fetchall()
+            if not todo:
+                break
+            conn.executemany(
+                f'UPDATE "{table}" SET uid=?{pending_sql} WHERE rowid=?',
+                [(str(_uuid.uuid4()), row[0]) for row in todo],
+            )
+        _ensure_unique_uid_index(conn, table)
+
+    if 'purchase_order_items' in live:
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_poi_po ON purchase_order_items(po_id)')
+
+    if 'gl_journals' in live and 'uid' in _columns('gl_journals'):
+        conn.execute(
+            "UPDATE purchase_orders SET order_journal_uid = ("
+            "  SELECT j.uid FROM gl_journals j "
+            "   WHERE j.company_id = purchase_orders.company_id "
+            "     AND j.source_type = 'purchase_order' AND j.source_id = purchase_orders.id "
+            "     AND j.reversed_journal_id IS NULL AND j.uid IS NOT NULL "
+            "   ORDER BY j.id LIMIT 1) "
+            "WHERE order_journal_uid IS NULL")
 
 
 def _single_computer_shop(conn, company_id):

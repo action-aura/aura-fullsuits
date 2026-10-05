@@ -165,8 +165,11 @@ def test_single_computer_upgrade_carries_the_difference_once_and_keeps_every_bal
     ids = _make_v43(db)
     backup_dir = _migrate(sch, db)
 
-    assert sch.RETAIL_SCHEMA_VERSION == 44
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 44
+    # v45 UPDATE: head moved to 45 (W4a purchase-order sync); this file still
+    # proves v44's own capture, and the head tripwire moved to
+    # retail_v45_po_sync_migration_test.py.
+    assert sch.RETAIL_SCHEMA_VERSION == 45
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 45
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
 

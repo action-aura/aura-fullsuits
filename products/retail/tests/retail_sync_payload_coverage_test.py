@@ -868,6 +868,11 @@ TRACKED_TABLES = {
     # v44: the one entity that carries a single-computer shop's balance across
     # the switch to derived balances; emitted by core/retail/party_balance.py.
     'party_balance_adjustments': [('party_balance_adjustment', 'create')],
+    # W4a (schema v45): purchase orders now travel between computers -- the
+    # header's `create` and each line's `create`. The later header `update`
+    # ({uid, status, received_at}) is a status merge, not a full-row baseline.
+    'purchase_orders': [('purchase_order', 'create')],
+    'purchase_order_items': [('purchase_order_item', 'create')],
 }
 
 MIN_REASON_LEN = 40
@@ -1187,6 +1192,45 @@ EXCLUSIONS = {
                       "off the incoming payload, identical to every other "
                       "synced entity in this file.",
     },
+    # W4a (schema v45): purchase orders shared between computers. Every reason
+    # below was checked against the sync apply branch and the writers, not
+    # guessed.
+    'purchase_orders': {
+        'id': "Local SQLite autoincrement primary key; a purchase order's real "
+              "cross-device identity is its `uid` (already in the payload), so "
+              "the sender's own integer id is meaningless on a receiving "
+              "computer -- that is the exact bug W4a fixes for the payments "
+              "that used to point at it.",
+        'company_id': "Tenant-isolation key; sync_service.py's purchase_order "
+                      "apply branch INSERTs the receiver's own "
+                      "local_company_id, never a value read off the incoming "
+                      "payload, identical to every other synced entity here.",
+        'branch_id': "A per-computer integer branches.id; the payload carries "
+                     "`branch_uid` instead and the apply branch resolves it to "
+                     "THIS computer's own branch through _resolve_branch_id, "
+                     "exactly like sales and returns do.",
+        'amount_paid': "DERIVED, never shipped: every computer recomputes it "
+                       "from the synced payments (recompute_po_paid on the "
+                       "writer, the apply branch's twin on a receiver), so a "
+                       "shipped copy could only disagree after a void and "
+                       "would reintroduce the stored-increment drift W4a removes.",
+        'payment_status': "DERIVED from amount_paid and total by the same "
+                          "recompute on every computer; shipping it would let "
+                          "two computers hold two stories about one order.",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v45 "
+                                 "order whose create event this computer still "
+                                 "owes the outbox. Meaningless to a peer, and "
+                                 "a receiver must keep it 0 or it would "
+                                 "re-queue what it just pulled.",
+    },
+    'purchase_order_items': {
+        'id': "Local SQLite autoincrement primary key; a line's cross-device "
+              "identity is its `uid`, which the payload already carries.",
+        'po_id': "A local autoincrement foreign key into this computer's own "
+                 "purchase_orders.id; the payload carries `po_uid` instead "
+                 "and the apply branch resolves the real parent by looking "
+                 "up purchase_orders.uid, as sale_items does with sale_uid.",
+    },
 }
 
 
@@ -1332,6 +1376,14 @@ def test_reorder_requests_outbox_payload_covers_every_column():
 
 def test_party_balance_adjustments_outbox_payload_covers_every_column():
     _assert_full_coverage('party_balance_adjustments')
+
+
+def test_purchase_orders_outbox_payload_covers_every_column():
+    _assert_full_coverage('purchase_orders')
+
+
+def test_purchase_order_items_outbox_payload_covers_every_column():
+    _assert_full_coverage('purchase_order_items')
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────

@@ -65,6 +65,10 @@ def effective_unit_cost(conn, cid, product_id, branch_id, currency=None):
     return Decimal('0')
 
 
+def _has_column(conn, table, column):
+    return any(row[1] == column for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall())
+
+
 def unbooked_movement_count(conn, cid):
     """How many stock movements of this company the books have never seen
     (see the module docstring's "UNBOOKED"). Two groups:
@@ -94,19 +98,35 @@ def unbooked_movement_count(conn, cid):
     # journal whose source_id is that PO's local id counts; only when no such
     # PO exists here (the receipt itself came from a sibling) is the text
     # match against the synced journal the only possible link.
+    #
+    # W4a: purchase orders now sync, so a PO with that number usually DOES exist
+    # on every computer, and a SYNCED order/receipt journal (source_id NULL)
+    # can no longer be linked by integer id. When the PO carries
+    # `order_journal_uid`, that uid is the cross-computer link: the order
+    # journal IS that uid, and the receipt journal's `source_uid` is that uid.
+    # The F6 intent is kept -- the link is still through THE PO, never through
+    # the number text alone, so two different "PO-0001"s cannot book each other.
+    # The legacy source_id link stays for orders with no uid link (written
+    # before v45, or posted at zero). A database without the column (hand-built
+    # fixture) falls back to the pre-W4a SQL exactly.
+    uid_link = (
+        "OR (p.order_journal_uid IS NOT NULL "
+        "    AND (j.uid=p.order_journal_uid OR j.source_uid=p.order_journal_uid)) "
+        if _has_column(conn, 'purchase_orders', 'order_journal_uid') else "")
     purchased = conn.execute(
         "SELECT COUNT(*) FROM inventory_movements m "
         "WHERE m.company_id=? AND m.movement_type='purchase_in' "
         "AND NOT ( "
         "  EXISTS (SELECT 1 FROM purchase_orders p JOIN gl_journals j "
-        "            ON j.company_id=p.company_id AND j.source_id=p.id AND j.source_type IN (%(js)s) "
+        "            ON j.company_id=p.company_id AND j.source_type IN (%(js)s) "
+        "           AND (j.source_id=p.id %(uid_link)s) "
         "           WHERE p.company_id=m.company_id AND p.po_number=m.reference) "
         "  OR (NOT EXISTS (SELECT 1 FROM purchase_orders p2 "
         "                   WHERE p2.company_id=m.company_id AND p2.po_number=m.reference) "
         "      AND EXISTS (SELECT 1 FROM gl_journals j2 "
         "                   WHERE j2.company_id=m.company_id AND j2.reference=m.reference "
         "                     AND j2.source_type IN (%(js)s))) "
-        ")" % {'js': ','.join('?' * len(_PURCHASE_JOURNALS))},
+        ")" % {'js': ','.join('?' * len(_PURCHASE_JOURNALS)), 'uid_link': uid_link},
         (cid, *_PURCHASE_JOURNALS, *_PURCHASE_JOURNALS)
     ).fetchone()[0]
     return int(moved) + int(purchased)

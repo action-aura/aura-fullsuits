@@ -676,6 +676,22 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # `_ENTITY_TYPES_WITHOUT_COMPANY_ID`. A v43 peer does not know the type and
     # parks it via the unknown-type schema-skew gate (`schema_version_too_new`).
     "party_balance_adjustment",
+    # Schema v45 (W4a) -- purchase orders shared between computers. Two types:
+    # "purchase_order" (the header: a `create`, then `update`s that only ever
+    # carry {uid, status, received_at}) and "purchase_order_item" (one
+    # create-only line, keyed on its own uid, parent named by `po_uid`).
+    # Before W4a a PO lived only on the computer that typed it, so a sibling
+    # could not see, receive or cancel it, and a sibling's instalment pointed
+    # at an UNRELATED local PO through the writer's integer id. The header
+    # needs `company_id` (the receiver stamps ITS OWN), so it is NOT in
+    # `_ENTITY_TYPES_WITHOUT_COMPANY_ID`; the line is (parent by uid, no
+    # company column). A v44 peer does not know either type and parks them via
+    # the same unknown-type schema-skew gate (`schema_version_too_new`) as the
+    # v41/v42/v44 types above -- never eats them. Also new on the wire, under
+    # the existing "payment" type: a `po_uid` key on `create`, and a
+    # `po_link` event_type that attaches a pre-v45 payment to its PO.
+    "purchase_order",
+    "purchase_order_item",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -744,7 +760,19 @@ _DEVICE_LOCAL_SETTING_PREFIXES = ("numbering_till:",)
 #: `SyncService` wired with no `local_company_id_provider` at all would
 #: raise for no reason on a batch of only cheque_events if this entry were
 #: missing.
-_ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset({"sale_item", "return_item", "cheque_event"})
+#: "purchase_order_item" (W4a, schema v45) is the same shape: `purchase_order_
+#: items` has no `company_id` column and resolves its parent by `po_uid`.
+_ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset(
+    {"sale_item", "return_item", "cheque_event", "purchase_order_item"})
+
+#: W4a: a purchase order's header status only ever moves FORWARD through this
+#: rank when merged from a peer. "received" outranks "cancelled" on purpose:
+#: stock has physically arrived and been booked, which a cancel cannot undo --
+#: so when two computers disagree, the receipt wins and the disagreement is
+#: recorded as a conflict for a human (see the `purchase_order` apply branch).
+#: Twin of `core/retail/purchase_orders.py`'s `PO_STATUS_RANK` (commercial_
+#: runtime cannot import products/); a test pins the two equal.
+PO_STATUS_RANK = {"pending": 0, "cancelled": 1, "received": 2}
 
 
 def local_company_id_from_registry() -> Optional[str]:
@@ -3200,6 +3228,10 @@ class SyncService:
                  p.get("line_total"), p.get("uid")),
             )
         elif entity_type == "payment":
+            if event_type == "po_link":
+                # W4a: attach a pre-v45 supplier payment to its purchase order
+                # -- see `_apply_payment_po_link`.
+                return self._apply_payment_po_link(conn, ev, p, local_company_id)
             if event_type == "update":
                 # AUDIT-032A (DEFECT 2): the ONE narrow, explicit exception to
                 # every other branch's "non-create is silently ignored" rule
@@ -3231,13 +3263,18 @@ class SyncService:
                 # The flip still happens on the TRANSITION only, so a replayed
                 # or doubly-delivered event is a no-op.
                 before = conn.execute(
-                    "SELECT id, status, party_type, party_id, direction, amount, related_type "
-                    "FROM payments WHERE uid=? AND company_id=?",
+                    "SELECT id, status, party_type, party_id, direction, amount, related_type, "
+                    "related_id FROM payments WHERE uid=? AND company_id=?",
                     (p.get("uid"), local_company_id)).fetchone()
                 if before is not None and (before["status"] or "active") != "voided":
                     conn.execute(
                         "UPDATE payments SET status='voided' WHERE uid=? AND company_id=?",
                         (p.get("uid"), local_company_id))
+                    # W4a: an order's `amount_paid` is derived from its active
+                    # payments, so the void must re-derive it here too -- the
+                    # old stored increment never came back down on any computer.
+                    if before["related_type"] == "po" and before["related_id"]:
+                        self._recompute_po_paid(conn, local_company_id, before["related_id"])
                     return True
                 if before is not None:
                     return True  # already voided here: nothing to do, nothing to move
@@ -3266,6 +3303,28 @@ class SyncService:
                     return self._quarantine_apply_event(
                         conn, ev, reason="missing_parent:sale",
                         detail=f"sale_uid={p.get('sale_uid')!r} not found locally")
+            # W4a: a PO instalment names its order by `po_uid`, never by the
+            # writer's `related_id`. That integer is the WRITER's own
+            # purchase_orders.id, which on this computer names an unrelated
+            # order (or none) -- so every instalment used to land on the wrong
+            # PO. Resolve the uid to THIS computer's id; park if the order
+            # has not arrived (replayed once it does).
+            related_id = p.get("related_id")
+            po_local_id = None
+            if p.get("related_type") == "po":
+                if p.get("po_uid"):
+                    po_local_id = self._local_id_by_uid(conn, "purchase_orders", p.get("po_uid"))
+                    if po_local_id is None:
+                        return self._quarantine_apply_event(
+                            conn, ev, reason="missing_parent:purchase_order",
+                            detail=f"po_uid={p.get('po_uid')!r} not found locally")
+                # A pre-v45 writer sends no `po_uid`: the integer it sent means
+                # nothing here, so the payment is stored with NO order (money
+                # still counts toward the supplier's balance, which is keyed on
+                # party_id). A later `po_link` event, emitted by that writer's
+                # upgrade backfill, attaches it. NULL is the safe answer;
+                # keeping the writer's integer was the original bug.
+                related_id = po_local_id
             conn.execute(
                 "INSERT INTO payments (company_id, reference, party_type, party_id, direction, amount, "
                 "currency, fx_rate, method, related_type, related_id, sale_id, notes, status, "
@@ -3274,10 +3333,57 @@ class SyncService:
                 "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                 (local_company_id, p.get("reference"), p.get("party_type"), p.get("party_id"),
                  p.get("direction"), p.get("amount", 0), p.get("currency", "USD"), p.get("method", "cash"),
-                 p.get("related_type"), p.get("related_id"), sale_local_id, p.get("notes", ""),
+                 p.get("related_type"), related_id, sale_local_id, p.get("notes", ""),
                  p.get("status", "active"), p.get("created_by"), p.get("device"), p.get("created_at"),
                  p.get("uid")),
             )
+            if po_local_id is not None:
+                self._recompute_po_paid(conn, local_company_id, po_local_id)
+        elif entity_type == "purchase_order":
+            # W4a (schema v45). The header of a purchase order another
+            # computer typed. `create` is the immutable fact (number, supplier,
+            # totals, order journal uid); `update` carries ONLY the status
+            # transition. `amount_paid`/`payment_status` never ride the wire --
+            # they are re-derived from the synced payments below.
+            if event_type == "create":
+                return self._apply_purchase_order_create(
+                    conn, ev, p, local_company_id, branch_fallback_sink)
+            if event_type == "update":
+                return self._apply_purchase_order_update(
+                    conn, ev, p, local_company_id, conflict_sink)
+            return True
+        elif entity_type == "purchase_order_item":
+            if event_type != "create":
+                return True
+            po_row = conn.execute(
+                "SELECT id, status FROM purchase_orders WHERE uid=?", (p.get("po_uid"),)
+            ).fetchone() if p.get("po_uid") else None
+            if po_row is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:purchase_order",
+                    detail=f"po_uid={p.get('po_uid')!r} not found locally")
+            # `purchase_order_items.product_id -> products(id)` is a real FK
+            # on an INTEGER NOT NULL column -- same wedge, same parking, as
+            # the sale_item branch above (see its comment for the reasoning).
+            if not self._row_exists(conn, "products", p.get("product_id")):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:product",
+                    detail=f"product_id={p.get('product_id')!r} not found locally")
+            conn.execute(
+                "INSERT INTO purchase_order_items (po_id, product_id, quantity, unit_cost, total, "
+                "received_qty, uid) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (po_row["id"], p.get("product_id"), p.get("quantity"), p.get("unit_cost"),
+                 p.get("total"), p.get("received_qty") or 0, p.get("uid")),
+            )
+            # A line that arrives AFTER its order was already marked received
+            # (it was parked on a missing product and replayed late) would
+            # otherwise sit at received_qty 0 under a received header, which
+            # the receive screen reads as "still owed".
+            if po_row["status"] == "received":
+                conn.execute(
+                    "UPDATE purchase_order_items SET received_qty=quantity WHERE uid=?",
+                    (p.get("uid"),))
         elif entity_type == "inventory_movement":
             # Wave B (stock-moving sync). Immutable ledger fact -- see the
             # module docstring's wave B note for why this posture matches
@@ -5278,6 +5384,218 @@ class SyncService:
             "ON CONFLICT(alias_uid) DO NOTHING",
             (alias, canon, cid, reason, created, origin, now))
         _normalise_branch_uid_refs(conn, cid)
+        return True
+
+    # ---------------------------------------------------------------
+    # W4a (schema v45): purchase orders shared between computers.
+    # ---------------------------------------------------------------
+    @staticmethod
+    def _recompute_po_paid(conn, company_id, po_id) -> None:
+        """Re-derives one order's `amount_paid` / `payment_status` from the
+        ACTIVE payments that name it -- the receiver-side twin of
+        `core/retail/purchase_orders.py::recompute_po_paid` (commercial_
+        runtime cannot import products/, the same layering trade-off
+        `_validate_gl_journal_lines` documents; a test pins the two to the
+        same answers).
+
+        WHY derived: the old `amount_paid` was a stored increment the writing
+        computer bumped on pay and never lowered on void, and a sibling's
+        instalment used to land on the wrong order. Now the figure is a pure
+        function of rows that sync, so every computer reaches the same number
+        whatever order the events arrive in -- which is also why every apply
+        that can change the inputs (payment create, void, po_link, the order's
+        own create) calls this.
+
+        Money is summed in INTEGER minor units (the same CAST(ROUND(x*factor))
+        party_balance.py uses) so 0.1 + 0.2 never drifts a fils; the 'active'
+        predicate is party_balance's (`COALESCE(status,'active')='active'`)."""
+        order = conn.execute(
+            "SELECT total FROM purchase_orders WHERE id=? AND company_id=?",
+            (po_id, company_id)).fetchone()
+        if order is None:
+            return
+        try:
+            cur_row = conn.execute(
+                "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+                (company_id,)).fetchone()
+            currency = (cur_row[0] if cur_row and cur_row[0] else None) or DEFAULT_BASE_CURRENCY
+        except sqlite3.OperationalError:
+            currency = DEFAULT_BASE_CURRENCY
+        quantum = currency_quantum(currency)
+        digits = -quantum.as_tuple().exponent
+        factor = 10 ** digits
+        minor = conn.execute(
+            "SELECT COALESCE(SUM(CAST(ROUND(amount * ?) AS INTEGER)), 0) FROM payments "
+            "WHERE company_id=? AND related_type='po' AND related_id=? "
+            "AND COALESCE(status,'active')='active'",
+            (factor, company_id, po_id)).fetchone()[0]
+        paid = float(Decimal(minor) / Decimal(factor))
+        total = float(order["total"] or 0)
+        eps = float(quantum) / 2.0
+        if total > eps and total - paid <= eps:
+            status = "paid"
+        elif paid > eps:
+            status = "partial"
+        else:
+            status = "unpaid"
+        conn.execute(
+            "UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
+            (paid, status, po_id, company_id))
+
+    def _apply_purchase_order_create(self, conn, ev: dict, p: dict, local_company_id,
+                                      branch_fallback_sink) -> bool:
+        """`purchase_order` create: insert the header another computer typed,
+        under THIS computer's company and branch, exactly once.
+
+        * `company_id` is the receiver's own, never the payload's (same rule
+          as every other synced entity).
+        * `branch_uid` -> this computer's branch via `_resolve_branch_id`
+          (the writer's `branch_id` integer is meaningless here).
+        * `supplier_id` is the supplier's wire id (suppliers sync under their
+          own id); `purchase_orders.supplier_id` is a real FK, so an absent
+          supplier is PARKED rather than allowed to raise and wedge the batch
+          (replayed once the supplier event arrives).
+        * `amount_paid`/`payment_status` start at 0/'unpaid' and are
+          recomputed straight away: a payment may have arrived first and be
+          parked behind this order, but one that was already applied (a
+          po_link) must count at once.
+        * `sync_backfill_pending` stays 0 -- that flag means "this computer
+          still owes the outbox a create"; a receiver must never re-queue what
+          it just pulled."""
+        supplier_id = p.get("supplier_id")
+        if supplier_id and not self._row_exists(conn, "suppliers", supplier_id):
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:supplier",
+                detail=f"supplier_id={supplier_id!r} not found locally")
+        resolved_branch_id = self._resolve_branch_id(
+            conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+        try:
+            conn.execute(
+                "INSERT INTO purchase_orders (company_id, po_number, supplier_id, branch_id, status, "
+                "subtotal, tax_total, total, notes, ordered_at, received_at, created_at, due_date, "
+                "split_group_id, split_index, split_count, routing_status, routed_channel, routed_at, "
+                "routed_to, idempotency_key, uid, order_journal_uid, amount_paid, payment_status, "
+                "sync_backfill_pending) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),?,?,?,?,?,?,?,?,?,?,?,0,'unpaid',0) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (local_company_id, p.get("po_number"), supplier_id, resolved_branch_id,
+                 p.get("status") or "pending", p.get("subtotal", 0), p.get("tax_total", 0),
+                 p.get("total", 0), p.get("notes"), p.get("ordered_at"), p.get("received_at"),
+                 p.get("created_at"), p.get("due_date"), p.get("split_group_id"),
+                 p.get("split_index"), p.get("split_count"), p.get("routing_status"),
+                 p.get("routed_channel"), p.get("routed_at"), p.get("routed_to"),
+                 p.get("idempotency_key"), p.get("uid"), p.get("order_journal_uid")),
+            )
+        except sqlite3.IntegrityError as exc:
+            # `ON CONFLICT(uid)` only suppresses a collision on the uid index.
+            # `po_number` carries its own bare UNIQUE (a number minted outside
+            # this shop's numbering series can collide) -- parked BY NAME like
+            # the sale_number / return_number cases, never widened to a bare
+            # IntegrityError, so one clash cannot wedge every later row.
+            if "purchase_orders.po_number" in str(exc):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="duplicate_document_number",
+                    detail=f"po_number={p.get('po_number')!r} already exists locally "
+                           f"under a different purchase order (incoming uid={p.get('uid')!r})")
+            # Same shape for the client-resubmission key: a second computer
+            # that already holds a DIFFERENT order under this key must not
+            # wedge the pull.
+            if "purchase_orders.idempotency_key" in str(exc):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="duplicate_idempotency_key",
+                    detail=f"idempotency_key={p.get('idempotency_key')!r} already exists locally "
+                           f"under a different purchase order (incoming uid={p.get('uid')!r})")
+            raise
+        local_id = self._local_id_by_uid(conn, "purchase_orders", p.get("uid"))
+        if local_id is not None:
+            self._recompute_po_paid(conn, local_company_id, local_id)
+        return True
+
+    def _apply_purchase_order_update(self, conn, ev: dict, p: dict, local_company_id,
+                                      conflict_sink) -> bool:
+        """`purchase_order` update: merge a peer's status transition FORWARD
+        ONLY (`PO_STATUS_RANK`).
+
+        WHY forward-only: events can arrive late, twice, or out of order, and
+        a status is not a counter -- last-writer-wins would let an old
+        'pending' un-receive an order whose stock has already moved. Only a
+        strictly higher rank applies.
+
+        received vs cancelled: the two computers disagreed about a real-world
+        fact (the goods arrived / the order was withdrawn). 'received' wins
+        because its stock and books have already moved and a cancel cannot
+        unmove them -- but the order's cancel-side bookkeeping on the other
+        computer is now skewed, so a `sync_conflicts` row says so for a human
+        (reason 'po_received_and_cancelled'). This branch never posts GL and
+        never moves stock: journals and movements sync as their own entities,
+        and doing it here as well would double-count."""
+        local = conn.execute(
+            "SELECT id, status FROM purchase_orders WHERE uid=? AND company_id=?",
+            (p.get("uid"), local_company_id)).fetchone()
+        if local is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:purchase_order",
+                detail=f"uid={p.get('uid')!r} not found locally to update")
+        incoming = p.get("status")
+        incoming_rank = PO_STATUS_RANK.get(incoming)
+        if incoming_rank is None:
+            return True  # a status this build does not know: ignore, never guess
+        local_status = local["status"] or "pending"
+        local_rank = PO_STATUS_RANK.get(local_status, 0)
+        if {local_status, incoming} == {"received", "cancelled"}:
+            self._record_sync_conflict(
+                conn, conflict_sink, local_company_id=local_company_id,
+                entity_type="purchase_order", entity_id=p.get("uid"), event_type="update",
+                local_row_version=local_rank, incoming_row_version=incoming_rank,
+                payload={**p, "reason": "po_received_and_cancelled"})
+        if incoming_rank <= local_rank:
+            return True
+        if incoming == "received":
+            conn.execute(
+                "UPDATE purchase_orders SET status='received', received_at=COALESCE(?, received_at) "
+                "WHERE id=?", (p.get("received_at"), local["id"]))
+            conn.execute(
+                "UPDATE purchase_order_items SET received_qty=quantity WHERE po_id=?",
+                (local["id"],))
+        else:
+            conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (incoming, local["id"]))
+        return True
+
+    def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id) -> bool:
+        """`payment` event_type `po_link` {uid, po_uid}: attach a payment to
+        its purchase order by uid.
+
+        Emitted by the upgrade backfill for pre-v45 payments, whose original
+        `create` carried only the writer's own integer `related_id` (stored
+        here as NULL, see the payment create branch). Sets related_type='po'
+        and the LOCAL order id, then re-derives BOTH the order it leaves (if
+        any) and the one it joins. Idempotent: a repeat finds nothing to
+        change and recomputes to the same figures.
+
+        Parks `missing_parent:payment` / `missing_parent:purchase_order`
+        like every other child event whose parent has not arrived. A payment
+        that is not a PO payment (related_type is something else) is left
+        alone -- the event is only ever meant for PO payments."""
+        pay = conn.execute(
+            "SELECT id, related_type, related_id FROM payments WHERE uid=? AND company_id=?",
+            (p.get("uid"), local_company_id)).fetchone()
+        if pay is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:payment",
+                detail=f"uid={p.get('uid')!r} not found locally to link")
+        po_id = self._local_id_by_uid(conn, "purchase_orders", p.get("po_uid"))
+        if po_id is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:purchase_order",
+                detail=f"po_uid={p.get('po_uid')!r} not found locally")
+        if pay["related_type"] not in (None, "", "po"):
+            return True
+        old_id = pay["related_id"] if pay["related_type"] == "po" else None
+        conn.execute(
+            "UPDATE payments SET related_type='po', related_id=? WHERE id=?", (po_id, pay["id"]))
+        self._recompute_po_paid(conn, local_company_id, po_id)
+        if old_id and old_id != po_id:
+            self._recompute_po_paid(conn, local_company_id, old_id)
         return True
 
     def _apply_party_balance_adjustment(self, conn, ev: dict, p: dict, event_type: str,

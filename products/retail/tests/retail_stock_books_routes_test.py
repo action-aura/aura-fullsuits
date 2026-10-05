@@ -866,7 +866,12 @@ def test_f5_pay_checks_the_status_inside_the_write_transaction(client, monkeypat
     begin = [i for i, s in enumerate(seen) if s.upper().startswith('BEGIN IMMEDIATE')]
     read = [i for i, s in enumerate(seen) if s.upper().startswith('SELECT') and 'FROM purchase_orders' in s
             and 'po_number,status' in s]
-    upd = [i for i, s in enumerate(seen) if s.upper().startswith('UPDATE PURCHASE_ORDERS SET AMOUNT_PAID')]
+    # W4a: retargeted from `SET amount_paid` to the status-guard write. The amount
+    # is no longer an increment: recompute_po_paid re-derives it from the active
+    # payments AFTER the payment row exists, and a derived cache needs no status
+    # guard. What this can no longer catch: a future amount write that is itself
+    # unguarded -- harmless now, because the guard write below fails closed first.
+    upd = [i for i, s in enumerate(seen) if s.upper().startswith('UPDATE PURCHASE_ORDERS SET PAYMENT_STATUS=PAYMENT_STATUS')]
     assert len(begin) == 1 and len(read) == 1 and len(upd) == 1, seen
     assert begin[0] < read[0] < upd[0], 'the status read must happen inside the write transaction'
     assert "<> 'cancelled'" in seen[upd[0]], seen[upd[0]]

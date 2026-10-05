@@ -253,10 +253,14 @@ def test_a_declined_request_frees_the_product_for_a_future_reorder_request(clien
 
 # ── Admin Center: accept / decline ───────────────────────────────────────
 
-def test_accept_creates_a_local_only_purchase_order_and_never_queues_it_to_sync(client, db_conn):
-    """The single most safety-critical property in this feature -- see this
-    file's module docstring and database/schema.py's migration docstring
-    for exactly why purchase_orders must never reach sync_outbox."""
+def test_accept_creates_a_purchase_order_queued_under_its_uuid_wire_identity(client, db_conn):
+    """W4a (schema v45) INVERTS this test's old assertion. It used to pin that a
+    drafted PO never reached sync_outbox, because `purchase_orders.id` is a
+    per-computer INTEGER and Owner's relay 400-rejects the WHOLE push batch on a
+    non-UUID entity_id. POs now carry a `uid`, so the safety property that
+    remains is the one that mattered: the PO is queued ONLY under its UUID uid,
+    never under the integer id. What this can no longer catch: nothing the old
+    test caught that still matters -- a queued integer id fails the UUID parse."""
     pid = _make_product(client, reorder_level=5, reorder_method='whatsapp', initial_stock=6)
     _sell(client, pid, 2)  # triggers the pending request
     req = db_conn.execute("SELECT id FROM reorder_requests WHERE product_id=?", (pid,)).fetchone()
@@ -278,12 +282,21 @@ def test_accept_creates_a_local_only_purchase_order_and_never_queues_it_to_sync(
     assert reorder_row['status'] == 'accepted'
     assert reorder_row['resolved_at'] is not None
 
-    # The critical assertion: NOT ONE row in sync_outbox is ever a
-    # purchase_order entity, even though a real PO was just created.
+    # The critical assertion: exactly one purchase_order create, keyed by the
+    # PO's own uid, which parses as a UUID (the relay's batch-wide rule); every
+    # line item likewise.
     po_outbox_rows = db_conn.execute(
         "SELECT * FROM sync_outbox WHERE entity_type='purchase_order'"
     ).fetchall()
-    assert po_outbox_rows == []
+    assert [o['event_type'] for o in po_outbox_rows] == ['create']
+    assert po['uid'] and po_outbox_rows[0]['entity_id'] == po['uid']
+    uuid.UUID(po_outbox_rows[0]['entity_id'])
+    item_rows = db_conn.execute(
+        "SELECT entity_id FROM sync_outbox WHERE entity_type='purchase_order_item'"
+    ).fetchall()
+    assert item_rows
+    for row in item_rows:
+        uuid.UUID(row['entity_id'])
 
     # The reorder_request's own status change, by contrast, IS queued.
     outbox = _reorder_outbox_rows(db_conn, entity_id=req['id'])
