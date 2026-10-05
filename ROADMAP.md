@@ -6858,3 +6858,21 @@ Residuals (written down, not fixed):
   (the runner sets it; bare pytest fails 6): the file should set it itself (R10 shape).
 - D8 — CLAUDE.md's "licensing unset = fully unlocked" is stale: a fresh install is
   READ-ONLY (403 LICENSE_INACTIVE) until a licence exists.
+
+## 2026-10-05 — DAY-UI cashed in (till screen fixes from the day run)
+
+2d3481f9 + af8b3d99: scan toasts no longer cover the total/tender tiles (per-scan
+"Added" toast removed, till toasts anchor top); pay-tile labels wrap ("Mobile /
+CliQ" whole at every text size); Hold-sale dialog and units ("pc" -> قطعة)
+Arabic; Ctrl+Shift+L signs out (same path as the menu, also from the scan box);
+dashboard teardown no longer logs "Failed to fetch". "Aura Retail" brand mark stays
+Latin in Arabic (owner named the product 2026-10-04; day script exempts exactly
+that element). day_in_shop: 106 PASS / 0 FAIL.
+
+Residuals:
+- U1 — `retail_p1b_help_e2e.py` fails 7 checks and `retail_p1a_shell_e2e.py` 1
+  (nav rail overflow), identical at the parent commit: pre-existing, not fixed.
+- U2 — the "aac" token once seen in the Arabic receipt dialog was not reproduced
+  (no such string in frontend or locales).
+- U3 — S2-toast proves "nothing covered", not "no toast": a toast storm that
+  stays top-anchored would still pass.
