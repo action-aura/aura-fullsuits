@@ -195,3 +195,37 @@ def test_f1_peer_average_matches_when_receipt_arrives_in_a_later_pull(tmp_path):
     run_device(PY, app_a, relay_db, [{"op": "push"}])
     run_device(PY, app_b, relay_db, [{"op": "pull"}, {"op": "pull"}])
     _assert_f1_converged(app_a, boot_a, app_b, boot_b, relay_db, pid)
+
+
+# ── STOCK-BOOKS verify F4 x tombstone sync: deleting a product writes off ONCE ──────────────
+# Deleting a product on A writes its remaining stock off (stock_out 'DELETE' + journal).
+# The tombstone event that reaches B must NOT write off again -- B receives A's movement
+# and A's journal by sync, so a second write-off there would count the same 7 units twice.
+
+def test_deleting_a_product_writes_off_once_across_two_computers(tmp_path):
+    relay_db = tmp_path / 'relay.db'
+    app_a, boot_a, pid, _branch = _provision_a(tmp_path, relay_db)
+    login = {"op": "login", "email": boot_a["email"], "password": boot_a["password"]}
+    _, deleted = run_device(PY, app_a, relay_db, [
+        login, {"op": "http", "method": "DELETE", "path": f"/products/{pid}"}])
+    assert deleted["status_code"] == 200, deleted
+    run_device(PY, app_a, relay_db, [{"op": "push"}])
+    app_b, boot_b = _b_pulls(tmp_path, relay_db, times=2)
+
+    # Hand-computed: opening 10 @ 2.000 = 20 (Dr 1200 / Cr 3900); adjust -3 = 6 to 5910;
+    # delete writes off the remaining 7 x 2.000 = 14 (Dr 5910 / Cr 1200).
+    # -> Inventory 0, Opening Balance Equity 20, Shrinkage 6 + 14 = 20.
+    for app, boot in ((app_a, boot_a), (app_b, boot_b)):
+        mv = _read_device(app, "SELECT movement_type, quantity FROM inventory_movements "
+                               "WHERE product_id=? AND reference='DELETE'", (pid,))
+        assert [(r["movement_type"], r["quantity"]) for r in mv] == [("stock_out", -7.0)], (app, mv)
+        bal = _read_device(app, "SELECT quantity_on_hand FROM inventory_balances WHERE product_id=?", (pid,))
+        assert [r["quantity_on_hand"] for r in bal] == [0.0], (app, bal)
+        tb = _trial_balance(app, relay_db, boot["email"], boot["password"])
+        assert _acct(tb, '1200') == 0.0
+        assert _acct(tb, '3900') == 20.0
+        assert _acct(tb, '5910') == 20.0
+    census_a = _gl_census(app_a, relay_db, boot_a["company_id"])
+    census_b = _gl_census(app_b, relay_db, boot_b["company_id"])
+    assert census_b['count'] == census_a['count'] == 3, (census_a, census_b)
+    assert census_a['uid_hash'] == census_b['uid_hash']
