@@ -1739,6 +1739,60 @@ def revenue_by_branch(conn, cid, period, currency=None):
     return rows
 
 
+# ── "Up to a time of day" (Aura Today) ────────────────────────────────────────
+#
+# "Yesterday by now" -- what the shop had taken by this same moment yesterday --
+# is the only fair comparison for a day that is still trading: today so far
+# against ALL of yesterday would read as a collapse every morning. Nothing in
+# this module could answer it, because every figure above is a whole-day
+# bucket. The cutoff is applied on `_business_ts`, the SAME shifted clock the
+# period predicate (`_day_key`) uses, so a row is cut on the clock that decided
+# which day it belongs to. `cutoff` is therefore a 'HH:MM:SS' on the shop's
+# BUSINESS clock, i.e. `business_now(...).strftime('%H:%M:%S')`, and a shop
+# that opens at 04:00 compares 01:30 (the tail of yesterday's trading) correctly.
+# Sales and returns take the identical predicate, so a refund rung after the
+# cutoff is not netted against a sale rung before it.
+
+def _until_clause(boundary, period, cutoff, alias=None):
+    return f"time({_business_ts(boundary, period, alias)}) <= ?", [cutoff]
+
+
+def revenue_until(conn, cid, period, cutoff, branch_id=None, currency=None):
+    """Net revenue (#1) over `period`, counting only rows stamped at or before
+    `cutoff` ('HH:MM:SS', business clock) on each day of the period."""
+    boundary = business_day(conn, cid)
+    where, params = _scope(cid, period, boundary, branch_id)
+    extra, extra_params = _until_clause(boundary, period, cutoff)
+    sales = conn.execute(
+        f'SELECT COALESCE(SUM(total),0) FROM sales WHERE {where} AND {extra}',
+        params + extra_params).fetchone()[0]
+    rets = _returns_query(
+        conn, f'SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE {where} AND {extra}',
+        params + extra_params)
+    refunded = rets[0][0] if rets else 0
+    return _money(_money(sales, currency) - _money(refunded, currency), currency)
+
+
+def revenue_until_by_branch(conn, cid, period, cutoff, currency=None):
+    """{branch_id: net revenue up to `cutoff`} for every branch that has any
+    row in the window. Same predicate as `revenue_until`, grouped."""
+    boundary = business_day(conn, cid)
+    where, params = _scope(cid, period, boundary, None)
+    extra, extra_params = _until_clause(boundary, period, cutoff)
+    sales = conn.execute(
+        f'SELECT branch_id, COALESCE(SUM(total),0) FROM sales WHERE {where} AND {extra} GROUP BY branch_id',
+        params + extra_params).fetchall()
+    rets = _returns_query(
+        conn, f'SELECT branch_id, COALESCE(SUM(refund_amount),0) FROM returns WHERE {where} AND {extra} '
+              f'GROUP BY branch_id', params + extra_params)
+    out = {}
+    for branch, gross in sales:
+        out[branch] = float(gross or 0)
+    for branch, refunded in rets:
+        out[branch] = out.get(branch, 0.0) - float(refunded or 0)
+    return {branch: _money(value, currency) for branch, value in out.items()}
+
+
 def summary(conn, cid, period, branch_id=None, currency=None):
     """The Reports page KPI cards, and the body of the emailed/WhatsApped
     report. Every figure here is one of the definitions above -- nothing is
