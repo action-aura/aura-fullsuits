@@ -18660,7 +18660,14 @@ const RetailSystem = {
     payment:         { label: 'Payment',              sign: -1 },
     return_forgiven: { label: 'Credit forgiven',      sign: -1 },
     return_credit:   { label: 'Store credit issued',  sign: -1 },
+    // v44: the one-off opening line a computer upgraded to v44 carries so the
+    // balance it already showed stays exactly the same (a stored figure the
+    // shop's own records did not fully explain). Undated on purpose -- it is
+    // not an event that happened on a day -- and it ages as "current".
+    balance_carried_owed:   { label: 'Balance carried forward (owed)',   sign: 1 },
+    balance_carried_credit: { label: 'Balance carried forward (credit)', sign: -1 },
   },
+  _PARTY_CARRIED_KINDS: ['balance_carried_owed', 'balance_carried_credit'],
   _partyStatementKind(kind) {
     return this._PARTY_STATEMENT_KIND[kind] || { label: 'Payment', sign: -1 };
   },
@@ -18713,6 +18720,11 @@ const RetailSystem = {
   // only happen here instead of at every call site below.
   _partyApiBase(kind) { return kind === 'supplier' ? '/api/sub/retail/suppliers' : '/api/sub/retail/customers'; },
 
+  // v44 NOTE: the disabling described in this comment is GONE for customers
+  // (see _asOfLastSyncNote below); this function now only answers "is this a
+  // shop network" so the screens can say "as of the last sync". The text
+  // below is kept as the history of how that signal was found.
+  //
   // P1a item #6, "Multi-computer honesty" (contract.md): customers.
   // credit_balance is local to THIS device until the sync wave that carries
   // it (W4b) lands, so a WhatsApp Statement or Remind built from THIS
@@ -18835,14 +18847,28 @@ const RetailSystem = {
     });
   },
 
-  // The reason text for a disabled Statement/Remind control, from
-  // _shopNetworkState()'s own two disabled cases -- kept as one function so
-  // the wording can never drift between the two call sites (Receivables
-  // rows, the statement modal).
-  _shopNetworkDisabledReason(state) {
-    return state.reason === 'error'
-      ? t("Can't check whether your computers share balances right now")
-      : t('Available once customer balances are shared between your computers');
+  // v44 (owner decision Q3): customer balances are now DERIVED from the
+  // sales/payments/returns every computer receives (party_balance.py), so a
+  // networked shop's customer Statement and Remind are no longer disabled --
+  // the figure is the shop-wide one, complete up to the last sync. The old
+  // disabled-with-a-reason state (and `_shopNetworkDisabledReason`) existed
+  // only because the balance was a per-computer running total. What a
+  // networked computer still owes the shopkeeper is honesty about freshness:
+  // one small line saying the figure is as of the last sync. Shown when the
+  // network state is active OR could not be determined (never claim "live"
+  // on an unknown).
+  _asOfLastSyncNote(state, attr) {
+    if (!state || !state.active) return '';
+    return `<div ${attr} style="font-size:11px;font-weight:400;color:var(--text-muted);margin-top:2px">${this._esc(t('As of the last sync with your other computers'))}</div>`;
+  },
+
+  // Suppliers: purchase orders do not sync between computers yet, so on a
+  // networked shop the payables figure counts the purchase orders entered on
+  // THIS computer. The server says so with `supplier_balance_scope` (present
+  // only on a shop with more than one computer); one line, never an error.
+  _supplierScopeNote(scope) {
+    if (scope !== 'this_computer_pos') return '';
+    return `<div data-supplier-scope-note style="font-size:12px;color:var(--text-muted);margin-top:8px">${this._esc(t('Supplier balances count purchase orders entered on this computer.'))}</div>`;
   },
 
   async _renderReceivables(c) { return this._renderPartyLedger(c, 'customer'); },
@@ -18909,6 +18935,14 @@ const RetailSystem = {
 
       const totalEl = document.getElementById(`pl-total-${kind}`);
       if (totalEl) totalEl.textContent = this._fmt(total || 0);
+      if (isSupplier && totalEl) {
+        const card = totalEl.closest('.sub-chart-card');
+        if (card) {
+          const oldNote = card.querySelector('[data-supplier-scope-note]');
+          if (oldNote) oldNote.remove();
+          card.insertAdjacentHTML('beforeend', this._supplierScopeNote(listResp.supplier_balance_scope));
+        }
+      }
 
       const agingEl = document.getElementById(`pl-aging-${kind}`);
       if (agingEl) {
@@ -18940,7 +18974,16 @@ const RetailSystem = {
       // P1a item #6 ("each overdue row 'Remind'"): checked ONCE per screen
       // load (_shopNetworkState caches its own answer), not once per row --
       // the answer cannot change between rows in the same render.
+      // v44: only used for the "as of last sync" line now; it no longer
+      // disables anything (see _asOfLastSyncNote).
       const netState = isSupplier ? { active: false, reason: null } : await this._shopNetworkState(true);
+      const asOf = tbody.closest('.sub-chart-card');
+      if (asOf) {
+        const old = asOf.querySelector('[data-asof-sync]');
+        if (old) old.remove();
+        const note = this._asOfLastSyncNote(netState, 'data-asof-sync');
+        if (note) asOf.insertAdjacentHTML('afterbegin', note);
+      }
       // FIX ROUND 3 (HIGH-1/2): "is this row overdue" is the SERVER's
       // answer, read from the `customers[]` list of the aging response this
       // screen already fetched -- no per-customer statement fetch and no
@@ -18973,9 +19016,7 @@ const RetailSystem = {
         const rid = this._esc(row.id);
         let remindCell = '';
         if (!isSupplier) {
-          if (netState.active) {
-            remindCell = disabledRemind(rid, this._shopNetworkDisabledReason(netState));
-          } else {
+          {
             const aging = this._partyAgingById.get(String(row.id)) || { overdueAmount: 0 };
             if (aging.overdueAmount > this._halfMinorUnit()) {
               const hasPhone = !!(row.phone && String(row.phone).trim());
@@ -19098,8 +19139,8 @@ const RetailSystem = {
       const sign = meta.sign > 0 ? '+' : '-';
       const color = meta.sign > 0 ? 'var(--state-warning-text)' : 'var(--state-success-text)';
       return `<tr>
-        <td style="color:var(--text-muted)">${this._bdi(e.date || '—')}</td>
-        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(e.ref || '—')}</td>
+        <td style="color:var(--text-muted)">${this._bdi(this._PARTY_CARRIED_KINDS.includes(e.kind) ? '—' : (e.date || '—'))}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(this._PARTY_CARRIED_KINDS.includes(e.kind) ? '—' : (e.ref || '—'))}</td>
         <!-- P1a FINAL F11: in Arabic the amount wrapped ("-د.أ" / "20.000")
              and the kind wrapped ("بيع" / "آجل") -- a figure split from its
              currency reads as two figures. Money cells take the .num
@@ -19153,7 +19194,7 @@ const RetailSystem = {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">
           <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Phone')}</div><div style="color:var(--text-primary);font-weight:600">${party.phone ? this._esc(party.phone) : '—'}</div></div>
-          <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${balanceLabel}</div><div style="color:var(--text-money);font-weight:700;font-size:18px">${this._fmt(balance)}</div>${isSupplier ? '' : this._unbookedNote(aging)}</div>
+          <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${balanceLabel}</div><div style="color:var(--text-money);font-weight:700;font-size:18px">${this._fmt(balance)}</div>${isSupplier ? '' : this._unbookedNote(aging) + this._asOfLastSyncNote(netState, 'data-stmt-asof')}</div>
         </div>
         <!-- P1a item #6 ("Send on WhatsApp" -- statement): customer only
              (a supplier statement is what the SHOP owes, not a message the
@@ -19165,9 +19206,7 @@ const RetailSystem = {
         ${isSupplier ? '' : (() => {
           // M7: the reason is visible text under the disabled button, not
           // only a title (see disabledRemind in _loadPartyLedger).
-          const why = netState.active
-            ? this._shopNetworkDisabledReason(netState)
-            : ((!party.phone || !String(party.phone).trim()) ? t('No WhatsApp number for this customer') : '');
+          const why = (!party.phone || !String(party.phone).trim()) ? t('No WhatsApp number for this customer') : '';
           if (why) {
             return `<div style="margin-bottom:16px"><button type="button" class="ret-btn ret-btn-ghost" disabled id="stmt-send-btn-off"
               aria-describedby="stmt-send-why" title="${this._esc(why)}">${t('Send Statement')}</button>

@@ -2386,5 +2386,9 @@
   "Unit: box": "box",
   "Unit: pack": "pack",
   "Unit: pair": "pair",
-  "Unit: dozen": "dozen"
+  "Unit: dozen": "dozen",
+  "Balance carried forward (owed)": "Balance carried forward (owed)",
+  "Balance carried forward (credit)": "Balance carried forward (credit)",
+  "As of the last sync with your other computers": "As of the last sync with your other computers",
+  "Supplier balances count purchase orders entered on this computer.": "Supplier balances count purchase orders entered on this computer."
 }

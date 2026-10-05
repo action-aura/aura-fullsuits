@@ -506,6 +506,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // already used by the desktop catalog's own refund-settlement toasts.
     "Credit forgiven" to "إعفاء من المستحقات",
     "Store credit issued" to "رصيد صادر لدى المتجر",
+    // v44: the one-off opening line a computer upgraded to v44 carries so the
+    // balance it already showed stays the same (statement kinds
+    // balance_carried_owed / balance_carried_credit).
+    "Balance carried forward (owed)" to "رصيد مرحَّل (مستحق عليه)",
+    "Balance carried forward (credit)" to "رصيد مرحَّل (دائن له)",
     "Payment" to "دفعة",
     "Void" to "إلغاء",
     "Record a payment" to "تسجيل دفعة",

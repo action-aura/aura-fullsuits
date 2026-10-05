@@ -2386,5 +2386,9 @@
   "Unit: box": "علبة",
   "Unit: pack": "عبوة",
   "Unit: pair": "زوج",
-  "Unit: dozen": "دزينة"
+  "Unit: dozen": "دزينة",
+  "Balance carried forward (owed)": "رصيد مرحَّل (مستحق عليه)",
+  "Balance carried forward (credit)": "رصيد مرحَّل (دائن له)",
+  "As of the last sync with your other computers": "حتى آخر مزامنة مع أجهزتك الأخرى",
+  "Supplier balances count purchase orders entered on this computer.": "تحتسب أرصدة الموردين أوامر الشراء المُدخلة على هذا الجهاز."
 }

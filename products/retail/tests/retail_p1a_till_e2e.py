@@ -1208,19 +1208,28 @@ with sync_playwright() as p:
 
     NET_REASON = "shared between your computers"
 
-    def assert_network_disabled(fragment, label):
-        rows = (OVERDUE_ID, OLD_PAYER_ID, PREPAID_ID, THREE_ID, MANY_ID, NOPHONE_ID)
-        for cid in rows:
-            s = remind_state(cid)
-            assert s["row"], f"{label}: receivables row {cid} is missing"
-            assert s["tones"] == [], f"{label}: an ENABLED Remind/Firm button exists for {cid} while the shop network is active"
-            assert s["disabled"], f"{label}: row {cid} shows no disabled Remind"
-            assert_reason_visible(s["why"], fragment, f"{label} row {cid}")
-        assert owner.query_selector("#pl-table-customer button[data-remind-id]") is None, \
-            f"{label}: some enabled Remind button is still present"
-        why_loc = owner.locator(
-            f'#pl-table-customer tr[data-open-statement-id="{OVERDUE_ID}"] .ret-btn-reason[data-remind-reason]')
-        reachable(owner, why_loc, f"{label}: reason text under Remind")
+    # v44 (owner decision Q3): customer balances are now derived from the
+    # sales/payments/returns every computer receives, so a networked shop's
+    # customer Remind and Statement are NO LONGER disabled; the screen instead
+    # says the figure is "as of the last sync". This replaces the old
+    # assert_network_disabled (which pinned the opposite behaviour, now
+    # deliberately reversed). What the replacement can no longer catch: a
+    # networked computer wrongly disabling Remind -- that is the new correct
+    # behaviour. What it still catches: the network signal being lost (the
+    # as-of line is only drawn when _shopNetworkState says "networked"), and
+    # a networked computer reaching the old disabled-with-reason state.
+    NET_ASOF = "last sync"
+
+    def assert_network_enabled_asof(label):
+        s = remind_state(OVERDUE_ID)
+        assert s["row"], f"{label}: receivables row {OVERDUE_ID} is missing"
+        assert s["tones"] == ["polite", "firm"] and not s["disabled"], \
+            f"{label}: a networked computer must now keep Remind and Firm ENABLED on an overdue row: {s}"
+        assert s["why"] is None, f"{label}: a networked computer still shows a disabled-Remind reason: {s['why']}"
+        asof = owner.evaluate(
+            "() => { const e = document.querySelector('[data-asof-sync]'); return e ? e.innerText.trim() : null; }")
+        assert asof is not None and NET_ASOF in asof, \
+            f"{label}: the receivables screen shows no 'as of last sync' line (got {asof!r})"
 
     # =========================================================================
     # F1 -- the real shop-network signal, all four cases + HIGH-3 + M1 + M7
@@ -1241,42 +1250,41 @@ with sync_playwright() as p:
     def f1_joined_client_disabled():
         def run():
             open_receivables()
-            assert_network_disabled(NET_REASON, "joined")
-            # M7 on the Statement side too: the Send button is off, its reason is text.
+            assert_network_enabled_asof("joined")
+            # The Statement side too: Send is ENABLED and carries the as-of line.
             open_statement_by_click(OVERDUE_ID)
-            assert owner.query_selector("#stmt-send-btn") is None, "joined computer still offers an enabled Send Statement"
-            off = owner.query_selector("#stmt-send-btn-off")
-            assert off is not None and off.is_disabled(), "joined computer must show Send Statement DISABLED"
-            why = owner.evaluate("""() => { const e = document.getElementById('stmt-send-why');
-                if (!e) return null; const cs = getComputedStyle(e), r = e.getBoundingClientRect();
-                return {text: e.innerText.trim(), font: parseFloat(cs.fontSize),
-                        visible: cs.visibility !== 'hidden' && cs.display !== 'none' && r.width > 0 && r.height > 0,
-                        id: e.id, describedBy: document.getElementById('stmt-send-btn-off').getAttribute('aria-describedby')}; }""")
-            assert_reason_visible(why, NET_REASON, "joined Statement")
-            reachable(owner, owner.locator("#stmt-send-why"), "joined: reason text under Send Statement")
+            assert owner.query_selector("#stmt-send-btn") is not None, "joined computer must now offer an enabled Send Statement"
+            assert owner.query_selector("#stmt-send-btn-off") is None, "joined computer still shows a disabled Send Statement"
+            asof = owner.evaluate(
+                "() => { const e = document.querySelector('[data-stmt-asof]'); return e ? e.innerText.trim() : null; }")
+            assert asof is not None and NET_ASOF in asof, f"joined Statement shows no 'as of last sync' line (got {asof!r})"
+            reachable(owner, owner.locator("[data-stmt-asof]"), "joined: as-of-last-sync line on the statement")
             close_statement()
         with_stubs(JOINED_STUBS, run)
 
-    check("F1 case 2/4: this computer JOINED another computer (stubbed /api/devices/me) -> every Remind + Statement DISABLED, reason shown as text",
+    check("F1 case 2/4 (v44 Q3): this computer JOINED another computer (stubbed /api/devices/me) -> Remind + Send Statement ENABLED, 'as of last sync' shown",
           f1_joined_client_disabled)
 
     def f1_hub_with_peer_disabled():
         def run():
             open_receivables()
-            assert_network_disabled(NET_REASON, "hub-with-peer")
+            assert_network_enabled_asof("hub-with-peer")
         with_stubs(HUB_PEER_STUBS, run)
 
-    check("F1 case 3/4: this computer IS a hub with a paired device (stubbed site-relay/status) -> DISABLED, reason shown as text",
+    check("F1 case 3/4 (v44 Q3): this computer IS a hub with a paired device (stubbed site-relay/status) -> Remind ENABLED, 'as of last sync' shown",
           f1_hub_with_peer_disabled)
 
     def f1_error_disabled_never_enabled():
         for label, stubs in (("aborted request", ERROR_ABORT_STUBS), ("HTTP 500", ERROR_500_STUBS)):
             def run():
                 open_receivables()
-                assert_network_disabled("check whether your computers share balances", f"error/{label}")
+                # An unknown network state is treated as networked: Remind stays
+                # usable (balances are derived, not per-computer) but the screen
+                # never claims to be live -- it says "as of the last sync".
+                assert_network_enabled_asof(f"error/{label}")
             with_stubs(stubs, run)
 
-    check("F1 case 4/4: the site-relay check itself fails (aborted request AND HTTP 500) -> DISABLED with its own reason, never enabled",
+    check("F1 case 4/4 (v44 Q3): the site-relay check itself fails (aborted request AND HTTP 500) -> treated as networked: Remind ENABLED, 'as of last sync' shown",
           f1_error_disabled_never_enabled)
 
     def f1_unclaimed_single_computer_stays_enabled():
@@ -1331,27 +1339,59 @@ with sync_playwright() as p:
             owner.evaluate("() => window.dispatchEvent(new Event('focus'))")
             for _ in range(20):
                 owner.wait_for_timeout(250)
-                if remind_state(OVERDUE_ID)["disabled"]:
+                if owner.query_selector("[data-asof-sync]") is not None:
                     break
+            assert owner.query_selector("[data-asof-sync]") is not None, \
+                "pairing mid-session did not add the 'as of last sync' line on the next focus (no reload)"
             s1 = remind_state(OVERDUE_ID)
-            assert s1["disabled"] and s1["tones"] == [], \
-                f"pairing mid-session did not disable Remind on the next focus (no reload): {s1}"
+            assert s1["tones"] == ["polite", "firm"] and not s1["disabled"], \
+                f"v44 Q3: pairing must not disable Remind: {s1}"
             assert owner.evaluate("() => window.__m1_same_page") == "yes", "the page reloaded; this proves nothing"
-            assert_reason_visible(s1["why"], NET_REASON, "after mid-session pairing")
         with_stubs(JOINED_STUBS, joined_then_focus)
 
-        # Allow direction: pairing undone -> the next focus enables it again.
+        # Un-pairing direction: the next focus drops the as-of line again.
         owner.evaluate("() => window.dispatchEvent(new Event('focus'))")
         for _ in range(20):
             owner.wait_for_timeout(250)
-            if remind_state(OVERDUE_ID)["tones"] == ["polite", "firm"]:
+            if owner.query_selector("[data-asof-sync]") is None:
                 break
         s2 = remind_state(OVERDUE_ID)
+        assert owner.query_selector("[data-asof-sync]") is None, \
+            "after the pairing went away the 'as of last sync' line must disappear on the next focus"
         assert s2["tones"] == ["polite", "firm"] and not s2["disabled"], \
-            f"after the pairing went away Remind must come back on the next focus: {s2}"
+            f"after the pairing went away Remind must stay enabled: {s2}"
 
-    check("F1 M1: pairing DURING the session disables Remind on the next window focus, no reload (and un-pairing re-enables it)",
+    check("F1 M1 (v44 Q3): pairing DURING the session adds the 'as of last sync' line on the next window focus, no reload (and un-pairing removes it)",
           m1_pairing_mid_session_disables_without_reload)
+
+    def v44_supplier_scope_note_follows_the_payables_flag():
+        # v44 (owner decision Q2): on a networked shop the payables JSON carries
+        # supplier_balance_scope='this_computer_pos' and the Payables screen says
+        # purchase orders count only on this computer; a one-computer shop's
+        # payload has no such key and the screen says nothing. Both directions,
+        # through the real screen with the response stubbed (the flag's
+        # server side is pinned by the retail route tests).
+        def paint(flag):
+            owner.route("**/api/sub/retail/suppliers/payables", lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({"status": "success", "total_payable": 12.5,
+                                 "data": [], **({"supplier_balance_scope": flag} if flag else {})})))
+            try:
+                go(owner, "payables", wait_ms=200)
+                owner.wait_for_selector("#pl-total-supplier", timeout=10000)
+                owner.wait_for_function(
+                    "() => document.getElementById('pl-total-supplier').textContent.trim() !== '—'", timeout=10000)
+                return owner.evaluate(
+                    "() => { const e = document.querySelector('[data-supplier-scope-note]'); return e ? e.innerText.trim() : null; }")
+            finally:
+                owner.unroute("**/api/sub/retail/suppliers/payables")
+        note = paint("this_computer_pos")
+        assert note == "Supplier balances count purchase orders entered on this computer.", \
+            f"networked payables must show the scope note, got {note!r}"
+        assert paint(None) is None, "a one-computer shop's payables must show NO scope note"
+
+    check("v44 Q2: the Payables screen shows 'Supplier balances count purchase orders entered on this computer.' only when the server flags supplier_balance_scope",
+          v44_supplier_scope_note_follows_the_payables_flag)
 
     # =========================================================================
     # F2 -- stored XSS via inline onclick, now data-attrs + addEventListener
@@ -1877,53 +1917,64 @@ with sync_playwright() as p:
           bug_mutation_generation_guard_scoped_to_dashboard_only_reproduces_the_crash)
 
     # =========================================================================
-    # UNBOOKED note -- the server says how much of the STORED balance no sale
-    # or payment on this computer explains. The shopkeeper sees a small neutral
-    # note on the Receivables row and in the statement; a customer never sees
-    # it in a WhatsApp message. Both directions: shown when non-zero, absent
-    # when zero. State is created by a fixture UPDATE of credit_balance (an
-    # import / backfill / synced sale is exactly "balance with no sale behind it").
+    # UNBOOKED note -- was: the server says how much of the STORED balance no
+    # sale or payment on this computer explains, shown as a small neutral note.
+    #
+    # v44 (plan step 8): that state no longer exists. The balance IS the
+    # shop-wide rows, so `unbooked_amount` is 0 by construction and a stored
+    # figure with nothing behind it cannot occur. The 7.25 is now planted the
+    # only way a balance with no sale behind it can exist: an append-only
+    # adjustment row (the upgrade carry), which the statement shows as an
+    # undated "Balance carried forward (owed)" line. What these checks can no
+    # longer catch end-to-end: the server reporting a NON-ZERO unbooked amount
+    # (it cannot). The note's own rendering is still pinned by calling the
+    # renderer with a non-zero value, and the new surface (the carried line) is
+    # pinned in the statement. Customer messages must still never carry the
+    # "isn't matched" note.
     # =========================================================================
     UNBOOKED_EXTRA = 7.25
     UNBOOKED_FRAGMENT = "isn't matched to a sale on this computer"
+    CARRIED_LABEL = "Balance carried forward (owed)"
 
     UB = {}
 
     def unbooked_note_both_directions():
+        from core.retail import party_balance
         ub_id = make_debtor("Unbooked Balance Customer", "0797778899")
         UB["id"] = ub_id
         credit_charge(ub_id, 10.0, 10)
         c = sqlite3.connect(str(RETAIL_DB))
         try:
-            n = c.execute("UPDATE customers SET credit_balance = credit_balance + ? WHERE id = ?",
-                          (UNBOOKED_EXTRA, ub_id)).rowcount
+            ub_company = c.execute("SELECT company_id FROM customers WHERE id = ?", (ub_id,)).fetchone()[0]
+            party_balance.insert_carry(c, ub_company, 'customer', ub_id, UNBOOKED_EXTRA)
+            party_balance.refresh_cache(c, ub_company, 'customers', ids=[ub_id])
             c.commit()
         finally:
             c.close()
-        assert n == 1, f"fixture UPDATE matched {n} customers"
         aging = server_aging_by_id()
-        assert abs(aging[str(ub_id)]["unbooked_amount"] - UNBOOKED_EXTRA) < 0.001, \
-            f"server should report unbooked {UNBOOKED_EXTRA}: {aging[str(ub_id)]}"
+        assert abs(aging[str(ub_id)]["unbooked_amount"]) < 0.001, \
+            f"v44: nothing can be unbooked any more -- the 7.25 has a carried event behind it: {aging[str(ub_id)]}"
         assert abs(aging[str(OVERDUE_ID)]["unbooked_amount"]) < 0.001, \
             f"fixture assumption: a plain credit customer has unbooked 0: {aging[str(OVERDUE_ID)]}"
         set_msg_lang("en")
 
-        # -- Receivables row: note SHOWN for the unbooked customer, ABSENT for the plain one
+        # -- Receivables row: the full 17.250 is shown, and NO unbooked note anywhere
         open_receivables()
         row = '#pl-table-customer tr[data-open-statement-id="%s"]'
-        note = owner.locator(row % ub_id + " [data-unbooked-note]")
-        assert note.count() == 1, f"expected exactly one unbooked note on the unbooked row, found {note.count()}"
-        reachable(owner, note, "unbooked note on the Receivables row")
-        txt = note.inner_text()
-        assert UNBOOKED_FRAGMENT in txt and "7.250" in txt, f"row note wrong: {txt!r}"
-        fsz = note.evaluate("e => parseFloat(getComputedStyle(e).fontSize)")
-        assert fsz >= 11, f"note is {fsz}px, below the 11px floor"
-        assert owner.locator(row % OVERDUE_ID + " [data-unbooked-note]").count() == 0, \
-            "a customer whose balance is fully explained must show NO unbooked note"
-        assert owner.locator("#pl-table-customer [data-unbooked-note]").count() == 1, \
-            "only the one unbooked customer may carry a note"
+        assert "17.250" in owner.locator(row % ub_id).inner_text(), \
+            f"the row must show the derived balance 10 + 7.25: {owner.locator(row % ub_id).inner_text()!r}"
+        assert owner.locator("#pl-table-customer [data-unbooked-note]").count() == 0, \
+            "v44: no Receivables row may show an unbooked note (the server reports 0 for everyone)"
+        # The note's own renderer, still correct for a non-zero value (kept so
+        # the dormant UI path cannot rot unseen): shown above half a minor unit,
+        # absent at zero, and never an alarm colour.
+        shown = owner.evaluate("(a) => RetailSystem._unbookedNote({unbookedAmount: a})", UNBOOKED_EXTRA)
+        # The renderer HTML-escapes the apostrophe (&#39;), so compare unescaped.
+        assert UNBOOKED_FRAGMENT in shown.replace("&#39;", "'") and "7.250" in shown, f"note renderer wrong: {shown!r}"
+        assert owner.evaluate("() => RetailSystem._unbookedNote({unbookedAmount: 0})") == "", \
+            "a zero unbooked amount must render no note"
 
-    check("UNBOOKED (Receivables row): note shown when the server reports unbooked 7.250, absent for a fully-explained customer",
+    check("UNBOOKED (Receivables row, v44): a planted 7.25 shows in the derived balance with NO unbooked note; the note renderer still works",
           unbooked_note_both_directions)
 
     # Separate check on purpose: the STATEMENT endpoint (retail_api.py,
@@ -1934,18 +1985,26 @@ with sync_playwright() as p:
         ub_id = UB["id"]
         set_msg_lang("en")
         open_statement_by_click(ub_id)
-        snote = owner.locator("#ret-statement-dialog [data-unbooked-note]")
-        assert snote.count() == 1, f"expected one unbooked note in the statement, found {snote.count()}"
-        reachable(owner, snote, "unbooked note in the statement modal")
-        stxt = snote.inner_text()
-        assert UNBOOKED_FRAGMENT in stxt and "7.250" in stxt, f"statement note wrong: {stxt!r}"
+        assert owner.locator("#ret-statement-dialog [data-unbooked-note]").count() == 0, \
+            "v44: the statement must show NO unbooked note (the amount is a carried line instead)"
+        # The new surface: an undated "Balance carried forward (owed)" line,
+        # +7.250, and the running balance closes at the full 17.250.
+        carried = owner.evaluate("""() => [...document.querySelectorAll('#ret-statement-dialog tbody tr')]
+            .filter(tr => tr.innerText.includes('Balance carried forward'))
+            .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))""")
+        assert len(carried) == 1, f"expected exactly one carried-forward line, found {carried}"
+        date_c, ref_c, label, amount, running = carried[0]
+        assert date_c == "—", f"a carried line must show no date, got {date_c!r}"
+        assert ref_c == "—", f"a carried line must show no raw reason token as its reference, got {ref_c!r}"
+        assert label == CARRIED_LABEL and "7.250" in amount and amount.startswith("+"), f"carried line wrong: {carried[0]}"
+        assert "17.250" in running, f"running balance after the carried line: {running!r}"
         close_statement()
         open_statement_by_click(OVERDUE_ID)
-        assert owner.locator("#ret-statement-dialog [data-unbooked-note]").count() == 0, \
-            "a fully-explained customer's statement must show NO unbooked note"
+        assert owner.evaluate("() => document.querySelector('#ret-statement-dialog').innerText.includes('Balance carried forward')") is False, \
+            "a customer with no carry must show NO carried-forward line"
         close_statement()
 
-    check("UNBOOKED (statement modal): note shown when the statement reports unbooked 7.250, absent for a fully-explained customer",
+    check("UNBOOKED (statement modal, v44): the planted 7.25 appears as ONE undated 'Balance carried forward (owed)' line, no unbooked note, other customers have none",
           unbooked_note_in_statement_both_directions)
 
     def unbooked_never_in_a_customer_message():
@@ -1956,7 +2015,12 @@ with sync_playwright() as p:
             assert "matched" not in rtext and not has_amt(rtext, UNBOOKED_EXTRA) and "غير مطابق" not in rtext, \
                 f"the unbooked note leaked into the {lang} reminder:\n{rtext}"
             stext, _ = send_statement(ub_id, lang)
-            assert "matched" not in stext and not has_amt(stext, UNBOOKED_EXTRA) and "غير مطابق" not in stext, \
+            # v44: the 7.25 is now a real carried-forward LINE on the statement,
+            # so its amount legitimately appears in the statement message (it
+            # no longer can be a hidden unbooked figure). What must still never
+            # appear is the shopkeeper-only "isn't matched" note. The reminder
+            # above keeps its amount check: the carried part is not overdue.
+            assert "matched" not in stext and "غير مطابق" not in stext, \
                 f"the unbooked note leaked into the {lang} statement message:\n{stext}"
         set_msg_lang("ar")
 

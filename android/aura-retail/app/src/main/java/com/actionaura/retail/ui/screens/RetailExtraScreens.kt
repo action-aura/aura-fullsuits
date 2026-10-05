@@ -998,13 +998,22 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                         // running_balance printed right beside it, which had
                         // already gone UP. `isDebit` now covers both of the
                         // TWO things that increase what the customer owes.
-                        val isDebit = e.kind == "charge" || e.kind == "reversal"
+                        // v44: `balance_carried_owed` is the one-off opening
+                        // line an upgraded computer carries so the balance it
+                        // already showed does not move; it ADDS to what is
+                        // owed, so it is a debit like a charge.
+                        // `balance_carried_credit` reduces it (green minus,
+                        // the default). Neither is dated -- see isCarried.
+                        val isDebit = e.kind == "charge" || e.kind == "reversal" || e.kind == "balance_carried_owed"
+                        val isCarried = e.kind == "balance_carried_owed" || e.kind == "balance_carried_credit"
                         Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     when (e.kind) {
                                         "charge" -> tr("Credit sale") + " ${e.ref ?: ""}"
                                         "reversal" -> tr("Cheque returned") + " ${e.ref ?: ""}"
+                                        "balance_carried_owed" -> tr("Balance carried forward (owed)")
+                                        "balance_carried_credit" -> tr("Balance carried forward (credit)")
                                         // customer_statement's two new return-settlement
                                         // kinds. Both REDUCE what the customer owes, so
                                         // `isDebit` above correctly leaves them out and the
@@ -1022,7 +1031,7 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                                         else -> tr("Payment") + " ${e.ref ?: ""}"
                                     },
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(shortDate(e.date), style = MaterialTheme.typography.labelSmall,
+                                Text(shortDate(if (isCarried) null else e.date), style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Text((if (isDebit) "+" else "-") + money(e.amount),
@@ -1288,17 +1297,23 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                         // `kind='reversal'` the same way a bounce does on the
                         // customer side -- and must count as owing them more
                         // again, exactly like a fresh PO charge does.
-                        val isDebit = e.kind == "charge" || e.kind == "reversal"
+                        // v44: the carried-forward opening line (see the
+                        // customer StatementSheet above). Owed adds, credit
+                        // reduces; undated.
+                        val isDebit = e.kind == "charge" || e.kind == "reversal" || e.kind == "balance_carried_owed"
+                        val isCarried = e.kind == "balance_carried_owed" || e.kind == "balance_carried_credit"
                         Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     when (e.kind) {
                                         "charge" -> tr("PO") + " ${e.ref ?: ""}"
                                         "reversal" -> tr("Cheque returned") + " ${e.ref ?: ""}"
+                                        "balance_carried_owed" -> tr("Balance carried forward (owed)")
+                                        "balance_carried_credit" -> tr("Balance carried forward (credit)")
                                         else -> tr("Payment") + " ${e.ref ?: ""}"
                                     },
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(shortDate(e.date), style = MaterialTheme.typography.labelSmall,
+                                Text(shortDate(if (isCarried) null else e.date), style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Text((if (isDebit) "+" else "-") + money(e.amount),
