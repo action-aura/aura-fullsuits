@@ -18159,14 +18159,21 @@ def pay_purchase_order(po_id):
     if amt <= 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
+    # STOCK-BOOKS verify F5: the status check and the write share ONE write
+    # transaction. The status used to be read before any lock, so a cancel
+    # landing between the read and the UPDATE below still let the payment
+    # through (a supplier credit with no debt behind it). BEGIN IMMEDIATE takes
+    # the write lock first, the status is read INSIDE it, and the UPDATE
+    # re-checks it and its rowcount.
+    conn.execute("BEGIN IMMEDIATE")
     po = conn.execute("SELECT id,supplier_id,total,COALESCE(amount_paid,0) AS amount_paid,po_number,status FROM purchase_orders WHERE id=? AND company_id=?",
                       (po_id, cid)).fetchone()
     if not po:
-        conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
     # STOCK-BOOKS B3: a cancelled order owes the supplier nothing -- paying it
     # would create a supplier credit with no debt behind it.
     if po['status'] == 'cancelled':
-        conn.close(); return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
+        conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
     try:
         new_paid = _money(po['amount_paid'] + amt, currency)
         # The SAME epsilon create_purchase_order sets this column with -- the
@@ -18175,8 +18182,13 @@ def pay_purchase_order(po_id):
         # have called 'partial'. A hardcoded 0.005 here called a JOD PO with
         # five fils outstanding fully paid.
         status = 'paid' if new_paid >= _money(po['total'], currency) - _money_epsilon(currency) else 'partial'
-        conn.execute("UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
-                     (new_paid, status, po_id, cid))
+        _paid_upd = conn.execute(
+            "UPDATE purchase_orders SET amount_paid=?, payment_status=? "
+            "WHERE id=? AND company_id=? AND COALESCE(status,'') <> 'cancelled'",
+            (new_paid, status, po_id, cid))
+        if _paid_upd.rowcount != 1:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be paid'}), 409
         pay_uid = _new_uid()  # F3b: see customer_payment -- source link for a later void
         ref = _record_payment(conn, cid, 'supplier', po['supplier_id'], 'out', amt, method=data.get('method', 'cash'),
                               related_type='po', related_id=po_id, notes=data.get('notes', ''),
