@@ -18961,6 +18961,9 @@ def _today_drawers(conn, cid, today_date, money):
     return rows, stake, extra
 
 
+TODAY_TAX_BACKLOG_GRACE = timedelta(minutes=15)
+
+
 def _today_tax(conn, cid, today_date, boundary, sales_today):
     """JoFotara reporting, honestly. None when e-invoicing is not part of this
     build / cannot be read (nothing true to say). Otherwise `(reason, rows,
@@ -18980,7 +18983,15 @@ def _today_tax(conn, cid, today_date, boundary, sales_today):
             {'key': 'waiting', 'n': waiting}]
     if state != 'connected':
         return state, rows, sales_today
-    queued = int(counts.get('QUEUED') or 0)
+    # Backlog = QUEUED for more than TODAY_TAX_BACKLOG_GRACE. A connected shop
+    # queues every sale for a moment before the worker submits it, so counting
+    # ANY queued row flashed "not reported" on the owner's home right after a
+    # normal sale. einvoice_outbox.created_at is UTC isoformat (outbox._now),
+    # the same shape as the cutoff below, so the string compare is exact.
+    stale_cutoff = (datetime.now(timezone.utc) - TODAY_TAX_BACKLOG_GRACE).isoformat()
+    queued = int(conn.execute(
+        "SELECT COUNT(*) FROM einvoice_outbox WHERE company_id=? AND status='QUEUED' AND created_at <= ?",
+        (cid, stale_cutoff)).fetchone()[0] or 0) if int(counts.get('QUEUED') or 0) else 0
     if queued > 0:
         return 'backlog', rows, queued
     rejected = int(counts.get('FAILED_PERMANENT') or 0)

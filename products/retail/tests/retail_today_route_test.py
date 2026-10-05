@@ -317,11 +317,11 @@ def _wire_provider(monkeypatch, provider):
                         scratch.view_functions['einvoicing_api._status'])
 
 
-def _outbox(cid, status, n=1, cleared_today=False):
+def _outbox(cid, status, n=1, cleared_today=False, age=timedelta(0)):
     conn = get_retail_conn()
     for _ in range(n):
         ref = uuid.uuid4().hex
-        stamp = NOW_UTC.isoformat()
+        stamp = (NOW_UTC - age).isoformat()
         conn.execute(
             "INSERT INTO einvoice_outbox (company_id, invoice_ref, source_type, source_id, einvoice_no, "
             "invoice_family, payment_type, status, created_at, updated_at, cleared_at) "
@@ -687,8 +687,13 @@ def test_tax_reasons_and_the_connected_allow_half(monkeypatch, _killswitch_clean
     d = _data(client)
     assert 'tax' not in [c['kind'] for c in d['cards']]
     assert {r['kind']: r['detail'] for r in d['all_clear']}['tax'] == {'sales_today': 1, 'reported_today': 1}
-    # a QUEUED invoice is a backlog; a permanently failed one is a rejection
-    _outbox(cid, 'QUEUED', n=2)
+    # A QUEUED invoice younger than the grace window is a sale being submitted,
+    # not a backlog: the card must stay away (allow half of the grace rule).
+    _outbox(cid, 'QUEUED', n=1, age=timedelta(minutes=5))
+    assert 'tax' not in [c['kind'] for c in _data(client)['cards']]
+    # Queued for longer than the grace window IS a backlog -- and the fresh
+    # one is still not counted; a permanently failed one is a rejection.
+    _outbox(cid, 'QUEUED', n=2, age=timedelta(minutes=16))
     c = _card(_data(client), 'tax')
     assert (c['extra']['reason'], c['count']) == ('backlog', 2)
     conn = get_retail_conn()
