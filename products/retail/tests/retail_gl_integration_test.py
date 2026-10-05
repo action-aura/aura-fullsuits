@@ -536,25 +536,38 @@ def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
 
 
 def test_purchase_order_with_no_supplier_still_balances(client):
-    """`supplier_id` is OPTIONAL on create_purchase_order -- see
-    post_purchase_order's own docstring. A PO with no supplier and an
-    unpaid balance must still post a BALANCED journal (Inventory booked
-    only at what is actually accounted for), never raise and block PO
-    creation."""
+    """`supplier_id` stays OPTIONAL on create_purchase_order for an order that
+    is PAID IN FULL, and that order must post a BALANCED journal.
+
+    RESHAPED (STOCK-BOOKS verify F3, 2026-10-05). This test used to create a
+    supplier-less PO with 30 left UNPAID and pin it as allowed. That order is
+    now refused (409 SUPPLIER_REQUIRED_FOR_CREDIT_PO): with no supplier there
+    is nobody to owe, so the unpaid part could never reach AP or a supplier
+    balance and the receipt left the stock outside the books for good (the
+    verifier measured `not_opened` / a red `differs`). The refusal is asserted
+    first (nothing posted), then the still-allowed fully paid order is held to
+    the same balance checks the old test made. What this can no longer catch:
+    a regression in how an UNPAID supplier-less order is booked -- because no
+    such order can be created any more."""
     cid = client.test_company_id
     pid = _seed_product(client, sell_price=5.0)
+    before = _trial_balance(cid)
     r = client.post(f'{API}/purchase-orders', json={
         'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}],
         'amount_paid': 10.0})  # 30 left unpaid, no supplier to charge it to
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json().get('code') == 'SUPPLIER_REQUIRED_FOR_CREDIT_PO', r.get_json()
+    assert _trial_balance(cid) == before, 'a refused order must post nothing'
+
+    r = client.post(f'{API}/purchase-orders', json={
+        'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}],
+        'amount_paid': 40.0})  # paid in full: no supplier needed
     assert r.status_code == 200, r.get_json()
 
     tb = _trial_balance(cid)
     assert tb['is_balanced']
-    # Only the accounted-for amount (the down payment) is booked -- see
-    # post_purchase_order's own docstring for why the unpaid 30 is not
-    # invented as Inventory the subledger cannot explain either.
-    # STOCK-BOOKS: the accounted-for 10 sits in 1260 until received.
-    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 10.0
+    # STOCK-BOOKS: the paid 40 sits in 1260 until received.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
     # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
     # seed product's opening stock (offset in 3900), not a cent more. (Plain
     # `== 0` would break the moment a product's opening stock is booked.)
@@ -564,7 +577,7 @@ def test_purchase_order_with_no_supplier_still_balances(client):
     # neither; 100.000 on each fails if the order leaks into 1200 at all.
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
-    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -10.0
+    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
 
 
