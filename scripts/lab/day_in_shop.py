@@ -269,6 +269,12 @@ def ui_login(page, email, password=PWD):
             break
     page.press("#rl-pass", "Enter")
     page.locator(".sub-nav-item").first.wait_for(state="visible", timeout=NAV_WAIT)
+    # DAY-UI U7: the signed-out shell's nav items are still in the DOM behind the login
+    # box, so the wait above can be satisfied BEFORE the new sign-in has launched the
+    # shell. open_till() then called _navigate('pos') while SubsystemApp.active was still
+    # null (logout() nulls it), logging "Error in null/pos: The null module is not
+    # available". That was this script racing the app, not the app: wait for the launch.
+    page.wait_for_function("() => window.SubsystemApp && !!SubsystemApp.active", timeout=NAV_WAIT)
 
 
 def open_till(page):
@@ -426,8 +432,13 @@ class Day:
     def new_page(self, viewport=None):
         ctx = self.browser.new_context(viewport=viewport or {"width": 1366, "height": 768})
         page = ctx.new_page()
-        page.on("console", lambda m: self.rec.console.append(f"{m.type}: {m.text}"[:300]) if m.type == "error" else None)
-        page.on("pageerror", lambda e: self.rec.console.append(f"pageerror: {e}"[:300]))
+        # DAY-UI U7: each error carries the last step recorded when it fired (diagnostic
+        # only, appended AFTER the 300-char cut so the dedupe key below is unchanged) --
+        # "an error exists" was not enough to find which action produced it.
+        def _tag():
+            return " [after %s]" % (self.rec.steps[-1]["id"] if self.rec.steps else "start")
+        page.on("console", lambda m: self.rec.console.append(f"{m.type}: {m.text}"[:300] + _tag()) if m.type == "error" else None)
+        page.on("pageerror", lambda e: self.rec.console.append(f"pageerror: {e}"[:300] + _tag()))
         page.on("dialog", lambda d: d.dismiss())
         return page
 
@@ -916,10 +927,21 @@ class Day:
         # Rana leaves an item in the cart and signs out.
         scan(p, CATALOG["P6"][1])
         s = rec.shot(p, "H-rana-cart-before-signout")
-        chip = p.locator("#sub-identity-chip-btn")
-        chip.click()
-        p.locator(".sub-identity-menu-item.is-danger").click()
-        p.get_by_text("Sign out and clear sale").wait_for(state="visible", timeout=5000)
+        # DAY-UI U5: sign out from the keyboard (Ctrl+Shift+L) with the cursor in the scan box,
+        # where a cashier actually is. It must reach the SAME confirm the menu item reaches.
+        focus_scan(p)
+        p.keyboard.press("Control+Shift+L")
+        try:
+            p.get_by_text("Sign out and clear sale").wait_for(state="visible", timeout=5000)
+            key_ok = True
+        except Exception:
+            key_ok = False
+        rec.step("H-signout-key", "H Ctrl+Shift+L opens the sign-out confirm (a sale is in progress) from the scan box", key_ok,
+                 "confirm shown", "shown" if key_ok else "nothing happened")
+        if not key_ok:   # fall back to the mouse so the rest of the day still runs
+            p.locator("#sub-identity-chip-btn").click()
+            p.locator(".sub-identity-menu-item.is-danger").click()
+            p.get_by_text("Sign out and clear sale").wait_for(state="visible", timeout=5000)
         s2 = rec.shot(p, "H-signout-confirm")
         # Cancel is focused by default (safe); Tab to the danger button, Enter.
         p.keyboard.press("Tab")
@@ -932,10 +954,6 @@ class Day:
         s3 = rec.shot(p, "H-omar-till-empty")
         rec.step("H1", "Rana signs out with an item in the cart, Omar signs in: till is EMPTY",
                  cart_n == 0 and dom_rows == 0 and (money_in(total_txt) or D(0)) == 0, "0 lines, total 0.000", f"{cart_n} lines, {dom_rows} rows, total {total_txt!r}", s3)
-        rec.finding("MINOR", "Signing out has no keyboard shortcut - it needs the mouse (account chip -> Log Out)",
-                    "Looked for a till key for sign-out; used the account chip.", "A key (or at least a reachable tab order from the till).",
-                    "Mouse click on #sub-identity-chip-btn then the Log Out item; the confirm dialog IS keyboard-friendly (Cancel focused, Tab, Enter).",
-                    s2, "products/retail/frontend/app-shell.js:3770-3792 (identity menu); no F-key in subsystem-retail.js _onFunctionKey")
         # S13 Omar rings one cash sale
         scan(p, CATALOG["P5"][1])
         e13 = self.record_sale("S13", [("P5", 1)], "cash", "omar", tendered=D("10"))
@@ -1013,8 +1031,15 @@ class Day:
         }""")
         names = {v[0] for v in CATALOG.values()}
         data_words = ("Day Test Shop", "Rana", "Omar", "Abu Khaled", "Ctrl K", "Owner Test")
+        # DAY-UI U3: the product word inside the brand lockup ("Retail" in "Aura Retail",
+        # span.aura-product) stays Latin by decision (the owner confirmed the product
+        # name 2026-10-04; a trademark is not translated). The exemption names that ONE
+        # element class -- it can no longer catch English text placed INSIDE the brand
+        # mark element only; the same word anywhere else on the till is still caught.
+        BRAND_MARK_ELEMENT = " @@ span.aura-product"
         left = [t for t in latin if not any(n.lower() in t.split(" @@ ")[0].lower() for n in names) and t.split(" @@ ")[0] not in ("Aura", "Aura Retail")
-                and not any(d.lower() in t.split(" @@ ")[0].lower() for d in data_words)]
+                and not any(d.lower() in t.split(" @@ ")[0].lower() for d in data_words)
+                and not t.endswith(BRAND_MARK_ELEMENT)]
         units = [t for t in (p.evaluate(r"""() => Array.from(document.querySelectorAll('.pos-card, .pos-card *')).filter(e =>  /\bpc\b/.test(e.textContent)).map(e => e.textContent.trim())""") or [])]
         rec.step("AR1", "Arabic till: no English text left (product names excepted)", not left, "none", left[:12], s)
         if left:
