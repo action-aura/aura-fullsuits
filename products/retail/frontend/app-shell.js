@@ -1966,6 +1966,7 @@ const SubsystemApp = {
     if (page) page.classList.add('active');
 
     this._renderShell(sys, systemId);
+    this._ensureSignOutShortcut();   // DAY-UI U5
     this._navigate(this.currentSection);
     LogoSystem.init();
     this._startSyncHealthPoll();
@@ -4158,6 +4159,49 @@ const SubsystemApp = {
     document.addEventListener('keydown', (e) => SubsystemApp._onDropdownKeydown(e), true);
   },
 
+  // Installed ONCE per page, from launch() -- NOT from the dropdown installer
+  // above, which only runs when a menu is first opened (a shortcut that works
+  // only after the account menu has been opened once is no shortcut).
+  _ensureSignOutShortcut() {
+    if (this._signOutShortcutInstalled) return;
+    this._signOutShortcutInstalled = true;
+    document.addEventListener('keydown', (e) => SubsystemApp._onSignOutShortcut(e), true);
+  },
+
+  // DAY-UI U5: Ctrl+Shift+L signs out -- the SAME logout() the identity menu's
+  // "Log Out" item calls (so the unsaved-changes guard, the unsynced-sales
+  // question and the "a sale is in progress" confirm all still run; this is a
+  // second way to reach that one path, not a second path). Found missing in a
+  // keyboard-only day-in-the-shop run: handing the till to the next cashier
+  // needed the mouse (account chip -> Log Out).
+  //
+  // A chord rather than a bare key so it cannot be hit by accident mid-sale.
+  // Read from the PHYSICAL key (e.code) so it works on an Arabic layout too.
+  //
+  // Not while typing, and not under an open dialog -- with ONE exception: the
+  // till's own scan box. The till parks focus in #pos-search essentially all
+  // the time (see _onPOSShortcut's note on its function keys), so a blanket
+  // "not in an input" rule would make this chord dead exactly where a cashier
+  // needs it. A Ctrl+Shift chord emits no character, so letting it through
+  // cannot corrupt a search term; every other field (tendered amount,
+  // discount, note, any form) still keeps its keys to itself.
+  _onSignOutShortcut(e) {
+    if (!e || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+    if (e.code !== 'KeyL') return;
+    // Only when signed in: the identity chip exists only in the signed-in shell.
+    if (!document.getElementById('sub-identity-chip-btn')) return;
+    const el = document.activeElement;
+    if (el && el.id !== 'pos-search') {
+      const tag = (el.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) return;
+    }
+    if (el && typeof el.closest === 'function' && el.closest('[role="dialog"]')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.repeat) return;
+    SubsystemApp.logout();
+  },
+
   _onDropdownKeydown(e) {
     const state = this._dropdownState;
     if (!state) return;
@@ -5808,6 +5852,14 @@ const SubsystemApp = {
   _installAuthGuard() {
     if (window.__auraAuthGuardInstalled) return;
     window.__auraAuthGuardInstalled = true;
+    // DAY-UI U7: the browser rejects every in-flight fetch with a bare
+    // "TypeError: Failed to fetch" when the page itself is being unloaded
+    // (a reload, e.g. right after a licence is activated). That is not a screen
+    // failing, and there is no screen left to show an error on; this flag lets a
+    // renderer tell the two apart instead of logging it and painting a
+    // "Failed to load" panel as the page goes away.
+    window.addEventListener('pagehide', () => { SubsystemApp._pageUnloading = true; });
+    window.addEventListener('pageshow', () => { SubsystemApp._pageUnloading = false; });   // restored from the back/forward cache
     const origFetch = window.fetch.bind(window);
     // Endpoints that legitimately return 401 during auth flow — never bounce on these.
     const SKIP = ['/api/auth/', '/api/onboarding/', '/api/system/', '/api/demo/'];
@@ -6129,7 +6181,18 @@ const SubsystemApp = {
     // JavaScript, which is exactly how a `right:24px` got in here while the
     // colours were being moved onto tokens -- so the toast test below now
     // watches this line instead.
-    toast.style.cssText = `position:fixed;bottom:calc(var(--overlay-inset-block-end,24px) + var(--toast-stack-offset,0px));inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4);transition:bottom .18s ease`;
+    // DAY-UI U1: while the till is on screen (its #pos-tendered input exists) the
+    // column starts at the TOP inline-end instead of the bottom. The bottom
+    // inline-end corner of the till IS the tender tiles, the tendered field and
+    // the Charge button; measured at 1366x768 toasts covered Credit/Voucher and
+    // the tendered field. The top corner over the till is only the page header
+    // (search / theme / language / account chip), which a cashier is not using
+    // mid-sale. Every other screen keeps the bottom column unchanged.
+    const _onTill = !!document.getElementById('pos-tendered');
+    const _anchor = _onTill
+      ? 'top:calc(12px + var(--toast-stack-offset,0px))'
+      : 'bottom:calc(var(--overlay-inset-block-end,24px) + var(--toast-stack-offset,0px))';
+    toast.style.cssText = `position:fixed;${_anchor};inset-inline-end:24px;background:var(${tok.surface});border:1px solid var(${tok.border});color:var(${tok.text});padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4);transition:bottom .18s ease,top .18s ease`;
     // ANNOUNCED, not merely shown. This toast is the product's ONLY feedback
     // surface -- every validation failure, save confirmation, network error
     // and stock warning in the whole app arrives here (this function's own

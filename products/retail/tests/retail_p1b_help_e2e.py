@@ -70,7 +70,7 @@ EXPECTED_FKEYS_AR = ["نقدًا", "بطاقة", "محفظة إلكترونية 
 # five keys ["Enter", "X", "Delete", "/", "N *"] to the whole keyboard model:
 # F7-F12, arrows, +/-, Ctrl+Delete, P, the drawer keys.
 EXPECTED_OTHER_KEYS = ["Enter", "\u2191 \u2193", "+ \u2212", "N *", "Delete", "Ctrl+Delete", "F10 / Ctrl+Enter", "X",
-                       "F7", "F8", "F9", "Shift+F9", "F11", "F12", "Esc", "/", "P", "Shift+F1 \u2013 F4"]
+                       "F7", "F8", "F9", "Shift+F9", "F11", "F12", "Esc", "/", "Ctrl+Shift+L", "P", "Shift+F1 \u2013 F4"]
 FAKE_NUMBER = "+962 79-123 4567"
 FAKE_DIGITS = "962791234567"
 

@@ -3232,6 +3232,19 @@ const RetailSystem = {
         </tr>`).join('');
       }
     } catch(e) {
+      // DAY-UI U7: a request that belonged to a render another navigation has
+      // since replaced (the person left Dashboard, signed out, or the page was
+      // being torn down) failing is not a dashboard failure -- there is no
+      // dashboard on screen for it to be a failure OF. Without this the stale
+      // request's "Failed to fetch" was logged twice (here and in _navigate's
+      // catch) and, worse, rethrown into _navigate, which painted a "Failed to
+      // load dashboard" panel over whatever screen had replaced it. Same
+      // renderToken the success path's guard above uses, so a CURRENT
+      // dashboard's failure still reaches the rethrow below untouched.
+      if (this._isStaleRender(renderToken)) return;
+      // Same reasoning for a page that is itself unloading (see the pagehide
+      // listener in app-shell _installAuthGuard): every pending fetch rejects.
+      if (window.SubsystemApp && SubsystemApp._pageUnloading) return;
       console.error('Retail dashboard error:', e.message);
       // AUDIT: this used to swallow the error silently, leaving every KPI
       // tile frozen on its "—" placeholder and the recent-transactions table
@@ -4303,7 +4316,21 @@ const RetailSystem = {
            100% is required for text-overflow to have a bounded box to
            clip against inside a flex column that otherwise sizes to its
            own content. */
-        .pos-pay-label { line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-inline-size:100%; }
+        /* DAY-UI U2 supersedes the nowrap+ellipsis above, for the reason the
+           comment above itself warned about from the other side: a day-in-the-
+           shop run at Normal text 1366x768 found "Mobile / CliQ" clipped to
+           "Mobile / ..." (needs 69px, the tile gives 61) -- a cashier could not
+           read which tender the tile was. The label now wraps to a second line
+           at the SAME font size (no shrinking), with a tight line-height so two
+           lines cost 2-3px more than one. The tile keeps its own
+           min-block-size, so the grid row does not jump between languages.
+           NO overflow-wrap (neither anywhere nor break-word): both were tried
+           and measured in the day-in-shop screenshots. anywhere shrank the
+           label's min-content to one letter, so the narrow Credit tile broke
+           "Cred / it" at Large text; break-word split "Voucher" as
+           "Voucher / r" at Extra large. A word that does not fit is a worse
+           read split in two than whole, so words only ever wrap at spaces. */
+        .pos-pay-label { line-height:1.1;white-space:normal;text-align:center;max-inline-size:100%; }
         /* F1-F6 accelerator badge (see _renderPayButtons/_onPOSShortcut). A
            SELF-CONTAINED chip -- its own opaque surface under its own text
            token, the same construction .ret-badge uses -- so it reads
@@ -5470,6 +5497,20 @@ const RetailSystem = {
     return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   },
 
+  // DAY-UI U6: a unit CODE the product form itself offers (pc, kg, ml, ...) is
+  // shown in the operator's language; anything else the shop typed is shown
+  // exactly as typed, and the stored value is never touched. In English the
+  // code is returned as stored (so "KG" stays "KG"). Found in Arabic, where
+  // every product tile read "المخزون: 12 pc". One catalogue key per CODE (not
+  // per concept) so English keeps showing exactly the code that was stored.
+  _UNIT_CODES: ['pc', 'pcs', 'kg', 'g', 'l', 'ml', 'm', 'cm', 'box', 'pack', 'pair', 'dozen'],
+  _unitLabel(u) {
+    const raw = String(u == null ? '' : u);
+    if (!window.AuraI18n || AuraI18n.current === 'en') return raw;
+    const code = raw.trim().toLowerCase();
+    return this._UNIT_CODES.indexOf(code) === -1 ? raw : t('Unit: ' + code);
+  },
+
   // Corrected scope for 7b (see the doc section named above): the figure is
   // KEPT, dated, not blanked -- a bare "no number" removes the only
   // information the cashier had. Escapes p.unit for the same reason
@@ -5478,7 +5519,7 @@ const RetailSystem = {
   // hand-typed strings.
   _staleStockLabel(p) {
     const clock = this._formatClockTime(this._mostRecentSyncSuccess(this._syncHealth));
-    const qty = `${p.total_stock} ${this._esc(p.unit || '')}`;
+    const qty = `${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`;
     return clock ? `${t('Stock at')} ${this._esc(clock)}: ${qty}` : `${t('Stock')}: ${qty}`;
   },
 
@@ -5647,7 +5688,7 @@ const RetailSystem = {
         <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
-          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(p.unit||'')}`)}
+          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(this._unitLabel(p.unit))}`)}
         </span>`}
       </button>`;
     }).join('');
@@ -5786,7 +5827,7 @@ const RetailSystem = {
             ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')`
             : `RetailSystem._addToCart('${this._esc(v.id)}');RetailSystem._closeModalOverlay(this)`}">
         <span>${this._esc(v.variant_label || v.name)}</span>
-        <span>${this._money(v.sell_price)} · ${outOfStock ? this._esc(t('Out of stock')) : `${v.total_stock} ${this._esc(v.unit||'')}`}</span>
+        <span>${this._money(v.sell_price)} · ${outOfStock ? this._esc(t('Out of stock')) : `${v.total_stock} ${this._esc(this._unitLabel(v.unit))}`}</span>
       </button>`;
     }).join('');
   },
@@ -6308,17 +6349,20 @@ const RetailSystem = {
     overlay.id = 'ret-hold-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:420px" id="ret-hold-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-hold-dialog-title">
-        <h3 id="ret-hold-dialog-title">${this._icon('pause', 18, '⏸')} Hold This Sale</h3>
+        <!-- DAY-UI U4: every string here goes through t(). A day-in-the-shop run in
+             Arabic found this dialog's title, body and label still English
+             (the buttons were translated only by the shell's exact-text pass). -->
+        <h3 id="ret-hold-dialog-title">${this._icon('pause', 18, '⏸')} ${t('Hold This Sale')}</h3>
         <p style="color:var(--text-muted);margin:0 0 18px;font-size:13px;line-height:1.5">
-          The cart is parked and cleared here so you can start a new sale. Resume it later from "Held Sales".
+          ${t('The cart is parked and cleared here so you can start a new sale. Resume it later from "Held Sales".')}
         </p>
         <div class="ret-field">
-          <label for="hold-label">Note (optional — e.g. "Table 4", customer name)</label>
+          <label for="hold-label">${t('Note (optional — e.g. "Table 4", customer name)')}</label>
           <input id="hold-label" data-i18n-ph="Helps you find it later" placeholder="${t('Helps you find it later')}" maxlength="200" />
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="hold-save-btn" onclick="RetailSystem._saveHold()">Hold Sale</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="hold-save-btn" onclick="RetailSystem._saveHold()">${t('Hold Sale')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -6401,10 +6445,10 @@ const RetailSystem = {
       <div class="ret-modal ret-modal-wide" id="ret-held-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-held-dialog-title">
         <h3 id="ret-held-dialog-title">${this._icon('clipboard-list', 18, '📋')} ${t('Held Sales')}</h3>
         <div id="held-list" style="max-height:50vh;overflow-y:auto">
-          <div style="text-align:center;color:var(--text-muted);padding:30px">Loading…</div>
+          <div style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</div>
         </div>
         <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Close</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Close')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -6456,7 +6500,7 @@ const RetailSystem = {
       const countEl = document.getElementById('pos-held-count');
       if (countEl) countEl.textContent = rows.length;
       if (!rows.length) {
-        box.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px">No held sales.</div>';
+        box.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px">' + t('No held sales.') + '</div>';
         return;
       }
       box.innerHTML = rows.map(r => {
@@ -6496,7 +6540,7 @@ const RetailSystem = {
       this._heldSel = Math.min(this._heldSel || 0, rows.length - 1);
       this._paintHeldSel();
     } catch (e) {
-      box.innerHTML = '<div style="text-align:center;color:var(--state-danger-text);padding:20px">Failed to load held sales.</div>';
+      box.innerHTML = '<div style="text-align:center;color:var(--state-danger-text);padding:20px">' + t('Failed to load held sales.') + '</div>';
     }
   },
 
@@ -7736,12 +7780,13 @@ const RetailSystem = {
     } else if (product) {
       // reuses existing stock checks + cart merge. Restaurant modifiers,
       // wave 2: _addToCart is now async and may open the modifier picker
-      // instead of committing -- awaited here so this toast only fires once
-      // a line has ACTUALLY landed in the cart (the picker's own Confirm
-      // tap is the visible confirmation for a modified line, matching how
-      // _openVariantPicker's own selection never toasts either).
-      const added = await this._addToCart(product.id);
-      if (added) SubsystemApp.showToast(`${t('Added')}: ${product.name}`, 'success');
+      // instead of committing -- awaited so the scan is finished before the
+      // next one is read.
+      // DAY-UI U1: no "Added: <item>" toast on a scan. The cart line (with its
+      // pos-row-new entrance animation) is the confirmation, and a scan burst's
+      // stacked toasts were measured sitting over the Credit/Voucher tiles and
+      // the tendered field at 1366x768. See _activateProduct for the same rule.
+      await this._addToCart(product.id);
     } else if (error) {
       // Distinct from "not found": the lookup itself failed, so telling the
       // cashier this product doesn't exist would be a lie about why the
@@ -8408,9 +8453,14 @@ const RetailSystem = {
     const hasKids = all.some(x => x.parent_product_id && x.parent_product_id === p.id);
     if (hasKids || p.has_variants) { this._openVariantPicker(p.id); return false; }
     if (p.total_stock <= 0) { SubsystemApp.showToast(t('Out of stock'), 'error'); return false; }
-    const added = this._addToCart(p.id);
-    if (added) SubsystemApp.showToast(`${t('Added')}: ${p.name}`, 'success');
-    return added;
+    // DAY-UI U1: no "Added: <item>" toast here any more. The cart line itself is
+    // the confirmation (it appears or its quantity moves, with the pos-row-new
+    // entrance animation _renderCart plays for the touched row). A day-in-the-shop
+    // run at 1366x768 measured four of these stacking bottom-end, on top of the
+    // Credit/Voucher tiles and the tendered field, for the several seconds a scan
+    // burst keeps them alive -- feedback that hid the money controls it was meant
+    // to reassure about. Error toasts (out of stock, above) stay.
+    return this._addToCart(p.id);
   },
 
   // Enter with text in the search. In order: the highlighted result; an exact
@@ -8484,6 +8534,9 @@ const RetailSystem = {
     ['F12', 'Show these keys'],
     ['Esc', 'Close, clear the search, cancel'],
     ['/', 'Go to the search box'],
+    // DAY-UI U5: handled by SubsystemApp._onSignOutShortcut (app-shell.js), not
+    // by the till's own key handler, because it works on every signed-in screen.
+    ['Ctrl+Shift+L', 'Sign out'],
     ['P', 'On the receipt: print'],
     ['Shift+F1 – F4', 'Cash drawer: open shift, cash in/out, X report, end shift'],
   ],
@@ -8584,7 +8637,7 @@ const RetailSystem = {
       if (!st.term) { box.innerHTML = ''; return; }
       if (!st.results.length) { box.innerHTML = `<div class="pk-empty">${this._esc(t('No products found.'))}</div>`; return; }
       box.innerHTML = st.results.map((p, i) => {
-        const stock = p.total_stock <= 0 ? this._esc(t('Out of stock')) : `${this._esc(t('Stock'))}: ${this._esc(String(p.total_stock))} ${this._esc(p.unit || '')}`;
+        const stock = p.total_stock <= 0 ? this._esc(t('Out of stock')) : `${this._esc(t('Stock'))}: ${this._esc(String(p.total_stock))} ${this._esc(this._unitLabel(p.unit))}`;
         return `<div class="pk-row pk-row-static${i === st.sel ? ' pk-row-sel' : ''}" role="option" aria-selected="${i === st.sel}">
           <span class="pk-row-main">${this._esc(p.name)}</span>
           <span class="pk-row-price">${this._money(p.sell_price)}</span>
@@ -9984,7 +10037,7 @@ const RetailSystem = {
              keeps its ⚠ prefix so the severity is not colour-only. Above the
              threshold is unremarkable, so it is simply ordinary text. -->
         <td class="num" style="font-weight:600;color:var(--text-money)">${this._fmt(p.sell_price)}</td>
-        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${p.unit||''}</td>
+        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?this._icon('triangle-alert', 16, '⚠')+' ':''}${p.total_stock} ${this._esc(this._unitLabel(p.unit))}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
         ${canAdjust ? `<td onclick="event.stopPropagation()" style="display:flex;gap:6px">

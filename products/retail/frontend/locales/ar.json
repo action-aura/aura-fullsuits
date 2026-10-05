@@ -2369,5 +2369,22 @@
   "You can give at most {n}% discount. Ask a manager for more.": "يمكنك منح خصم بحد أقصى {n}%. اطلب من المدير خصماً أكبر.",
   "Discount (up to {n}%)": "خصم (حتى {n}%)",
   "Discount given by cashier": "خصم منحه الكاشير",
-  "Cashier discount limit changed": "تم تغيير حد خصم الكاشير"
+  "Cashier discount limit changed": "تم تغيير حد خصم الكاشير",
+  "Hold This Sale": "تعليق هذا البيع",
+  "The cart is parked and cleared here so you can start a new sale. Resume it later from \"Held Sales\".": "يتم حفظ السلة وتفريغها هنا لتبدأ بيعًا جديدًا. يمكنك استئنافه لاحقًا من «المبيعات المعلّقة».",
+  "Note (optional — e.g. \"Table 4\", customer name)": "ملاحظة (اختيارية — مثل «طاولة 4» أو اسم العميل)",
+  "No held sales.": "لا توجد مبيعات معلّقة.",
+  "Sign out": "تسجيل الخروج",
+  "Unit: pc": "قطعة",
+  "Unit: pcs": "قطعة",
+  "Unit: kg": "كغم",
+  "Unit: g": "غم",
+  "Unit: l": "لتر",
+  "Unit: ml": "مل",
+  "Unit: m": "م",
+  "Unit: cm": "سم",
+  "Unit: box": "علبة",
+  "Unit: pack": "عبوة",
+  "Unit: pair": "زوج",
+  "Unit: dozen": "دزينة"
 }

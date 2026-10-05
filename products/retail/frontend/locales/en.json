@@ -2369,5 +2369,22 @@
   "You can give at most {n}% discount. Ask a manager for more.": "You can give at most {n}% discount. Ask a manager for more.",
   "Discount (up to {n}%)": "Discount (up to {n}%)",
   "Discount given by cashier": "Discount given by cashier",
-  "Cashier discount limit changed": "Cashier discount limit changed"
+  "Cashier discount limit changed": "Cashier discount limit changed",
+  "Hold This Sale": "Hold This Sale",
+  "The cart is parked and cleared here so you can start a new sale. Resume it later from \"Held Sales\".": "The cart is parked and cleared here so you can start a new sale. Resume it later from \"Held Sales\".",
+  "Note (optional — e.g. \"Table 4\", customer name)": "Note (optional — e.g. \"Table 4\", customer name)",
+  "No held sales.": "No held sales.",
+  "Sign out": "Sign out",
+  "Unit: pc": "pc",
+  "Unit: pcs": "pcs",
+  "Unit: kg": "kg",
+  "Unit: g": "g",
+  "Unit: l": "l",
+  "Unit: ml": "ml",
+  "Unit: m": "m",
+  "Unit: cm": "cm",
+  "Unit: box": "box",
+  "Unit: pack": "pack",
+  "Unit: pair": "pair",
+  "Unit: dozen": "dozen"
 }

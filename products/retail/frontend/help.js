@@ -119,6 +119,7 @@ const AuraHelp = {
     'Show these keys': 'عرض هذه المفاتيح',
     'Close, clear the search, cancel': 'إغلاق، مسح البحث، إلغاء',
     'On the receipt: print': 'في الإيصال: طباعة',
+    'Sign out': 'تسجيل الخروج',
     'Cash drawer: open shift, cash in/out, X report, end shift': 'درج النقد: فتح وردية، إيداع/سحب، تقرير X، إنهاء الوردية',
   },
 
