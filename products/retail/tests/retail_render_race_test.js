@@ -343,9 +343,13 @@ async function main() {
   // go RED, and it must go red WITH THE REAL MESSAGE (the stale figure
   // actually overwriting the screen), not with an unrelated crash.
   await run('M1: generation check removed => testSupersededRenderWritesNothingAndResolvesCleanly FAILS', async () => {
+    // Anchored with the line AFTER the guard: DAY-UI U7 (2d3481f9) added a
+    // second, identical guard in _renderDashboard's catch, so the bare guard
+    // line now occurs twice. This mutation targets the SUCCESS-path guard --
+    // the one that stops a superseded render writing its figures.
     const broken = mutate(SRC, [[
-      '      if (this._isStaleRender(renderToken)) return;\n',
-      '      // MUTATED: generation check removed\n',
+      '      if (this._isStaleRender(renderToken)) return;\n      // _setMoney, not',
+      '      // MUTATED: generation check removed\n      // _setMoney, not',
     ]]);
     return provesMutation(
       'M1 generation check removed',
@@ -362,8 +366,8 @@ async function main() {
   // Dashboard into a permanent no-op. The normal-path test must catch it.
   await run('M2: guard always returns early (allow-half destroyed) => testNormalPathStillRendersData FAILS', async () => {
     const broken = mutate(SRC, [[
-      '      if (this._isStaleRender(renderToken)) return;\n',
-      '      if (true) return; // MUTATED: every render treated as superseded\n',
+      '      if (this._isStaleRender(renderToken)) return;\n      // _setMoney, not',
+      '      if (true) return; // MUTATED: every render treated as superseded\n      // _setMoney, not',
     ]]);
     return provesMutation(
       'M2 guard always returns early',

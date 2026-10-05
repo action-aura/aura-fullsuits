@@ -254,6 +254,11 @@ function loadShell(shellSrc, opts) {
     }
     return null;
   };
+  // A real browser window has addEventListener; app-shell _installAuthGuard
+  // registers a `pagehide` listener on it since DAY-UI U7 (2d3481f9). The stub
+  // only records nothing -- no test here depends on page unload.
+  sandbox.addEventListener = () => {};
+  sandbox.removeEventListener = () => {};
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(ICONS_SRC, sandbox, { filename: ICONS_FILE });
