@@ -377,9 +377,14 @@ def _trigger_pending_reorder_request(c, cost_price):
     hand-crafting one (core/retail/reorder_hook.py's post-sale trigger is the
     sole writer). reorder_level=1 keeps the drafted PO's total exactly
     `cost_price * 1`, so this test can pick a currency-revealing cost_price
-    (12.345) without a second multiplication rounding the arithmetic itself."""
+    (12.345) without a second multiplication rounding the arithmetic itself.
+
+    STOCK-BOOKS verify F3: a reorder-drafted PO is born unpaid, so accepting
+    one for a supplier-less product is refused (409). These tests are about
+    the PO total's precision, not suppliers, so the product carries one."""
     pid = _seed_product(
         c, name='Reorder Precision Widget', cost_price=cost_price,
+        supplier_id=_seed_supplier(c),
         reorder_level=1, reorder_method='whatsapp', initial_stock=2,
     )
     sale = c.post(f'{API}/sales', json={

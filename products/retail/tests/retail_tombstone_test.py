@@ -1286,6 +1286,15 @@ def test_a_deleted_customer_cannot_be_sold_to_on_credit(client, a_conn):
 #       a "consistency" pass would break), a NEW PO cannot be raised for a
 #       deleted product (the write-gate half) ──────────────────────────────
 
+def _seed_supplier_id(client):
+    # STOCK-BOOKS verify F3: an unpaid PO must name a supplier now (409
+    # otherwise). The two PO tests below are about the deleted-product tombstone
+    # and the live-product allow half, not suppliers, so they name one.
+    r = client.post('/api/sub/retail/suppliers', json={'name': f'Tomb Supplier {uuid.uuid4().hex[:6]}'})
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']['id']
+
+
 def test_a_purchase_order_for_a_since_deleted_product_can_still_be_received(client, a_conn):
     create = client.post('/api/sub/retail/products', json={
         'name': 'PO In Transit Widget', 'sku': f'TOMB-PORECV-{uuid.uuid4().hex[:8]}',
@@ -1296,6 +1305,7 @@ def test_a_purchase_order_for_a_since_deleted_product_can_still_be_received(clie
 
     po = client.post('/api/sub/retail/purchase-orders', json={
         'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 5}],
+        'supplier_id': _seed_supplier_id(client),
     })
     assert po.status_code == 200, po.get_json()
     po_id = po.get_json()['data']['id']
@@ -1418,6 +1428,7 @@ def test_a_live_product_can_still_be_put_on_a_new_purchase_order(client, a_conn)
 
     po = client.post('/api/sub/retail/purchase-orders', json={
         'items': [{'product_id': pid, 'quantity': 5, 'unit_cost': 5}],
+        'supplier_id': _seed_supplier_id(client),
     })
     assert po.status_code == 200, po.get_json()
 

@@ -154,10 +154,21 @@ def _runs_as_the_main_computer(monkeypatch):
     monkeypatch.setattr(device_context, 'local_device_is_admin', lambda conn, cid: True)
 
 
+def _seed_supplier(c):
+    r = c.post('/api/sub/retail/suppliers', json={'name': f'DOCSER Supplier {uuid.uuid4().hex[:6]}'})
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']['id']
+
+
 def _seed_product(c, **kw):
+    # STOCK-BOOKS verify F3: an unpaid PO (and a reorder-drafted one) must name a
+    # supplier now. These tests are about po_number minting, not suppliers, so
+    # every product carries one and every PO below names one -- the numbering
+    # behaviour under test is unchanged.
     payload = {
         'name': 'Doc Series Test Widget', 'sku': f'DOCSER-{uuid.uuid4().hex[:8]}',
         'cost_price': 5.0, 'sell_price': 10.0, 'initial_stock': 1000,
+        'supplier_id': _seed_supplier(c),
     }
     payload.update(kw)
     r = c.post('/api/sub/retail/products', json=payload)
@@ -354,6 +365,7 @@ def test_with_no_series_configured_po_number_is_byte_identical_to_legacy(client_
     with at_terminal(TILL_A):
         r = c.post('/api/sub/retail/purchase-orders', json={
             'items': [{'product_id': pid, 'quantity': 1, 'unit_cost': 5.0}],
+            'supplier_id': _seed_supplier(c),
         })
     assert r.status_code == 200, r.get_json()
     assert _LEGACY_PO_RE.match(r.get_json()['data']['po_number']), r.get_json()
@@ -419,6 +431,7 @@ def test_a_claimed_po_book_is_used_at_both_mint_sites(client_and_company):
     with at_terminal(TILL_A):
         po = c.post('/api/sub/retail/purchase-orders', json={
             'items': [{'product_id': pid, 'quantity': 1, 'unit_cost': 5.0}],
+            'supplier_id': _seed_supplier(c),
         })
         assert po.status_code == 200, po.get_json()
         assert po.get_json()['data']['po_number'] == 'POBOOK1-000001'
@@ -528,7 +541,8 @@ def test_po_number_is_not_consumed_when_the_po_transaction_rolls_back(client_and
     monkeypatch.setattr(retail_api, '_record_payment', _boom)
     with at_terminal(TILL_A):
         failed = c.post('/api/sub/retail/purchase-orders', json={
-            'items': [{'product_id': pid, 'quantity': 1, 'unit_cost': 5.0}], 'amount_paid': 1.0,
+            'items': [{'product_id': pid, 'quantity': 1, 'unit_cost': 5.0}],
+            'supplier_id': _seed_supplier(c), 'amount_paid': 1.0,
         })
     assert failed.status_code in (400, 409, 500), failed.get_data(as_text=True)
 
@@ -536,6 +550,7 @@ def test_po_number_is_not_consumed_when_the_po_transaction_rolls_back(client_and
     with at_terminal(TILL_A):
         ok = c.post('/api/sub/retail/purchase-orders', json={
             'items': [{'product_id': pid, 'quantity': 1, 'unit_cost': 5.0}],
+            'supplier_id': _seed_supplier(c),
         })
     assert ok.status_code == 200, ok.get_json()
     assert ok.get_json()['data']['po_number'] == 'ROLLBACKPO-000001', (
