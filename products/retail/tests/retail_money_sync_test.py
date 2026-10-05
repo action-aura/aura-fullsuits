@@ -281,6 +281,18 @@ def _outbox(entity_type=None):
 
 
 @pytest.fixture(autouse=True)
+def _no_background_push(monkeypatch):
+    """These tests READ install A's outbox right after a route call. The route's
+    `_sync_nudge()` starts a background push whose ack DELETES outbox rows, so
+    `_outbox('sale')[0]` raced it and read an empty list (measured 2026-10-06:
+    3 IndexErrors per run, identical on the pre-W4a commit b169cd92, gone with
+    this stub). Tests that need a push call `service_a.push_once()` themselves,
+    so stubbing the nudge removes the race without changing what is queued."""
+    import api.retail_api as _ra
+    monkeypatch.setattr(_ra, '_sync_nudge', lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _clean_install_a_outbox():
     """Install A (this file's own `app`/`get_retail_conn()`) is booted ONCE
     at module import time and shared by every test below -- there is no
