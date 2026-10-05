@@ -2780,6 +2780,16 @@ const RetailSystem = {
       return this._renderCashierLanding(c);
     }
 
+    // Aura Today (P2 Track B) is the owner's home now: one call to
+    // /reports/today, cards for what needs money or a decision, calm shown as
+    // measured "All clear" lines. today.js is loaded by index.html before the
+    // shell boots. The body below is kept ONLY as the fallback for an install
+    // where that file is absent (the old dashboard, unchanged), so deleting
+    // this block restores the previous screen exactly.
+    if (window.AuraToday && typeof window.AuraToday.render === 'function') {
+      return window.AuraToday.render(c, renderToken);
+    }
+
     // OPERATIONAL CALM — dashboard. What changed and why.
     //
     // This screen was five equally-weighted KPI cards in a row, plus two

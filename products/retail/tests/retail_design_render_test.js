@@ -104,6 +104,57 @@ const FRONTEND = path.join(__dirname, '..', 'frontend');
 const RETAIL_JS = path.join(FRONTEND, 'subsystem-retail.js');
 const APP_SHELL_JS = path.join(__dirname, '..', 'frontend', 'app-shell.js');
 const ICONS_JS = path.join(__dirname, '..', 'frontend', 'icons.js');
+const TODAY_JS = path.join(__dirname, '..', 'frontend', 'today.js');
+
+/* Aura Today's one answer (GET /reports/today), shaped exactly as the plan's
+   JSON. EVERY card kind is open at once and the all-clear block is present, so
+   every surface the screen can paint (danger/warning/info icon tiles, the tag
+   dots, the scope chip, the delta chip in both directions, the tender bar, the
+   chart, the branch strip, the did-today list) is an element the contrast,
+   opacity and touch-target sweeps can see. */
+const TODAY_FIXTURE = {
+  currency: 'JOD', business_date: '2026-10-05', as_of: '16:12',
+  scope: { branch_id: null, branch_name: null, scoped: false, branch_count: 3 },
+  hero: {
+    revenue: 95.5, gross_sales: 100.5, refunds: 5, transactions: 4, avg_ticket: 23.875,
+    yesterday_by_now: 50, change_pct: 91.0, gross_profit: 47.75, margin_pct: 50.0, cost_known: false,
+    tenders: [{ method: 'cash', revenue: 55.5, share_pct: 58.1 }, { method: 'card', revenue: 30, share_pct: 31.4 },
+      { method: 'credit', revenue: 10, share_pct: 10.5 }],
+  },
+  trend: {
+    days: Array.from({ length: 14 }, (_, i) => ({ day: '2026-09-' + String(22 + i).padStart(2, '0'), revenue: i === 13 ? 95.5 : 20 + i * 7.5, transactions: i })),
+    average: 62.5, yesterday_by_now: 50,
+  },
+  branches: [
+    { branch_id: 1, name: 'Abdali', revenue: 55.5, transactions: 3, share_pct: 58.1, yesterday_by_now: 50, change_pct: 11.0 },
+    { branch_id: 2, name: 'Irbid', revenue: 40, transactions: 1, share_pct: 41.9, yesterday_by_now: 60, change_pct: -33.3 },
+    { branch_id: 3, name: 'Mecca Street', revenue: 0, transactions: 0, share_pct: 0, yesterday_by_now: 20, change_pct: null },
+  ],
+  cards: [
+    { kind: 'cheques', state: 'open', scope: 'shop', stake: 120, count: 1, amount: 120, more: 0,
+      rows: [{ id: 1, party_name: 'Khalil Stores', bank_name: 'Arab Bank', cheque_number: '004512', due_date: '2026-10-07', amount: 120 }],
+      extra: { next_week_count: 1, next_week_amount: 200, out_due_count: 1, out_due_amount: 75 } },
+    { kind: 'collect', state: 'open', scope: 'shop', stake: 85, count: 2, amount: 85, more: 0,
+      rows: [{ id: 11, name: 'Hala Nasser', has_phone: true, amount: 70, days_overdue: 40 }, { id: 12, name: 'Rania Khoury', has_phone: false, amount: 15, days_overdue: 45 }],
+      extra: {} },
+    { kind: 'restock', state: 'open', scope: 'shop', stake: 26, count: 5, amount: 26, more: 2,
+      rows: [{ product_id: 1, name: 'Nido Milk Powder', branch_name: 'Irbid', on_hand: 3, reorder_level: 10 },
+        { product_id: 2, name: 'Nescafe Classic', branch_name: 'Abdali', on_hand: 4, reorder_level: 4 }],
+      extra: { supplier_count: 2, pending_requests: 1 } },
+    { kind: 'drawers', state: 'open', scope: 'this_computer', stake: 2.35, count: 2, amount: null, more: 0,
+      rows: [{ session_id: 's1', terminal_short: '1234', ended_at: '2026-10-04T21:05:00', variance_status: 'unverified', variance: -2.35 },
+        { session_id: 's2', terminal_short: '5678', ended_at: '2026-10-03T21:00:00', variance_status: 'not_counted', variance: null }],
+      extra: { open_count: 1, open_expected_cash: 350, not_counted: 1 } },
+    { kind: 'tax', state: 'open', scope: 'this_computer', stake: null, count: 1, amount: null, more: 0,
+      rows: [{ key: 'sales_today', n: 4 }, { key: 'reported_today', n: 0 }], extra: { reason: 'not_connected' } },
+    { kind: 'branches', state: 'open', scope: 'shop', stake: null, count: 1, amount: null, more: 0,
+      rows: [{ branch_id: 3, name: 'Mecca Street', yesterday_by_now: 20 }], extra: {} },
+  ],
+  needs_count: 6,
+  all_clear: [],
+  aura_did: [{ kind: 'reorder_suggested', count: 7, last_at: '11:48', scope: 'shop' },
+    { kind: 'backup_made', count: 1, last_at: '03:00', scope: 'this_computer' }],
+};
 const MAIN_CSS = path.join(FRONTEND, 'css', 'main.css');
 const RTL_CSS = path.join(FRONTEND, 'css', 'rtl.css');
 const INDEX_HTML = path.join(FRONTEND, 'index.html');
@@ -1274,6 +1325,7 @@ function apiResponseFor(url) {
   // "No sales in this period.", i.e. the empty state, i.e. a Reports screen in
   // the corpus with no rows in it. That is the exact shape of miss
   // testCorpusRendersRealScreens exists to refuse.
+  if (/\/reports\/today/.test(u)) return ok(TODAY_FIXTURE);
   if (/\/reports\/by-employee/.test(u)) return ok(TABLE_DATA.employeeSales);
   if (/\/reports\/summary/.test(u)) return ok(REPORT_SUMMARY);
   // Schema v38's general ledger trial balance. See the TRIAL_BALANCE fixture's
@@ -1416,7 +1468,7 @@ function loadAppShell() {
 }
 
 /** Load the real subsystem-retail.js. Never a reimplementation. */
-function loadRetailSystem(capabilities) {
+function loadRetailSystem(capabilities, extraFiles) {
   const code = fs.readFileSync(RETAIL_JS, 'utf8');
   const els = Object.create(null);
   const chartHosts = Object.create(null);
@@ -1455,7 +1507,10 @@ function loadRetailSystem(capabilities) {
     URLSearchParams,
     document: {
       activeElement: null,
-      getElementById(id) { if (id === 'ret-styles') return null; return getEl(id); },
+      // 'aura-today-css' is today.js's own "already injected?" guard, exactly as
+      // 'ret-styles' is subsystem-retail.js's: answer "not yet" so the stylesheet
+      // is built and reaches injected.css, where every CSS sweep reads it.
+      getElementById(id) { if (id === 'ret-styles' || id === 'aura-today-css') return null; return getEl(id); },
       createElement() { return makeStub(); },
       querySelector(sel) {
         if (!namedQueries[sel]) namedQueries[sel] = makeStub({ id: '::query::' + sel });
@@ -1472,16 +1527,24 @@ function loadRetailSystem(capabilities) {
       addEventListener() {},
     },
   };
-  sandbox.SubsystemApp = {
+  sandbox.SubsystemApp = Object.assign({
     active: 'retail', showToast() {}, _navigate() {},
     hasCapability: (code) => (capabilities || []).includes(code),
-  };
+  // Only the entries that load a feature file get an owner identity, so no
+  // existing screen's behaviour changes because of this harness edit.
+  }, extraFiles ? { role: 'admin', currentUser: { id: 1 } } : {});
   sandbox.window = sandbox;
   sandbox.Chart = function ChartStub() { return { destroy() {} }; };
   sandbox.Chart.getChart = () => null;
 
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: RETAIL_JS });
+  // Feature files that index.html loads AFTER subsystem-retail.js (today.js).
+  // Only the corpus entries that ask for one get it, so every other screen is
+  // still rendered by subsystem-retail.js ALONE, exactly as before.
+  for (const extra of (extraFiles || [])) {
+    vm.runInContext(fs.readFileSync(extra, 'utf8'), sandbox, { filename: extra });
+  }
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
   return { RetailSystem: sandbox.RetailSystem, els, chartHosts, injected, namedQueries, overlays };
 }
@@ -1629,6 +1692,19 @@ async function buildCorpus() {
     const content = makeStub();
     await ctx.RetailSystem._renderDashboard(content);
     screens.push(screenFrom('cashier-landing', ctx, content.innerHTML));
+  }
+
+  // Aura Today: the owner's home. SAME route as 'dashboard' above (the router
+  // case is 'dashboard'), but a different surface: _renderDashboard delegates
+  // to AuraToday when today.js is loaded, which index.html does. The plain
+  // 'dashboard' entry stays as the fallback body for an install without
+  // today.js. Rendered with today.js in the sandbox, as the browser has it.
+  {
+    const ctx = loadRetailSystem(['retail.reports', 'retail.stock.adjust'], [TODAY_JS]);
+    const content = makeStub();
+    await ctx.RetailSystem._renderDashboard(content);
+    await settle();
+    screens.push(screenFrom('owner-home', ctx, content.innerHTML));
   }
 
   // The till itself, with a populated cart and a product grid that includes a
@@ -2052,7 +2128,7 @@ function testTokensResolve(h) {
    elements, while twelve others keep the total comfortably above any number
    written here. A screen that does not appear must fail by name. */
 const DECLARED_SCREENS = [
-  'dashboard', 'cashier-landing', 'pos',
+  'dashboard', 'cashier-landing', 'owner-home', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
   'suppliers', 'audit-log', 'reports', 'categories', 'branches',
   'backup-export', 'scanner', 'stock-accuracy', 'transfers', 'quotations',
@@ -2121,6 +2197,8 @@ const SCREEN_ROUTES = {
   // The same entry point with no `retail.reports` capability. One route, two
   // genuinely different surfaces; both are in the corpus.
   'cashier-landing': 'dashboard',
+  // Third surface of the same route: the owner's Today (today.js present).
+  'owner-home': 'dashboard',
   pos: 'pos',
   'sales-history': 'sales',
   returns: 'returns',

@@ -935,7 +935,11 @@ const SubsystemApp = {
       accent: '#f43f5e',
       accentRgb: '244,63,94',
       nav: [
-        { id: 'dashboard',  label: 'Dashboard',        icon: '🏠' },
+        // Labelled "Today": the owner's home answers "how is today going and
+        // what needs me" (today.js), not "here are some numbers". The id stays
+        // 'dashboard' because routes, the palette and the cashier-landing
+        // rule all key on it.
+        { id: 'dashboard',  label: 'Today',            icon: '🏠' },
         { id: 'pos',        label: 'Point of Sale',     icon: '🛒' },
         { id: 'products',   label: 'Products',          icon: '📦' },
         // P1a item 3 ("the till shows only what the person can do"):
@@ -3917,7 +3921,7 @@ const SubsystemApp = {
                  at ≤640px", now made the ONE header for every width) already
                  wait on #sub-header-section as the "shell is ready" selector
                  -- moving the id would have broken all of them silently. -->
-            <span class="sub-header-section" id="sub-header-section">${this._isBooksOnlyCapabilities() ? t('Books') : t('Dashboard')}</span>
+            <span class="sub-header-section" id="sub-header-section">${this._isBooksOnlyCapabilities() ? t('Books') : t('Today')}</span>
           </div>
           <div class="sub-header-right">
             <!-- P1b item 7: the command palette's door. A 36px-tall control on
