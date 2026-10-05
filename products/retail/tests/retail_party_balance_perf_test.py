@@ -43,9 +43,12 @@ from pathlib import Path
 
 import pytest
 
-if os.environ.get('AURA_RUN_PERF') != '1':
-    pytest.skip('timing benchmark: opt-in with AURA_RUN_PERF=1 on a quiet machine '
-                '(see module docstring)', allow_module_level=True)
+# A collected-then-skipped mark, NOT a module-level pytest.skip: the latter
+# collects nothing, pytest exits 5, and run_all_tests.py (rightly strict on a
+# file that collects nothing) reports the file as FAILED in every full run.
+pytestmark = pytest.mark.skipif(
+    os.environ.get('AURA_RUN_PERF') != '1',
+    reason='timing benchmark: opt-in with AURA_RUN_PERF=1 on a quiet machine (see module docstring)')
 
 PRODUCT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = PRODUCT_DIR / 'backend'

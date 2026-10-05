@@ -1517,7 +1517,13 @@ function loadRetailSystem(capabilities, extraFiles) {
         return namedQueries[sel];
       },
       querySelectorAll() { return []; },
-      head: { appendChild(node) { if (node && node.textContent) injected.css += '\n' + node.textContent; } },
+      head: { appendChild(node) {
+        if (node && node.textContent) injected.css += '\n' + node.textContent;
+        // today.js's stylesheet is captured for the RULE TABLE too (see
+        // harness()): without it every cascade sweep resolved the owner-home
+        // screen against main.css alone and was blind to today.js's own rules.
+        if (node && node.id === 'aura-today-css' && node.textContent) TODAY_INJECTED_CSS = node.textContent;
+      } },
       // Modals are appended to <body>, not into #sub-content. Recording them is
       // what lets a modal be rendered as its own corpus screen rather than
       // vanishing — and the dark `.ret-modal` island was, for two rounds, the
@@ -2047,12 +2053,20 @@ function textPaintingElements(root) {
 }
 
 let CACHE = null;
+let TODAY_INJECTED_CSS = '';
 async function harness() {
   if (CACHE) return CACHE;
+  // The corpus is built FIRST so today.js's injected stylesheet (captured while
+  // rendering owner-home) can join the rule table. Found 2026-10-05: the touch
+  // floor sweep reported "NO minimum declared at all" for today.js controls
+  // that DID declare one, because their stylesheet was never in the cascade --
+  // which also meant the contrast sweeps measured owner-home without its rules.
+  const screens = await buildCorpus();
   const sources = loadSources();
+  assert.ok(TODAY_INJECTED_CSS, 'owner-home rendered but today.js injected no stylesheet into the corpus');
+  sources.push({ label: 'today.js injected stylesheet', css: TODAY_INJECTED_CSS });
   const tokens = tokenMap(sources);
   const ruleTable = buildRuleTable(sources);
-  const screens = await buildCorpus();
   CACHE = {
     sources, tokens, ruleTable, screens,
     textPaintingElements, effectiveColour, effectiveBackground,

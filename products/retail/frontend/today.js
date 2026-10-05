@@ -244,7 +244,7 @@
       .td-note { margin: var(--space-snug) 0 0; font-size: var(--text-size-meta); color: var(--text-tertiary); line-height: 1.4; }
       .td-note .money { color: var(--text-secondary); font-weight: var(--text-weight-bold); }
       .td-foot { margin-block-start: auto; padding-block-start: var(--space-base); display: flex; align-items: center; gap: var(--space-base); flex-wrap: wrap; }
-      .td-link { border: 0; background: none; padding: var(--space-tight) var(--space-hairline); cursor: pointer; color: var(--accent-action); font-size: var(--text-size-body); font-weight: var(--text-weight-bold); white-space: nowrap; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
+      .td-link { min-height: var(--touch-target-min); min-width: var(--touch-target-min); border: 0; background: none; padding: var(--space-tight) var(--space-hairline); cursor: pointer; color: var(--accent-action); font-size: var(--text-size-body); font-weight: var(--text-weight-bold); white-space: nowrap; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
       .td-link:hover { text-decoration-color: currentColor; }
       .td-clear { box-shadow: none; background: var(--surface-till); }
       .td-clear .td-row { grid-template-columns: auto minmax(0, 1fr); justify-content: start; }
@@ -252,7 +252,7 @@
       .td-clear-wide { grid-column: 1 / -1; }
 
       .td-did { padding: 0; }
-      .td-did-sum { display: flex; align-items: center; gap: var(--space-base); padding: var(--space-base) var(--space-comfy); cursor: pointer; font-weight: var(--text-weight-bold); font-size: var(--text-size-body-lg); color: var(--text-primary); list-style: none; }
+      .td-did-sum { min-height: var(--touch-target-min); width: 100%; box-sizing: border-box; display: flex; align-items: center; gap: var(--space-base); padding: var(--space-base) var(--space-comfy); cursor: pointer; font-weight: var(--text-weight-bold); font-size: var(--text-size-body-lg); color: var(--text-primary); list-style: none; }
       .td-did-sum::-webkit-details-marker { display: none; }
       .td-did-sum .td-chev { margin-inline-start: auto; color: var(--text-tertiary); transition: transform var(--motion-fast); }
       .td-did[open] .td-chev { transform: rotate(180deg); }

@@ -29,9 +29,11 @@ from pathlib import Path
 
 import pytest
 
-if os.environ.get('AURA_RUN_PERF') != '1':
-    pytest.skip('timing benchmark: opt-in with AURA_RUN_PERF=1 on a quiet machine '
-                '(see module docstring)', allow_module_level=True)
+# Collected-then-skipped, not a module-level skip (exit 5 = FAILED in
+# run_all_tests.py); see retail_party_balance_perf_test.py.
+pytestmark = pytest.mark.skipif(
+    os.environ.get('AURA_RUN_PERF') != '1',
+    reason='timing benchmark: opt-in with AURA_RUN_PERF=1 on a quiet machine (see module docstring)')
 
 PRODUCT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = PRODUCT_DIR / 'backend'

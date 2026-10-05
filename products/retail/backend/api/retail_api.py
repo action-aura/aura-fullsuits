@@ -18728,8 +18728,14 @@ def _today_walls_of_today(conn, sql, params, boundary, today_date):
     return out
 
 
-def _today_hero(conn, cid, shop_now, branch_id, currency, money):
-    """Today so far, net, with the same-moment-yesterday comparison."""
+def _today_hero(conn, cid, now, branch_id, currency, money):
+    """Today so far, net, with the same-moment-yesterday comparison.
+
+    `now` is the route's ONE raw instant; each _today_* helper converts it onto
+    the shop's business day itself, so retail_report_clock_agreement_test's
+    static scan sees the conversion next to every window it builds (the same
+    instant converts to the same shop clock in every helper)."""
+    shop_now = metrics.business_now(conn, cid, now)
     today_p = metrics.period_today(shop_now)
     yest_p = metrics.period_yesterday(shop_now)
     cutoff = shop_now.strftime('%H:%M:%S')
@@ -18764,9 +18770,10 @@ def _today_hero(conn, cid, shop_now, branch_id, currency, money):
     }
 
 
-def _today_trend(conn, cid, shop_now, branch_id, currency, money, yby):
+def _today_trend(conn, cid, now, branch_id, currency, money, yby):
     """Fourteen shop days ending today, zero-filled, plus the average of the
     thirteen COMPLETE days (zeros included -- a closed day is a real zero)."""
+    shop_now = metrics.business_now(conn, cid, now)
     first = shop_now.date() - timedelta(days=_TODAY_TREND_DAYS - 1)
     by_day = {d['day']: d for d in metrics.revenue_by_day(
         conn, cid, metrics.period_days(_TODAY_TREND_DAYS - 1, shop_now), branch_id, currency)}
@@ -18781,9 +18788,10 @@ def _today_trend(conn, cid, shop_now, branch_id, currency, money, yby):
     return {'days': days, 'average': average, 'yesterday_by_now': yby}
 
 
-def _today_branches(conn, cid, shop_now, currency, shop_revenue):
+def _today_branches(conn, cid, now, currency, shop_revenue):
     """Per-branch strip: today, share of the shop, and each branch's own
     yesterday-by-now. Empty unless there are at least two active branches."""
+    shop_now = metrics.business_now(conn, cid, now)
     today_p = metrics.period_today(shop_now)
     cutoff = shop_now.strftime('%H:%M:%S')
     rows = metrics.revenue_by_branch(conn, cid, today_p, currency)
@@ -19087,10 +19095,10 @@ def report_today():
             scoped = True
         shop_view = branch_id in (None, '')
 
-        hero = timed('hero', _today_hero, conn, cid, shop_now, branch_id, currency, money)
-        trend = timed('trend', _today_trend, conn, cid, shop_now, branch_id, currency, money,
+        hero = timed('hero', _today_hero, conn, cid, now, branch_id, currency, money)
+        trend = timed('trend', _today_trend, conn, cid, now, branch_id, currency, money,
                       hero['yesterday_by_now'])
-        branches = timed('branches', _today_branches, conn, cid, shop_now, currency, hero['revenue']) \
+        branches = timed('branches', _today_branches, conn, cid, now, currency, hero['revenue']) \
             if shop_view else []
 
         open_cards, resolved = [], {}

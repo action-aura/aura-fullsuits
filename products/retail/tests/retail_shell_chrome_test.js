@@ -413,7 +413,9 @@ function testHeaderTitleShowsCurrentSection() {
   // #sub-header-section is now the ONLY title.
   const m = html.match(/<span class="sub-header-section" id="sub-header-section">([^<]*)<\/span>/);
   assert.ok(m, 'No #sub-header-section element found in the rendered shell.');
-  assert.strictEqual(m[1], 'Dashboard', `Expected #sub-header-section to read "Dashboard" on first render, got "${m[1]}".`);
+  // Label update only (P2 Today, 2026-10-05): the home section's nav label is
+  // now "Today"; the section id is still `dashboard`.
+  assert.strictEqual(m[1], 'Today', `Expected #sub-header-section to read "Today" on first render, got "${m[1]}".`);
   // Checked as an actual class/id attribute, not a bare substring: this
   // file's own explanatory comments legitimately name "sub-header-title" in
   // prose (documenting what used to be there), and a substring check would
@@ -423,7 +425,7 @@ function testHeaderTitleShowsCurrentSection() {
     'A sub-header-title element is still in the rendered shell -- it should have been deleted, ' +
     'not left next to the promoted #sub-header-section.'
   );
-  console.log('PASS: #sub-header-section is the header\'s only title, showing "Dashboard" on first render');
+  console.log('PASS: #sub-header-section is the header\'s only title, showing "Today" on first render');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
