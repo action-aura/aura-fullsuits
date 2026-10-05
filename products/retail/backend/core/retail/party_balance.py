@@ -224,10 +224,18 @@ def _supplier_minor(conn, cid, currency, ids):
     f, eps = _factor(currency), money_epsilon(currency)
     total = {}
     if _has(conn, 'purchase_orders', 'supplier_id', 'total'):
+        # STOCK-BOOKS: a CANCELLED order is not owed -- its order journal is
+        # reversed in the books, so the derived balance must drop it too or
+        # the AP tie breaks. COALESCE: a row with no status still counts; a
+        # table with no status column at all (old fixture) is filtered by
+        # nothing, exactly as before.
+        not_cancelled = (" AND COALESCE(status,'') <> 'cancelled'"
+                         if _has(conn, 'purchase_orders', 'status') else "")
         _merge(total, _grouped(
             conn,
             "SELECT supplier_id, SUM(CAST(ROUND(total * %d) AS INTEGER)) FROM purchase_orders "
-            "WHERE company_id=? AND supplier_id IS NOT NULL AND total > ?{scope} GROUP BY supplier_id" % f,
+            "WHERE company_id=? AND supplier_id IS NOT NULL AND total > ?" % f
+            + not_cancelled + "{scope} GROUP BY supplier_id",
             (cid, eps), "supplier_id", ids))
     if _has(conn, 'payments', 'party_type', 'party_id', 'direction', 'amount', 'status'):
         _merge(total, _grouped(

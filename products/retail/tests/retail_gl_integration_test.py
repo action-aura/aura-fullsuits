@@ -254,15 +254,22 @@ def test_credit_sale_refused_for_walk_in_posts_no_journal_at_all(client):
     partial or compensating journal."""
     cid = client.test_company_id
     pid = _seed_product(client, sell_price=50.0, tax_rate=0)
+    # STOCK-BOOKS: creating a product WITH opening stock now books that stock
+    # (Dr Inventory / Cr Opening Balance Equity), so the ledger is no longer
+    # empty before the sale. The claim is unchanged -- the REFUSED SALE posts
+    # nothing -- so compare the ledger to itself before and after, rather than
+    # to "empty". Stronger than the old `accounts == [] or debit == 0` check:
+    # it also fails if a refused sale adds any journal at all, not just a
+    # debit-bearing one. Nothing the old check caught is lost.
+    before = {a['code']: (a['debit'], a['credit']) for a in _trial_balance(cid)['accounts']}
     r = client.post(f'{API}/sales', json={
         'items': [{'product_id': pid, 'quantity': 1}],
         'payment_method': 'cash', 'amount_paid': 10.0,  # leaves 40 unpaid, no customer
         'idempotency_key': str(uuid.uuid4())})
     assert r.status_code == 400, r.get_json()
 
-    tb = _trial_balance(cid)
-    assert tb['accounts'] == [] or all(a['debit'] == 0 for a in tb['accounts']), (
-        "a refused credit sale must post nothing at all")
+    after = {a['code']: (a['debit'], a['credit']) for a in _trial_balance(cid)['accounts']}
+    assert after == before, "a refused credit sale must post nothing at all"
 
 
 # ── 3. Loyalty redemption ────────────────────────────────────────────────
@@ -418,10 +425,14 @@ def test_purchase_order_with_down_payment_posts_inventory_cash_ap(client):
     # Received (1260); Inventory (1200) moves only on receipt (see the
     # receive test in retail_stock_books_routes_test.py). This replaces the
     # old `1200 == 40`. What it can no longer catch: nothing here -- the
-    # "stock reaches 1200" half is asserted at receipt, and the 1200 == 0
-    # line below is what proves the order did NOT inflate Inventory.
+    # "stock reaches 1200" half is asserted at receipt, and the 1200 line
+    # below is what proves the order did NOT inflate Inventory.
     assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
+    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
+    # seed product's opening stock (offset in 3900), not a cent more. (Plain
+    # `== 0` would break the moment a product's opening stock is booked.)
+    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
+            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
 
@@ -480,7 +491,11 @@ def test_purchase_order_with_a_negative_amount_paid_does_not_inflate_ap(client):
     # STOCK-BOOKS: 40 of goods ordered (1260), not yet stock (1200 == 0);
     # nothing is lost -- receipt moves it, asserted in the routes test.
     assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
+    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
+    # seed product's opening stock (offset in 3900), not a cent more. (Plain
+    # `== 0` would break the moment a product's opening stock is booked.)
+    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
+            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 40.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 0.0
 
@@ -500,7 +515,11 @@ def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
     # STOCK-BOOKS: paid-in-full order -> 1260 (not yet received), 1200 == 0.
     assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
+    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
+    # seed product's opening stock (offset in 3900), not a cent more. (Plain
+    # `== 0` would break the moment a product's opening stock is booked.)
+    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
+            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
 
 
@@ -524,7 +543,11 @@ def test_purchase_order_with_no_supplier_still_balances(client):
     # invented as Inventory the subledger cannot explain either.
     # STOCK-BOOKS: the accounted-for 10 sits in 1260 until received.
     assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 10.0
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 0.0
+    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
+    # seed product's opening stock (offset in 3900), not a cent more. (Plain
+    # `== 0` would break the moment a product's opening stock is booked.)
+    assert (_account(tb, gl.ACCOUNT_INVENTORY)['balance']
+            == _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'])
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -10.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
 

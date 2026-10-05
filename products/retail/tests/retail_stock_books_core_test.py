@@ -483,3 +483,24 @@ def test_t9_a_movement_with_no_uid_can_never_be_booked(conn, sb):
         "INSERT INTO inventory_movements (company_id, product_id, branch_id, movement_type, quantity, unit_cost) "
         "VALUES (?,?,?,'stock_in',1,2.0)", (CID, pid, BRANCH))
     assert sb.unbooked_movement_count(conn, CID) == 1
+
+
+# ── T10: a cancelled PO is not owed ──────────────────────────────────────
+
+def test_t10_cancelled_po_leaves_the_derived_supplier_balance(conn):
+    """M5: without the status filter the derived supplier balance keeps the
+    cancelled order's 40 while the books (order journal reversed) say 0 -- the
+    AP tie would break on the first cancel. The pending order must still
+    count: the filter is for 'cancelled' only."""
+    from core.retail import party_balance as pb
+    sid = str(uuid.uuid4())   # suppliers.id is a TEXT uuid
+    conn.execute("INSERT INTO suppliers (id, company_id, name) VALUES (?, ?, 'S')", (sid, CID))
+    for number, status, total in (('PO-A', 'pending', 25), ('PO-B', 'cancelled', 40)):
+        conn.execute(
+            "INSERT INTO purchase_orders (company_id, po_number, supplier_id, status, total) "
+            "VALUES (?,?,?,?,?)", (CID, number, sid, status, total))
+    assert pb.supplier_balances(conn, CID, CUR)[str(sid)] == D('25.000')
+    conn.execute("UPDATE purchase_orders SET status='cancelled' WHERE po_number='PO-A'")
+    assert pb.supplier_balances(conn, CID, CUR)[str(sid)] == D('0.000')
+    conn.execute("UPDATE purchase_orders SET status='pending' WHERE po_number='PO-B'")
+    assert pb.supplier_balances(conn, CID, CUR)[str(sid)] == D('40.000')

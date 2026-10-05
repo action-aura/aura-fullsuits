@@ -354,7 +354,10 @@ def test_purchase_on_credit_increases_inventory_and_payable_and_still_balances(c
     inventory = _account(data['assets'], gl.ACCOUNT_INVENTORY)
     ap = _account(data['liabilities'], gl.ACCOUNT_AP)
     assert ordered is not None and ordered['amount'] == 40.0
-    assert inventory is None or inventory['amount'] == 0.0
+    # Inventory holds only the seed product's opening stock (500 @ 1.0, offset
+    # in 3900), not the 40 on order. `or 0` = no row on the sheet.
+    opening = _account(data['equity'], gl.ACCOUNT_OPENING_EQUITY)
+    assert (inventory['amount'] if inventory else 0.0) == (opening['amount'] if opening else 0.0)
     assert ap is not None and ap['amount'] == 40.0
     # Nothing paid, nothing sold yet -- no revenue/expense activity at all,
     # so retained_earnings must still read exactly 0, and Cash must be
@@ -496,8 +499,17 @@ def test_equity_equals_owners_equity_plus_earnings_and_matches_income_statement(
 
     owners_equity_acct = _account(bs['equity'], gl.ACCOUNT_EQUITY)
     assert owners_equity_acct is not None and owners_equity_acct['amount'] == 1000.0
-    assert bs['equity']['owners_equity'] == 1000.0
-    assert bs['equity']['total'] == 1000.0 + pnl['net_profit']
+    # STOCK-BOOKS: creating the product with 500 units at cost 20.0 books that
+    # stock against Opening Balance Equity (3900, an equity account), so
+    # owners_equity is the 1000 contribution PLUS 500 x 20 = 10000 opening
+    # stock. The two figures are asserted separately so the sum cannot hide
+    # one of them going missing. What the old `owners_equity == 1000` can no
+    # longer catch: 3900 leaking in unnoticed -- the explicit 3900 line below
+    # takes that over.
+    opening_acct = _account(bs['equity'], gl.ACCOUNT_OPENING_EQUITY)
+    assert opening_acct is not None and opening_acct['amount'] == 10000.0
+    assert bs['equity']['owners_equity'] == 1000.0 + 10000.0
+    assert bs['equity']['total'] == 1000.0 + 10000.0 + pnl['net_profit']
 
     assert bs['balance_check']['is_balanced'] is True
     assert bs['balance_check']['difference'] == 0.0
