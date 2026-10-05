@@ -208,7 +208,7 @@
       .td-share i { display: block; block-size: 100%; background: var(--accent-action); }
       .td-ic { inline-size: 16px; block-size: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-      .td-needs-h { display: flex; align-items: baseline; gap: var(--space-base); flex-wrap: wrap; }
+      .td-needs-h { margin-block-start: var(--space-snug); display: flex; align-items: baseline; gap: var(--space-base); flex-wrap: wrap; }
       .td-needs-h h2 { margin: 0; font-size: var(--text-size-subhead); font-weight: var(--text-weight-bold); color: var(--text-primary); }
       .td-count { display: inline-grid; place-items: center; min-inline-size: 22px; block-size: 20px; padding-inline: var(--space-snug); border-radius: var(--radius-pill); background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--border-default); color: var(--text-primary); font-size: var(--text-size-meta); font-weight: var(--text-weight-bold); }
       .td-needs-h p { margin: 0; color: var(--text-tertiary); font-size: var(--text-size-body); }
@@ -236,7 +236,7 @@
       .td-rows { list-style: none; margin: 0; padding: 0; }
       .td-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-base); min-block-size: 40px; padding-block: var(--space-hairline); border-block-start: 1px solid var(--border-hairline); font-size: var(--text-size-body); color: var(--text-primary); }
       .td-who { font-weight: var(--text-weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
-      .td-who small { display: block; font-size: var(--text-size-meta); font-weight: var(--text-weight-medium); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; }
+      .td-who small { display: block; font-size: var(--text-size-meta); font-weight: var(--text-weight-medium); color: var(--text-tertiary); white-space: normal; overflow-wrap: anywhere; }
       .td-who .ret-rowbtn { font: inherit; font-weight: var(--text-weight-semibold); color: var(--text-primary); text-align: start; padding: 0; background: none; border: 0; cursor: pointer; max-inline-size: 100%; overflow: hidden; text-overflow: ellipsis; }
       .td-amt { text-align: end; font-weight: var(--text-weight-bold); white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-money); }
       .td-amt.is-plain { color: var(--text-secondary); font-weight: var(--text-weight-semibold); }
@@ -410,7 +410,7 @@
       '<thead><tr><th scope="col">' + esc(tr('Date')) + '</th><th scope="col">' + esc(tr('Net sales')) + '</th><th scope="col">' + esc(tr('Transactions')) + '</th></tr></thead><tbody>' +
       days.map((x) => '<tr><td>' + bidi(shortDate(x.day) || x.day) + '</td><td>' + money(Number(x.revenue) || 0) + '</td><td>' + num(isFiniteNum(x.transactions) ? x.transactions : 0) + '</td></tr>').join('') + '</tbody></table>';
     return '<div class="td-chart-wrap"><div class="td-ch-head"><h3 class="td-ch-title">' + esc(tr('Last 14 days')) +
-      ' <span>· ' + S('{currency} per day', { currency: esc((R() && R()._currencySymbol) || d.currency || '') }) + '</span></h3>' +
+      ' <span>· ' + S('{currency} per day', { currency: esc(tr((R() && R()._currencySymbol) || d.currency || '')) }) + '</span></h3>' +
       '<div class="td-legend"><span><i class="td-lg bar"></i>' + esc(tr('Net sales')) + '</span>' +
       '<span><i class="td-lg now"></i>' + esc(tr('Today so far')) + '</span>' +
       '<span><i class="td-lg yd"></i>' + S('Yesterday by {time}', { time: num(d.as_of || '') }) + '</span>' +
