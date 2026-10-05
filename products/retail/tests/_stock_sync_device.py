@@ -378,6 +378,15 @@ def main() -> None:
             results.append({"status_code": r.status_code, "body": r.get_json(),
                              "branch_id": branch_id, "branch_uid": branch_uid})
 
+        elif op == "http":
+            # STOCK-BOOKS (crew B): a generic logged-in request, for routes this
+            # vocabulary has no dedicated op for (stock transfers). Additive --
+            # no existing op changes. {"op":"http","method":"POST","path":"/stock-transfers",
+            # "json":{...}} -> {"status_code":.., "body":..}; `path` is relative to /api/sub/retail.
+            r = client.open(f"{API}{action['path']}", method=action.get("method", "GET"),
+                            json=action.get("json"))
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
         elif op == "push":
             service.push_once()
             results.append({"ok": True})

@@ -135,6 +135,18 @@ def _write_device(app_data_dir: Path, sql: str, params: tuple = ()) -> None:
         conn.close()
 
 
+def _stock_entry_split(app_data_dir: Path, company_id: str) -> tuple:
+    """(journals that are stock entries, all other journals) -- STOCK-BOOKS posts
+    `opening_entry` / `stock_adjustment` journals when stock is entered, which
+    these census tests must count apart from the sale/COGS pair they pin."""
+    rows = _read_device(
+        app_data_dir,
+        "SELECT SUM(CASE WHEN source_type IN ('opening_entry','stock_adjustment') THEN 1 ELSE 0 END) AS s, "
+        "SUM(CASE WHEN source_type IN ('opening_entry','stock_adjustment') THEN 0 ELSE 1 END) AS r "
+        "FROM gl_journals WHERE company_id=?", (company_id,))
+    return int(rows[0]["s"] or 0), int(rows[0]["r"] or 0)
+
+
 def _local_sale_id_by_uid(app_data_dir: Path, sale_uid: str) -> int:
     """The RECEIVING device's own local `sales.id` for a sale that arrived by
     sync -- `sales.uid` is the one cross-device identity a synced sale row
@@ -518,10 +530,18 @@ def test_origin_does_not_double_post_its_own_echo(tmp_path):
 
     run_device(PY, device_a, relay_db, [{"op": "push"}])
     census_before_echo = _gl_census(device_a, relay_db, cid_a)
-    assert census_before_echo["count"] == 2, (
-        "expected exactly 2 gl_journal rows (the sale posting + its COGS "
-        f"posting) before any echo: {census_before_echo}"
+    # STOCK-BOOKS: entering the product's 50 units now books ONE opening-entry
+    # journal (Dr 1200 / Cr 3900) of its own, so the census is 3 -- the sale + its
+    # COGS (still pinned at exactly 2, counted apart from the stock entry) plus
+    # that one. What this can no longer catch: nothing -- a duplicate of ANY of
+    # the three still changes the total, and the echo check below compares the
+    # whole census before/after.
+    _stock, _rest = _stock_entry_split(device_a, cid_a)
+    assert (_stock, _rest) == (1, 2), (
+        "expected 1 stock-entry journal + exactly 2 others (the sale posting + its "
+        f"COGS posting) before any echo: {census_before_echo} stock={_stock} rest={_rest}"
     )
+    assert census_before_echo["count"] == 3, census_before_echo
 
     # A pulls -- FileRelay hands back every event with seq > cursor,
     # including the ones A itself JUST pushed a moment ago.
@@ -580,7 +600,13 @@ def test_cursor_reset_and_relay_switch_replay_posts_nothing_twice(tmp_path):
     run_device(PY, device_b, relay_db, [{"op": "pull"}])
 
     census_first = _gl_census(device_b, relay_db, cid_b)
-    assert census_first["count"] == 2  # sale + COGS
+    # STOCK-BOOKS: A's `adjust_stock` of 100 units now books one stock-adjustment
+    # journal, which syncs too -- so B holds 3: that one + sale + COGS (still
+    # pinned at exactly 2 apart from it). Nothing is lost: any duplicate still
+    # moves the total, and the replays below compare the full census.
+    _stock, _rest = _stock_entry_split(device_b, cid_b)
+    assert (_stock, _rest) == (1, 2), (census_first, _stock, _rest)
+    assert census_first["count"] == 3
 
     # A cursor reset: forces a re-pull of the ENTIRE history from seq 0.
     run_device(PY, device_b, relay_db, [{"op": "reset_cursor"}])
