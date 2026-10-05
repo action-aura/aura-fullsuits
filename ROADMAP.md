@@ -6957,3 +6957,45 @@ Residuals (written down, not fixed):
 - V8 — Android statement kinds edited, not built; KMP app keeps its own running total.
 - Plan residuals R2 (credit limits are per-computer), R3 (offline over-extension),
   R7 (carried amounts age as current) stand.
+
+## 2026-10-05 — P2 Track B "Aura Today" (the owner's home) CASHED IN — no schema claim
+
+Delivered on `feat/retail-ux-p0` (2d2d23f1..ff4d9169; plan: job f8252b48
+tmp/today/plan.md). One read-only route `GET /reports/today` (CAP_REPORTS, in the
+capability matrix, money-disclosure sweeps cover it) replaces seven-plus calls; new
+`frontend/today.js` takes over the `dashboard` section (old body kept as fallback);
+nav label "Today". Hero (today so far, vs yesterday by this time, gross profit,
+tender split), 14-day chart (inline SVG, mirrored in Arabic), branch strip, and
+"Needs you" cards ordered by JD at stake — Collect (> 30 days, shop-wide since v44,
+equal to aging 31+ by construction), Cheques (due within 7 days), Restock (stake =
+what Accept would draft), Drawers and Tax (both labelled "On this computer only"),
+Branches (2+ branches). Every verb opens an existing screen. JoFotara backlog counts
+only invoices queued > 15 min (a1aa0cb2).
+
+Owner decisions ASSUMED (owner to confirm): nav label "Today"; Collect = owed
+> 30 days; managers see exactly what /reports/aging, /cheques and /cash-sessions
+already show them; MTD / counts / recent sales leave the home (still in Reports).
+
+Measured: route test 22 (every figure hand-computed), metrics-until 5, screen
+node test 15, real-browser e2e 9/9 at 1366x768 en/ar × sand/night, day_in_shop
+106/0. Mutations M1-M15 + client M9/M11/M12 + "no delegation" each turned a named
+test red. First full run after Today found 5 files (fixed ff4d9169) — including a
+corpus gap: the design harness never put today.js's stylesheet into its cascade,
+so touch-floor and contrast sweeps had been blind to owner-home's own rules.
+
+Residuals:
+- T1 — speed: 1.68 s on the 500-debtor / 20k-sale fixture (budget 300 ms; the old
+  /dashboard/stats takes 9.3 s on the same data). Collect's aging FIFO is ~0.9 s
+  (`_statement_events` + per-customer aging) and hero/trend/branches ~0.64 s
+  (non-sargable `datetime()` scope in metrics). Needs its own wave (sargable
+  created_at prefilter + a cheaper aging pass). Perf file is opt-in (AURA_RUN_PERF=1).
+- T2 — Drawers, Tax and most "Aura did today" rows are this-computer only until
+  cash sessions sync.
+- T3 — no bulk WhatsApp reminders and no per-supplier PO drafting: the verbs open
+  the existing screens.
+- T4 — Arabic wording is count-neutral ("1 من العملاء ...") and needs a native
+  reader; a stray full stop follows the drawers card's total.
+- T5 — no branch picker; mockup "Top products" / "Plan & devices" deferred; old
+  dashboard body survives as a fallback until retired with its tests.
+- T6 — `scripts/ui-sweep/retail_ui_sweep.py` reports 16 problems not from Today
+  (audit-log header, cashier header) — not verified against the pre-Today tree.
