@@ -99,7 +99,7 @@ function load(opts) {
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
   sandbox.RetailSystem._confirm = async () => true;
   sandbox.RetailSystem._closeModalOverlay = () => {};
-  return { rs: sandbox.RetailSystem, calls, toasts, els, appended };
+  return { rs: sandbox.RetailSystem, calls, toasts, els, appended, doc: sandbox.document };
 }
 
 async function settle() {
@@ -301,6 +301,66 @@ const CLAIMS = {
     assert.ok(en[k.label], 'en.json carries the label');
     assert.ok(ar[k.label] && /[؀-ۿ]/.test(ar[k.label]), 'ar.json carries a real Arabic label');
   },
+  // W4a-2 UI: a supplier's goods charge is a purchase, not a "Credit sale".
+  async supplierChargeIsLabelledPurchase(src) {
+    const ctx = load({ source: src });
+    assert.strictEqual(ctx.rs._partyStatementKind('charge', 'supplier').label, 'Purchase');
+    assert.strictEqual(ctx.rs._partyStatementKind('charge', 'supplier').sign, 1);
+    assert.strictEqual(ctx.rs._partyStatementKind('charge', 'customer').label, 'Credit sale', 'customer wording unchanged');
+    assert.strictEqual(ctx.rs._partyStatementKind('charge').label, 'Credit sale');
+    assert.strictEqual(ctx.rs._partyStatementKind('payment', 'supplier').label, 'Payment', 'other kinds shared');
+    // the on-screen statement actually passes the party type through
+    const ev = [{ kind: 'charge', amount: 5, running_balance: 5, date: '2026-10-01', ref: 'PO-1' }];
+    const html = ctx.rs._partyStatementMarkup('supplier', 1, { name: 'S' }, ev, 5, { active: false }, {});
+    assert.ok(html.indexOf('Purchase') !== -1 && html.indexOf('Credit sale') === -1, 'supplier statement row says Purchase');
+    const en = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'frontend', 'locales', 'en.json'), 'utf8'));
+    const ar = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'frontend', 'locales', 'ar.json'), 'utf8'));
+    assert.ok(en['Purchase'] && /[؀-ۿ]/.test(ar['Purchase']), 'both locales carry Purchase');
+  },
+  // W4a-2 UI: Tab cycles inside the top modal; a stacked layer owns the keys.
+  async tabIsTrappedInsideTheTopModal(src) {
+    const ctx = load({ source: src });
+    const mk = (name) => ({ name, disabled: false, type: 'button', offsetWidth: 10, offsetHeight: 10,
+      getAttribute() { return null; }, closest() { return null; }, getClientRects() { return [1]; },
+      focus() { ctx.doc.activeElement = this; } });
+    const run = (items, active, shift, stacked) => {
+      const listeners = [];
+      const dialog = makeStub({ id: 'dlg', querySelectorAll: () => items, contains: (el) => items.indexOf(el) !== -1 });
+      ctx.doc.addEventListener = (type, fn) => { if (type === 'keydown') listeners.push(fn); };
+      ctx.doc.getElementById = (id) => (id === 'dlg' ? dialog : null);
+      ctx.doc.activeElement = active;
+      ctx.rs._modalKeyStack.length = 0;
+      ctx.rs._wireModalA11y({ remove() {} }, 'dlg');
+      if (stacked) ctx.rs._modalKeyStack.push({ overlay: {} });
+      let prevented = false;
+      listeners[0]({ key: 'Tab', shiftKey: !!shift, preventDefault() { prevented = true; }, stopPropagation() {} });
+      return { prevented, active: ctx.doc.activeElement };
+    };
+    const a = mk('a'), b = mk('b'), c = mk('c');
+    let r = run([a, b, c], c, false, false);
+    assert.ok(r.prevented && r.active === a, 'Tab from last wraps to first');
+    r = run([a, b, c], a, true, false);
+    assert.ok(r.prevented && r.active === c, 'Shift+Tab from first wraps to last');
+    r = run([a, b, c], b, false, false);
+    assert.ok(!r.prevented, 'Tab in the middle is left to the browser');
+    r = run([a, b, c], c, false, true);
+    assert.ok(!r.prevented && r.active === c, 'a layer stacked on top owns Tab');
+    r = run([], null, false, false);
+    assert.ok(r.prevented, 'zero focusables: Tab swallowed, no throw');
+    const hidden = Object.assign(mk('h'), { offsetWidth: 0, offsetHeight: 0, getClientRects() { return []; } });
+    r = run([a, hidden], a, false, false);
+    assert.ok(r.prevented && r.active === a, 'invisible controls are skipped when finding the last');
+  },
+  // W4a-2 UI: in Arabic the device suffix landed on the wrong side of the number.
+  async docNumberAndTagAreOneLtrIsolate(src) {
+    const ctx = load({ source: src });
+    const html = ctx.rs._docNoHtml('PO-000004-0123abcd-60ee1234');
+    assert.ok(html.startsWith('<bdi dir="ltr">'), html);
+    assert.ok(html.endsWith('</bdi>') && html.indexOf('60ee') !== -1 && html.indexOf('PO-000004') !== -1, html);
+    assert.ok(html.indexOf('<bdi dir="ltr" title=') !== -1, 'inner number isolate kept');
+    const evil = ctx.rs._docNoHtml('<img src=x onerror=1>');
+    assert.ok(evil.indexOf('<img') === -1, 'still escaped: ' + evil);
+  },
 };
 
 function mutate(src, from, to) {
@@ -337,6 +397,16 @@ const MUTANTS = [
   ['in-flight flag never cleared after a failed request', 'stuckInFlight', 'retryAfterFailureReusesTheKeyEachDialogMintsItsOwn',
     "        st.inFlight = false;\n        if (btn) btn.disabled = false;\n      }\n    } catch",
     "        if (btn) btn.disabled = false;\n      }\n    } catch"],
+  ['supplier charge keeps customer wording', 'custWording', 'supplierChargeIsLabelledPurchase',
+    "partyType === 'supplier' && this._PARTY_STATEMENT_KIND_SUPPLIER[kind]", 'false && this._PARTY_STATEMENT_KIND_SUPPLIER[kind]'],
+  ['statement markup drops the party type', 'markupNoType', 'supplierChargeIsLabelledPurchase',
+    'const meta = this._partyStatementKind(e.kind, kind);', 'const meta = this._partyStatementKind(e.kind);'],
+  ['Tab trap removed', 'noTrap', 'tabIsTrappedInsideTheTopModal',
+    'this._trapTab(e, dialogEl || overlay);', ''],
+  ['Tab trap ignores the top-layer gate', 'trapNoGate', 'tabIsTrappedInsideTheTopModal',
+    "if (e.key === 'Tab') {\n        if (this._topModalKeyLayer() !== layer) return;", "if (e.key === 'Tab') {"],
+  ['doc number tag outside the isolate', 'tagOutside', 'docNumberAndTagAreOneLtrIsolate',
+    'return `<bdi dir="ltr">${this._bdi(main, full)}${tag}</bdi>`;', 'return this._bdi(main, full) + tag;'],
   ['over-receipt not checked client-side', 'noOverCheck', 'overRemainingIsRefusedBeforeSending',
     'if (q < 0 || q > ln.remaining) {', 'if (false) {'],
 ];

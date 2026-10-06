@@ -458,6 +458,11 @@ def test_a_purchase_order_down_payment_is_not_subtracted_twice():
         'amount_paid': 30.0,
     })
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
+
+    # W4a-2: AP is recognised at receipt now; receiving keeps this test's original claim (no double subtraction / not negative / payment listed). It no longer checks the balance BEFORE receipt, which is now -<down payment> by design.
+    rc = client.post(f'/api/sub/retail/purchase-orders/{po_id}/receive', json={})
+    assert rc.status_code == 200, rc.get_json()
 
     assert _supplier_balance(cid, supplier_id) == 70.0
     stmt = _supplier_statement(client, supplier_id)
@@ -482,6 +487,10 @@ def test_a_fully_paid_purchase_order_does_not_leave_the_supplier_statement_negat
     })
     assert r.status_code == 200, r.get_json()
     po_id = r.get_json()['data']['id']
+
+    # W4a-2: AP is recognised at receipt now; receiving keeps this test's original claim (no double subtraction / not negative / payment listed). It no longer checks the balance BEFORE receipt, which is now -<down payment> by design.
+    rc = client.post(f'/api/sub/retail/purchase-orders/{po_id}/receive', json={})
+    assert rc.status_code == 200, rc.get_json()
     assert _supplier_balance(cid, supplier_id) == 100.0
 
     p = client.post(f'/api/sub/retail/purchase-orders/{po_id}/pay', json={'amount': 100.0})
@@ -512,6 +521,11 @@ def test_a_direct_supplier_payment_still_appears_on_the_statement():
         'amount_paid': 0.0,
     })
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
+
+    # W4a-2: AP is recognised at receipt now; receiving keeps this test's original claim (no double subtraction / not negative / payment listed). It no longer checks the balance BEFORE receipt, which is now -<down payment> by design.
+    rc = client.post(f'/api/sub/retail/purchase-orders/{po_id}/receive', json={})
+    assert rc.status_code == 200, rc.get_json()
 
     p = client.post(f'/api/sub/retail/suppliers/{supplier_id}/payments', json={'amount': 40.0})
     assert p.status_code == 200, p.get_json()

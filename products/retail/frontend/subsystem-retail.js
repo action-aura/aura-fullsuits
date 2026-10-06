@@ -2242,6 +2242,24 @@ const RetailSystem = {
     if (i !== -1) this._modalKeyStack.splice(i, 1);
   },
 
+  // Cycles Tab / Shift+Tab inside `root` over visible, enabled focusables.
+  // Zero focusables: swallow Tab and keep focus on the dialog itself.
+  _trapTab(e, root) {
+    if (!root || typeof root.querySelectorAll !== 'function') return;
+    const sel = 'a[href], button, input, select, textarea, [tabindex]';
+    const items = Array.from(root.querySelectorAll(sel)).filter(el =>
+      !el.disabled && el.getAttribute('tabindex') !== '-1' && el.type !== 'hidden'
+      && !el.closest('[hidden]') && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+    const active = document.activeElement;
+    if (!items.length) { e.preventDefault(); if (root.focus) root.focus(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && (active === first || active === root || !root.contains(active))) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && (active === last || !root.contains(active))) {
+      e.preventDefault(); first.focus();
+    }
+  },
+
   _wireModalA11y(overlay, dialogId) {
     const dialogEl = (typeof document !== 'undefined' && document.getElementById(dialogId)) || null;
     const trigger = (typeof document !== 'undefined' && document.activeElement) || null;
@@ -2256,6 +2274,14 @@ const RetailSystem = {
       if (trigger && typeof trigger.focus === 'function') trigger.focus();
     };
     const onKeydown = (e) => {
+      // W4a-2 UI: Tab focus trap. Without it Tab from the last control left
+      // the dialog for the page behind ("Skip to main content"). Top layer
+      // only, same as Escape, so a stacked _confirm owns the keys.
+      if (e.key === 'Tab') {
+        if (this._topModalKeyLayer() !== layer) return;
+        this._trapTab(e, dialogEl || overlay);
+        return;
+      }
       if (e.key !== 'Escape') return;
       // Not the front of the queue: a _confirm() opened on top of this modal
       // owns this keypress, and closing underneath it would take away the
@@ -2400,7 +2426,14 @@ const RetailSystem = {
     const tag = deviceTag
       ? `<span style="color:var(--text-faint);font-size:10px;margin-inline-start:3px" aria-hidden="true">${this._esc(deviceTag)}</span>`
       : '';
-    return this._bdi(main, full) + tag;
+    // W4a UI-3 (W4a-2 UI): the number is isolated by _bdi, but the device tag
+    // sat OUTSIDE it, so in Arabic (dir=rtl) the paragraph direction placed
+    // the short suffix on the wrong side ("PO-000004 60ee" read backwards).
+    // With a tag, wrap number + tag in ONE ltr isolate so the pair reads
+    // left-to-right as a unit. The inner <bdi> stays, so its own text is
+    // still exactly the short number. Everything is escaped by _bdi/_esc.
+    if (!tag) return this._bdi(main, full);
+    return `<bdi dir="ltr">${this._bdi(main, full)}${tag}</bdi>`;
   },
 
   // Review fix (2026-09-27, medium -- item #16 regression, in audit
@@ -18905,7 +18938,16 @@ const RetailSystem = {
     closed_short: { label: 'Closed short (undelivered balance released)', sign: -1 },
   },
   _PARTY_CARRIED_KINDS: ['balance_carried_owed', 'balance_carried_credit'],
-  _partyStatementKind(kind) {
+  // W4a-2 UI: a supplier's 'charge' is goods we bought on account, not a
+  // sale, so it takes supplier wording. Only the label differs; sign and every
+  // other kind are shared. ar.json "مشتريات" -- native speaker to confirm.
+  _PARTY_STATEMENT_KIND_SUPPLIER: {
+    charge: { label: 'Purchase', sign: 1 },
+  },
+  _partyStatementKind(kind, partyType) {
+    if (partyType === 'supplier' && this._PARTY_STATEMENT_KIND_SUPPLIER[kind]) {
+      return this._PARTY_STATEMENT_KIND_SUPPLIER[kind];
+    }
     return this._PARTY_STATEMENT_KIND[kind] || { label: 'Payment', sign: -1 };
   },
 
@@ -19357,7 +19399,7 @@ const RetailSystem = {
     const isSupplier = kind === 'supplier';
     const balanceLabel = isSupplier ? t('You Owe') : t('Owed to You');
     const eventsHtml = events.length ? events.map(e => {
-      const meta = this._partyStatementKind(e.kind);
+      const meta = this._partyStatementKind(e.kind, kind);
       const sign = meta.sign > 0 ? '+' : '-';
       const color = meta.sign > 0 ? 'var(--state-warning-text)' : 'var(--state-success-text)';
       return `<tr>
@@ -19471,7 +19513,7 @@ const RetailSystem = {
     // line is actually read in.
     const lang = await this._shareMessageLang();
     const recentLines = events.slice(-5).reverse().map(e => ({
-      label: this._translateForLang(this._partyStatementKind(e.kind).label, lang),
+      label: this._translateForLang(this._partyStatementKind(e.kind, ctx.kind).label, lang),
       amount: e.amount,
       date: this._formatDateForLang(e.date, lang),
     }));
