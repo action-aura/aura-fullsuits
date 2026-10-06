@@ -7095,3 +7095,64 @@ recomputed from the local active PO payments after every write and every apply;
 receipt movements get deterministic uids so a double receive moves stock once.
 In scope deliberately NOT: AP at receipt time and partial receive (ROADMAP S1) --
 next wave W4a-2. Plan: job 54e80fc2 tmp/W4A-PLAN.md.
+
+## 2026-10-06 — W4a CASHED IN (purchase orders shared between computers, retail schema v45)
+
+Commits 0c8b7747 (feature), 812e9e8c (two-computer proof), ef38b4f0 (verify fixes) on
+feat/retail-ux-p0. Plan and fix plan: job 54e80fc2 tmp/W4A-PLAN.md, tmp/W4A-FIX1.md.
+
+What changed: POs and their lines carry a uid and sync (`purchase_order` create +
+forward-only status update, received beats cancelled with a conflict recorded once;
+`purchase_order_item` parked until its PO arrives); payments carry `po_uid`
+(pre-v45 events land with related_id NULL, never on an unrelated local PO);
+`amount_paid`/`payment_status` are a cache recomputed from active PO payments in
+integer minor units by one rule on both sides (a void now lowers it); receipt
+movements have deterministic uids, inserted before any stock moves; receive refuses
+409 PO_BOOKS_NOT_ARRIVED / PO_LINES_NOT_ARRIVED until the order journal and every
+line (`item_count`) are local; pre-v45 POs are sent once by a boot backfill, and a
+legacy instalment is re-linked only when the books prove THIS computer recorded it
+(local journal with non-NULL source_id), detached when they prove a sibling did.
+
+Measured: routes 19, apply 41, core 15, migration 6, coverage ratchet 34, two-computer
+7 (PO + lines arrive; 30 + 20 = 50 partial on both, void leaves 20, supplier balance 80;
+receipt on B books and moves stock once on both; double offline receive = 10 not 20;
+cancel on B reverses once on A; sibling payment never lands on an unrelated local PO;
+legacy backfill reaches the sibling). Adversarial verify re-proved 12 builder mutations
+and found 2 HIGH (receive before lines arrived; backfill re-pointed a sibling's
+payment, recompute read 101 'paid' on an order paid 1) -- both fixed and
+mutation-proved. Two-computer test mutations: 4 of 5 went red (status apply no-op x2,
+po_uid ignored, apply recompute off, backfill silent).
+
+Honest limits of the proof:
+- the two-computer double-receive test does NOT exercise the receive rowcount gate
+  (neither computer has synced before receiving; the apply's ON CONFLICT dedupes).
+  The gate is covered by routes R4, mutation-proved twice. A two-computer case where
+  the sibling's movement arrives before the local receive is not written.
+
+Residuals (W4a-2 and later):
+- AP is still recognised at ORDER time; partial receive / close short (S1) not built.
+- unprovable legacy PO payments (pre-v38, supplier-less) are left as they were, counted
+  in one log line; a stale sibling row sharing the integer of an order typed AFTER the
+  upgrade is not swept; a sibling's down payment cannot be proved on the receiver.
+- cancel on one computer while a sibling's instalment is unsynced leaves a cancelled
+  PO with an active payment (shown as a supplier credit -- money really left).
+- received-vs-cancelled conflict: received wins, 1260 stays skewed until a person
+  resolves the recorded conflict.
+- po_number collisions from a series without a device fragment park as
+  duplicate_document_number (same as sales).
+- Android/KMP: no PO cancel screen (S6 unchanged); the phone embeds the backend, so
+  sync itself is the same code.
+Pre-existing order-dependent flakes seen, not caused by W4a (also red on b169cd92 or
+passing alone): retail_stock_sync_test (~448/506), retail_money_sync_test::
+test_a_device_with_no_terminal_identity_yet_still_mints_a_stable_discriminator;
+retail_reorder_hook_regression_test's thread check (a 'Thread-19 (_push)' nudge
+thread), retail_two_install_roundtrip_test's cursor test (1 relay event of 3) and three
+retail_money_sync_test outbox reads raced `_sync_nudge` -- each red on b169cd92 too,
+now stubbed in the test (f4a63398 and this wave); the reorder thread check was
+re-proved red with a reorder-started thread after the stub.
+
+Regression sweep at ef38b4f0, one file per process, 41 files: 37 fully green; 4 with
+one order-dependent failure each, every one green alone and red on b169cd92 too
+(stock_sync ~448, money_sync no-terminal discriminator, reorder thread, two-install
+cursor). Two of those four are fixed above; stock_sync and the money_sync
+discriminator remain as recorded flakes.
