@@ -517,3 +517,36 @@ def test_balance_ignores_other_companies_receipts(conn, po_mod, pb):
     _receipt(conn, po_mod, po, [6])
     conn.execute("UPDATE purchase_order_receipts SET company_id=? WHERE po_id=?", (CID + 1, po['id']))
     assert _bal(pb, conn) == Decimal('0.000')
+
+
+# -- stock books: the per-receipt link (W4a-2 fix, F5) ----------------------------
+
+def _receipt_movement(conn, po, ruid, line_idx, qty):
+    """The stock movement a receipt line wrote: uid = the line's movement uid."""
+    from core.retail import purchase_orders as _po
+    row = conn.execute("SELECT po_number FROM purchase_orders WHERE id=?", (po['id'],)).fetchone()
+    conn.execute(
+        "INSERT INTO inventory_movements (company_id, product_id, branch_id, movement_type, quantity, "
+        "unit_cost, reference, uid) VALUES (?,?,?,'purchase_in',?,3.0,?,?)",
+        (CID, 'prod-x', BRANCH, qty, row['po_number'],
+         _po.receipt_line_movement_uid(ruid, po['items'][line_idx][1])))
+
+
+def test_second_receipts_missing_journal_leaves_its_movement_unbooked(conn, po_mod, gl):
+    """W4a-2 fix (F5). Two receipts of one receipt-basis order; only the FIRST
+    has its po_receipt journal on this computer (the second's has not synced).
+    The per-order fallback (a journal whose source_id is the order's id) used
+    to mark BOTH movements booked, hiding the second. The link must run through
+    THE RECEIPT: the second movement counts as UNBOOKED."""
+    from core.retail import stock_books as sb
+    po = _po(conn, lines=((10, 3.0),))
+    r1, v1 = _receipt(conn, po_mod, po, [6])
+    r2, v2 = _receipt(conn, po_mod, po, [4])
+    _receipt_movement(conn, po, r1, 0, 6)
+    _receipt_movement(conn, po, r2, 0, 4)
+    assert sb.unbooked_movement_count(conn, CID) == 2, 'neither receipt is journalled yet'
+    gl.post_po_receipt_for(conn, CID, BRANCH, _po_row(conn, po), r1, v1, CUR)
+    assert sb.unbooked_movement_count(conn, CID) == 1, \
+        "the first receipt is booked; the second one's missing journal must still show"
+    gl.post_po_receipt_for(conn, CID, BRANCH, _po_row(conn, po), r2, v2, CUR)
+    assert sb.unbooked_movement_count(conn, CID) == 0

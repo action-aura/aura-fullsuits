@@ -143,6 +143,21 @@ def unbooked_movement_count(conn, cid):
             "                     WHERE j3.company_id = r.company_id AND j3.source_type = 'po_receipt' "
             "                       AND j3.source_uid = r.uid))) ")
         receipt_params = (float(currency_quantum(_currency_of(conn, cid)) / 2),)
+    # W4a-2 fix (F5): the per-ORDER links above (a journal whose source_id is the
+    # order's id, or the order journal's uid) would book EVERY movement of an
+    # order once ANY of its journals exists -- so a second receipt whose own
+    # journal has not synced stayed hidden behind the first. A movement that is
+    # the line of a REAL (non-legacy) receipt is therefore judged by the
+    # receipt link alone. Legacy receipts (v46 migration / v45 compat) keep the
+    # per-order link: their books are the single W4a/order journal, whose
+    # source_uid is the order's, not a receipt's.
+    own_receipt_guard = ""
+    if _has_column(conn, 'purchase_order_receipt_lines', 'movement_uid'):
+        own_receipt_guard = (
+            "AND NOT EXISTS (SELECT 1 FROM purchase_order_receipt_lines rl0 "
+            "                 JOIN purchase_order_receipts r0 ON r0.id = rl0.receipt_id "
+            "                WHERE rl0.movement_uid = m.uid AND r0.company_id = m.company_id "
+            "                  AND COALESCE(r0.legacy, 0) = 0) ")
     purchased = conn.execute(
         "SELECT COUNT(*) FROM inventory_movements m "
         "WHERE m.company_id=? AND m.movement_type='purchase_in' "
@@ -150,7 +165,8 @@ def unbooked_movement_count(conn, cid):
         "  EXISTS (SELECT 1 FROM purchase_orders p JOIN gl_journals j "
         "            ON j.company_id=p.company_id AND j.source_type IN (%(js)s) "
         "           AND (j.source_id=p.id %(uid_link)s) "
-        "           WHERE p.company_id=m.company_id AND p.po_number=m.reference) "
+        "           WHERE p.company_id=m.company_id AND p.po_number=m.reference "
+        "           %(own_guard)s) "
         "  OR (NOT EXISTS (SELECT 1 FROM purchase_orders p2 "
         "                   WHERE p2.company_id=m.company_id AND p2.po_number=m.reference) "
         "      AND EXISTS (SELECT 1 FROM gl_journals j2 "
@@ -158,7 +174,7 @@ def unbooked_movement_count(conn, cid):
         "                     AND j2.source_type IN (%(js)s))) "
         "%(receipt_link)s"
         ")" % {'js': ','.join('?' * len(_PURCHASE_JOURNALS)), 'uid_link': uid_link,
-               'receipt_link': receipt_link},
+               'receipt_link': receipt_link, 'own_guard': own_receipt_guard},
         (cid, *_PURCHASE_JOURNALS, *_PURCHASE_JOURNALS, *receipt_params)
     ).fetchone()[0]
     return int(moved) + int(purchased)

@@ -244,6 +244,19 @@ const CLAIMS = {
     assert.ok(ctx.calls.some((c) => c.method === 'POST' && /\/purchase-orders\/5\/close$/.test(c.url)), JSON.stringify(ctx.calls));
     assert.ok(ctx.toasts.some((x) => x.kind === 'success'), JSON.stringify(ctx.toasts));
   },
+  // W4a-2 fix (F4): the supplier statement emits kind 'closed_short' (a credit
+  // line for the undelivered part of a closed-short order). It must render as
+  // its own translated label, never fall through to the "Payment" default.
+  async closedShortStatementLineHasItsOwnLabel(src) {
+    const ctx = load({ source: src });
+    const k = ctx.rs._partyStatementKind('closed_short');
+    assert.strictEqual(k.label, 'Closed short (undelivered balance released)', JSON.stringify(k));
+    assert.strictEqual(k.sign, -1, 'a credit line');
+    const en = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'frontend', 'locales', 'en.json'), 'utf8'));
+    const ar = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'frontend', 'locales', 'ar.json'), 'utf8'));
+    assert.ok(en[k.label], 'en.json carries the label');
+    assert.ok(ar[k.label] && /[؀-ۿ]/.test(ar[k.label]), 'ar.json carries a real Arabic label');
+  },
 };
 
 function mutate(src, from, to) {
@@ -267,6 +280,8 @@ const MUTANTS = [
     "event.key==='Enter'&&event.target.tagName==='INPUT'){event.preventDefault();RetailSystem._submitReceivePO();}", "event.key==='Enter'&&false){}"],
   ['server refusal shown raw', 'rawRefusal', 'serverRefusalIsTranslatedNotRaw',
     "return msg ? t(msg) : ((d && d.message) || t('Error'));", "return (d && d.message) || t('Error');"],
+  ['closed_short statement kind removed', 'noClosedShortKind', 'closedShortStatementLineHasItsOwnLabel',
+    "    closed_short: { label: 'Closed short (undelivered balance released)', sign: -1 },", ''],
   ['over-receipt not checked client-side', 'noOverCheck', 'overRemainingIsRefusedBeforeSending',
     'if (q < 0 || q > ln.remaining) {', 'if (false) {'],
 ];

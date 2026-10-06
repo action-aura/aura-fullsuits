@@ -2514,6 +2514,7 @@
   "Partly received": "مستلم جزئياً",
   "Closed short": "مُغلق بنقص",
   "Close short": "إغلاق بنقص",
+  "Closed short (undelivered balance released)": "إغلاق بنقص (تحرير الرصيد غير المستلم)",
   "Ordered": "المطلوب",
   "Received so far": "المستلم حتى الآن",
   "Receive now": "استلام الآن",

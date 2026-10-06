@@ -488,6 +488,54 @@ def test_v45_received_status_is_ignored_when_real_receipts_exist(get_conn):
     assert _po_row(get_conn)["status"] == "partial", "facts win over a stale status claim"
 
 
+def test_create_payload_status_received_synthesizes_the_legacy_receipt(get_conn):
+    """W4a-2 fix (F2): the boot backfill announces a legacy RECEIVED order as a
+    create carrying status='received' and ap_basis='order' (the key is always
+    sent). The receiver must end with the order 'received' and received_qty
+    filled -- items arrive AFTER the header, so the lines join the legacy
+    receipt as they land."""
+    from core.retail import purchase_orders as po_mod
+    assert _apply(get_conn, _po(ap_basis="order", status="received",
+                                received_at="2026-10-06 12:00:00")) is True
+    assert _apply(get_conn, _item(ITEM_A, PRODUCT, 4.0)) is True
+    assert _apply(get_conn, _item(ITEM_B, PRODUCT_B, 6.0)) is True
+    receipts = _rows(get_conn, "SELECT * FROM purchase_order_receipts")
+    assert len(receipts) == 1 and receipts[0]["legacy"] == 1
+    assert receipts[0]["uid"] == str(uuid.uuid5(po_mod._PO_RECEIPT_NAMESPACE, f"{PO_UID}:legacy-receipt"))
+    row = _po_row(get_conn)
+    assert row["status"] == "received" and row["received_at"] == "2026-10-06 12:00:00"
+    got = sorted(r["received_qty"] for r in _rows(
+        get_conn, "SELECT received_qty FROM purchase_order_items"))
+    assert got == [4.0, 6.0]
+    # Replay of the create is idempotent: still one legacy receipt, two lines.
+    assert _apply(get_conn, _po(ap_basis="order", status="received",
+                                received_at="2026-10-06 12:00:00")) is True
+    assert len(_rows(get_conn, "SELECT id FROM purchase_order_receipts")) == 1
+    assert len(_rows(get_conn, "SELECT id FROM purchase_order_receipt_lines")) == 2
+
+
+def test_create_payload_status_received_on_a_receipt_basis_order_synthesizes_nothing(get_conn):
+    """A 'receipt'-basis order's deliveries arrive as real receipt events; a
+    synthesized legacy receipt beside them would count the goods twice."""
+    assert _apply(get_conn, _po(ap_basis="receipt", status="received")) is True
+    assert _apply(get_conn, _item(ITEM_A, PRODUCT, 10.0)) is True
+    assert _rows(get_conn, "SELECT id FROM purchase_order_receipts") == []
+    assert _po_row(get_conn)["status"] == "pending"
+
+
+def test_create_payload_status_cancelled_stamps_cancelled_at(get_conn):
+    """W4a-2 fix (F2): a backfilled cancelled order arrives cancelled."""
+    assert _apply(get_conn, _po(ap_basis="order", status="cancelled",
+                                received_at="2026-10-06 15:00:00")) is True
+    row = _po_row(get_conn)
+    assert row["cancelled_at"] == "2026-10-06 15:00:00" and row["status"] == "cancelled"
+    other = str(uuid.uuid4())
+    assert _apply(get_conn, _po(uid=other, po_number="PO-0002", ap_basis="order",
+                                status="cancelled")) is True
+    assert _po_row(get_conn, other)["cancelled_at"] == "2026-10-06 09:00:00", \
+        "no received_at -> falls back to the order's own created_at"
+
+
 def test_a_line_arriving_after_the_legacy_receipt_joins_it(get_conn):
     """The old apply set received_qty=quantity for a late line under a received
     header; state is derived now, so the late line must get its legacy receipt

@@ -5749,7 +5749,14 @@ class SyncService:
             raise
         local_id = self._local_po_id(conn, local_company_id, p.get("uid"))
         if local_id is not None:
-            if p.get("status") == "received" and not p.get("ap_basis"):
+            # W4a-2 fix (F2): this used to require NO ap_basis key, but the
+            # boot backfill announces a legacy received order WITH
+            # ap_basis='order' (the column is always sent), so the legacy
+            # receipt was never synthesized and the order stayed 'pending' with
+            # received_qty 0 on the receiving computer. Only a 'receipt'-basis
+            # order is excluded: its deliveries arrive as real receipt events,
+            # and synthesizing one here would count the goods twice.
+            if p.get("status") == "received" and p.get("ap_basis") != "receipt":
                 self._ensure_legacy_receipt_for(conn, local_company_id, local_id)
             self._refresh_po(conn, local_company_id, local_id)
         return True

@@ -18872,6 +18872,13 @@ const RetailSystem = {
     // not an event that happened on a day -- and it ages as "current".
     balance_carried_owed:   { label: 'Balance carried forward (owed)',   sign: 1 },
     balance_carried_credit: { label: 'Balance carried forward (credit)', sign: -1 },
+    // W4a-2 fix: an order-basis purchase order closed short -- the supplier's
+    // statement gets a CREDIT line for the part that never arrived (the order's
+    // charge stays, this releases the undelivered share). Without an entry here
+    // the unknown-kind fallback below would show it as a "Payment", which it is
+    // not: no money moved. (ar.json: "إغلاق بنقص (تحرير الرصيد غير المستلم)" --
+    // native speaker to confirm; JSON cannot carry the note.)
+    closed_short: { label: 'Closed short (undelivered balance released)', sign: -1 },
   },
   _PARTY_CARRIED_KINDS: ['balance_carried_owed', 'balance_carried_credit'],
   _partyStatementKind(kind) {

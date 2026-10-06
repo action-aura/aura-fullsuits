@@ -4141,10 +4141,11 @@ def create_purchase_order():
             """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line, _new_uid()))
         # AP ledger: record any down-payment now; push the unpaid balance onto supplier AP.
         down_pay_uid = _new_uid()
+        down_pay_ref = None
         if amount_paid > _eps:
-            _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
-                            method=data.get('method', 'cash'), related_type='po', related_id=po_id,
-                            doc_type='supplier_payment', currency=currency, pay_uid=down_pay_uid)
+            down_pay_ref = _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
+                                           method=data.get('method', 'cash'), related_type='po', related_id=po_id,
+                                           doc_type='supplier_payment', currency=currency, pay_uid=down_pay_uid)
         # Derived, not stored-by-hand (see the insert above). Equals the figure
         # computed from the request, by construction: the one payment row.
         _, payment_status = po_core.recompute_po_paid(conn, cid, po_id, _eps)
@@ -4163,8 +4164,9 @@ def create_purchase_order():
         # the supplier can read negative before delivery -- an advance, and it
         # ties to AP. `order_journal_uid` stays NULL for these orders.
         if amount_paid > _eps:
+            # W4a-2 fix: reference = the payment's, as post_supplier_payment does.
             gl.post_po_prepayment(conn, cid, branch_id, po_id, bool(supplier_id),
-                                  amount_paid, down_pay_uid, currency)
+                                  amount_paid, down_pay_uid, currency, reference=down_pay_ref)
         # W4a: queue order + lines in THIS transaction, so the outbox rows and
         # the rows they describe land or roll back together.
         _po_stamp_and_queue_create(cur, po_id, None)
@@ -18866,8 +18868,11 @@ def pay_purchase_order(po_id):
             # finds and reverses it (retail_stock_books_routes_test PD1).
             if po['supplier_id']:
                 _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
+            # W4a-2 fix: carry the payment's reference like every other payment
+            # journal (post_supplier_payment gets `ref`), so the books line and
+            # the payment row are findable from each other by reference.
             gl.post_po_prepayment(conn, cid, po['branch_id'], po_id, bool(po['supplier_id']),
-                                  amt, pay_uid, currency)
+                                  amt, pay_uid, currency, reference=ref)
         elif po['supplier_id']:
             # v44: re-derived (the instalment is a 'po' payment row, which
             # the supplier formula counts), not moved by -amt.

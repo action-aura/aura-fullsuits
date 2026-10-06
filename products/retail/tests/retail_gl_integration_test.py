@@ -398,11 +398,25 @@ def test_supplier_payment_clears_ap_and_ties_to_subledger(client):
         'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}],
         'amount_paid': 0})
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
     _assert_ap_ties(cid)
 
     r = client.post(f'{API}/suppliers/{supp_id}/payments', json={'amount': 15.0, 'method': 'cash'})
     assert r.status_code == 200, r.get_json()
 
+    # W4a-2 fix: UPDATED, deliberately. AP is now booked when goods ARRIVE,
+    # not when an order is typed, so before the receipt a supplier paid 15
+    # shows an ADVANCE (-15), not "owed 25". The original claim (owed 25 after
+    # paying 15 of a 40 order) is kept by receiving, below. What this can no
+    # longer catch: nothing about the old order-time booking -- that behaviour
+    # is gone for new orders (it lives on only for ap_basis='order' history,
+    # covered in retail_po_receipts_routes_test.py).
+    tb = _assert_ap_ties(cid)
+    assert _account(tb, gl.ACCOUNT_AP)['balance'] == -15.0
+    assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
+
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 200, r.get_json()
     tb = _assert_ap_ties(cid)
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
@@ -419,26 +433,30 @@ def test_purchase_order_with_down_payment_posts_inventory_cash_ap(client):
         'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}],
         'amount_paid': 15.0})
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
 
     tb = _assert_ap_ties(cid)
-    # STOCK-BOOKS: an ORDER is not stock -- it books to Goods Ordered Not
-    # Received (1260); Inventory (1200) moves only on receipt (see the
-    # receive test in retail_stock_books_routes_test.py). This replaces the
-    # old `1200 == 40`. What it can no longer catch: nothing here -- the
-    # "stock reaches 1200" half is asserted at receipt, and the 1200 line
-    # below is what proves the order did NOT inflate Inventory.
-    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
-    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
-    # seed product's opening stock (offset in 3900), not a cent more. (Plain
-    # `== 0` would break the moment a product's opening stock is booked.)
-    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
-    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
-    # numbers that move together, so it passed while the PO added to BOTH or
-    # neither; 100.000 on each fails if the order leaks into 1200 at all.
+    # W4a-2 fix: UPDATED, deliberately. A new order books NOTHING to 1260 or AP
+    # (those were order-time bookings, now only for ap_basis='order' history);
+    # the 15 down payment is an advance to the supplier (AP -15). What this can
+    # no longer catch: an order-time 1260/AP booking on a NEW order -- which is
+    # now the bug, and is what the zeros below pin.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
+    assert _account(tb, gl.ACCOUNT_AP)['balance'] == -15.0
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 200, r.get_json()
+    tb = _assert_ap_ties(cid)
+    # The goods arrived: Inventory +40 (100 seed + 40), the supplier is owed
+    # 40 - 15 paid = 25, and 1260 was never touched on this path.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 140.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -15.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 25.0
+    # (Absolute figures, hand-computed from the seed: 100 units x cost 1.000 =
+    # 100.000 of opening stock, per STOCK-BOOKS verify F8.)
 
 
 def test_purchase_order_with_a_negative_amount_paid_does_not_inflate_ap(client):
@@ -488,21 +506,33 @@ def test_purchase_order_with_a_negative_amount_paid_does_not_inflate_ap(client):
     assert row['amount_paid'] == 0.0, (
         'a negative down-payment must be stored as nothing paid, not as a '
         'negative that every later subtraction turns into extra debt')
+    # W4a-2 fix: UPDATED, deliberately. Debt now starts at RECEIPT, so right
+    # after create the supplier is owed nothing (0) -- the inflated-debt shape
+    # (total + |amount_paid| = 90) would show here as 90, not 0. The original
+    # claim "owed == total, not total + |paid|" is asserted after the receipt.
+    assert owed == 0.0, f'an unreceived order owes nothing; got {owed}'
+    po_id = r.get_json()['data']['id']
+    tb = _assert_ap_ties(cid)
+    assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
+
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 200, r.get_json()
+    conn = get_retail_conn()
+    try:
+        owed = conn.execute(
+            "SELECT credit_balance FROM suppliers WHERE id=? AND company_id=?",
+            (supp_id, cid)).fetchone()['credit_balance']
+    finally:
+        conn.close()
     assert owed == 40.0, (
         f'the shop owes the PO total, not total + |amount_paid|; got {owed}')
 
     tb = _assert_ap_ties(cid)
-    # STOCK-BOOKS: 40 of goods ordered (1260), not yet stock (1200 == 0);
-    # nothing is lost -- receipt moves it, asserted in the routes test.
-    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
-    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
-    # seed product's opening stock (offset in 3900), not a cent more. (Plain
-    # `== 0` would break the moment a product's opening stock is booked.)
-    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
-    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
-    # numbers that move together, so it passed while the PO added to BOTH or
-    # neither; 100.000 on each fails if the order leaks into 1200 at all.
-    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+    # STOCK-BOOKS verify F8: ABSOLUTE figures from the seed (100 units x cost
+    # 1.000 = 100.000) plus the 40 received.
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 140.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 40.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == 0.0
@@ -517,20 +547,23 @@ def test_purchase_order_paid_in_full_up_front_posts_no_ap_leg(client):
         'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}],
         'amount_paid': 40.0})
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
 
-    tb = _trial_balance(cid)
-    assert tb['is_balanced']
-    assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
-    # STOCK-BOOKS: paid-in-full order -> 1260 (not yet received), 1200 == 0.
-    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 40.0
-    # The order added NOTHING to Inventory: whatever 1200 holds is exactly the
-    # seed product's opening stock (offset in 3900), not a cent more. (Plain
-    # `== 0` would break the moment a product's opening stock is booked.)
-    # STOCK-BOOKS verify F8: ABSOLUTE figures, hand-computed from the seed
-    # (100 units x cost 1.000 = 100.000). The earlier `1200 == 3900` compared two
-    # numbers that move together, so it passed while the PO added to BOTH or
-    # neither; 100.000 on each fails if the order leaks into 1200 at all.
+    # W4a-2 fix: UPDATED, deliberately. Paid in full BEFORE delivery is an
+    # advance: AP -40 (not 0) and nothing in 1260 until/unless goods arrive.
+    # On receipt the advance is consumed and AP returns to 0 -- that is the
+    # original "no AP leg left over" claim, now asserted at the right moment.
+    tb = _assert_ap_ties(cid)
+    assert _account(tb, gl.ACCOUNT_AP)['balance'] == -40.0
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 100.0
+
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 200, r.get_json()
+    tb = _assert_ap_ties(cid)
+    assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
+    assert _account(tb, gl.ACCOUNT_GOODS_ORDERED)['balance'] == 0.0
+    assert _account(tb, gl.ACCOUNT_INVENTORY)['balance'] == 140.0
     assert _account(tb, gl.ACCOUNT_OPENING_EQUITY)['balance'] == 100.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0
 
@@ -596,6 +629,12 @@ def test_pay_purchase_order_posts_ap_settlement(client):
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['data']['payment_status'] == 'paid'
 
+    # W4a-2 fix: UPDATED, deliberately -- fully paid before delivery is an
+    # advance (AP -40) until the goods are received; receipt settles it to 0.
+    tb = _assert_ap_ties(cid)
+    assert _account(tb, gl.ACCOUNT_AP)['balance'] == -40.0
+    r = client.post(f'{API}/purchase-orders/{po["id"]}/receive')
+    assert r.status_code == 200, r.get_json()
     tb = _assert_ap_ties(cid)
     assert _account(tb, gl.ACCOUNT_AP)['balance'] == 0.0
     assert _account(tb, gl.ACCOUNT_CASH)['balance'] == -40.0

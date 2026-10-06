@@ -233,7 +233,19 @@ def test_po_instalments_on_two_devices_sum_not_overwrite(tmp_path):
         po = _po_by_uid(s, who, uid)
         assert (po["amount_paid"], po["payment_status"]) == (20.0, "partial"), (who, po)
 
-    # The supplier balance agrees too: owed 100, paid 20 -> 80 on both.
+    # W4a-2 fix: UPDATED, deliberately. Debt now starts at RECEIPT, so before
+    # the goods arrive the 20 still paid is an ADVANCE: -20 on both computers
+    # (it used to read "owed 100 - 20 = 80" straight from the typed order).
+    # What this can no longer catch alone: the order's 100 counting as debt
+    # before delivery -- that is now the bug.
+    bal = {who: s.sql(who, "SELECT credit_balance FROM suppliers WHERE name='W4a Sup'")[0]["credit_balance"]
+           for who in ('a', 'b')}
+    assert bal['a'] == bal['b'] == -20.0, bal
+    # The original claim, at the right moment: the delivery arrives (recorded on
+    # A) -> owed 100, paid 20 -> 80 on both.
+    r = s.http('a', "POST", f"/purchase-orders/{po_a}/receive")
+    assert r["status_code"] == 200, r
+    s.settle()
     bal = {who: s.sql(who, "SELECT credit_balance FROM suppliers WHERE name='W4a Sup'")[0]["credit_balance"]
            for who in ('a', 'b')}
     assert bal['a'] == bal['b'] == 80.0, bal
@@ -310,8 +322,15 @@ def test_po_cancel_on_b_reaches_a(tmp_path):
 
     for who in ('a', 'b'):
         assert _po_by_uid(s, who, uid)["status"] == "cancelled", who
-        assert _order_reversals(s, who) == 1, (who, _order_reversals(s, who))
+        # W4a-2 fix: UPDATED, deliberately. The order is ap_basis 'receipt': it
+        # never posted an order journal, so cancelling it has nothing to reverse
+        # (0 reversals, not 1) and 1260 never moved. What this can no longer
+        # catch: the order-journal REVERSAL on a synced cancel -- that path now
+        # exists only for pre-v46 ('order' basis) orders, covered in
+        # retail_stock_books_routes_test / retail_po_receipts_routes_test.
+        assert _order_reversals(s, who) == 0, (who, _order_reversals(s, who))
         assert _acct(_tb(s, who), '1260') == 0.0, who
+        assert _acct(_tb(s, who), '2000') == 0.0, who
 
 
 # ── 6. an instalment never lands on the wrong local PO ──────────────────────

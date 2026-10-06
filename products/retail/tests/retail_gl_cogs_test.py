@@ -81,6 +81,22 @@ def teardown_module(module):
     shutil.rmtree(DATA, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def _no_background_push(monkeypatch):
+    """W4a-2 fix: receive_purchase_order now ends with `_sync_nudge()` (the
+    receipt and its lines are queued), as sale/return/transfer routes already
+    did. The nudge starts a background push that DRAINS `sync_outbox`, and
+    several tests here read the outbox right after a route call (the sale_item /
+    sale payload tests, and the product-update COUNT before/after test), so
+    whether the row was still there was timing: whole-file run red, each test
+    alone green (measured 2026-10-06, 3 failures; same shape as 26ad74a2).
+    What this can no longer catch: a nudge thread -- not what these tests
+    guard; they assert WHAT is queued, and stubbing changes nothing a route
+    queues."""
+    import api.retail_api as _ra
+    monkeypatch.setattr(_ra, '_sync_nudge', lambda: None)
+
+
 @pytest.fixture
 def client():
     email = f'glcogs-{uuid.uuid4().hex[:8]}@test.local'

@@ -342,25 +342,30 @@ def test_purchase_on_credit_increases_inventory_and_payable_and_still_balances(c
         'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 4.0}],
         'amount_paid': 0})
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
+
+    # W4a-2 fix: UPDATED, deliberately. A new order books NOTHING until goods
+    # arrive: no Goods Ordered (1260), no AP, 1200 holds only the opening stock.
+    # (This used to assert 1260 == 40 and AP == 40 right after create; that is
+    # now the bug -- debt for goods that never came.) The credit-purchase claim
+    # is asserted after the RECEIPT below.
+    pre = _balance_sheet(cid, _today())
+    assert _account(pre['assets'], gl.ACCOUNT_GOODS_ORDERED) is None
+    assert _account(pre['liabilities'], gl.ACCOUNT_AP) is None
+    assert pre['balance_check']['is_balanced'] is True
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 200, r.get_json()
 
     data = _balance_sheet(cid, _today())
-    # STOCK-BOOKS: a purchase ORDER is an asset (Goods Ordered Not Received,
-    # 1260), not Inventory (1200) -- the sheet still carries the 40 on the
-    # asset side and still balances against AP. The old `Inventory == 40`
-    # line moved here; what it can no longer catch is an order wrongly
-    # landing in 1200, which the `inventory is None` check now guards (a
-    # zero-balance 1200 has no row on the sheet).
     ordered = _account(data['assets'], gl.ACCOUNT_GOODS_ORDERED)
     inventory = _account(data['assets'], gl.ACCOUNT_INVENTORY)
     ap = _account(data['liabilities'], gl.ACCOUNT_AP)
-    assert ordered is not None and ordered['amount'] == 40.0
-    # Inventory holds only the seed product's opening stock (500 @ 1.0, offset
-    # in 3900), not the 40 on order. `or 0` = no row on the sheet.
+    # Receipt basis never touches 1260 (no order journal to move from).
+    assert ordered is None
     opening = _account(data['equity'], gl.ACCOUNT_OPENING_EQUITY)
     # STOCK-BOOKS verify F8: absolute, hand-computed (500 units x 1.000 = 500.000
-    # on each side). The old `(inv or 0) == (opening or 0)` also passed when BOTH
-    # rows were missing from the sheet, and could not see the order leak into 1200.
-    assert inventory is not None and inventory['amount'] == 500.0
+    # opening, offset in 3900) PLUS the 40 received; the payable is the 40.
+    assert inventory is not None and inventory['amount'] == 540.0
     assert opening is not None and opening['amount'] == 500.0
     assert ap is not None and ap['amount'] == 40.0
     # Nothing paid, nothing sold yet -- no revenue/expense activity at all,

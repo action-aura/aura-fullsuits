@@ -363,12 +363,19 @@ def test_purchase_order_down_payment_and_later_supplier_payment_merge_one_label(
     today = _today_str()
     cf = _cash_flow(cid, today, today)
     cash_out = _cash_out_labels(cf)
-    # 15 (PO1 down payment) stays on its OWN line -- Inventory is the counter
-    # account, not Accounts Payable.
-    assert cash_out.get('Cash Paid for Inventory Purchases') == 15.0
-    # 9 (direct supplier_payment) + 25 (po_payment settling PO1's balance) ==
-    # 34, on the SAME 'Payments to Suppliers' line.
-    assert cash_out.get('Payments to Suppliers') == 34.0
+    # W4a-2 fix: UPDATED, deliberately. A NEW order (ap_basis 'receipt') books
+    # no order journal, so its 15 down payment is no longer "Inventory is the
+    # counter account": it posts Dr AP / Cr Cash (a prepayment), the SAME shape
+    # as a supplier payment, and so lands on the same line. All three cash-outs
+    # now merge: 15 (down payment) + 9 (direct supplier_payment) + 25
+    # (po_payment) == 49 on 'Payments to Suppliers', and the Inventory-
+    # Purchases line is empty. What this can no longer catch: a down payment
+    # that must NOT merge with account settlements because its counter account
+    # is Inventory -- that only exists for pre-v46 (ap_basis 'order') orders,
+    # which a route can no longer create (the shape is covered at the journal
+    # level in retail_po_receipts_core_test).
+    assert cash_out.get('Cash Paid for Inventory Purchases') is None
+    assert cash_out.get('Payments to Suppliers') == 49.0
     assert cf['total_cash_out'] == 49.0
 
     # Traceability: both raw source_types are listed against the merged line.
