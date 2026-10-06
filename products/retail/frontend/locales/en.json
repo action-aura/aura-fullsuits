@@ -2528,5 +2528,10 @@
   "An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.": "An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.",
   "Set a supplier on this order before closing it short.": "Set a supplier on this order before closing it short.",
   "Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.": "Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.",
-  "Purchase order closed short": "Purchase order closed short"
+  "Purchase order closed short": "Purchase order closed short",
+  "another purchase order here already uses the same order reference": "another purchase order here already uses the same order reference",
+  "two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier": "two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier",
+  "goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier": "goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier",
+  "goods arrived on a purchase order that another computer cancelled. The goods were kept": "goods arrived on a purchase order that another computer cancelled. The goods were kept",
+  "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored": "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored"
 }

@@ -22142,6 +22142,13 @@ _SYNC_REVIEW_REASONS = {
     # AUDIT-033 fix round 2 (review V3r G4): a user change named a uid that belongs to
     # another company's row in this registry. Arabic wording flagged for a native reader.
     'foreign_company_user': ('a change named a staff account that belongs to a different shop on this computer. Nothing was changed', False),
+    # W4a / W4a-2 (schema v45/v46): purchase-order sync. The engine parks or flags
+    # these; the test that parses its source refuses any reason without a sentence.
+    'duplicate_idempotency_key': ('another purchase order here already uses the same order reference', False),
+    'po_over_received': ('two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier', False),
+    'po_received_after_close': ('goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier', False),
+    'po_received_and_cancelled': ('goods arrived on a purchase order that another computer cancelled. The goods were kept', False),
+    'po_link_from_non_origin': ('another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

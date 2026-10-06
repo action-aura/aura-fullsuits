@@ -428,10 +428,31 @@ def test_receiving_a_purchase_order_stamps_its_movements():
     movements = conn.execute(
         "SELECT * FROM inventory_movements WHERE company_id=? AND reference=?",
         (shop['company_id'], po['po_number'])).fetchall()
+    receipt_movement_uids = {r[0] for r in conn.execute(
+        "SELECT l.movement_uid FROM purchase_order_receipt_lines l "
+        "JOIN purchase_order_receipts r ON r.id=l.receipt_id "
+        "JOIN purchase_orders o ON o.id=r.po_id WHERE o.company_id=? AND o.po_number=?",
+        (shop['company_id'], po['po_number'])).fetchall()}
     conn.close()
     assert movements, 'the PO receipt added stock without a ledger row'
     for i, mv in enumerate(movements):
-        _assert_stamped(mv, f'inventory_movements[{i}] (purchase_in)', shop['user_uid'])
+        # W4a / W4a-2 (v45/v46) UPDATE: a PO receipt's movement uid is DELIBERATELY
+        # a uuid5 of (receipt uid, order-item uid), identical on every computer, so
+        # two computers that receive the same delivery converge on one ledger row
+        # instead of doubling the stock. The old claim here -- "a random uuid4" --
+        # is exactly the shape that would now be the bug. So the uid is checked
+        # against the receipt line's own recorded `movement_uid` (and as a canonical
+        # uuid5) rather than as a uuid4; the actor/terminal/UTC trio is unchanged.
+        # What this can no longer catch by itself: a uid that is canonical but not
+        # the deterministic one -- po_core's own tests pin the derivation.
+        _assert_stamped(mv, f'inventory_movements[{i}] (purchase_in)', shop['user_uid'],
+                        uid_expected=False)
+        parsed = uuid.UUID(str(mv['uid']))
+        assert parsed.version == 5 and str(parsed) == str(mv['uid']), (
+            f"inventory_movements[{i}].uid {mv['uid']!r} is not a canonical uuid5")
+        assert mv['uid'] in receipt_movement_uids, (
+            f"inventory_movements[{i}].uid {mv['uid']!r} is not the receipt line's movement_uid "
+            f"{sorted(receipt_movement_uids)!r}")
 
 
 # ── cash drawer ──────────────────────────────────────────────────────────────

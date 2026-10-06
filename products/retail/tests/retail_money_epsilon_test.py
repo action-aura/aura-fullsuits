@@ -335,6 +335,12 @@ def test_a_four_fil_down_payment_makes_a_purchase_order_partial_not_unpaid():
         'amount_paid': 0.004,
     })
     assert r.status_code == 200, r.get_json()
+    po_id = r.get_json()['data']['id']
+    # W4a-2 (v46): AP is recognised at RECEIPT, so before the goods arrive the balance is -<down payment>
+    # by design. Receiving first keeps this test's original claim (the figure after the debt exists);
+    # it no longer checks the balance BEFORE receipt.
+    rc = client.post(f'{API}/purchase-orders/{po_id}/receive', json={})
+    assert rc.status_code == 200, rc.get_json()
 
     rconn = get_retail_conn()
     po = rconn.execute(
@@ -365,6 +371,11 @@ def test_a_purchase_order_four_fils_short_is_not_called_fully_paid():
     })
     assert r.status_code == 200, r.get_json()
     po_id = r.get_json()['data']['id']
+    # W4a-2 (v46): AP is recognised at RECEIPT, so before the goods arrive the balance is -<down payment>
+    # by design. Receiving first keeps this test's original claim (the figure after the debt exists);
+    # it no longer checks the balance BEFORE receipt.
+    rc = client.post(f'{API}/purchase-orders/{po_id}/receive', json={})
+    assert rc.status_code == 200, rc.get_json()
 
     p = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 9.996})
     assert p.status_code == 200, p.get_json()
@@ -386,6 +397,11 @@ def test_the_same_purchase_order_shape_on_a_two_decimal_currency_is_fully_paid()
     })
     assert r.status_code == 200, r.get_json()
     po_id = r.get_json()['data']['id']
+    # W4a-2 (v46): AP is recognised at RECEIPT, so before the goods arrive the balance is -<down payment>
+    # by design. Receiving first keeps this test's original claim (the figure after the debt exists);
+    # it no longer checks the balance BEFORE receipt.
+    rc = client.post(f'{API}/purchase-orders/{po_id}/receive', json={})
+    assert rc.status_code == 200, rc.get_json()
 
     p = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 9.996})
     assert p.status_code == 200, p.get_json()

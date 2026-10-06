@@ -401,6 +401,18 @@ def _child_test_env():
     """
     env = dict(os.environ)
     env.setdefault('AURA_SITE_RELAY_ENABLED', '0')
+    # Measured 2026-10-07: a developer shell that points at the lab
+    # (AURA_SYNC_RELAY_URL=http://127.0.0.1:5551, AURA_OWNER_LICENSING_URL)
+    # leaked both into every child, and two files failed for that reason
+    # alone -- identically on the pre-W4a commit 026f1176, green with the
+    # variables stripped (retail_einvoicing_regression_test's no-worker check,
+    # retail_sync_relay_url_validation_test's invalid-URL gate). A sweep must
+    # not depend on, or talk to, the live relay/Owner of whoever runs it.
+    # Tests that need these set them themselves. AURA_TEST_KEEP_LIVE_URLS=1
+    # keeps them for a deliberate run against a live lab.
+    if os.environ.get('AURA_TEST_KEEP_LIVE_URLS') != '1':
+        for name in ('AURA_SYNC_RELAY_URL', 'AURA_OWNER_LICENSING_URL'):
+            env.pop(name, None)
     return env
 
 

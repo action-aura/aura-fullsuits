@@ -2528,5 +2528,10 @@
   "An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.": "لم تكتمل مزامنة دفعة استلام سابقة من جهازك الآخر بعد. حاول مجدداً بعد قليل.",
   "Set a supplier on this order before closing it short.": "حدّد مورداً لهذا الأمر قبل إغلاقه بنقص.",
   "Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.": "إغلاق هذا الأمر كما هو؟ ما وصل يبقى مستحقاً للمورد، أما الباقي فلم يعد متوقعاً ولا مستحقاً.",
-  "Purchase order closed short": "تم إغلاق أمر الشراء بنقص"
+  "Purchase order closed short": "تم إغلاق أمر الشراء بنقص",
+  "another purchase order here already uses the same order reference": "طلب شراء آخر هنا يستخدم نفس مرجع الطلب",
+  "two deliveries of one purchase order add up to more than was ordered. Both were kept, so check the count with the supplier": "استلامان لطلب شراء واحد يتجاوز مجموعهما الكمية المطلوبة. تم الاحتفاظ بكليهما، لذا راجع العدد مع المورّد",
+  "goods arrived on a purchase order that another computer had already closed. The goods were kept, so check what is owed to the supplier": "وصلت بضاعة على طلب شراء كان جهاز آخر قد أغلقه. تم الاحتفاظ بالبضاعة، لذا راجع المبلغ المستحق للمورّد",
+  "goods arrived on a purchase order that another computer cancelled. The goods were kept": "وصلت بضاعة على طلب شراء ألغاه جهاز آخر. تم الاحتفاظ بالبضاعة",
+  "another computer tried to link a supplier payment to a purchase order it did not pay. It was ignored": "حاول جهاز آخر ربط دفعة مورّد بطلب شراء لم يدفعها. تم تجاهل ذلك"
 }

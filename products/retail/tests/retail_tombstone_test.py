@@ -98,6 +98,7 @@ from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from commercial_runtime.sync.sync_service import SyncService  # noqa: E402
 import database.schema as schema  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
+import api.retail_api as _retail_api_module  # noqa: E402
 
 
 def teardown_module(module):
@@ -257,11 +258,28 @@ def install_b(tmp_path):
 _INSTALL_B_COMPANY_ID = "install-b-company"
 
 
+def _ensure_install_b_credit_schema(conn):
+    # `_CREDIT_SCHEMA_READY` is a PROCESS-global flag, not a per-database one
+    # (same trap retail_money_sync_test.py documents): install A already set it,
+    # so the hook would silently skip install B's file. Reset it for B's run.
+    previous = _retail_api_module._CREDIT_SCHEMA_READY
+    _retail_api_module._CREDIT_SCHEMA_READY = False
+    try:
+        _retail_api_module._ensure_credit_schema(conn)
+    finally:
+        _retail_api_module._CREDIT_SCHEMA_READY = previous
+
+
 @pytest.fixture
 def service_b(relay_b, install_b):
     return SyncService(
         client_factory=lambda: relay_b, get_conn=install_b,
         local_company_id_provider=lambda: _INSTALL_B_COMPANY_ID,
+        # W4a UPDATE: production (app.py) always wires this hook; install B's fixture
+        # did not, and never needed to until purchase orders began riding the same
+        # relay (an earlier test's order reaches B, whose payments.related_type is a
+        # lazy column). Mirrors production; it does not loosen any tombstone claim.
+        local_ensure_schema=_ensure_install_b_credit_schema,
     )
 
 

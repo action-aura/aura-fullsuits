@@ -775,6 +775,13 @@ _DEVICE_LOCAL_SETTING_PREFIXES = ("numbering_till:",)
 #: items` has no `company_id` column and resolves its parent by `po_uid`.
 #: "purchase_order_receipt_line" (W4a-2, schema v46) likewise: `purchase_order_
 #: receipt_lines` has no company column; its parent receipt carries it.
+#: Purchase-order entity types whose apply reads lazily-created columns (see the
+#: `local_ensure_schema` gate in `apply_pull_result`).
+_PO_ENSURE_ENTITY_TYPES = frozenset({
+    "purchase_order", "purchase_order_item",
+    "purchase_order_receipt", "purchase_order_receipt_line",
+})
+
 _ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset(
     {"sale_item", "return_item", "cheque_event", "purchase_order_item",
      "purchase_order_receipt_line"})
@@ -1668,6 +1675,17 @@ class SyncService:
                 isinstance(ev, dict) and (
                     (ev.get("entity_type") in ("sale", "return", "payment")
                      and ev.get("event_type") in ("create", "update"))
+                    # W4a / W4a-2 (v45/v46): applying a purchase order (or one of
+                    # its receipts) re-derives its paid figure from `payments`
+                    # (`_recompute_po_paid` reads `payments.related_type`, a lazy
+                    # column), and a `po_link` attaches a payment to its order.
+                    # A brand-new device whose first pulled page is only an order
+                    # hit `no such column: related_type` and lost the whole page
+                    # (retail_tombstone_test, 2026-10-07).
+                    or (ev.get("entity_type") in _PO_ENSURE_ENTITY_TYPES
+                        and ev.get("event_type") in ("create", "update"))
+                    or (ev.get("entity_type") == "payment"
+                        and ev.get("event_type") == "po_link")
                     or ev.get("entity_type") == "retail_setting")
                 for ev in events
             ) or touches_pending_or_quarantine

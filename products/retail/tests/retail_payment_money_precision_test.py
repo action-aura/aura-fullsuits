@@ -172,6 +172,11 @@ def _create_po(c, product_id, **kw):
     return c.post(f'{API}/purchase-orders', json=payload)
 
 
+def _receive(c, po_id):
+    r = c.post(f'{API}/purchase-orders/{po_id}/receive', json={})
+    assert r.status_code == 200, r.get_json()
+
+
 def _payment_amount(company_id, reference):
     """`payments.reference` is minted by `_next_ref`, which counts PER
     COMPANY starting at 1 -- so two different companies' first payment both
@@ -288,6 +293,10 @@ def test_pay_purchase_order_default_install_keeps_fils(client):
     po = _create_po(client, pid, supplier_id=sup)
     assert po.status_code == 200, po.get_json()
     po_id = po.get_json()['data']['id']
+    # W4a-2 (v46) UPDATE: the supplier's payable is recognised at RECEIPT, so the
+    # derived balance below only exists once the goods are received. Receiving keeps
+    # every original figure (1000 - x); it no longer checks the balance before receipt.
+    _receive(client, po_id)
 
     r = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 12.345})
     assert r.status_code == 200, r.get_json()
@@ -311,6 +320,10 @@ def test_pay_purchase_order_two_decimal_currency_still_gets_two(client):
     po = _create_po(client, pid, supplier_id=sup)
     assert po.status_code == 200, po.get_json()
     po_id = po.get_json()['data']['id']
+    # W4a-2 (v46) UPDATE: the supplier's payable is recognised at RECEIPT, so the
+    # derived balance below only exists once the goods are received. Receiving keeps
+    # every original figure (1000 - x); it no longer checks the balance before receipt.
+    _receive(client, po_id)
 
     r = client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 12.345})
     assert r.status_code == 200, r.get_json()
@@ -336,6 +349,10 @@ def test_create_purchase_order_down_payment_default_install_keeps_fils(client):
     po = _create_po(client, pid, supplier_id=sup, amount_paid=12.345)
     assert po.status_code == 200, po.get_json()
     po_id = po.get_json()['data']['id']
+    # W4a-2 (v46) UPDATE: the supplier's payable is recognised at RECEIPT, so the
+    # derived balance below only exists once the goods are received. Receiving keeps
+    # every original figure (1000 - x); it no longer checks the balance before receipt.
+    _receive(client, po_id)
 
     row = _po_row(po_id)
     assert row['total'] == 1000.0
@@ -354,6 +371,10 @@ def test_create_purchase_order_down_payment_two_decimal_currency_still_gets_two(
     po = _create_po(client, pid, supplier_id=sup, amount_paid=12.345)
     assert po.status_code == 200, po.get_json()
     po_id = po.get_json()['data']['id']
+    # W4a-2 (v46) UPDATE: the supplier's payable is recognised at RECEIPT, so the
+    # derived balance below only exists once the goods are received. Receiving keeps
+    # every original figure (1000 - x); it no longer checks the balance before receipt.
+    _receive(client, po_id)
 
     row = _po_row(po_id)
     assert row['amount_paid'] == 12.35, (

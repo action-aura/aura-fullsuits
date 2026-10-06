@@ -1247,6 +1247,13 @@ def test_trial_balance_as_of_never_falsely_reports_does_not_tie(client, monkeypa
         'items': [{'product_id': pid, 'quantity': 1, 'unit_cost': 10}],
     })
     assert por.status_code == 200, por.get_json()
+    # W4a-2 (v46) UPDATE: AP is recognised at RECEIPT, so an unreceived order posts
+    # no journal at all -- there was then nothing dated after `yesterday` and the
+    # comparison was (correctly) applicable, which made this test's premise ("an
+    # unpaid PO TODAY, AP=10") false. Receiving restores the premise: AP=10 today,
+    # nothing posted yesterday. The claim is unchanged.
+    rc = client.post(f"{API}/purchase-orders/{por.get_json()['data']['id']}/receive", json={})
+    assert rc.status_code == 200, rc.get_json()
 
     # Sanity: all-time and as_of=today both tie -- the bug is specific to a
     # date BEFORE any activity, never the no-filter/current-day path.
