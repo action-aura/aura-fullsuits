@@ -692,6 +692,17 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # `po_link` event_type that attaches a pre-v45 payment to its PO.
     "purchase_order",
     "purchase_order_item",
+    # Schema v46 (W4a-2) -- a DELIVERY is an immutable fact: a
+    # "purchase_order_receipt" header (value, date, line count; parent named by
+    # `po_uid`) and one create-only "purchase_order_receipt_line" per line
+    # (parent by `receipt_uid`, item by `po_item_uid`). The order's received
+    # quantities and status are DERIVED from them, so two computers that
+    # received different parts of one order offline converge on the same
+    # state. The header needs `company_id` (receiver stamps its own); the line
+    # has none (see `_ENTITY_TYPES_WITHOUT_COMPANY_ID`). A v45 peer does not
+    # know either type and parks them via the unknown-type schema-skew gate.
+    "purchase_order_receipt",
+    "purchase_order_receipt_line",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -762,8 +773,24 @@ _DEVICE_LOCAL_SETTING_PREFIXES = ("numbering_till:",)
 #: missing.
 #: "purchase_order_item" (W4a, schema v45) is the same shape: `purchase_order_
 #: items` has no `company_id` column and resolves its parent by `po_uid`.
+#: "purchase_order_receipt_line" (W4a-2, schema v46) likewise: `purchase_order_
+#: receipt_lines` has no company column; its parent receipt carries it.
 _ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset(
-    {"sale_item", "return_item", "cheque_event", "purchase_order_item"})
+    {"sale_item", "return_item", "cheque_event", "purchase_order_item",
+     "purchase_order_receipt_line"})
+
+#: W4a-2: the namespace `core/retail/purchase_orders.py` mints its uuid5 uids
+#: under. Needed here ONLY to synthesize the LEGACY receipt a v45 writer's
+#: {status:'received'} header update stands for -- every computer must derive
+#: the identical uid or the same delivery would count twice. commercial_runtime
+#: cannot import products/, so the literal is duplicated and a test pins the
+#: two equal.
+_PO_RECEIPT_NAMESPACE = uuid.UUID('a674e3be-c149-497a-b0a7-f235e22c5ae0')
+
+#: Quantities are REAL; "received >= ordered" and "over-received" compare with
+#: this slack so 0.1+0.2 style sums neither strand an order at 'partial' nor
+#: raise a phantom over-receipt conflict.
+_PO_QTY_EPSILON = 1e-6
 
 #: W4a: a purchase order's header status only ever moves FORWARD through this
 #: rank when merged from a peer. "received" outranks "cancelled" on purpose:
@@ -1063,6 +1090,13 @@ class SyncService:
             frozenset(handled_entity_types) if handled_entity_types is not None
             else RETAIL_SYNC_ENTITY_TYPES
         )
+        # W4a-2 / D13: the retail core's "re-derive this order's received
+        # quantities, status and paid figure" function, installed by
+        # retail_api.install_po_state_refresh (this module must not import
+        # products/). Signature: hook(conn, company_id, po_id). When None the
+        # built-in twin (`_refresh_po`) runs, so an instance wired without the
+        # retail API still derives state.
+        self.po_state_refresh: Optional[Callable] = None
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
         # Serializes push_once/pull_once against each other -- the 10s timer
@@ -3274,7 +3308,7 @@ class SyncService:
                     # payments, so the void must re-derive it here too -- the
                     # old stored increment never came back down on any computer.
                     if before["related_type"] == "po" and before["related_id"]:
-                        self._recompute_po_paid(conn, local_company_id, before["related_id"])
+                        self._refresh_po(conn, local_company_id, before["related_id"])
                     return True
                 if before is not None:
                     return True  # already voided here: nothing to do, nothing to move
@@ -3338,7 +3372,16 @@ class SyncService:
                  p.get("uid")),
             )
             if po_local_id is not None:
-                self._recompute_po_paid(conn, local_company_id, po_local_id)
+                self._refresh_po(conn, local_company_id, po_local_id)
+        elif entity_type == "purchase_order_receipt":
+            if event_type != "create":
+                return True
+            return self._apply_po_receipt(
+                conn, ev, p, local_company_id, branch_fallback_sink, conflict_sink)
+        elif entity_type == "purchase_order_receipt_line":
+            if event_type != "create":
+                return True
+            return self._apply_po_receipt_line(conn, ev, p, local_company_id, conflict_sink)
         elif entity_type == "purchase_order":
             # W4a (schema v45). The header of a purchase order another
             # computer typed. `create` is the immutable fact (number, supplier,
@@ -3357,7 +3400,8 @@ class SyncService:
                 return True
             # W4a verify F4: the parent is looked up INSIDE the receiver's company.
             po_row = conn.execute(
-                "SELECT id, status FROM purchase_orders WHERE uid=? AND company_id=?",
+                "SELECT id, uid, status, branch_id, total, received_at, created_at, item_count "
+                "FROM purchase_orders WHERE uid=? AND company_id=?",
                 (p.get("po_uid"), local_company_id)
             ).fetchone() if p.get("po_uid") else None
             if po_row is None:
@@ -3378,14 +3422,19 @@ class SyncService:
                 (po_row["id"], p.get("product_id"), p.get("quantity"), p.get("unit_cost"),
                  p.get("total"), p.get("received_qty") or 0, p.get("uid")),
             )
-            # A line that arrives AFTER its order was already marked received
-            # (it was parked on a missing product and replayed late) would
-            # otherwise sit at received_qty 0 under a received header, which
-            # the receive screen reads as "still owed".
-            if po_row["status"] == "received":
-                conn.execute(
-                    "UPDATE purchase_order_items SET received_qty=quantity WHERE uid=?",
-                    (p.get("uid"),))
+            # W4a-2: received_qty / status are DERIVED from receipts now, so the
+            # old "parent already received -> received_qty=quantity" shortcut is
+            # gone. Its one legitimate case -- a line parked on a missing
+            # product and replayed AFTER a v45 writer's {status:'received'}
+            # event synthesized the legacy receipt -- joins that receipt here
+            # (same uids every computer derives); otherwise the order would
+            # read 'partial' forever.
+            if conn.execute(
+                    "SELECT 1 FROM purchase_order_receipts WHERE po_id=? AND company_id=? "
+                    "AND legacy=1", (po_row["id"], local_company_id)).fetchone():
+                self._ensure_legacy_receipt(
+                    conn, local_company_id, po_row, only_item_uid=p.get("uid"))
+            self._refresh_po(conn, local_company_id, po_row["id"])
         elif entity_type == "inventory_movement":
             # Wave B (stock-moving sync). Immutable ledger fact -- see the
             # module docstring's wave B note for why this posture matches
@@ -5391,6 +5440,144 @@ class SyncService:
     # ---------------------------------------------------------------
     # W4a (schema v45): purchase orders shared between computers.
     # ---------------------------------------------------------------
+    def set_po_state_refresh(self, hook: Optional[Callable]) -> None:
+        """Install (or clear) the D13 hook: `hook(conn, company_id, po_id)`
+        re-derives one order's received state AND paid figure from the rows
+        that sync. Called after every purchase_order / receipt / receipt-line /
+        PO-payment apply."""
+        self.po_state_refresh = hook
+
+    def _refresh_po(self, conn, company_id, po_id) -> None:
+        """Re-derive one order after an apply changed its inputs. The installed
+        hook (the retail core's own functions) wins -- ONE implementation of
+        the derivation is what the shop runs and what a test can pin; the
+        in-module twin below exists only so an instance without the hook
+        (unit tests, a service wired outside retail_api) still converges."""
+        if po_id is None:
+            return
+        hook = self.po_state_refresh
+        if hook is not None:
+            hook(conn, company_id, po_id)
+            return
+        self._derive_po_receive_state(conn, company_id, po_id)
+        self._recompute_po_paid(conn, company_id, po_id)
+
+    @staticmethod
+    def _derive_po_receive_state(conn, company_id, po_id) -> None:
+        """Twin of `core/retail/purchase_orders.py::recompute_po_receive_state`
+        (W4a-2 D2/D3): items.received_qty, status and received_at are caches of
+        the receipts + the set-once cancelled_at/closed_at.
+
+          receipts exist -> 'received' if every line's received >= ordered,
+                            else 'closed' if closed_at/cancelled_at, else
+                            'partial'
+          none           -> 'cancelled' if cancelled_at or closed_at, else
+                            'pending'
+        """
+        po = conn.execute(
+            "SELECT id, cancelled_at, closed_at FROM purchase_orders WHERE id=? AND company_id=?",
+            (po_id, company_id)).fetchone()
+        if po is None:
+            return
+        received = {r[0]: float(r[1] or 0) for r in conn.execute(
+            "SELECT l.po_item_id, SUM(l.quantity) FROM purchase_order_receipt_lines l "
+            "JOIN purchase_order_receipts r ON r.id=l.receipt_id "
+            "WHERE r.po_id=? AND r.company_id=? GROUP BY l.po_item_id",
+            (po_id, company_id)).fetchall()}
+        items = conn.execute(
+            "SELECT id, quantity FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
+        for it in items:
+            conn.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?",
+                         (received.get(it[0], 0.0), it[0]))
+        n_receipts, last_at = conn.execute(
+            "SELECT COUNT(*), MAX(received_at) FROM purchase_order_receipts "
+            "WHERE po_id=? AND company_id=?", (po_id, company_id)).fetchone()
+        stamped = bool(po["cancelled_at"] or po["closed_at"])
+        if n_receipts:
+            complete = bool(items) and all(
+                received.get(it[0], 0.0) >= float(it[1] or 0) - _PO_QTY_EPSILON for it in items)
+            status = "received" if complete else ("closed" if stamped else "partial")
+        else:
+            status = "cancelled" if stamped else "pending"
+        conn.execute(
+            "UPDATE purchase_orders SET status=?, received_at=? WHERE id=? AND company_id=?",
+            (status, last_at if status == "received" else None, po_id, company_id))
+
+    @classmethod
+    def _flag_po_conflicts(cls, conn, conflict_sink, company_id, po_id) -> None:
+        """Record, ONCE per order, the two ways independent computers can
+        disagree about one purchase order's facts:
+
+          * 'po_over_received' -- two DIFFERENT offline deliveries together
+            exceed what was ordered. Both are real (stock arrived), so both
+            stay applied and the order reads 'received'; a human decides
+            whether the supplier shorted the next order or a count was wrong.
+          * 'po_received_and_cancelled' -- goods arrived on an order another
+            computer withdrew. Receipts win (stock and books already moved).
+        """
+        po = conn.execute(
+            "SELECT uid, cancelled_at FROM purchase_orders WHERE id=? AND company_id=?",
+            (po_id, company_id)).fetchone()
+        if po is None:
+            return
+        over = conn.execute(
+            "SELECT 1 FROM purchase_order_items i WHERE i.po_id=? AND "
+            "(SELECT COALESCE(SUM(l.quantity),0) FROM purchase_order_receipt_lines l "
+            " JOIN purchase_order_receipts r ON r.id=l.receipt_id "
+            " WHERE l.po_item_id=i.id AND r.company_id=?) > i.quantity + ?",
+            (po_id, company_id, _PO_QTY_EPSILON)).fetchone()
+        if over:
+            cls._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=company_id, entity_type="purchase_order",
+                entity_id=po["uid"], event_type="create", local_row_version=0,
+                incoming_row_version=0, reason="po_over_received", payload={"uid": po["uid"]})
+        if po["cancelled_at"] and conn.execute(
+                "SELECT 1 FROM purchase_order_receipts WHERE po_id=? AND company_id=?",
+                (po_id, company_id)).fetchone():
+            cls._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=company_id, entity_type="purchase_order",
+                entity_id=po["uid"], event_type="update", local_row_version=0,
+                incoming_row_version=0, reason="po_received_and_cancelled",
+                payload={"uid": po["uid"]})
+
+    @staticmethod
+    def _ensure_legacy_receipt(conn, company_id, po, only_item_uid=None) -> None:
+        """Synthesize (idempotently) the LEGACY receipt a v45 writer's
+        {status:'received'} stands for (D15): one receipt, uid
+        uuid5(NS, "<po_uid>:legacy-receipt"), value = the order's total, one line
+        per order line for the full ordered quantity, movement_uid = W4a's own
+        `receipt_movement_uid`. Every computer derives the same uids, so it is
+        NEVER queued -- and never moves stock or books: the v45 writer's own
+        movements/journals already sync under those movement uids.
+
+        `only_item_uid` adds just that line (an item that arrived after the
+        status event); the receipt must already exist then."""
+        leg_uid = str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{po['uid']}:legacy-receipt"))
+        conn.execute(
+            "INSERT INTO purchase_order_receipts (company_id, uid, po_id, branch_id, received_at, "
+            "value, line_count, legacy) VALUES (?,?,?,?,?,?,?,1) ON CONFLICT(uid) DO NOTHING",
+            (company_id, leg_uid, po["id"], po["branch_id"],
+             po["received_at"] or po["created_at"], float(po["total"] or 0),
+             po["item_count"]))
+        rid = conn.execute(
+            "SELECT id FROM purchase_order_receipts WHERE uid=? AND company_id=?",
+            (leg_uid, company_id)).fetchone()["id"]
+        sql = "SELECT id, uid, quantity FROM purchase_order_items WHERE po_id=?"
+        params = [po["id"]]
+        if only_item_uid is not None:
+            sql += " AND uid=?"
+            params.append(only_item_uid)
+        for it in conn.execute(sql, params).fetchall():
+            if not it["uid"]:
+                continue
+            item_movement = str(uuid.uuid5(
+                _PO_RECEIPT_NAMESPACE, f"{po['uid']}:{it['uid']}:receipt"))
+            conn.execute(
+                "INSERT INTO purchase_order_receipt_lines (receipt_id, uid, po_item_id, quantity, "
+                "movement_uid) VALUES (?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
+                (rid, str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{leg_uid}:{it['uid']}")),
+                 it["id"], float(it["quantity"] or 0), item_movement))
+
     @staticmethod
     def _recompute_po_paid(conn, company_id, po_id) -> None:
         """Re-derives one order's `amount_paid` / `payment_status` from the
@@ -5512,8 +5699,8 @@ class SyncService:
                 "subtotal, tax_total, total, notes, ordered_at, received_at, created_at, due_date, "
                 "split_group_id, split_index, split_count, routing_status, routed_channel, routed_at, "
                 "routed_to, idempotency_key, uid, order_journal_uid, amount_paid, payment_status, "
-                "sync_backfill_pending, item_count) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),?,?,?,?,?,?,?,?,?,?,?,0,'unpaid',0,?) "
+                "sync_backfill_pending, item_count, ap_basis, cancelled_at, closed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),?,?,?,?,?,?,?,?,?,?,?,0,'unpaid',0,?,?,?,?) "
                 "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                 (local_company_id, p.get("po_number"), supplier_id, resolved_branch_id,
                  p.get("status") or "pending", p.get("subtotal", 0), p.get("tax_total", 0),
@@ -5527,7 +5714,18 @@ class SyncService:
                  # compare against and keeps the old behaviour (see
                  # receive_purchase_order); inventing a count here would
                  # either strand the order or hide a missing line.
-                 p.get("item_count")),
+                 p.get("item_count"),
+                 # W4a-2: how this order's supplier debt is booked. A v45
+                 # writer sends no key -> 'order' (its history is never
+                 # re-booked as receipts); a v46 writer sends 'receipt'.
+                 p.get("ap_basis") or "order",
+                 # A pre-v46 backfill create carries the CURRENT status and no
+                 # stamp: a 'cancelled' one becomes the stamp (D14), a
+                 # 'received' one gets its legacy receipt just below.
+                 p.get("cancelled_at") or (
+                     (p.get("received_at") or p.get("created_at"))
+                     if p.get("status") == "cancelled" else None),
+                 p.get("closed_at")),
             )
         except sqlite3.IntegrityError as exc:
             # `ON CONFLICT(uid)` only suppresses a collision on the uid index.
@@ -5551,59 +5749,140 @@ class SyncService:
             raise
         local_id = self._local_po_id(conn, local_company_id, p.get("uid"))
         if local_id is not None:
-            self._recompute_po_paid(conn, local_company_id, local_id)
+            if p.get("status") == "received" and not p.get("ap_basis"):
+                self._ensure_legacy_receipt_for(conn, local_company_id, local_id)
+            self._refresh_po(conn, local_company_id, local_id)
+        return True
+
+    def _ensure_legacy_receipt_for(self, conn, company_id, po_id, received_at=None) -> None:
+        """Synthesize the legacy receipt for order `po_id` unless it already
+        has ANY receipt (real receipts are facts and win over a status claim)."""
+        po = conn.execute(
+            "SELECT id, uid, branch_id, total, received_at, created_at, item_count "
+            "FROM purchase_orders WHERE id=? AND company_id=?", (po_id, company_id)).fetchone()
+        if po is None or conn.execute(
+                "SELECT 1 FROM purchase_order_receipts WHERE po_id=? AND company_id=?",
+                (po_id, company_id)).fetchone():
+            return
+        po = dict(po)
+        # The status event's own timestamp is when the goods arrived; the
+        # order row's received_at is still empty on this computer.
+        po["received_at"] = received_at or po["received_at"]
+        self._ensure_legacy_receipt(conn, company_id, po)
+
+    def _apply_po_receipt(self, conn, ev: dict, p: dict, local_company_id,
+                          branch_fallback_sink, conflict_sink) -> bool:
+        """`purchase_order_receipt` create (W4a-2): one delivery's header.
+
+        Immutable fact keyed on `uid` (deterministic on the writer: two
+        computers that recorded the identical delivery offline mint the same
+        uid and collapse into this one row). The order is resolved by
+        `po_uid` INSIDE the receiver's company and parked until it arrives;
+        `branch_uid` resolves to this computer's branch. `value` is the
+        WRITER'S figure, stored as sent -- a receiver never recomputes it
+        (rounding must not differ per computer). `legacy` is always 0: legacy
+        receipts are derived locally, never shipped. Never moves stock and
+        never posts books -- the writer's movements and journals sync as their
+        own entities."""
+        po_id = self._local_po_id(conn, local_company_id, p.get("po_uid"))
+        if po_id is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:purchase_order",
+                detail=f"po_uid={p.get('po_uid')!r} not found locally")
+        branch_id = self._resolve_branch_id(
+            conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+        conn.execute(
+            "INSERT INTO purchase_order_receipts (company_id, uid, po_id, branch_id, received_at, "
+            "value, line_count, legacy, created_by, actor_user_uid, terminal_id, created_at_utc) "
+            "VALUES (?,?,?,?,?,?,?,0,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
+            (local_company_id, p.get("uid"), po_id, branch_id, p.get("received_at"),
+             p.get("value") or 0, p.get("line_count"), p.get("created_by"),
+             p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")))
+        self._refresh_po(conn, local_company_id, po_id)
+        self._flag_po_conflicts(conn, conflict_sink, local_company_id, po_id)
+        return True
+
+    def _apply_po_receipt_line(self, conn, ev: dict, p: dict, local_company_id,
+                               conflict_sink) -> bool:
+        """`purchase_order_receipt_line` create (W4a-2): how much of one order
+        line a delivery brought. The receipt is resolved by `receipt_uid`
+        inside the receiver's company, the item by `po_item_uid` within THAT
+        receipt's order (so a hostile uid cannot attach a line to another
+        order); either missing parks the event. `movement_uid` is carried as
+        text only -- the inventory movement it names syncs as its own event."""
+        receipt = conn.execute(
+            "SELECT id, po_id FROM purchase_order_receipts WHERE uid=? AND company_id=?",
+            (p.get("receipt_uid"), local_company_id)).fetchone() if p.get("receipt_uid") else None
+        if receipt is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:purchase_order_receipt",
+                detail=f"receipt_uid={p.get('receipt_uid')!r} not found locally")
+        item = conn.execute(
+            "SELECT id FROM purchase_order_items WHERE uid=? AND po_id=?",
+            (p.get("po_item_uid"), receipt["po_id"])).fetchone() if p.get("po_item_uid") else None
+        if item is None:
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:purchase_order_item",
+                detail=f"po_item_uid={p.get('po_item_uid')!r} not found locally")
+        conn.execute(
+            "INSERT INTO purchase_order_receipt_lines (receipt_id, uid, po_item_id, quantity, "
+            "movement_uid) VALUES (?,?,?,?,?) ON CONFLICT(uid) DO NOTHING",
+            (receipt["id"], p.get("uid"), item["id"], p.get("quantity") or 0,
+             p.get("movement_uid")))
+        self._refresh_po(conn, local_company_id, receipt["po_id"])
+        self._flag_po_conflicts(conn, conflict_sink, local_company_id, receipt["po_id"])
         return True
 
     def _apply_purchase_order_update(self, conn, ev: dict, p: dict, local_company_id,
                                       conflict_sink) -> bool:
-        """`purchase_order` update: merge a peer's status transition FORWARD
-        ONLY (`PO_STATUS_RANK`).
+        """`purchase_order` update (W4a-2): merge the order's two SET-ONCE
+        stamps, `cancelled_at` and `closed_at`, then re-derive its state.
 
-        WHY forward-only: events can arrive late, twice, or out of order, and
-        a status is not a counter -- last-writer-wins would let an old
-        'pending' un-receive an order whose stock has already moved. Only a
-        strictly higher rank applies.
+        WHY stamps and not a status: a status is not a counter -- the old
+        forward-only rank had to pick a winner between 'received' and
+        'cancelled' and guess at partial deliveries. Receipts are facts, the
+        stamps are facts ("someone withdrew it at T", "someone closed it short
+        at T"), and the status is a pure function of them (D3), so every
+        computer reaches the same answer in any arrival order.
 
-        received vs cancelled: the two computers disagreed about a real-world
-        fact (the goods arrived / the order was withdrawn). 'received' wins
-        because its stock and books have already moved and a cancel cannot
-        unmove them -- but the order's cancel-side bookkeeping on the other
-        computer is now skewed, so a `sync_conflicts` row says so for a human
-        (reason 'po_received_and_cancelled'). This branch never posts GL and
-        never moves stock: journals and movements sync as their own entities,
-        and doing it here as well would double-count."""
+        Set-once, earliest wins: an incoming stamp fills an empty one, or
+        replaces a LATER one; a NULL never erases (redelivery of an older
+        event cannot un-cancel). v45 compat: a writer that still sends
+        {status} -- 'cancelled' becomes a `cancelled_at` stamp (its received_at,
+        else the order's created_at); 'received' becomes the LEGACY receipt
+        (D15) unless real receipts already exist (facts win over a status
+        claim). 'pending' / anything else is ignored. Never posts GL and never
+        moves stock: journals and movements sync as their own entities."""
         local = conn.execute(
-            "SELECT id, status FROM purchase_orders WHERE uid=? AND company_id=?",
-            (p.get("uid"), local_company_id)).fetchone()
+            "SELECT id, cancelled_at, closed_at, created_at FROM purchase_orders "
+            "WHERE uid=? AND company_id=?", (p.get("uid"), local_company_id)).fetchone()
         if local is None:
             return self._quarantine_apply_event(
                 conn, ev, reason="missing_parent:purchase_order",
                 detail=f"uid={p.get('uid')!r} not found locally to update")
-        incoming = p.get("status")
-        incoming_rank = PO_STATUS_RANK.get(incoming)
-        if incoming_rank is None:
-            return True  # a status this build does not know: ignore, never guess
-        local_status = local["status"] or "pending"
-        local_rank = PO_STATUS_RANK.get(local_status, 0)
-        if {local_status, incoming} == {"received", "cancelled"}:
-            # W4a verify F3: once per order. The losing event is redelivered on
-            # every replayed pull; each copy used to add a row.
-            self._record_sync_conflict_once(
-                conn, conflict_sink, local_company_id=local_company_id,
-                entity_type="purchase_order", entity_id=p.get("uid"), event_type="update",
-                local_row_version=local_rank, incoming_row_version=incoming_rank,
-                reason="po_received_and_cancelled", payload=p)
-        if incoming_rank <= local_rank:
-            return True
-        if incoming == "received":
+        legacy_status = p.get("status")
+        in_cancelled = p.get("cancelled_at")
+        if legacy_status == "cancelled" and not in_cancelled:
+            in_cancelled = p.get("received_at") or local["created_at"]
+        if legacy_status == "received":
+            self._ensure_legacy_receipt_for(
+                conn, local_company_id, local["id"], received_at=p.get("received_at"))
+
+        def _earliest(current, incoming):
+            if not incoming:
+                return current
+            if not current or str(incoming) < str(current):
+                return incoming
+            return current
+
+        cancelled_at = _earliest(local["cancelled_at"], in_cancelled)
+        closed_at = _earliest(local["closed_at"], p.get("closed_at"))
+        if (cancelled_at, closed_at) != (local["cancelled_at"], local["closed_at"]):
             conn.execute(
-                "UPDATE purchase_orders SET status='received', received_at=COALESCE(?, received_at) "
-                "WHERE id=?", (p.get("received_at"), local["id"]))
-            conn.execute(
-                "UPDATE purchase_order_items SET received_qty=quantity WHERE po_id=?",
-                (local["id"],))
-        else:
-            conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (incoming, local["id"]))
+                "UPDATE purchase_orders SET cancelled_at=?, closed_at=? WHERE id=? AND company_id=?",
+                (cancelled_at, closed_at, local["id"], local_company_id))
+        self._refresh_po(conn, local_company_id, local["id"])
+        self._flag_po_conflicts(conn, conflict_sink, local_company_id, local["id"])
         return True
 
     def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id,
@@ -5657,9 +5936,9 @@ class SyncService:
         old_id = pay["related_id"] if pay["related_type"] == "po" else None
         conn.execute(
             "UPDATE payments SET related_type='po', related_id=? WHERE id=?", (po_id, pay["id"]))
-        self._recompute_po_paid(conn, local_company_id, po_id)
+        self._refresh_po(conn, local_company_id, po_id)
         if old_id and old_id != po_id:
-            self._recompute_po_paid(conn, local_company_id, old_id)
+            self._refresh_po(conn, local_company_id, old_id)
         return True
 
     def _apply_party_balance_adjustment(self, conn, ev: dict, p: dict, event_type: str,

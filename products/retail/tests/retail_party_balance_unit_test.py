@@ -204,7 +204,15 @@ def test_derived_balance_equals_statement_sum_and_cache_for_every_party_on_a_mix
         for sup in (sup_a, sup_b):
             stored = Decimal(str(conn.execute("SELECT credit_balance FROM suppliers WHERE id=?", (sup,)).fetchone()[0]))
             assert sd[sup] == stored, f"supplier {sup}: derived {sd[sup]} != cache {stored}"
-        assert sd[sup_a] == Decimal('120.000')
+        # W4a-2 UPDATE (deliberate): a PO typed by v46 code is 'receipt' basis, so
+        # its 200 is NOT owed until goods arrive; only the 50 down payment and
+        # the 30 instalment move the balance -> -80 (an advance to the supplier).
+        # This line can therefore no longer catch "a PO total counted at order
+        # time" -- that rule still exists for orders that predate v46 and is
+        # pinned by retail_po_receipts_core_test.py::test_balance_order_basis_states.
+        # What this test still proves is the one it exists for: derived == stored
+        # cache == statement for every party.
+        assert sd[sup_a] == Decimal('-80.000')
         assert sd[sup_b] == Decimal('-12.000')
         # single-party form agrees with the batch form
         assert pb.customer_balance(conn, cid, credit, cur) == derived[credit]

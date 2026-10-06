@@ -871,8 +871,18 @@ TRACKED_TABLES = {
     # W4a (schema v45): purchase orders now travel between computers -- the
     # header's `create` and each line's `create`. The later header `update`
     # ({uid, status, received_at}) is a status merge, not a full-row baseline.
-    'purchase_orders': [('purchase_order', 'create')],
+    #
+    # W4a-2 (schema v46): the header's `update` now carries the two SET-ONCE
+    # stamps `cancelled_at` / `closed_at` ({uid, cancelled_at, closed_at}), so
+    # it joins the sources: a module's keys are the UNION over its listed
+    # sources, which is how a column legitimately carried only by the update
+    # (the stamps) counts as covered, while `ap_basis` -- immutable, so it must
+    # ride the create -- is still found only if some source carries it.
+    'purchase_orders': [('purchase_order', 'create'), ('purchase_order', 'update')],
     'purchase_order_items': [('purchase_order_item', 'create')],
+    # W4a-2: a delivery is an immutable synced fact -- header and lines.
+    'purchase_order_receipts': [('purchase_order_receipt', 'create')],
+    'purchase_order_receipt_lines': [('purchase_order_receipt_line', 'create')],
 }
 
 MIN_REASON_LEN = 40
@@ -1223,6 +1233,38 @@ EXCLUSIONS = {
                                  "a receiver must keep it 0 or it would "
                                  "re-queue what it just pulled.",
     },
+    'purchase_order_receipts': {
+        'id': "Local SQLite autoincrement primary key; a receipt's cross-device "
+              "identity is its deterministic `uid`, which the payload carries, "
+              "so the sender's own integer id is meaningless on a peer.",
+        'company_id': "Tenant-isolation key; the receipt apply branch INSERTs "
+                      "the receiver's own local_company_id, never a value read "
+                      "off the incoming payload, like every synced header.",
+        'po_id': "A local autoincrement foreign key into this computer's own "
+                 "purchase_orders.id; the payload carries `po_uid` instead and "
+                 "the apply branch resolves the order by uid inside the "
+                 "receiver's company (parking the receipt until it arrives).",
+        'branch_id': "A per-computer integer branches.id; the payload carries "
+                     "`branch_uid` and the apply branch resolves it to THIS "
+                     "computer's branch through _resolve_branch_id.",
+        'legacy': "Never queued and never shipped: a LEGACY receipt (1) is "
+                  "synthesized locally from a pre-v46 order with a deterministic "
+                  "uid, so every computer derives the identical row itself; "
+                  "every receipt that travels is by definition legacy=0.",
+    },
+    'purchase_order_receipt_lines': {
+        'id': "Local SQLite autoincrement primary key; a receipt line's "
+              "cross-device identity is its deterministic `uid`, carried in "
+              "the payload.",
+        'receipt_id': "A local autoincrement foreign key into this computer's "
+                      "purchase_order_receipts.id; the payload carries "
+                      "`receipt_uid` and the apply branch resolves the real "
+                      "parent by uid (parking the line until it arrives).",
+        'po_item_id': "A local autoincrement foreign key into this computer's "
+                      "purchase_order_items.id; the payload carries "
+                      "`po_item_uid` and the apply branch resolves the item "
+                      "by uid within the receipt's own order.",
+    },
     'purchase_order_items': {
         'id': "Local SQLite autoincrement primary key; a line's cross-device "
               "identity is its `uid`, which the payload already carries.",
@@ -1384,6 +1426,14 @@ def test_purchase_orders_outbox_payload_covers_every_column():
 
 def test_purchase_order_items_outbox_payload_covers_every_column():
     _assert_full_coverage('purchase_order_items')
+
+
+def test_purchase_order_receipts_outbox_payload_covers_every_column():
+    _assert_full_coverage('purchase_order_receipts')
+
+
+def test_purchase_order_receipt_lines_outbox_payload_covers_every_column():
+    _assert_full_coverage('purchase_order_receipt_lines')
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────

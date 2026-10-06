@@ -1214,7 +1214,33 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # The fresh-install DDL deliberately does NOT carry these columns: like v13's
 # `uid` on sales and v41's `gl_journals.uid`, a brand-new database reaches the
 # shape by running this chain. See `_migrate_add_purchase_order_sync`.
-RETAIL_SCHEMA_VERSION = 45
+#
+# v46 (2026-10-06, W4a-2 -- SUPPLIER DEBT AT RECEIPT + PARTIAL RECEIVE; claimed
+# in ROADMAP.md "retail schema v46 CLAIMED"). Accounts Payable used to be booked
+# when an order was TYPED (Dr 1260 / Cr AP), so supplier balances and AP claimed
+# debt for goods that never came, and an order could only be received whole, so
+# a short delivery was refused or received as complete. A RECEIPT is now an
+# immutable synced fact; received quantities, the order's state and the debt all
+# derive from receipts:
+#
+#   * `purchase_orders.ap_basis` -- 'order' for every order that exists at
+#     upgrade (history is never re-booked: those orders keep AP-at-order and the
+#     1260 -> 1200 move is split across receipts), 'receipt' for every order
+#     v46 code creates (no order journal; AP is booked per receipt).
+#   * `purchase_orders.closed_at` / `cancelled_at` -- set-once facts (a short
+#     order closed by the shop; a cancel). `status` becomes a CACHE derived from
+#     them plus the receipts (core/retail/purchase_orders.py).
+#   * `purchase_order_receipts` / `purchase_order_receipt_lines` -- the receipt
+#     header (carrying its VALUE, computed once by the writer) and its lines.
+#     Both SYNCED, immutable, keyed by deterministic uids.
+#   * A LEGACY receipt is synthesised for every order that was received before
+#     the upgrade (uid = f(order uid), legacy=1, value = the order total, one
+#     line per received line, movement uid = the W4a receipt movement uid). It is
+#     never queued: every computer derives the same uids, so each makes the same
+#     rows locally. Its books are the existing W4a/STOCK-BOOKS journal.
+#
+# Appended LAST and shape-gated. See `_migrate_add_po_receipts`.
+RETAIL_SCHEMA_VERSION = 46
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2372,6 +2398,120 @@ def _migrate_retail_schema(conn):
     # v41), so it must run after every step above. See the v45 comment on
     # RETAIL_SCHEMA_VERSION.
     _migrate_add_purchase_order_sync(conn)
+    # v45 -> v46 (partial receipts, AP at receipt, W4a-2): appended LAST. It
+    # reads the `uid` columns v45 stamps on orders and lines (to derive the
+    # legacy receipts' uids), so it must run after `_migrate_add_purchase_order_
+    # sync`. See the v46 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_po_receipts(conn)
+
+
+def _migrate_add_po_receipts(conn):
+    """One-time migration (schema v45 -> v46). See the v46 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated end to end (`PRAGMA table_info`, `IF NOT EXISTS`, `INSERT OR
+    IGNORE` on the deterministic uids), so the whole chain replaying -- the
+    normal case after a failed launch -- is byte-identical. Returns early when
+    `purchase_orders` does not exist (a hand-built minimal fixture).
+
+    THE LEGACY RECEIPT (D15). An order whose lines carry `received_qty > 0` and
+    that has no receipt yet gets exactly one: uid = `legacy_receipt_uid(order
+    uid)`, `legacy=1`, value = the order total (a pre-v46 order was received
+    whole), `received_at` = the order's own (else its creation), and one line per
+    received line with quantity = `received_qty` and `movement_uid` = the W4a
+    `receipt_movement_uid(order uid, line uid)` -- the movement the old receive
+    route really wrote, so the receipt names it instead of a second, invented one.
+    The uids are pure functions of uids the order already has, so two computers
+    upgrading independently mint identical rows, which is why none of it is
+    queued. The uuid5 namespace is imported from `core.retail.purchase_orders`
+    (this migration owns no copy of the literal) -- importing core from here is
+    the same lazy pattern `_migrate_add_party_balance_ledger` uses for
+    party_balance."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'purchase_orders' not in live:
+        return
+
+    def _columns(table):
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+    po_cols = _columns('purchase_orders')
+    for column, decl in (
+        ('ap_basis', "TEXT DEFAULT 'order'"),
+        ('closed_at', 'TEXT'),
+        ('cancelled_at', 'TEXT'),
+    ):
+        if column not in po_cols:
+            conn.execute(f'ALTER TABLE purchase_orders ADD COLUMN {column} {decl}')
+
+    # A cancelled order's cancellation time becomes the set-once fact. Replays
+    # touch only rows still NULL, so a later real cancel is never overwritten.
+    conn.execute(
+        "UPDATE purchase_orders SET cancelled_at = COALESCE(received_at, created_at) "
+        "WHERE status = 'cancelled' AND cancelled_at IS NULL")
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS purchase_order_receipts ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " company_id INTEGER NOT NULL,"
+        " uid TEXT NOT NULL,"
+        " po_id INTEGER NOT NULL,"
+        " branch_id INTEGER,"
+        " received_at TEXT,"
+        " value REAL NOT NULL DEFAULT 0,"
+        " line_count INTEGER,"
+        " legacy INTEGER NOT NULL DEFAULT 0,"
+        " created_by TEXT,"
+        " actor_user_uid TEXT,"
+        " terminal_id TEXT,"
+        " created_at_utc TEXT)")
+    conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_po_receipts_uid ON purchase_order_receipts(uid)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_po_receipts_po ON purchase_order_receipts(company_id, po_id)')
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS purchase_order_receipt_lines ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " receipt_id INTEGER NOT NULL,"
+        " uid TEXT NOT NULL,"
+        " po_item_id INTEGER NOT NULL,"
+        " quantity REAL NOT NULL,"
+        " movement_uid TEXT)")
+    conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_po_receipt_lines_uid ON purchase_order_receipt_lines(uid)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_po_receipt_lines_receipt ON purchase_order_receipt_lines(receipt_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_po_receipt_lines_item ON purchase_order_receipt_lines(po_item_id)')
+
+    # A database that never ran v45 has no uids to derive from: nothing to do.
+    if ('purchase_order_items' not in live or 'uid' not in _columns('purchase_orders')
+            or 'uid' not in _columns('purchase_order_items')):
+        return
+    from core.retail import purchase_orders as _po
+    todo = conn.execute(
+        "SELECT p.id, COALESCE(p.company_id, 1), p.uid, p.branch_id, "
+        "       COALESCE(p.received_at, p.created_at), COALESCE(p.total, 0) "
+        "FROM purchase_orders p WHERE p.uid IS NOT NULL AND TRIM(p.uid) <> '' "
+        "AND EXISTS (SELECT 1 FROM purchase_order_items i WHERE i.po_id = p.id "
+        "            AND COALESCE(i.received_qty, 0) > 0) "
+        "AND NOT EXISTS (SELECT 1 FROM purchase_order_receipts r "
+        "                 WHERE r.po_id = p.id AND r.company_id = COALESCE(p.company_id, 1))"
+    ).fetchall()
+    for po_id, company_id, po_uid, branch_id, received_at, total in todo:
+        lines = conn.execute(
+            "SELECT id, uid, received_qty FROM purchase_order_items "
+            "WHERE po_id=? AND COALESCE(received_qty, 0) > 0 AND uid IS NOT NULL AND TRIM(uid) <> '' "
+            "ORDER BY id", (po_id,)).fetchall()
+        if not lines:
+            continue
+        r_uid = _po.legacy_receipt_uid(po_uid)
+        conn.execute(
+            "INSERT OR IGNORE INTO purchase_order_receipts (company_id, uid, po_id, branch_id, received_at, "
+            "value, line_count, legacy) VALUES (?,?,?,?,?,?,?,1)",
+            (company_id, r_uid, po_id, branch_id, received_at, float(total), len(lines)))
+        r_id = conn.execute("SELECT id FROM purchase_order_receipts WHERE uid=?", (r_uid,)).fetchone()[0]
+        for item_id, item_uid, qty in lines:
+            conn.execute(
+                "INSERT OR IGNORE INTO purchase_order_receipt_lines (receipt_id, uid, po_item_id, quantity, "
+                "movement_uid) VALUES (?,?,?,?,?)",
+                (r_id, _po.receipt_line_uid(r_uid, item_uid), item_id, float(qty),
+                 _po.receipt_movement_uid(po_uid, item_uid)))
 
 
 def _migrate_add_purchase_order_sync(conn):

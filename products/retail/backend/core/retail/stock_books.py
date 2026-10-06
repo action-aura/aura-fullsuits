@@ -69,6 +69,17 @@ def _has_column(conn, table, column):
     return any(row[1] == column for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall())
 
 
+def _currency_of(conn, cid):
+    """The shop's base currency (None when unreadable -> 2dp quantum)."""
+    try:
+        row = conn.execute(
+            "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+            (cid,)).fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
 def unbooked_movement_count(conn, cid):
     """How many stock movements of this company the books have never seen
     (see the module docstring's "UNBOOKED"). Two groups:
@@ -113,6 +124,25 @@ def unbooked_movement_count(conn, cid):
         "OR (p.order_journal_uid IS NOT NULL "
         "    AND (j.uid=p.order_journal_uid OR j.source_uid=p.order_journal_uid)) "
         if _has_column(conn, 'purchase_orders', 'order_journal_uid') else "")
+    # W4a-2 (schema v46): a receipt-basis order has NO order journal, so the
+    # clauses above can never book its movements. A movement is booked when it
+    # is the movement of a RECEIPT LINE (`purchase_order_receipt_lines.
+    # movement_uid`, a pure function of receipt + line) whose receipt either has
+    # its own po_receipt journal (`source_uid` = the receipt's uid) or is worth
+    # nothing at all (a zero-cost receipt is never journalled -- unknown cost is
+    # silence -- and must not read as "stock not opened yet"). Linked THROUGH
+    # THE RECEIPT, never through the po_number text, for the same F6 reason as
+    # above. Absent tables (a pre-v46 fixture) leave the SQL exactly as it was.
+    receipt_link, receipt_params = "", ()
+    if _has_column(conn, 'purchase_order_receipt_lines', 'movement_uid'):
+        receipt_link = (
+            "  OR EXISTS (SELECT 1 FROM purchase_order_receipt_lines rl "
+            "              JOIN purchase_order_receipts r ON r.id = rl.receipt_id "
+            "             WHERE rl.movement_uid = m.uid AND r.company_id = m.company_id "
+            "               AND (r.value <= ? OR EXISTS (SELECT 1 FROM gl_journals j3 "
+            "                     WHERE j3.company_id = r.company_id AND j3.source_type = 'po_receipt' "
+            "                       AND j3.source_uid = r.uid))) ")
+        receipt_params = (float(currency_quantum(_currency_of(conn, cid)) / 2),)
     purchased = conn.execute(
         "SELECT COUNT(*) FROM inventory_movements m "
         "WHERE m.company_id=? AND m.movement_type='purchase_in' "
@@ -126,8 +156,10 @@ def unbooked_movement_count(conn, cid):
         "      AND EXISTS (SELECT 1 FROM gl_journals j2 "
         "                   WHERE j2.company_id=m.company_id AND j2.reference=m.reference "
         "                     AND j2.source_type IN (%(js)s))) "
-        ")" % {'js': ','.join('?' * len(_PURCHASE_JOURNALS)), 'uid_link': uid_link},
-        (cid, *_PURCHASE_JOURNALS, *_PURCHASE_JOURNALS)
+        "%(receipt_link)s"
+        ")" % {'js': ','.join('?' * len(_PURCHASE_JOURNALS)), 'uid_link': uid_link,
+               'receipt_link': receipt_link},
+        (cid, *_PURCHASE_JOURNALS, *_PURCHASE_JOURNALS, *receipt_params)
     ).fetchone()[0]
     return int(moved) + int(purchased)
 

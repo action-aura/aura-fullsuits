@@ -32,7 +32,11 @@ check cannot disagree.
         -ar_forgiven_amount and -store_credit_amount, each only when > eps
     (4) party_balance_adjustments (customer)                  -> +amount
   Supplier (+ = the shop owes more):
-    (1) purchase_orders total (> eps)                         -> +
+    (1) purchase orders, by basis (W4a-2, schema v46):         -> +
+        'receipt' basis -- the sum of the order's RECEIPT values
+        'order' basis (orders that existed at v46; NULL too) -- the receipt
+        values once the order is closed short (or cancelled after a
+        delivery); 0 when cancelled; else the order total (> eps)
     (2) active payments party_type='supplier', ALL related_types incl 'po'
         and 'cheque': 'out' -amount, 'in' +amount
     (3) party_balance_adjustments (supplier)
@@ -161,12 +165,14 @@ def _scoped(ids):
         yield " AND {col} IN (%s)" % ",".join("?" * len(chunk)), tuple(chunk)
 
 
-def _grouped(conn, sql, params, col, ids):
+def _grouped(conn, sql, params, col, ids, scope_marker="{scope}"):
     """Run `sql` (which contains `{scope}` where the id narrowing goes) once
-    per id chunk; returns {str(party_id): int minor units}."""
+    per id chunk; returns {str(party_id): int minor units}. `scope_marker`
+    names the placeholder when a query already uses `{scope}` for something
+    else (W4a-2's nested supplier query)."""
     out = {}
     for clause, extra in _scoped(ids):
-        q = sql.replace("{scope}", clause.replace("{col}", col))
+        q = sql.replace(scope_marker, clause.replace("{col}", col))
         for row in conn.execute(q, (*params, *extra)).fetchall():
             if row[0] is None:
                 continue
@@ -223,12 +229,45 @@ def _customer_minor(conn, cid, currency, ids):
 def _supplier_minor(conn, cid, currency, ids):
     f, eps = _factor(currency), money_epsilon(currency)
     total = {}
-    if _has(conn, 'purchase_orders', 'supplier_id', 'total'):
+    if (_has(conn, 'purchase_orders', 'supplier_id', 'total', 'status', 'ap_basis', 'closed_at', 'cancelled_at')
+            and _has(conn, 'purchase_order_receipts', 'po_id', 'value', 'company_id')):
+        # W4a-2 (schema v46): what an order adds to its supplier's balance
+        # depends on its BASIS (core/retail/purchase_orders.po_supplier_charge_
+        # minor is the same rule per order -- the statement and the aging read
+        # that one; a unit test pins the two together):
+        #   'receipt' basis (every order v46 code creates): the sum of its
+        #     RECEIPT values, whatever its state -- nothing arrived, nothing is
+        #     owed, and a close-short needs no special case;
+        #   'order' basis (every order that existed at the upgrade, NULL
+        #     included -- AP was booked when it was typed): closed (or cancelled
+        #     after a delivery, which IS a close-short) -> the receipt values;
+        #     else cancelled -> 0; else the order total, as before.
+        # Receipt values are summed in integer minor units like every term here.
+        _merge(total, _grouped(
+            conn,
+            "SELECT supplier_id, SUM(CASE "
+            "  WHEN ap_basis = 'receipt' THEN rv "
+            "  WHEN closed_at IS NOT NULL OR (cancelled_at IS NOT NULL AND rn > 0) THEN rv "
+            "  WHEN cancelled_at IS NOT NULL OR COALESCE(status,'') = 'cancelled' THEN 0 "
+            "  WHEN total > ? THEN CAST(ROUND(total * %(f)d) AS INTEGER) "
+            "  ELSE 0 END) "
+            "FROM (SELECT p.supplier_id AS supplier_id, p.ap_basis AS ap_basis, p.closed_at AS closed_at, "
+            "             p.cancelled_at AS cancelled_at, p.status AS status, p.total AS total, "
+            "             (SELECT COUNT(*) FROM purchase_order_receipts r "
+            "               WHERE r.company_id = p.company_id AND r.po_id = p.id) AS rn, "
+            "             COALESCE((SELECT SUM(CAST(ROUND(r.value * %(f)d) AS INTEGER)) "
+            "                         FROM purchase_order_receipts r "
+            "                        WHERE r.company_id = p.company_id AND r.po_id = p.id), 0) AS rv "
+            "        FROM purchase_orders p WHERE p.company_id=? AND p.supplier_id IS NOT NULL{scope_p}) "
+            "GROUP BY supplier_id" % {'f': f},
+            (eps, cid), "p.supplier_id", ids, scope_marker="{scope_p}"))
+    elif _has(conn, 'purchase_orders', 'supplier_id', 'total'):
         # STOCK-BOOKS: a CANCELLED order is not owed -- its order journal is
         # reversed in the books, so the derived balance must drop it too or
         # the AP tie breaks. COALESCE: a row with no status still counts; a
         # table with no status column at all (old fixture) is filtered by
-        # nothing, exactly as before.
+        # nothing, exactly as before. (A pre-v46 database -- no receipt tables
+        # -- is derived this way, unchanged.)
         not_cancelled = (" AND COALESCE(status,'') <> 'cancelled'"
                          if _has(conn, 'purchase_orders', 'status') else "")
         _merge(total, _grouped(

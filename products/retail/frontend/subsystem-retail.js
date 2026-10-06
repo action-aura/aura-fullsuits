@@ -11335,7 +11335,8 @@ const RetailSystem = {
       })}</td></tr>`;
         return;
       }
-      const statusColor = { pending:'yellow', received:'green', cancelled:'red', partial:'blue' };
+      // W4a-2: 'closed' = a part-delivered order the shop closed short.
+      const statusColor = this._PO_STATUS_COLOR;
       // AUDIT (Phase 0 #16): see _docNoHtml()'s own comment.
       tbody.innerHTML = data.map(po => `<tr>
         <td style="font-family:monospace;color:var(--sub-accent)">${this._docNoHtml(po.po_number||'')}</td>
@@ -11358,13 +11359,14 @@ const RetailSystem = {
              the difference between "safe because the caller is careful" and
              "safe by construction", the same reasoning the round-1 #19 fix
              already applied to every payment-method badge on this file. -->
-        <td>${this._badge(this._esc(t(this._humanizeSnakeCode(po.status))), statusColor[po.status]||'blue')}</td>
+        <td>${this._badge(this._esc(this._poStatusLabel(po.status)), statusColor[po.status]||'blue')}</td>
         <td style="font-weight:600">${this._fmt(po.total)}</td>
         <td style="color:var(--text-muted)">${po.ordered_at||'—'}</td>
         <td style="color:var(--text-muted)">${po.received_at||'—'}</td>
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._viewPO(${po.id})">View</button>
-          ${po.status==='pending'?`<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._receivePO(${po.id},'${po.po_number}')">Receive</button>`:''}
+          ${(po.status==='pending'||po.status==='partial')?`<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._receivePO(${po.id},'${po.po_number}')">${t('Receive')}</button>`:''}
+          ${po.status==='partial'?`<button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._closeShortPO(${po.id},'${po.po_number}')">${t('Close short')}</button>`:''}
           ${po.status==='pending'?`<button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._cancelPO(${po.id},'${po.po_number}')">${t('Cancel')}</button>`:''}
         </td>
       </tr>`).join('');
@@ -11656,20 +11658,155 @@ const RetailSystem = {
       </div>`;
   },
 
+  // W4a-2: an order can now arrive in parts. The status vocabulary the server
+  // speaks is pending / partial / received / closed / cancelled; 'closed' is a
+  // part-delivered order the shop gave up waiting on ("closed short").
+  // ARABIC NOTE: the Arabic strings for these states and the receive dialog
+  // were written without a native-speaker pass -- a native speaker should
+  // confirm them before release.
+  _PO_STATUS_COLOR: { pending:'yellow', partial:'blue', received:'green', closed:'purple', cancelled:'red' },
+  _poStatusLabel(status) {
+    const known = { pending:'Pending', partial:'Partly received', received:'Received',
+                    closed:'Closed short', cancelled:'Cancelled' };
+    return known[status] ? t(known[status]) : t(this._humanizeSnakeCode(status));
+  },
+
+  // The server's refusals, in the shop's language -- never the raw sentence,
+  // because each one tells the owner what to do next.
+  _poErrorMessage(d) {
+    const byCode = {
+      OVER_RECEIPT: 'You cannot receive more than is still on order.',
+      PO_HAS_RECEIPTS: 'Some of this order has already arrived. Use Close short instead of Cancel.',
+      PO_HAS_PAYMENTS: 'This order has a payment. Void the payment first.',
+      PO_BOOKS_NOT_ARRIVED: 'This order has not finished syncing from your other computer yet. Try again in a moment.',
+      PO_LINES_NOT_ARRIVED: 'This order has not finished syncing from your other computer yet. Try again in a moment.',
+      PO_RECEIPTS_NOT_ARRIVED: 'An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.',
+      CLOSE_SHORT_NEEDS_SUPPLIER: 'Set a supplier on this order before closing it short.',
+    };
+    const msg = d && byCode[d.code];
+    return msg ? t(msg) : ((d && d.message) || t('Error'));
+  },
+
+  // Pure: the request body for a receipt. Only lines with a quantity above
+  // zero go on the wire; a line left at 0 simply is not part of this delivery.
+  // `readQty(line)` returns the number typed for that line.
+  _receiveLinesPayload(lines, readQty) {
+    const out = [];
+    for (const ln of lines) {
+      const q = Number(readQty(ln));
+      if (q > 0) out.push({ item_id: ln.id, quantity: q });
+    }
+    return out;
+  },
+
   async _receivePO(poId, poNumber) {
+    let po = {}, items = [];
+    try {
+      const resp = (await this._get(`/api/sub/retail/purchase-orders/${poId}`)).data || {};
+      po = resp.po || {}; items = resp.items || [];
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+      return;
+    }
+    const round3 = (n) => Math.round(n * 1000) / 1000;
+    const lines = items
+      .map(i => ({ id: i.id, name: i.product_name || '—', sku: i.sku || '',
+                   ordered: Number(i.quantity) || 0, received: Number(i.received_qty) || 0 }))
+      .map(l => ({ ...l, remaining: round3(l.ordered - l.received) }))
+      .filter(l => l.remaining > 0);
+    if (!lines.length) {
+      SubsystemApp.showToast(t('Nothing is left to receive on this order.'), 'error');
+      return;
+    }
+    this._receivePOState = { poId, lines };
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-po-receive-modal';
+    // Enter in any quantity box submits; Escape is wired by _wireModalA11y.
+    overlay.innerHTML = `
+      <div class="ret-modal ret-modal-wide" id="ret-po-receive-dialog" role="dialog" aria-modal="true" aria-labelledby="ret-po-receive-dialog-title"
+           onkeydown="if(event.key==='Enter'&&event.target.tagName==='INPUT'){event.preventDefault();RetailSystem._submitReceivePO();}">
+        <h3 id="ret-po-receive-dialog-title">${t('Receive Purchase Order')} — ${this._docNoHtml(poNumber || po.po_number || '')}</h3>
+        <p style="color:var(--text-muted);margin:0 0 14px">${t('Enter what actually arrived. Anything you leave out stays on order.')}</p>
+        <table class="ret-table">
+          <thead><tr><th>${t('Product')}</th><th>${t('Ordered')}</th><th>${t('Received so far')}</th><th>${t('Remaining')}</th><th>${t('Receive now')}</th></tr></thead>
+          <tbody>${lines.map(l => `<tr>
+            <td>${this._esc(l.name)}${l.sku ? ` <span style="font-family:monospace;color:var(--text-muted)">${this._esc(l.sku)}</span>` : ''}</td>
+            <td>${l.ordered}</td>
+            <td>${l.received}</td>
+            <td>${l.remaining}</td>
+            <td><input type="number" id="po-recv-${l.id}" class="po-recv-qty" aria-label="${this._esc(t('Receive now'))}: ${this._esc(l.name)}" min="0" max="${l.remaining}" step="any" value="${l.remaining}" style="width:90px" /></td>
+          </tr>`).join('')}</tbody>
+        </table>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="po-recv-btn" onclick="RetailSystem._submitReceivePO()">${t('Receive')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const _closeRecv = this._wireModalA11y(overlay, 'ret-po-receive-dialog');
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeRecv(); });
+    const first = document.getElementById(`po-recv-${lines[0].id}`);
+    if (first && first.focus) first.focus();
+  },
+
+  async _submitReceivePO() {
+    const st = this._receivePOState;
+    if (!st) return;
+    const readQty = (ln) => parseFloat(document.getElementById(`po-recv-${ln.id}`)?.value || 0) || 0;
+    for (const ln of st.lines) {
+      const q = readQty(ln);
+      if (q < 0 || q > ln.remaining) {
+        SubsystemApp.showToast(t('You cannot receive more than is still on order.'), 'error');
+        return;
+      }
+    }
+    const payloadLines = this._receiveLinesPayload(st.lines, readQty);
+    if (!payloadLines.length) {
+      SubsystemApp.showToast(t('Enter a quantity for at least one line.'), 'error');
+      return;
+    }
+    const btn = document.getElementById('po-recv-btn');
+    if (btn) btn.disabled = true;
+    try {
+      const d = await this._post(`/api/sub/retail/purchase-orders/${st.poId}/receive`, { lines: payloadLines });
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Stock received and inventory updated'), 'success');
+        this._closeModalOverlay(document.getElementById('ret-po-receive-modal'));
+        this._loadPurchaseOrders();
+      } else {
+        SubsystemApp.showToast(this._poErrorMessage(d), 'error');
+        if (btn) btn.disabled = false;
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  // W4a-2: stop waiting for the rest of a part-delivered order. What arrived
+  // stays owed to the supplier; what did not is no longer owed.
+  async _closeShortPO(poId, poNumber) {
     if (!(await this._confirm({
-      title: t('Receive Purchase Order'),
-      message: `${t('Mark PO')} ${poNumber} ${t('as received? This will add the items to inventory.')}`,
-      confirmLabel: t('Receive'),
-      danger: false,
+      title: t('Close short'),
+      message: `${poNumber}: ${t('Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.')}`,
+      confirmLabel: t('Close short'),
+      danger: true,
     }))) return;
     try {
-      const d = await this._post(`/api/sub/retail/purchase-orders/${poId}/receive`, {});
-      if (d.status==='success') {
-        SubsystemApp.showToast(t('Stock received and inventory updated'),'success');
+      const d = await this._post(`/api/sub/retail/purchase-orders/${poId}/close`, {});
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Purchase order closed short'), 'success');
         this._loadPurchaseOrders();
-      } else { SubsystemApp.showToast(d.message||'Error','error'); }
-    } catch(e) {}
+      } else {
+        SubsystemApp.showToast(this._poErrorMessage(d), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+    }
   },
 
   // STOCK-BOOKS B8: cancel a purchase order that has not been received. The
@@ -11688,8 +11825,8 @@ const RetailSystem = {
       if (d.status === 'success') {
         SubsystemApp.showToast(t('Purchase order cancelled'), 'success');
         this._loadPurchaseOrders();
-      } else if (d.code === 'PO_HAS_PAYMENTS') {
-        SubsystemApp.showToast(t('This order has a payment. Void the payment first.'), 'error');
+      } else if (d.code === 'PO_HAS_PAYMENTS' || d.code === 'PO_HAS_RECEIPTS') {
+        SubsystemApp.showToast(this._poErrorMessage(d), 'error');
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
       }
@@ -11718,7 +11855,7 @@ const RetailSystem = {
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Supplier')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(po.supplier_name||'—')}</div></div>
             <!-- Round 2, till R2 (defence in depth, T6/#19 XSS finding): see
                  the PO list row's own comment on this same pattern. -->
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(this._esc(t(this._humanizeSnakeCode(po.status))),'green')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(this._esc(this._poStatusLabel(po.status)), this._PO_STATUS_COLOR[po.status]||'blue')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:var(--text-money);font-weight:700">${this._fmt(po.total)}</div></div>
           </div>
           <table class="ret-table">
@@ -18931,15 +19068,6 @@ const RetailSystem = {
     return `<div ${attr} style="font-size:11px;font-weight:400;color:var(--text-muted);margin-top:2px">${this._esc(t('As of the last sync with your other computers'))}</div>`;
   },
 
-  // Suppliers: purchase orders do not sync between computers yet, so on a
-  // networked shop the payables figure counts the purchase orders entered on
-  // THIS computer. The server says so with `supplier_balance_scope` (present
-  // only on a shop with more than one computer); one line, never an error.
-  _supplierScopeNote(scope) {
-    if (scope !== 'this_computer_pos') return '';
-    return `<div data-supplier-scope-note style="font-size:12px;color:var(--text-muted);margin-top:8px">${this._esc(t('Supplier balances count purchase orders entered on this computer.'))}</div>`;
-  },
-
   async _renderReceivables(c) { return this._renderPartyLedger(c, 'customer'); },
   async _renderPayables(c)    { return this._renderPartyLedger(c, 'supplier'); },
 
@@ -19004,14 +19132,8 @@ const RetailSystem = {
 
       const totalEl = document.getElementById(`pl-total-${kind}`);
       if (totalEl) totalEl.textContent = this._fmt(total || 0);
-      if (isSupplier && totalEl) {
-        const card = totalEl.closest('.sub-chart-card');
-        if (card) {
-          const oldNote = card.querySelector('[data-supplier-scope-note]');
-          if (oldNote) oldNote.remove();
-          card.insertAdjacentHTML('beforeend', this._supplierScopeNote(listResp.supplier_balance_scope));
-        }
-      }
+      // W4a-2 (D16): the old "counts purchase orders entered on this
+      // computer" scope note is gone -- purchase orders sync now.
 
       const agingEl = document.getElementById(`pl-aging-${kind}`);
       if (agingEl) {

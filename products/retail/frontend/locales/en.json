@@ -2510,5 +2510,21 @@
   "Stock in Transit (GL)": "Stock in Transit (GL)",
   "Stock not opened yet": "Stock not opened yet",
   "Rounding difference": "Rounding difference",
-  "Some stock was entered before the books tracked it, so the two figures are not compared yet.": "Some stock was entered before the books tracked it, so the two figures are not compared yet."
+  "Some stock was entered before the books tracked it, so the two figures are not compared yet.": "Some stock was entered before the books tracked it, so the two figures are not compared yet.",
+  "Partly received": "Partly received",
+  "Closed short": "Closed short",
+  "Close short": "Close short",
+  "Ordered": "Ordered",
+  "Received so far": "Received so far",
+  "Receive now": "Receive now",
+  "Enter what actually arrived. Anything you leave out stays on order.": "Enter what actually arrived. Anything you leave out stays on order.",
+  "Nothing is left to receive on this order.": "Nothing is left to receive on this order.",
+  "Enter a quantity for at least one line.": "Enter a quantity for at least one line.",
+  "You cannot receive more than is still on order.": "You cannot receive more than is still on order.",
+  "Some of this order has already arrived. Use Close short instead of Cancel.": "Some of this order has already arrived. Use Close short instead of Cancel.",
+  "This order has not finished syncing from your other computer yet. Try again in a moment.": "This order has not finished syncing from your other computer yet. Try again in a moment.",
+  "An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.": "An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.",
+  "Set a supplier on this order before closing it short.": "Set a supplier on this order before closing it short.",
+  "Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.": "Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.",
+  "Purchase order closed short": "Purchase order closed short"
 }

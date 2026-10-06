@@ -255,10 +255,18 @@ EXPECTED_CUSTOMERS = {
     'F_cheques': Decimal('40.000'),
     'G_split': Decimal('70.000'),
 }
+# W4a-2 UPDATE (deliberate): a PO typed by v46 code is 'receipt' basis -- nothing
+# arrives in this fixture, so no PO total is owed. S1 = -(50 down + 30 instalment)
+# = -80 (an advance); S3 = -40 (the cheque, no goods yet). These figures can no
+# longer catch "a PO total counted at ORDER time" (120 / 60 before); that rule
+# survives only for orders that predate v46 and is pinned by
+# retail_po_receipts_core_test.py::test_balance_order_basis_states. What this
+# test still proves is its own subject: derived == cache == statement ==
+# payables == aging for every party, and the books tie.
 EXPECTED_SUPPLIERS = {
-    'S1_po_instalments': Decimal('120.000'),
+    'S1_po_instalments': Decimal('-80.000'),
     'S2_direct': Decimal('-12.000'),
-    'S3_cheque': Decimal('60.000'),
+    'S3_cheque': Decimal('-40.000'),
 }
 
 
@@ -376,27 +384,33 @@ def test_an_accepted_reorder_po_is_booked_and_ties():  # v44 F1
     r = client.post(f'{API}/reorder-requests/{rid}/accept', json={})
     assert r.status_code == 200, r.get_json()
     po_id = r.get_json()['data']['purchase_order_id']
-    po_total = Decimal('20.000')  # reorder_level 5 x cost 4
+    # W4a-2 UPDATE (deliberate): the drafted PO is 'receipt' basis, so accepting
+    # it owes the supplier NOTHING until goods arrive and posts no order journal;
+    # the books and the subledger still agree (both zero). This can no longer
+    # catch "the reorder path forgot to book a debt it created" -- there is no
+    # debt now; the mirror of that hazard is a reorder PO that books AP at order
+    # time while the receipt-basis subledger does not, which the zero/zero tie
+    # below would show as ap_ties False. The part payment then makes both sides
+    # -8 (an advance), still tied.
     conn = get_retail_conn()
     try:
-        assert pb.supplier_balance(conn, cid, sid, 'JOD') == po_total
-        assert _stored('suppliers', sid) == po_total
-        # exactly ONE journal for the PO, booked to AP
+        assert pb.supplier_balance(conn, cid, sid, 'JOD') == Decimal('0.000')
+        assert _stored('suppliers', sid) == Decimal('0.000')
         n = conn.execute("SELECT COUNT(*) FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
                          "AND source_id=?", (cid, str(po_id))).fetchone()[0]
-        assert n == 1, n
+        assert n == 0, n
     finally:
         conn.close()
     sub = _tb(client)
     assert sub['ap_ties'] is True, sub
-    assert Decimal(str(sub['ap_gl'])) == po_total and Decimal(str(sub['ap_subledger'])) == po_total, sub
+    assert Decimal(str(sub['ap_gl'])) == 0 and Decimal(str(sub['ap_subledger'])) == 0, sub
     assert client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 8}).status_code == 200
     sub = _tb(client)
     assert sub['ap_ties'] is True, sub
-    assert Decimal(str(sub['ap_subledger'])) == Decimal('12.000'), sub
+    assert Decimal(str(sub['ap_subledger'])) == Decimal('-8.000'), sub
     conn = get_retail_conn()
     try:
-        assert pb.supplier_balance(conn, cid, sid, 'JOD') == Decimal('12.000')
+        assert pb.supplier_balance(conn, cid, sid, 'JOD') == Decimal('-8.000')
     finally:
         conn.close()
 

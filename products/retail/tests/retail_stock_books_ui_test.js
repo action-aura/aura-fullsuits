@@ -252,7 +252,9 @@ const MUTANTS = [
   ['recall offered on received transfers too', 'recallEverywhere', 'recallOnlyOnInTransit',
     "} else if (xfer.status === 'in_transit') {", "} else {"],
   ['payment refusal shows the raw server text', 'rawRefusal', 'paymentRefusalIsShownTranslated',
-    "} else if (d.code === 'PO_HAS_PAYMENTS') {", "} else if (false) {"],
+    // W4a-2: the branch also covers PO_HAS_RECEIPTS now; the mutant still
+    // disables the whole branch, so the claim it guards is unchanged.
+    "} else if (d.code === 'PO_HAS_PAYMENTS' || d.code === 'PO_HAS_RECEIPTS') {", "} else if (false) {"],
   ['reorder accept refusal shows the raw server text', 'rawSupplierRefusal', 'acceptRefusalNamesTheSupplierStep',
     "} else if (d && d.code === 'SUPPLIER_REQUIRED_FOR_CREDIT_PO') {", "} else if (false) {"],
   ['written-off money dropped from the toast', 'noWrittenOff', 'shortReceiptStatesTheMoneyWrittenOff',

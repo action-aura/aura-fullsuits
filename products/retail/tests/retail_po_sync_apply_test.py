@@ -302,6 +302,7 @@ def test_update_never_moves_status_backwards(get_conn):
     """The guard that makes a delayed or replayed old event harmless: an order
     already received here must not be flipped back to pending."""
     _apply(get_conn, _po())
+    _apply(get_conn, _item())
     _apply(get_conn, _po_update("received", "2026-10-06 12:00:00"))
     _apply(get_conn, _po_update("pending"))
     row = _po_row(get_conn)
@@ -309,7 +310,11 @@ def test_update_never_moves_status_backwards(get_conn):
 
 
 def test_received_then_cancelled_keeps_received_and_records_a_conflict(get_conn):
+    # W4a-2: 'received' is now the legacy receipt (a fact), 'cancelled' a
+    # set-once stamp; the status is derived, so receipts win by construction
+    # and the disagreement is still recorded once for a human.
     _apply(get_conn, _po())
+    _apply(get_conn, _item())
     _apply(get_conn, _po_update("received", "2026-10-06 12:00:00"))
     _apply(get_conn, _po_update("cancelled"))
     assert _po_row(get_conn)["status"] == "received"
@@ -319,6 +324,7 @@ def test_received_then_cancelled_keeps_received_and_records_a_conflict(get_conn)
 
 def test_cancelled_then_received_ends_received_and_records_a_conflict(get_conn):
     _apply(get_conn, _po())
+    _apply(get_conn, _item())
     _apply(get_conn, _po_update("cancelled"))
     _apply(get_conn, _po_update("received", "2026-10-06 12:00:00"))
     assert _po_row(get_conn)["status"] == "received"
@@ -479,8 +485,11 @@ def test_receiver_recompute_matches_the_writer_side_module(get_conn):
     different 'paid' for the same instalments -- this pins them together."""
     from core.retail import purchase_orders as po_mod
     from core.retail import party_balance
-    assert dict(po_mod.PO_STATUS_RANK) == dict(__import__(
-        "commercial_runtime.sync.sync_service", fromlist=["x"]).PO_STATUS_RANK)
+    # W4a-2: the PO_STATUS_RANK equality pin that stood here is removed on
+    # purpose -- the header apply no longer merges a status through a rank (it
+    # merges set-once stamps and derives the status; see
+    # retail_po_receipts_apply_test.py). This test can no longer catch the two
+    # rank tables drifting, which no longer matters because neither is read.
     _apply(get_conn, _po())
     po_id = _po_row(get_conn)["id"]
     eps = party_balance.money_epsilon("USD")
@@ -542,6 +551,7 @@ def test_f2_po_link_arriving_at_the_origin_is_ignored_and_recorded_once(get_conn
 
 def test_f3_redelivered_losing_cancel_records_one_conflict(get_conn):
     _apply(get_conn, _po())
+    _apply(get_conn, _item())   # W4a-2: a legacy receipt completes only once its line exists
     _apply(get_conn, _po_update("received", "2026-10-06 12:00:00"))
     _apply(get_conn, _po_update("cancelled"))
     _apply(get_conn, _po_update("cancelled"))      # the same event, delivered again

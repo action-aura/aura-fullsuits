@@ -2231,6 +2231,186 @@ def post_po_receipt(conn, cid, branch_id, po_id, po_number, currency, posted_by=
                       source_uid=order['uid'])
 
 
+# -- W4a-2: books per RECEIPT (schema v46) ---------------------------------------
+#
+# Accounts Payable used to be recognised when an order was TYPED. Since v46 an
+# order created by new code (`ap_basis='receipt'`) books NOTHING at order time;
+# each receipt books its own value, and a payment made before delivery is a
+# standalone journal. Orders that existed at the upgrade (`ap_basis='order'`)
+# keep their order journal untouched: their 1260 -> 1200 move is split across
+# receipts (cumulatively rounded so the pieces sum to the whole) and a short
+# order that is closed releases what never came. Every helper is ONCE-ONLY on a
+# uid derived from the receipt / order uid (never a per-computer integer), is
+# posted by the WRITER only (the journal itself syncs), and posts nothing at or
+# below half a minor unit -- the same contract as every STOCK-BOOKS helper above.
+
+def _po_field(po_row, key, default=None):
+    """`po_row` is a sqlite3.Row or a dict; a hand-built row may lack a column."""
+    try:
+        value = po_row[key]
+    except (KeyError, IndexError):
+        return default
+    return default if value is None else value
+
+
+def po_receipt_moved(conn, cid, po_row) -> Decimal:
+    """How much of this ORDER's 1260 the po_receipt journals have already moved
+    to Inventory: the sum of the 1200 debits of every po_receipt journal that
+    names one of the order's receipts (`source_uid` = receipt uid) -- plus the
+    legacy single W4a journal, which is keyed on the ORDER journal's uid. A
+    close-short and a later receipt both subtract this, so what a receipt moves
+    is always "its share, minus what earlier receipts moved"."""
+    keys = [r[0] for r in conn.execute(
+        "SELECT uid FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
+        (cid, po_row['id'])).fetchall()]
+    order_uid = _po_field(po_row, 'order_journal_uid')
+    if order_uid:
+        keys.append(order_uid)
+    if not keys:
+        return Decimal('0')
+    rows = conn.execute(
+        "SELECT l.debit FROM gl_journals j "
+        "JOIN gl_journal_lines l ON l.journal_id = j.id "
+        "JOIN gl_accounts a ON a.id = l.account_id "
+        "WHERE j.company_id=? AND j.source_type='po_receipt' AND a.code=? AND l.debit > 0 "
+        "AND j.source_uid IN (%s)" % ','.join('?' * len(keys)),
+        (cid, ACCOUNT_INVENTORY, *keys)).fetchall()
+    return sum((Decimal(str(r[0])) for r in rows), Decimal('0'))
+
+
+def _po_receipt_values_sum(conn, cid, po_id, exclude_uid=None) -> Decimal:
+    rows = conn.execute(
+        "SELECT value FROM purchase_order_receipts WHERE company_id=? AND po_id=? AND uid IS NOT ?",
+        (cid, po_id, exclude_uid)).fetchall()
+    return sum((Decimal(str(r[0] or 0)) for r in rows), Decimal('0'))
+
+
+def post_po_receipt_for(conn, cid, branch_id, po_row, receipt_uid, value, currency, posted_by=None):
+    """Book ONE receipt of purchase order `po_row` (a row with id, po_number,
+    supplier_id, total, ap_basis, order_journal_uid), of worth `value` (computed
+    once by the writer, `purchase_orders.receipt_value`). uid =
+    `stock_journal_uid(receipt_uid, 'po_receipt')`, source_uid = receipt uid.
+
+      * ap_basis 'receipt': Dr Inventory (1200) / Cr Accounts Payable (2000) --
+        or Cr Goods Ordered (1260) when the order has no supplier (there is no
+        subledger to owe it to) -- for `value`.
+      * ap_basis 'order' whose order journal debited 1260: Dr 1200 / Cr 1260 for
+        round(order debit x cumulative value / total) minus what earlier
+        receipts already moved; once the receipts reach the total, the whole
+        remainder (order debit - moved). THE CUMULATIVE FORM IS THE POINT:
+        rounding each third of 10.000 on its own books 3.333 three times and
+        leaves 0.001 stuck in 1260 forever; this way the pieces sum to the
+        order's own debit exactly.
+      * ap_basis 'order' whose order journal debited 1200 (pre-STOCK-BOOKS) or
+        with no order journal: nothing (Inventory was already debited).
+    Returns the journal id, or None when nothing is posted."""
+    uid = stock_journal_uid(receipt_uid, 'po_receipt')
+    existing = conn.execute(
+        "SELECT id FROM gl_journals WHERE company_id=? AND uid=?", (cid, uid)).fetchone()
+    if existing:
+        return existing['id']
+    eps = _gl_epsilon(currency)
+    value = Decimal(str(value or 0))
+    po_number = _po_field(po_row, 'po_number')
+    if (_po_field(po_row, 'ap_basis') or 'order') == 'receipt':
+        amount = quantize_money(value, currency)
+        if amount <= eps:
+            return None
+        credit = ACCOUNT_AP if _po_field(po_row, 'supplier_id') else ACCOUNT_GOODS_ORDERED
+    else:
+        order = po_order_journal(conn, cid, po_row['id'],
+                                 order_journal_uid=_po_field(po_row, 'order_journal_uid'))
+        if not order or order['debit_code'] != ACCOUNT_GOODS_ORDERED:
+            return None
+        total = Decimal(str(_po_field(po_row, 'total', 0)))
+        if total <= eps:
+            return None
+        cumulative = _po_receipt_values_sum(conn, cid, po_row['id'], exclude_uid=receipt_uid) + value
+        if cumulative >= quantize_money(total, currency) - eps:
+            target = order['debit_amount']
+        else:
+            target = quantize_money(order['debit_amount'] * cumulative / total, currency)
+        amount = target - po_receipt_moved(conn, cid, po_row)
+        if amount <= eps:
+            return None
+        credit = ACCOUNT_GOODS_ORDERED
+    lines = [
+        {'account_code': ACCOUNT_INVENTORY, 'debit': amount,
+         'memo': f'Goods received, purchase order {po_number}'},
+        {'account_code': credit, 'credit': amount,
+         'memo': f'Receipt of order {po_number}'},
+    ]
+    return _post_once(conn, cid, uid, branch_id, _today(), 'po_receipt', po_row['id'], currency,
+                      lines, reference=po_number, posted_by=posted_by, source_uid=receipt_uid)
+
+
+def post_po_prepayment(conn, cid, branch_id, po_id, has_supplier, amount, pay_uid, currency,
+                       reference=None, posted_by=None):
+    """Cash paid against a 'receipt'-basis order (down payment at create, or a
+    later instalment): Dr Accounts Payable (Dr Goods Ordered when the order has
+    no supplier) / Cr Cash. A standalone journal, source_type 'po_payment',
+    source_id = the order, source_uid = the PAYMENT's uid (what a void finds it
+    by -- fixing PD1 for these orders: the down payment used to be buried inside
+    the order journal where a void could not reach it). A supplier paid before
+    delivery therefore shows a NEGATIVE balance -- an advance -- and that is
+    correct: AP carries the same negative, so the two still tie."""
+    amount = Decimal(str(amount or 0))
+    if amount <= 0:
+        return None
+    lines = [
+        {'account_code': ACCOUNT_AP if has_supplier else ACCOUNT_GOODS_ORDERED, 'debit': amount,
+         'memo': 'Paid to supplier on purchase order'},
+        {'account_code': ACCOUNT_CASH, 'credit': amount, 'memo': 'Payment to supplier'},
+    ]
+    return post_journal(conn, cid, branch_id, _today(), 'po_payment', po_id, currency, lines,
+                        reference=reference, posted_by=posted_by, source_uid=pay_uid)
+
+
+def post_po_close_short(conn, cid, branch_id, po_row, currency):
+    """An 'order'-basis order the shop closes SHORT: release what will never
+    come. Dr Accounts Payable / Cr Goods Ordered (1260) -- or Cr Inventory
+    (1200) when the order debited Inventory directly -- for the part of the
+    order's debit no receipt moved. Once-only on `stock_journal_uid(order uid,
+    'po_close_short')`; None for a 'receipt'-basis order (it booked nothing for
+    the goods that never came) and when nothing is left to release.
+
+    On a 1200-debit (pre-STOCK-BOOKS) order no receipt journal ever moved
+    anything, so "what was received" is its share of the order debit
+    (round(debit x receipts / total)); crediting the whole debit would take the
+    stock that DID arrive back out of Inventory."""
+    if (_po_field(po_row, 'ap_basis') or 'order') == 'receipt':
+        return None
+    uid = stock_journal_uid(po_row['uid'], 'po_close_short')
+    existing = conn.execute(
+        "SELECT id FROM gl_journals WHERE company_id=? AND uid=?", (cid, uid)).fetchone()
+    if existing:
+        return existing['id']
+    order = po_order_journal(conn, cid, po_row['id'],
+                             order_journal_uid=_po_field(po_row, 'order_journal_uid'))
+    if not order or order['debit_code'] not in (ACCOUNT_GOODS_ORDERED, ACCOUNT_INVENTORY):
+        return None
+    eps = _gl_epsilon(currency)
+    od = order['debit_amount']
+    if order['debit_code'] == ACCOUNT_GOODS_ORDERED:
+        moved = po_receipt_moved(conn, cid, po_row)
+    else:
+        total = Decimal(str(_po_field(po_row, 'total', 0)))
+        moved = (quantize_money(od * _po_receipt_values_sum(conn, cid, po_row['id']) / total, currency)
+                 if total > eps else Decimal('0'))
+    amount = od - moved
+    if amount <= eps:
+        return None
+    po_number = _po_field(po_row, 'po_number')
+    lines = [
+        {'account_code': ACCOUNT_AP, 'debit': amount,
+         'memo': f'Order {po_number} closed short'},
+        {'account_code': order['debit_code'], 'credit': amount,
+         'memo': f'Undelivered part of order {po_number}'},
+    ]
+    return _post_once(conn, cid, uid, branch_id, _today(), 'po_close_short', po_row['id'], currency,
+                      lines, reference=po_number, source_uid=po_row['uid'])
+
+
 def post_transfer_send(conn, cid, branch_id, transfer_id, lines, currency):
     """Stock leaves the source branch: Dr Stock in Transit (1250) / Cr
     Inventory (1200) for the sum of quantize(qty x unit_cost) over `lines`

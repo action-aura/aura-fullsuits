@@ -168,8 +168,11 @@ def test_single_computer_upgrade_carries_the_difference_once_and_keeps_every_bal
     # v45 UPDATE: head moved to 45 (W4a purchase-order sync); this file still
     # proves v44's own capture, and the head tripwire moved to
     # retail_v45_po_sync_migration_test.py.
-    assert sch.RETAIL_SCHEMA_VERSION == 45
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 45
+    # v46 UPDATE: head moved to 46 (W4a-2 partial receipts); same caveat -- this
+    # can no longer catch the head drifting past 46 (that tripwire lives with
+    # retail_v46_po_receipts_migration_test.py).
+    assert sch.RETAIL_SCHEMA_VERSION == 46
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 46
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
 

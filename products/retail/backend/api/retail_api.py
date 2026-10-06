@@ -3678,6 +3678,14 @@ def _po_stamp_and_queue_create(cur, po_id, order_journal_id):
         'routed_channel': po['routed_channel'], 'routed_at': po['routed_at'],
         'routed_to': po['routed_to'], 'idempotency_key': po['idempotency_key'],
         'item_count': po['item_count'],
+        # W4a-2: which rule books this order's supplier debt ('receipt' = at
+        # delivery, 'order' = at the order, the pre-v46 way). Sent so every
+        # computer applies the SAME rule; a payload without it applies as
+        # 'order' (a v45 writer). cancelled_at/closed_at ride along so an order
+        # announced after it was cancelled/closed (the boot backfill) arrives in
+        # that state without a separate header update.
+        'ap_basis': po['ap_basis'], 'cancelled_at': po['cancelled_at'],
+        'closed_at': po['closed_at'],
     })
     for it in cur.execute("SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY id",
                           (po_id,)).fetchall():
@@ -3803,9 +3811,11 @@ def backfill_legacy_purchase_orders(conn):
             po = cur.execute("SELECT * FROM purchase_orders WHERE id=? AND company_id=?",
                              (po_id, po_company)).fetchone()
             _po_stamp_and_queue_create(cur, po_id, None)
-            if po['status'] and po['status'] != 'pending':
-                _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
-                    'uid': po['uid'], 'status': po['status'], 'received_at': po['received_at']})
+            # W4a-2: the old `status` update that used to follow is gone. A
+            # cancelled/closed order now announces that in its create payload
+            # (cancelled_at/closed_at), and a received order's receipts are
+            # facts every computer derives for itself (the v46 migration's
+            # legacy receipt) -- they are NEVER queued from here.
             local, sibling, unprovable = _classify_po_payments(
                 cur, po, _money_epsilon(_company_currency(conn, po['company_id'])))
             for pay in local:
@@ -4117,8 +4127,8 @@ def create_purchase_order():
         po_uid = _new_uid()
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
-                                         amount_paid,payment_status,due_date,uid)
-            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid',?,?)
+                                         amount_paid,payment_status,due_date,uid,ap_basis)
+            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid',?,?,'receipt')
         """, (cid, po_number, supplier_id, branch_id,
               'pending', total, total, data.get('notes',''),
               datetime.now().strftime('%Y-%m-%d'), data.get('due_date'), po_uid))
@@ -4130,10 +4140,11 @@ def create_purchase_order():
                 VALUES (?,?,?,?,?,?)
             """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line, _new_uid()))
         # AP ledger: record any down-payment now; push the unpaid balance onto supplier AP.
+        down_pay_uid = _new_uid()
         if amount_paid > _eps:
             _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
                             method=data.get('method', 'cash'), related_type='po', related_id=po_id,
-                            doc_type='supplier_payment', currency=currency)
+                            doc_type='supplier_payment', currency=currency, pay_uid=down_pay_uid)
         # Derived, not stored-by-hand (see the insert above). Equals the figure
         # computed from the request, by construction: the one payment row.
         _, payment_status = po_core.recompute_po_paid(conn, cid, po_id, _eps)
@@ -4142,18 +4153,21 @@ def create_purchase_order():
             # v44: the PO row and its down-payment are written above, so the
             # supplier's figure is re-derived from them (never moved by delta).
             _refresh_party_balance(conn, 'suppliers', supplier_id, cid, currency)
-        # Schema v38 (general ledger core): Dr Inventory / Cr Cash + Cr AP.
-        # `ap_balance_for_gl` mirrors the EXACT old AP-credit gate just
-        # above rather than the raw `balance` -- see post_purchase_order's
-        # own docstring for why (supplier_id is optional here, and a
-        # supplier-less unpaid balance is untracked by the subledger too).
-        ap_balance_for_gl = balance if (balance > _eps and supplier_id) else 0.0
-        order_journal_id = gl.post_purchase_order(conn, cid, branch_id, po_id, po_number, currency,
-                                                  amount_paid, ap_balance_for_gl, po_uid=po_uid)
-        # W4a: store the journal's uid on the order and queue order + lines, in
-        # THIS transaction, so the outbox rows and the rows they describe land
-        # or roll back together.
-        _po_stamp_and_queue_create(cur, po_id, order_journal_id)
+        # W4a-2: NO order journal. Supplier debt (and the stock it buys) is
+        # booked when the goods ARRIVE, once per receipt (receive_purchase_order),
+        # so a typed order that never comes leaves no debt and no stock in the
+        # books -- it used to book Dr 1260 / Cr AP here and the supplier's
+        # balance claimed money for goods that were never delivered. A down
+        # payment is the one thing that IS money out today: it posts on its own
+        # (Dr AP, or Dr 1260 when there is no supplier, / Cr Cash), which is why
+        # the supplier can read negative before delivery -- an advance, and it
+        # ties to AP. `order_journal_uid` stays NULL for these orders.
+        if amount_paid > _eps:
+            gl.post_po_prepayment(conn, cid, branch_id, po_id, bool(supplier_id),
+                                  amount_paid, down_pay_uid, currency)
+        # W4a: queue order + lines in THIS transaction, so the outbox rows and
+        # the rows they describe land or roll back together.
+        _po_stamp_and_queue_create(cur, po_id, None)
         _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -4364,6 +4378,17 @@ def receive_purchase_order(po_id):
     Receive button). Two computers receiving offline and then syncing both end
     up 'received' (the status merge is forward-only, see po_core.
     PO_STATUS_RANK) with the stock added once.
+
+    W4a-2 (schema v46) -- PARTIAL RECEIVE, AND DEBT AT DELIVERY. This route no
+    longer flips an order to 'received'. It records one RECEIPT: an immutable,
+    synced fact (header + one line per product delivered) that says how much of
+    each line arrived. `received_qty`, the order's status and the supplier's
+    debt are all DERIVED from the receipts (po_core.recompute_po_receive_state),
+    so a short delivery is recorded as short instead of being refused or booked
+    as complete. Body (all optional): {"lines":[{"item_id"|"item_uid", "quantity"}]};
+    no body receives every line's REMAINING quantity (older desktop/phone
+    builds keep working). Books: the writer posts the receipt's own journal
+    (gl.post_po_receipt_for); peers get it by sync and post nothing.
     """
     cid  = _cid()
     conn = get_retail_conn()
@@ -4384,17 +4409,26 @@ def receive_purchase_order(po_id):
         if po['status'] == 'cancelled':
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO is cancelled and cannot be received'}), 409
+        # W4a-2: closed short = the supplier will not send the rest; nothing more
+        # can be received against it.
+        if po['status'] == 'closed':
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO is closed and cannot be received'}), 409
+        ap_basis = po['ap_basis'] or 'order'
         # W4a: this order reached us by sync but the journal it posted has not
         # (events are applied in batches and a journal can park). Receiving now
         # would book Dr 1200 / Cr 1260 against an order this computer has never
         # seen -- refuse, write nothing, and let a later sync make it possible.
-        if po['order_journal_uid'] and gl.po_order_journal_missing(conn, cid, po['order_journal_uid']):
+        # W4a-2: only an 'order'-basis PO HAS an order journal to wait for; a
+        # 'receipt'-basis one posts nothing until now.
+        if (ap_basis == 'order' and po['order_journal_uid']
+                and gl.po_order_journal_missing(conn, cid, po['order_journal_uid'])):
             conn.rollback()
             return jsonify({'status': 'error', 'code': 'PO_BOOKS_NOT_ARRIVED',
                             'message': "This order's bookkeeping has not reached this computer yet. "
                                        "Sync, then try again."}), 409
 
-        items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
+        items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY id", (po_id,)).fetchall()
         # W4a verify F1: the header and its order journal can both be here while
         # a LINE is still parked (its product has not synced). Receiving then
         # moves the books for the whole order (1260 -> 1200 at the full
@@ -4410,6 +4444,68 @@ def receive_purchase_order(po_id):
             return jsonify({'status': 'error', 'code': 'PO_LINES_NOT_ARRIVED',
                             'message': "Some lines of this order have not reached this computer yet. "
                                        "Sync, then try again."}), 409
+        # W4a-2: the same hazard one level down. A receipt header can be here
+        # with some of its lines still parked; "what is already received" would
+        # then read short and this receipt would take stock for quantity another
+        # computer already took. Refuse until every local receipt is complete.
+        recv_rows = cur.execute(
+            "SELECT id, uid, line_count FROM purchase_order_receipts WHERE company_id=? AND po_id=? ORDER BY id",
+            (cid, po_id)).fetchall()
+        for rr in recv_rows:
+            have = cur.execute("SELECT COUNT(*) FROM purchase_order_receipt_lines WHERE receipt_id=?",
+                               (rr['id'],)).fetchone()[0]
+            if rr['line_count'] is not None and have < rr['line_count']:
+                conn.rollback()
+                return jsonify({'status': 'error', 'code': 'PO_RECEIPTS_NOT_ARRIVED',
+                                'message': "Part of an earlier delivery has not reached this computer yet. "
+                                           "Sync, then try again."}), 409
+        # Quantity already received per line, from the receipts themselves (the
+        # `received_qty` column is only their cache).
+        got = {r[0]: Decimal(str(r[1] or 0)) for r in cur.execute(
+            "SELECT l.po_item_id, SUM(l.quantity) FROM purchase_order_receipt_lines l "
+            "JOIN purchase_order_receipts r ON r.id=l.receipt_id "
+            "WHERE r.company_id=? AND r.po_id=? GROUP BY l.po_item_id", (cid, po_id)).fetchall()}
+        remaining = {it['id']: Decimal(str(it['quantity'] or 0)) - got.get(it['id'], Decimal('0'))
+                     for it in items}
+        body = request.get_json(silent=True)
+        body = body if isinstance(body, dict) else {}
+        req_lines = body.get('lines')
+        selected = []          # [(item row, Decimal quantity)]
+        if req_lines:
+            if not isinstance(req_lines, list):
+                conn.rollback()
+                return jsonify({'status': 'error', 'message': 'lines must be a list'}), 400
+            asked = {}
+            for rl in req_lines:
+                rl = rl if isinstance(rl, dict) else {}
+                match = next((it for it in items
+                              if (rl.get('item_id') is not None and it['id'] == rl.get('item_id'))
+                              or (rl.get('item_uid') and it['uid'] == rl.get('item_uid'))), None)
+                try:
+                    q = Decimal(str(rl.get('quantity')))
+                except Exception:  # noqa: BLE001 -- any unparsable quantity is a 400
+                    q = Decimal('0')
+                if match is None or not q.is_finite() or q <= 0:
+                    conn.rollback()
+                    return jsonify({'status': 'error',
+                                    'message': 'Each line needs a known item and a quantity above zero.'}), 400
+                asked[match['id']] = asked.get(match['id'], Decimal('0')) + q
+            for it in items:
+                if it['id'] in asked:
+                    if asked[it['id']] > remaining[it['id']]:
+                        pname = cur.execute("SELECT name FROM products WHERE id=? AND company_id=?",
+                                            (it['product_id'], cid)).fetchone()
+                        conn.rollback()
+                        return jsonify({'status': 'error', 'code': 'OVER_RECEIPT',
+                                        'message': f"Only {remaining[it['id']].normalize():f} of "
+                                                   f"{(pname['name'] if pname else 'this item')} "
+                                                   f"is still to receive."}), 409
+                    selected.append((it, asked[it['id']]))
+        else:
+            selected = [(it, remaining[it['id']]) for it in items if remaining[it['id']] > 0]
+        if not selected:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO already received'}), 409
         # `po['branch_id']` is a trusted value from THIS company's own PO row
         # (fetched WHERE company_id=? above) -- always set for a PO created
         # after this fix (create_purchase_order now resolves one via
@@ -4430,8 +4526,32 @@ def receive_purchase_order(po_id):
         # moving-average update below, same `currency` every money figure in
         # this file is quantized at -- see `_money`'s own docstring.
         currency = _company_currency(conn, cid)
-        for item in items:
-            qty = item['quantity']
+        received_on = datetime.now().strftime('%Y-%m-%d')
+        # W4a-2: the receipt's identity is a pure function of (order, how many
+        # receipts this computer already holds, the lines and quantities), so two
+        # computers that each record the identical delivery while offline mint
+        # the SAME uid and it counts once; a genuinely different delivery has a
+        # different uid and counts too. The VALUE is computed here once and
+        # synced as a fact -- a peer never recomputes it.
+        recv_uid = (po_core.receipt_uid(po['uid'], len(recv_rows), [(it['uid'], q) for it, q in selected])
+                    if po['uid'] and all(it['uid'] for it, _q in selected) else _new_uid())
+        recv_value = po_core.receipt_value(conn, cid, po_id, [(it['id'], q) for it, q in selected], currency)
+        hdr = cur.execute(
+            "INSERT INTO purchase_order_receipts (company_id,uid,po_id,branch_id,received_at,value,line_count,"
+            "legacy,created_by,actor_user_uid,terminal_id,created_at_utc) VALUES (?,?,?,?,?,?,?,0,?,?,?,?) "
+            "ON CONFLICT(uid) DO NOTHING",
+            (cid, recv_uid, po_id, bid, received_on, float(recv_value), len(selected), _uid(), actor, terminal, utc_now))
+        if hdr.rowcount == 0:
+            # A sibling already recorded exactly this delivery (its header is
+            # here). Writing anything more would count it twice.
+            conn.rollback()
+            return jsonify({'status': 'success', 'already_recorded': True,
+                            'data': {'receipt_uid': recv_uid}}), 200
+        recv_id = hdr.lastrowid
+        recv_line_events = []
+        for item, dqty in selected:
+            qty = float(dqty)
+            line_uid = (po_core.receipt_line_uid(recv_uid, item['uid']) if item['uid'] else _new_uid())
             # W4a: the receipt's movement is written FIRST, under a uid that is
             # a pure function of (order uid, line uid) -- the same on every
             # computer. `ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING`
@@ -4450,8 +4570,14 @@ def receive_purchase_order(po_id):
             # A line with no uid cannot exist after v45 (every row is stamped);
             # the fallback keeps a hand-built fixture working but then offers no
             # cross-computer protection for that line, as before.
-            movement_uid = (po_core.receipt_movement_uid(po['uid'], item['uid'])
-                            if po['uid'] and item['uid'] else _new_uid())
+            # W4a-2: the movement uid now names the RECEIPT line (it used to name
+            # the order line, which allowed one receipt per line per order).
+            movement_uid = (po_core.receipt_line_movement_uid(recv_uid, item['uid'])
+                            if item['uid'] else _new_uid())
+            cur.execute(
+                "INSERT INTO purchase_order_receipt_lines (receipt_id,uid,po_item_id,quantity,movement_uid) "
+                "VALUES (?,?,?,?,?)", (recv_id, line_uid, item['id'], qty, movement_uid))
+            recv_line_events.append((line_uid, item['uid'], qty, movement_uid))
             ins = cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
@@ -4460,8 +4586,7 @@ def receive_purchase_order(po_id):
             """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid(),
                   movement_uid, actor, terminal, utc_now))
             if ins.rowcount == 0:
-                cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
-                continue
+                continue          # the stock for this line is already here (see above)
             # Schema v39: maintain `products.avg_cost` as a MOVING WEIGHTED
             # AVERAGE at the moment stock actually arrives -- see database/
             # schema.py's v39 migration docstring for why a weighted average
@@ -4667,31 +4792,30 @@ def receive_purchase_order(po_id):
                 'reference': po['po_number'], 'notes': None, 'created_by': _uid(),
                 'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
             })
-            cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
 
-        received_on = datetime.now().strftime('%Y-%m-%d')
-        cur.execute("UPDATE purchase_orders SET status='received', received_at=? "
-                    "WHERE id=? AND company_id=? AND status NOT IN ('received','cancelled')",
-                    (received_on, po_id, cid))
-        if cur.rowcount != 1:
-            conn.rollback()
-            return jsonify({'status': 'error', 'message': 'PO already received'}), 409
-        # STOCK-BOOKS B1: goods arrived -- move the order's 1260 amount into
-        # Inventory (1200). Posts nothing for a legacy PO (its order journal
-        # already debited 1200) -- see gl.post_po_receipt. Same transaction as
-        # the stock movements above, so the books and the shelves cannot part.
-        # W4a: `order_journal_uid` finds the order journal on a computer whose
-        # copy arrived by sync (its `source_id` is the writer's integer and
-        # names nothing here); the receipt journal's own uid is still derived
-        # from the order's uid, so two computers receiving post it once.
-        gl.post_po_receipt(conn, cid, bid, po_id, po['po_number'], currency,
-                           order_journal_uid=po['order_journal_uid'])
-        # W4a: tell the other computers the order is received. The receiver
-        # merges forward-only (po_core.PO_STATUS_RANK) and never moves stock or
-        # posts books from this event -- the movements and journals sync
-        # themselves. A literal dict, like every other queued payload.
-        _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
-            'uid': po['uid'], 'status': 'received', 'received_at': received_on})
+        # STOCK-BOOKS B1 / W4a-2: goods arrived -- book THIS receipt. 'receipt'
+        # basis: Dr Inventory / Cr AP (or Goods Ordered when there is no
+        # supplier) for the receipt's value; 'order' basis: move its share of
+        # the order's 1260 into Inventory. Same transaction as the stock
+        # movements above, so books and shelves cannot part. Peers post nothing:
+        # the journal syncs itself.
+        gl.post_po_receipt_for(conn, cid, bid, po, recv_uid, recv_value, currency)
+        # status / received_qty / received_at are caches of the receipts.
+        new_status = po_core.recompute_po_receive_state(conn, cid, po_id)
+        if po['supplier_id']:
+            _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
+        # W4a-2: announce the receipt and its lines (immutable facts; literal
+        # dicts for the payload-coverage ratchet). The old `status` update on
+        # the order header is gone -- every computer derives status from these.
+        _queue_sync_event(cur, 'purchase_order_receipt', recv_uid, 'create', {
+            'uid': recv_uid, 'po_uid': po['uid'], 'branch_uid': receipt_branch_uid,
+            'received_at': received_on, 'value': float(recv_value), 'line_count': len(selected),
+            'created_by': _uid(), 'actor_user_uid': actor, 'terminal_id': terminal,
+            'created_at_utc': utc_now})
+        for l_uid, l_item_uid, l_qty, l_mov in recv_line_events:
+            _queue_sync_event(cur, 'purchase_order_receipt_line', l_uid, 'create', {
+                'uid': l_uid, 'receipt_uid': recv_uid, 'po_item_uid': l_item_uid,
+                'quantity': l_qty, 'movement_uid': l_mov})
         _audit(conn, 'PO_RECEIVED', 'purchase_order', po_id, po['po_number'])
         conn.commit()
     except sqlite3.DatabaseError as exc:
@@ -4701,7 +4825,9 @@ def receive_purchase_order(po_id):
     finally:
         conn.close()
     _emit('StockReceived', {'po_id': po_id, 'po_number': po['po_number']})
-    return jsonify({'status': 'success'})
+    _sync_nudge()  # W4a-2: the receipt and its lines are queued
+    return jsonify({'status': 'success', 'data': {'receipt_uid': recv_uid, 'status': new_status,
+                                                  'value': float(recv_value)}})
 
 
 #: the note accept_reorder_request writes on the PO it drafts; cancel_purchase_order
@@ -4736,21 +4862,37 @@ def cancel_purchase_order(po_id):
     try:
         conn.execute("BEGIN IMMEDIATE")
         cur = conn.cursor()
-        po = cur.execute("SELECT id, status, po_number, notes, uid, order_journal_uid "
+        po = cur.execute("SELECT id, status, po_number, notes, uid, order_journal_uid, ap_basis, closed_at "
                          "FROM purchase_orders WHERE id=? AND company_id=?",
                          (po_id, cid)).fetchone()
         if not po:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO not found'}), 404
-        if po['status'] in ('received', 'cancelled'):
+        # W4a-2: once any goods have arrived the order cannot be un-ordered --
+        # the stock is on the shelves and the debt for it is booked. The way to
+        # stop a part-delivered order is "Close short". Checked before the status
+        # message so a 'partial' order gets this code, not a generic refusal.
+        # Counts the receipt rows themselves too, so a receipt that arrived by
+        # sync a moment ago (status cache not yet recomputed) still blocks.
+        has_receipts = cur.execute(
+            "SELECT COUNT(*) FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
+            (cid, po_id)).fetchone()[0]
+        if po['status'] == 'partial' or (has_receipts and po['status'] not in ('cancelled',)):
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_HAS_RECEIPTS',
+                            'message': 'Part of this order has already been received. '
+                                       'Use Close short instead.'}), 409
+        if po['status'] in ('received', 'cancelled', 'closed'):
             conn.rollback()
             return jsonify({'status': 'error',
                             'message': f"Cannot cancel a purchase order that is {po['status']}."}), 409
+        ap_basis = po['ap_basis'] or 'order'
         # W4a: same guard as receive -- an order that reached this computer
         # before its journal did cannot be reversed here (there is nothing yet
         # to reverse), and cancelling without reversing would strand 1260 and
         # the supplier's debt. Refuse and write nothing.
-        if po['order_journal_uid'] and gl.po_order_journal_missing(conn, cid, po['order_journal_uid']):
+        if (ap_basis == 'order' and po['order_journal_uid']
+                and gl.po_order_journal_missing(conn, cid, po['order_journal_uid'])):
             conn.rollback()
             return jsonify({'status': 'error', 'code': 'PO_BOOKS_NOT_ARRIVED',
                             'message': "This order's bookkeeping has not reached this computer yet. "
@@ -4762,21 +4904,30 @@ def cancel_purchase_order(po_id):
             conn.rollback()
             return jsonify({'status': 'error', 'code': 'PO_HAS_PAYMENTS',
                             'message': 'This order has a payment. Void the payment first.'}), 409
-        cur.execute("UPDATE purchase_orders SET status='cancelled' "
-                    "WHERE id=? AND company_id=? AND status NOT IN ('received','cancelled')", (po_id, cid))
+        # W4a-2: cancelling stamps the set-once `cancelled_at`; `status` is the
+        # derived cache (po_core.recompute_po_receive_state), the guard being
+        # that nothing has arrived (checked above, same transaction).
+        cancelled_at = now_utc_iso()
+        cur.execute("UPDATE purchase_orders SET cancelled_at=COALESCE(cancelled_at, ?) "
+                    "WHERE id=? AND company_id=? AND status NOT IN ('received','cancelled','closed','partial')",
+                    (cancelled_at, po_id, cid))
         if cur.rowcount != 1:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO already received or cancelled'}), 409
+        po_core.recompute_po_receive_state(conn, cid, po_id)
         # W4a: found by uid when the order names one (works on a computer whose
         # copy of the journal arrived by sync, `source_id` NULL there), by the
-        # old source_id lookup for a legacy order.
-        order = gl.po_order_journal(conn, cid, po_id, order_journal_uid=po['order_journal_uid'])
-        if order:
-            gl.reverse_journal(conn, cid, order['id'], memo=f"Purchase order {po['po_number']} cancelled")
-        # W4a: tell the other computers (merged forward-only; `received` beats
-        # `cancelled` there, see po_core.PO_STATUS_RANK). Literal dict.
+        # old source_id lookup for a legacy order. A 'receipt'-basis order
+        # posted no order journal, so there is nothing to reverse for it.
+        if ap_basis == 'order':
+            order = gl.po_order_journal(conn, cid, po_id, order_journal_uid=po['order_journal_uid'])
+            if order:
+                gl.reverse_journal(conn, cid, order['id'], memo=f"Purchase order {po['po_number']} cancelled")
+        # W4a-2: tell the other computers. The header update now carries the
+        # set-once timestamps (the receiver keeps the earliest and derives the
+        # status itself); it no longer carries a `status` to merge by rank.
         _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
-            'uid': po['uid'], 'status': 'cancelled', 'received_at': None})
+            'uid': po['uid'], 'cancelled_at': cancelled_at, 'closed_at': po['closed_at']})
         currency = _company_currency(conn, cid)
         sup = cur.execute("SELECT supplier_id FROM purchase_orders WHERE id=? AND company_id=?",
                           (po_id, cid)).fetchone()
@@ -4818,6 +4969,77 @@ def cancel_purchase_order(po_id):
     finally:
         conn.close()
     return jsonify({'status': 'success'})
+
+@retail_bp.route('/purchase-orders/<int:po_id>/close', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def close_purchase_order_short(po_id):
+    """W4a-2: CLOSE SHORT -- the supplier delivered part of an order and will
+    not send the rest. Allowed only while the order is 'partial' (something has
+    arrived, something is still owed).
+
+    The supplier owes nothing for goods that never came, so the debt for the
+    undelivered part must not stay on the books. 'receipt'-basis orders booked
+    debt only per receipt, so there is nothing to undo; 'order'-basis (pre-v46)
+    orders booked the whole order up front, so the undelivered share is moved
+    back out (gl.post_po_close_short). Refused 409 CLOSE_SHORT_NEEDS_SUPPLIER
+    when the order has no supplier: its unpaid remainder never reached AP, so
+    there is no supplier debt to release and the books would not balance.
+    Sets the set-once `closed_at`; status is derived. Same authority as
+    receiving (a short delivery is a receiving decision).
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        po = cur.execute("SELECT * FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)).fetchone()
+        if not po:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO not found'}), 404
+        if po['status'] != 'partial':
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'CLOSE_SHORT_NOT_PARTIAL',
+                            'message': 'Only an order that is partly received can be closed short.'}), 409
+        if not po['supplier_id']:
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'CLOSE_SHORT_NEEDS_SUPPLIER',
+                            'message': 'Choose the supplier on this order before closing it short.'}), 409
+        ap_basis = po['ap_basis'] or 'order'
+        if (ap_basis == 'order' and po['order_journal_uid']
+                and gl.po_order_journal_missing(conn, cid, po['order_journal_uid'])):
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_BOOKS_NOT_ARRIVED',
+                            'message': "This order's bookkeeping has not reached this computer yet. "
+                                       "Sync, then try again."}), 409
+        currency = _company_currency(conn, cid)
+        closed_at = now_utc_iso()
+        cur.execute("UPDATE purchase_orders SET closed_at=COALESCE(closed_at, ?) "
+                    "WHERE id=? AND company_id=? AND status='partial'", (closed_at, po_id, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'CLOSE_SHORT_NOT_PARTIAL',
+                            'message': 'Only an order that is partly received can be closed short.'}), 409
+        po_core.recompute_po_receive_state(conn, cid, po_id)
+        if ap_basis == 'order':
+            bid = po['branch_id'] or _resolve_working_branch(conn, cid)[0]
+            gl.post_po_close_short(conn, cid, bid, po, currency)
+        _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
+        _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
+            'uid': po['uid'], 'cancelled_at': po['cancelled_at'], 'closed_at': closed_at})
+        _audit(conn, 'PO_CLOSED_SHORT', 'purchase_order', po_id, po['po_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("close_purchase_order_short(%s) failed: %s", po_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not close this purchase order.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': {'status': 'closed'}})
+
 
 @retail_bp.route('/purchase-orders/split-preview', methods=['POST'])
 @mt_login_required
@@ -5880,8 +6102,8 @@ def accept_reorder_request(rid):
         po_uid = _new_uid()   # W4a: wire identity from birth (see this route's docstring)
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,
-                                         ordered_at,amount_paid,payment_status,uid)
-            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid',?)
+                                         ordered_at,amount_paid,payment_status,uid,ap_basis)
+            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid',?,'receipt')
         """, (cid, po_number, supplier_id, branch_id, 'pending', total, total,
               f'{_REORDER_PO_NOTE_PREFIX}{rid}',
               datetime.now().strftime('%Y-%m-%d'), po_uid))
@@ -5904,14 +6126,16 @@ def accept_reorder_request(rid):
         # total is above the money epsilon; a reorder PO is born with no
         # down-payment so amount_paid is 0), inside this transaction, then
         # re-derive the supplier's display cache like every other writer.
+        #
+        # W4a-2: the order journal is gone for BOTH mint sites together (see
+        # create_purchase_order): this PO is ap_basis='receipt', so it books
+        # nothing until goods arrive, and the supplier's formula counts nothing
+        # for it until then either -- the two cannot disagree. Nothing to post
+        # here at all (a reorder PO is born with no down payment).
         _po_currency = _company_currency(conn, cid)
-        _po_eps = _money_epsilon(_po_currency)
         if supplier_id:
             _refresh_party_balance(conn, 'suppliers', supplier_id, cid, _po_currency)
-        _order_journal_id = gl.post_purchase_order(
-            conn, cid, branch_id, po_id, po_number, _po_currency,
-            0.0, total if (total > _po_eps and supplier_id) else 0.0, po_uid=po_uid)
-        _po_stamp_and_queue_create(cur, po_id, _order_journal_id)
+        _po_stamp_and_queue_create(cur, po_id, None)
 
         now = datetime.now(timezone.utc).isoformat()
         # launch-readiness Phase 6 stage 6a-i: `status`/`resolved_at` are
@@ -18406,17 +18630,13 @@ def suppliers_payables():
     currency = _company_currency(conn, cid)
     rows, total = _derived_party_rows(
         conn, cid, 'suppliers', "id,name,phone,payment_terms", currency, _eps)
-    networked = not _single_computer_shop(conn, cid)
     conn.close()
-    body = {'status': 'success', 'total_payable': _money(total, currency), 'data': rows}
-    if networked:
-        # v44 (owner decision Q2, assumed): purchase orders do not sync yet, so
-        # on a shop with more than one computer a supplier's figure counts the
-        # purchase orders entered ON THIS COMPUTER (its payments are shop-wide).
-        # The screen shows a short note when this key is present; it is absent
-        # on a one-computer shop, where the figure is complete.
-        body['supplier_balance_scope'] = 'this_computer_pos'
-    return jsonify(body)
+    # W4a-2 D16: the old `supplier_balance_scope='this_computer_pos'` note is
+    # gone. It said a networked shop's supplier figure only counted orders typed
+    # on this computer, because purchase orders did not sync. They do now
+    # (W4a), and so do their receipts, so the figure is the shop's on every
+    # computer and the warning would be false.
+    return jsonify({'status': 'success', 'total_payable': _money(total, currency), 'data': rows})
 
 @retail_bp.route('/suppliers/<string:sid>/statement', methods=['GET'])
 @mt_login_required
@@ -18444,11 +18664,46 @@ def supplier_statement(sid):
     # `_money_epsilon(currency)`, the one create_purchase_order uses.
     currency = _company_currency(conn, cid)
     _eps = _money_epsilon(currency)
-    charges = conn.execute(
-        "SELECT po_number AS ref, created_at, total AS amount, 'charge' AS kind, 1 AS sign "
-        "FROM purchase_orders WHERE company_id=? AND supplier_id=? AND total > ? "
-        "AND COALESCE(status,'')<>'cancelled'",
-        (cid, sid, _eps)).fetchall()
+    # W4a-2 D10: WHAT A PURCHASE ORDER CHARGES depends on its basis, and this
+    # must be the same answer party_balance.supplier_balances and the aging
+    # report give, so all three read po_core.po_supplier_charge_minor's rule:
+    #   'receipt' basis -> one charge PER RECEIPT (its value, on its date): the
+    #     debt exists when goods arrive, not when the order is typed;
+    #   'order' basis (every order that existed at v46) -> one charge for the
+    #     order's total as before, and for one that was CLOSED SHORT a credit
+    #     line for the part that never came (total - what was received), so the
+    #     running balance still lands on the derived balance.
+    charges = []
+    po_rows = conn.execute(
+        "SELECT id, po_number, total, created_at, ap_basis, closed_at, cancelled_at, status "
+        "FROM purchase_orders WHERE company_id=? AND supplier_id=?", (cid, sid)).fetchall()
+    recv_by_po = {}
+    for rr in conn.execute(
+            "SELECT r.po_id, r.received_at, r.value FROM purchase_order_receipts r "
+            "JOIN purchase_orders p ON p.id=r.po_id AND p.company_id=r.company_id "
+            "WHERE r.company_id=? AND p.supplier_id=? ORDER BY r.id", (cid, sid)).fetchall():
+        recv_by_po.setdefault(rr['po_id'], []).append(rr)
+    _quant = tax_engine.currency_quantum(currency)
+    for po in po_rows:
+        receipts = recv_by_po.get(po['id'], [])
+        if (po['ap_basis'] or 'order') == 'receipt':
+            for rr in receipts:
+                if float(rr['value'] or 0) > _eps:
+                    charges.append({'ref': po['po_number'], 'created_at': rr['received_at'] or po['created_at'],
+                                    'amount': rr['value'], 'kind': 'charge', 'sign': 1})
+            continue
+        if po['closed_at'] or (po['cancelled_at'] and receipts):
+            if float(po['total'] or 0) > _eps:
+                charges.append({'ref': po['po_number'], 'created_at': po['created_at'],
+                                'amount': po['total'], 'kind': 'charge', 'sign': 1})
+            got = sum((Decimal(str(rr['value'] or 0)) for rr in receipts), Decimal('0'))
+            short = (Decimal(str(po['total'] or 0)) - got).quantize(_quant, rounding=ROUND_HALF_UP)
+            if float(short) > _eps:
+                charges.append({'ref': po['po_number'], 'created_at': po['closed_at'] or po['cancelled_at'],
+                                'amount': float(short), 'kind': 'closed_short', 'sign': -1})
+        elif not po['cancelled_at'] and po['status'] != 'cancelled' and float(po['total'] or 0) > _eps:
+            charges.append({'ref': po['po_number'], 'created_at': po['created_at'],
+                            'amount': po['total'], 'kind': 'charge', 'sign': 1})
     # The settling direction is the MIRROR of the customer statement's: PAYING
     # a supplier ('out') reduces what the shop owes, so 'out' reads as
     # 'payment' and a returned issued cheque ('in') as 'reversal'.
@@ -18467,7 +18722,7 @@ def supplier_statement(sid):
             "CASE WHEN amount >= 0 THEN 1 ELSE -1 END AS sign "
             "FROM party_balance_adjustments WHERE company_id=? AND party_type='supplier' AND party_id=?",
             (cid, str(sid))).fetchall()
-    events = [dict(r) for r in charges] + [dict(r) for r in payments] + [dict(r) for r in adjustments]
+    events = list(charges) + [dict(r) for r in payments] + [dict(r) for r in adjustments]
     events.sort(key=lambda e: e.get('created_at') or '')
     quant = tax_engine.currency_quantum(currency)
     run = Decimal('0'); out = []
@@ -18561,7 +18816,7 @@ def pay_purchase_order(po_id):
     # the write lock first, the status is read INSIDE it, and the UPDATE
     # re-checks it and its rowcount.
     conn.execute("BEGIN IMMEDIATE")
-    po = conn.execute("SELECT id,supplier_id,total,COALESCE(amount_paid,0) AS amount_paid,po_number,status FROM purchase_orders WHERE id=? AND company_id=?",
+    po = conn.execute("SELECT id,supplier_id,total,COALESCE(amount_paid,0) AS amount_paid,po_number,status,ap_basis,branch_id FROM purchase_orders WHERE id=? AND company_id=?",
                       (po_id, cid)).fetchone()
     if not po:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
@@ -18602,7 +18857,18 @@ def pay_purchase_order(po_id):
         # NOTHING is queued for the PO header: the figure is derived on every
         # computer from the synced payment rows.
         new_paid, status = po_core.recompute_po_paid(conn, cid, po_id, _money_epsilon(currency))
-        if po['supplier_id']:
+        if (po['ap_basis'] or 'order') == 'receipt':
+            # W4a-2: a 'receipt'-basis order has no order journal, so money paid
+            # on it posts on its own, payable at ANY status (before delivery it
+            # is an advance: the supplier reads negative and AP ties). Dr AP
+            # (or Goods Ordered when there is no supplier) / Cr Cash. The
+            # journal's source link is the payment's uid, so voiding the payment
+            # finds and reverses it (retail_stock_books_routes_test PD1).
+            if po['supplier_id']:
+                _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
+            gl.post_po_prepayment(conn, cid, po['branch_id'], po_id, bool(po['supplier_id']),
+                                  amt, pay_uid, currency)
+        elif po['supplier_id']:
             # v44: re-derived (the instalment is a 'po' payment row, which
             # the supplier formula counts), not moved by -amt.
             _refresh_party_balance(conn, 'suppliers', po['supplier_id'], cid, currency)
@@ -19346,9 +19612,32 @@ def aging_report():
     # v44: derived balances (one batch), not the stored column.
     parties, _unused_total = _derived_party_rows(
         conn, cid, 'suppliers', "id", _company_currency(conn, cid), _eps)
-    oldest_sql = "SELECT MIN(created_at) FROM purchase_orders WHERE company_id=? AND supplier_id=? AND (total-COALESCE(amount_paid,0))>? AND COALESCE(status,'')<>'cancelled'"
+    # W4a-2 D10: "which of this supplier's orders is still unpaid, and how old
+    # is its debt" reads each order's CHARGE through po_core.po_supplier_charge_
+    # minor (the one rule the balance and the statement use). An 'order'-basis
+    # order ages from its creation date, as before; a 'receipt'-basis one from
+    # its first receipt, because that is when the debt began.
+    _aging_quant = tax_engine.currency_quantum(_company_currency(conn, cid))
+    _first_receipt = {r[0]: r[1] for r in conn.execute(
+        "SELECT po_id, MIN(received_at) FROM purchase_order_receipts WHERE company_id=? GROUP BY po_id",
+        (cid,)).fetchall()}
+
+    def _oldest_unpaid(supplier_id):
+        dates = []
+        for po in conn.execute(
+                "SELECT id, created_at, amount_paid, ap_basis FROM purchase_orders "
+                "WHERE company_id=? AND supplier_id=?", (cid, supplier_id)).fetchall():
+            charge = Decimal(po_core.po_supplier_charge_minor(conn, cid, po['id'], _eps)) * _aging_quant
+            if float(charge) - float(po['amount_paid'] or 0) <= _eps:
+                continue
+            if (po['ap_basis'] or 'order') == 'receipt':
+                dates.append(_first_receipt.get(po['id']) or po['created_at'])
+            else:
+                dates.append(po['created_at'])
+        dates = [d for d in dates if d]
+        return min(dates) if dates else None
     for p in parties:
-        oldest = conn.execute(oldest_sql, (cid, p['id'], _eps)).fetchone()[0]
+        oldest = _oldest_unpaid(p['id'])
         days = 0
         if oldest:
             try:
@@ -20388,6 +20677,39 @@ def install_party_balance_refresh(sync_service):
 
     sync_service.apply_pull_result = apply_pull_result_then_refresh
     sync_service._party_balance_refresh_installed = True
+    # W4a-2 D13: the same service also needs the purchase-order state hook, and
+    # both services (Windows + Android) already pass through this function, so
+    # it is installed here rather than at a second call site that could be
+    # forgotten on one of them.
+    install_po_state_refresh(sync_service)
+    return sync_service
+
+
+def install_po_state_refresh(sync_service):
+    """W4a-2 D13: give the sync service the one function that re-derives a
+    purchase order's received state and paid state.
+
+    WHY A HOOK. After a purchase order, one of its receipts, a receipt line or a
+    payment arrives by sync, the order's `received_qty`, `status` and
+    `payment_status` are caches that must be recomputed from the rows now
+    present. That logic lives in core/retail/purchase_orders.py (products code);
+    the sync engine cannot import it (commercial_runtime must not depend on a
+    product), so the product hands it in. `hook(conn, company_id, po_id)` runs
+    in the apply's own transaction; the sync service's built-in twin is only
+    the fallback for an instance wired without this hook. Installing twice is a
+    no-op."""
+    if getattr(sync_service, '_po_state_refresh_installed', False):
+        return sync_service
+
+    def _po_state_refresh(conn, company_id, po_id):
+        po_core.recompute_po_receive_state(conn, company_id, po_id)
+        po_core.recompute_po_paid(conn, company_id, po_id,
+                                  _money_epsilon(_company_currency(conn, company_id)))
+
+    setter = getattr(sync_service, "set_po_state_refresh", None)  # a stub service may lack it
+    if setter is not None:
+        setter(_po_state_refresh)
+    sync_service._po_state_refresh_installed = True
     return sync_service
 
 

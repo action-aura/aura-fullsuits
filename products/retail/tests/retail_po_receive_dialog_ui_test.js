@@ -1,0 +1,287 @@
+/**
+ * Aura Retail -- W4a-2 receive dialog (partial receive + close short).
+ *
+ * What the owner sees:
+ *   1. Receive on pending AND partial purchase orders; Close short on PARTIAL
+ *      only; Cancel on pending only;
+ *   2. a dialog with one row per line still on order, its quantity box
+ *      defaulting to what REMAINS;
+ *   3. Receive sends {lines:[{item_id, quantity}]} carrying only quantities
+ *      above zero, and refuses an empty delivery without calling the server;
+ *   4. the server's refusals (OVER_RECEIPT, PO_HAS_RECEIPTS ...) shown in the
+ *      shop's language, never the raw sentence;
+ *   5. keyboard: Enter inside a quantity box submits.
+ *
+ * Each claim is mutation-proved at the bottom: the real subsystem-retail.js is
+ * broken in one place at a time and the matching claim must go red.
+ *
+ *   node products/retail/tests/retail_po_receive_dialog_ui_test.js
+ */
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const RETAIL_JS = path.join(__dirname, '..', 'frontend', 'subsystem-retail.js');
+const SRC = fs.readFileSync(RETAIL_JS, 'utf8');
+
+function makeStub(over) {
+  return Object.assign({
+    innerHTML: '', outerHTML: '', textContent: '', value: '', id: '', disabled: false,
+    style: {}, dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    appendChild() {}, getAttribute() { return null; }, setAttribute() {},
+    querySelectorAll() { return []; }, addEventListener() {}, removeEventListener() {},
+    focus() {}, blur() {}, remove() {}, closest() { return null; }, getContext() { return {}; },
+  }, over || {});
+}
+
+function load(opts) {
+  const o = opts || {};
+  const calls = [];
+  const toasts = [];
+  const els = Object.create(null);
+  const appended = [];
+  const getEl = (id) => (els[id] || (els[id] = makeStub({ id })));
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {}, info() {} },
+    t: (s) => s,
+    fetch: (url, init) => {
+      const method = ((init && init.method) || 'GET').toUpperCase();
+      const u = String(url);
+      calls.push({ method, url: u, body: init && init.body ? JSON.parse(init.body) : null });
+      const hit = (o.routes || []).find((r) => u.indexOf(r.match) !== -1 && (r.method || 'GET') === method);
+      if (!hit) {
+        return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ status: 'error', message: 'unmapped ' + method + ' ' + u }) });
+      }
+      return Promise.resolve({ ok: hit.status ? hit.status < 400 : true, status: hit.status || 200, json: () => Promise.resolve(hit.payload) });
+    },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    localStorage: { getItem: () => null, setItem() {} },
+    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    URLSearchParams,
+    document: {
+      activeElement: null,
+      getElementById(id) {
+        if (id === 'ret-styles') return null;
+        // inputs the dialog rendered answer with the value the test "typed"
+        const m = /^po-recv-(\d+)$/.exec(id);
+        if (m && o.typed && Object.prototype.hasOwnProperty.call(o.typed, m[1])) {
+          return makeStub({ id, value: String(o.typed[m[1]]) });
+        }
+        return getEl(id);
+      },
+      createElement() { return makeStub(); },
+      querySelector(sel) {
+        const m = /^#([\w-]+)\s+tbody$/.exec(sel);
+        if (m) return getEl(m[1] + '__tbody');
+        return makeStub();
+      },
+      querySelectorAll() { return []; },
+      head: { appendChild() {} }, body: { appendChild(el) { appended.push(el); } },
+      documentElement: { getAttribute: () => 'light', style: { setProperty() {} } },
+      addEventListener() {}, removeEventListener() {},
+    },
+  };
+  sandbox.SubsystemApp = {
+    active: 'retail', _navigate() {}, role: 'admin',
+    showToast(msg, kind) { toasts.push({ msg, kind }); },
+    hasCapability: () => true,
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(o.source || SRC, sandbox, { filename: RETAIL_JS });
+  assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
+  sandbox.RetailSystem._confirm = async () => true;
+  sandbox.RetailSystem._closeModalOverlay = () => {};
+  return { rs: sandbox.RetailSystem, calls, toasts, els, appended };
+}
+
+async function settle() {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+const PO_DETAIL = { data: {
+  po: { id: 5, po_number: 'PO-5', status: 'partial', supplier_name: 'S', total: 100 },
+  items: [
+    { id: 11, product_name: 'Widget', sku: 'W1', quantity: 10, received_qty: 6 },
+    { id: 12, product_name: 'Gadget', sku: 'G1', quantity: 4, received_qty: 4 },   // already complete
+    { id: 13, product_name: 'Gizmo', sku: 'Z1', quantity: 5, received_qty: 0 },
+  ],
+} };
+
+async function poListHtml(source) {
+  const ctx = load({
+    source,
+    routes: [{ match: '/purchase-orders', payload: { data: [
+      { id: 1, po_number: 'PO-1', status: 'pending', total: 40, supplier_name: 'S' },
+      { id: 2, po_number: 'PO-2', status: 'partial', total: 40, supplier_name: 'S' },
+      { id: 3, po_number: 'PO-3', status: 'received', total: 40, supplier_name: 'S' },
+      { id: 4, po_number: 'PO-4', status: 'closed', total: 40, supplier_name: 'S' },
+      { id: 6, po_number: 'PO-6', status: 'cancelled', total: 40, supplier_name: 'S' },
+    ] } }],
+  });
+  await ctx.rs._loadPurchaseOrders();
+  await settle();
+  return ctx.els['po-table__tbody'].innerHTML;
+}
+
+async function openDialog(source, extra) {
+  const ctx = load(Object.assign({
+    source,
+    routes: [
+      { match: '/purchase-orders/5/receive', method: 'POST', payload: { status: 'success' } },
+      { match: '/purchase-orders/5', payload: PO_DETAIL },
+      { match: '/purchase-orders', payload: { data: [] } },
+    ],
+  }, extra || {}));
+  await ctx.rs._receivePO(5, 'PO-5');
+  await settle();
+  return ctx;
+}
+
+const CLAIMS = {
+  async receiveOnPendingAndPartialOnly(src) {
+    const h = await poListHtml(src);
+    assert.strictEqual((h.match(/_receivePO\(/g) || []).length, 2, 'Receive on exactly pending + partial: ' + h);
+    assert.ok(/_receivePO\(1,/.test(h) && /_receivePO\(2,/.test(h), 'Receive belongs to PO 1 and PO 2');
+  },
+  async closeShortOnlyOnPartial(src) {
+    const h = await poListHtml(src);
+    assert.strictEqual((h.match(/_closeShortPO\(/g) || []).length, 1, 'exactly one Close short: ' + h);
+    assert.ok(/_closeShortPO\(2,/.test(h), 'Close short belongs to the partial PO');
+  },
+  async cancelOnlyOnPending(src) {
+    const h = await poListHtml(src);
+    assert.strictEqual((h.match(/_cancelPO\(/g) || []).length, 1, 'exactly one Cancel: ' + h);
+    assert.ok(/_cancelPO\(1,/.test(h), 'Cancel belongs to the pending PO');
+  },
+  async partialAndClosedHaveTheirOwnBadges(src) {
+    const h = await poListHtml(src);
+    assert.ok(/>Partly received</.test(h), 'partial badge text: ' + h);
+    assert.ok(/>Closed short</.test(h), 'closed badge text: ' + h);
+  },
+  async dialogHasOneRowPerOpenLineDefaultingToRemaining(src) {
+    const ctx = await openDialog(src);
+    assert.strictEqual(ctx.appended.length, 1, 'one overlay appended');
+    const h = ctx.appended[0].innerHTML;
+    assert.ok(/role="dialog"/.test(h) && /aria-modal="true"/.test(h), 'dialog semantics');
+    assert.ok(/id="po-recv-11"[^>]*value="4"/.test(h), 'line 11 defaults to remaining 4 (10 ordered, 6 in): ' + h);
+    assert.ok(/id="po-recv-13"[^>]*value="5"/.test(h), 'line 13 defaults to remaining 5');
+    assert.ok(!/po-recv-12"/.test(h), 'a fully received line gets no input');
+  },
+  async dialogIsKeyboardOperable(src) {
+    const ctx = await openDialog(src);
+    const h = ctx.appended[0].innerHTML;
+    assert.ok(/onkeydown="[^"]*Enter[^"]*_submitReceivePO/.test(h), 'Enter must submit: ' + h);
+    assert.ok(/<input[^>]*aria-label=/.test(h), 'every quantity box is named');
+  },
+  async receiveSendsOnlyPositiveQuantities(src) {
+    const ctx = await openDialog(src, { typed: { 11: 3, 13: 0 } });
+    await ctx.rs._submitReceivePO();
+    await settle();
+    const post = ctx.calls.find((c) => c.method === 'POST' && /\/purchase-orders\/5\/receive/.test(c.url));
+    assert.ok(post, 'a receive POST was sent: ' + JSON.stringify(ctx.calls));
+    assert.deepStrictEqual(post.body, { lines: [{ item_id: 11, quantity: 3 }] });
+  },
+  async emptyDeliveryNeverReachesTheServer(src) {
+    const ctx = await openDialog(src, { typed: { 11: 0, 13: 0 } });
+    await ctx.rs._submitReceivePO();
+    await settle();
+    assert.ok(!ctx.calls.some((c) => c.method === 'POST'), 'no POST for an empty delivery: ' + JSON.stringify(ctx.calls));
+    assert.ok(ctx.toasts.some((x) => x.msg === 'Enter a quantity for at least one line.' && x.kind === 'error'), JSON.stringify(ctx.toasts));
+  },
+  async overRemainingIsRefusedBeforeSending(src) {
+    const ctx = await openDialog(src, { typed: { 11: 9, 13: 1 } });
+    await ctx.rs._submitReceivePO();
+    await settle();
+    assert.ok(!ctx.calls.some((c) => c.method === 'POST'), 'no POST for an over-receipt');
+    assert.ok(ctx.toasts.some((x) => /more than is still on order/.test(x.msg)), JSON.stringify(ctx.toasts));
+  },
+  async serverRefusalIsTranslatedNotRaw(src) {
+    const ctx = await openDialog(src, {
+      typed: { 11: 4, 13: 5 },
+      routes: [
+        { match: '/purchase-orders/5/receive', method: 'POST', status: 409,
+          payload: { status: 'error', code: 'PO_RECEIPTS_NOT_ARRIVED', message: 'raw server sentence' } },
+        { match: '/purchase-orders/5', payload: PO_DETAIL },
+        { match: '/purchase-orders', payload: { data: [] } },
+      ],
+    });
+    await ctx.rs._submitReceivePO();
+    await settle();
+    assert.strictEqual(ctx.toasts.length, 1, JSON.stringify(ctx.toasts));
+    assert.ok(/earlier delivery has not finished syncing/.test(ctx.toasts[0].msg), ctx.toasts[0].msg);
+  },
+  async cancelAfterReceiptsPointsAtCloseShort(src) {
+    const ctx = load({
+      source: src,
+      routes: [
+        { match: '/purchase-orders/5/cancel', method: 'POST', status: 409,
+          payload: { status: 'error', code: 'PO_HAS_RECEIPTS', message: 'raw server sentence' } },
+        { match: '/purchase-orders', payload: { data: [] } },
+      ],
+    });
+    await ctx.rs._cancelPO(5, 'PO-5');
+    await settle();
+    assert.strictEqual(ctx.toasts.length, 1, JSON.stringify(ctx.toasts));
+    assert.ok(/Use Close short instead of Cancel/.test(ctx.toasts[0].msg), ctx.toasts[0].msg);
+  },
+  async closeShortPostsToTheCloseRoute(src) {
+    const ctx = load({
+      source: src,
+      routes: [
+        { match: '/purchase-orders/5/close', method: 'POST', payload: { status: 'success' } },
+        { match: '/purchase-orders', payload: { data: [] } },
+      ],
+    });
+    await ctx.rs._closeShortPO(5, 'PO-5');
+    await settle();
+    assert.ok(ctx.calls.some((c) => c.method === 'POST' && /\/purchase-orders\/5\/close$/.test(c.url)), JSON.stringify(ctx.calls));
+    assert.ok(ctx.toasts.some((x) => x.kind === 'success'), JSON.stringify(ctx.toasts));
+  },
+};
+
+function mutate(src, from, to) {
+  const n = src.split(from).length - 1;
+  assert.strictEqual(n, 1, `mutation anchor must match exactly once, matched ${n}: ${from.slice(0, 60)}`);
+  return src.replace(from, () => to);
+}
+
+const MUTANTS = [
+  ['Receive hidden on partial', 'receiveNotOnPartial', 'receiveOnPendingAndPartialOnly',
+    "(po.status==='pending'||po.status==='partial')?`<button class=\"ret-btn ret-btn-primary", "(po.status==='pending')?`<button class=\"ret-btn ret-btn-primary"],
+  ['Close short offered on every PO', 'closeShortEverywhere', 'closeShortOnlyOnPartial',
+    "${po.status==='partial'?`<button class=\"ret-btn ret-btn-ghost ret-btn-sm\" style=\"margin-inline-start:6px\" onclick=\"RetailSystem._closeShortPO", "${true?`<button class=\"ret-btn ret-btn-ghost ret-btn-sm\" style=\"margin-inline-start:6px\" onclick=\"RetailSystem._closeShortPO"],
+  ['dialog defaults to ordered, not remaining', 'defaultOrdered', 'dialogHasOneRowPerOpenLineDefaultingToRemaining',
+    'step="any" value="${l.remaining}"', 'step="any" value="${l.ordered}"'],
+  ['zero quantities sent too', 'sendZeros', 'receiveSendsOnlyPositiveQuantities',
+    'if (q > 0) out.push', 'if (q >= 0) out.push'],
+  ['empty delivery sent anyway', 'sendEmpty', 'emptyDeliveryNeverReachesTheServer',
+    'if (!payloadLines.length) {', 'if (false) {'],
+  ['Enter no longer submits', 'noEnter', 'dialogIsKeyboardOperable',
+    "event.key==='Enter'&&event.target.tagName==='INPUT'){event.preventDefault();RetailSystem._submitReceivePO();}", "event.key==='Enter'&&false){}"],
+  ['server refusal shown raw', 'rawRefusal', 'serverRefusalIsTranslatedNotRaw',
+    "return msg ? t(msg) : ((d && d.message) || t('Error'));", "return (d && d.message) || t('Error');"],
+  ['over-receipt not checked client-side', 'noOverCheck', 'overRemainingIsRefusedBeforeSending',
+    'if (q < 0 || q > ln.remaining) {', 'if (false) {'],
+];
+
+(async () => {
+  for (const [name, fn] of Object.entries(CLAIMS)) {
+    await fn(SRC);
+    console.log('ok   ' + name);
+  }
+  for (const [label, _id, claim, from, to] of MUTANTS) {
+    let broken;
+    try { broken = mutate(SRC, from, to); } catch (e) { console.log('MUTANT ANCHOR LOST: ' + label); throw e; }
+    let red = false;
+    try { await CLAIMS[claim](broken); } catch (e) { red = true; console.log('red  (' + label + ') -> ' + String(e.message).split('\n')[0].slice(0, 110)); }
+    assert.ok(red, `mutation "${label}" did not turn "${claim}" red -- that claim guards nothing`);
+  }
+  console.log('retail_po_receive_dialog_ui_test: all claims hold and every mutation is caught');
+})().catch((e) => { console.error('FAIL', e); process.exit(1); });

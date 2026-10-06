@@ -1365,12 +1365,14 @@ with sync_playwright() as p:
           m1_pairing_mid_session_disables_without_reload)
 
     def v44_supplier_scope_note_follows_the_payables_flag():
-        # v44 (owner decision Q2): on a networked shop the payables JSON carries
-        # supplier_balance_scope='this_computer_pos' and the Payables screen says
-        # purchase orders count only on this computer; a one-computer shop's
-        # payload has no such key and the screen says nothing. Both directions,
-        # through the real screen with the response stubbed (the flag's
-        # server side is pinned by the retail route tests).
+        # W4a-2 D16 UPDATE: this used to pin the opposite -- the note shown when
+        # the server flagged supplier_balance_scope='this_computer_pos'. Purchase
+        # orders and their receipts sync now, so the figure is the shop's on
+        # every computer, the server no longer sends the flag and the screen no
+        # longer renders the note. Can no longer catch: the note appearing for a
+        # flagged payload (gone on purpose). Still catches: the note creeping
+        # back -- even a stale server that DID send the flag must not make the
+        # screen claim the figure is partial.
         def paint(flag):
             owner.route("**/api/sub/retail/suppliers/payables", lambda route: route.fulfill(
                 status=200, content_type="application/json",
@@ -1385,12 +1387,10 @@ with sync_playwright() as p:
                     "() => { const e = document.querySelector('[data-supplier-scope-note]'); return e ? e.innerText.trim() : null; }")
             finally:
                 owner.unroute("**/api/sub/retail/suppliers/payables")
-        note = paint("this_computer_pos")
-        assert note == "Supplier balances count purchase orders entered on this computer.", \
-            f"networked payables must show the scope note, got {note!r}"
+        assert paint("this_computer_pos") is None, "the retired scope note must not render, even if flagged"
         assert paint(None) is None, "a one-computer shop's payables must show NO scope note"
 
-    check("v44 Q2: the Payables screen shows 'Supplier balances count purchase orders entered on this computer.' only when the server flags supplier_balance_scope",
+    check("W4a-2 D16: the Payables screen no longer shows the 'entered on this computer' supplier scope note",
           v44_supplier_scope_note_follows_the_payables_flag)
 
     # =========================================================================

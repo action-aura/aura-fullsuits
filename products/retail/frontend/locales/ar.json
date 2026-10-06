@@ -2510,5 +2510,21 @@
   "Stock in Transit (GL)": "بضاعة في الطريق (الدفاتر)",
   "Stock not opened yet": "لم يُفتتح المخزون في الدفاتر بعد",
   "Rounding difference": "فرق تقريب",
-  "Some stock was entered before the books tracked it, so the two figures are not compared yet.": "أُدخل بعض المخزون قبل أن تتتبّعه الدفاتر، لذا لا تُقارن القيمتان بعد."
+  "Some stock was entered before the books tracked it, so the two figures are not compared yet.": "أُدخل بعض المخزون قبل أن تتتبّعه الدفاتر، لذا لا تُقارن القيمتان بعد.",
+  "Partly received": "مستلم جزئياً",
+  "Closed short": "مُغلق بنقص",
+  "Close short": "إغلاق بنقص",
+  "Ordered": "المطلوب",
+  "Received so far": "المستلم حتى الآن",
+  "Receive now": "استلام الآن",
+  "Enter what actually arrived. Anything you leave out stays on order.": "أدخل الكمية التي وصلت فعلاً. أي بند تتركه يبقى قيد الطلب.",
+  "Nothing is left to receive on this order.": "لا يوجد شيء متبقٍ للاستلام في هذا الأمر.",
+  "Enter a quantity for at least one line.": "أدخل كمية لبند واحد على الأقل.",
+  "You cannot receive more than is still on order.": "لا يمكنك استلام أكثر من الكمية المتبقية في الطلب.",
+  "Some of this order has already arrived. Use Close short instead of Cancel.": "وصل جزء من هذا الأمر بالفعل. استخدم «إغلاق بنقص» بدلاً من الإلغاء.",
+  "This order has not finished syncing from your other computer yet. Try again in a moment.": "لم تكتمل مزامنة هذا الأمر من جهازك الآخر بعد. حاول مجدداً بعد قليل.",
+  "An earlier delivery has not finished syncing from your other computer yet. Try again in a moment.": "لم تكتمل مزامنة دفعة استلام سابقة من جهازك الآخر بعد. حاول مجدداً بعد قليل.",
+  "Set a supplier on this order before closing it short.": "حدّد مورداً لهذا الأمر قبل إغلاقه بنقص.",
+  "Close this order as it stands? What arrived stays owed to the supplier. The rest is no longer expected and no longer owed.": "إغلاق هذا الأمر كما هو؟ ما وصل يبقى مستحقاً للمورد، أما الباقي فلم يعد متوقعاً ولا مستحقاً.",
+  "Purchase order closed short": "تم إغلاق أمر الشراء بنقص"
 }

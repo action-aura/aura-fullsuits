@@ -71,6 +71,7 @@ PO_KEYS = {
     'notes', 'ordered_at', 'received_at', 'created_at', 'due_date', 'order_journal_uid',
     'split_group_id', 'split_index', 'split_count', 'routing_status', 'routed_channel',
     'routed_at', 'routed_to', 'idempotency_key', 'item_count',
+    'ap_basis', 'cancelled_at', 'closed_at',      # W4a-2 (v46)
 }
 ITEM_KEYS = {'uid', 'po_uid', 'product_id', 'quantity', 'unit_cost', 'total', 'received_qty'}
 
@@ -195,11 +196,15 @@ def test_r1_create_queues_po_and_item_events_with_exact_keys(client):
     # branch travels by uid, never by this computer's integer.
     assert pl['branch_uid'] == _q("SELECT uid FROM branches WHERE id=?", po['branch_id'])[0]['uid']
 
-    # order_journal_uid is the uid of the journal the order posted.
-    jr = _q("SELECT uid FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
-            "AND source_id=?", cid, po_id)
-    assert len(jr) == 1
-    assert po['order_journal_uid'] == jr[0]['uid'] == pl['order_journal_uid']
+    # W4a-2 UPDATE: an order posts NO journal any more (debt is booked per receipt),
+    # so order_journal_uid is NULL and ap_basis says why. This used to assert the
+    # order journal's uid; it can no longer catch the order journal's uid being
+    # wrong -- that behaviour now lives only on pre-v46 'order'-basis orders
+    # (see test_r5 / retail_stock_books_routes_test).
+    assert _q("SELECT uid FROM gl_journals WHERE company_id=? AND source_type='purchase_order' "
+              "AND source_id=?", cid, po_id) == []
+    assert po['order_journal_uid'] is None and pl['order_journal_uid'] is None
+    assert po['ap_basis'] == 'receipt' and pl['ap_basis'] == 'receipt'
 
     items = _q("SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY id", po_id)
     assert len(items) == 2 and all(i['uid'] for i in items)
@@ -293,7 +298,10 @@ def test_r4_receive_after_a_siblings_identical_movement_adds_no_second_stock(cli
     po_id = _make_po(client, sid, [(pid, 10, 4.0)])
     po = _po(po_id)
     item = _q("SELECT * FROM purchase_order_items WHERE po_id=?", po_id)[0]
-    mv_uid = po_core.receipt_movement_uid(po['uid'], item['uid'])
+    # W4a-2: the movement uid names the RECEIPT line; a whole-order receive on a
+    # computer holding no receipts yet is receipt n=0 carrying every line.
+    mv_uid = po_core.receipt_line_movement_uid(
+        po_core.receipt_uid(po['uid'], 0, [(item['uid'], 10)]), item['uid'])
 
     # Simulate the sync apply of the OTHER computer's receipt: its movement row
     # (same deterministic uid) and the +10 it put on the balance.
@@ -329,7 +337,8 @@ def test_r4b_a_normal_receive_uses_the_deterministic_movement_uid_and_queues_it(
     po = _po(po_id)
     item = _q("SELECT * FROM purchase_order_items WHERE po_id=?", po_id)[0]
     assert client.post(f'{API}/purchase-orders/{po_id}/receive').status_code == 200
-    mv_uid = po_core.receipt_movement_uid(po['uid'], item['uid'])
+    mv_uid = po_core.receipt_line_movement_uid(
+        po_core.receipt_uid(po['uid'], 0, [(item['uid'], 10)]), item['uid'])
     assert len(_q("SELECT 1 FROM inventory_movements WHERE uid=?", mv_uid)) == 1
     assert len(_events('inventory_movement', 'create', mv_uid)) == 1
     assert _on_hand(cid, pid) == 10
@@ -338,6 +347,20 @@ def test_r4b_a_normal_receive_uses_the_deterministic_movement_uid_and_queues_it(
 # ═════════════════════════════════════════════════════════════════════════════
 # R5 -- the order's books have not arrived: refuse, write nothing
 # ═════════════════════════════════════════════════════════════════════════════
+
+def _make_order_basis(c, cid, items, sid):
+    """A pre-v46 'order'-basis order: route-created, flipped to ap_basis='order'
+    with its order journal posted by hand (see retail_stock_books_routes_test)."""
+    po_id = _make_po(c, sid, items)
+    conn = get_retail_conn()
+    po = conn.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+    jid = gl.post_purchase_order(conn, cid, po['branch_id'], po_id, po['po_number'], 'JOD',
+                                 0.0, po['total'], po_uid=po['uid'])
+    juid = conn.execute("SELECT uid FROM gl_journals WHERE id=?", (jid,)).fetchone()[0]
+    conn.execute("UPDATE purchase_orders SET ap_basis='order', order_journal_uid=? WHERE id=?", (juid, po_id))
+    conn.commit(); conn.close()
+    return po_id
+
 
 def _strand_order_journal(po_id):
     """Make the PO name an order journal this computer does not hold (what a
@@ -358,7 +381,8 @@ def test_r5_receive_and_cancel_refuse_while_the_order_journal_has_not_arrived(cl
     cid = client.test_company_id
     sid = _seed_supplier(client)
     pid = _seed_product(client)
-    po_id = _make_po(client, sid, [(pid, 10, 4.0)])
+    # W4a-2: only an 'order'-basis order has an order journal to wait for.
+    po_id = _make_order_basis(client, cid, [(pid, 10, 4.0)], sid)
     _strand_order_journal(po_id)
     before = _snapshot(po_id, pid)
 
@@ -426,14 +450,18 @@ def test_r7_receive_and_cancel_queue_the_header_update(client):
     assert client.post(f'{API}/purchase-orders/{a}/receive').status_code == 200
     assert client.post(f'{API}/purchase-orders/{b}/cancel').status_code == 200
 
-    ev = _events('purchase_order', 'update', _po(a)['uid'])
-    assert len(ev) == 1
-    assert set(ev[0]['payload']) == {'uid', 'status', 'received_at'}
-    assert ev[0]['payload']['status'] == 'received' and ev[0]['payload']['received_at']
+    # W4a-2 UPDATE: receiving no longer queues a header `status` update (the
+    # receipt + its lines are the fact; status is derived everywhere), and the
+    # cancel update carries the set-once timestamps, not a status. Can no longer
+    # catch: a rank-merged `status` going missing -- that mechanism is retired.
+    assert _events('purchase_order', 'update', _po(a)['uid']) == []
+    assert len(_events('purchase_order_receipt', 'create')) >= 1
 
     ev = _events('purchase_order', 'update', _po(b)['uid'])
     assert len(ev) == 1
-    assert ev[0]['payload'] == {'uid': _po(b)['uid'], 'status': 'cancelled', 'received_at': None}
+    assert ev[0]['payload'] == {'uid': _po(b)['uid'], 'cancelled_at': _po(b)['cancelled_at'],
+                                'closed_at': None}
+    assert _po(b)['cancelled_at']
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -506,6 +534,8 @@ def test_r8b_backfill_of_a_received_po_also_queues_its_status(client):
     assert client.post(f'{API}/purchase-orders/{po_id}/receive').status_code == 200
     po = _po(po_id)
     _make_legacy(po_id)
+    receipts_before = len([e for e in _events('purchase_order_receipt', 'create')
+                           if e['payload']['po_uid'] == po['uid']])
     conn = get_retail_conn()
     try:
         retail_api.backfill_legacy_purchase_orders(conn)
@@ -513,8 +543,14 @@ def test_r8b_backfill_of_a_received_po_also_queues_its_status(client):
     finally:
         conn.close()
     assert len(_events('purchase_order', 'create', po['uid'])) == 1
-    upd = _events('purchase_order', 'update', po['uid'])
-    assert len(upd) == 1 and upd[0]['payload']['status'] == 'received'
+    # W4a-2 UPDATE: the backfill no longer queues a `status` update for a received
+    # order; its receipts are facts every computer derives (the v46 legacy
+    # receipt) and are NEVER queued from here. This can no longer catch a missing
+    # status update (retired by design); it pins that none is emitted and that
+    # no receipt event leaks out of the backfill.
+    assert _events('purchase_order', 'update', po['uid']) == []
+    assert len([e for e in _events('purchase_order_receipt', 'create')
+                if e['payload']['po_uid'] == po['uid']]) == receipts_before
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -533,11 +569,12 @@ def test_r9_reorder_accept_stamps_uids_and_queues_the_same_events(client):
     r = client.post(f'{API}/reorder-requests/{rid}/accept', json={})
     assert r.status_code == 200, r.get_json()
     po = _po(r.get_json()['data']['purchase_order_id'])
-    assert po['uid'] and po['order_journal_uid']
+    # W4a-2 UPDATE: no order journal at reorder-accept either (receipt basis).
+    assert po['uid'] and po['order_journal_uid'] is None and po['ap_basis'] == 'receipt'
     assert (po['amount_paid'], po['payment_status']) == (0.0, 'unpaid')
     evs = _events('purchase_order', 'create', po['uid'])
     assert len(evs) == 1 and set(evs[0]['payload']) == PO_KEYS
-    assert evs[0]['payload']['order_journal_uid'] == po['order_journal_uid']
+    assert evs[0]['payload']['order_journal_uid'] is None and evs[0]['payload']['ap_basis'] == 'receipt'
     items = _q("SELECT uid FROM purchase_order_items WHERE po_id=?", po['id'])
     assert len(items) == 1 and items[0]['uid']
     iev = _events('purchase_order_item', 'create', items[0]['uid'])

@@ -157,6 +157,33 @@ def _make_po(c, sid, pid, qty=10, cost=4.0, paid=0):
     return r.get_json()['data']['id']
 
 
+def _q_one(sql, *args):
+    conn = get_retail_conn()
+    try:
+        return conn.execute(sql, args).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _make_order_basis_po(c, cid, sid, pid, qty=10, cost=4.0):
+    """W4a-2 UPDATE: routes now create 'receipt'-basis orders (no order journal,
+    debt booked at delivery -- pinned in retail_po_receipts_routes_test.py). The
+    tests below pin the ORDER-basis behaviour (1260 at order, moved at receipt,
+    reversed at cancel) that every order existing at the v46 upgrade still has,
+    so they build one: a route-created order flipped to ap_basis='order' with its
+    order journal posted by hand. What they can no longer catch: a route that
+    mints order-basis orders (none does, deliberately)."""
+    po_id = _make_po(c, sid, pid, qty=qty, cost=cost)
+    conn = get_retail_conn()
+    po = conn.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+    jid = gl.post_purchase_order(conn, cid, po['branch_id'], po_id, po['po_number'], 'JOD',
+                                 0.0, po['total'], po_uid=po['uid'])
+    juid = conn.execute("SELECT uid FROM gl_journals WHERE id=?", (jid,)).fetchone()[0]
+    conn.execute("UPDATE purchase_orders SET ap_basis='order', order_journal_uid=? WHERE id=?", (juid, po_id))
+    conn.commit(); conn.close()
+    return po_id
+
+
 def _po_order_uid(cid, po_id):
     rows = _journals(cid, source_type='purchase_order', source_id=po_id)
     assert len(rows) == 1, rows
@@ -171,7 +198,7 @@ def test_t1_po_order_books_1260_then_receive_moves_it_to_inventory(client):
     cid = client.test_company_id
     sid = _seed_supplier(client)
     pid = _seed_product(client)
-    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    po_id = _make_order_basis_po(client, cid, sid, pid, qty=10, cost=4.0)
 
     # An ORDER is not stock: 10 x 4.000 = 40.000 sits in Goods Ordered.
     assert _bal(cid, gl.ACCOUNT_GOODS_ORDERED) == 40.0
@@ -190,7 +217,11 @@ def test_t1_po_order_books_1260_then_receive_moves_it_to_inventory(client):
 
     receipts = _journals(cid, source_type='po_receipt')
     assert len(receipts) == 1
-    assert receipts[0]['uid'] == gl.stock_journal_uid(order_uid, 'po_receipt')
+    # W4a-2: the receipt journal is keyed on the RECEIPT's uid (one per receipt),
+    # no longer on the order journal's uid (one per order).
+    receipt_uid = _q_one("SELECT uid FROM purchase_order_receipts WHERE po_id=?", po_id)
+    assert receipts[0]['uid'] == gl.stock_journal_uid(receipt_uid, 'po_receipt')
+    assert receipts[0]['source_uid'] == receipt_uid
 
     # DENY half: receiving again is refused and books nothing more.
     n_journals = len(_journals(cid))
@@ -246,7 +277,7 @@ def test_t3_cancel_reverses_the_order_and_clears_the_supplier(client):
     cid = client.test_company_id
     sid = _seed_supplier(client)
     pid = _seed_product(client)
-    po_id = _make_po(client, sid, pid)
+    po_id = _make_order_basis_po(client, cid, sid, pid)
     assert _supplier_balance(client, sid) == 40.0
     order_uid = _po_order_uid(cid, po_id)
 
@@ -322,11 +353,15 @@ def test_t3_cancel_refused_while_a_payment_is_active_then_allowed_after_void(cli
     assert _supplier_balance(client, sid) == 0.0
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "PD1 (pre-existing, plan section 6 R-PD1): voiding a PO-CREATION down payment moves the "
-    "supplier subledger but posts no GL, because _reverse_payment_journal only finds "
-    "customer_payment/supplier_payment/po_payment journals and the down payment lives inside "
-    "the purchase_order journal. Cancel repairs it; an open PO does not. Needs W4a."))
+# W4a-2 UPDATE: this was a strict xfail for PD1 (voiding a PO-creation down
+# payment moved the supplier subledger but posted no GL, because the down payment
+# lived INSIDE the order journal). A 'receipt'-basis order -- the only kind any
+# route creates now -- books its down payment as its own po_payment journal keyed
+# on the payment uid, so the void reverses it and the test PASSES; the xfail
+# marker had to go (strict xfail would now fail the suite). What this can no
+# longer catch: PD1 on a pre-v46 'order'-basis order whose down payment is inside
+# its order journal. No route can mint one any more, so that case is a RECORDED
+# GAP (not reproduced here), not a green check.
 def test_pd1_void_of_a_po_down_payment_keeps_ap_tied(client):
     cid = client.test_company_id
     sid = _seed_supplier(client)
@@ -354,10 +389,11 @@ def test_t3_legacy_po_cancel_reverses_the_inventory_debit(client):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_t10_cancelled_po_leaves_statement_and_aging_pending_stays(client):
+    cid = client.test_company_id
     sid = _seed_supplier(client)
     pid = _seed_product(client)
-    keep = _make_po(client, sid, pid, qty=5, cost=4.0)      # 20.000, stays pending
-    gone = _make_po(client, sid, pid, qty=10, cost=4.0)     # 40.000, cancelled
+    keep = _make_order_basis_po(client, cid, sid, pid, qty=5, cost=4.0)      # 20.000, stays pending
+    gone = _make_order_basis_po(client, cid, sid, pid, qty=10, cost=4.0)     # 40.000, cancelled
     assert _supplier_balance(client, sid) == 60.0
     assert client.post(f'{API}/purchase-orders/{gone}/cancel').status_code == 200
 

@@ -145,6 +145,7 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # Both are reachable only by a holder of retail.stock.adjust (test_t3_cashier_
     # cannot_cancel in retail_stock_books_routes_test.py proves the deny half).
     'cancel_purchase_order': CAP_STOCK,
+    'close_purchase_order_short': CAP_STOCK,     # W4a-2: same authority as receiving
     'recall_stock_transfer': CAP_STOCK,
     'preview_po_split': CAP_STOCK,
     'accept_reorder_request': CAP_STOCK,

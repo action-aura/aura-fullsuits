@@ -23,6 +23,16 @@ SAME answer and none of them may import another's file:
   * `PO_STATUS_RANK` -- the order's status only moves forward when merged
     (pending -> cancelled -> received); `received` beats `cancelled` because
     stock physically arrived and cannot be un-arrived by a click elsewhere.
+    W4a-2: RETIRED from the apply path (state is derived now, see below); the
+    constant stays only for the v45 compat path and its test.
+
+W4a-2 (schema v46) adds the RECEIPT layer. AP was booked when an order was
+TYPED, so supplier balances claimed debt for goods that never came, and an
+order could only be received whole. A receipt (header + lines) is now an
+immutable synced fact; `received_qty`, `status` and `received_at` on the order
+are CACHES recomputed from receipts + the set-once `cancelled_at`/`closed_at`
+by `recompute_po_receive_state` -- the ONE function every writer and every
+sync apply calls, so every computer derives the same state from the same rows.
 
 NO IMPORT OF api/: retail_api.py imports this module, so importing back would
 be a cycle (same reason po_split.py duplicates its rounding helper).
@@ -31,6 +41,8 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
+
+from commercial_runtime.currency import currency_quantum, quantize_money
 
 #: forward-only merge order for `purchase_orders.status`. Higher rank wins.
 PO_STATUS_RANK = {'pending': 0, 'cancelled': 1, 'received': 2}
@@ -120,3 +132,179 @@ def recompute_po_paid(conn, cid, po_id, epsilon):
         "UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
         (paid, status, po_id, cid))
     return paid, status
+
+
+# -- W4a-2: receipts ---------------------------------------------------------------
+
+def _qty_text(q) -> str:
+    """A quantity as canonical text: 6, 6.0, '6.000' and Decimal('6.00') all
+    read '6'. Two computers typing the same delivery must hash the same text."""
+    return format(Decimal(str(q)).normalize(), 'f')
+
+
+def receipt_uid(po_uid: str, n: int, lines) -> str:
+    """The uid of the `n`-th receipt (n = receipts of this order already present
+    locally) of order `po_uid` carrying `lines` = [(item_uid, quantity)].
+
+    W4a-2 D4: DETERMINISTIC, with the canonical line text sorted by item uid, so
+    two computers that record the IDENTICAL delivery while offline mint the same
+    uid and it collapses to one fact on sync (counted once). A DIFFERENT
+    delivery (other quantities, or a second one of the same size -- `n` differs)
+    is another fact and both count. NEVER use uuid4 here: a random uid would
+    make the identical delivery count twice, silently."""
+    canon = ";".join(f"{item_uid}={_qty_text(q)}" for item_uid, q in sorted(lines, key=lambda l: l[0]))
+    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{po_uid}:receipt:{n}:{canon}"))
+
+
+def receipt_line_uid(receipt_uid_: str, item_uid: str) -> str:
+    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{receipt_uid_}:{item_uid}"))
+
+
+def receipt_line_movement_uid(receipt_uid_: str, item_uid: str) -> str:
+    """The stock movement a receipt line writes: a pure function of (receipt,
+    line), so the W4a ON CONFLICT(uid) gate keeps stock from landing twice."""
+    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{receipt_uid_}:{item_uid}:movement"))
+
+
+def legacy_receipt_uid(po_uid: str) -> str:
+    """The one receipt synthesised for an order received before v46 (D15).
+    Never queued: every computer derives the same uid from the order's uid."""
+    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{po_uid}:legacy-receipt"))
+
+
+def _eps(currency) -> Decimal:
+    return currency_quantum(currency) / 2
+
+
+def received_by_item(conn, cid, po_id) -> dict:
+    """{po_item_id: Decimal received} summed over this order's receipt lines."""
+    out = {}
+    for row in conn.execute(
+            "SELECT l.po_item_id, l.quantity FROM purchase_order_receipt_lines l "
+            "JOIN purchase_order_receipts r ON r.id = l.receipt_id "
+            "WHERE r.company_id=? AND r.po_id=?", (cid, po_id)).fetchall():
+        out[row[0]] = out.get(row[0], Decimal('0')) + Decimal(str(row[1] or 0))
+    return out
+
+
+def receipt_value(conn, cid, po_id, lines, currency) -> Decimal:
+    """What a receipt of `lines` = [(po_item_id, quantity)] is WORTH, computed
+    ONCE by the writer and then stored and synced -- a peer never recomputes it
+    (D5).
+
+    value = quantize(SUM(qty x unit_cost) x factor), factor = total / subtotal
+    when the order has a subtotal (so tax rides along proportionally), else 1.
+    If this receipt COMPLETES every line (everything received, including this
+    delivery, reaches the ordered quantity) the value is the REMAINDER instead:
+    total - the value of the earlier receipts. Rounding each part on its own
+    drifts (3 x 33.336 = 100.008 against a total of 100.000); the remainder rule
+    makes a fully received order's receipts sum to its total exactly, which is
+    what keeps the supplier's balance, the order's total and Accounts Payable
+    from disagreeing by a few fils."""
+    head = conn.execute(
+        "SELECT total, subtotal FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)).fetchone()
+    if head is None:
+        raise ValueError(f"purchase order {po_id} not found for company {cid}")
+    total = Decimal(str(head[0] or 0))
+    subtotal = Decimal(str(head[1] or 0))
+    factor = (total / subtotal) if subtotal > _eps(currency) else Decimal('1')
+    items = {row[0]: (Decimal(str(row[1] or 0)), Decimal(str(row[2] or 0))) for row in conn.execute(
+        "SELECT id, quantity, unit_cost FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()}
+    raw = Decimal('0')
+    this_delivery = {}
+    for item_id, qty in lines:
+        if item_id not in items:
+            raise ValueError(f"line {item_id} does not belong to purchase order {po_id}")
+        q = Decimal(str(qty))
+        raw += q * items[item_id][1]
+        this_delivery[item_id] = this_delivery.get(item_id, Decimal('0')) + q
+    value = quantize_money(raw * factor, currency)
+    already = received_by_item(conn, cid, po_id)
+    completes = all(already.get(i, Decimal('0')) + this_delivery.get(i, Decimal('0')) >= ordered
+                    for i, (ordered, _c) in items.items())
+    if completes:
+        prior = sum((Decimal(str(r[0] or 0)) for r in conn.execute(
+            "SELECT value FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
+            (cid, po_id)).fetchall()), Decimal('0'))
+        value = max(Decimal('0'), quantize_money(total, currency) - prior)
+    return value
+
+
+def po_over_received(conn, cid, po_id) -> bool:
+    """True when some line's receipts exceed its ordered quantity -- two
+    different offline deliveries that together overshoot (D12). A fact to
+    record as a conflict, never to refuse."""
+    ordered = {row[0]: Decimal(str(row[1] or 0)) for row in conn.execute(
+        "SELECT id, quantity FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()}
+    return any(got > ordered.get(i, Decimal('0')) for i, got in received_by_item(conn, cid, po_id).items())
+
+
+def recompute_po_receive_state(conn, cid, po_id):
+    """Derive and store (items.received_qty, status, received_at) for order
+    `po_id` from its receipts and the set-once `cancelled_at` / `closed_at`.
+    Returns the status, or None when the order is not this company's.
+
+    D3: receipts exist -> 'received' when every line's received >= ordered; else
+    'closed' when closed_at OR cancelled_at is set (an order cancelled after a
+    partial delivery IS a close-short -- the stock is here); else 'partial'. No
+    receipts -> 'cancelled' when cancelled_at (or closed_at, which the routes
+    cannot produce without a receipt) is set, else 'pending'. `received_at` is
+    the latest receipt's when 'received', else NULL. The caller owns the
+    transaction."""
+    head = conn.execute(
+        "SELECT closed_at, cancelled_at FROM purchase_orders WHERE id=? AND company_id=?",
+        (po_id, cid)).fetchone()
+    if head is None:
+        return None
+    received = received_by_item(conn, cid, po_id)
+    items = conn.execute("SELECT id, quantity FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
+    for item in items:
+        conn.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?",
+                     (float(received.get(item[0], Decimal('0'))), item[0]))
+    n_receipts, latest = conn.execute(
+        "SELECT COUNT(*), MAX(received_at) FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
+        (cid, po_id)).fetchone()
+    if n_receipts:
+        complete = all(received.get(i[0], Decimal('0')) >= Decimal(str(i[1] or 0)) for i in items)
+        if complete:
+            status = 'received'
+        elif head[0] or head[1]:
+            status = 'closed'
+        else:
+            status = 'partial'
+    else:
+        status = 'cancelled' if (head[0] or head[1]) else 'pending'
+    conn.execute("UPDATE purchase_orders SET status=?, received_at=? WHERE id=? AND company_id=?",
+                 (status, latest if status == 'received' else None, po_id, cid))
+    return status
+
+
+def po_supplier_charge_minor(conn, cid, po_id, epsilon) -> int:
+    """What order `po_id` adds to its supplier's balance, in integer MINOR units
+    (D10). The same rule `party_balance._supplier_minor` aggregates in SQL --
+    kept as a per-order function so the statement and the aging report read ONE
+    answer instead of re-deriving it.
+
+    'receipt' basis: the sum of the receipt values, whatever the state.
+    'order' basis (every order that existed at v46, NULL included): closed (or
+    cancelled after a delivery) -> the receipt values; else cancelled -> 0; else
+    the total (when above epsilon)."""
+    factor = 10 ** _digits_from_epsilon(epsilon)
+    head = conn.execute(
+        "SELECT total, ap_basis, closed_at, cancelled_at, status FROM purchase_orders "
+        "WHERE id=? AND company_id=?", (po_id, cid)).fetchone()
+    if head is None:
+        return 0
+    n, minor = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(CAST(ROUND(value * ?) AS INTEGER)), 0) "
+        "FROM purchase_order_receipts WHERE company_id=? AND po_id=?", (factor, cid, po_id)).fetchone()
+    if head[1] == 'receipt':
+        return int(minor)
+    if head[2] or (head[3] and n):
+        return int(minor)
+    if head[3] or (head[4] or '') == 'cancelled':
+        return 0
+    total = float(head[0] or 0)
+    if total <= float(epsilon or 0):
+        return 0
+    return int(conn.execute("SELECT CAST(ROUND(? * ?) AS INTEGER)", (total, factor)).fetchone()[0])
