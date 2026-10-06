@@ -482,6 +482,17 @@ class _CountingConnWrapper:
         return getattr(self._inner, item)
 
 
+@pytest.fixture(autouse=True)
+def _no_background_push(monkeypatch):
+    """Every test here drives pushes itself (`service_a.push_once()`). The
+    routes' own `_sync_nudge()` starts a background `_push` thread that drains
+    the same outbox first, so the cursor test saw 1 relay event where it
+    queued 3 (measured 2026-10-06: whole-file run red, alone green, identical
+    on b169cd92). Stubbing the nudge changes nothing a route queues."""
+    import api.retail_api as _ra
+    monkeypatch.setattr(_ra, '_sync_nudge', lambda: None)
+
+
 def test_pull_once_advances_cursor_exactly_once_not_once_per_event(client, service_a, install_b, relay):
     client.post('/api/sub/retail/suppliers', json={'name': 'Cursor Supplier'})
     client.post('/api/sub/retail/categories', json={'name': 'Cursor Category'})

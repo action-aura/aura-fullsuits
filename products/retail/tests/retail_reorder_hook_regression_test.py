@@ -266,12 +266,20 @@ def test_hook_exception_produces_the_identical_response_a_successful_hook_would_
         assert ok_line[key] == fail_line[key], f"line divergence on {key!r}"
 
 
-def test_no_background_thread_exists_from_the_reorder_hook():
+def test_no_background_thread_exists_from_the_reorder_hook(monkeypatch):
     """The hook runs synchronously, inline, on its own connection -- not a
     background thread. Mirrors
     retail_einvoicing_regression_test.py's identical assertion for
-    e-invoicing's own worker."""
+    e-invoicing's own worker.
+
+    The sale route's own `_sync_nudge()` (a sync push thread, not the reorder
+    hook) is stubbed: whether that thread was still alive at the check was
+    timing, so the whole-file run failed while the test alone passed
+    (measured 2026-10-06). What this can no longer catch: a nudge thread,
+    which is not what this test guards."""
     import threading
+    import api.retail_api as _ra
+    monkeypatch.setattr(_ra, '_sync_nudge', lambda: None)
     client, cid, pid = _make_admin_and_product(reorder_level=5, reorder_method='whatsapp', initial_stock=6)
     baseline = {t.name for t in threading.enumerate()}
     _sell(client, pid, 2)
