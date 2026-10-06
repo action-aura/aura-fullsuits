@@ -7228,3 +7228,21 @@ Residuals:
 - inventory_tie differs by tax when total != subtotal (no route sets tax on POs today).
 - Android: receives a whole order only; its Receive button hides on 'partial'.
 - Arabic strings (partly received / closed short / purchase) await a native speaker.
+
+## 2026-10-07 — retail schema v47 CLAIMED (W3b: stock transfers shared between computers)
+
+Claimed before any builder starts. Checked all 109 local and origin refs (fetched): the
+highest `RETAIL_SCHEMA_VERSION` anywhere is 46 (this branch). No registry bump, no Owner
+revision.
+
+Why (S5): transfer movements and their 1250/5910 journals already sync, but the
+`stock_transfers` header and lines never do, so a transfer sent from computer A cannot be
+received on computer B (404), B's books show stock in transit its screen cannot see, and
+movement uids are random, so the same transfer received on two computers offline would add
+the stock twice. Recall vs receive across computers is unhandled.
+
+v47 adds `stock_transfers.item_count`, `cancelled_at`, `recalled_at`,
+`sync_backfill_pending`; headers and lines sync as metadata (forward-only status merge,
+set-once facts), stock and books keep moving only through their own synced movements and
+journals, movement uids become deterministic, and receive/recall refuse until the transfer's
+lines, send costs and send journal are local. Plan: job 54e80fc2 tmp/W3B-PLAN.md.
