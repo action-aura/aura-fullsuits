@@ -7174,3 +7174,57 @@ computers), AP is posted per receipt (Dr Inventory / Cr AP) for orders created u
 v46, a "close short" ends an order with lines outstanding, and orders created before
 v46 keep their order-time AP (no re-booking of history). Plan: job 54e80fc2
 tmp/W4A2-PLAN.md.
+
+## 2026-10-07 — W4a-2 CASHED IN (supplier debt at receipt, partial receive, retail schema v46)
+
+Commits 8a49b24b (feature), 555142c4 + 131826eb (verify fixes), 49abc376 (browser-check UI
+fixes), 5d597b00 (two-computer proof), 78838036 (full-suite cleanup) on feat/retail-ux-p0. Plans: job 54e80fc2
+tmp/W4A2-PLAN.md, W4A2-FIX2.md.
+
+What changed: purchase orders created under v46 carry `ap_basis='receipt'` and post no order
+journal. A receipt is an immutable synced fact (`purchase_order_receipts` + lines) with a value
+fixed by its writer (the completing receipt takes the remainder); each posts Dr 1200 / Cr AP
+(Cr 1260 without a supplier). `received_qty`, status (pending/partial/received/closed/
+cancelled) and received_at are caches derived from receipts + set-once cancelled_at/closed_at
+by one core function on every write and apply (sync hook `po_state_refresh`). Payments before
+delivery post Dr AP / Cr cash (an advance; PD1 fixed for these orders). Close short ends a
+partly received order; cancel refuses once anything arrived. Supplier balance, statement
+(one 'Purchase' charge per receipt; a closed_short credit for old orders) and aging share one
+per-PO charge rule. Desktop receive dialog: per-line quantities, keyboard, in-flight guard.
+Orders open at the v46 upgrade keep order-time AP; their receipts move 1260 cumulatively and
+close short reverses only the unreceived share.
+
+Receipt identity (after the verifier proved the first rule wrong both ways): a completing
+receipt's uid derives from the receipts it follows (two computers receiving "the rest" after
+the same history collapse); a partial receipt's uid derives from a client receipt_key minted
+once per dialog (a retry or double Enter is already_recorded).
+
+Measured: core 37, routes 20, apply 47, migration 6, two-computer 6 (partial then rest across
+computers, identical completing receive collapses 10 not 20, different partials both count +
+one po_over_received each, close short reaches the sibling, down payment -30 on both, retried
+key already_recorded), dialog UI claims+mutants all red. Verify found 2 HIGH (receipt identity;
+float remaining refused 0.7 after 0.1+0.2) + 4 MEDIUM, all fixed with probes and mutation
+proofs. Real-browser pass (headless Chromium, en + ar, 1366 and 1024): every step of the
+receive/close flow worked; three visual defects fixed (supplier 'Credit sale' wording, no Tab
+trap in ANY modal, RTL doc number tag).
+
+Full suite (products/run_all_tests.py retail -j 6) at 78838036: 374 files, 374 passed, 0 failed.
+The first full run (5d597b00) had 10 red files: two real gaps fixed (a new computer whose
+first pulled page held only POs lost the page -- the local-schema gate skipped the PO types;
+five new sync reasons had no plain sentence on the review screen), six stale pins of
+deliberately changed behaviour (incl. the v42 migration tests still pinned at 44 since v45),
+and two that failed only because the runner leaked the operator's AURA_SYNC_RELAY_URL /
+AURA_OWNER_LICENSING_URL (the runner now drops them unless AURA_TEST_KEEP_LIVE_URLS=1).
+
+Residuals:
+- The same PARTIAL delivery typed on two computers offline counts twice (flagged
+  po_over_received if it exceeds the order; never silently lost).
+- A retry of a COMPLETING receipt after it landed answers 409 "already received", not
+  already_recorded.
+- Order-basis races (only orders open at the upgrade): close short or cancel on one computer
+  while another receives leaves AP/1260 skewed; recorded as po_received_after_close.
+- A supplier-less partly received order can be neither closed nor cancelled (1260 prepaid
+  waits for the rest).
+- inventory_tie differs by tax when total != subtotal (no route sets tax on POs today).
+- Android: receives a whole order only; its Receive button hides on 'partial'.
+- Arabic strings (partly received / closed short / purchase) await a native speaker.
