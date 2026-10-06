@@ -41,9 +41,6 @@ PO_STATUS_RANK = {'pending': 0, 'cancelled': 1, 'received': 2}
 #: twice -- silently, because nothing errors.
 _PO_RECEIPT_NAMESPACE = uuid.UUID('a674e3be-c149-497a-b0a7-f235e22c5ae0')
 
-_MONEY_DIGITS = Decimal('0.001')
-
-
 def receipt_movement_uid(po_uid: str, item_uid: str) -> str:
     """The uid of the stock movement that receiving line `item_uid` of order
     `po_uid` writes -- deterministic, so it is the same on every computer."""
@@ -62,10 +59,18 @@ def po_id_by_uid(conn, cid, uid):
     return None if row is None else row[0]
 
 
-def _money(value) -> Decimal:
-    """Round to 3 decimals (the finest currency in use is the 3-dp JOD) so a
-    sum of floats like 0.1+0.1+0.1 is exactly 0.3 and never 0.30000000000000004."""
-    return Decimal(str(value or 0)).quantize(_MONEY_DIGITS)
+def _digits_from_epsilon(epsilon) -> int:
+    """How many minor-unit digits the currency has, read back from its epsilon.
+
+    Every caller passes `_money_epsilon(currency)` / `party_balance.money_
+    epsilon(currency)`, which is HALF a minor unit (0.0005 JOD, 0.005 USD, 0.5
+    JPY), so doubling it gives the quantum. No usable epsilon (None/0/negative)
+    answers 3, the finest currency in use, so a bad argument can never make a
+    figure coarser than the money really is."""
+    quantum = (Decimal(str(epsilon or 0)) * 2).normalize()
+    if quantum <= 0:
+        return 3
+    return max(0, -quantum.as_tuple().exponent)
 
 
 def recompute_po_paid(conn, cid, po_id, epsilon):
@@ -81,26 +86,37 @@ def recompute_po_paid(conn, cid, po_id, epsilon):
     status: 'paid' when what remains is within `epsilon` (and the order has a
     real total), 'partial' when anything beyond `epsilon` is paid, else
     'unpaid'. Writes `amount_paid` / `payment_status` and returns
-    (paid as float, status). The caller owns the transaction."""
-    eps = Decimal(str(epsilon or 0))
-    rows = conn.execute(
-        "SELECT amount FROM payments WHERE company_id=? AND related_type='po' "
-        "AND related_id=? AND COALESCE(status,'active')='active'",
-        (cid, po_id)
-    ).fetchall()
-    paid = sum((_money(r[0]) for r in rows), Decimal('0'))
+    (paid as float, status). The caller owns the transaction.
+
+    W4a verify F5: ONE RULE with the receiver's twin (`SyncService.
+    _recompute_po_paid`, which cannot import this module). Both sum in INTEGER
+    MINOR UNITS of the shop's currency -- the same `CAST(ROUND(amount * factor)
+    AS INTEGER)` SQL, factor = 10 ** digits -- and compare floats the same way.
+    This used to round every amount to a fixed 3 dp, so on a 2-dp or 0-dp
+    currency the computer that typed an order and the one that pulled it could
+    disagree about 'paid' exactly at the half-unit boundary (measured: USD
+    99.995 of 100 read 'paid' on both, but as 99.995 here and 100.0 there).
+    Digits come from `epsilon`, which every caller derives from the currency."""
+    factor = 10 ** _digits_from_epsilon(epsilon)
+    eps = float(epsilon or 0)
+    minor = conn.execute(
+        "SELECT COALESCE(SUM(CAST(ROUND(amount * ?) AS INTEGER)), 0) FROM payments "
+        "WHERE company_id=? AND related_type='po' AND related_id=? "
+        "AND COALESCE(status,'active')='active'",
+        (factor, cid, po_id)
+    ).fetchone()[0]
+    paid = float(Decimal(minor) / Decimal(factor))
     head = conn.execute(
         "SELECT total FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)
     ).fetchone()
-    total = _money(head[0]) if head else Decimal('0')
+    total = float(head[0] or 0) if head else 0.0
     if total > eps and total - paid <= eps:
         status = 'paid'
     elif paid > eps:
         status = 'partial'
     else:
         status = 'unpaid'
-    paid_f = float(paid)
     conn.execute(
         "UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
-        (paid_f, status, po_id, cid))
-    return paid_f, status
+        (paid, status, po_id, cid))
+    return paid, status

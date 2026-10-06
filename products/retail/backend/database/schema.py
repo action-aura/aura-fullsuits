@@ -1201,6 +1201,14 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     `amount_paid`/`payment_status` become DERIVED figures
 #     (core/retail/purchase_orders.recompute_po_paid), never synced columns.
 #   * `idx_poi_po` -- order lines are always read by their order.
+#   * `purchase_orders.item_count` (W4a verify F1; v45 is unreleased so it is
+#     added here, not re-versioned) -- how many lines the order was written
+#     with. Header and lines are separate sync events and a line can park (its
+#     product has not arrived) while the header and its journal are already
+#     here; a computer that received then would move the books for the WHOLE
+#     order and the stock for only the lines present. The receive route
+#     refuses while COUNT(lines) < item_count. Backfilled with the local line
+#     count; NULL = written by a build that did not send it (no check possible).
 #
 # Appended LAST and shape-gated, so a replay of the whole chain is a no-op.
 # The fresh-install DDL deliberately does NOT carry these columns: like v13's
@@ -2408,6 +2416,7 @@ def _migrate_add_purchase_order_sync(conn):
         ('uid', 'TEXT'),
         ('order_journal_uid', 'TEXT'),
         ('sync_backfill_pending', 'INTEGER DEFAULT 0'),
+        ('item_count', 'INTEGER'),
     ):
         if column not in po_cols:
             conn.execute(f'ALTER TABLE purchase_orders ADD COLUMN {column} {decl}')
@@ -2436,6 +2445,21 @@ def _migrate_add_purchase_order_sync(conn):
 
     if 'purchase_order_items' in live:
         conn.execute('CREATE INDEX IF NOT EXISTS idx_poi_po ON purchase_order_items(po_id)')
+
+    # W4a verify F1: the line count a receiving sibling checks before it books
+    # a receipt. Backfilled from the lines THIS computer holds, but ONLY for
+    # the legacy rows (`sync_backfill_pending=1`, i.e. typed on this computer
+    # before v45, whose lines are all local by construction). A row with a NULL
+    # count and pending=0 is a sibling's order that an older build sent
+    # without the field: counting whatever lines have arrived so far would
+    # stamp a PARTIAL number and make the check pass vacuously for the wrong
+    # reason, so it stays NULL ("no check possible"). `IS NULL` also means a
+    # replay never rewrites a count a v45 writer stamped.
+    if 'purchase_order_items' in live:
+        conn.execute(
+            "UPDATE purchase_orders SET item_count = ("
+            "  SELECT COUNT(*) FROM purchase_order_items i WHERE i.po_id = purchase_orders.id) "
+            "WHERE item_count IS NULL AND sync_backfill_pending = 1")
 
     if 'gl_journals' in live and 'uid' in _columns('gl_journals'):
         conn.execute(

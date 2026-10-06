@@ -3641,12 +3641,30 @@ def _po_stamp_and_queue_create(cur, po_id, order_journal_id):
     (po_core.recompute_po_paid) on every computer, so sending the writer's
     figure would only invite it to disagree with the rows that produce it.
     """
+    # W4a verify F4: every read/write below is company-scoped (CLAUDE.md: any
+    # query that skips company_id is a bug). The order's own company is the
+    # scope: this helper is handed an id, not a company.
+    po_cid = cur.execute("SELECT company_id FROM purchase_orders WHERE id=?", (po_id,)).fetchone()[0]
     if order_journal_id is not None:
-        jrow = cur.execute("SELECT uid FROM gl_journals WHERE id=?", (order_journal_id,)).fetchone()
+        jrow = cur.execute("SELECT uid FROM gl_journals WHERE id=? AND company_id=?",
+                           (order_journal_id, po_cid)).fetchone()
         if jrow and jrow['uid']:
-            cur.execute("UPDATE purchase_orders SET order_journal_uid=? WHERE id=?",
-                        (jrow['uid'], po_id))
-    po = cur.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+            cur.execute("UPDATE purchase_orders SET order_journal_uid=? WHERE id=? AND company_id=?",
+                        (jrow['uid'], po_id, po_cid))
+    # W4a verify F1: stamp how many lines this order has. Every caller has
+    # inserted ALL its lines before reaching here (create, reorder-accept) or
+    # holds them all locally (the legacy backfill), so COUNT(*) is the full set.
+    # The header and each line are SEPARATE sync events and a line can park on
+    # a product that has not arrived; a sibling that received on the header
+    # alone would move the books for the whole order and the stock for only the
+    # lines present. receive_purchase_order refuses while it holds fewer lines
+    # than this number. Company-scoped like every write here.
+    cur.execute(
+        "UPDATE purchase_orders SET item_count="
+        "(SELECT COUNT(*) FROM purchase_order_items WHERE po_id=purchase_orders.id) "
+        "WHERE id=? AND company_id=?", (po_id, po_cid))
+    po = cur.execute("SELECT * FROM purchase_orders WHERE id=? AND company_id=?",
+                     (po_id, po_cid)).fetchone()
     branch_uid = _branch_uid(cur.connection, po['branch_id']) if po['branch_id'] else None
     _queue_sync_event(cur, 'purchase_order', po['uid'], 'create', {
         'uid': po['uid'], 'po_number': po['po_number'], 'supplier_id': po['supplier_id'],
@@ -3659,6 +3677,7 @@ def _po_stamp_and_queue_create(cur, po_id, order_journal_id):
         'split_count': po['split_count'], 'routing_status': po['routing_status'],
         'routed_channel': po['routed_channel'], 'routed_at': po['routed_at'],
         'routed_to': po['routed_to'], 'idempotency_key': po['idempotency_key'],
+        'item_count': po['item_count'],
     })
     for it in cur.execute("SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY id",
                           (po_id,)).fetchall():
@@ -3667,6 +3686,79 @@ def _po_stamp_and_queue_create(cur, po_id, order_journal_id):
             'quantity': it['quantity'], 'unit_cost': it['unit_cost'], 'total': it['total'],
             'received_qty': it['received_qty'],
         })
+
+
+def _classify_po_payments(cur, po, eps):
+    """W4a verify F2: sort the payments naming legacy order `po` by WHO recorded
+    them. Returns (local, sibling, unprovable) lists of payment rows.
+
+    WHY THIS EXISTS. Before W4a a sibling's instalment was applied verbatim:
+    `related_id` is the WRITER's purchase_orders.id, which here names THIS
+    computer's unrelated order. Emitting a po_link for every same-supplier
+    payment (the first cut) therefore tied a sibling's money to our order and
+    the recompute counted it (measured: 101 'paid' on an order this computer
+    paid 1 on).
+
+    ORIGIN RULE -- the only signal that cannot be forged or shared:
+    the computer that recorded a payment posted its GL journal LOCALLY, so
+    that journal's `source_id` is a real integer; a journal that arrived by
+    sync has `source_id` NULL (sync_service derives source_id only for sale
+    and return journals). `payments.device` is client-supplied and
+    `created_by` users sync to every computer, so neither can say.
+
+      LOCAL      (a) a `po_payment` journal with source_id = this order and
+                     source_uid = the payment's uid (an instalment), OR
+                 (b) the order's own LOCAL order journal credits cash (1000)
+                     by the payment's amount: the DOWN PAYMENT, which posts no
+                     po_payment journal of its own. One cash line matches at
+                     most ONE payment (lowest payments.id first), so a second
+                     payment of the same amount is not mistaken for it.
+      SIBLING    journals exist for the payment's uid and NONE is local.
+      UNPROVABLE no journal either way (pre-v38 books, a supplier-less order).
+                 Left exactly as it was and never announced: RESIDUAL -- such
+                 a payment keeps counting toward this order and is not linked
+                 on siblings, because guessing is how the bug above happened.
+    """
+    cid = po['company_id']
+    pays = cur.execute(
+        "SELECT id, uid, amount FROM payments WHERE company_id=? AND related_type='po' "
+        "AND related_id=? ORDER BY id", (cid, po['id'])).fetchall()
+    if not pays:
+        return [], [], []
+    try:
+        cash_lines = [float(r[0]) for r in cur.execute(
+            "SELECT l.credit FROM gl_journals j "
+            "JOIN gl_journal_lines l ON l.journal_id = j.id "
+            "JOIN gl_accounts a ON a.id = l.account_id AND a.company_id = j.company_id "
+            "WHERE j.company_id=? AND j.source_type='purchase_order' AND j.source_id=? "
+            "AND j.reversed_journal_id IS NULL AND a.code=? AND l.credit > 0 ORDER BY l.id",
+            (cid, po['id'], gl.ACCOUNT_CASH)).fetchall()]
+    except sqlite3.OperationalError:
+        cash_lines = []            # no books tables yet: nothing is provable
+    local, sibling, unprovable = [], [], []
+    for pay in pays:
+        if not pay['uid']:
+            unprovable.append(pay)
+            continue
+        try:
+            sources = [r[0] for r in cur.execute(
+                "SELECT source_id FROM gl_journals WHERE company_id=? AND source_type='po_payment' "
+                "AND source_uid=?", (cid, pay['uid'])).fetchall()]
+        except sqlite3.OperationalError:
+            sources = []
+        if po['id'] in sources:                                   # (a)
+            local.append(pay)
+        elif sources and all(s is None for s in sources):         # synced in: a sibling's
+            sibling.append(pay)
+        else:
+            hit = next((i for i, line in enumerate(cash_lines)
+                        if abs(line - float(pay['amount'] or 0)) <= eps), None)
+            if hit is not None:                                   # (b) the down payment
+                cash_lines.pop(hit)
+                local.append(pay)
+            else:
+                unprovable.append(pay)
+    return local, sibling, unprovable
 
 
 def backfill_legacy_purchase_orders(conn):
@@ -3684,11 +3776,15 @@ def backfill_legacy_purchase_orders(conn):
 
     The `po_link` is how a pre-v45 PAYMENT (its `create` event carried only the
     writer's integer `related_id`, never a uid) gets pinned to the right order on
-    the receiver. It is narrowed to payments whose supplier is the order's
-    supplier: `related_id` is a bare per-computer integer, so without that match
-    a payment of ANOTHER supplier that happens to carry the same integer would
-    be linked too. RESIDUAL, recorded not fixed: a different payment of the SAME
-    supplier with the same integer id from a sibling can still mis-link.
+    the receiver. `related_id` is a bare per-computer integer, so a payment that
+    merely carries this order's integer may be a SIBLING's. W4a verify F2 decides
+    by ORIGIN, not by supplier (see `_classify_po_payments`): only payments this
+    computer provably recorded are linked; a sibling's is detached from the
+    order and not counted; the rest are left alone and counted in one INFO line.
+    RESIDUAL, recorded not fixed: (1) an unprovable payment (no journal either
+    way) is neither linked nor detached; (2) only orders that existed at the
+    upgrade are scanned, so a stale sibling row that happens to carry the
+    integer of an order typed AFTER the upgrade is not found here.
 
     Emitted even on a single-computer shop (harmless; the outbox is how a later
     second computer learns the history) -- same stance as
@@ -3697,26 +3793,39 @@ def backfill_legacy_purchase_orders(conn):
     if 'sync_backfill_pending' not in cols or 'uid' not in cols:
         return 0          # pre-v45 shape: nothing stamped yet, retry next boot
     done = 0
-    pending = [r[0] for r in conn.execute(
-        "SELECT id FROM purchase_orders WHERE sync_backfill_pending=1 ORDER BY id").fetchall()]
-    for po_id in pending:
+    unlinked = 0
+    pending = [(r[0], r[1]) for r in conn.execute(
+        "SELECT id, company_id FROM purchase_orders WHERE sync_backfill_pending=1 ORDER BY id").fetchall()]
+    for po_id, po_company in pending:
         cur = conn.cursor()
         try:
             cur.execute("SAVEPOINT po_backfill")
-            po = cur.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+            po = cur.execute("SELECT * FROM purchase_orders WHERE id=? AND company_id=?",
+                             (po_id, po_company)).fetchone()
             _po_stamp_and_queue_create(cur, po_id, None)
             if po['status'] and po['status'] != 'pending':
                 _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
                     'uid': po['uid'], 'status': po['status'], 'received_at': po['received_at']})
-            for pay in cur.execute(
-                    "SELECT uid FROM payments WHERE company_id=? AND related_type='po' AND related_id=? "
-                    "AND party_type='supplier' AND party_id IS ? AND uid IS NOT NULL ORDER BY id",
-                    (po['company_id'], po_id, po['supplier_id'])).fetchall():
+            local, sibling, unprovable = _classify_po_payments(
+                cur, po, _money_epsilon(_company_currency(conn, po['company_id'])))
+            for pay in local:
                 _queue_sync_event(cur, 'payment', pay['uid'], 'po_link',
                                   {'uid': pay['uid'], 'po_uid': po['uid']})
-            cur.execute("UPDATE purchase_orders SET sync_backfill_pending=0 WHERE id=?", (po_id,))
+            for pay in sibling:
+                # A sibling's payment that the old verbatim apply pinned to this
+                # order by the WRITER's integer. Detach (money still counts for
+                # the supplier: that balance is keyed on party_id); the sibling
+                # re-announces it by po_uid, which resolves to the right order.
+                cur.execute("UPDATE payments SET related_id=NULL WHERE id=? AND company_id=?",
+                            (pay['id'], po['company_id']))
+            if local or sibling:
+                po_core.recompute_po_paid(conn, po['company_id'], po_id,
+                                          _money_epsilon(_company_currency(conn, po['company_id'])))
+            cur.execute("UPDATE purchase_orders SET sync_backfill_pending=0 WHERE id=? AND company_id=?",
+                        (po_id, po_company))
             cur.execute("RELEASE SAVEPOINT po_backfill")
             done += 1
+            unlinked += len(unprovable)
         except Exception:  # noqa: BLE001 -- one order must not stop the rest, nor the boot
             log.exception('purchase-order sync backfill failed for PO %s -- will retry next boot', po_id)
             try:
@@ -3724,6 +3833,8 @@ def backfill_legacy_purchase_orders(conn):
                 cur.execute("RELEASE SAVEPOINT po_backfill")
             except Exception:  # noqa: BLE001
                 pass
+    if unlinked:
+        log.info('W4a backfill: %d PO payments left unlinked (origin unprovable)', unlinked)
     if done:
         conn.commit()
     return done
@@ -4284,6 +4395,21 @@ def receive_purchase_order(po_id):
                                        "Sync, then try again."}), 409
 
         items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
+        # W4a verify F1: the header and its order journal can both be here while
+        # a LINE is still parked (its product has not synced). Receiving then
+        # moves the books for the whole order (1260 -> 1200 at the full
+        # amount) but the stock for only the lines present -- ledger and shelves
+        # silently disagree, and the missing line's stock can never be added
+        # afterwards because the order is already 'received'. Refuse, write
+        # nothing; a later sync brings the line and the same click then works.
+        # `item_count` NULL means the writer predates this check (or never sent
+        # it): no count to compare, so the OLD behaviour stands -- refusing
+        # would strand every pre-W4a order.
+        if po['item_count'] is not None and len(items) < po['item_count']:
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_LINES_NOT_ARRIVED',
+                            'message': "Some lines of this order have not reached this computer yet. "
+                                       "Sync, then try again."}), 409
         # `po['branch_id']` is a trusted value from THIS company's own PO row
         # (fetched WHERE company_id=? above) -- always set for a PO created
         # after this fix (create_purchase_order now resolves one via
@@ -4652,7 +4778,8 @@ def cancel_purchase_order(po_id):
         _queue_sync_event(cur, 'purchase_order', po['uid'], 'update', {
             'uid': po['uid'], 'status': 'cancelled', 'received_at': None})
         currency = _company_currency(conn, cid)
-        sup = cur.execute("SELECT supplier_id FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+        sup = cur.execute("SELECT supplier_id FROM purchase_orders WHERE id=? AND company_id=?",
+                          (po_id, cid)).fetchone()
         if sup and sup['supplier_id']:
             _refresh_party_balance(conn, 'suppliers', sup['supplier_id'], cid, currency)
         # STOCK-BOOKS verify F7: a PO drafted by accept_reorder_request leaves its

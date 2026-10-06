@@ -97,7 +97,8 @@ def _make_v44(db, lazy_columns_present=False):
         conn.execute('DROP INDEX IF EXISTS idx_purchase_orders_uid')
         conn.execute('DROP INDEX IF EXISTS idx_purchase_order_items_uid')
         conn.execute('DROP INDEX IF EXISTS idx_poi_po')
-        for table, cols in (('purchase_orders', ('uid', 'order_journal_uid', 'sync_backfill_pending')),
+        for table, cols in (('purchase_orders', ('uid', 'order_journal_uid', 'sync_backfill_pending',
+                                                  'item_count')),
                             ('purchase_order_items', ('uid',))):
             have = {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
             for c in cols:
@@ -176,6 +177,10 @@ def test_upgrade_adds_columns_stamps_legacy_rows_and_keeps_integrity(lazy):
     items = _rows(db, "SELECT uid FROM purchase_order_items")
     assert len(items) == 4 and all(i['uid'] for i in items) and len({i['uid'] for i in items}) == 4
 
+    # W4a verify F1: every legacy order gets the count of its (all-local) lines
+    assert 'item_count' in _cols(db, 'purchase_orders')
+    assert all(p['item_count'] == 2 for p in pos.values()), [p['item_count'] for p in pos.values()]
+
     # the order journal is found for the PO that had one and ONLY that one
     assert pos['PO-V45-1']['order_journal_uid'] == ids['journal_uid']
     assert pos['PO-V45-2']['order_journal_uid'] is None
@@ -241,3 +246,28 @@ def test_a_fresh_install_has_the_v45_shape_and_no_pending_rows():
     assert {'uid', 'order_journal_uid', 'sync_backfill_pending'} <= _cols(db, 'purchase_orders')
     assert 'uid' in _cols(db, 'purchase_order_items')
     assert _rows(db, "SELECT COUNT(*) AS n FROM purchase_orders WHERE sync_backfill_pending=1")[0]['n'] == 0
+
+
+def test_f1_replay_never_stamps_a_count_on_a_siblings_order_or_rewrites_one():
+    """W4a verify F1. A sibling's order that an older build sent without
+    `item_count` has pending=0 and a NULL count; counting the lines that have
+    arrived so far would stamp a PARTIAL number. A stamped count must also
+    survive a replay untouched."""
+    sch, db = _install()
+    _make_v44(db)
+    _migrate(sch, db)
+    conn = _open(db)
+    try:
+        conn.execute("INSERT INTO purchase_orders (company_id, po_number, uid) VALUES (?, 'PO-SIB', ?)",
+                     (CID, str(uuid.uuid4())))
+        conn.execute("INSERT INTO purchase_orders (company_id, po_number, uid, item_count) "
+                     "VALUES (?, 'PO-STAMPED', ?, 5)", (CID, str(uuid.uuid4())))
+        conn.commit()
+        sch._migrate_retail_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    after = _po_rows(db)
+    assert after['PO-SIB']['item_count'] is None
+    assert after['PO-STAMPED']['item_count'] == 5
+    assert after['PO-V45-1']['item_count'] == 2

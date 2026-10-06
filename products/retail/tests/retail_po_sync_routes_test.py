@@ -70,7 +70,7 @@ PO_KEYS = {
     'uid', 'po_number', 'supplier_id', 'branch_uid', 'status', 'subtotal', 'tax_total', 'total',
     'notes', 'ordered_at', 'received_at', 'created_at', 'due_date', 'order_journal_uid',
     'split_group_id', 'split_index', 'split_count', 'routing_status', 'routed_channel',
-    'routed_at', 'routed_to', 'idempotency_key',
+    'routed_at', 'routed_to', 'idempotency_key', 'item_count',
 }
 ITEM_KEYS = {'uid', 'po_uid', 'product_id', 'quantity', 'unit_cost', 'total', 'received_qty'}
 
@@ -542,3 +542,172 @@ def test_r9_reorder_accept_stamps_uids_and_queues_the_same_events(client):
     assert len(items) == 1 and items[0]['uid']
     iev = _events('purchase_order_item', 'create', items[0]['uid'])
     assert len(iev) == 1 and set(iev[0]['payload']) == ITEM_KEYS
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# W4a verify F1 -- a sibling must not receive an order whose lines have not
+# arrived. The header and its order journal can both be here while a line is
+# still parked (e.g. on a product that has not synced): receiving then moved
+# the books (1260 -> 1200) for the WHOLE order but the stock for only the
+# lines present -- stock and books silently disagreed.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_f1_create_carries_the_line_count(client):
+    sid = _seed_supplier(client)
+    p1 = _seed_product(client); p2 = _seed_product(client)
+    po_id = _make_po(client, sid, [(p1, 10, 4.0), (p2, 5, 2.0)])
+    po = _po(po_id)
+    assert po['item_count'] == 2
+    pl = _events('purchase_order', 'create', po['uid'])[0]['payload']
+    assert pl['item_count'] == 2
+
+
+def test_f1_receive_refuses_while_a_line_has_not_arrived_and_writes_nothing(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    p1 = _seed_product(client); p2 = _seed_product(client)
+    po_id = _make_po(client, sid, [(p1, 10, 4.0), (p2, 5, 2.0)])
+    # Strand one line: what a sibling looks like while that line is parked.
+    gone = _q("SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY id DESC LIMIT 1", po_id)[0]
+    conn = get_retail_conn()
+    conn.execute("DELETE FROM purchase_order_items WHERE id=?", (gone['id'],))
+    conn.commit(); conn.close()
+    before = _snapshot(po_id, p1)
+
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json()['code'] == 'PO_LINES_NOT_ARRIVED'
+    assert _snapshot(po_id, p1) == before and _on_hand(cid, p1) == 0
+    assert _po(po_id)['status'] == 'pending'
+
+    # ALLOW half: once the missing line is here the same receipt goes through.
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO purchase_order_items (id, po_id, product_id, quantity, unit_cost, total, "
+                 "received_qty, uid) VALUES (?,?,?,?,?,?,?,?)",
+                 (gone['id'], po_id, gone['product_id'], gone['quantity'], gone['unit_cost'],
+                  gone['total'], gone['received_qty'], gone['uid']))
+    conn.commit(); conn.close()
+    r = client.post(f'{API}/purchase-orders/{po_id}/receive')
+    assert r.status_code == 200, r.get_json()
+    assert _on_hand(cid, p1) == 10 and _on_hand(cid, p2) == 5
+
+
+def test_f1_a_legacy_order_without_a_line_count_keeps_the_old_behaviour(client):
+    """item_count NULL = written by a build that did not send it, so no check
+    is possible; refusing would strand every pre-W4a order."""
+    sid = _seed_supplier(client)
+    p1 = _seed_product(client); p2 = _seed_product(client)
+    po_id = _make_po(client, sid, [(p1, 3, 2.0), (p2, 3, 2.0)])
+    conn = get_retail_conn()
+    conn.execute("UPDATE purchase_orders SET item_count=NULL WHERE id=?", (po_id,))
+    conn.execute("DELETE FROM purchase_order_items WHERE po_id=? AND product_id=?", (po_id, p2))
+    conn.commit(); conn.close()
+    assert client.post(f'{API}/purchase-orders/{po_id}/receive').status_code == 200
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# W4a verify F2 -- the upgrade backfill must not re-point a SIBLING's payment
+# at this computer's order.
+#
+# Before W4a a sibling's instalment was applied VERBATIM: `related_id` is the
+# WRITER's purchase_orders.id, which here names this computer's own unrelated
+# order. The backfill then saw "a payment of the same supplier naming PO X" and
+# emitted a po_link tying the sibling's money to our order, and the recompute
+# counted it (measured: 101 'paid' on an order this computer paid 1 on).
+# The only trustworthy origin signal: the computer that recorded a payment
+# posted its GL journal LOCALLY (source_id NOT NULL); a synced journal arrives
+# with source_id NULL. (`payments.device` is client-supplied; `created_by`
+# users sync, so neither can tell.)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _seed_foreign_po_payment(cid, supplier_id, po_id, amount, sibling_journal):
+    """A payment row exactly as the PRE-v45 apply left a sibling's instalment:
+    related_type='po', related_id = the writer's integer (here: ours). With
+    `sibling_journal` its GL journal is present too, as a SYNCED journal
+    (source_id NULL, source_uid = the payment's uid)."""
+    uid = str(uuid.uuid4())
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO payments (company_id,reference,party_type,party_id,direction,amount,currency,"
+                 "method,related_type,related_id,status,uid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (cid, f'S-{uuid.uuid4().hex[:6]}', 'supplier', supplier_id, 'out', amount, 'JOD',
+                  'cash', 'po', po_id, 'active', uid))
+    if sibling_journal:
+        conn.execute("INSERT INTO gl_journals (company_id,branch_id,business_date,reference,source_type,"
+                     "source_id,currency,uid,source_uid) VALUES (?,NULL,'2026-10-06',?,'po_payment',NULL,"
+                     "'JOD',?,?)", (cid, f'SJ-{uuid.uuid4().hex[:6]}', str(uuid.uuid4()), uid))
+    conn.commit(); conn.close()
+    return uid
+
+
+def _run_backfill():
+    conn = get_retail_conn()
+    try:
+        retail_api.backfill_legacy_purchase_orders(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_f2_a_siblings_payment_is_detached_not_linked_and_not_counted(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, [(pid, 10, 10.0)])                     # total 100
+    assert client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 1}).status_code == 200
+    own_uid = _q("SELECT uid FROM payments WHERE related_type='po' AND related_id=?", po_id)[0]['uid']
+    stale_uid = _seed_foreign_po_payment(cid, sid, po_id, 100, sibling_journal=True)
+    _make_legacy(po_id)
+
+    _run_backfill()
+
+    po = _po(po_id)
+    links = [e['payload'] for e in _events('payment', 'po_link') if e['payload']['po_uid'] == po['uid']]
+    assert links == [{'uid': own_uid, 'po_uid': po['uid']}], \
+        'only the payment THIS computer recorded may be pinned to this order'
+    stale = _q("SELECT related_type, related_id FROM payments WHERE uid=?", stale_uid)[0]
+    assert stale['related_id'] is None, "the sibling's payment must be detached from our order"
+    assert (po['amount_paid'], po['payment_status']) == (1.0, 'partial'), \
+        "this computer paid 1 on this order; the sibling's 100 must not be counted"
+
+
+def test_f2_down_payment_is_linked_once_and_unprovable_payments_are_left_alone(client, caplog):
+    import logging
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, [(pid, 10, 10.0)], paid=30)             # down payment 30, total 100
+    dp_uid = _q("SELECT uid FROM payments WHERE related_type='po' AND related_id=?", po_id)[0]['uid']
+    # Same amount as the down payment, but a sibling's (synced journal): detached.
+    sib = _seed_foreign_po_payment(cid, sid, po_id, 30, sibling_journal=True)
+    # No journal either way (e.g. pre-v38): origin cannot be proved -> untouched,
+    # emitted nothing. One has the down payment's amount too and must NOT be
+    # mistaken for it (a down-payment line matches ONE payment).
+    unp_a = _seed_foreign_po_payment(cid, sid, po_id, 7, sibling_journal=False)
+    unp_b = _seed_foreign_po_payment(cid, sid, po_id, 30, sibling_journal=False)
+    _make_legacy(po_id)
+
+    with caplog.at_level(logging.INFO):
+        _run_backfill()
+
+    po = _po(po_id)
+    links = [e['payload']['uid'] for e in _events('payment', 'po_link') if e['payload']['po_uid'] == po['uid']]
+    assert links == [dp_uid], 'the down payment is emitted exactly once, nothing else'
+    assert _q("SELECT related_id FROM payments WHERE uid=?", sib)[0]['related_id'] is None
+    for u in (unp_a, unp_b):
+        assert _q("SELECT related_id FROM payments WHERE uid=?", u)[0]['related_id'] == po_id
+    assert any('2 PO payments left unlinked' in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]
+    assert po['amount_paid'] == 67.0     # 30 (down) + 7 + 30 (unprovable: still counted, as before)
+
+
+def test_f2_an_instalment_this_computer_took_is_linked(client):
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, [(pid, 10, 10.0)])
+    assert client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 20}).status_code == 200
+    pay_uid = _q("SELECT uid FROM payments WHERE related_type='po' AND related_id=?", po_id)[0]['uid']
+    _make_legacy(po_id)
+    _run_backfill()
+    po = _po(po_id)
+    links = [e['payload'] for e in _events('payment', 'po_link') if e['payload']['po_uid'] == po['uid']]
+    assert links == [{'uid': pay_uid, 'po_uid': po['uid']}]

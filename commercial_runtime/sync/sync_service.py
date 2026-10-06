@@ -3231,7 +3231,7 @@ class SyncService:
             if event_type == "po_link":
                 # W4a: attach a pre-v45 supplier payment to its purchase order
                 # -- see `_apply_payment_po_link`.
-                return self._apply_payment_po_link(conn, ev, p, local_company_id)
+                return self._apply_payment_po_link(conn, ev, p, local_company_id, conflict_sink)
             if event_type == "update":
                 # AUDIT-032A (DEFECT 2): the ONE narrow, explicit exception to
                 # every other branch's "non-create is silently ignored" rule
@@ -3313,7 +3313,7 @@ class SyncService:
             po_local_id = None
             if p.get("related_type") == "po":
                 if p.get("po_uid"):
-                    po_local_id = self._local_id_by_uid(conn, "purchase_orders", p.get("po_uid"))
+                    po_local_id = self._local_po_id(conn, local_company_id, p.get("po_uid"))
                     if po_local_id is None:
                         return self._quarantine_apply_event(
                             conn, ev, reason="missing_parent:purchase_order",
@@ -3355,8 +3355,10 @@ class SyncService:
         elif entity_type == "purchase_order_item":
             if event_type != "create":
                 return True
+            # W4a verify F4: the parent is looked up INSIDE the receiver's company.
             po_row = conn.execute(
-                "SELECT id, status FROM purchase_orders WHERE uid=?", (p.get("po_uid"),)
+                "SELECT id, status FROM purchase_orders WHERE uid=? AND company_id=?",
+                (p.get("po_uid"), local_company_id)
             ).fetchone() if p.get("po_uid") else None
             if po_row is None:
                 return self._quarantine_apply_event(
@@ -5442,6 +5444,41 @@ class SyncService:
             "UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
             (paid, status, po_id, company_id))
 
+    @staticmethod
+    def _local_po_id(conn, company_id, uid):
+        """This computer's integer id for the purchase order with wire uid
+        `uid`, INSIDE `company_id` (W4a verify F4). Separate from
+        `_local_id_by_uid` on purpose: that helper is shared by tables whose
+        callers rely on its unscoped behaviour; a parent lookup for a
+        company-scoped table must never resolve another tenant's row."""
+        if not uid:
+            return None
+        row = conn.execute(
+            "SELECT id FROM purchase_orders WHERE uid=? AND company_id=?", (uid, company_id)
+        ).fetchone()
+        return row["id"] if row else None
+
+    @classmethod
+    def _record_sync_conflict_once(cls, conn, conflict_sink, *, local_company_id, entity_type,
+                                    entity_id, event_type, local_row_version,
+                                    incoming_row_version, reason, payload) -> bool:
+        """`_record_sync_conflict`, but only when this (entity, reason) has no
+        row yet (W4a verify F3). The same losing event is redelivered whenever
+        a pull is replayed or a peer re-announces; the first row already tells
+        a human everything, and N copies of it bury the real conflicts in the
+        review list. Returns True when a row was written."""
+        needle = "%" + json.dumps({"reason": reason})[1:-1] + "%"
+        if conn.execute(
+                "SELECT 1 FROM sync_conflicts WHERE company_id=? AND entity_type=? AND entity_id=? "
+                "AND incoming_payload LIKE ?",
+                (local_company_id, entity_type, entity_id, needle)).fetchone():
+            return False
+        cls._record_sync_conflict(
+            conn, conflict_sink, local_company_id=local_company_id, entity_type=entity_type,
+            entity_id=entity_id, event_type=event_type, local_row_version=local_row_version,
+            incoming_row_version=incoming_row_version, payload={**payload, "reason": reason})
+        return True
+
     def _apply_purchase_order_create(self, conn, ev: dict, p: dict, local_company_id,
                                       branch_fallback_sink) -> bool:
         """`purchase_order` create: insert the header another computer typed,
@@ -5475,8 +5512,8 @@ class SyncService:
                 "subtotal, tax_total, total, notes, ordered_at, received_at, created_at, due_date, "
                 "split_group_id, split_index, split_count, routing_status, routed_channel, routed_at, "
                 "routed_to, idempotency_key, uid, order_journal_uid, amount_paid, payment_status, "
-                "sync_backfill_pending) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),?,?,?,?,?,?,?,?,?,?,?,0,'unpaid',0) "
+                "sync_backfill_pending, item_count) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),?,?,?,?,?,?,?,?,?,?,?,0,'unpaid',0,?) "
                 "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                 (local_company_id, p.get("po_number"), supplier_id, resolved_branch_id,
                  p.get("status") or "pending", p.get("subtotal", 0), p.get("tax_total", 0),
@@ -5484,7 +5521,13 @@ class SyncService:
                  p.get("created_at"), p.get("due_date"), p.get("split_group_id"),
                  p.get("split_index"), p.get("split_count"), p.get("routing_status"),
                  p.get("routed_channel"), p.get("routed_at"), p.get("routed_to"),
-                 p.get("idempotency_key"), p.get("uid"), p.get("order_journal_uid")),
+                 p.get("idempotency_key"), p.get("uid"), p.get("order_journal_uid"),
+                 # W4a verify F1: how many lines the writer wrote. NULL when the
+                 # writer predates the field -- receive then has nothing to
+                 # compare against and keeps the old behaviour (see
+                 # receive_purchase_order); inventing a count here would
+                 # either strand the order or hide a missing line.
+                 p.get("item_count")),
             )
         except sqlite3.IntegrityError as exc:
             # `ON CONFLICT(uid)` only suppresses a collision on the uid index.
@@ -5506,7 +5549,7 @@ class SyncService:
                     detail=f"idempotency_key={p.get('idempotency_key')!r} already exists locally "
                            f"under a different purchase order (incoming uid={p.get('uid')!r})")
             raise
-        local_id = self._local_id_by_uid(conn, "purchase_orders", p.get("uid"))
+        local_id = self._local_po_id(conn, local_company_id, p.get("uid"))
         if local_id is not None:
             self._recompute_po_paid(conn, local_company_id, local_id)
         return True
@@ -5543,11 +5586,13 @@ class SyncService:
         local_status = local["status"] or "pending"
         local_rank = PO_STATUS_RANK.get(local_status, 0)
         if {local_status, incoming} == {"received", "cancelled"}:
-            self._record_sync_conflict(
+            # W4a verify F3: once per order. The losing event is redelivered on
+            # every replayed pull; each copy used to add a row.
+            self._record_sync_conflict_once(
                 conn, conflict_sink, local_company_id=local_company_id,
                 entity_type="purchase_order", entity_id=p.get("uid"), event_type="update",
                 local_row_version=local_rank, incoming_row_version=incoming_rank,
-                payload={**p, "reason": "po_received_and_cancelled"})
+                reason="po_received_and_cancelled", payload=p)
         if incoming_rank <= local_rank:
             return True
         if incoming == "received":
@@ -5561,7 +5606,8 @@ class SyncService:
             conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (incoming, local["id"]))
         return True
 
-    def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id) -> bool:
+    def _apply_payment_po_link(self, conn, ev: dict, p: dict, local_company_id,
+                               conflict_sink=None) -> bool:
         """`payment` event_type `po_link` {uid, po_uid}: attach a payment to
         its purchase order by uid.
 
@@ -5583,12 +5629,30 @@ class SyncService:
             return self._quarantine_apply_event(
                 conn, ev, reason="missing_parent:payment",
                 detail=f"uid={p.get('uid')!r} not found locally to link")
-        po_id = self._local_id_by_uid(conn, "purchase_orders", p.get("po_uid"))
+        po_id = self._local_po_id(conn, local_company_id, p.get("po_uid"))
         if po_id is None:
             return self._quarantine_apply_event(
                 conn, ev, reason="missing_parent:purchase_order",
                 detail=f"po_uid={p.get('po_uid')!r} not found locally")
         if pay["related_type"] not in (None, "", "po"):
+            return True
+        # W4a verify F2: the computer that RECORDED a payment posted its journal
+        # locally (`source_id` a real integer; a synced journal has it NULL).
+        # That computer knows which order it paid, so a po_link for the payment
+        # can only be a stranger's guess -- the pre-fix backfill emitted them for
+        # every same-supplier payment carrying the order's integer. Applying it
+        # would move OUR money onto another order. Ignored, and recorded ONCE
+        # (a redelivery must not add a row) so a human can see it happened.
+        # RESIDUAL: a down payment posts no po_payment journal of its own, so
+        # its origin cannot be proved here (the sender's backfill proves it).
+        if conn.execute(
+                "SELECT 1 FROM gl_journals WHERE company_id=? AND source_type='po_payment' "
+                "AND source_uid=? AND source_id IS NOT NULL",
+                (local_company_id, p.get("uid"))).fetchone():
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=local_company_id, entity_type="payment",
+                entity_id=p.get("uid"), event_type="po_link", local_row_version=0,
+                incoming_row_version=0, reason="po_link_from_non_origin", payload=p)
             return True
         old_id = pay["related_id"] if pay["related_type"] == "po" else None
         conn.execute(

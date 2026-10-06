@@ -226,6 +226,18 @@ def test_create_lands_under_the_receivers_company_and_branch(get_conn):
     assert row["sync_backfill_pending"] == 0, "a receiver must never re-queue what it pulled"
 
 
+def test_f1_create_stores_the_writers_line_count(get_conn):
+    """W4a verify F1: the receiver keeps `item_count` so receive can tell that a
+    line is still parked. Absent (an older writer) is stored as NULL, not 0 --
+    0 would read as "an order with no lines" and a fabricated count would
+    either strand the order or hide a missing line."""
+    assert _apply(get_conn, _po(item_count=3)) is True
+    assert _po_row(get_conn)["item_count"] == 3
+    other = str(uuid.uuid4())
+    assert _apply(get_conn, _po(uid=other, po_number="PO-0002")) is True
+    assert _po_row(get_conn, other)["item_count"] is None
+
+
 def test_create_replayed_is_a_noop(get_conn):
     _apply(get_conn, _po())
     _apply(get_conn, _po())
@@ -494,3 +506,109 @@ def test_receiver_recompute_matches_the_writer_side_module(get_conn):
     finally:
         conn.close()
     assert ours == (70.0, "partial")
+
+
+# ── W4a verify F2: a po_link must never come back to the computer that recorded the payment ──
+
+def test_f2_po_link_arriving_at_the_origin_is_ignored_and_recorded_once(get_conn):
+    """This computer recorded the payment (it holds a LOCAL po_payment journal:
+    source_id = a real integer). A po_link for it, from any other computer, is
+    by construction wrong -- the origin knows which order it paid. Re-pointing
+    it would move our money onto another order. Ignored, with one conflict
+    row so a human can see it (not one per redelivery)."""
+    mine = _local_po(get_conn, total=100.0)
+    _apply(get_conn, _po())                       # the order the stray link names
+    pay_uid = str(uuid.uuid4())
+    _exec(get_conn, "INSERT INTO payments (company_id, reference, party_type, party_id, direction, "
+                    "amount, currency, method, related_type, related_id, status, created_at, uid) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          (CID, "R", "supplier", SUPPLIER, "out", 25.0, "USD", "cash", "po", mine["id"],
+           "active", "2026-10-06 10:00:00", pay_uid))
+    _exec(get_conn, "INSERT INTO gl_journals (company_id, business_date, source_type, source_id, "
+                    "currency, uid, source_uid) VALUES (?,?,?,?,?,?,?)",
+          (CID, "2026-10-06", "po_payment", mine["id"], "USD", str(uuid.uuid4()), pay_uid))
+
+    assert _apply(get_conn, _link(pay_uid)) is True
+    assert _apply(get_conn, _link(pay_uid)) is True        # redelivery
+    row = _rows(get_conn, "SELECT related_type, related_id FROM payments WHERE uid=?", (pay_uid,))[0]
+    assert row == {"related_type": "po", "related_id": mine["id"]}, \
+        "the origin's own payment must stay on the order it paid"
+    conflicts = _rows(get_conn, "SELECT * FROM sync_conflicts WHERE entity_type='payment'")
+    assert len(conflicts) == 1 and "po_link_from_non_origin" in conflicts[0]["incoming_payload"]
+    assert _po_row(get_conn)["amount_paid"] == 0, "the stray target order must not gain the money"
+
+
+# ── W4a verify F3: a redelivered losing event is ONE conflict, not one per delivery ──
+
+def test_f3_redelivered_losing_cancel_records_one_conflict(get_conn):
+    _apply(get_conn, _po())
+    _apply(get_conn, _po_update("received", "2026-10-06 12:00:00"))
+    _apply(get_conn, _po_update("cancelled"))
+    _apply(get_conn, _po_update("cancelled"))      # the same event, delivered again
+    conflicts = _rows(get_conn, "SELECT * FROM sync_conflicts WHERE entity_type='purchase_order'")
+    assert len(conflicts) == 1 and "po_received_and_cancelled" in conflicts[0]["incoming_payload"]
+    assert _po_row(get_conn)["status"] == "received"
+
+
+# ── W4a verify F4: parents are looked up inside the receiver's company ──
+
+def test_f4_children_never_attach_to_another_companys_order(get_conn):
+    foreign_uid = str(uuid.uuid4())
+    _exec(get_conn, "INSERT INTO purchase_orders (company_id, po_number, supplier_id, status, total, uid) "
+                    "VALUES (?,?,?,?,?,?)", ("someone-else", "THEIRS-1", SUPPLIER, "pending", 50.0, foreign_uid))
+    assert _apply(get_conn, _item(po_uid=foreign_uid)) is False
+    assert _apply(get_conn, _pay(po_uid=foreign_uid)) is False
+    p = _pay(with_po_uid=False, related_id=1)
+    _apply(get_conn, p)
+    assert _apply(get_conn, _link(p["payload"]["uid"], po_uid=foreign_uid)) is False
+    assert _rows(get_conn, "SELECT id FROM purchase_order_items") == []
+    assert [r["reason"] for r in _parked(get_conn)] == ["missing_parent:purchase_order"] * 3
+    theirs = _rows(get_conn, "SELECT amount_paid FROM purchase_orders WHERE uid=?", (foreign_uid,))[0]
+    assert (theirs["amount_paid"] or 0) == 0
+
+
+# ── W4a verify F5: the two recomputes must agree in EVERY currency, at the boundary ──
+#
+# The test above runs the receiver in the shop's default currency (JOD, 3 dp)
+# but hands the writer-side function USD's epsilon (0.005): they were never
+# asked the same question, so it could not catch the two disagreeing about
+# where "paid" begins. Here both run with the SAME currency, for a 3-dp, a
+# 2-dp and a 0-dp currency, with the outstanding amount landing exactly on,
+# just under and just over half a minor unit (the point the status flips).
+
+#: (currency, total, paid, why). Half a minor unit is 0.0005 / 0.005 / 0.5.
+_PARITY_CASES = [
+    ("JOD", 100.0, 99.9995, "JOD: outstanding exactly half a fil"),
+    ("JOD", 100.0, 99.9994, "JOD: outstanding just OVER half a fil"),
+    ("JOD", 100.0, 99.9996, "JOD: outstanding just UNDER half a fil"),
+    ("JOD", 100.0, 99.999, "JOD: one whole fil outstanding"),
+    ("USD", 100.0, 99.995, "USD: outstanding exactly half a cent"),
+    ("USD", 100.0, 99.994, "USD: just OVER half a cent"),
+    ("USD", 100.0, 99.996, "USD: just UNDER half a cent"),
+    ("USD", 100.0, 99.99, "USD: one whole cent outstanding"),
+    ("JPY", 100.0, 99.5, "JPY (0 dp): outstanding exactly half a yen"),
+    ("JPY", 100.0, 99.4, "JPY: just OVER half a yen"),
+    ("JPY", 100.0, 99.6, "JPY: just UNDER half a yen"),
+    ("JPY", 100.0, 99.0, "JPY: one whole yen outstanding"),
+    ("USD", 0.0, 0.0, "USD: a zero-total order is never 'paid'"),
+]
+
+
+@pytest.mark.parametrize("currency,total,paid,why", _PARITY_CASES, ids=[c[3] for c in _PARITY_CASES])
+def test_f5_receiver_and_writer_recompute_agree_in_every_currency(get_conn, currency, total, paid, why):
+    from core.retail import purchase_orders as po_mod
+    from core.retail import party_balance
+    _exec(get_conn, "INSERT OR REPLACE INTO retail_settings (company_id, skey, svalue) VALUES (?,?,?)",
+          (CID, "base_currency", currency))
+    _apply(get_conn, _po(total=total, subtotal=total))
+    po_id = _po_row(get_conn)["id"]
+    if paid:
+        _apply(get_conn, _pay(amount=paid, currency=currency))
+    ours = (_po_row(get_conn)["amount_paid"], _po_row(get_conn)["payment_status"])
+    conn = get_conn()
+    try:
+        theirs = po_mod.recompute_po_paid(conn, CID, po_id, party_balance.money_epsilon(currency))
+        conn.commit()
+    finally:
+        conn.close()
+    assert ours == theirs, (why, "receiver", ours, "writer", theirs)
