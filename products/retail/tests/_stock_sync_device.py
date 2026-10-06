@@ -251,6 +251,14 @@ def main() -> None:
         local_ensure_schema=_ensure_credit_schema,
         stock_exception_recorder=record_or_refresh_stock_exception,
     )
+    # app.py gives BOTH retail sync services these two post-pull hooks. This
+    # harness used to omit them, so a device that only PULLED kept a stale
+    # `credit_balance` (a PO down payment pulled by B left B's supplier at 0
+    # instead of -30) -- a fixture defect, not a product one: the production
+    # wiring refreshes after every pull. Same wiring as _money_void_device.py.
+    from api.retail_api import install_void_reversal_sweep, install_party_balance_refresh
+    install_void_reversal_sweep(service)
+    install_party_balance_refresh(service)
 
     API = "/api/sub/retail"
     client = flask_app.test_client()

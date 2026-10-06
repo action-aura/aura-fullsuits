@@ -765,3 +765,51 @@ def test_r5_the_close_event_flags_a_receipt_created_after_its_stamp(get_conn):
     _apply(get_conn, {"entity_type": "purchase_order", "event_type": "update", "entity_id": puid,
                       "payload": {"uid": puid, "closed_at": "2026-10-06 08:00:00"}})
     assert len(_after_close_conflicts(get_conn, puid)) == 1
+
+
+def _supplier_cache(get_conn):
+    return _rows(get_conn, "SELECT credit_balance FROM suppliers WHERE id=?", (SUPPLIER,))[0]["credit_balance"]
+
+
+def _down_payment_event(amount=30.0):
+    p = {"uid": str(uuid.uuid4()), "reference": "PAY-DP-1", "party_type": "supplier",
+         "party_id": SUPPLIER, "direction": "out", "amount": amount, "currency": "USD",
+         "method": "cash", "related_type": "po", "related_id": 99, "po_uid": PO_UID,
+         "status": "active", "created_by": None, "device": "a",
+         "created_at": "2026-10-06 09:00:00"}
+    return {"entity_type": "payment", "event_type": "create", "entity_id": p["uid"], "payload": p}
+
+
+def _pull(get_conn, events, install=True):
+    """One pull through the SAME wiring app.py gives a retail sync service."""
+    svc = SyncService(client_factory=lambda: None, get_conn=get_conn,
+                      local_company_id_provider=lambda: CID,
+                      local_ensure_schema=_ensure_credit_schema)
+    if install:
+        _retail_api_module.install_party_balance_refresh(svc)
+    conn = get_conn()
+    try:
+        svc.apply_pull_result(conn, {"events": events, "cursor": 1})
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_r6_payment_parked_then_replayed_in_the_same_pull_updates_the_supplier_cache(get_conn):
+    """The down payment is queued BEFORE its order (A creates the payment first),
+    so on B it parks as missing_parent:purchase_order and is replayed by the
+    quarantine retry INSIDE the same apply_pull_result -- after which the party
+    balance cache must already read -30 (an advance), not wait for the next pull.
+    Measured on the real two-device flow: event order was
+    payment, gl_journal, purchase_order, purchase_order_item."""
+    _pull(get_conn, [_down_payment_event(), _po(), _item(ITEM_A, PRODUCT, 10.0)])
+    assert _rows(get_conn, "SELECT COUNT(*) AS n FROM sync_apply_quarantine")[0]["n"] == 0
+    assert _rows(get_conn, "SELECT amount_paid FROM purchase_orders")[0]["amount_paid"] == 30.0
+    assert _supplier_cache(get_conn) == -30.0
+
+
+def test_r6_without_the_installed_refresh_the_cache_stays_stale(get_conn):
+    """Proves the test above is not vacuous: the cache moves ONLY through the
+    post-pull hook (a bare service, as the old device harness was, leaves 0)."""
+    _pull(get_conn, [_down_payment_event(), _po(), _item(ITEM_A, PRODUCT, 10.0)], install=False)
+    assert _supplier_cache(get_conn) == 0
