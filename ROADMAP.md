@@ -7156,3 +7156,21 @@ one order-dependent failure each, every one green alone and red on b169cd92 too
 (stock_sync ~448, money_sync no-terminal discriminator, reorder thread, two-install
 cursor). Two of those four are fixed above; stock_sync and the money_sync
 discriminator remain as recorded flakes.
+
+## 2026-10-06 — retail schema v46 CLAIMED (W4a-2: supplier debt at receipt, partial receive)
+
+Claimed before any builder starts. Checked all 109 local and origin refs (fetched):
+the highest `RETAIL_SCHEMA_VERSION` anywhere is 45 (this branch). No registry bump,
+no Owner revision.
+
+Why: W4a residuals S1 and "AP at order time". A purchase order books Accounts Payable
+the moment it is typed, so the supplier balance and AP say the shop owes for goods
+that never came; and an order can only be received whole, so a short delivery is
+either refused or received as if complete (stock and books overstated).
+
+Scope: receipts become immutable synced facts (per-line quantities), `received_qty`
+and the PO's receive state are DERIVED from them (order-independent across
+computers), AP is posted per receipt (Dr Inventory / Cr AP) for orders created under
+v46, a "close short" ends an order with lines outstanding, and orders created before
+v46 keep their order-time AP (no re-booking of history). Plan: job 54e80fc2
+tmp/W4A2-PLAN.md.
