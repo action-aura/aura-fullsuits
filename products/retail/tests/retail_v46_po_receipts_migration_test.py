@@ -222,7 +222,7 @@ def test_replaying_the_chain_is_byte_identical_and_adds_no_second_legacy_receipt
         icur = conn.execute(
             "INSERT INTO purchase_order_items (po_id, product_id, quantity, unit_cost, total, received_qty, uid) "
             "VALUES (?, 'p', 10, 1, 10, 4, ?)", (cur.lastrowid, i_uid))
-        r_uid = po_core.receipt_uid(po_uid, 0, [(i_uid, 4)])
+        r_uid = po_core.keyed_receipt_uid(po_uid, 'migrate-key-0001')
         rcur = conn.execute(
             "INSERT INTO purchase_order_receipts (company_id, uid, po_id, value, line_count, legacy) "
             "VALUES (?,?,?,4,1,0)", (CID, r_uid, cur.lastrowid))

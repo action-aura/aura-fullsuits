@@ -39,6 +39,7 @@ be a cycle (same reason po_split.py duplicates its rounding helper).
 """
 from __future__ import annotations
 
+import re
 import uuid
 from decimal import Decimal
 
@@ -119,9 +120,18 @@ def recompute_po_paid(conn, cid, po_id, epsilon):
     ).fetchone()[0]
     paid = float(Decimal(minor) / Decimal(factor))
     head = conn.execute(
-        "SELECT total FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)
+        "SELECT total, status FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)
     ).fetchone()
     total = float(head[0] or 0) if head else 0.0
+    if head and head[1] == 'closed':
+        # W4a-2 verify R4: a CLOSED-short order owes only for what arrived, so
+        # "paid" means paid against the receipts' value, not the full total
+        # (24 of 40 delivered and 24 paid read 'partial' for ever). 'cancelled'
+        # is unchanged. Same rule in the sync twin (SyncService._recompute_po_paid).
+        charge_minor = conn.execute(
+            "SELECT COALESCE(SUM(CAST(ROUND(value * ?) AS INTEGER)), 0) FROM purchase_order_receipts "
+            "WHERE company_id=? AND po_id=?", (factor, cid, po_id)).fetchone()[0]
+        total = float(Decimal(charge_minor) / Decimal(factor))
     if total > eps and total - paid <= eps:
         status = 'paid'
     elif paid > eps:
@@ -142,18 +152,48 @@ def _qty_text(q) -> str:
     return format(Decimal(str(q)).normalize(), 'f')
 
 
-def receipt_uid(po_uid: str, n: int, lines) -> str:
-    """The uid of the `n`-th receipt (n = receipts of this order already present
-    locally) of order `po_uid` carrying `lines` = [(item_uid, quantity)].
+#: a client-supplied receipt key: 8..64 chars of [A-Za-z0-9-] (a uuid fits).
+_RECEIPT_KEY_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
-    W4a-2 D4: DETERMINISTIC, with the canonical line text sorted by item uid, so
-    two computers that record the IDENTICAL delivery while offline mint the same
-    uid and it collapses to one fact on sync (counted once). A DIFFERENT
-    delivery (other quantities, or a second one of the same size -- `n` differs)
-    is another fact and both count. NEVER use uuid4 here: a random uid would
-    make the identical delivery count twice, silently."""
-    canon = ";".join(f"{item_uid}={_qty_text(q)}" for item_uid, q in sorted(lines, key=lambda l: l[0]))
-    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{po_uid}:receipt:{n}:{canon}"))
+
+def valid_receipt_key(key) -> bool:
+    """True when `key` is an acceptable client receipt key (see `keyed_receipt_uid`)."""
+    return isinstance(key, str) and bool(_RECEIPT_KEY_RE.fullmatch(key))
+
+
+def completing_receipt_uid(po_uid: str, prior_receipt_uids) -> str:
+    """The uid of the receipt that COMPLETES an order -- the one that takes every
+    line's full remaining quantity.
+
+    W4a-2 verify R1 (replaces the D4 rule, whose local receipt count `n` was
+    wrong both ways: the same delivery typed on two computers that held a
+    different number of receipts minted different uids and was counted twice
+    with no over-receipt flag, and two DIFFERENT same-size deliveries at the
+    same `n` minted the same uid so one was silently lost).
+
+    The identity of "the rest" is the history it completes: the order's uid and
+    the sorted uids of the receipts present locally. Two computers that saw the
+    SAME history and both receive the rest mint the same uid and collapse (this
+    keeps W4a's double-offline-receive guarantee: prior = empty for a whole
+    order). Computers with DIFFERENT histories mint different uids, both facts
+    count, and the over-receipt is flagged -- visible, never silently lost.
+    NEVER derive this from a per-computer counter."""
+    prior = ",".join(sorted(prior_receipt_uids))
+    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{po_uid}:rest-after:{prior}"))
+
+
+def keyed_receipt_uid(po_uid: str, receipt_key: str) -> str:
+    """The uid of a PARTIAL receipt, from the key the client minted when it
+    opened the receive dialog. A retry or a double submit carries the same key,
+    so it mints the same uid and hits ON CONFLICT(uid) DO NOTHING -- recorded
+    once. A request WITHOUT a key gets a random uuid4 from the route (no retry
+    dedupe: with nothing to say "this is the same delivery" a deterministic uid
+    would merge two genuinely different deliveries of the same size).
+
+    Residual, by design: the same partial delivery typed on two computers while
+    offline has two keys, counts twice, and -- if that exceeds the order -- is
+    flagged `po_over_received`. It is never silently lost."""
+    return str(uuid.uuid5(_PO_RECEIPT_NAMESPACE, f"{po_uid}:key:{receipt_key}"))
 
 
 def receipt_line_uid(receipt_uid_: str, item_uid: str) -> str:
@@ -185,6 +225,23 @@ def received_by_item(conn, cid, po_id) -> dict:
             "WHERE r.company_id=? AND r.po_id=?", (cid, po_id)).fetchall():
         out[row[0]] = out.get(row[0], Decimal('0')) + Decimal(str(row[1] or 0))
     return out
+
+
+def receipt_completes(conn, cid, po_id, lines) -> bool:
+    """True when a delivery of `lines` = [(po_item_id, quantity)] takes every
+    line of the order to (at least) its ordered quantity -- i.e. it is the
+    receipt that COMPLETES the order. Decimal throughout (no float slack).
+    An order with no lines is never completed by anything."""
+    items = {row[0]: Decimal(str(row[1] or 0)) for row in conn.execute(
+        "SELECT id, quantity FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()}
+    if not items:
+        return False
+    delivered = {}
+    for item_id, qty in lines:
+        delivered[item_id] = delivered.get(item_id, Decimal('0')) + Decimal(str(qty))
+    already = received_by_item(conn, cid, po_id)
+    return all(already.get(i, Decimal('0')) + delivered.get(i, Decimal('0')) >= ordered
+               for i, ordered in items.items())
 
 
 def receipt_value(conn, cid, po_id, lines, currency) -> Decimal:
@@ -219,10 +276,7 @@ def receipt_value(conn, cid, po_id, lines, currency) -> Decimal:
         raw += q * items[item_id][1]
         this_delivery[item_id] = this_delivery.get(item_id, Decimal('0')) + q
     value = quantize_money(raw * factor, currency)
-    already = received_by_item(conn, cid, po_id)
-    completes = all(already.get(i, Decimal('0')) + this_delivery.get(i, Decimal('0')) >= ordered
-                    for i, (ordered, _c) in items.items())
-    if completes:
+    if receipt_completes(conn, cid, po_id, lines):
         prior = sum((Decimal(str(r[0] or 0)) for r in conn.execute(
             "SELECT value FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
             (cid, po_id)).fetchall()), Decimal('0'))
@@ -265,7 +319,10 @@ def recompute_po_receive_state(conn, cid, po_id):
         "SELECT COUNT(*), MAX(received_at) FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
         (cid, po_id)).fetchone()
     if n_receipts:
-        complete = all(received.get(i[0], Decimal('0')) >= Decimal(str(i[1] or 0)) for i in items)
+        # W4a-2 verify R2: an order with NO lines is never 'received' (the old
+        # all([]) said it was) -- the sync twin always said otherwise.
+        complete = bool(items) and all(
+            received.get(i[0], Decimal('0')) >= Decimal(str(i[1] or 0)) for i in items)
         if complete:
             status = 'received'
         elif head[0] or head[1]:

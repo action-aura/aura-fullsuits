@@ -299,9 +299,10 @@ def test_r4_receive_after_a_siblings_identical_movement_adds_no_second_stock(cli
     po = _po(po_id)
     item = _q("SELECT * FROM purchase_order_items WHERE po_id=?", po_id)[0]
     # W4a-2: the movement uid names the RECEIPT line; a whole-order receive on a
-    # computer holding no receipts yet is receipt n=0 carrying every line.
+    # computer holding no receipts yet COMPLETES the order with an empty history
+    # (W4a-2 verify R1: completing_receipt_uid(po_uid, [])).
     mv_uid = po_core.receipt_line_movement_uid(
-        po_core.receipt_uid(po['uid'], 0, [(item['uid'], 10)]), item['uid'])
+        po_core.completing_receipt_uid(po['uid'], []), item['uid'])
 
     # Simulate the sync apply of the OTHER computer's receipt: its movement row
     # (same deterministic uid) and the +10 it put on the balance.
@@ -338,7 +339,7 @@ def test_r4b_a_normal_receive_uses_the_deterministic_movement_uid_and_queues_it(
     item = _q("SELECT * FROM purchase_order_items WHERE po_id=?", po_id)[0]
     assert client.post(f'{API}/purchase-orders/{po_id}/receive').status_code == 200
     mv_uid = po_core.receipt_line_movement_uid(
-        po_core.receipt_uid(po['uid'], 0, [(item['uid'], 10)]), item['uid'])
+        po_core.completing_receipt_uid(po['uid'], []), item['uid'])
     assert len(_q("SELECT 1 FROM inventory_movements WHERE uid=?", mv_uid)) == 1
     assert len(_events('inventory_movement', 'create', mv_uid)) == 1
     assert _on_hand(cid, pid) == 10
@@ -527,7 +528,9 @@ def test_r8_boot_backfill_emits_once_and_clears_the_flag(client):
     assert len(_q("SELECT 1 FROM sync_outbox")) == total, 'second boot must emit nothing'
 
 
-def test_r8b_backfill_of_a_received_po_also_queues_its_status(client):
+def test_r8b_backfill_of_a_received_po_queues_no_status_update_and_leaks_no_receipt(client):
+    # W4a-2 verify R6: renamed -- it used to be "...also_queues_its_status", which
+    # is the OPPOSITE of what it now asserts (see the comment on the assert below).
     sid = _seed_supplier(client)
     pid = _seed_product(client)
     po_id = _make_po(client, sid, [(pid, 2, 5.0)])

@@ -787,10 +787,20 @@ _ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset(
 #: two equal.
 _PO_RECEIPT_NAMESPACE = uuid.UUID('a674e3be-c149-497a-b0a7-f235e22c5ae0')
 
-#: Quantities are REAL; "received >= ordered" and "over-received" compare with
-#: this slack so 0.1+0.2 style sums neither strand an order at 'partial' nor
-#: raise a phantom over-receipt conflict.
-_PO_QTY_EPSILON = 1e-6
+#: W4a-2 verify R2: quantities are REAL columns but are compared as DECIMALS
+#: built from str(value) -- exactly what core/retail/purchase_orders.py does --
+#: with NO slack. The old float SUM + 1e-6 slack was a second implementation of
+#: the same rule that could disagree with the core (and 1 - (0.1+0.2) in floats
+#: refused the last 0.7 of a fractional order). One rule, two copies, one table
+#: test (retail_po_receipts_apply_test) holding them equal.
+def _po_received_by_item(conn, company_id, po_id) -> dict:
+    out = {}
+    for row in conn.execute(
+            "SELECT l.po_item_id, l.quantity FROM purchase_order_receipt_lines l "
+            "JOIN purchase_order_receipts r ON r.id = l.receipt_id "
+            "WHERE r.company_id=? AND r.po_id=?", (company_id, po_id)).fetchall():
+        out[row[0]] = out.get(row[0], Decimal("0")) + Decimal(str(row[1] or 0))
+    return out
 
 #: W4a: a purchase order's header status only ever moves FORWARD through this
 #: rank when merged from a peer. "received" outranks "cancelled" on purpose:
@@ -5479,23 +5489,19 @@ class SyncService:
             (po_id, company_id)).fetchone()
         if po is None:
             return
-        received = {r[0]: float(r[1] or 0) for r in conn.execute(
-            "SELECT l.po_item_id, SUM(l.quantity) FROM purchase_order_receipt_lines l "
-            "JOIN purchase_order_receipts r ON r.id=l.receipt_id "
-            "WHERE r.po_id=? AND r.company_id=? GROUP BY l.po_item_id",
-            (po_id, company_id)).fetchall()}
+        received = _po_received_by_item(conn, company_id, po_id)
         items = conn.execute(
             "SELECT id, quantity FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
         for it in items:
             conn.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?",
-                         (received.get(it[0], 0.0), it[0]))
+                         (float(received.get(it[0], Decimal("0"))), it[0]))
         n_receipts, last_at = conn.execute(
             "SELECT COUNT(*), MAX(received_at) FROM purchase_order_receipts "
             "WHERE po_id=? AND company_id=?", (po_id, company_id)).fetchone()
         stamped = bool(po["cancelled_at"] or po["closed_at"])
         if n_receipts:
             complete = bool(items) and all(
-                received.get(it[0], 0.0) >= float(it[1] or 0) - _PO_QTY_EPSILON for it in items)
+                received.get(it[0], Decimal("0")) >= Decimal(str(it[1] or 0)) for it in items)
             status = "received" if complete else ("closed" if stamped else "partial")
         else:
             status = "cancelled" if stamped else "pending"
@@ -5504,9 +5510,10 @@ class SyncService:
             (status, last_at if status == "received" else None, po_id, company_id))
 
     @classmethod
-    def _flag_po_conflicts(cls, conn, conflict_sink, company_id, po_id) -> None:
-        """Record, ONCE per order, the two ways independent computers can
-        disagree about one purchase order's facts:
+    def _flag_po_conflicts(cls, conn, conflict_sink, company_id, po_id,
+                           receipt_just_applied: bool = False) -> None:
+        """Record, ONCE per order, the ways independent computers can disagree
+        about one purchase order's facts:
 
           * 'po_over_received' -- two DIFFERENT offline deliveries together
             exceed what was ordered. Both are real (stock arrived), so both
@@ -5514,19 +5521,27 @@ class SyncService:
             whether the supplier shorted the next order or a count was wrong.
           * 'po_received_and_cancelled' -- goods arrived on an order another
             computer withdrew. Receipts win (stock and books already moved).
+          * 'po_received_after_close' (W4a-2 verify R5) -- an ORDER-basis order
+            (booked up front, before v46) that is closed short or cancelled while
+            a receipt exists that the closer may not have seen. The close /
+            cancel journal was computed from the receipts its computer held;
+            the late receipt moves 1260 -> Inventory on top, and no self-correcting
+            journal exists (its amount depends on facts that arrive in any
+            order). RECORDED, NOT REPAIRED: the money skew is a written residual
+            and only orders already open when v46 was installed can hit it.
+            Flagged when a receipt event has just been applied to such an order
+            (`receipt_just_applied`), or -- from the order's own update event --
+            when a receipt was created AFTER the close/cancel stamp.
         """
         po = conn.execute(
-            "SELECT uid, cancelled_at FROM purchase_orders WHERE id=? AND company_id=?",
+            "SELECT uid, cancelled_at, closed_at, ap_basis FROM purchase_orders WHERE id=? AND company_id=?",
             (po_id, company_id)).fetchone()
         if po is None:
             return
-        over = conn.execute(
-            "SELECT 1 FROM purchase_order_items i WHERE i.po_id=? AND "
-            "(SELECT COALESCE(SUM(l.quantity),0) FROM purchase_order_receipt_lines l "
-            " JOIN purchase_order_receipts r ON r.id=l.receipt_id "
-            " WHERE l.po_item_id=i.id AND r.company_id=?) > i.quantity + ?",
-            (po_id, company_id, _PO_QTY_EPSILON)).fetchone()
-        if over:
+        ordered = {row[0]: Decimal(str(row[1] or 0)) for row in conn.execute(
+            "SELECT id, quantity FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()}
+        if any(got > ordered.get(i, Decimal("0"))
+               for i, got in _po_received_by_item(conn, company_id, po_id).items()):
             cls._record_sync_conflict_once(
                 conn, conflict_sink, local_company_id=company_id, entity_type="purchase_order",
                 entity_id=po["uid"], event_type="create", local_row_version=0,
@@ -5539,6 +5554,20 @@ class SyncService:
                 entity_id=po["uid"], event_type="update", local_row_version=0,
                 incoming_row_version=0, reason="po_received_and_cancelled",
                 payload={"uid": po["uid"]})
+        stamps = [x for x in (po["closed_at"], po["cancelled_at"]) if x]
+        if (po["ap_basis"] or "order") == "order" and stamps:
+            real = conn.execute(
+                "SELECT created_at_utc FROM purchase_order_receipts "
+                "WHERE po_id=? AND company_id=? AND COALESCE(legacy,0)=0", (po_id, company_id)).fetchall()
+            stamp = min(str(x) for x in stamps)
+            late = bool(real) if receipt_just_applied else any(
+                r[0] and str(r[0]) > stamp for r in real)
+            if late:
+                cls._record_sync_conflict_once(
+                    conn, conflict_sink, local_company_id=company_id, entity_type="purchase_order",
+                    entity_id=po["uid"], event_type="update", local_row_version=0,
+                    incoming_row_version=0, reason="po_received_after_close",
+                    payload={"uid": po["uid"]})
 
     @staticmethod
     def _ensure_legacy_receipt(conn, company_id, po, only_item_uid=None) -> None:
@@ -5599,7 +5628,7 @@ class SyncService:
         party_balance.py uses) so 0.1 + 0.2 never drifts a fils; the 'active'
         predicate is party_balance's (`COALESCE(status,'active')='active'`)."""
         order = conn.execute(
-            "SELECT total FROM purchase_orders WHERE id=? AND company_id=?",
+            "SELECT total, status FROM purchase_orders WHERE id=? AND company_id=?",
             (po_id, company_id)).fetchone()
         if order is None:
             return
@@ -5620,6 +5649,14 @@ class SyncService:
             (factor, company_id, po_id)).fetchone()[0]
         paid = float(Decimal(minor) / Decimal(factor))
         total = float(order["total"] or 0)
+        if order["status"] == "closed":
+            # W4a-2 verify R4 (twin of the core rule): a closed-short order owes
+            # only for what arrived, so 'paid' compares against the receipts'
+            # value. 'cancelled' is unchanged.
+            charge_minor = conn.execute(
+                "SELECT COALESCE(SUM(CAST(ROUND(value * ?) AS INTEGER)), 0) FROM purchase_order_receipts "
+                "WHERE company_id=? AND po_id=?", (factor, company_id, po_id)).fetchone()[0]
+            total = float(Decimal(charge_minor) / Decimal(factor))
         eps = float(quantum) / 2.0
         if total > eps and total - paid <= eps:
             status = "paid"
@@ -5781,9 +5818,12 @@ class SyncService:
                           branch_fallback_sink, conflict_sink) -> bool:
         """`purchase_order_receipt` create (W4a-2): one delivery's header.
 
-        Immutable fact keyed on `uid` (deterministic on the writer: two
-        computers that recorded the identical delivery offline mint the same
-        uid and collapse into this one row). The order is resolved by
+        Immutable fact keyed on `uid`. W4a-2 verify R1: the writer mints it as
+        the history a COMPLETING receipt completes, or from the client's
+        receipt key for a partial one -- so two computers that saw the same
+        receipts and both received "the rest" collapse into this one row, while
+        the same partial delivery typed twice offline stays two facts (flagged
+        po_over_received if it exceeds the order; never lost). The order is resolved by
         `po_uid` INSIDE the receiver's company and parked until it arrives;
         `branch_uid` resolves to this computer's branch. `value` is the
         WRITER'S figure, stored as sent -- a receiver never recomputes it
@@ -5806,7 +5846,7 @@ class SyncService:
              p.get("value") or 0, p.get("line_count"), p.get("created_by"),
              p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")))
         self._refresh_po(conn, local_company_id, po_id)
-        self._flag_po_conflicts(conn, conflict_sink, local_company_id, po_id)
+        self._flag_po_conflicts(conn, conflict_sink, local_company_id, po_id, receipt_just_applied=True)
         return True
 
     def _apply_po_receipt_line(self, conn, ev: dict, p: dict, local_company_id,
@@ -5837,7 +5877,8 @@ class SyncService:
             (receipt["id"], p.get("uid"), item["id"], p.get("quantity") or 0,
              p.get("movement_uid")))
         self._refresh_po(conn, local_company_id, receipt["po_id"])
-        self._flag_po_conflicts(conn, conflict_sink, local_company_id, receipt["po_id"])
+        self._flag_po_conflicts(conn, conflict_sink, local_company_id, receipt["po_id"],
+                                receipt_just_applied=True)
         return True
 
     def _apply_purchase_order_update(self, conn, ev: dict, p: dict, local_company_id,

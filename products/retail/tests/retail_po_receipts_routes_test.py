@@ -162,12 +162,16 @@ def _on_hand(cid, pid):
               "WHERE company_id=? AND product_id=?", cid, pid)[0]['q']
 
 
-def _receive(c, po_id, qty=None):
-    if qty is None:
+def _receive(c, po_id, qty=None, key=None):
+    if qty is None and key is None:
         return c.post(f'{API}/purchase-orders/{po_id}/receive')
-    item = _item(po_id)
-    return c.post(f'{API}/purchase-orders/{po_id}/receive',
-                  json={'lines': [{'item_id': item['id'], 'quantity': qty}]})
+    body = {}
+    if qty is not None:
+        item = _item(po_id)
+        body['lines'] = [{'item_id': item['id'], 'quantity': qty}]
+    if key is not None:
+        body['receipt_key'] = key
+    return c.post(f'{API}/purchase-orders/{po_id}/receive', json=body)
 
 
 def _bal(cid, code):
@@ -408,18 +412,19 @@ def test_p6_an_identical_receipt_already_recorded_adds_nothing(client):
     sid = _seed_supplier(client)
     pid = _seed_product(client)
     po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
-    po, item = _po(po_id), _item(po_id)
+    po = _po(po_id)
 
-    # Simulate the other computer's receipt having ALREADY arrived: its header
-    # carries the uid this request is about to mint (n = 1 receipts held here).
-    sibling_uid = po_core.receipt_uid(po['uid'], 1, [(item['uid'], 6)])
+    # Simulate the same delivery ALREADY recorded here (a retry whose first
+    # attempt landed): its header carries the uid this request's key mints.
+    key = 'p6-key-0001'
+    sibling_uid = po_core.keyed_receipt_uid(po['uid'], key)
     conn = get_retail_conn()
     conn.execute("INSERT INTO purchase_order_receipts (company_id,uid,po_id,received_at,value,line_count,legacy) "
                  "VALUES (?,?,?,?,24,NULL,0)", (cid, sibling_uid, po_id, '2026-10-06'))
     conn.commit(); conn.close()
 
     n_journals = len(_journals(cid))
-    r = _receive(client, po_id, 6)
+    r = _receive(client, po_id, 6, key=key)
     assert r.status_code == 200, r.get_json()
     assert r.get_json().get('already_recorded') is True
     assert _on_hand(cid, pid) == 0, "the sibling's movement is not here in this fixture; we must add none"
@@ -532,7 +537,8 @@ def test_p9_receive_queues_receipt_and_lines_and_no_header_status_update(client)
     assert len(recs) == 1 and set(recs[0]['payload']) == RECEIPT_KEYS
     rp = recs[0]['payload']
     assert rp['po_uid'] == po['uid'] and rp['value'] == 24.0 and rp['line_count'] == 1
-    assert rp['uid'] == po_core.receipt_uid(po['uid'], 0, [(item['uid'], 6)])
+    # W4a-2 verify R1: a partial with no key is a random uuid4 (no retry dedupe).
+    assert str(uuid.UUID(rp['uid'])) == rp['uid']
     lines = [e for e in _events('purchase_order_receipt_line', 'create')
              if e['payload']['receipt_uid'] == rp['uid']]
     assert len(lines) == 1 and set(lines[0]['payload']) == LINE_KEYS
@@ -582,3 +588,176 @@ def test_p10_install_party_balance_refresh_installs_the_po_state_hook(client):
     svc.hook(conn, cid, po_id)
     conn.commit(); conn.close()
     assert _po(po_id)['status'] == 'partial' and _item(po_id)['received_qty'] == 6
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# V2 verify round 2 (R1-R4)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _receipts(po_id):
+    return _q("SELECT * FROM purchase_order_receipts WHERE po_id=? ORDER BY id", po_id)
+
+
+def test_r1_double_submit_with_one_key_records_one_receipt(client):
+    """W4a-2 verify R1 / probe A: a double Enter or a retry carries the same
+    key. Before: two receipts, stock 6 for ONE delivery of 3. It also proves the
+    `already_recorded` answer is reachable through the real route."""
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    r1 = _receive(client, po_id, 3, key='dbl-submit-key-1')
+    r2 = _receive(client, po_id, 3, key='dbl-submit-key-1')
+    assert r1.status_code == 200 and r2.status_code == 200, (r1.get_json(), r2.get_json())
+    assert r1.get_json().get('already_recorded') is None
+    assert r2.get_json().get('already_recorded') is True
+    assert len(_receipts(po_id)) == 1
+    assert _on_hand(cid, pid) == 3, 'one delivery of 3 is 3 on the shelf, not 6'
+    assert len(_journals(cid, source_type='po_receipt')) == 1
+    assert _ap_ties(cid) and _supplier_balance(client, sid) == 12.0
+
+
+def test_r1_a_retry_after_a_second_delivery_is_still_already_recorded(client):
+    """The key check runs BEFORE the "how much is left" guard: after 3 then 5
+    (2 left) a retry of the first 3 must answer already_recorded, not a
+    confusing OVER_RECEIPT -- and must add nothing."""
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po_id, 3, key='first-delivery-k').status_code == 200
+    assert _receive(client, po_id, 5, key='second-delivery-k').status_code == 200
+    r = _receive(client, po_id, 3, key='first-delivery-k')
+    assert r.status_code == 200 and r.get_json().get('already_recorded') is True, r.get_json()
+    assert _on_hand(cid, pid) == 8 and len(_receipts(po_id)) == 2
+
+
+def test_r1_two_different_keys_are_two_deliveries(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po_id, 3, key='key-number-one').status_code == 200
+    assert _receive(client, po_id, 3, key='key-number-two').status_code == 200
+    assert len(_receipts(po_id)) == 2 and _on_hand(cid, pid) == 6
+    # no key at all: still recorded (no retry dedupe, by design)
+    assert _receive(client, po_id, 1).status_code == 200
+    assert len(_receipts(po_id)) == 3 and _on_hand(cid, pid) == 7
+
+
+def test_r1_a_malformed_receipt_key_is_a_400_and_writes_nothing(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    for bad in ('short', 'has space in it', 'x' * 65, 12345678, ['abcdefgh'], ''):
+        r = _receive(client, po_id, 3, key=bad)
+        assert r.status_code == 400 and r.get_json().get('code') == 'BAD_RECEIPT_KEY', (bad, r.get_json())
+    assert _receipts(po_id) == [] and _on_hand(cid, pid) == 0
+
+
+def test_r1_completing_receipt_uid_is_the_history_it_completes(client):
+    """The route's completing uid is exactly completing_receipt_uid(po, priors):
+    the same on any computer that saw the same receipts."""
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    po = _po(po_id)
+    assert _receive(client, po_id, 4, key='partial-first-k').status_code == 200
+    first = _receipts(po_id)[0]['uid']
+    assert _receive(client, po_id).status_code == 200            # the rest completes it
+    rest = _receipts(po_id)[1]['uid']
+    assert rest == po_core.completing_receipt_uid(po['uid'], [first])
+    assert rest != po_core.completing_receipt_uid(po['uid'], [])
+    # whole order in one go on a computer with no history
+    po2 = _make_po(client, sid, pid, qty=5, cost=1.0)
+    assert _receive(client, po2).status_code == 200
+    assert _receipts(po2)[0]['uid'] == po_core.completing_receipt_uid(_po(po2)['uid'], [])
+
+
+def test_r2_fractional_quantities_can_be_finished_in_decimal(client):
+    """Probe C: 0.1 + 0.2 + 0.7 of 1 unit. The float SQL SUM made the remaining
+    0.69999... and refused 0.7 as OVER_RECEIPT; the order could never complete."""
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=1, cost=3.0)
+    codes = [_receive(client, po_id, q, key=f'frac-key-{i}-xx').status_code
+             for i, q in enumerate((0.1, 0.2, 0.7))]
+    assert codes == [200, 200, 200], codes
+    assert _po(po_id)['status'] == 'received'
+    assert [r['value'] for r in _receipts(po_id)] == [0.3, 0.6, 2.1]
+    assert _supplier_balance(client, sid) == 3.0 and _ap_ties(cid)
+    # Deny half: a hair over the true remainder is still refused (no slack).
+    po2 = _make_po(client, sid, pid, qty=1, cost=3.0)
+    assert _receive(client, po2, 0.3, key='frac2-key-aaaa').status_code == 200
+    r = _receive(client, po2, 0.7000001, key='frac2-key-bbbb')
+    assert r.status_code == 409 and r.get_json().get('code') == 'OVER_RECEIPT', r.get_json()
+
+
+def _hand_receipt_without_lines(cid, po_id, line_count):
+    conn = get_retail_conn()
+    conn.execute("INSERT INTO purchase_order_receipts (company_id,uid,po_id,received_at,value,line_count,legacy) "
+                 "VALUES (?,?,?,?,10,?,0)", (cid, str(uuid.uuid4()), po_id, '2026-10-06', line_count))
+    conn.commit(); conn.close()
+
+
+def test_r3_close_short_refuses_while_receipt_lines_or_order_lines_are_parked(client):
+    """Probe G: a sibling's receipt header is here, its LINES are not -- the
+    order reads 'partial' and Close was offered, releasing debt for goods that
+    arrived. Same two guards receive has, plus the order-journal one."""
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+
+    # (a) receipt header present, its line parked
+    po_a = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po_a, 4, key='r3-first-delivery').status_code == 200
+    _hand_receipt_without_lines(cid, po_a, 1)
+    n_journals = len(_journals(cid))
+    r = client.post(f'{API}/purchase-orders/{po_a}/close')
+    assert r.status_code == 409 and r.get_json().get('code') == 'PO_RECEIPTS_NOT_ARRIVED', r.get_json()
+    assert _po(po_a)['closed_at'] is None and len(_journals(cid)) == n_journals
+
+    # (b) an order line parked (item_count says 2, one row here)
+    po_b = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po_b, 4, key='r3-second-delivr').status_code == 200
+    conn = get_retail_conn()
+    conn.execute("UPDATE purchase_orders SET item_count=2 WHERE id=?", (po_b,))
+    conn.commit(); conn.close()
+    r = client.post(f'{API}/purchase-orders/{po_b}/close')
+    assert r.status_code == 409 and r.get_json().get('code') == 'PO_LINES_NOT_ARRIVED', r.get_json()
+    assert _po(po_b)['closed_at'] is None
+
+    # (c) order basis, its order journal has not arrived
+    po_c = _make_order_basis_po(client, cid, sid, pid)
+    assert _receive(client, po_c, 1, key='r3-third-delivery').status_code == 200
+    conn = get_retail_conn()
+    conn.execute("UPDATE purchase_orders SET order_journal_uid=? WHERE id=?", (str(uuid.uuid4()), po_c))
+    conn.commit(); conn.close()
+    r = client.post(f'{API}/purchase-orders/{po_c}/close')
+    assert r.status_code == 409 and r.get_json().get('code') == 'PO_BOOKS_NOT_ARRIVED', r.get_json()
+
+    # Allow half: with nothing parked the close goes through.
+    po_d = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po_d, 4, key='r3-fourth-delivry').status_code == 200
+    assert client.post(f'{API}/purchase-orders/{po_d}/close').status_code == 200
+
+
+def test_r4_a_closed_order_is_paid_against_what_arrived(client):
+    """Probe I: 24 of 40 delivered and 24 paid. payment_status read 'partial'
+    for ever because 'paid' compared against the full 40."""
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po_id, 6, key='r4-delivery-key').status_code == 200
+    assert client.post(f'{API}/purchase-orders/{po_id}/pay', json={'amount': 24}).status_code == 200
+    assert _po(po_id)['payment_status'] == 'partial', 'while open, 24 of a 40 order is partial'
+    assert client.post(f'{API}/purchase-orders/{po_id}/close').status_code == 200
+    assert _po(po_id)['payment_status'] == 'paid'
+    # Deny half: a closed order that is NOT paid up to what arrived is not 'paid'.
+    po2 = _make_po(client, sid, pid, qty=10, cost=4.0)
+    assert _receive(client, po2, 6, key='r4-delivery-two').status_code == 200
+    assert client.post(f'{API}/purchase-orders/{po2}/pay', json={'amount': 10}).status_code == 200
+    assert client.post(f'{API}/purchase-orders/{po2}/close').status_code == 200
+    assert _po(po2)['payment_status'] == 'partial'

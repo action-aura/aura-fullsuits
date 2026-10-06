@@ -612,3 +612,156 @@ def test_real_core_derivation_agrees_with_the_built_in_twin(get_conn):
     real = _po_row(get_conn)
     assert (real["status"], real["received_at"]) == (twin["status"], twin["received_at"])
     assert _rows(get_conn, "SELECT received_qty FROM purchase_order_items")[0]["received_qty"] == 6.0
+
+
+# -- W4a-2 verify round 2: twin-vs-core parity table (R2/R4) and R5 conflicts --
+
+def _build(get_conn, items, deliveries, hdr=None, ap_basis="receipt", pay=None, sink=None):
+    """One order from `items` (ordered quantities) with `deliveries` =
+    [[(item index, quantity), ...], ...] applied as receipt events, then an
+    optional header update and an optional supplier payment of `pay`."""
+    puid = str(uuid.uuid4())
+    iuids = [str(uuid.uuid4()) for _ in items]
+    assert _apply(get_conn, _po(uid=puid, po_number="PO-" + puid[:8], ap_basis=ap_basis, total=100.0)) is True
+    for iu, q in zip(iuids, items):
+        assert _apply(get_conn, _item(iu, PRODUCT, q, po_uid=puid)) is True
+    for lines in deliveries:
+        r = _receipt(po_uid=puid, value=sum(q for _i, q in lines) * 10.0, line_count=len(lines))
+        assert _apply(get_conn, r, sink=sink) is True
+        for idx, q in lines:
+            assert _apply(get_conn, _rline(r["payload"]["uid"], iuids[idx], q), sink=sink) is True
+    if hdr:
+        assert _apply(get_conn, {"entity_type": "purchase_order", "event_type": "update",
+                                 "entity_id": puid, "payload": {"uid": puid, **hdr}}, sink=sink) is True
+    if pay is not None:
+        assert _apply(get_conn, {"entity_type": "payment", "event_type": "create",
+                                 "entity_id": str(uuid.uuid4()), "payload": {
+                                     "uid": str(uuid.uuid4()), "reference": "R", "party_type": "supplier",
+                                     "party_id": SUPPLIER, "direction": "out", "amount": pay,
+                                     "currency": "USD", "method": "cash", "related_type": "po",
+                                     "related_id": 1, "po_uid": puid, "notes": "", "status": "active",
+                                     "created_by": "x", "device": "A",
+                                     "created_at": "2026-10-06 10:00:00"}}) is True
+    return puid
+
+
+def _state(get_conn, puid):
+    po = _po_row(get_conn, puid)
+    items = [r["received_qty"] for r in _rows(
+        get_conn, "SELECT received_qty FROM purchase_order_items WHERE po_id=? ORDER BY id", (po["id"],))]
+    return (po["status"], po["received_at"], items, po["amount_paid"], po["payment_status"])
+
+
+# (label, ordered, deliveries, header update, ap_basis, payment, expected status, expected payment_status)
+_PARITY = [
+    ("pending", [10.0], [], None, "receipt", None, "pending", "unpaid"),
+    ("partial", [10.0], [[(0, 6.0)]], None, "receipt", None, "partial", "unpaid"),
+    ("received", [10.0], [[(0, 6.0)], [(0, 4.0)]], None, "receipt", None, "received", "unpaid"),
+    ("closed-unpaid-part", [10.0], [[(0, 6.0)]], {"closed_at": "2026-10-09 09:00:00"}, "receipt", 10.0,
+     "closed", "partial"),
+    # 6 of 10 arrived (value 60.000); 60 paid: against the RECEIPTS it is paid (R4)
+    ("closed-paid-for-what-came", [10.0], [[(0, 6.0)]], {"closed_at": "2026-10-09 09:00:00"}, "receipt", 60.0,
+     "closed", "paid"),
+    ("cancelled", [10.0], [], {"cancelled_at": "2026-10-09 09:00:00"}, "receipt", None, "cancelled", "unpaid"),
+    ("no-items", [], [], None, "receipt", None, "pending", "unpaid"),
+    ("fractional-0.1+0.2+0.7", [1.0], [[(0, 0.1)], [(0, 0.2)], [(0, 0.7)]], None, "receipt", None,
+     "received", "unpaid"),
+]
+
+
+@pytest.mark.parametrize("label,items,deliveries,hdr,basis,pay,want_status,want_paid",
+                         _PARITY, ids=[p[0] for p in _PARITY])
+def test_twin_and_core_agree_on_every_state_and_payment_status(
+        get_conn, label, items, deliveries, hdr, basis, pay, want_status, want_paid):
+    """W4a-2 verify R2/R4. The built-in twin (no hook) and the retail core are
+    TWO implementations of one rule; a table of states through both must give
+    the same answer, and the answer must be the expected one (so both being
+    wrong the same way cannot pass)."""
+    from commercial_runtime.currency import currency_quantum
+    from core.retail import purchase_orders as po_mod
+    puid = _build(get_conn, items, deliveries, hdr=hdr, ap_basis=basis, pay=pay)
+    twin = _state(get_conn, puid)
+    assert twin[0] == want_status and twin[4] == want_paid, (label, twin)
+    # Core: recompute from the same rows and compare field by field.
+    po_id = _po_row(get_conn, puid)["id"]
+    eps = float(currency_quantum(_ss.DEFAULT_BASE_CURRENCY)) / 2.0
+    conn = get_conn()
+    try:
+        po_mod.recompute_po_receive_state(conn, CID, po_id)
+        po_mod.recompute_po_paid(conn, CID, po_id, eps)
+        conn.commit()
+    finally:
+        conn.close()
+    assert _state(get_conn, puid) == twin, (label, "core and twin disagree")
+
+
+def test_fractional_deliveries_record_no_phantom_over_receipt(get_conn):
+    """0.1 + 0.2 + 0.7 sums to 1.0000000000000002 in floats; the twin used a
+    float SUM plus 1e-6 slack. In Decimal it is exactly 1: complete, no conflict."""
+    sink = []
+    puid = _build(get_conn, [1.0], [[(0, 0.1)], [(0, 0.2)], [(0, 0.7)]], sink=sink)
+    assert _po_row(get_conn, puid)["status"] == "received"
+    assert _rows(get_conn, "SELECT id FROM sync_conflicts") == []
+
+
+def test_no_slack_a_hair_short_is_partial_and_a_hair_over_is_flagged(get_conn):
+    short = _build(get_conn, [1.0], [[(0, 0.9999999)]])
+    assert _po_row(get_conn, short)["status"] == "partial"
+    sink = []
+    over = _build(get_conn, [1.0], [[(0, 1.0000001)]], sink=sink)
+    assert _po_row(get_conn, over)["status"] == "received"
+    assert any("po_over_received" in c["incoming_payload"] for c in _rows(
+        get_conn, "SELECT incoming_payload FROM sync_conflicts WHERE entity_id=?", (over,)))
+
+
+def _after_close_conflicts(get_conn, puid):
+    return [c for c in _rows(get_conn, "SELECT * FROM sync_conflicts WHERE entity_id=?", (puid,))
+            if "po_received_after_close" in c["incoming_payload"]]
+
+
+def test_r5_order_basis_receipt_arriving_after_a_close_short_is_flagged_once(get_conn):
+    """Probe E: A closed an order-basis order short while B received the rest.
+    The close journal cannot self-correct, so the late receipt is made VISIBLE
+    (once per order), never silently absorbed."""
+    sink = []
+    puid = _build(get_conn, [3.0], [[(0, 1.0)]], hdr={"closed_at": "2026-10-09 09:00:00"},
+                  ap_basis="order", sink=sink)
+    assert _after_close_conflicts(get_conn, puid) == [], "the receipt predates the close: nothing to flag"
+    iuid = _rows(get_conn, "SELECT uid FROM purchase_order_items ORDER BY id DESC")[0]["uid"]
+    late = _receipt(po_uid=puid, value=20.0, line_count=1)
+    assert _apply(get_conn, late, sink=sink) is True
+    assert _apply(get_conn, _rline(late["payload"]["uid"], iuid, 2.0), sink=sink) is True
+    assert len(_after_close_conflicts(get_conn, puid)) == 1
+    # a redelivery adds no second row
+    assert _apply(get_conn, late, sink=sink) is True
+    assert len(_after_close_conflicts(get_conn, puid)) == 1
+
+
+def test_r5_order_basis_receipt_arriving_after_a_cancel_is_flagged(get_conn):
+    """Probe F: cancel on A, receipt on B."""
+    puid = _build(get_conn, [3.0], [], hdr={"cancelled_at": "2026-10-09 09:00:00"}, ap_basis="order")
+    iuid = _rows(get_conn, "SELECT uid FROM purchase_order_items ORDER BY id DESC")[0]["uid"]
+    late = _receipt(po_uid=puid, value=10.0, line_count=1)
+    assert _apply(get_conn, late) is True
+    assert _apply(get_conn, _rline(late["payload"]["uid"], iuid, 1.0)) is True
+    assert len(_after_close_conflicts(get_conn, puid)) == 1
+
+
+def test_r5_receipt_basis_orders_are_never_flagged(get_conn):
+    """Deny half: a receipt-basis order books per receipt, so a late receipt is
+    simply more debt for goods that arrived -- nothing to repair."""
+    puid = _build(get_conn, [3.0], [[(0, 1.0)]], hdr={"closed_at": "2026-10-09 09:00:00"}, ap_basis="receipt")
+    iuid = _rows(get_conn, "SELECT uid FROM purchase_order_items ORDER BY id DESC")[0]["uid"]
+    late = _receipt(po_uid=puid, value=20.0, line_count=1)
+    _apply(get_conn, late)
+    _apply(get_conn, _rline(late["payload"]["uid"], iuid, 2.0))
+    assert _after_close_conflicts(get_conn, puid) == []
+
+
+def test_r5_the_close_event_flags_a_receipt_created_after_its_stamp(get_conn):
+    """The other arrival order: B's receipt is here, then A's close arrives with
+    a stamp EARLIER than the receipt was created."""
+    puid = _build(get_conn, [3.0], [[(0, 1.0)]], ap_basis="order")
+    _apply(get_conn, {"entity_type": "purchase_order", "event_type": "update", "entity_id": puid,
+                      "payload": {"uid": puid, "closed_at": "2026-10-06 08:00:00"}})
+    assert len(_after_close_conflicts(get_conn, puid)) == 1

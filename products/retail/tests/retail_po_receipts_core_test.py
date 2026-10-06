@@ -9,8 +9,10 @@ fact: received quantities, the order's state and the supplier's debt all
 derive from receipts. Five rules must be the same on every computer and are
 pinned here:
 
-  * receipt uids are DETERMINISTIC (two computers recording the identical
-    delivery offline mint the same uid and it counts once);
+  * receipt uids: a COMPLETING receipt's uid is the history it completes (two
+    computers that saw the same receipts and both receive "the rest" collapse);
+    a PARTIAL receipt's uid is the client's key (a retry / double submit counts
+    once). No local count is ever hashed (W4a-2 verify R1);
   * a receipt's VALUE is computed once by the writer and, when it completes the
     order, is the REMAINDER (total - earlier receipts) so receipts sum to the
     order total exactly;
@@ -138,9 +140,15 @@ def _receipt(conn, po_mod, po, qtys, value=None, received_at='2026-10-06 10:00:0
     """Record one receipt of `qtys` (one per line, 0 = line not in this
     delivery) the way the receive route will: deterministic uids, the value
     from `receipt_value`, then recompute the order's cached state."""
-    n = conn.execute("SELECT COUNT(*) FROM purchase_order_receipts WHERE po_id=?", (po['id'],)).fetchone()[0]
     picked = [(iid, iuid, q) for (iid, iuid), q in zip(po['items'], qtys) if q]
-    ruid = po_mod.receipt_uid(po['uid'], n, [(iuid, q) for _i, iuid, q in picked])
+    # W4a-2 verify R1: the receipt's identity is the history it completes (a
+    # completing receipt) or the client's key (a partial one) -- never a count.
+    priors = [r[0] for r in conn.execute(
+        "SELECT uid FROM purchase_order_receipts WHERE po_id=?", (po['id'],)).fetchall()]
+    if po_mod.receipt_completes(conn, CID, po['id'], [(iid, q) for iid, _u, q in picked]):
+        ruid = po_mod.completing_receipt_uid(po['uid'], priors)
+    else:
+        ruid = po_mod.keyed_receipt_uid(po['uid'], uuid.uuid4().hex)
     if value is None:
         value = po_mod.receipt_value(conn, CID, po['id'], [(iid, q) for iid, _u, q in picked], CUR)
     cur = conn.execute(
@@ -164,30 +172,48 @@ def _status(conn, po):
 
 # -- uids -----------------------------------------------------------------------
 
-def test_receipt_uid_is_deterministic_and_ignores_line_order(po_mod):
-    a = po_mod.receipt_uid('PO-U', 0, [('I1', 3), ('I2', 4)])
-    assert a == po_mod.receipt_uid('PO-U', 0, [('I2', 4), ('I1', 3)]), \
-        'two computers listing the same delivery in a different order must mint the same uid'
-    assert str(uuid.UUID(a)) == a
+def test_completing_receipt_uid_is_the_history_it_completes(po_mod):
+    """W4a-2 verify R1. Two computers that saw the SAME receipts and both
+    receive "the rest" mint one uid (collapse); different histories differ; the
+    order in which the prior uids are listed does not matter."""
+    base = po_mod.completing_receipt_uid('PO-U', [])
+    assert str(uuid.UUID(base)) == base
+    assert base == po_mod.completing_receipt_uid('PO-U', []), 'prior = empty must be stable (W4a double-offline receive)'
+    assert (po_mod.completing_receipt_uid('PO-U', ['r1', 'r2'])
+            == po_mod.completing_receipt_uid('PO-U', ['r2', 'r1']))
+    assert base != po_mod.completing_receipt_uid('PO-U', ['r1']), 'a different history is a different fact'
+    assert po_mod.completing_receipt_uid('PO-U', ['r1']) != po_mod.completing_receipt_uid('PO-U', ['r2'])
+    assert base != po_mod.completing_receipt_uid('PO-V', []), 'another order, another uid'
 
 
-def test_receipt_uid_quantity_text_is_normalised(po_mod):
-    base = po_mod.receipt_uid('PO-U', 0, [('I1', 6)])
-    assert base == po_mod.receipt_uid('PO-U', 0, [('I1', 6.0)])
-    assert base == po_mod.receipt_uid('PO-U', 0, [('I1', '6.000')])
-    assert base == po_mod.receipt_uid('PO-U', 0, [('I1', Decimal('6.00'))])
+def test_completing_uid_does_not_depend_on_a_local_count_or_the_lines(po_mod):
+    """The old rule hashed `n` (receipts held locally) and the quantities: two
+    computers with different counts minted different uids for ONE delivery (a
+    silent double count) and two different same-size deliveries at the same n
+    minted one uid (one silently lost). The new function takes neither."""
+    import inspect
+    params = list(inspect.signature(po_mod.completing_receipt_uid).parameters)
+    assert params == ['po_uid', 'prior_receipt_uids']
+    assert not hasattr(po_mod, 'receipt_uid'), 'the n-based receipt_uid must be gone'
 
 
-def test_receipt_uid_differs_by_count_quantity_item_and_order(po_mod):
-    base = po_mod.receipt_uid('PO-U', 0, [('I1', 6)])
-    assert base != po_mod.receipt_uid('PO-U', 1, [('I1', 6)]), 'a second delivery of the same size is another fact'
-    assert base != po_mod.receipt_uid('PO-U', 0, [('I1', 7)])
-    assert base != po_mod.receipt_uid('PO-U', 0, [('I2', 6)])
-    assert base != po_mod.receipt_uid('PO-V', 0, [('I1', 6)])
+def test_keyed_receipt_uid_is_a_pure_function_of_order_and_key(po_mod):
+    k = po_mod.keyed_receipt_uid('PO-U', 'abcd1234-abcd')
+    assert k == po_mod.keyed_receipt_uid('PO-U', 'abcd1234-abcd'), 'a retry carries the same key -> the same uid'
+    assert k != po_mod.keyed_receipt_uid('PO-U', 'abcd1234-abce'), 'two keys = two deliveries'
+    assert k != po_mod.keyed_receipt_uid('PO-V', 'abcd1234-abcd')
+    assert k != po_mod.completing_receipt_uid('PO-U', [])
+
+
+def test_receipt_key_validation(po_mod):
+    ok = ['abcd1234', 'A' * 64, str(uuid.uuid4()), 'a-b-c-d-1-2-3-4']
+    bad = ['', 'short', 'x' * 65, 'has space 1234', 'under_score1', 'semi;colon1', None, 12345678, ['abcdefgh'], 'abcd1234\n']
+    assert all(po_mod.valid_receipt_key(k) for k in ok)
+    assert not any(po_mod.valid_receipt_key(k) for k in bad), [k for k in bad if po_mod.valid_receipt_key(k)]
 
 
 def test_line_movement_and_legacy_uids(po_mod):
-    r = po_mod.receipt_uid('PO-U', 0, [('I1', 6)])
+    r = po_mod.keyed_receipt_uid('PO-U', 'abcd1234')
     assert po_mod.receipt_line_uid(r, 'I1') == po_mod.receipt_line_uid(r, 'I1')
     assert po_mod.receipt_line_uid(r, 'I1') != po_mod.receipt_line_uid(r, 'I2')
     assert po_mod.receipt_line_movement_uid(r, 'I1') != po_mod.receipt_line_uid(r, 'I1')
@@ -550,3 +576,78 @@ def test_second_receipts_missing_journal_leaves_its_movement_unbooked(conn, po_m
         "the first receipt is booked; the second one's missing journal must still show"
     gl.post_po_receipt_for(conn, CID, BRANCH, _po_row(conn, po), r2, v2, CUR)
     assert sb.unbooked_movement_count(conn, CID) == 0
+
+
+# -- W4a-2 verify round 2 -----------------------------------------------------------
+
+def test_completing_receipts_on_two_databases_with_the_same_history_share_a_uid(po_mod):
+    """R1: the same order (same uids) on two computers. Both have received 4 as
+    receipt K1 and both now receive the rest: one uid, so it collapses on sync.
+    A computer that has NOT seen K1 mints a different uid for ITS rest -- both
+    count and the over-receipt is flagged; nothing is silently lost."""
+    po_uid, item_uid = str(uuid.uuid4()), str(uuid.uuid4())
+    k1 = po_mod.keyed_receipt_uid(po_uid, 'first-delivery-4')
+    a = po_mod.completing_receipt_uid(po_uid, [k1])
+    b = po_mod.completing_receipt_uid(po_uid, [k1])
+    c = po_mod.completing_receipt_uid(po_uid, [])           # this computer never saw K1
+    assert a == b and a != c
+
+
+def test_receipt_completes_is_decimal_and_false_for_an_order_with_no_lines(conn, po_mod):
+    po = _po(conn, lines=((1, 3.0),))
+    iid = po['items'][0][0]
+    _receipt(conn, po_mod, po, [0.1])
+    _receipt(conn, po_mod, po, [0.2])
+    assert po_mod.receipt_completes(conn, CID, po['id'], [(iid, 0.7)]) is True, \
+        '0.1 + 0.2 + 0.7 is exactly 1 in Decimal (the float sum is 1.0000000000000002 / 0.6999 remaining)'
+    assert po_mod.receipt_completes(conn, CID, po['id'], [(iid, 0.6999999)]) is False, 'no slack'
+    empty = _po(conn, lines=())
+    assert po_mod.receipt_completes(conn, CID, empty['id'], []) is False
+
+
+def test_state_table_includes_fractional_and_no_items(conn, po_mod):
+    """R2: the core's side of the twin-vs-core parity table (the twin's side is in
+    retail_po_receipts_apply_test.py, same expected answers)."""
+    frac = _po(conn, lines=((1, 3.0),))
+    for q in (0.1, 0.2, 0.7):
+        _receipt(conn, po_mod, frac, [q])
+    assert _status(conn, frac)[0] == 'received'
+    assert conn.execute("SELECT received_qty FROM purchase_order_items WHERE id=?",
+                        (frac['items'][0][0],)).fetchone()[0] == 1.0
+    none = _po(conn, lines=())
+    assert po_mod.recompute_po_receive_state(conn, CID, none['id']) == 'pending'
+    # An order with no lines but a (hand-built) receipt is never 'received':
+    # all([]) used to say it was.
+    conn.execute("INSERT INTO purchase_order_receipts (company_id, uid, po_id, received_at, value, legacy) "
+                 "VALUES (?,?,?,?,0,0)", (CID, str(uuid.uuid4()), none['id'], '2026-10-06'))
+    assert po_mod.recompute_po_receive_state(conn, CID, none['id']) != 'received'
+
+
+def _pay(conn, po_id, amount):
+    conn.execute(
+        "INSERT INTO payments (company_id, reference, party_type, party_id, direction, amount, currency, "
+        "method, related_type, related_id, status, uid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (CID, 'R-' + uuid.uuid4().hex[:6], 'supplier', SUP, 'out', amount, CUR, 'cash', 'po', po_id,
+         'active', str(uuid.uuid4())))
+
+
+def test_closed_order_is_paid_against_its_receipts_not_its_total(conn, po_mod):
+    """R4: 24 of a 40 order delivered, 24 paid. Open: 'partial'. Closed short:
+    'paid'. Cancelled and open behaviour are unchanged."""
+    po = _po(conn, lines=((10, 4.0),))
+    _receipt(conn, po_mod, po, [6])                         # value 24.000
+    _pay(conn, po['id'], 24.0)
+    assert po_mod.recompute_po_paid(conn, CID, po['id'], EPS) == (24.0, 'partial')
+    conn.execute("UPDATE purchase_orders SET closed_at='2026-10-07 00:00:00' WHERE id=?", (po['id'],))
+    assert po_mod.recompute_po_receive_state(conn, CID, po['id']) == 'closed'
+    assert po_mod.recompute_po_paid(conn, CID, po['id'], EPS) == (24.0, 'paid')
+    # Deny half: paid LESS than what arrived is still partial, and nothing paid is unpaid.
+    short = _po(conn, lines=((10, 4.0),))
+    _receipt(conn, po_mod, short, [6])
+    _pay(conn, short['id'], 10.0)
+    conn.execute("UPDATE purchase_orders SET closed_at='2026-10-07 00:00:00' WHERE id=?", (short['id'],))
+    po_mod.recompute_po_receive_state(conn, CID, short['id'])
+    assert po_mod.recompute_po_paid(conn, CID, short['id'], EPS) == (10.0, 'partial')
+    # A closed order with NO receipts value (cannot be produced by routes) is never 'paid' by 0 >= 0.
+    zero = _po(conn, lines=((10, 4.0),), status='closed', closed_at='2026-10-07 00:00:00')
+    assert po_mod.recompute_po_paid(conn, CID, zero['id'], EPS) == (0.0, 'unpaid')

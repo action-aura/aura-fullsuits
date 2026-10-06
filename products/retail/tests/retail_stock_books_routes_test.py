@@ -358,15 +358,61 @@ def test_t3_cancel_refused_while_a_payment_is_active_then_allowed_after_void(cli
 # lived INSIDE the order journal). A 'receipt'-basis order -- the only kind any
 # route creates now -- books its down payment as its own po_payment journal keyed
 # on the payment uid, so the void reverses it and the test PASSES; the xfail
-# marker had to go (strict xfail would now fail the suite). What this can no
-# longer catch: PD1 on a pre-v46 'order'-basis order whose down payment is inside
-# its order journal. No route can mint one any more, so that case is a RECORDED
-# GAP (not reproduced here), not a green check.
+# marker had to go for THIS (receipt-basis) fixture -- strict xfail would now fail
+# the suite. W4a-2 verify R6: the order-basis half is pinned again by the strict
+# xfail `test_pd1_order_basis_void_of_a_down_payment_keeps_ap_tied` just above.
 def test_pd1_void_of_a_po_down_payment_keeps_ap_tied(client):
     cid = client.test_company_id
     sid = _seed_supplier(client)
     pid = _seed_product(client)
     po_id = _make_po(client, sid, pid, paid=15)
+    [pay_id] = _po_payment_ids(cid, po_id)
+    assert client.post(f'{API}/payments/{pay_id}/void', json={'reason': 'test'}).status_code == 200
+    assert _bal(cid, gl.ACCOUNT_AP) == _supplier_balance(client, sid)   # GL 25 vs supplier 40 today
+
+
+def _make_order_basis_po_with_down_payment(c, cid, sid, pid, qty=10, cost=4.0, paid=15.0):
+    """An 'order'-basis order whose down payment sits INSIDE its order journal
+    (Dr 1260 40 / Cr AP 25 / Cr Cash 15) -- the pre-v46 shape no route can mint
+    any more, built by hand the way `_make_order_basis_po` is."""
+    from api import retail_api
+    po_id = _make_po(c, sid, pid, qty=qty, cost=cost)
+    conn = get_retail_conn()
+    po = conn.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+    real_uid = retail_api._uid          # _record_payment stamps the acting user (needs a request)
+    retail_api._uid = lambda: 'fixture'
+    try:
+        retail_api._record_payment(conn, cid, 'supplier', sid, 'out', paid, method='cash',
+                                   related_type='po', related_id=po_id, doc_type='supplier_payment',
+                                   currency='JOD')
+    finally:
+        retail_api._uid = real_uid
+    jid = gl.post_purchase_order(conn, cid, po['branch_id'], po_id, po['po_number'], 'JOD',
+                                 paid, po['total'] - paid, po_uid=po['uid'])
+    juid = conn.execute("SELECT uid FROM gl_journals WHERE id=?", (jid,)).fetchone()[0]
+    conn.execute("UPDATE purchase_orders SET ap_basis='order', order_journal_uid=? WHERE id=?", (juid, po_id))
+    retail_api.po_core.recompute_po_paid(conn, cid, po_id, 0.0005)
+    retail_api._refresh_party_balance(conn, 'suppliers', sid, cid, 'JOD')
+    conn.commit(); conn.close()
+    return po_id
+
+
+# W4a-2 verify R6: the PD1 pin comes BACK as a strict xfail for the ORDER basis.
+# The previous round deleted it when the receipt-basis case (below) started
+# passing -- but an order that already existed when v46 was installed still has
+# its down payment inside the order journal, and voiding that payment still moves
+# the supplier subledger (40) without moving the GL (AP stays 25). Strict, so the
+# day someone fixes PD1 for that shape this goes red and forces the marker out.
+# What it cannot catch: nothing -- it asserts the tie directly. It is the
+# PASSING receipt-basis test next to it that proves the fixed half.
+@pytest.mark.xfail(strict=True, reason="PD1: void of a down payment inside a pre-v46 order journal "
+                                       "moves the supplier balance but posts no GL")
+def test_pd1_order_basis_void_of_a_down_payment_keeps_ap_tied(client):
+    cid = client.test_company_id
+    sid = _seed_supplier(client)
+    pid = _seed_product(client)
+    po_id = _make_order_basis_po_with_down_payment(client, cid, sid, pid)
+    assert _bal(cid, gl.ACCOUNT_AP) == 25.0 and _supplier_balance(client, sid) == 25.0
     [pay_id] = _po_payment_ids(cid, po_id)
     assert client.post(f'{API}/payments/{pay_id}/void', json={'reason': 'test'}).status_code == 200
     assert _bal(cid, gl.ACCOUNT_AP) == _supplier_balance(client, sid)   # GL 25 vs supplier 40 today

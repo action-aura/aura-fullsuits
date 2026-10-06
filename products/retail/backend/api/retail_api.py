@@ -4401,6 +4401,26 @@ def receive_purchase_order(po_id):
         if not po:
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO not found'}), 404
+        body = request.get_json(silent=True)
+        body = body if isinstance(body, dict) else {}
+        # W4a-2 verify R1: the client's key for THIS delivery (minted when the
+        # dialog opened). A retry / double Enter / double click carries the same
+        # key and so the same receipt uid -- answered here, BEFORE any guard that
+        # depends on what is left to receive, so a retry of a delivery that has
+        # since been followed by another still reads "already recorded" instead
+        # of a confusing OVER_RECEIPT. No key = no retry dedupe (see below).
+        receipt_key = body.get('receipt_key')
+        if receipt_key is not None and not po_core.valid_receipt_key(receipt_key):
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'BAD_RECEIPT_KEY',
+                            'message': 'receipt_key must be 8 to 64 letters, digits or dashes.'}), 400
+        if receipt_key is not None and po['uid']:
+            keyed_uid = po_core.keyed_receipt_uid(po['uid'], receipt_key)
+            if cur.execute("SELECT 1 FROM purchase_order_receipts WHERE company_id=? AND uid=?",
+                           (cid, keyed_uid)).fetchone():
+                conn.rollback()
+                return jsonify({'status': 'success', 'already_recorded': True,
+                                'data': {'receipt_uid': keyed_uid}}), 200
         if po['status'] == 'received':
             conn.rollback()
             return jsonify({'status': 'error', 'message': 'PO already received'}), 409
@@ -4462,15 +4482,13 @@ def receive_purchase_order(po_id):
                                 'message': "Part of an earlier delivery has not reached this computer yet. "
                                            "Sync, then try again."}), 409
         # Quantity already received per line, from the receipts themselves (the
-        # `received_qty` column is only their cache).
-        got = {r[0]: Decimal(str(r[1] or 0)) for r in cur.execute(
-            "SELECT l.po_item_id, SUM(l.quantity) FROM purchase_order_receipt_lines l "
-            "JOIN purchase_order_receipts r ON r.id=l.receipt_id "
-            "WHERE r.company_id=? AND r.po_id=? GROUP BY l.po_item_id", (cid, po_id)).fetchall()}
+        # `received_qty` column is only their cache). W4a-2 verify R2: summed in
+        # DECIMAL by the core (po_core.received_by_item), not by a float SQL SUM --
+        # 1 - (0.1 + 0.2) is 0.69999... in floats, which refused the last 0.7 of
+        # a fractional order as OVER_RECEIPT and left it unfinishable.
+        got = po_core.received_by_item(conn, cid, po_id)
         remaining = {it['id']: Decimal(str(it['quantity'] or 0)) - got.get(it['id'], Decimal('0'))
                      for it in items}
-        body = request.get_json(silent=True)
-        body = body if isinstance(body, dict) else {}
         req_lines = body.get('lines')
         selected = []          # [(item row, Decimal quantity)]
         if req_lines:
@@ -4529,14 +4547,29 @@ def receive_purchase_order(po_id):
         # this file is quantized at -- see `_money`'s own docstring.
         currency = _company_currency(conn, cid)
         received_on = datetime.now().strftime('%Y-%m-%d')
-        # W4a-2: the receipt's identity is a pure function of (order, how many
-        # receipts this computer already holds, the lines and quantities), so two
-        # computers that each record the identical delivery while offline mint
-        # the SAME uid and it counts once; a genuinely different delivery has a
-        # different uid and counts too. The VALUE is computed here once and
-        # synced as a fact -- a peer never recomputes it.
-        recv_uid = (po_core.receipt_uid(po['uid'], len(recv_rows), [(it['uid'], q) for it, q in selected])
-                    if po['uid'] and all(it['uid'] for it, _q in selected) else _new_uid())
+        # W4a-2 verify R1: the receipt's identity (replaces the D4 count-based
+        # rule, which was wrong both ways -- see po_core.completing_receipt_uid).
+        #   * the receipt that COMPLETES the order: uuid5 of the history it
+        #     completes (order uid + the receipts present here), so two computers
+        #     that saw the same receipts and both receive "the rest" collapse to
+        #     one fact, and ones with different histories stay two (flagged
+        #     po_over_received by the sync apply) -- never silently lost;
+        #   * a PARTIAL receipt: uuid5 of the client's receipt_key, so a retry /
+        #     double submit hits ON CONFLICT(uid) and is recorded once;
+        #   * a partial with NO key (an older client): a random uuid4. There is
+        #     nothing to say two requests are the same delivery, and a
+        #     deterministic uid would merge two real deliveries of one size.
+        # The VALUE is computed here once and synced as a fact -- a peer never
+        # recomputes it.
+        completing = po_core.receipt_completes(conn, cid, po_id, [(it['id'], q) for it, q in selected])
+        if not (po['uid'] and all(it['uid'] for it, _q in selected)):
+            recv_uid = _new_uid()
+        elif completing:
+            recv_uid = po_core.completing_receipt_uid(po['uid'], [rr['uid'] for rr in recv_rows])
+        elif receipt_key is not None:
+            recv_uid = po_core.keyed_receipt_uid(po['uid'], receipt_key)
+        else:
+            recv_uid = _new_uid()
         recv_value = po_core.receipt_value(conn, cid, po_id, [(it['id'], q) for it, q in selected], currency)
         hdr = cur.execute(
             "INSERT INTO purchase_order_receipts (company_id,uid,po_id,branch_id,received_at,value,line_count,"
@@ -5016,6 +5049,30 @@ def close_purchase_order_short(po_id):
             return jsonify({'status': 'error', 'code': 'PO_BOOKS_NOT_ARRIVED',
                             'message': "This order's bookkeeping has not reached this computer yet. "
                                        "Sync, then try again."}), 409
+        # W4a-2 verify R3: the same two arrival guards receive has. Closing
+        # decides "what never came" from the lines and receipts HERE; with a line
+        # or a receipt's lines still parked, that arithmetic reads short, the
+        # close-short journal releases debt for goods that DID arrive, and once
+        # 'closed' nothing more can be received to correct it. Refuse, write
+        # nothing; a later sync makes the same click work. (`item_count` NULL =
+        # an order from a writer that never sent it: nothing to compare.)
+        n_items = cur.execute("SELECT COUNT(*) FROM purchase_order_items WHERE po_id=?",
+                              (po_id,)).fetchone()[0]
+        if po['item_count'] is not None and n_items < po['item_count']:
+            conn.rollback()
+            return jsonify({'status': 'error', 'code': 'PO_LINES_NOT_ARRIVED',
+                            'message': "Some lines of this order have not reached this computer yet. "
+                                       "Sync, then try again."}), 409
+        for rr in cur.execute(
+                "SELECT id, line_count FROM purchase_order_receipts WHERE company_id=? AND po_id=?",
+                (cid, po_id)).fetchall():
+            have = cur.execute("SELECT COUNT(*) FROM purchase_order_receipt_lines WHERE receipt_id=?",
+                               (rr['id'],)).fetchone()[0]
+            if rr['line_count'] is not None and have < rr['line_count']:
+                conn.rollback()
+                return jsonify({'status': 'error', 'code': 'PO_RECEIPTS_NOT_ARRIVED',
+                                'message': "Part of an earlier delivery has not reached this computer yet. "
+                                           "Sync, then try again."}), 409
         currency = _company_currency(conn, cid)
         closed_at = now_utc_iso()
         cur.execute("UPDATE purchase_orders SET closed_at=COALESCE(closed_at, ?) "
@@ -5025,6 +5082,9 @@ def close_purchase_order_short(po_id):
             return jsonify({'status': 'error', 'code': 'CLOSE_SHORT_NOT_PARTIAL',
                             'message': 'Only an order that is partly received can be closed short.'}), 409
         po_core.recompute_po_receive_state(conn, cid, po_id)
+        # W4a-2 verify R4: a closed order is paid against what ARRIVED, so its
+        # payment_status moves the moment it closes.
+        po_core.recompute_po_paid(conn, cid, po_id, _money_epsilon(currency))
         if ap_basis == 'order':
             bid = po['branch_id'] or _resolve_working_branch(conn, cid)[0]
             gl.post_po_close_short(conn, cid, bid, po, currency)

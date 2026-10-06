@@ -11699,6 +11699,17 @@ const RetailSystem = {
     return out;
   },
 
+  // 8..64 chars of [A-Za-z0-9-] (the server validates exactly this).
+  _newReceiptKey() {
+    try {
+      if (typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch (e) { /* fall through to the hex fallback */ }
+    const hex = () => Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0');
+    return Date.now().toString(16) + '-' + hex() + hex();
+  },
+
   async _receivePO(poId, poNumber) {
     let po = {}, items = [];
     try {
@@ -11719,7 +11730,12 @@ const RetailSystem = {
       SubsystemApp.showToast(t('Nothing is left to receive on this order.'), 'error');
       return;
     }
-    this._receivePOState = { poId, lines };
+    // W4a-2 verify R1: ONE key per dialog open names THIS delivery. A retry, a
+    // double Enter or a double click that slips past the in-flight guard below
+    // carries the same key, so the server records the delivery once instead of
+    // twice (stock 6 for one delivery of 3 was measured). Never minted per
+    // request: a failed request that actually landed must dedupe on retry.
+    this._receivePOState = { poId, lines, receiptKey: this._newReceiptKey(), inFlight: false };
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-po-receive-modal';
@@ -11754,6 +11770,10 @@ const RetailSystem = {
   async _submitReceivePO() {
     const st = this._receivePOState;
     if (!st) return;
+    // W4a-2 verify R1: a request is already on its way -- Enter / click again
+    // does nothing (the keydown handler calls this directly, bypassing the
+    // button's disabled state, which is why the guard lives here).
+    if (st.inFlight) return;
     const readQty = (ln) => parseFloat(document.getElementById(`po-recv-${ln.id}`)?.value || 0) || 0;
     for (const ln of st.lines) {
       const q = readQty(ln);
@@ -11769,19 +11789,23 @@ const RetailSystem = {
     }
     const btn = document.getElementById('po-recv-btn');
     if (btn) btn.disabled = true;
+    st.inFlight = true;
     try {
-      const d = await this._post(`/api/sub/retail/purchase-orders/${st.poId}/receive`, { lines: payloadLines });
+      const d = await this._post(`/api/sub/retail/purchase-orders/${st.poId}/receive`,
+        { lines: payloadLines, receipt_key: st.receiptKey });
       if (d.status === 'success') {
         SubsystemApp.showToast(t('Stock received and inventory updated'), 'success');
         this._closeModalOverlay(document.getElementById('ret-po-receive-modal'));
         this._loadPurchaseOrders();
       } else {
         SubsystemApp.showToast(this._poErrorMessage(d), 'error');
+        st.inFlight = false;
         if (btn) btn.disabled = false;
       }
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not reach the server. Please try again.'), 'error');
+      st.inFlight = false;
       if (btn) btn.disabled = false;
     }
   },
