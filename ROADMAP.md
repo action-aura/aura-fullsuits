@@ -7347,3 +7347,13 @@ Residuals:
   own points before v48, a person must add the other back.
 - Earn rate is still `int(total / 10)` (small win next). Demo seed/wipe leave ledger and cache out of
   step; the KMP app writes loyalty_points to its own local DB.
+
+## 2026-10-07 — retail schema v49 CLAIMED (customers.total_spent baseline)
+
+Claimed before any builder starts (highest RETAIL_SCHEMA_VERSION anywhere: 48, this branch).
+Why: rehearsal fix B6 (cfbf883f) made customers.total_spent a cache derived from this
+system's sales minus refunds, so a total brought in from a previous system by import or
+typed by hand is silently replaced after the customer's first sale here. v49 adds
+customers.total_spent_baseline (migration: MAX(0, stored - derived) per existing customer;
+import/hand-set writes it; carried in the customer sync payload); the cache becomes
+baseline + derived. Plan: job 54e80fc2 tmp/B6B-PLAN.md.
