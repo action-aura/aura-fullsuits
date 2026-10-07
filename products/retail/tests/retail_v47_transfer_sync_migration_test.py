@@ -138,8 +138,8 @@ def test_upgrade_adds_columns_stamps_counts_arms_backfill_and_infers_recalls():
     ids = _make_v46(db)
     backup_dir = _migrate(sch, db)
 
-    assert sch.RETAIL_SCHEMA_VERSION == 47
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 47
+    assert sch.RETAIL_SCHEMA_VERSION == 48  # v48 UPDATE: head moved 47 -> 48 (W2a); v48's own shape is pinned by retail_v48_loyalty_sync_migration_test.py
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == 48  # v48 UPDATE: head moved 47 -> 48 (W2a); v48's own shape is pinned by retail_v48_loyalty_sync_migration_test.py
     assert _rows(db, 'PRAGMA integrity_check')[0]['integrity_check'] == 'ok'
     assert os.listdir(backup_dir), 'ensure_schema_version must have written its pre-migration backup'
     assert set(_V47_COLUMNS) <= _cols(db, 'stock_transfers')
@@ -199,7 +199,7 @@ def test_replay_is_byte_identical_and_never_rearms_a_cleared_flag_or_rewrites_a_
 
 def test_a_fresh_install_has_the_v47_shape_and_defaults_the_flag_to_zero():
     sch, db = _install()
-    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 47
+    assert _rows(db, 'PRAGMA user_version')[0]['user_version'] == sch.RETAIL_SCHEMA_VERSION == 48  # v48 UPDATE: head moved 47 -> 48 (W2a); v48's own shape is pinned by retail_v48_loyalty_sync_migration_test.py
     assert set(_V47_COLUMNS) <= _cols(db, 'stock_transfers')
     conn = _open(db)
     try:

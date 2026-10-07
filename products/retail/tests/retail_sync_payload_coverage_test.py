@@ -892,6 +892,13 @@ TRACKED_TABLES = {
     # counts as covered; one neither carries is found.
     'stock_transfers': [('stock_transfer', 'create'), ('stock_transfer', 'update')],
     'stock_transfer_items': [('stock_transfer_item', 'create'), ('stock_transfer_item', 'update')],
+    # W2a (schema v48): a loyalty ledger row is an immutable synced fact, so its
+    # `create` is the whole baseline (no update exists). Every column of
+    # `loyalty_ledger` must ride it or be excluded below with a reason. The
+    # SALE side of the same wave -- `sales.points_earned` -- needs no entry
+    # here: `sales` is already tracked, and the new column has NO exclusion, so
+    # the sales test goes red the moment the sale payload stops carrying it.
+    'loyalty_ledger': [('loyalty_entry', 'create')],
 }
 
 MIN_REASON_LEN = 40
@@ -1305,6 +1312,32 @@ EXCLUSIONS = {
                                  "a receiver must keep it 0 or it would "
                                  "re-queue what it just pulled.",
     },
+    # W2a (schema v48): loyalty points shared between computers. `uid`,
+    # `customer_id`, `points_delta`, `entry_type`, `created_by` and `created_at`
+    # ride the payload as themselves.
+    'loyalty_ledger': {
+        'id': "Local SQLite autoincrement primary key; a ledger row's "
+              "cross-device identity is its `uid`, which the payload already "
+              "carries as the entity id, so the sender's own integer is "
+              "meaningless on a receiving computer and is never sent.",
+        'company_id': "Tenant-isolation key; the loyalty_entry apply branch "
+                      "INSERTs the receiver's own local_company_id, never a "
+                      "value read off the incoming payload, identical to "
+                      "every other synced company-scoped row in this file.",
+        'sale_id': "A per-computer integer sales.id; the payload carries "
+                   "`sale_uid` instead and the apply branch resolves it to "
+                   "THIS computer's own sale (parking the entry as "
+                   "missing_parent:sale until the sale arrives).",
+        'return_id': "A per-computer integer returns.id; the payload carries "
+                     "`return_uid` instead and the apply branch resolves it "
+                     "to THIS computer's own return (parking the entry as "
+                     "missing_parent:return until the return arrives).",
+        'sync_backfill_pending': "Local outbox bookkeeping: 1 marks a pre-v48 "
+                                 "ledger row whose create this computer still "
+                                 "owes the outbox. Meaningless to a peer, and "
+                                 "a receiver must keep it 0 or it would "
+                                 "re-queue what it just pulled.",
+    },
 }
 
 
@@ -1474,6 +1507,10 @@ def test_stock_transfers_outbox_payload_covers_every_column():
 
 def test_stock_transfer_items_outbox_payload_covers_every_column():
     _assert_full_coverage('stock_transfer_items')
+
+
+def test_loyalty_ledger_outbox_payload_covers_every_column():
+    _assert_full_coverage('loyalty_ledger')
 
 
 # ── NOT-VACUOUS PROOF ─────────────────────────────────────────────────────────

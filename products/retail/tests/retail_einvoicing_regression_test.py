@@ -203,6 +203,14 @@ SALES_TABLE_COLUMNS = [
     # added only new tables -- is untouched by this, exactly as it was by v10
     # and v13.
     'points_redeemed_amount',
+    # W2a (schema v48, database/schema.py's _migrate_add_loyalty_sync):
+    # sales.points_earned, how many loyalty points the sale granted, so a
+    # computer that receives the sale can tell 'earned nothing' from 'its earn
+    # row has not arrived yet'. Same boot-time-migration category and position
+    # as points_redeemed_amount above. What this can no longer catch: a stray
+    # column NAMED points_earned on sales -- the e-invoicing claim (v7 added
+    # only new tables) is unaffected.
+    'points_earned',
     'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [

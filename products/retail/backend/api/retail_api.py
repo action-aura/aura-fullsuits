@@ -176,6 +176,9 @@ from core.retail import purchase_orders as po_core
 # shared with the sync apply (which carries its own pinned-equal copy).
 from core.retail import stock_transfers as xfer_core
 from core.retail import stock_books
+# W2a: the one rule that refreshes the loyalty cache and the deterministic
+# opening-row uid, shared with the importer and the sync apply.
+from core.retail import loyalty as loyalty_core
 from commercial_runtime.stock_cost import blended_unit_cost as _blended_unit_cost
 from core.retail import today_cards
 from config import (
@@ -5467,6 +5470,91 @@ def backfill_legacy_transfers(conn):
     return done
 
 
+def _queue_loyalty_entry(cur, cid, entry_uid):
+    """W2a: queue one `loyalty_ledger` row as a `loyalty_entry` create event.
+
+    The ledger row is an immutable FACT, so it travels once under its own uid
+    and the receiving computer inserts it ON CONFLICT DO NOTHING. `sale_id` /
+    `return_id` are LOCAL integers that mean nothing elsewhere, so the wire
+    carries the sale's and the return's own uid (NULL when the row names none,
+    or when the document no longer exists here). Called by the sale and return
+    routes and by the boot backfill so the wire shape cannot drift between them.
+    The payload is a literal dict on purpose: the sync-payload coverage ratchet
+    reads it from the AST."""
+    r = cur.execute(
+        "SELECT l.uid, l.customer_id, l.points_delta, l.entry_type, l.created_by, l.created_at, "
+        "s.uid AS sale_uid, rt.uid AS return_uid FROM loyalty_ledger l "
+        "LEFT JOIN sales s ON s.id=l.sale_id AND s.company_id=l.company_id "
+        "LEFT JOIN returns rt ON rt.id=l.return_id AND rt.company_id=l.company_id "
+        "WHERE l.company_id=? AND l.uid=?", (cid, entry_uid)).fetchone()
+    _queue_sync_event(cur, 'loyalty_entry', r['uid'], 'create', {
+        'uid': r['uid'], 'customer_id': r['customer_id'], 'points_delta': r['points_delta'],
+        'entry_type': r['entry_type'], 'sale_uid': r['sale_uid'], 'return_uid': r['return_uid'],
+        'created_by': r['created_by'], 'created_at': r['created_at'],
+    })
+
+
+_LOYALTY_BACKFILL_BATCH = 200
+
+
+def backfill_legacy_loyalty(conn):
+    """W2a boot step: announce every loyalty row that existed BEFORE v48.
+
+    The migration only flags them `sync_backfill_pending=1` (it cannot import
+    this module's payload code). Rows go out in savepointed batches, then the
+    flag clears, so a second run emits nothing and a failure rolls back only
+    that batch (the next boot retries it). An 'opening' row goes out under the
+    deterministic uid -- the migration already re-keyed it; a row that somehow
+    still carries another uid is re-keyed here unless that uid is taken, in
+    which case it is a duplicate opening and is NOT announced (announcing it
+    under its own uid would double the balance on every other computer).
+    Returns the number of rows announced."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(loyalty_ledger)").fetchall()}
+    if 'sync_backfill_pending' not in cols:
+        return 0          # pre-v48 shape: nothing flagged yet, retry next boot
+    done = 0
+    while True:
+        batch = conn.execute(
+            "SELECT id, company_id, customer_id, uid, entry_type FROM loyalty_ledger "
+            "WHERE sync_backfill_pending=1 ORDER BY id LIMIT ?", (_LOYALTY_BACKFILL_BATCH,)).fetchall()
+        if not batch:
+            break
+        cur = conn.cursor()
+        try:
+            cur.execute("SAVEPOINT loyalty_backfill")
+            for row in batch:
+                uid = row['uid']
+                if row['entry_type'] == 'opening':
+                    want = loyalty_core.opening_uid(row['customer_id'])
+                    if uid != want:
+                        taken = cur.execute("SELECT 1 FROM loyalty_ledger WHERE uid=? AND id<>?",
+                                            (want, row['id'])).fetchone()
+                        if taken:
+                            cur.execute("UPDATE loyalty_ledger SET sync_backfill_pending=0 WHERE id=?",
+                                        (row['id'],))
+                            continue
+                        uid = want
+                        cur.execute("UPDATE loyalty_ledger SET uid=? WHERE id=?", (uid, row['id']))
+                elif not uid:
+                    uid = _new_uid()
+                    cur.execute("UPDATE loyalty_ledger SET uid=? WHERE id=?", (uid, row['id']))
+                _queue_loyalty_entry(cur, row['company_id'], uid)
+                cur.execute("UPDATE loyalty_ledger SET sync_backfill_pending=0 WHERE id=?", (row['id'],))
+                done += 1
+            cur.execute("RELEASE SAVEPOINT loyalty_backfill")
+        except Exception:  # noqa: BLE001 -- one batch must not stop the boot
+            log.exception('loyalty sync backfill failed -- will retry next boot')
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT loyalty_backfill")
+                cur.execute("RELEASE SAVEPOINT loyalty_backfill")
+            except Exception:  # noqa: BLE001
+                pass
+            break
+    if done:
+        conn.commit()
+    return done
+
+
 @retail_bp.route('/stock-transfers', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -8560,16 +8648,25 @@ def create_sale():
         # -- `entity_id` must equal the row's own `uid`, or the receiving
         # device could never resolve sale_items/payments back to this sale.
         sale_uid = _new_uid()
+        # W2a (schema v48): the points this sale grants, decided ONCE here so the
+        # sales row, the sale's sync payload and the 'earn' ledger row below all
+        # carry the same number. A computer that later receives the sale reads
+        # `points_earned` to know whether the earn row is still on its way, and
+        # create_return refuses until it has arrived (LOYALTY_NOT_ARRIVED). 1
+        # point per 10 of the sale's FULL total (unaffected by any redemption on
+        # this same sale); a walk-in earns nothing, stored as 0 (known), where an
+        # old sale's NULL means 'unknown'.
+        points_earned = int(total / 10) if customer_id else 0
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
                                change_amount,points_redeemed_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
-                               session_id,uid,actor_user_uid,terminal_id,created_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?)
+                               session_id,uid,actor_user_uid,terminal_id,created_at_utc,points_earned)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?,?)
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
               subtotal, discount, tax, total, paid, change, points_redeemed_amount,
               pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
-              sale_uid, actor, terminal, utc_now))
+              sale_uid, actor, terminal, utc_now, points_earned))
         sale_id = cur.lastrowid
         if cashier_discount:
             _audit(conn, 'SALE_DISCOUNT_BY_CASHIER', 'sale', sale_id,
@@ -8611,6 +8708,9 @@ def create_sale():
             # `change_amount` beside it already are: it is part of the
             # sale's own settled tender breakdown, not a local-only figure.
             'points_redeemed_amount': points_redeemed_amount,
+            # W2a: how many points this sale granted -- lets the receiving
+            # computer tell 'earned nothing' from 'its earn row has not arrived'.
+            'points_earned': points_earned,
             'payment_method': pm, 'status': 'completed',
             'notes': data.get('notes', ''), 'created_at': now_local, 'due_date': due_date,
             'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
@@ -8823,24 +8923,24 @@ def create_sale():
         # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`
         # for the mutation proof.
         if customer_id:
-            pts = int(total / 10)  # 1 point per $10 -- EARNED on the sale's
+            pts = points_earned  # 1 point per $10 -- EARNED on the sale's
             # full total, unaffected by any redemption THIS SAME sale
             # applied (points_applied below): a customer earns on what they
             # bought, not on what cash they happened to still owe after
             # spending points -- unchanged from the pre-redemption formula.
+            # (W2a: computed once above, where the sales row is written.)
             #
-            # Loyalty redemption, wave 1 (schema v27): `points_applied`
-            # subtracted in this SAME UPDATE rather than a second one, so
-            # the "MUST NOT bump row_version / MUST NOT queue a sync event"
-            # contract this whole comment block documents stays true of the
-            # ONE write this hot path has always made -- `points_applied`
-            # is 0 for every sale that never redeemed, which reduces this
-            # UPDATE to `loyalty_points=loyalty_points+pts-0`, byte-identical
-            # to the pre-redemption statement.
+            # W2a (schema v48): this UPDATE used to ALSO do
+            # `loyalty_points=loyalty_points+pts-points_applied`. That made the
+            # column a second running total beside the ledger, and once ledger
+            # rows arrive from other computers a running total can only drift.
+            # The column is now a CACHE refreshed from SUM(points_delta) by
+            # loyalty_core.refresh_points after the ledger rows below -- still
+            # no row_version bump, still no customer sync event.
             cur.execute("""
-                UPDATE customers SET total_spent=total_spent+?, loyalty_points=loyalty_points+?-?
+                UPDATE customers SET total_spent=total_spent+?
                 WHERE id=? AND company_id=?
-            """, (total, pts, points_applied, customer_id, cid))
+            """, (total, customer_id, cid))
             # Immutable ledger rows alongside the accumulator UPDATE above --
             # see database/schema.py's _migrate_add_loyalty_ledger docstring
             # for why the accumulator alone can never be the source of
@@ -8849,16 +8949,25 @@ def create_sale():
             # partial-unique index for) even though sync is not turned on
             # for this table in wave 1, so a later sync wave never has to
             # backfill identity onto rows this API already wrote.
+            #
+            # W2a (schema v48): each row is also QUEUED (`loyalty_entry`), so the
+            # points exist on every computer, not just this one -- see
+            # _queue_loyalty_entry. The cache refresh follows the writes.
             if pts:
+                _earn_uid = _new_uid()
                 cur.execute(
                     "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,sale_id,created_by) "
                     "VALUES (?,?,?,?,'earn',?,?)",
-                    (_new_uid(), cid, customer_id, pts, sale_id, _uid()))
+                    (_earn_uid, cid, customer_id, pts, sale_id, _uid()))
+                _queue_loyalty_entry(cur, cid, _earn_uid)
             if points_applied:
+                _redeem_uid = _new_uid()
                 cur.execute(
                     "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,sale_id,created_by) "
                     "VALUES (?,?,?,?,'redeem',?,?)",
-                    (_new_uid(), cid, customer_id, -points_applied, sale_id, _uid()))
+                    (_redeem_uid, cid, customer_id, -points_applied, sale_id, _uid()))
+                _queue_loyalty_entry(cur, cid, _redeem_uid)
+            loyalty_core.refresh_points(conn, cid, customer_id)
 
         # Ledger: record the amount actually RETAINED now (feeds the daily
         # cash summary/drawer close), and push any unpaid balance onto the
@@ -9962,7 +10071,7 @@ def create_return():
         # comment for the full defect.
         sale = cur.execute(
             "SELECT id, uid, branch_id, customer_id, total, amount_paid, payment_method, "
-            "points_redeemed_amount, tax_amount "
+            "points_redeemed_amount, tax_amount, points_earned "
             "FROM sales WHERE id=? AND company_id=?",
             (sale_id, cid)
         ).fetchone()
@@ -10019,6 +10128,28 @@ def create_return():
         # function uses, and the same value create_sale resolves for the
         # gates this function has to agree with. See `_money_epsilon`.
         _eps = _money_epsilon(currency)
+        # W2a (schema v48): REFUSE, before anything is written, while the points
+        # this sale earned or spent have not reached THIS computer. Loyalty rows
+        # sync separately from the sale, so a return on B of A's sale can find
+        # the sale but not its earn/redeem rows -- and would then claw back
+        # nothing and give back nothing while refunding the full cash, which is
+        # exactly the 'buy, earn, return, keep the points' leak the reversal
+        # block below exists to close. `points_earned` NULL is a sale from before
+        # v48: there is no way to know what it granted, so nothing to wait for.
+        if sale['customer_id'] and sale['points_earned'] is not None:
+            _need_earn = float(sale['points_earned'] or 0) > 0
+            _need_redeem = float(sale['points_redeemed_amount'] or 0) > _eps
+            if _need_earn or _need_redeem:
+                _have = cur.execute(
+                    "SELECT COALESCE(SUM(entry_type='earn'), 0) AS earn, "
+                    "COALESCE(SUM(entry_type='redeem'), 0) AS redeem FROM loyalty_ledger "
+                    "WHERE company_id=? AND customer_id=? AND sale_id=?",
+                    (cid, sale['customer_id'], sale_id)).fetchone()
+                if (_need_earn and not _have['earn']) or (_need_redeem and not _have['redeem']):
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'code': 'LOYALTY_NOT_ARRIVED',
+                                    'message': "This sale's loyalty points have not reached this computer yet. "
+                                               "Sync, then try again."}), 409
         # feat/shift-cash-drawer (schema v10): same best-effort session stamp
         # as create_sale above -- see _open_cash_session_id's docstring.
         cash_session_id = _open_cash_session_id(conn, cid, bid)
@@ -10824,30 +10955,35 @@ def create_return():
                     # only in the `_audit(...)` call below. `ret_id` is the
                     # `returns.id` this SAME call already inserted, a few
                     # lines above (`ret_id = cur.lastrowid`).
+                    # W2a (schema v48): each adjust row is QUEUED as a
+                    # `loyalty_entry` carrying this return's uid, so the
+                    # claw-back/give-back reaches every computer; the original
+                    # sale's earn/redeem rows are found by sale_id above, which
+                    # is why the LOYALTY_NOT_ARRIVED guard exists.
                     if earn_clawback:
+                        _claw_uid = _new_uid()
                         cur.execute(
                             "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by,return_id) "
                             "VALUES (?,?,?,?,'adjust',?,?)",
-                            (_new_uid(), cid, sale['customer_id'], -earn_clawback, _uid(), ret_id))
+                            (_claw_uid, cid, sale['customer_id'], -earn_clawback, _uid(), ret_id))
+                        _queue_loyalty_entry(cur, cid, _claw_uid)
                     if redeem_giveback:
+                        _give_uid = _new_uid()
                         cur.execute(
                             "INSERT INTO loyalty_ledger (uid,company_id,customer_id,points_delta,entry_type,created_by,return_id) "
                             "VALUES (?,?,?,?,'adjust',?,?)",
-                            (_new_uid(), cid, sale['customer_id'], redeem_giveback, _uid(), ret_id))
+                            (_give_uid, cid, sale['customer_id'], redeem_giveback, _uid(), ret_id))
+                        _queue_loyalty_entry(cur, cid, _give_uid)
                     if earn_clawback or redeem_giveback:
-                        # `customers.loyalty_points` cache kept in step,
-                        # obeying the SAME rule create_sale's own comment
-                        # sets out at its earn/redeem write: this UPDATE
-                        # must NOT bump row_version and must NOT emit a
-                        # sync event, or a genuine name/phone correction
-                        # made on another device could later be rejected
-                        # as stale -- see
+                        # `customers.loyalty_points` cache refreshed from the
+                        # ledger SUM (W2a: it used to be nudged by +/-, which
+                        # drifts once rows arrive from other computers). Still
+                        # NO row_version bump and NO customer sync event, or a
+                        # genuine name/phone correction made on another device
+                        # could later be rejected as stale -- see
                         # retail_v17_row_version_bump_test.py's
                         # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`.
-                        cur.execute(
-                            "UPDATE customers SET loyalty_points = loyalty_points + ? - ? "
-                            "WHERE id=? AND company_id=?",
-                            (redeem_giveback, earn_clawback, sale['customer_id'], cid))
+                        loyalty_core.refresh_points(conn, cid, sale['customer_id'])
                         loyalty_audit_note = (
                             f' loyalty_redeem_giveback={redeem_giveback} loyalty_earn_clawback={earn_clawback}')
 
@@ -14612,6 +14748,13 @@ def _ensure_credit_schema(conn):
         backfill_legacy_transfers(conn)
     except Exception:  # noqa: BLE001
         log.exception('stock-transfer sync backfill failed this boot -- will retry next boot')
+    # W2a BOOT STEP: the loyalty rows that pre-date v48 (same shape and reasoning
+    # as the two backfills above; its own try block so one failure cannot stop
+    # the others).
+    try:
+        backfill_legacy_loyalty(conn)
+    except Exception:  # noqa: BLE001
+        log.exception('loyalty sync backfill failed this boot -- will retry next boot')
     _CREDIT_SCHEMA_READY = True
 
 def _settings(conn, cid):
@@ -22426,6 +22569,8 @@ _SYNC_REVIEW_KINDS = {
     'gl_journal_line': 'A line of an accounting entry',
     'stock_transfer': 'A stock transfer from another computer',
     'stock_transfer_item': 'A line of a stock transfer',
+    # W2a (schema v48): a loyalty points entry from another computer.
+    'loyalty_entry': 'Loyalty points from another computer',
     # Track S (retail v42 + 1e7194cb): the engine parks these too -- a till
     # number given out by a computer that is not main, or a branch alias it
     # refused -- so the owner is told what the item is, not "something".
@@ -22518,6 +22663,11 @@ _SYNC_REVIEW_REASONS = {
     'transfer_received_and_recalled': ('a transfer was received on one computer while another computer brought it back. Both moved stock, so the same goods may be counted twice. A person needs to correct the stock and the books (the stock in transit and the shrinkage accounts)', False),
     'transfer_sent_twice': ('two computers sent the same transfer and recorded a different cost for it. The lower cost was kept on every computer and the duplicate send was reversed in the books', False),
     'transfer_received_twice': ('two computers received the same transfer and counted a different quantity. Both counts moved stock, so check the shelves and correct the stock and the books (the stock in transit and the shrinkage accounts)', False),
+    # W2a (schema v48): loyalty points shared between computers. Arabic wording in
+    # locales/ar.json: native speaker to confirm.
+    'missing_parent:customer': ('the customer these points belong to has not reached this computer yet', True),
+    'loyalty_opening_differs': ('two computers started this customer with a different number of points. The smaller number was kept on every computer. Check the balance with the customer', False),
+    'loyalty_overspent': ('this customer spent points on two computers before the points had synced, so the balance is now below zero. Check it with the customer', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read
 # (sync_service `reason=f"malformed_{entity_type}"`), so the prefix gets one

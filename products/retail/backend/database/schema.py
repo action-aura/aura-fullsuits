@@ -1272,7 +1272,33 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     apply to it or it could never be received.
 #
 # Appended LAST and shape-gated. See `_migrate_add_transfer_sync`.
-RETAIL_SCHEMA_VERSION = 47
+#
+# v48 (2026-10-07, W2a -- LOYALTY POINTS SHARED BETWEEN COMPUTERS; claimed in
+# ROADMAP.md "retail schema v48 CLAIMED"). `loyalty_ledger` rows never left the
+# computer that wrote them: points earned on A did not exist on B, a return on B
+# of A's sale found no earn/redeem rows (no claw-back, no give-back, the wrong
+# cash refund), `sale_id`/`return_id` were local integers, and each computer's
+# v27 'opening' row for one customer would DOUBLE the balance once rows synced.
+# Ledger rows now sync as immutable facts (entity `loyalty_entry`, keyed by their
+# uid); `customers.loyalty_points` is a CACHE of SUM(points_delta).
+#
+#   * `loyalty_ledger.sync_backfill_pending` -- 1 on exactly the rows that existed
+#     at upgrade: the boot step announces each one to the outbox once, then
+#     clears the flag. Armed in the SAME step that adds the column (the W4a
+#     pattern), so a replay can never re-arm a flag already cleared.
+#   * `sales.points_earned` -- the points a sale granted, stored on the sale
+#     and sent in its payload, so a return on another computer can tell whether
+#     the earn row has not arrived yet (LOYALTY_NOT_ARRIVED) instead of refunding
+#     as if nothing had been earned. NULL for sales written before v48: unknown,
+#     never "zero".
+#   * every customer's 'opening' row is re-keyed to the deterministic uid
+#     `core.retail.loyalty.opening_uid(customer)`; a customer with several local
+#     opening rows has them merged into ONE row carrying their sum.
+#   * `loyalty_ledger.return_id` is ensured here too (retail_api's
+#     `_ensure_credit_schema` also adds it lazily; whichever runs first wins).
+#
+# Appended LAST and shape-gated. See `_migrate_add_loyalty_sync`.
+RETAIL_SCHEMA_VERSION = 48
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2440,6 +2466,69 @@ def _migrate_retail_schema(conn):
     # step) and nothing a step above may still be changing. See the v47 comment
     # on RETAIL_SCHEMA_VERSION.
     _migrate_add_transfer_sync(conn)
+    # v47 -> v48 (loyalty points shared between computers, W2a): appended LAST.
+    # It reads `loyalty_ledger` (v27) and `sales` and nothing a step above may
+    # still be changing. See the v48 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_loyalty_sync(conn)
+
+
+def _migrate_add_loyalty_sync(conn):
+    """One-time migration (schema v47 -> v48). See the v48 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated end to end (`PRAGMA table_info`), so the whole chain replaying --
+    the normal case after a failed launch -- is byte-identical. Returns early
+    when `loyalty_ledger` does not exist (a hand-built minimal fixture).
+
+    W2a: THE FLAG IS ARMED ONLY WHEN THE COLUMN IS JUST ADDED. Every row that
+    exists at that moment is pending; once the column exists a replay never
+    touches it, so a row the boot backfill already announced and cleared cannot
+    be re-armed, and a row written by v48 code (flag 0) is never pending.
+
+    W2a: THE OPENING RE-KEY. Positional row access (this may run on a connection
+    without sqlite3.Row). Several local opening rows for one customer (not
+    expected, but nothing forbade it) are merged into the lowest-id row carrying
+    their SUM, the others deleted -- the balance is unchanged and the
+    deterministic uid can then be set without colliding. Idempotent: after one
+    pass each customer has at most one opening row, already holding the uid."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'loyalty_ledger' not in live:
+        return
+
+    cols = {row[1] for row in conn.execute('PRAGMA table_info("loyalty_ledger")').fetchall()}
+    if 'sync_backfill_pending' not in cols:
+        conn.execute('ALTER TABLE loyalty_ledger ADD COLUMN sync_backfill_pending INTEGER DEFAULT 0')
+        conn.execute('UPDATE loyalty_ledger SET sync_backfill_pending = 1')
+    if 'return_id' not in cols:
+        conn.execute('ALTER TABLE loyalty_ledger ADD COLUMN return_id INTEGER')
+
+    if 'sales' in live:
+        sales_cols = {row[1] for row in conn.execute('PRAGMA table_info("sales")').fetchall()}
+        if 'points_earned' not in sales_cols:
+            conn.execute('ALTER TABLE sales ADD COLUMN points_earned REAL')
+
+    from core.retail import loyalty as _loy
+    openings = {}
+    for row in conn.execute(
+            "SELECT id, company_id, customer_id, points_delta, uid FROM loyalty_ledger "
+            "WHERE entry_type = 'opening' ORDER BY id").fetchall():
+        openings.setdefault((row[1], row[2]), []).append((row[0], row[3], row[4]))
+    for (company_id, customer_id), rows in openings.items():
+        target = _loy.opening_uid(customer_id)
+        if len(rows) == 1 and rows[0][2] == target:
+            continue
+        keep_id = rows[0][0]
+        total = sum(r[1] for r in rows)
+        if len(rows) > 1:
+            logging.getLogger(__name__).warning(
+                'v48 merged %d opening loyalty rows for customer %s into one (%s points)',
+                len(rows), customer_id, total)
+            conn.execute(
+                "DELETE FROM loyalty_ledger WHERE entry_type = 'opening' AND company_id = ? "
+                "AND customer_id = ? AND id <> ?", (company_id, customer_id, keep_id))
+        conn.execute("UPDATE loyalty_ledger SET uid = ?, points_delta = ? WHERE id = ?",
+                     (target, total, keep_id))
 
 
 def _migrate_add_transfer_sync(conn):

@@ -718,6 +718,18 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     # type and parks them via the unknown-type schema-skew gate.
     "stock_transfer",
     "stock_transfer_item",
+    # Schema v48 (W2a) -- loyalty points shared between computers. ONE type:
+    # "loyalty_entry", a create-only IMMUTABLE fact keyed on the ledger row's
+    # own uid, naming its customer by wire id and its sale / return by uid.
+    # Before W2a `loyalty_ledger` rows never left the computer that wrote
+    # them, so points earned on one computer did not exist on another and a
+    # return of a sale rung elsewhere found nothing to claw back. Applying one
+    # NEVER posts books (the 5000 redemption expense already travels as a
+    # `gl_journal`) and NEVER queues anything. Needs `company_id` (the receiver
+    # stamps its own), so it is NOT in `_ENTITY_TYPES_WITHOUT_COMPANY_ID`. A v47
+    # peer does not know the type and parks it via the unknown-type schema-skew
+    # gate (`schema_version_too_new`).
+    "loyalty_entry",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -817,6 +829,13 @@ _ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset(
 #: cannot import products/, so the literal is duplicated and a test pins the
 #: two equal.
 _PO_RECEIPT_NAMESPACE = uuid.UUID('a674e3be-c149-497a-b0a7-f235e22c5ae0')
+
+#: W2a: the namespace `core/retail/loyalty.py` mints a customer's 'opening'
+#: ledger uid under. NEVER CHANGE. Every computer must derive the SAME uid for
+#: one customer's opening row, or the two computers' own v27 opening balances
+#: would be counted twice once rows sync. commercial_runtime cannot import
+#: products/, so the literal is duplicated and a test pins the two equal.
+_LOYALTY_OPENING_NAMESPACE = uuid.UUID('b3a7d1c4-5e92-4f08-9a61-0c2d8e4f7b13')
 
 #: W4a-2 verify R2: quantities are REAL columns but are compared as DECIMALS
 #: built from str(value) -- exactly what core/retail/purchase_orders.py does --
@@ -3136,8 +3155,8 @@ class SyncService:
                     "subtotal, discount_amount, tax_amount, total, amount_paid, change_amount, "
                     "points_redeemed_amount, "
                     "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
-                    "uid, actor_user_uid, terminal_id, created_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?) "
+                    "uid, actor_user_uid, terminal_id, created_at_utc, points_earned) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                     (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
                      p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
@@ -3145,7 +3164,12 @@ class SyncService:
                      p.get("change_amount", 0), p.get("points_redeemed_amount", 0),
                      p.get("payment_method", "cash"), p.get("status", "completed"),
                      p.get("notes", ""), p.get("created_at"), p.get("due_date"),
-                     p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
+                     p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc"),
+                     # W2a: the points this sale granted, so a return on ANOTHER
+                     # computer can tell "the earn row has not arrived yet" from
+                     # "this sale never earned". Absent (an older sender) stays
+                     # NULL = unknown, which skips that guard.
+                     p.get("points_earned")),
                 )
             except sqlite3.IntegrityError as exc:
                 # Aseel-parity wave A-PAR (schema v34), per-document-type
@@ -3539,6 +3563,12 @@ class SyncService:
                 return self._apply_stock_transfer_item_update(
                     conn, ev, p, local_company_id, conflict_sink)
             return True
+        elif entity_type == "loyalty_entry":
+            # W2a (schema v48): one immutable loyalty ledger fact. Create-only;
+            # nothing else is ever emitted for the type.
+            if event_type != "create":
+                return True
+            return self._apply_loyalty_entry_create(conn, ev, p, local_company_id, conflict_sink)
         elif entity_type == "inventory_movement":
             # Wave B (stock-moving sync). Immutable ledger fact -- see the
             # module docstring's wave B note for why this posture matches
@@ -6025,6 +6055,137 @@ class SyncService:
                 (cancelled_at, closed_at, local["id"], local_company_id))
         self._refresh_po(conn, local_company_id, local["id"])
         self._flag_po_conflicts(conn, conflict_sink, local_company_id, local["id"])
+        return True
+
+    # ── W2a: loyalty points (schema v48) ─────────────────────────────────────
+
+    @staticmethod
+    def _loyalty_opening_uid(customer_id) -> str:
+        """The uid of a customer's 'opening' ledger row -- identical on every
+        computer. Twin of `core/retail/loyalty.py::opening_uid`; a test pins the
+        two equal."""
+        return str(uuid.uuid5(_LOYALTY_OPENING_NAMESPACE, f"{customer_id}:opening"))
+
+    @staticmethod
+    def _refresh_loyalty_points(conn, company_id, customer_id) -> None:
+        """Set `customers.loyalty_points` to SUM(points_delta), REPLACING the
+        cache (so a replayed row cannot double it). Never bumps row_version and
+        queues no customer event: the figure is derived from rows that sync on
+        their own. Twin of `core/retail/loyalty.py::refresh_points` -- the same
+        one statement; a test pins the two equal."""
+        conn.execute(
+            "UPDATE customers SET loyalty_points = COALESCE((SELECT SUM(points_delta) FROM loyalty_ledger "
+            "WHERE customer_id=?), 0) WHERE company_id=? AND id=?",
+            (customer_id, company_id, customer_id))
+
+    @staticmethod
+    def _loyalty_crossing_entry_type(conn, company_id, customer_id):
+        """(final balance, entry_type of the row that LAST took the running
+        balance from >= 0 to < 0), walking the customer's rows in time order
+        (created_at, then uid -- never the local id, which differs per
+        computer). The crossing type is None when the balance ended >= 0. Time
+        order, not arrival order, so every computer reaches the same verdict
+        however the rows reached it."""
+        balance = Decimal(0)
+        crossing = None
+        for row in conn.execute(
+                "SELECT points_delta, entry_type FROM loyalty_ledger WHERE company_id=? AND customer_id=? "
+                "ORDER BY created_at, uid", (company_id, customer_id)).fetchall():
+            before = balance
+            balance += Decimal(str(row[0]))
+            if before >= 0 > balance:
+                crossing = row[1]
+            elif balance >= 0:
+                crossing = None
+        return balance, crossing
+
+    def _apply_loyalty_entry_create(self, conn, ev: dict, p: dict, local_company_id,
+                                     conflict_sink) -> bool:
+        """`loyalty_entry` create: insert one immutable ledger fact another
+        computer wrote, under THIS computer's company, with THIS computer's own
+        sale_id / return_id (the writer's integers mean nothing here), exactly
+        once (`ON CONFLICT(uid) DO NOTHING`).
+
+        * customer / sale / return not here yet -> PARKED (never raised, never
+          dropped) and applied when they arrive: `missing_parent:customer|sale|
+          return`. The ledger carries no real FKs, so nothing would raise -- but
+          a row that points at nothing would leave the receiver unable to find
+          a sale's earn/redeem rows when that sale is returned.
+        * NEVER written from the sale / return apply branches and NEVER posts
+          books: the 5000 redemption expense already syncs as a `gl_journal`.
+        * `customers.loyalty_points` is re-derived from the SUM afterwards,
+          never incremented, so a replay cannot double it.
+        * 'opening': a customer's pre-v48 opening row has a deterministic uid,
+          so two computers that each carried the same customer collide. When
+          the local row's value DIFFERS, the SMALLER wins on every computer --
+          the ONE place a ledger row is ever edited -- and the difference is
+          recorded once for a person.
+        * An overspent redemption (two computers each spent the same points
+          offline) converges to the same negative balance on both; it is
+          recorded once per customer, but a claw-back that goes negative is
+          NOT (the shop allows that today)."""
+        uid = p.get("uid") or ev.get("entity_id")
+        customer_id = p.get("customer_id")
+        entry_type = p.get("entry_type")
+        delta = p.get("points_delta")
+        if (not uid or not customer_id or not entry_type or isinstance(delta, bool)
+                or not isinstance(delta, (int, float))):
+            return self._quarantine_apply_event(
+                conn, ev, reason="malformed_loyalty_entry",
+                detail=f"uid={uid!r} customer_id={customer_id!r} entry_type={entry_type!r} "
+                       f"points_delta={delta!r}")
+        if not conn.execute("SELECT 1 FROM customers WHERE id=? AND company_id=?",
+                            (customer_id, local_company_id)).fetchone():
+            return self._quarantine_apply_event(
+                conn, ev, reason="missing_parent:customer",
+                detail=f"customer_id={customer_id!r} not found locally")
+        sale_local_id = None
+        if p.get("sale_uid"):
+            sale_local_id = self._local_id_by_uid(conn, "sales", p.get("sale_uid"))
+            if sale_local_id is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:sale",
+                    detail=f"sale_uid={p.get('sale_uid')!r} not found locally")
+        return_local_id = None
+        if p.get("return_uid"):
+            return_local_id = self._local_id_by_uid(conn, "returns", p.get("return_uid"))
+            if return_local_id is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:return",
+                    detail=f"return_uid={p.get('return_uid')!r} not found locally")
+        existing = conn.execute(
+            "SELECT points_delta FROM loyalty_ledger WHERE uid=? AND company_id=?",
+            (uid, local_company_id)).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type, "
+                "sale_id, return_id, created_by, created_at, sync_backfill_pending) "
+                "VALUES (?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),0) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (uid, local_company_id, customer_id, delta, entry_type, sale_local_id,
+                 return_local_id, p.get("created_by") or "System", p.get("created_at")))
+        elif entry_type == "opening" and uid == self._loyalty_opening_uid(customer_id):
+            local_delta = existing[0]
+            if Decimal(str(delta)) != Decimal(str(local_delta)):
+                # The ONE allowed mutation of a ledger row: both computers must
+                # land on the same opening figure whichever arrives second.
+                if Decimal(str(delta)) < Decimal(str(local_delta)):
+                    conn.execute("UPDATE loyalty_ledger SET points_delta=? WHERE uid=? AND company_id=?",
+                                 (delta, uid, local_company_id))
+                self._record_sync_conflict_once(
+                    conn, conflict_sink, local_company_id=local_company_id,
+                    entity_type="loyalty_entry", entity_id=customer_id, event_type="create",
+                    local_row_version=0, incoming_row_version=0, reason="loyalty_opening_differs",
+                    payload={"customer_id": customer_id, "local_points": local_delta,
+                             "incoming_points": delta})
+        self._refresh_loyalty_points(conn, local_company_id, customer_id)
+        balance, crossing = self._loyalty_crossing_entry_type(conn, local_company_id, customer_id)
+        if balance < 0 and crossing == "redeem":
+            self._record_sync_conflict_once(
+                conn, conflict_sink, local_company_id=local_company_id,
+                entity_type="loyalty_entry", entity_id=customer_id, event_type="create",
+                local_row_version=0, incoming_row_version=0, reason="loyalty_overspent",
+                payload={"customer_id": customer_id, "balance": float(balance)})
         return True
 
     # ── W3b: stock transfers (schema v47) ────────────────────────────────────

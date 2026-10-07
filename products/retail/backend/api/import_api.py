@@ -103,6 +103,7 @@ from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
 # from retail_api, for the peer-module reason above.
 from core.retail import general_ledger as _gl
 from core.retail import stock_books as _stock_books
+from core.retail import loyalty as _loyalty   # W2a: opening uid + cache refresh
 from core.retail import pricing as _tax_engine
 from commercial_runtime.currency import quantize_money as _quantize_money
 
@@ -2134,12 +2135,19 @@ def _handle_retail_customers(records):
             # backfill posture phase6b-decisions.md pins) off the back of an
             # unrelated contact-detail re-import -- only a genuine
             # `deleted_at_utc` tombstone is resurrected here.
-            set_clause = "name=?,phone=?,address=?,loyalty_points=?,total_spent=?,row_version=row_version+1,updated_at_utc=?"
+            #
+            # W2a (schema v48): `loyalty_points` is no longer written here --
+            # it is a CACHE of the ledger SUM, refreshed by
+            # `_sync_loyalty_ledger_to_column` below after the ledger delta is
+            # written. Writing the imported figure straight into it would leave
+            # the column and the ledger disagreeing until something else
+            # refreshed it.
+            set_clause = "name=?,phone=?,address=?,total_spent=?,row_version=row_version+1,updated_at_utc=?"
             if resurrecting:
                 set_clause += ",deleted_at_utc=NULL"
             cur.execute(
                 f"UPDATE customers SET {set_clause} WHERE id=?",
-                (name, rec.get('phone',''), rec.get('address',''), lp, ts, utc_now, existing['id']))
+                (name, rec.get('phone',''), rec.get('address',''), ts, utc_now, existing['id']))
             # Same re-SELECTed payload update_customer queues. loyalty_points/
             # total_spent stay local-only (not in the normal route's payload
             # either -- the apply side never writes them).
@@ -2171,7 +2179,9 @@ def _handle_retail_customers(records):
             cur.execute(
                 "INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent,"
                 "row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts, 1, utc_now))
+                # W2a: starts at 0; the ledger delta below and its cache refresh
+                # set the real figure (never a figure the ledger cannot explain).
+                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), 0, ts, 1, utc_now))
             # Mirrors create_customer's payload key-for-key (see the
             # loyalty_points/total_spent note on the update branch above).
             _queue_sync_event(cur, 'customer', nid, 'create', {
@@ -2232,13 +2242,21 @@ def _sync_loyalty_ledger_to_column(cur, cid, customer_id, imported_points):
     zero in it, is the common case and must not litter the ledger. This
     mirrors v27's own `WHERE loyalty_points > 0`.
 
-    NOT SYNCED, deliberately, and for the same reason the column itself is
-    not: `loyalty_points` is an accumulator that sync_service.py's customer
-    apply branch does not carry (SYNCED_CUSTOMER_FIELDS), because
-    last-write-wins on an accumulator loses points the way it would lose
-    stock. An import is a local administrative act on the device that runs
-    it; the ledger rows it writes are local rows, exactly like the ones v27's
-    migration wrote on each device independently.
+    SYNCED NOW (W2a, schema v48). This paragraph used to say the rows were
+    "NOT SYNCED, deliberately" and local to the importing device. That was
+    right while the ledger itself did not sync; it now does, so a row written
+    here and left local would make this computer's balance differ from every
+    other computer's for good. Each row is queued as a `loyalty_entry` (the
+    importer's own copy of the retail route's payload -- sale_uid and
+    return_uid are always None for an import) and `customers.loyalty_points`,
+    which stays a cache that sync_service's customer apply does not carry, is
+    refreshed from the ledger SUM.
+
+    THE 'opening' ROW'S UID IS DETERMINISTIC (loyalty.opening_uid): two
+    computers that each imported or migrated an opening balance for one
+    customer collide on the unique uid index instead of each adding their own,
+    and the apply side keeps the smaller figure. An 'adjust' row takes a fresh
+    uid -- it is a delta, and a delta from two computers should both count.
     """
     try:
         points = float(imported_points or 0)
@@ -2253,12 +2271,25 @@ def _sync_loyalty_ledger_to_column(cur, cid, customer_id, imported_points):
     has_history = int(rows[1] or 0) > 0
     delta = points - current
     if delta == 0:
+        # Nothing to write, but the cache may still be stale (a pre-W2a column
+        # value the ledger never explained) -- one rule, one refresh.
+        _loyalty.refresh_points(cur.connection, cid, customer_id)
         return
+    entry_uid = str(_uuid.uuid4()) if has_history else _loyalty.opening_uid(customer_id)
     cur.execute(
         "INSERT INTO loyalty_ledger (uid, company_id, customer_id, points_delta, entry_type) "
         "VALUES (?,?,?,?,?)",
-        (str(_uuid.uuid4()), cid, customer_id, delta, 'adjust' if has_history else 'opening'),
+        (entry_uid, cid, customer_id, delta, 'adjust' if has_history else 'opening'),
     )
+    row = cur.execute(
+        "SELECT uid, customer_id, points_delta, entry_type, created_by, created_at "
+        "FROM loyalty_ledger WHERE company_id=? AND uid=?", (cid, entry_uid)).fetchone()
+    _queue_sync_event(cur, 'loyalty_entry', row['uid'], 'create', {
+        'uid': row['uid'], 'customer_id': row['customer_id'], 'points_delta': row['points_delta'],
+        'entry_type': row['entry_type'], 'sale_uid': None, 'return_uid': None,
+        'created_by': row['created_by'], 'created_at': row['created_at'],
+    })
+    _loyalty.refresh_points(cur.connection, cid, customer_id)
 
 
 def _handle_retail_suppliers(records):
