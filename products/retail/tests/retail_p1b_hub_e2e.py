@@ -434,7 +434,8 @@ with sync_playwright() as p:
 
     # P1c added "display" (Screen size: a per-DEVICE preference, offered to everyone who can
     # open Settings -- it changes nothing in the shop's data).
-    OWNER_SECTIONS = ["shop-receipt", "tax", "credit", "tills", "hardware", "display", "team", "data-backup", "plan-devices"]
+    # EXTRAS (2026-10-07): the Extras set-up section sits after Tills.
+    OWNER_SECTIONS = ["shop-receipt", "tax", "credit", "tills", "extras", "hardware", "display", "team", "data-backup", "plan-devices"]
 
     # =========================================================================
     # 1. Reaching the hub and every section (owner)
@@ -449,6 +450,7 @@ with sync_playwright() as p:
             "tax": "#tax-mode",
             "credit": "#credit-mode",
             "tills": "#device-branch-card",
+            "extras": None,
             "hardware": "#printer-card",
             "display": "#display-card",
             "team": None,
@@ -883,9 +885,10 @@ with sync_playwright() as p:
         # P1c: Display (Screen size) is per-device and needs no authority, so a delegated
         # manager sees it too. WHAT THIS CAN NO LONGER CATCH: "Display" being hidden from a
         # manager -- it is not owner-data. Every owner-only section is still refused below.
-        assert ids == ["tills", "display", "team"], f"a delegated manager sees sections {ids}"
+        # EXTRAS: a manager holds retail.stock.adjust, so the Extras set-up section shows too.
+        assert ids == ["tills", "extras", "display", "team"], f"a delegated manager sees sections {ids}"
         secs = manager.evaluate("() => SettingsHub.sections().filter(s => s.visible).map(s => s.id)")
-        assert secs == ["tills", "display", "team"], secs
+        assert secs == ["tills", "extras", "display", "team"], secs
         # owner-only sections refuse to open
         assert manager.evaluate("() => SettingsHub.open('credit')") is False
         for sel in ("#branding-card", "#default-tax-card", "#business-day-card", "#einvoicing-card",
@@ -2189,10 +2192,18 @@ with sync_playwright() as p:
         # server file a pending request; the owner accepts it in Purchasing with real
         # clicks; the PO list right beside it must show the new order at once (it
         # used to keep saying "No purchase orders yet" under a success toast).
+        # STOCK-BOOKS verify F3 (2026-10-05): a reorder PO is born unpaid, so the
+        # product must name its supplier or accept is refused 409
+        # SUPPLIER_REQUIRED_FOR_CREDIT_PO. This setup predates that rule; it now
+        # gives the product a supplier. It no longer exercises a supplier-less
+        # reorder accept -- that refusal is pinned in retail_stock_books_routes_test.
+        _, sb = api(owner, "POST", "/api/sub/retail/suppliers", {"name": "Hub Reorder Supplier"})
+        sup_id = ((sb or {}).get("data") or {}).get("id")
+        assert sup_id, f"reorder supplier was not created: {sb}"
         _, b = api(owner, "POST", "/api/sub/retail/products", {
             "name": "Hub Reorder Widget", "sku": "H-RO1", "sell_price": 5, "cost_price": 2,
             "category_id": CAT_SNACKS, "unit": "pc", "reorder_level": 5,
-            "reorder_method": "whatsapp", "initial_stock": 6,
+            "reorder_method": "whatsapp", "initial_stock": 6, "supplier_id": sup_id,
         })
         pid = ((b or {}).get("data") or {}).get("id")
         assert pid, f"reorder product was not created: {b}"

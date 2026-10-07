@@ -71,23 +71,18 @@ INTENTIONALLY_UNREACHABLE = {
     # segment, not the full path), so this heuristic now reads all of them
     # as reached even though only the till's GET is actually wired to a
     # client. That is a known imprecision in the heuristic itself, not a
-    # claim that a modifier-admin Settings screen was built here -- it was
-    # not; see 'modifier-options' below for the entry that still needs one.
-    'modifier-options':
-        'PATCH/DELETE /modifier-options/<id> -- editing or deactivating one '
-        'already-created option. Still genuinely unreachable: this wave '
-        '(the POS picker, subsystem-retail.js) only ever READS options, '
-        'nested inside GET /products/<id>/modifier-groups -- it never '
-        'edits or deletes one, and no Settings screen for authoring '
-        'modifier groups/options exists yet on either client (grep '
-        'confirms zero references to "modifier" in app-shell.js and only '
-        'this wave\'s own POS code in subsystem-retail.js). Building that '
-        'admin screen was out of scope for the till-side wave that closed '
-        '\'modifier-groups\' above; when it lands, POST /modifier-groups/'
-        '<id>/options (create) is covered by the SAME "modifier-groups" '
-        'search key and will need no entry of its own, but these two '
-        'routes will.',
-
+    # claim that a modifier-admin Settings screen existed at that point.
+    #
+    # EXTRAS: 'modifier-options' is REMOVED from this dict too. It was the
+    # last entry here for the modifier routes ("PATCH/DELETE /modifier-options/
+    # <id> -- no Settings screen for authoring modifier groups/options exists
+    # yet on either client"). The Settings > Extras screen
+    # (frontend/modifiers-settings.js, RetailModifiers) now edits and
+    # deactivates options through those two routes, and creates groups/options
+    # and attaches products through the rest. Desktop only: Android has no
+    # modifier set-up screen, which this heuristic cannot see either way
+    # (it only needs SOME client to name the path).
+    #
     # ── Genuinely reachable only from elsewhere ─────────────────────────────
     'demo-seed':
         'Seeds demo data. Deliberately absent from every customer-facing UI: a '

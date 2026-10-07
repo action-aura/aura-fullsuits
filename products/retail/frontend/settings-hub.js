@@ -36,7 +36,7 @@
   const toast = (msg, type) => { if (window.SubsystemApp && SubsystemApp.showToast) SubsystemApp.showToast(msg, type); };
 
   // Section ids are a contract with the palette (palette.js) and the tests.
-  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'hardware', 'display', 'team', 'data-backup', 'plan-devices'];
+  const SECTION_ORDER = ['shop-receipt', 'tax', 'credit', 'tills', 'extras', 'hardware', 'display', 'team', 'data-backup', 'plan-devices'];
 
   // ── who is asking ──────────────────────────────────────────────────────────
   // Same two axes _renderAdminCenter uses. `!window.SubsystemApp` fails OPEN,
@@ -47,6 +47,12 @@
     return isOwner() ||
       !!(window.SubsystemApp && typeof SubsystemApp.hasCapability === 'function' &&
          SubsystemApp.hasCapability('retail.employees'));
+  }
+
+  // EXTRAS: modifier set-up needs the stock-management capability.
+  function canStockAdjust() {
+    return !!(window.SubsystemApp && typeof SubsystemApp.hasCapability === 'function' &&
+      SubsystemApp.hasCapability('retail.stock.adjust'));
   }
 
   // ── dirty tracking ─────────────────────────────────────────────────────────
@@ -1897,6 +1903,9 @@
       delete S.holding.printer;
     } else if (id === 'display') {
       host.innerHTML = displayCard();
+    } else if (id === 'extras') {
+      if (window.RetailModifiers && typeof RetailModifiers.render === 'function') await RetailModifiers.render(host);
+      else host.innerHTML = '';
     } else if (id === 'team') {
       if (window.RetailEmployees && typeof RetailEmployees.render === 'function') await RetailEmployees.render(host);
     } else if (id === 'data-backup') {
@@ -1929,6 +1938,12 @@
       { id: 'tax', label: t('Tax'), visible: owner },
       { id: 'credit', label: t('Credit & loyalty'), visible: owner },
       { id: 'tills', label: t('Tills & numbering'), visible: dev },
+      // EXTRAS: modifier groups ("Size", "Toppings"). The routes behind it are
+      // CAP_STOCK_ADJUST (catalogue management, not selling), so the door is
+      // shown to exactly that capability -- the owner has it, a manager does,
+      // a cashier does not. A missing shell fails CLOSED here: this is a
+      // door to mutations, unlike the display card.
+      { id: 'extras', label: t('Extras (options on items)'), visible: canStockAdjust() },
       // Hardware stays owner-only (decided): a delegated manager keeps the
       // printer card on the scanner screen, which is where they already use it.
       { id: 'hardware', label: t('Hardware'), visible: owner },
