@@ -202,7 +202,17 @@ def test_9_garbage_in_the_table_fails_closed(shop):
     assert _sell(cashier, pid, [1]).status_code == 403
 
 
-def test_10_loyalty_redemption_still_needs_the_discount_capability(shop):
+def test_10_loyalty_redemption_is_a_tender_a_cashier_may_take(shop):
+    """INVERTED 2026-10-07 (rehearsal fix B4, cfbf883f). This used to pin that
+    a cashier is refused 403 when a customer pays with points, because
+    redemption borrowed the discount capability. The two-till rehearsal
+    showed a cashier could not take a points payment at all. Points are a
+    way of PAYING, not a discount: any seller may take them, and they must
+    not count against the cashier's own discount limit (50% here, a 5-point
+    payment on this sale would not trip it anyway -- what is pinned is the
+    200 and the ledger row). WHAT THIS CAN NO LONGER CATCH: a redemption
+    accidentally re-gated on retail.discount is caught here only as a 403
+    instead of 200 -- still red, so nothing is lost."""
     company_id, owner, cashier, pid = shop
     _set_limit(owner, '50')
     cust = owner.post(f'{API}/customers', json={'name': 'Pts Customer'}).get_json()['data']['id']
@@ -215,10 +225,15 @@ def test_10_loyalty_redemption_still_needs_the_discount_capability(shop):
     body = {'items': [{'product_id': pid, 'quantity': 1}], 'payment_method': 'cash',
             'customer_id': cust, 'points_redeemed': 5}
     r = cashier.post(f'{API}/sales', json=dict(body, idempotency_key=str(uuid.uuid4())))
-    assert r.status_code == 403, r.get_json()
-    # allow half: the owner (holds retail.discount) may redeem
-    r = owner.post(f'{API}/sales', json=dict(body, idempotency_key=str(uuid.uuid4())))
     assert r.status_code == 200, r.get_json()
+    conn = get_retail_conn()
+    try:
+        spent = conn.execute(
+            "SELECT COALESCE(SUM(points_delta),0) FROM loyalty_ledger "
+            "WHERE company_id=? AND customer_id=? AND entry_type='redeem'", (company_id, cust)).fetchone()[0]
+    finally:
+        conn.close()
+    assert spent == -5, f'the cashier\'s points payment must be recorded as -5 redeemed, got {spent}'
 
 
 def test_11_setting_change_is_audited(shop):
