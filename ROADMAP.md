@@ -7291,3 +7291,22 @@ Residuals:
   arrives posts no receive journal.
 - No destination-branch enforcement; an unknown branch uid falls back to the local default branch.
 - Android has no transfer screens. Arabic sentences await a native speaker.
+
+## 2026-10-07 — retail schema v48 CLAIMED (W2a: loyalty points shared between computers)
+
+Claimed before any builder starts. Checked all 109 local and origin refs (fetched): the
+highest `RETAIL_SCHEMA_VERSION` anywhere is 47 (this branch). No registry bump, no Owner
+revision. (BOOKS-WAVE1-PLAN once expected W2a at v42; v42-v47 went to other waves.)
+
+Why: `loyalty_ledger` rows never leave the computer that wrote them. Points earned on A
+do not exist on B (B cannot redeem them); a return on B of A's sale finds no earn/redeem
+rows, so it neither claws back nor gives back points and refunds the wrong cash; the
+ledger's sale_id/return_id are local integers; each computer's v27 'opening' row for the
+same customer would double the balance the moment rows did sync.
+
+v48: ledger rows sync as immutable facts referencing sale/return by uid; the balance and
+the `customers.loyalty_points` cache derive from the synced SUM by one rule; 'opening'
+rows get one deterministic uid per customer (smaller amount wins on every computer);
+`sales.points_earned` lets a return on another computer wait until the sale's points have
+arrived; an offline double-spend converges (balance below zero on every computer) and is
+flagged. Plan: job 54e80fc2 tmp/W2A-PLAN.md.
