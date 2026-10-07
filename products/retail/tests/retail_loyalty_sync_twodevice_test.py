@@ -20,7 +20,7 @@ independent databases:
   5. both computers' pre-v48 'opening' rows for one customer (50 vs 30) collapse to ONE
      row of 30 on both, flagged on both.
 
-Hand-computed figures (point value 1.000 per point; earn = int(total / 10)):
+Hand-computed figures (point value 1.000 per point; earn = int(total / spend), spend left at its default 10):
   Big  = 100.000 (earns 10)     Half = 50.000 each     Cheap = 9.000 (earns int(0.9) = 0)
 
 Run:

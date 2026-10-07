@@ -6805,7 +6805,7 @@ def _migrate_add_loyalty_ledger(conn):
     migration exists to avoid shipping:
 
     `customers.loyalty_points` has been incremented on every sale since v1
-    (create_sale's `int(total / 10)` accrual) and nothing anywhere can ever
+    (create_sale's `int(total / 10)` accrual -- since LOYALTY-EARN the divisor is the shop setting `loyalty_earn_spend`, default 10) and nothing anywhere can ever
     spend it -- zero redemption routes exist yet. The obvious fix, a route
     that subtracts from that column, would ship a double-spend on any shop
     with two tills: `loyalty_points` and `total_spent` are ACCUMULATORS,

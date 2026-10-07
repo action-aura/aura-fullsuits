@@ -132,7 +132,7 @@
     taxRate: { section: 'tax', fields: ['tax-default-rate'], save: () => R()._saveDefaultTaxRate() },
     credit: {
       section: 'credit',
-      fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty', 'credit-cashier-disc'],
+      fields: ['credit-mode', 'credit-limit', 'credit-enforce', 'credit-loyalty', 'credit-loyalty-earn', 'credit-cashier-disc'],
       save: () => saveCredit(),
     },
     deviceBranch: { section: 'tills', fields: ['device-branch-select'], save: () => R()._saveDeviceBranch() },
@@ -427,6 +427,13 @@
     const loyaltyRaw = $('credit-loyalty').value.trim();
     const discRaw = $('credit-cashier-disc').value.trim();
     const cashierDisc = discRaw === '' ? 0 : Number(discRaw);
+    // LOYALTY-EARN: spend this much to earn 1 point; '0' = earning off. Unlike
+    // the two fields above, an EMPTY box is refused rather than read as 0:
+    // empty -> 0 would silently switch earning off, and the field always shows
+    // its value (0 included) so "off" and "default" never look alike.
+    // Same rule as the server (0 to 1,000,000, finite).
+    const earnRaw = $('credit-loyalty-earn').value.trim();
+    const earnSpend = earnRaw === '' ? NaN : Number(earnRaw);
     const limit = limitRaw === '' ? 0 : Number(limitRaw);
     const loyalty = loyaltyRaw === '' ? 0 : Number(loyaltyRaw);
     if (!Number.isFinite(limit) || limit < 0) {
@@ -445,12 +452,17 @@
       toast(t('The cashier discount limit must be a number from 0 to 100.'), 'error');
       return false;
     }
+    if (!Number.isFinite(earnSpend) || earnSpend < 0 || earnSpend > 1000000) {
+      toast(t('Spend per point must be a number from 0 to 1,000,000 (0 turns earning off).'), 'error');
+      return false;
+    }
     try {
       const resp = await R()._post('/api/sub/retail/settings/credit', {
         default_credit_mode: mode,
         default_credit_limit: String(limit),
         enforce_credit_limit: enforce,
         loyalty_point_value: String(loyalty),
+        loyalty_earn_spend: String(earnSpend),
         cashier_discount_limit_pct: String(cashierDisc),
       });
       if (!resp || resp.status !== 'success') {
@@ -481,6 +493,9 @@
       $('credit-limit').value = d.default_credit_limit != null && Number(d.default_credit_limit) > 0 ? d.default_credit_limit : '';
       $('credit-enforce').value = d.enforce_credit_limit === 'block' ? 'block' : 'warn';
       $('credit-loyalty').value = d.loyalty_point_value != null && Number(d.loyalty_point_value) > 0 ? d.loyalty_point_value : '';
+      // LOYALTY-EARN: always show the stored value, "0" included; only a
+      // server that predates the setting (key absent) falls back to the old 10.
+      $('credit-loyalty-earn').value = d.loyalty_earn_spend != null && d.loyalty_earn_spend !== '' ? d.loyalty_earn_spend : '10';
       $('credit-cashier-disc').value = d.cashier_discount_limit_pct != null && Number(d.cashier_discount_limit_pct) > 0 ? d.cashier_discount_limit_pct : '';
     } catch (e) { console.error(e); }
     syncCreditLimitVisibility();
@@ -1828,6 +1843,10 @@
         <p class="sh-card-lead">${esc(t('What one point is worth when a customer spends points. Leave empty or 0 to turn spending points off.'))}</p>
         <div class="ret-field" style="margin:0"><label for="credit-loyalty">${esc(t('Loyalty point value'))}</label>
           <input type="number" id="credit-loyalty" min="0" step="0.001" dir="ltr" /></div>
+        <p class="sh-card-lead" style="margin-top:12px">${esc(t('Spend this much to earn 1 loyalty point. 0 turns earning off.'))}</p>
+        <!-- LOYALTY-EARN: Arabic strings for this field are real but not yet read by a native speaker -- native speaker to confirm. -->
+        <div class="ret-field" style="margin:0"><label for="credit-loyalty-earn">${esc(t('Spend per point'))}</label>
+          <input type="number" id="credit-loyalty-earn" min="0" max="1000000" step="any" dir="ltr" /></div>
       </div>
       <div class="sub-chart-card" id="cashier-discount-card">
         <h3 class="sh-card-title">${esc(t('Cashier discounts'))}</h3>

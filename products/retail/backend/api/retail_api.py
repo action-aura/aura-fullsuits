@@ -8685,7 +8685,14 @@ def create_sale():
         # point per 10 of the sale's FULL total (unaffected by any redemption on
         # this same sale); a walk-in earns nothing, stored as 0 (known), where an
         # old sale's NULL means 'unknown'.
-        points_earned = int(total / 10) if customer_id else 0
+        # LOYALTY-EARN: the rate is the shop setting `loyalty_earn_spend` ("spend
+        # this much to earn 1 point", default 10, 0 = earning off), no longer a
+        # hardcoded 10. Decimal floor-division on str(total): float division
+        # turns 0.300 / 0.1 into 2.999... and truncates to 2, a point short.
+        # Truncation (floor) semantics are unchanged from `int(total / 10)`.
+        _earn_spend = _loyalty_earn_spend(_settings(conn, cid))
+        points_earned = (int(Decimal(str(total)) // _earn_spend)
+                         if customer_id and _earn_spend > 0 else 0)
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
@@ -8952,7 +8959,7 @@ def create_sale():
         # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`
         # for the mutation proof.
         if customer_id:
-            pts = points_earned  # 1 point per $10 -- EARNED on the sale's
+            pts = points_earned  # 1 point per `loyalty_earn_spend` -- EARNED on the sale's
             # full total, unaffected by any redemption THIS SAME sale
             # applied (points_applied below): a customer earns on what they
             # bought, not on what cash they happened to still owe after
@@ -14547,6 +14554,11 @@ _DEFAULT_SETTINGS = {
     # Syncs like every retail_setting; it is NOT an authority-signed event
     # (authority.py signs only till_release_ack: keys) -- recorded S-AUTH residual.
     'cashier_discount_limit_pct': '0',
+    # LOYALTY-EARN: spend this much (shop currency) to earn 1 loyalty point.
+    # '0' = earning OFF. Default '10' is the rate that was hardcoded before this
+    # setting existed, so an install that never touches it earns exactly as it did.
+    # Syncs shop-wide like every retail_setting (not device-local).
+    'loyalty_earn_spend': '10',
     # 'after_discount' (default) | 'before_discount' -- see core/retail/pricing.py,
     # the single source of truth for what these two modes mean and compute.
     'tax_calculation_mode': tax_engine.DEFAULT_MODE,
@@ -14621,6 +14633,39 @@ _RETAIL_SETTING_SYNC_NAMESPACE = _uuid.UUID('6f1a1c2e-4d2b-4b7e-9a0e-5c3d8a7b2f1
 
 def _retail_setting_entity_id(skey):
     return str(_uuid.uuid5(_RETAIL_SETTING_SYNC_NAMESPACE, f"retail_setting:{skey}"))
+
+
+# LOYALTY-EARN: sanity ceiling for "spend per point". A million of any currency
+# per point is already "never earns"; the cap just stops a typo from storing a
+# value no one meant. Server and client use the same number.
+_LOYALTY_EARN_SPEND_MAX = Decimal('1000000')
+_LOYALTY_EARN_SPEND_DEFAULT = Decimal('10')
+_loyalty_earn_spend_warned = set()
+
+
+def _parse_loyalty_earn_spend(raw):
+    """Decimal in [0, MAX] or None when `raw` is not a finite number in range."""
+    try:
+        d = Decimal(str(raw).strip())
+    except Exception:
+        return None
+    if not d.is_finite() or d < 0 or d > _LOYALTY_EARN_SPEND_MAX:
+        return None
+    return d
+
+
+def _loyalty_earn_spend(settings):
+    """The shop's earn rate as a Decimal. A missing/unparseable stored value
+    falls back to the old hardcoded 10 (logged once per bad value) rather than
+    silently turning earning off or blocking a sale."""
+    raw = settings.get('loyalty_earn_spend')
+    d = _parse_loyalty_earn_spend(raw)
+    if d is None:
+        if raw not in _loyalty_earn_spend_warned:
+            _loyalty_earn_spend_warned.add(raw)
+            log.warning("LOYALTY-EARN: unusable loyalty_earn_spend %r; using %s", raw, _LOYALTY_EARN_SPEND_DEFAULT)
+        return _LOYALTY_EARN_SPEND_DEFAULT
+    return d
 
 
 def _queue_setting_sync_event(cur, skey, svalue):
@@ -15137,8 +15182,18 @@ def credit_settings_set():
         if _old_lim != data['cashier_discount_limit_pct']:
             _audit(conn, 'CASHIER_DISCOUNT_LIMIT_CHANGED', 'retail_setting', 'cashier_discount_limit_pct',
                    f"{_old_lim}% -> {data['cashier_discount_limit_pct']}%")
+    # LOYALTY-EARN: validated before any write, like the two above; stored as a
+    # canonical plain-decimal string ('5', '2.5', '0') so it round-trips.
+    if 'loyalty_earn_spend' in data:
+        _es = _parse_loyalty_earn_spend(data['loyalty_earn_spend']) if data['loyalty_earn_spend'] not in (None, '') else None
+        if _es is None:
+            conn.close()
+            return jsonify({'status': 'error', 'code': 'LOYALTY_EARN_SPEND_INVALID',
+                            'message': 'Spend per point must be a number from 0 to 1,000,000 (0 turns earning off).'}), 400
+        _es_txt = format(_es.normalize(), 'f')
+        data['loyalty_earn_spend'] = _es_txt if _es_txt != '-0' else '0'
     for k in ('base_currency', 'default_credit_mode', 'default_credit_limit', 'enforce_credit_limit',
-              'loyalty_point_value', 'cashier_discount_limit_pct'):
+              'loyalty_point_value', 'cashier_discount_limit_pct', 'loyalty_earn_spend'):
         if k in data:
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
