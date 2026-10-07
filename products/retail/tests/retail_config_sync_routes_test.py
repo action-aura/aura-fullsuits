@@ -469,10 +469,165 @@ def test_plain_sale_item_carries_empty_snapshots(shop):
     assert p['modifiers'] == [] and p['promotion'] is None
 
 
+# ── 4b. F1: every writer stamps strictly AFTER the version it edits ───────────
+#
+# Fix round 1. The merge compares STAMPS first, so an edit must outrank the row
+# it was made on even when this computer's clock is BEHIND the one that wrote
+# that row. The tests plant a stamp far in the future (a fast neighbour's
+# clock) and require the edit to land exactly one microsecond after it. A
+# writer that stamps `now()` instead leaves the edit EARLIER than what it
+# edited, so every other computer would keep the old version.
+
+FUTURE = '2099-01-01T00:00:00.000000Z'
+FUTURE_PLUS_1 = '2099-01-01T00:00:00.000001Z'
+FUTURE_PLUS_2 = '2099-01-01T00:00:00.000002Z'
+
+
+def _plant(table, row_id, stamp=FUTURE):
+    _x(f"UPDATE {table} SET updated_at_utc=? WHERE id=?", stamp, row_id)
+
+
+def _stamp_and_rv(table, row_id):
+    r = _q(f"SELECT updated_at_utc AS u, row_version AS v FROM {table} WHERE id=?", row_id)[0]
+    return r['u'], r['v']
+
+
+def test_creates_stamp_a_parseable_z_stamp_and_rv_one(shop):
+    from core.retail import config_sync as cs
+    client, cid = shop
+    pid = _product(client)
+    gid = _group(client)
+    oid = _option(client, gid)
+    link = _attach(client, pid, gid)
+    promo = _promo(client, pid)
+    for table, rid in (('promotions', promo), ('modifier_groups', gid),
+                       ('modifier_options', oid), ('product_modifier_groups', link)):
+        stamp, rv = _stamp_and_rv(table, rid)
+        assert rv == 1 and stamp.endswith('Z') and cs.parse_stamp(stamp) is not None, (table, stamp)
+
+
+def test_promotion_edits_stamp_after_a_future_previous_stamp(shop):
+    client, cid = shop
+    pid = _product(client)
+    promo = _promo(client, pid)
+    _plant('promotions', promo)
+    m = _mark()
+    assert client.patch(f'{API}/promotions/{promo}', json={'discount_pct': 30}).status_code == 200
+    assert _stamp_and_rv('promotions', promo) == (FUTURE_PLUS_1, 2)
+    ev = _only(_events_since(m, *CONFIG_TYPES), 'promotion', 'update')
+    assert ev['payload']['updated_at_utc'] == FUTURE_PLUS_1 and ev['payload']['row_version'] == 2
+    assert client.delete(f'{API}/promotions/{promo}').status_code == 200
+    assert _stamp_and_rv('promotions', promo) == (FUTURE_PLUS_2, 3)
+
+
+def test_group_edits_stamp_after_a_future_previous_stamp(shop):
+    client, cid = shop
+    gid = _group(client)
+    _plant('modifier_groups', gid)
+    assert client.patch(f'{API}/modifier-groups/{gid}', json={'max_select': 2}).status_code == 200
+    assert _stamp_and_rv('modifier_groups', gid) == (FUTURE_PLUS_1, 2)
+    assert client.delete(f'{API}/modifier-groups/{gid}').status_code == 200
+    assert _stamp_and_rv('modifier_groups', gid) == (FUTURE_PLUS_2, 3)
+
+
+def test_option_edits_stamp_after_a_future_previous_stamp(shop):
+    client, cid = shop
+    gid = _group(client)
+    oid = _option(client, gid)
+    _plant('modifier_options', oid)
+    assert client.patch(f'{API}/modifier-options/{oid}', json={'price_delta': 1}).status_code == 200
+    assert _stamp_and_rv('modifier_options', oid) == (FUTURE_PLUS_1, 2)
+    assert client.delete(f'{API}/modifier-options/{oid}').status_code == 200
+    assert _stamp_and_rv('modifier_options', oid) == (FUTURE_PLUS_2, 3)
+
+
+def test_detach_and_reattach_stamp_after_a_future_previous_stamp(shop):
+    client, cid = shop
+    pid = _product(client)
+    gid = _group(client)
+    link = _attach(client, pid, gid)
+    _plant('product_modifier_groups', link)
+    m = _mark()
+    assert client.delete(f'{API}/products/{pid}/modifier-groups/{gid}').status_code == 200
+    assert _stamp_and_rv('product_modifier_groups', link) == (FUTURE_PLUS_1, 2)
+    ev = _only(_events_since(m, *CONFIG_TYPES), 'product_modifier_group', 'update')
+    assert ev['payload']['updated_at_utc'] == FUTURE_PLUS_1
+    assert _attach(client, pid, gid) == link
+    assert _stamp_and_rv('product_modifier_groups', link) == (FUTURE_PLUS_2, 3)
+    row = _q("SELECT deleted_at_utc FROM product_modifier_groups WHERE id=?", link)[0]
+    assert row['deleted_at_utc'] is None
+
+
+# ── 4c. F6: a sale line shows the promotion it was rung with ────────────────
+
+def _promo_sale(client, pct=20, name='Eid special'):
+    pid = _product(client, price=10.0)
+    _promo(client, pid, pct=pct, name=name)
+    r = _sale(client, [{'product_id': pid, 'quantity': 2}])
+    assert r.status_code == 200, r.get_json()
+    return pid, r.get_json()['data']['id']
+
+
+def test_get_sale_items_carry_applied_promotion_from_the_snapshot(shop):
+    client, cid = shop
+    pid, sale_id = _promo_sale(client, pct=20, name='Eid special')
+    items = client.get(f'{API}/sales/{sale_id}').get_json()['data']['items']
+    snap = _q("SELECT discount_amount_snapshot AS d FROM sale_item_promotions "
+              "ORDER BY id DESC LIMIT 1")[0]
+    assert snap['d'] > 0
+    assert items[0]['applied_promotion'] == {
+        'name': 'Eid special', 'discount_pct': 20, 'discount_amount': snap['d']}
+    # A rename of the promotion afterwards never changes what the sale says.
+    _x("UPDATE promotions SET name='RENAMED' WHERE company_id=?", cid)
+    items = client.get(f'{API}/sales/{sale_id}').get_json()['data']['items']
+    assert items[0]['applied_promotion']['name'] == 'Eid special'
+
+
+def test_get_sale_applied_promotion_is_null_on_a_plain_line_and_for_a_synced_sale(shop):
+    client, cid = shop
+    plain_pid = _product(client)
+    plain = _sale(client, [{'product_id': plain_pid, 'quantity': 1}]).get_json()['data']['id']
+    items = client.get(f'{API}/sales/{plain}').get_json()['data']['items']
+    assert 'applied_promotion' in items[0] and items[0]['applied_promotion'] is None
+    # A sale that arrived from another computer: its snapshot row exists but the
+    # promotion itself may not have reached this one (promotion_id 0). The
+    # snapshot is what matters.
+    _pid, sale_id = _promo_sale(client)
+    _x("UPDATE sale_item_promotions SET promotion_id=0")
+    items = client.get(f'{API}/sales/{sale_id}').get_json()['data']['items']
+    assert items[0]['applied_promotion']['name'] == 'Eid special'
+
+
+def test_get_sale_applied_promotion_is_company_scoped(shop):
+    client, cid = shop
+    _pid, sale_id = _promo_sale(client)
+    # (company ids are uuid strings in this suite -- an arithmetic bump would coerce to a number)
+    _x("UPDATE sale_item_promotions SET company_id='another-shop'")
+    items = client.get(f'{API}/sales/{sale_id}').get_json()['data']['items']
+    assert items[0]['applied_promotion'] is None
+
+
+def test_printed_receipt_names_the_promotion_under_its_line(shop):
+    import base64
+    client, cid = shop
+    _pid, sale_id = _promo_sale(client, name='Eid special')
+    r = client.get(f'{API}/printer/receipt-payload?sale_id={sale_id}')
+    assert r.status_code == 200, r.get_json()
+    text = base64.b64decode(r.get_json()['data']['payload_b64']).decode('latin-1')
+    assert 'Eid special' in text
+    # and no promotion name on a plain sale
+    plain_pid = _product(client)
+    plain = _sale(client, [{'product_id': plain_pid, 'quantity': 1}]).get_json()['data']['id']
+    r = client.get(f'{API}/printer/receipt-payload?sale_id={plain}')
+    text = base64.b64decode(r.get_json()['data']['payload_b64']).decode('latin-1')
+    assert 'Eid special' not in text
+
+
 # ── 5. plain sentences, both languages ───────────────────────────────────────
 
 NEW_REASONS = ('missing_parent:branch', 'missing_parent:modifier_group', 'malformed_promotion',
-               'modifier_link_duplicate', 'modifier_group_same_name', 'config_edit_superseded')
+               'modifier_link_duplicate', 'modifier_group_same_name', 'config_edit_superseded',
+               'config_legacy_copy_differs')
 NEW_KINDS = ('promotion', 'modifier_group', 'modifier_option', 'product_modifier_group')
 
 
@@ -499,3 +654,26 @@ def test_every_new_reason_and_kind_has_a_plain_sentence_in_en_and_ar():
     # missing_parent:branch / modifier_group are retried by the engine on its own.
     assert retail_api._SYNC_REVIEW_REASONS['missing_parent:branch'][1] is True
     assert retail_api._SYNC_REVIEW_REASONS['modifier_link_duplicate'][1] is False
+
+
+def test_conflict_sentences_say_what_happened_and_never_claim_nothing_needs_doing():
+    # F3: a dropped edit is a person's call, so the sentence asks them to check;
+    # the old wording ("nothing needs doing") told them to ignore a lost change.
+    en, ar = _locale('en.json'), _locale('ar.json')
+    for reason in ('config_edit_superseded', 'config_legacy_copy_differs', 'modifier_link_duplicate'):
+        text, retries = retail_api._sync_review_reason(reason, 'promotion')
+        assert retries is False
+        assert 'nothing needs doing' not in text, reason
+        assert 'check' in text.lower(), reason
+        assert en.get(text) == text and ar.get(text) and ar[text] != text, reason
+    sup, _ = retail_api._sync_review_reason('config_edit_superseded', 'promotion')
+    assert sup == ('two computers changed this at about the same time. The later change was kept '
+                   'and the other one was dropped. Please check it is right')
+    leg, _ = retail_api._sync_review_reason('config_legacy_copy_differs', 'promotion')
+    assert leg == ('two computers had different copies of this from before they shared setup. '
+                   'One copy was kept on both. Please check it is right')
+    dup, _ = retail_api._sync_review_reason('modifier_link_duplicate', 'product_modifier_group')
+    assert 'extras' in dup and 'product' in dup
+    # no stale sentence is left behind in either language file
+    for table in (en, ar):
+        assert not [k for k in table if 'nothing needs doing' in k and ('promotion' in k or 'extras' in k)]

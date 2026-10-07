@@ -9070,7 +9070,7 @@ const RetailSystem = {
         // names -> t('Item'), never the id) is what decides the id is never
         // shown, not this adapter re-deciding it a second time.
         // `modifiers` (EXTRAS): the snapshot names get_sale now returns per item.
-        lines: items.map(i => ({ product_id: i.product_id, name: i.product_name, quantity: i.quantity, line_total: i.line_total, modifiers: i.modifiers })),
+        lines: items.map(i => ({ product_id: i.product_id, name: i.product_name, quantity: i.quantity, line_total: i.line_total, modifiers: i.modifiers, applied_promotion: i.applied_promotion })),
       };
     } catch (e) {
       return { id: saleId, sale_number: fallbackSaleNumber, lines: [] };
@@ -9231,11 +9231,28 @@ const RetailSystem = {
   // Arabic name inside an English slip (or the reverse) keeps its own
   // direction. `inPrintDoc` drops the colour token: the print iframe is a
   // bare document that none of this file's --tokens reach.
+  // F6 (fix round 1): the NAME of the promotion a line was rung under, from the
+  // server's snapshot (`applied_promotion`, get_sale / receipt payload) -- never
+  // a price: the line amount is already the discounted figure, and the strike-
+  // through gross beside it is how the saving is shown. '' when there is none.
+  _linePromotionName(line) {
+    const applied = line && line.applied_promotion;
+    return (applied && applied.name) ? String(applied.name) : '';
+  },
+
   _receiptLineExtras(line, inPrintDoc) {
     const names = this._lineExtraNames(line);
-    if (!names.length) return '';
+    const promo = this._linePromotionName(line);
+    if (!names.length && !promo) return '';
     const tone = inPrintDoc ? '' : 'color:var(--text-muted);';
-    return `<div class="rcpt-extras" style="${tone}font-size:11px;text-align:start;margin-inline-start:12px;margin-block-end:6px"><bdi data-no-i18n>${names.map(n => this._esc(n)).join(' · ')}</bdi></div>`;
+    const style = `${tone}font-size:11px;text-align:start;margin-inline-start:12px;margin-block-end:6px`;
+    const extrasRow = names.length
+      ? `<div class="rcpt-extras" style="${style}"><bdi data-no-i18n>${names.map(n => this._esc(n)).join(' · ')}</bdi></div>`
+      : '';
+    const promoRow = promo
+      ? `<div class="rcpt-promo" style="${style}"><bdi data-no-i18n>% ${this._esc(promo)}</bdi></div>`
+      : '';
+    return extrasRow + promoRow;
   },
 
   _receiptLineAmountHTML(line) {
@@ -15934,6 +15951,7 @@ const RetailSystem = {
         name: i.product_name || ('#'+i.product_id), quantity: i.quantity,
         unit_price: i.unit_price, discount_pct: i.discount_pct, line_total: i.line_total,
         modifiers: i.modifiers,   // EXTRAS: snapshot names from get_sale
+        applied_promotion: i.applied_promotion,   // F6: the promotion's name, same source
       })),
     };
     await this._printReceipt(saleData);

@@ -18,9 +18,11 @@ function it needs and a test pins the twin equal (the W2a / W3b / W4a pattern).
     IS, so the same promotion typed on two computers before v50 collapses into
     one row when they first sync instead of appearing twice (and applying twice).
   * `lww_incoming_wins` -- the ONE merge rule: last writer wins per row on
-    (row_version, updated_at_utc, then the payload's content as a final,
+    (updated_at_utc, then row_version, then the payload's content as a final,
     deterministic tiebreak), so both computers pick the SAME winner no matter
     which order the two edits arrive in. A pure function, no I/O.
+  * `next_stamp` / `parse_stamp` -- every configuration writer stamps its edit
+    with a time strictly after the version it is editing (F1, see below).
   * `config_values_differ` -- whether two versions of a row disagree on any
     field both sides carry; a conflict is worth recording only when they do.
 
@@ -28,6 +30,7 @@ NO IMPORT OF api/ OR general_ledger: nothing here queues or writes anything.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import uuid
 from decimal import Decimal
@@ -115,9 +118,53 @@ def _version(row) -> int:
         return 0
 
 
-def _stamp(row) -> str:
-    value = row.get('updated_at_utc')
-    return '' if value is None else str(value)
+_UTC = _dt.timezone.utc
+_STAMP_FORMAT = '%Y-%m-%dT%H:%M:%S.%fZ'
+
+
+def parse_stamp(value):
+    """A stored `updated_at_utc` as an aware UTC datetime, or None.
+
+    Accepts every spelling this suite has written: 'YYYY-MM-DDTHH:MM:SS' with an
+    optional fraction and an optional 'Z' / '+00:00' (what `now_utc_iso` and
+    `next_stamp` write) and the space-separated 'YYYY-MM-DD HH:MM:SS' (SQLite's
+    own clock). A naive value is read as UTC. None, a non-string or anything
+    unreadable is None -- which the merge rule treats as the OLDEST possible
+    stamp, so a garbled value can never beat a real one and never raises."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace(' ', 'T', 1)
+    if text.endswith(('Z', 'z')):
+        text = text[:-1] + '+00:00'
+    try:
+        parsed = _dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=_UTC)
+    return parsed.astimezone(_UTC)
+
+
+def next_stamp(prev=None, now=None) -> str:
+    """The `updated_at_utc` for an edit made on top of a row stamped `prev`.
+
+    F1 (fix round 1). The merge rule compares STAMPS first, so an edit must
+    carry a stamp strictly later than the version it edits -- otherwise a
+    computer whose clock runs a little BEHIND the one that wrote `prev` would
+    stamp its edit earlier than the thing it edited, and every other computer
+    would keep the old version. So: the clock's time, unless that is not after
+    `prev`, in which case `prev` plus one microsecond. A first write (no/unreadable
+    `prev`) is just the clock. `now` is injectable for tests only.
+
+    RESIDUAL, accepted and written down: between two CONCURRENT edits (neither
+    made on top of the other) the later CLOCK wins, so a computer whose clock is
+    far AHEAD wins every clash with the others. It is never silent -- the losing
+    edit is always recorded for a person to look at (config_edit_superseded)."""
+    clock = (now or _dt.datetime.now(_UTC)).astimezone(_UTC)
+    before = parse_stamp(prev)
+    if before is not None and clock <= before:
+        clock = before + _dt.timedelta(microseconds=1)
+    return clock.strftime(_STAMP_FORMAT)
 
 
 def _content(row, keys) -> str:
@@ -134,25 +181,34 @@ def config_values_differ(local, incoming) -> bool:
     return _content(local, keys) != _content(incoming, keys)
 
 
+_OLDEST = _dt.datetime.min.replace(tzinfo=_UTC)
+
+
 def lww_incoming_wins(local, incoming) -> bool:
     """Does the incoming version of a configuration row replace the local one?
 
-    Last writer wins, per row, on (row_version, updated_at_utc, content):
-      1. a higher row_version wins;
-      2. equal row_version: the later updated_at_utc wins;
+    Last writer wins, per row, on (updated_at_utc, row_version, content):
+      1. a different STAMP decides: the later one wins. A missing or unreadable
+         stamp is the oldest possible. (F1: the stamp used to be compared
+         AFTER row_version, so a computer that had edited a promotion three
+         times -- rv 4, older stamps -- beat a later deactivation at rv 2, and
+         the promotion came back ON everywhere and kept discounting.)
+      2. equal stamps: the higher row_version wins;
       3. both equal: the greater canonical JSON of the shared content fields
          wins. This last step is arbitrary but DETERMINISTIC -- computer A
          comparing (its row, B's row) and computer B comparing (its row, A's
          row) reach opposite verdicts on the same pair, so exactly one of them
          keeps its row and they converge. Identical content is no win at all
          (nothing to write).
-    `local` and `incoming` are plain dicts (a DB row / a wire payload). Never
-    raises on missing keys: a missing version is 0, a missing stamp is ''."""
+    The twin in sync_service.py is pinned equal by a test. `local` and
+    `incoming` are plain dicts (a DB row / a wire payload). Never raises on
+    missing keys: a missing version is 0, a missing stamp is the oldest."""
+    s_in = parse_stamp(incoming.get('updated_at_utc')) or _OLDEST
+    s_local = parse_stamp(local.get('updated_at_utc')) or _OLDEST
+    if s_in != s_local:
+        return s_in > s_local
     rv_in, rv_local = _version(incoming), _version(local)
     if rv_in != rv_local:
         return rv_in > rv_local
-    at_in, at_local = _stamp(incoming), _stamp(local)
-    if at_in != at_local:
-        return at_in > at_local
     keys = _shared_keys(local, incoming)
     return _content(incoming, keys) > _content(local, keys)

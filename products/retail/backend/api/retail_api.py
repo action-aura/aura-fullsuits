@@ -126,6 +126,7 @@ from core.retail import promotions as promo_engine
 # above is: it cannot collide with a `modifiers`/`modifier` local variable
 # name inside create_sale below.
 from core.retail import modifiers as modifier_engine
+from core.retail import config_sync as _config_sync   # W2b/W3a F1: next_stamp for every config writer
 # The ONE shared currency-aware money-STRING renderer (email_hook.py and
 # whatsapp_hook.py already use it for the identical reason -- see its own
 # docstring). Aliased to match this file's own `_whatsapp_hook`/`_email_hook`
@@ -5531,6 +5532,58 @@ def backfill_legacy_transfers(conn):
 # never seen this row. No `company_id` on the wire: the receiver stamps its own.
 
 
+#: Tables whose rows carry the (row_version, updated_at_utc) pair -- a closed
+#: list, because the table name is interpolated into SQL below.
+_CONFIG_STAMPED_TABLES = frozenset({
+    'promotions', 'modifier_groups', 'modifier_options', 'product_modifier_groups'})
+
+
+def _cfg_next_stamp(cur, table, row_id):
+    """F1 (fix round 1): the `updated_at_utc` for an edit of one configuration
+    row -- strictly AFTER the stamp the row carries now, even when this
+    computer's clock is behind the one that wrote it.
+
+    The merge on every other computer compares stamps FIRST (row_version only
+    breaks an exact tie), so an edit stamped with a plain `now()` could land
+    EARLIER than the version it was made on and be thrown away by every other
+    computer. Called by EVERY config writer, immediately before its UPDATE (a
+    create passes no row: `_config_sync.next_stamp(None)` is just the clock)."""
+    if table not in _CONFIG_STAMPED_TABLES:
+        raise ValueError(table)
+    r = cur.execute(f"SELECT updated_at_utc FROM {table} WHERE id=?", (row_id,)).fetchone()
+    return _config_sync.next_stamp(r['updated_at_utc'] if r else None)
+
+
+def _read_sale_promotions(conn, cid, sale_item_ids):
+    """F6 (fix round 1): `{sale_item_id: {name, discount_pct, discount_amount}}`
+    for the lines of one sale that were rung under a promotion.
+
+    SNAPSHOT COLUMNS ONLY (never joins `promotions`), the same rule as
+    `modifier_engine.read_sale_modifiers` and for the same reason: a promotion
+    renamed or switched off afterwards cannot change what the sale says it was
+    sold under -- and a sale that arrived from ANOTHER computer carries its own
+    snapshot even when the promotion itself has not reached this one yet
+    (`promotion_id` 0). Company-scoped in the WHERE; a line with none is simply
+    absent (the caller defaults to None). Batched and chunked under SQLite's
+    bound-parameter cap."""
+    ids = [int(i) for i in (sale_item_ids or [])]
+    out = {}
+    for start in range(0, len(ids), 400):
+        chunk = ids[start:start + 400]
+        marks = ",".join("?" * len(chunk))
+        for r in conn.execute(
+            "SELECT sale_item_id, name_snapshot, discount_pct_snapshot, discount_amount_snapshot "
+            "FROM sale_item_promotions "
+            f"WHERE company_id=? AND sale_item_id IN ({marks}) ORDER BY id",
+            (cid, *chunk),
+        ).fetchall():
+            out.setdefault(r['sale_item_id'], {
+                'name': r['name_snapshot'], 'discount_pct': r['discount_pct_snapshot'],
+                'discount_amount': r['discount_amount_snapshot'],
+            })
+    return out
+
+
 def _queue_promotion(cur, cid, promotion_id, changed=None):
     """W2b: queue a `promotion` create (changed is None) or update event. The
     wire identity is `promotions.uid`; `branch_id` travels as the branch's UID
@@ -9695,7 +9748,7 @@ def create_promotion():
     # at birth so the receiving computer's last-writer-wins comparison has a
     # real value from the first event.
     promo_uid = _new_uid()
-    now = now_utc_iso()
+    now = _config_sync.next_stamp(None)     # F1: the one stamp format every config writer uses
     cur.execute("""
         INSERT INTO promotions
             (company_id, name, discount_pct, product_id, category_id, branch_id,
@@ -9783,7 +9836,7 @@ def update_promotion(promotion_id):
     cur.execute(
         f"UPDATE promotions SET {sets}, row_version=COALESCE(row_version,1)+1, updated_at_utc=? "
         "WHERE id=? AND company_id=?",
-        list(fields.values()) + [now_utc_iso(), promotion_id, cid]
+        list(fields.values()) + [_cfg_next_stamp(cur, 'promotions', promotion_id), promotion_id, cid]
     )
     _queue_promotion(cur, cid, promotion_id, changed=list(fields))
     conn.commit(); conn.close()
@@ -9813,7 +9866,7 @@ def delete_promotion(promotion_id):
     cur.execute(
         "UPDATE promotions SET status='inactive', row_version=COALESCE(row_version,1)+1, "
         "updated_at_utc=? WHERE id=? AND company_id=? AND status='active'",
-        (now_utc_iso(), promotion_id, cid)
+        (_cfg_next_stamp(cur, 'promotions', promotion_id), promotion_id, cid)
     )
     if cur.rowcount == 0:
         conn.close()
@@ -10108,6 +10161,9 @@ def get_sale(sale_id):
     # line with none. Display only: the line's unit_price/line_total already
     # include the deltas and are not touched here.
     extras_by_item = modifier_engine.read_sale_modifiers(conn, cid, [i['id'] for i in items])
+    # F6: the promotion each line was rung under, from its own snapshot (a sale that
+    # arrived from another computer carries one too), so a reprint / sale detail names it.
+    promo_by_item = _read_sale_promotions(conn, cid, [i['id'] for i in items])
     conn.close()
 
     payload = dict(sale)
@@ -10127,6 +10183,7 @@ def get_sale(sale_id):
     for i in items:
         row = dict(i)
         row['modifiers'] = extras_by_item.get(i['id'], [])
+        row['applied_promotion'] = promo_by_item.get(i['id'])
         item_rows.append(row)
     return jsonify({'status': 'success', 'data': {'sale': payload, 'items': item_rows}})
 
@@ -11504,7 +11561,7 @@ def create_modifier_group():
     conn = get_retail_conn()
     cur = conn.cursor()
     group_id = str(_uuid.uuid4())
-    now = now_utc_iso()
+    now = _config_sync.next_stamp(None)     # F1
     cur.execute("""
         INSERT INTO modifier_groups (id, company_id, name, min_select, max_select, status, row_version, updated_at_utc)
         VALUES (?,?,?,?,?, 'active', 1, ?)
@@ -11567,8 +11624,8 @@ def update_modifier_group(group_id):
 
     changed = sorted(fields)          # W3a: what THIS edit touched, before the stamps below
     fields['row_version'] = int(existing['row_version'] or 1) + 1
-    fields['updated_at_utc'] = now_utc_iso()
     cur = conn.cursor()
+    fields['updated_at_utc'] = _cfg_next_stamp(cur, 'modifier_groups', group_id)   # F1
     sets = ', '.join(f'{k}=?' for k in fields)
     cur.execute(
         f"UPDATE modifier_groups SET {sets} WHERE id=? AND company_id=?",
@@ -11601,7 +11658,7 @@ def delete_modifier_group(group_id):
     cur.execute(
         "UPDATE modifier_groups SET status='inactive', row_version=row_version+1, updated_at_utc=? "
         "WHERE id=? AND company_id=? AND status='active'",
-        (now_utc_iso(), group_id, cid)
+        (_cfg_next_stamp(cur, 'modifier_groups', group_id), group_id, cid)
     )
     if cur.rowcount == 0:
         conn.close()
@@ -11646,7 +11703,7 @@ def create_modifier_option(group_id):
 
     cur = conn.cursor()
     option_id = str(_uuid.uuid4())
-    now = now_utc_iso()
+    now = _config_sync.next_stamp(None)     # F1
     cur.execute("""
         INSERT INTO modifier_options
             (id, company_id, group_id, name, price_delta, cost_delta, is_default,
@@ -11711,8 +11768,8 @@ def update_modifier_option(option_id):
 
     changed = sorted(fields)          # W3a: what THIS edit touched, before the stamps below
     fields['row_version'] = int(existing['row_version'] or 1) + 1
-    fields['updated_at_utc'] = now_utc_iso()
     cur = conn.cursor()
+    fields['updated_at_utc'] = _cfg_next_stamp(cur, 'modifier_options', option_id)   # F1
     sets = ', '.join(f'{k}=?' for k in fields)
     cur.execute(
         f"UPDATE modifier_options SET {sets} WHERE id=? AND company_id=?",
@@ -11737,7 +11794,7 @@ def delete_modifier_option(option_id):
     cur.execute(
         "UPDATE modifier_options SET status='inactive', row_version=row_version+1, updated_at_utc=? "
         "WHERE id=? AND company_id=? AND status='active'",
-        (now_utc_iso(), option_id, cid)
+        (_cfg_next_stamp(cur, 'modifier_options', option_id), option_id, cid)
     )
     if cur.rowcount == 0:
         conn.close()
@@ -11806,7 +11863,7 @@ def attach_product_modifier_group(pid):
         return jsonify({'status': 'error', 'message': f'Unknown group_id: {group_id}'}), 400
 
     cur = conn.cursor()
-    now = now_utc_iso()
+    now = _config_sync.next_stamp(None)     # F1 (a brand-new link); a re-attach below stamps after its own row
     sort_order = int(data.get('sort_order', 0) or 0)
     existing = conn.execute(
         "SELECT id, deleted_at_utc FROM product_modifier_groups "
@@ -11820,7 +11877,8 @@ def attach_product_modifier_group(pid):
         cur.execute(
             "UPDATE product_modifier_groups SET deleted_at_utc=NULL, sort_order=?, "
             "row_version=row_version+1, updated_at_utc=? WHERE id=?",
-            (sort_order, now, existing['id'])
+            (sort_order, _cfg_next_stamp(cur, 'product_modifier_groups', existing['id']),
+             existing['id'])
         )
         _queue_product_modifier_group(cur, cid, existing['id'],
                                       changed=['deleted_at_utc', 'sort_order'])
@@ -11851,7 +11909,11 @@ def detach_product_modifier_group(pid, group_id):
     cur = conn.cursor()
     # W3a: this UPDATE bumped row_version but never touched updated_at_utc, so a
     # detach was invisible to the last-writer-wins tie-break on other computers.
-    now = now_utc_iso()
+    # F1: the detach is stamped strictly after the row it detaches (see _cfg_next_stamp).
+    prev = cur.execute(
+        "SELECT id FROM product_modifier_groups WHERE company_id=? AND product_id=? AND group_id=?",
+        (cid, pid, group_id)).fetchone()
+    now = _cfg_next_stamp(cur, 'product_modifier_groups', prev['id']) if prev else _config_sync.next_stamp(None)
     cur.execute(
         "UPDATE product_modifier_groups SET deleted_at_utc=?, row_version=row_version+1, "
         "updated_at_utc=? "
@@ -16289,6 +16351,8 @@ def printer_receipt_payload():
         # EXTRAS: snapshot names only (see get_sale); printed as priceless
         # sub-rows by render_receipt.
         extras_by_item = modifier_engine.read_sale_modifiers(conn, cid, [i['id'] for i in items])
+        # F6: the promotion name goes under the line too (snapshot, never today's row).
+        promo_by_item = _read_sale_promotions(conn, cid, [i['id'] for i in items])
 
         # Column-name mapping is deliberate, and NOT symmetrical with
         # render_receipt's own keys: `sales.change_amount` (not `change`)
@@ -16306,6 +16370,7 @@ def printer_receipt_payload():
                     'quantity': item['quantity'],
                     'line_total': item['line_total'],
                     'modifiers': extras_by_item.get(item['id'], []),
+                    'applied_promotion': promo_by_item.get(item['id']),
                 }
                 for item in items
             ],
@@ -23226,8 +23291,13 @@ _SYNC_REVIEW_REASONS = {
     'missing_parent:branch': ('the shop branch this promotion is for has not reached this computer yet', True),
     'missing_parent:modifier_group': ('the extras group it belongs to has not reached this computer yet', True),
     'malformed_promotion': ('the other computer described a promotion in a way this one cannot read, so it was not added', False),
-    'modifier_link_duplicate': ('two computers attached the same extras group to the same product. One attachment was kept on both computers, so nothing needs doing', False),
-    'config_edit_superseded': ('two computers changed the same promotion or extras setting at about the same time. The most recent change was kept on both computers, so nothing needs doing', False),
+    # Fix round 1 (F3): these three used to end "so nothing needs doing", which told a
+    # person to ignore an edit that was in fact DROPPED. Each now says what happened and
+    # asks them to look.
+    'modifier_link_duplicate': ('two computers attached the same extras group to the same product. One attachment was kept on both computers. Please check the extras on that product are what you expect', False),
+    'config_edit_superseded': ('two computers changed this at about the same time. The later change was kept and the other one was dropped. Please check it is right', False),
+    # Both copies pre-date sharing (neither carries a stamp), so there is no "later" to keep.
+    'config_legacy_copy_differs': ('two computers had different copies of this from before they shared setup. One copy was kept on both. Please check it is right', False),
     'modifier_group_same_name': ('two extras groups with the same name were set up on different computers. Both are shown, so switch one off if they are the same', False),
 }
 # The engine also parks `malformed_<entity type>` for any entity it cannot read

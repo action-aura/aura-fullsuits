@@ -7373,3 +7373,36 @@ deterministic final tiebreak) so concurrent edits converge; the product-group li
 natural-key clash deterministically instead of wedging the pull; a branch-scoped promotion with an
 unknown branch waits (never widens); sale lines carry their extras and promotion snapshots.
 Plan: job 54e80fc2 tmp/W2B3A-PLAN.md.
+
+## 2026-10-07 — retail schema v50 CASHED IN (W2b promotions + W3a modifier configuration sync)
+
+Commits c0270e01 (build) + the fix-round commit after it. Promotions, modifier groups, options and
+product links now sync (entity types promotion / modifier_group / modifier_option /
+product_modifier_group); sale lines carry their extras and promotion snapshots so the other
+computer's sale screen and receipts show them (GET /sales/<id> items carry applied_promotion).
+
+Merge rule (core/retail/config_sync.py lww_incoming_wins, twin in sync_service pinned equal):
+whole-row last-writer-wins ordered by updated_at_utc (parsed as an instant), then row_version, then
+canonical content. Every writer stamps next_stamp(previous) = max(now, previous + 1 microsecond), so
+an edit made on top of a version always beats it even with a slow clock. Verifier finding H1 is why
+the stamp comes FIRST: with row_version first, a computer that edited a promotion three times offline
+beat a later switch-off and the promotion came back on at both tills. Every dropped edit is recorded
+once per dropped edit (discriminator = losing stamp|rv|content hash); the owner sentence says "please
+check" (it used to say "nothing needs doing", which was false).
+
+Other rules: a branch-scoped promotion whose branch has not arrived parks (missing_parent:branch),
+never widens; options/links whose group has not arrived park (missing_parent:modifier_group); the
+link natural-key clash keeps the lower id with the WINNER's state (a detach held under the higher id
+is no longer undone); pre-v50 identical promotions collapse by a deterministic content uid, and
+differing pre-sharing copies are recorded as config_legacy_copy_differs.
+
+Proved: two-process two-computer test (retail_config_sync_twodevice_test.py, 7 scenarios incl.
+product/category promotions, deactivate, concurrent edits, held-back branch, extras pricing, duplicate
+attachment, extras + promotion on the other computer's sale screen); apply 61, core 21, routes 23,
+migration 5; mutation-proved per builder and by the adversarial verifier.
+
+RESIDUALS (recorded, not fixed): a computer whose clock runs far ahead wins concurrent clashes
+(always recorded); a higher-version edit made from a stale copy replaces the whole row and, because
+rows carry no ancestry, is not recorded as a clash; a sale rung before a promotion arrived is not
+re-priced; WhatsApp receipt text does not name the promotion (modal + printed slip do); Arabic
+wording of the new sentences needs a native reader.

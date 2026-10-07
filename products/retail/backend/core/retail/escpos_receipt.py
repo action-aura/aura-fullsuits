@@ -314,6 +314,13 @@ def render_receipt(
             extra_name = extra.get("name")
             if extra_name:
                 out += _line(f"  + {extra_name}", width_chars)
+        # F6: the promotion the line was rung under, one priceless "  % <name>"
+        # sub-row (the amount above is already the discounted figure, so a
+        # price here would double-count). Same truncation / '?' rules as extras.
+        applied = item.get("applied_promotion")
+        promo_name = applied.get("name") if isinstance(applied, dict) else None
+        if promo_name:
+            out += _line(f"  % {promo_name}", width_chars)
 
     out += _line("-" * width_chars, width_chars)
 

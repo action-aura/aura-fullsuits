@@ -512,9 +512,33 @@ def _config_version(row) -> int:
         return 0
 
 
-def _config_stamp(row) -> str:
-    value = row.get("updated_at_utc")
-    return "" if value is None else str(value)
+def _config_parse_stamp(value):
+    """W2b/W3a fix round 1 (F1): a row's `updated_at_utc` as a naive-UTC
+    datetime, or None. Twin of core's parser. Accepts
+    'YYYY-MM-DDTHH:MM:SS[.ffffff][Z|+00:00]' and 'YYYY-MM-DD HH:MM:SS'; a
+    missing or unreadable stamp is None, which the rule treats as the OLDEST
+    possible time. Compared as a TIME, never as text: '...:00Z' and
+    '...:00.000000+00:00' are the same instant but sort differently as strings,
+    and a string compare would decide a clash by how a stamp is spelled."""
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    for suffix in ("Z", "+00:00"):
+        if s.endswith(suffix):
+            s = s[:-len(suffix)]
+            break
+    s = s.replace("T", " ", 1)
+    main, _, frac = s.partition(".")
+    if frac and (not frac.isdigit()):
+        return None
+    try:
+        parsed = datetime.strptime(main, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return parsed.replace(microsecond=int(frac[:6].ljust(6, "0"))) if frac else parsed
+
+
+_CONFIG_OLDEST = datetime.min
 
 
 def _config_shared_keys(local, incoming):
@@ -531,15 +555,29 @@ def _config_values_differ(local, incoming) -> bool:
 
 
 def _config_lww_incoming_wins(local, incoming) -> bool:
-    """Last writer wins per row on (row_version, updated_at_utc, content);
-    identical content is no win. See core/retail/config_sync.py for the full
-    reasoning -- this is its twin."""
+    """Last writer wins per row, in THIS order (F1, fix round 1):
+
+      1. the stamp (`updated_at_utc`, parsed as a time; missing = oldest);
+      2. only when the stamps are equal, the higher row_version;
+      3. only when both are equal, the canonical content order.
+    Identical content is no win. See core/retail/config_sync.py for the full
+    reasoning -- this is its twin.
+
+    WHY the stamp is first: the version used to lead, and an owner who
+    switched a promotion off AFTER another computer had renamed it three times
+    offline lost -- three renames out-count one deactivation, the promotion
+    came back on, on both computers. Every writer now stamps
+    `next_stamp(previous)` (never earlier than the stamp it edits), so an edit
+    made on top of a version always outranks it, and between concurrent edits
+    the later clock wins. RESIDUAL: a computer whose clock runs far ahead wins
+    concurrent clashes; the dropped edit is always recorded, never silent."""
+    s_in = _config_parse_stamp(incoming.get("updated_at_utc")) or _CONFIG_OLDEST
+    s_local = _config_parse_stamp(local.get("updated_at_utc")) or _CONFIG_OLDEST
+    if s_in != s_local:
+        return s_in > s_local
     rv_in, rv_local = _config_version(incoming), _config_version(local)
     if rv_in != rv_local:
         return rv_in > rv_local
-    at_in, at_local = _config_stamp(incoming), _config_stamp(local)
-    if at_in != at_local:
-        return at_in > at_local
     keys = _config_shared_keys(local, incoming)
     return _config_content(incoming, keys) > _config_content(local, keys)
 
@@ -6611,6 +6649,9 @@ class SyncService:
             self._flag_same_name_group(conn, cid, key, p.get("name"), conflict_sink, event_type)
             return True
         if entity_type == "modifier_option":
+            parked = self._park_unless_group_here(conn, ev, cid, p.get("group_id"), "modifier_option", key)
+            if parked is not None:
+                return parked
             self._config_merge(
                 conn, p, entity_type=entity_type, event_type=event_type,
                 table="modifier_options", key_col="id", key=key, cid=cid,
@@ -6672,6 +6713,12 @@ class SyncService:
         incoming_view = dict(incoming, row_version=rv_in, updated_at_utc=ts_in)
         differs = any(_config_canonical_json(incoming.get(c)) != _config_canonical_json(local_wire.get(c))
                       for c in columns)
+        rv_local = self._config_int(row["row_version"], 0)
+        # Two copies from BEFORE the computers shared setup have no stamp on
+        # either side: there is no "most recent" between them, so they get
+        # their own sentence (`config_legacy_copy_differs`).
+        legacy = _config_parse_stamp(row["updated_at_utc"]) is None             and _config_parse_stamp(ts_in) is None
+        reason = "config_legacy_copy_differs" if legacy else "config_edit_superseded"
         if _config_lww_incoming_wins(local, incoming_view):
             # WHOLE-ROW last-writer-wins (planner decision, replaces the earlier
             # delta write): the winner writes its FULL snapshot of the synced
@@ -6680,17 +6727,20 @@ class SyncService:
             # up different (the winner's computer kept both edits, the other
             # kept only the winner's). Whole-row means both pick the same row.
             # The cost -- independent field edits no longer merge on a tie --
-            # is made VISIBLE: when the two versions were concurrent (equal
-            # row_version) and their values differ, the dropped local edit is
-            # recorded once so the owner can see it. A normal later edit
-            # (higher row_version) is not a conflict and records nothing.
-            if rv_in == self._config_int(row["row_version"], 0) and differs:
-                self._record_sync_conflict_once(
-                    conn, conflict_sink, local_company_id=cid, entity_type=entity_type,
-                    entity_id=key, event_type=event_type,
-                    local_row_version=self._config_int(row["row_version"], 0),
-                    incoming_row_version=rv_in, reason="config_edit_superseded",
-                    payload=dict(local_wire, superseded="local"))
+            # is made VISIBLE: when the winner did not build on what this
+            # computer holds (its version is NOT higher: it won on the later
+            # clock) and the values differ, the dropped local edit is recorded
+            # so the owner can see it. A winner with a higher version is a
+            # normal later edit and records nothing. (Known limit: a winner
+            # that out-counts us AND out-times us without having seen our edit
+            # is indistinguishable from a normal edit -- the rows carry no
+            # ancestry.) Recorded once PER DROPPED EDIT (F2).
+            if rv_in <= rv_local and differs:
+                self._record_dropped_config_edit(
+                    conn, conflict_sink, cid=cid, entity_type=entity_type, key=key,
+                    event_type=event_type, rv_local=rv_local, rv_in=rv_in, reason=reason,
+                    dropped=local_wire, dropped_stamp=row["updated_at_utc"],
+                    dropped_rv=rv_local, columns=columns, payload=dict(local_wire, superseded="local"))
             write = list(columns)
             sets = [f'"{cmap.get(c, c)}"=?' for c in write] + ['"row_version"=?', '"updated_at_utc"=?']
             conn.execute(
@@ -6698,12 +6748,29 @@ class SyncService:
                 [local_values[c] for c in write] + [rv_in, ts_in, key, cid])
             return False
         if differs:
-            self._record_sync_conflict_once(
-                conn, conflict_sink, local_company_id=cid, entity_type=entity_type,
-                entity_id=key, event_type=event_type,
-                local_row_version=self._config_int(row["row_version"], 0),
-                incoming_row_version=rv_in, reason="config_edit_superseded", payload=p)
+            self._record_dropped_config_edit(
+                conn, conflict_sink, cid=cid, entity_type=entity_type, key=key,
+                event_type=event_type, rv_local=rv_local, rv_in=rv_in, reason=reason,
+                dropped=incoming, dropped_stamp=ts_in, dropped_rv=rv_in, columns=columns,
+                payload=dict(p))
         return False
+
+    def _record_dropped_config_edit(self, conn, conflict_sink, *, cid, entity_type, key, event_type,
+                                    rv_local, rv_in, reason, dropped, dropped_stamp, dropped_rv,
+                                    columns, payload) -> None:
+        """Record ONE note for ONE dropped edit (F2). The once-key used to be
+        (row, reason) for ever, so a row that lost edits twice showed one note.
+        The discriminator is the DROPPED side's (stamp, version, content hash):
+        a redelivery of the same edit finds its note and adds nothing; a
+        different dropped edit on the same row is a note of its own."""
+        digest = hashlib.sha1(_config_content(dropped, list(columns)).encode("utf-8")).hexdigest()[:16]
+        disc = f"{dropped_stamp or ''}|{dropped_rv}|{digest}"
+        self._record_sync_conflict_once(
+            conn, conflict_sink, local_company_id=cid, entity_type=entity_type,
+            entity_id=key, event_type=event_type, local_row_version=rv_local,
+            incoming_row_version=rv_in, reason=reason,
+            payload=dict(payload, dropped_edit=disc),
+            discriminator=("dropped_edit", disc))
 
     def _apply_promotion(self, conn, ev, p, uid, event_type, cid, conflict_sink) -> bool:
         """`promotion`: see `_config_merge`. On top of it:
@@ -6795,8 +6862,11 @@ class SyncService:
             return self._quarantine_apply_event(
                 conn, ev, reason="malformed_product_modifier_group",
                 detail="product_id / group_id missing or not text")
+        parked = self._park_unless_group_here(conn, ev, cid, group_id, "product_modifier_group", key)
+        if parked is not None:
+            return parked
         others = conn.execute(
-            "SELECT id FROM product_modifier_groups WHERE company_id=? AND product_id=? "
+            "SELECT * FROM product_modifier_groups WHERE company_id=? AND product_id=? "
             "AND group_id=? AND id<>?", (cid, product_id, group_id, key)).fetchall()
         if others:
             self._record_sync_conflict_once(
@@ -6806,17 +6876,66 @@ class SyncService:
                 reason="modifier_link_duplicate",
                 payload={"product_id": product_id, "group_id": group_id,
                          "ids": sorted([key] + [o["id"] for o in others])})
-            if any(o["id"] < key for o in others):
-                return True
+            # F4 (fix round 1): the surviving ID is the lower one, but the
+            # surviving STATE is whichever version wins the ordinary rule
+            # between ALL the rows (incoming included). Taking the lower id's
+            # state as well undid a detach held under the higher id. Folding
+            # through `_config_lww_incoming_wins` (a total order) leaves two
+            # computers that saw the rows in different orders on the SAME
+            # row, and no 'edit superseded' note: one clash, one note.
+            def _view(r):
+                return {"sort_order": r["sort_order"], "deleted_at_utc": r["deleted_at_utc"],
+                        "row_version": self._config_int(r["row_version"], 0),
+                        "updated_at_utc": r["updated_at_utc"]}
+            best = {"sort_order": p.get("sort_order"), "deleted_at_utc": p.get("deleted_at_utc"),
+                    "row_version": self._config_int(p.get("row_version")),
+                    "updated_at_utc": p.get("updated_at_utc")}
             for o in others:
-                conn.execute("DELETE FROM product_modifier_groups WHERE id=? AND company_id=?",
-                             (o["id"], cid))
+                if _config_lww_incoming_wins(best, _view(o)):
+                    best = _view(o)
+            survivor = min([key] + [o["id"] for o in others])
+            for o in others:
+                if o["id"] != survivor:
+                    conn.execute("DELETE FROM product_modifier_groups WHERE id=? AND company_id=?",
+                                 (o["id"], cid))
+            if survivor == key:
+                conn.execute(
+                    "INSERT INTO product_modifier_groups (id, company_id, product_id, group_id, "
+                    "sort_order, deleted_at_utc, row_version, updated_at_utc) VALUES (?,?,?,?,?,?,?,?)",
+                    (key, cid, product_id, group_id, best["sort_order"], best["deleted_at_utc"],
+                     best["row_version"], best["updated_at_utc"]))
+            else:
+                conn.execute(
+                    "UPDATE product_modifier_groups SET sort_order=?, deleted_at_utc=?, "
+                    "row_version=?, updated_at_utc=? WHERE id=? AND company_id=?",
+                    (best["sort_order"], best["deleted_at_utc"], best["row_version"],
+                     best["updated_at_utc"], survivor, cid))
+            return True
         self._config_merge(
             conn, p, entity_type="product_modifier_group", event_type=event_type,
             table="product_modifier_groups", key_col="id", key=key, cid=cid,
             columns=_CONFIG_LINK_COLUMNS, incoming={c: p.get(c) for c in _CONFIG_LINK_COLUMNS},
             conflict_sink=conflict_sink)
         return True
+
+    @staticmethod
+    def _park_unless_group_here(conn, ev, cid, group_id, entity_type, key):
+        """F5 (fix round 1): an extras OPTION or an ATTACHMENT whose GROUP this
+        computer does not hold yet waits (`missing_parent:modifier_group`) and
+        replays when the group arrives. Neither table has a foreign key, so
+        they used to apply at once -- and a till holding the option but not the
+        group sold a cart (e.g. none of a required group) that a computer
+        holding both refuses. Returns None when the group is here (carry on),
+        else the value `_apply_config_event` should return. A product that has
+        not arrived is NOT a reason to park: products sync on their own and
+        `product_id` carries no FK."""
+        if isinstance(group_id, str) and group_id and conn.execute(
+                "SELECT 1 FROM modifier_groups WHERE id=? AND company_id=?",
+                (group_id, cid)).fetchone():
+            return None
+        return SyncService._quarantine_apply_event(
+            conn, ev, reason="missing_parent:modifier_group",
+            detail=f"{entity_type} {key!r}: group_id={group_id!r} not found locally")
 
     @staticmethod
     def _apply_sale_item_snapshots(conn, p: dict) -> None:

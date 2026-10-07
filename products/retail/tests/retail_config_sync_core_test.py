@@ -5,9 +5,15 @@ Pins `core.retail.config_sync`: the merge rule (`lww_incoming_wins`), the
 promotion uid (`promotion_legacy_uid`).
 
 WHAT EACH TEST GUARDS (and the mutation that must turn it RED):
-  * higher row_version wins, even against a LATER timestamp: comparing the
-    timestamp first lets a clock-skewed older edit beat a newer one.
-  * equal version -> later updated_at_utc wins.
+  * F1 (fix round 1): the STAMP is compared FIRST, row_version second. The old
+    order (rv first) let a computer that renamed a promotion 3 times (rv 4,
+    OLDER stamps) beat a later deactivation (rv 2): the promotion came back ON
+    on both computers and kept discounting. A later stamp wins whatever the
+    counters say; equal stamps -> higher row_version; then content.
+  * a missing/unparseable stamp is the OLDEST possible (never raises, never
+    beats a real stamp); two such rows fall through to row_version / content.
+  * `next_stamp(prev)` is strictly after `prev` even when this computer's
+    clock is behind, so an edit made on top of a version always beats it.
   * full tie -> the winner is decided by content and is OPPOSITE in the two
     directions (A's verdict on (a, b) is the inverse of B's on (b, a)); a rule
     that returns True (or False) on a tie leaves each computer keeping its own
@@ -42,18 +48,94 @@ def _row(**kw):
     return base
 
 
-def test_higher_row_version_wins_even_against_a_later_timestamp():
-    local = _row(row_version=2, updated_at_utc='2026-10-07T09:00:00Z')
-    incoming = _row(row_version=3, updated_at_utc='2026-10-07T08:00:00Z', name='X')
+def test_later_stamp_beats_higher_row_version():
+    # H1: B renamed 3x (rv 4, older stamps), A deactivated later (rv 2).
+    # PIN CHANGED from "higher row_version wins even against a later timestamp":
+    # that was the defect. It can no longer catch the old order coming back as
+    # a pure regression -- this test now asserts the opposite on purpose.
+    b_side = _row(row_version=4, updated_at_utc='2026-10-07T09:00:00Z', status='active')
+    a_side = _row(row_version=2, updated_at_utc='2026-10-07T10:00:00Z', status='inactive')
+    assert cs.lww_incoming_wins(b_side, a_side) is True
+    assert cs.lww_incoming_wins(a_side, b_side) is False
+
+
+def test_equal_stamp_higher_row_version_wins():
+    local = _row(row_version=2)
+    incoming = _row(row_version=3, name='X')
     assert cs.lww_incoming_wins(local, incoming) is True
     assert cs.lww_incoming_wins(incoming, local) is False
 
 
-def test_equal_version_later_timestamp_wins():
-    local = _row(updated_at_utc='2026-10-07T10:00:00Z')
-    incoming = _row(updated_at_utc='2026-10-07T10:00:01Z', name='X')
-    assert cs.lww_incoming_wins(local, incoming) is True
-    assert cs.lww_incoming_wins(incoming, local) is False
+def test_stamp_spellings_compare_by_instant_not_by_text():
+    # '+00:00', 'Z', a space separator and fractional seconds are the SAME clock.
+    z = _row(updated_at_utc='2026-10-07T10:00:00Z', row_version=1)
+    plus = _row(updated_at_utc='2026-10-07T10:00:00+00:00', row_version=2, name='X')
+    space = _row(updated_at_utc='2026-10-07 10:00:00', row_version=3, name='Y')
+    frac = _row(updated_at_utc='2026-10-07T10:00:00.000000Z', row_version=4, name='W')
+    # equal instants -> row_version decides, so the highest rv wins each time
+    assert cs.lww_incoming_wins(z, plus) is True
+    assert cs.lww_incoming_wins(plus, space) is True
+    assert cs.lww_incoming_wins(space, frac) is True
+    assert cs.lww_incoming_wins(frac, z) is False
+    # a microsecond later beats a higher counter
+    later = _row(updated_at_utc='2026-10-07T10:00:00.000001Z', row_version=1, name='L')
+    assert cs.lww_incoming_wins(frac, later) is True
+    assert cs.lww_incoming_wins(later, frac) is False
+
+
+def test_missing_or_unparseable_stamp_is_oldest():
+    real = _row(updated_at_utc='2026-10-07T10:00:00Z', row_version=1)
+    for bad in (None, '', 'garbage', 12):
+        none = _row(updated_at_utc=bad, row_version=9, name='N')
+        assert cs.lww_incoming_wins(none, real) is True, bad
+        assert cs.lww_incoming_wins(real, none) is False, bad
+    a = _row(updated_at_utc=None, row_version=1, name='A')
+    b = _row(updated_at_utc='garbage', row_version=2, name='B')
+    assert cs.lww_incoming_wins(a, b) is True       # both oldest -> rv decides
+
+
+def test_parse_stamp_accepts_the_shapes_the_suite_writes():
+    import datetime as dt
+    want = dt.datetime(2026, 10, 7, 10, 0, 0, 250000, tzinfo=dt.timezone.utc)
+    for s in ('2026-10-07T10:00:00.25Z', '2026-10-07T10:00:00.250000+00:00',
+              '2026-10-07 10:00:00.25'):
+        assert cs.parse_stamp(s) == want, s
+    assert cs.parse_stamp('2026-10-07 10:00:00') == dt.datetime(
+        2026, 10, 7, 10, 0, 0, tzinfo=dt.timezone.utc)
+    for bad in (None, '', 'x', 5):
+        assert cs.parse_stamp(bad) is None
+
+
+def test_next_stamp_is_strictly_after_a_future_previous_stamp():
+    import datetime as dt
+    now = dt.datetime(2026, 10, 7, 10, 0, 0, tzinfo=dt.timezone.utc)
+    ahead = '2026-10-07T10:00:05.000000Z'          # this clock runs 5s behind the writer
+    out = cs.next_stamp(ahead, now=now)
+    assert out == '2026-10-07T10:00:05.000001Z'
+    assert cs.parse_stamp(out) > cs.parse_stamp(ahead)
+    # equal to now is also not enough
+    same = '2026-10-07T10:00:00.000000Z'
+    assert cs.parse_stamp(cs.next_stamp(same, now=now)) > cs.parse_stamp(same)
+
+
+def test_next_stamp_uses_the_clock_when_it_is_ahead_and_when_no_previous():
+    import datetime as dt
+    now = dt.datetime(2026, 10, 7, 10, 0, 0, 123456, tzinfo=dt.timezone.utc)
+    assert cs.next_stamp(None, now=now) == '2026-10-07T10:00:00.123456Z'
+    assert cs.next_stamp('2026-10-07T09:00:00Z', now=now) == '2026-10-07T10:00:00.123456Z'
+    assert cs.next_stamp('garbage', now=now) == '2026-10-07T10:00:00.123456Z'
+    real = cs.next_stamp(None)
+    assert real.endswith('Z') and cs.parse_stamp(real) is not None
+
+
+def test_an_edit_on_top_of_a_version_beats_it_even_with_a_slow_clock():
+    import datetime as dt
+    slow_now = dt.datetime(2026, 10, 7, 9, 0, 0, tzinfo=dt.timezone.utc)
+    v1 = _row(row_version=1, updated_at_utc='2026-10-07T10:00:00.000000Z')
+    v2 = _row(row_version=2, name='X',
+              updated_at_utc=cs.next_stamp(v1['updated_at_utc'], now=slow_now))
+    assert cs.lww_incoming_wins(v1, v2) is True
+    assert cs.lww_incoming_wins(v2, v1) is False
 
 
 def test_full_tie_converges_both_directions():
@@ -93,8 +175,12 @@ def test_tiebreak_is_spelling_independent_for_numbers():
 def test_missing_version_and_stamp_never_raise():
     assert cs.lww_incoming_wins({'name': 'a'}, {'name': 'a', 'row_version': 1}) is True
     assert cs.lww_incoming_wins({'name': 'a', 'row_version': 1}, {'name': 'a'}) is False
+    # F1: an unparseable stamp is the oldest possible, i.e. EQUAL to None, so with
+    # equal versions and nothing else to compare this is no win (it used to be a
+    # win because the text 'x' sorted after ''). Cannot catch: a garbage stamp
+    # being preferred over a missing one -- which is not a distinction worth keeping.
     assert cs.lww_incoming_wins({'row_version': 1, 'updated_at_utc': None},
-                                {'row_version': 1, 'updated_at_utc': 'x'}) is True
+                                {'row_version': 1, 'updated_at_utc': 'x'}) is False
 
 
 def test_a_tombstone_edit_with_a_higher_version_beats_a_stale_live_edit():

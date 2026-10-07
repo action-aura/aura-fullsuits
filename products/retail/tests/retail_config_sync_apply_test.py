@@ -233,6 +233,17 @@ _ROWS = [
     {"row_version": "3", "updated_at_utc": T3, "name": "a", "discount_pct": 10,
      "_changed_fields": ["name"], "company_id": "x", "id": 5},
     {"updated_at_utc": T3, "name": "a"},
+    # W2b/W3a fix round 1 (F1): the STAMP is compared before the version. These
+    # rows reach each leg: a later stamp with a LOWER version, the same instant
+    # spelled several ways, a microsecond apart, a space-separated stamp, and a
+    # stamp nobody can read (= oldest).
+    {"row_version": 4, "updated_at_utc": T1, "name": "a", "discount_pct": 10},
+    {"row_version": 2, "updated_at_utc": T3, "name": "a", "discount_pct": 10},
+    {"row_version": 2, "updated_at_utc": "2026-10-07T10:10:00Z", "name": "q", "discount_pct": 10},
+    {"row_version": 2, "updated_at_utc": "2026-10-07T10:10:00.000000Z", "name": "q", "discount_pct": 10},
+    {"row_version": 2, "updated_at_utc": "2026-10-07T10:10:00.000001Z", "name": "q", "discount_pct": 10},
+    {"row_version": 9, "updated_at_utc": "2026-10-07 10:10:00", "name": "r", "discount_pct": 10},
+    {"row_version": 9, "updated_at_utc": "not a time", "name": "r", "discount_pct": 10},
 ]
 
 
@@ -264,8 +275,10 @@ def test_both_computers_pick_the_same_winner_for_every_pair():
             # tell the two rows apart at all (same version, stamp and content).
             assert in_a is False, (x, y)
             keys = ss._config_shared_keys(x, y)
-            assert (ss._config_version(x), ss._config_stamp(x), ss._config_content(x, keys)) == \
-                   (ss._config_version(y), ss._config_stamp(y), ss._config_content(y, keys)), (x, y)
+            assert (ss._config_parse_stamp(x.get("updated_at_utc")), ss._config_version(x),
+                    ss._config_content(x, keys)) == \
+                   (ss._config_parse_stamp(y.get("updated_at_utc")), ss._config_version(y),
+                    ss._config_content(y, keys)), (x, y)
 
 
 def test_the_four_types_are_handled_and_need_a_company_id():
@@ -432,6 +445,8 @@ def test_edits_to_different_fields_at_one_version_leave_both_computers_identical
     mk, fa, va, fb, vb, select = _CONVERGE_CASES[kind]
     dbs = [_make_db(tmp_path, monkeypatch, f"{kind}{i}") for i in (0, 1)]
     for db in dbs:
+        if kind in ("modifier_option", "product_modifier_group"):
+            _apply(db, _group())      # F5: a child waits for its group
         _apply(db, _CREATE[kind]())
     # Each computer edits a DIFFERENT field of the same row, both reaching rv2.
     ev_a = mk(**{fa: va, "row_version": 2, "updated_at_utc": a_stamp, "changed": [fa]})
@@ -454,6 +469,110 @@ def test_a_dropped_concurrent_edit_is_recorded_once_on_the_computer_that_lost_it
     flagged = [c for c in _conflicts(db, "promotion") if c["payload"].get("reason") == "config_edit_superseded"]
     assert len(flagged) == 1
     assert flagged[0]["payload"]["name"] == "Local edit"   # which edit was dropped
+
+
+# ── 3c. fix round 1: the STAMP decides before the version (F1) ──────────────
+
+def _reasons(get_conn, entity_type="promotion"):
+    return sorted(c["payload"].get("reason") for c in _conflicts(get_conn, entity_type)
+                  if c["payload"].get("reason") in ("config_edit_superseded",
+                                                    "config_legacy_copy_differs"))
+
+
+@pytest.mark.parametrize("order", ["a_then_b", "b_then_a"])
+def test_a_later_deactivation_beats_a_busier_older_rename_on_every_computer(
+        tmp_path, monkeypatch, order):
+    """H1. Computer B renames the promotion three times offline (rv4, old
+    stamps); computer A switches it OFF afterwards (rv2, later stamp). The old
+    rule compared the version first and kept B's rv4 -- the promotion came back
+    ON on both computers and kept discounting, with a note saying nothing
+    needed doing. The later change is the owner's last word: it wins on A, on
+    B and on a third computer that sees both in either order, and the dropped
+    edit is recorded on each computer that dropped one."""
+    a = _make_db(tmp_path, monkeypatch, "h1a")
+    b = _make_db(tmp_path, monkeypatch, "h1b")
+    c = _make_db(tmp_path, monkeypatch, "h1c")
+    for db in (a, b, c):
+        _apply(db, _promo())
+    off = _promo("update", status="inactive", row_version=2, updated_at_utc=T3, changed=["status"])
+    rename = _promo("update", name="Renamed x3", row_version=4, updated_at_utc=T2, changed=["name"])
+    _apply(a, off)
+    _apply(b, rename)
+    _apply(a, rename)          # A receives B's busier-but-older edit: loses
+    _apply(b, off)             # B receives A's later edit: wins although rv 2 < 4
+    for ev in ((off, rename) if order == "a_then_b" else (rename, off)):
+        _apply(c, ev)
+    states = [_promo_row(db) for db in (a, b, c)]
+    assert [s["status"] for s in states] == ["inactive"] * 3
+    assert len({(s["name"], s["status"], s["row_version"], s["updated_at_utc"]) for s in states}) == 1
+    assert _reasons(a) == ["config_edit_superseded"]     # A refused B's rename
+    assert _reasons(b) == ["config_edit_superseded"]     # B's own rename was replaced
+
+
+@pytest.mark.parametrize("incoming_stamp,incoming_rv,wins", [
+    ("2026-10-07T10:00:00.500001Z", 3, True),     # a slow-clock edit on top: prev + 1 microsecond
+    ("2026-10-07T10:00:00Z", 9, False),           # older stamp loses whatever its version says
+    ("2026-10-07 10:00:00.5", 1, False),          # same instant, spelled differently, lower version
+])
+def test_the_stamp_is_compared_as_a_time_not_as_text(get_conn, incoming_stamp, incoming_rv, wins):
+    _apply(get_conn, _promo(row_version=2, updated_at_utc="2026-10-07T10:00:00.500000Z"))
+    _apply(get_conn, _promo("update", name="Incoming", row_version=incoming_rv,
+                            updated_at_utc=incoming_stamp, changed=["name"]))
+    assert (_promo_row(get_conn)["name"] == "Incoming") is wins
+
+
+def test_equal_stamps_fall_back_to_the_version_then_to_the_content(get_conn):
+    _apply(get_conn, _promo(row_version=2, updated_at_utc=T2))
+    _apply(get_conn, _promo("update", name="Higher version", row_version=3, updated_at_utc=T2,
+                            changed=["name"]))
+    assert _promo_row(get_conn)["name"] == "Higher version"
+    _apply(get_conn, _promo("update", name="Lower version", row_version=2, updated_at_utc=T2,
+                            changed=["name"]))
+    assert _promo_row(get_conn)["name"] == "Higher version"
+
+
+def test_a_second_clash_on_the_same_row_is_recorded_and_a_replay_is_not(get_conn):
+    """M1. The once-key was (row, reason) forever: the FIRST dropped edit was
+    recorded and every later one on that row was swallowed, so a shop owner
+    saw one note for a row that lost edits twice. The key now includes WHICH
+    edit was dropped (its stamp, version and content), so a redelivery of the
+    same edit adds nothing and a different dropped edit adds a note."""
+    _apply(get_conn, _promo())
+    _apply(get_conn, _promo("update", name="Local edit", row_version=2, updated_at_utc=T2,
+                            changed=["name"]))
+    first = _promo("update", discount_pct=40.0, row_version=2, updated_at_utc=T3, changed=["discount_pct"])
+    _apply(get_conn, first)                      # drops "Local edit"      -> note 1
+    assert len(_reasons(get_conn)) == 1
+    second = _promo("update", name="Another stale one", row_version=2,
+                    updated_at_utc="2026-10-07T10:02:00+00:00", changed=["name"])
+    _apply(get_conn, second)                     # a different loser       -> note 2
+    assert len(_reasons(get_conn)) == 2
+    _apply(get_conn, second)                     # redelivery
+    _apply(get_conn, first)
+    assert len(_reasons(get_conn)) == 2
+
+
+@pytest.mark.parametrize("a_status", ["active", "inactive"])
+def test_two_pre_sharing_copies_that_differ_converge_with_the_legacy_sentence(
+        tmp_path, monkeypatch, a_status):
+    """M2. A promotion typed on two computers before they shared setup got the
+    same uid but each keeps its own copy (no stamp, version 1). There is no
+    'most recent' between them -- the note used to say so. One copy is kept on
+    both (a fixed content order), and the note is the legacy one."""
+    b_status = "inactive" if a_status == "active" else "active"
+    a = _make_db(tmp_path, monkeypatch, "m2a")
+    b = _make_db(tmp_path, monkeypatch, "m2b")
+    ev_a = _promo(status=a_status, updated_at_utc=None)
+    ev_b = _promo(status=b_status, updated_at_utc=None)
+    _apply(a, ev_a)
+    _apply(b, ev_b)
+    _apply(a, ev_b)
+    _apply(b, ev_a)
+    sa, sb = _promo_row(a), _promo_row(b)
+    assert (sa["status"], sa["row_version"], sa["updated_at_utc"]) == \
+        (sb["status"], sb["row_version"], sb["updated_at_utc"])
+    assert _reasons(a) == ["config_legacy_copy_differs"]
+    assert _reasons(b) == ["config_legacy_copy_differs"]
 
 
 # ── 4. promotion branch (D4) ─────────────────────────────────────────────────
@@ -537,14 +656,44 @@ def test_group_and_option_create_then_delta_update(get_conn):
     assert (o["price_delta"], o["name"], o["row_version"]) == (0.75, "Cheese", 2)
 
 
-def test_an_option_whose_group_has_not_arrived_still_applies(get_conn):
-    """`modifier_options.group_id` carries no literal FK (schema v26): arrival
-    order between a group and its options must not matter."""
-    assert _apply(get_conn, _option()) is True
+def test_an_option_whose_group_has_not_arrived_parks_then_applies_when_it_does(get_conn):
+    """F5 (fix round 1). This test used to pin the OPPOSITE ("still applies"):
+    `modifier_options.group_id` has no FK, so the option applied at once -- and
+    a till that held the option but not its group sold a cart a computer
+    holding both would have refused (the group's min_select was unknown). It
+    can no longer catch "an option applies before its group"; that is now the
+    bug. Arrival order must not matter: the option waits and replays."""
+    assert _apply(get_conn, _option()) is False
+    assert _rows(get_conn, "SELECT COUNT(*) AS n FROM modifier_options")[0]["n"] == 0
+    assert [(r["entity_type"], r["reason"]) for r in _parked(get_conn)] == \
+        [("modifier_option", "missing_parent:modifier_group")]
+    _apply(get_conn, _group())
+    _retry(get_conn)
+    assert [r["name"] for r in _rows(get_conn, "SELECT name FROM modifier_options")] == ["Cheese"]
+    assert _parked(get_conn) == []
+
+
+def test_a_link_whose_group_has_not_arrived_parks_then_applies_when_it_does(get_conn):
+    assert _apply(get_conn, _link()) is False
+    assert _links(get_conn) == []
+    assert [(r["entity_type"], r["reason"]) for r in _parked(get_conn)] == \
+        [("product_modifier_group", "missing_parent:modifier_group")]
+    _apply(get_conn, _group())
+    _retry(get_conn)
+    assert _links(get_conn) == [LINK]
+    assert _parked(get_conn) == []
+
+
+def test_a_link_to_a_product_this_computer_has_not_received_still_applies(get_conn):
+    """Unchanged by F5: products sync on their own and `product_id` has no FK,
+    so only the GROUP is a parking parent."""
+    _apply(get_conn, _group())
+    assert _apply(get_conn, _link(product_id=str(uuid.uuid4()))) is True
     assert _parked(get_conn) == []
 
 
 def test_a_stale_edit_never_resurrects_a_deactivated_option(get_conn):
+    _apply(get_conn, _group())
     _apply(get_conn, _option())
     _apply(get_conn, _option("update", status="inactive", row_version=3, updated_at_utc=T3,
                              changed=["status"]))
@@ -574,6 +723,7 @@ def _links(get_conn):
 
 
 def test_link_create_and_detach(get_conn):
+    _apply(get_conn, _group())
     assert _apply(get_conn, _link()) is True
     assert _links(get_conn) == [LINK]
     _apply(get_conn, _link("update", row_version=2, updated_at_utc=T2,
@@ -584,6 +734,7 @@ def test_link_create_and_detach(get_conn):
 
 @pytest.mark.parametrize("order", ["low_first", "high_first"])
 def test_two_attachment_ids_for_one_product_and_group_converge_on_the_lower(get_conn, order):
+    _apply(get_conn, _group())
     low, high = sorted([str(uuid.uuid4()), str(uuid.uuid4())])
     evs = [_link(lid=low), _link(lid=high)]
     if order == "high_first":
@@ -597,14 +748,64 @@ def test_two_attachment_ids_for_one_product_and_group_converge_on_the_lower(get_
     assert len(clash) == 1, "recorded once per (product, group)"
 
 
-def test_a_later_edit_to_the_losing_attachment_id_is_ignored(get_conn):
+def test_a_later_detach_made_under_the_losing_id_still_detaches_the_survivor(get_conn):
+    """M3 (fix round 1). This test used to pin "a later edit to the losing id
+    is ignored" -- which UNDID a detach the shop owner made under the higher
+    id. It can no longer catch an edit under the losing id being dropped on the
+    floor: that edit is merged into the surviving row by the same last-writer
+    rule, so the pair stays one row and the detach sticks."""
+    _apply(get_conn, _group())
     low, high = sorted([str(uuid.uuid4()), str(uuid.uuid4())])
     _apply(get_conn, _link(lid=high))
     _apply(get_conn, _link(lid=low))
     _apply(get_conn, _link("update", lid=high, row_version=5, updated_at_utc=T3,
                            deleted_at_utc=T3, changed=["deleted_at_utc"]))
-    rows = _rows(get_conn, "SELECT id, deleted_at_utc FROM product_modifier_groups")
-    assert rows == [{"id": low, "deleted_at_utc": None}]
+    rows = _rows(get_conn, "SELECT id, deleted_at_utc, row_version FROM product_modifier_groups")
+    assert rows == [{"id": low, "deleted_at_utc": T3, "row_version": 5}]
+
+
+_LINK_SELECT = ("SELECT id, product_id, group_id, sort_order, deleted_at_utc, row_version, "
+                "updated_at_utc FROM product_modifier_groups ORDER BY id")
+
+
+@pytest.mark.parametrize("detach_is_later", [True, False])
+def test_link_clash_keeps_the_lower_id_but_the_winning_state_on_both_computers(
+        tmp_path, monkeypatch, detach_is_later):
+    """F4. Computer A attached under the LOWER id and kept it active; computer
+    B attached under the HIGHER id and then detached it. Whichever order each
+    sees the other's row, both must end on ONE row (the lower id) carrying the
+    state of whichever edit is last -- not the lower id's own state by default
+    (that undid B's detach). Each records exactly one duplicate note and no
+    'edit superseded' note (the clash is one event, not two)."""
+    low, high = sorted([str(uuid.uuid4()), str(uuid.uuid4())])
+    a = _make_db(tmp_path, monkeypatch, "la")
+    b = _make_db(tmp_path, monkeypatch, "lb")
+    t_low = T2
+    t_high = T3 if detach_is_later else T1
+    low_ev = _link(lid=low, row_version=1, updated_at_utc=t_low)
+    high_ev = _link("update", lid=high, row_version=3, updated_at_utc=t_high,
+                    deleted_at_utc=t_high, changed=["deleted_at_utc"])
+    for db in (a, b):
+        _apply(db, _group())
+    _apply(a, low_ev)       # A holds the lower id's row ...
+    _apply(b, high_ev)      # ... B holds the higher id's (detached) row
+    _apply(a, high_ev)      # each receives the other's
+    _apply(b, low_ev)
+    rows_a, rows_b = _rows(a, _LINK_SELECT), _rows(b, _LINK_SELECT)
+    assert rows_a == rows_b, (rows_a, rows_b)
+    assert [r["id"] for r in rows_a] == [low]
+    assert (rows_a[0]["deleted_at_utc"] is not None) is detach_is_later
+    assert rows_a[0]["row_version"] == (3 if detach_is_later else 1)
+    for db in (a, b):
+        notes = [c["payload"].get("reason") for c in _conflicts(db, "product_modifier_group")]
+        assert notes == ["modifier_link_duplicate"], notes
+    # and a third computer that sees both in either order lands in the same place
+    for i, order in enumerate(((low_ev, high_ev), (high_ev, low_ev))):
+        c = _make_db(tmp_path, monkeypatch, f"lc{i}")
+        _apply(c, _group())
+        for ev in order:
+            _apply(c, ev)
+        assert _rows(c, _LINK_SELECT) == rows_a
 
 
 # ── 8. sale line snapshots (D8) ─────────────────────────────────────────────

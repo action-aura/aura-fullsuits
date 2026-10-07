@@ -184,6 +184,55 @@ async function suite(source, report) {
     assert.strictEqual(sd.lines[0].line_total, 5.5);
   });
 
+  // F6 (fix round 1): the NAME of the promotion a line was rung under shows on every
+  // receipt surface that shows extras; never a price (the amount is already discounted).
+  const promoLine = (extra) => createSaleLine(Object.assign({
+    modifier_snapshots: [], discount_pct: 20, line_total: 4.4,
+    applied_promotion: { name: 'Eid <special>', discount_pct: 20, discount_amount: 1.1 },
+  }, extra || {}));
+
+  await report('receipt modal and printed slip name the promotion (escaped), amount unchanged', async () => {
+    const { R, created } = load(source);
+    const html = modalHtml(R, created, saleData(promoLine()));
+    assert.ok(html.includes('<bdi data-no-i18n>% Eid &lt;special&gt;</bdi>'), html.slice(0, 1800));
+    assert.ok(!html.includes('Eid <special>'), 'user text must be escaped');
+    assert.ok(html.includes('rcpt-promo'), 'own row, so it can be styled / found');
+    const printed = await printHtml(R, saleData(promoLine()));
+    const i = printed.indexOf('Burger');
+    const j = printed.indexOf('% Eid &lt;special&gt;', i);
+    assert.ok(i > 0 && j > i && j - i < 700, 'promotion name follows its own line');
+  });
+
+  await report('a line with no promotion renders no promotion row', async () => {
+    const { R, created } = load(source);
+    assert.ok(!modalHtml(R, created, saleData(createSaleLine())).includes('rcpt-promo'));
+    const none = modalHtml(R, created, saleData(createSaleLine({ applied_promotion: undefined })));
+    assert.ok(!none.includes('rcpt-promo'));
+    const noName = modalHtml(R, created, saleData(createSaleLine({ applied_promotion: { discount_pct: 5 } })));
+    assert.ok(!noName.includes('rcpt-promo'), 'a promotion with no name draws nothing');
+  });
+
+  await report('extras and promotion on one line both show, extras first', async () => {
+    const { R, created } = load(source);
+    const html = modalHtml(R, created, saleData(promoLine({ modifier_snapshots: [{ name: 'Large', price_delta: 0.5 }] })));
+    assert.ok(html.indexOf('rcpt-extras') > 0 && html.indexOf('rcpt-extras') < html.indexOf('rcpt-promo'), html.slice(0, 1800));
+  });
+
+  await report('_reprintSale and _replaySaleReceiptData pass the promotion through from get_sale', async () => {
+    const { R } = load(source);
+    let printed = null;
+    R._printReceipt = async (sd) => { printed = sd; };
+    const item = { product_id: 7, product_name: 'Burger', quantity: 1, unit_price: 5.5, discount_pct: 20, line_total: 4.4,
+      modifiers: [], applied_promotion: { name: 'Eid', discount_pct: 20, discount_amount: 1.1 } };
+    R._lastViewedSale = { sale: { sale_number: 'S', total: 4.4 }, items: [item] };
+    await R._reprintSale();
+    assert.strictEqual(printed.lines[0].applied_promotion.name, 'Eid');
+    R._get = async () => ({ data: { sale: { sale_number: 'S', total: 4.4 }, items: [item] } });
+    const sd = await R._replaySaleReceiptData(1, 'S');
+    assert.strictEqual(sd.lines[0].applied_promotion.name, 'Eid');
+    assert.strictEqual(sd.lines[0].line_total, 4.4, 'figures untouched');
+  });
+
   await report('customer display payload carries a plain `extras` string per item', async () => {
     const { R } = load(source);
     R._cart = [
@@ -249,6 +298,11 @@ async function displayChecks(report) {
     // REHEARSAL-1007 B12: the shop's own option name ("Large") was rewritten to the
     // dictionary's Arabic ("كبير") by the DOM sweep; data-no-i18n is what stops it.
     ['extras bdi loses data-no-i18n', SOURCE, '<bdi data-no-i18n>${names.map', '<bdi>${names.map'],
+    ['promotion name dropped from every receipt surface', SOURCE, '_linePromotionName(line) {', '_linePromotionName(line) { return \'\';'],
+    ['reprint loses the promotion from get_sale', SOURCE,
+      'applied_promotion: i.applied_promotion,   // F6', 'applied_promotion_LOST: i.applied_promotion,   // F6'],
+    ['replay adapter loses the promotion from get_sale', SOURCE,
+      'modifiers: i.modifiers, applied_promotion: i.applied_promotion })),', 'modifiers: i.modifiers })),'],
     ['delta added to the printed amount', SOURCE,
       '_receiptLineAmountHTML(line) {\n    const { gross, discountAmount } = this._receiptLineFigures(line);',
       '_receiptLineAmountHTML(line) {\n    const { gross: g0, discountAmount } = this._receiptLineFigures(line);\n    const gross = g0 + (line.modifier_snapshots || line.modifiers || []).reduce((s, m) => s + (m.price_delta || 0), 0);'],
