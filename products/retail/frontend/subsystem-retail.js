@@ -6725,7 +6725,7 @@ const RetailSystem = {
       // shows a modifier sub-line; ", " is punctuation, not a translatable
       // word, so it is never routed through t().
       const modifiersHTML = (item.modifiers && item.modifiers.length)
-        ? `<div class="pos-item-modifiers">${item.modifiers.map(m => {
+        ? `<div class="pos-item-modifiers" data-no-i18n>${item.modifiers.map(m => {
             const delta = m.price_delta || 0;
             const deltaLabel = delta ? ` (${delta > 0 ? '+' : ''}${this._fmt(delta)})` : '';
             return this._esc(m.name) + deltaLabel;
@@ -9235,7 +9235,7 @@ const RetailSystem = {
     const names = this._lineExtraNames(line);
     if (!names.length) return '';
     const tone = inPrintDoc ? '' : 'color:var(--text-muted);';
-    return `<div class="rcpt-extras" style="${tone}font-size:11px;text-align:start;margin-inline-start:12px;margin-block-end:6px"><bdi>${names.map(n => this._esc(n)).join(' · ')}</bdi></div>`;
+    return `<div class="rcpt-extras" style="${tone}font-size:11px;text-align:start;margin-inline-start:12px;margin-block-end:6px"><bdi data-no-i18n>${names.map(n => this._esc(n)).join(' · ')}</bdi></div>`;
   },
 
   _receiptLineAmountHTML(line) {
@@ -10315,15 +10315,9 @@ const RetailSystem = {
         <h3 id="ret-stockadjust-dialog-title">${this._icon('package', 18, '📦')} Adjust Stock — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:var(--text-primary)">${currentStock}</strong></p>
         <div class="ret-field"><label for="sa-qty">Adjustment Quantity (+ to add, − to deduct)</label>
-          <input type="number" id="sa-qty" placeholder="${t('+10 or -5')}" step="1" /></div>
-        <div class="ret-field"><label for="sa-reason">Reason</label>
-          <select id="sa-reason">
-            <option value="Stock received">${t('Stock received')}</option>
-            <option value="Manual correction">${t('Manual correction')}</option>
-            <option value="Damaged goods">${t('Damaged goods')}</option>
-            <option value="Stock count">${t('Stock count adjustment')}</option>
-            <option value="Returned from customer">${t('Returned from customer')}</option>
-          </select>
+          <input type="number" id="sa-qty" placeholder="${t('+10 or -5')}" step="1" oninput="RetailSystem._syncStockAdjustReasons()" /></div>
+        <div class="ret-field"><label for="sa-reason">${t('Reason')}</label>
+          <select id="sa-reason">${this._stockAdjustReasonOptions(1, '')}</select>
         </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeModalOverlay(this)">Cancel</button>
@@ -10336,9 +10330,36 @@ const RetailSystem = {
     document.getElementById('sa-qty')?.focus();
   },
 
+  // REHEARSAL-1007 B3-UI: an increase used to post a negative to the
+  // stock-count account (5910), i.e. it counted as PROFIT. The route now takes
+  // `reason` = 'added' (new stock bought outside a purchase order: owner's own
+  // money put into stock) or 'count' (a count correction, gain or loss). Only
+  // an increase can be 'added'; a reduction is always a count/loss, so the
+  // reduction dialog offers that one choice and nothing else. The default for
+  // an increase is 'added' (the common case: stock just arrived).
+  // Arabic strings below: native speaker to confirm.
+  _stockAdjustReasonOptions(qty, selected) {
+    const countLabel = qty < 0 ? t('Count correction / loss') : t('Stock count correction');
+    const opts = qty < 0
+      ? [['count', countLabel]]
+      : [['added', t('New stock added (my own money)')], ['count', countLabel]];
+    const chosen = opts.some(o => o[0] === selected) ? selected : opts[0][0];
+    return opts.map(([v, l]) => `<option value="${v}"${v === chosen ? ' selected' : ''}>${l}</option>`).join('');
+  },
+
+  _syncStockAdjustReasons() {
+    const sel = document.getElementById('sa-reason');
+    if (!sel) return;
+    const qty = parseFloat(document.getElementById('sa-qty')?.value || 0) || 0;
+    sel.innerHTML = this._stockAdjustReasonOptions(qty, sel.value);
+  },
+
   async _saveStockAdjust(pid) {
     const qty = parseFloat(document.getElementById('sa-qty')?.value || 0);
-    const reason = document.getElementById('sa-reason')?.value || 'Manual adjustment';
+    // Re-derive from the sign at send time: never send 'added' with a
+    // reduction even if the select is somehow stale.
+    const picked = document.getElementById('sa-reason')?.value;
+    const reason = qty > 0 ? (picked === 'count' ? 'count' : 'added') : 'count';
     if (!qty) { SubsystemApp.showToast(t('Enter a quantity'),'error'); return; }
     const btn = document.getElementById('sa-btn');
     if (btn) { btn.disabled=true; btn.textContent=t('Saving…'); }
@@ -11350,15 +11371,18 @@ const RetailSystem = {
 
   // ── PURCHASE ORDERS ───────────────────────────────────────────────────────
   async _renderPurchases(c) {
+    // REHEARSAL-1007 B11: "+ New PO" / "PO #" were bare English literals and
+    // stayed English under Arabic. Their ar.json strings ("+ أمر شراء جديد",
+    // "رقم أمر الشراء") are assistant-written -- native speaker to confirm.
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <button class="sub-btn-primary" onclick="RetailSystem._openCreatePO()">+ New PO</button>
+        <button class="sub-btn-primary" onclick="RetailSystem._openCreatePO()">${t('+ New PO')}</button>
       </div>
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="po-table">
-            <thead><tr><th>PO #</th><th>Supplier</th><th>Status</th><th>Total</th><th>Ordered</th><th>Received</th><th>Actions</th></tr></thead>
+            <thead><tr><th>${t('PO #')}</th><th>Supplier</th><th>Status</th><th>Total</th><th>Ordered</th><th>Received</th><th>Actions</th></tr></thead>
             <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
@@ -15830,7 +15854,7 @@ const RetailSystem = {
                  comment). Same helper the receipt modal and the printed
                  slip now use, so all three surfaces agree. -->
             <tbody>${items.map(i=>`<tr>
-              <td>${this._esc(i.product_name||('#'+i.product_id))}</td>
+              <td><bdi data-no-i18n>${this._esc(i.product_name||("#"+i.product_id))}</bdi></td>
               <td style="font-family:monospace;color:var(--text-muted)">${this._esc(i.sku||'—')}</td>
               <td>${i.quantity}</td>
               <td>${this._fmt(i.unit_price)}</td>

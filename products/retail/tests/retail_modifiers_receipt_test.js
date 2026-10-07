@@ -119,7 +119,7 @@ async function suite(source, report) {
   await report('receipt modal names the extras (escaped, bdi) and keeps the amount', async () => {
     const { R, created } = load(source);
     const html = modalHtml(R, created, saleData(createSaleLine()));
-    assert.ok(html.includes('<bdi>Large · Extra &lt;cheese&gt;</bdi>'), html.slice(0, 1500));
+    assert.ok(html.includes('<bdi data-no-i18n>Large · Extra &lt;cheese&gt;</bdi>'), html.slice(0, 1500));
     assert.ok(!html.includes('Extra <cheese>'), 'user text must be escaped');
     assert.ok(html.includes('JD 5.500'), 'line amount must stay what was charged');
     assert.ok(!html.includes('JD 6.000'), 'delta must never be added to the amount');
@@ -149,7 +149,7 @@ async function suite(source, report) {
     const line = { product_id: 7, name: 'Burger', quantity: 1, unit_price: 5.5, line_total: 5.5, discount_pct: 0,
       modifiers: [{ group_name: 'Size', name: 'Large', price_delta: 0.5 }] };
     const html = await printHtml(R, saleData(line));
-    assert.ok(html.includes('<bdi>Large</bdi>'), 'reprint shape');
+    assert.ok(html.includes('<bdi data-no-i18n>Large</bdi>'), 'reprint shape');
   });
 
   await report('WhatsApp text appends the extras to the item, total unchanged', async () => {
@@ -246,6 +246,9 @@ async function displayChecks(report) {
   };
   const mutants = [
     ['extras dropped from every surface', SOURCE, '_lineExtraNames(line) {', '_lineExtraNames(line) { return [];'],
+    // REHEARSAL-1007 B12: the shop's own option name ("Large") was rewritten to the
+    // dictionary's Arabic ("كبير") by the DOM sweep; data-no-i18n is what stops it.
+    ['extras bdi loses data-no-i18n', SOURCE, '<bdi data-no-i18n>${names.map', '<bdi>${names.map'],
     ['delta added to the printed amount', SOURCE,
       '_receiptLineAmountHTML(line) {\n    const { gross, discountAmount } = this._receiptLineFigures(line);',
       '_receiptLineAmountHTML(line) {\n    const { gross: g0, discountAmount } = this._receiptLineFigures(line);\n    const gross = g0 + (line.modifier_snapshots || line.modifiers || []).reduce((s, m) => s + (m.price_delta || 0), 0);'],

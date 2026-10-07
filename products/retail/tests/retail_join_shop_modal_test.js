@@ -499,6 +499,12 @@ async function joinSubmitSuccessFlow(shellSrc) {
   await ctx.SubsystemApp._toggleJoinMode({ preventDefault() {} });
   ctx.doc.getElementById('su-key').value = '  aura-retail-join-code  ';
   await ctx.SubsystemApp._joinSubmit();
+  // _joinSubmit now arms the real 3 s account poll (B10); the screen it drew is
+  // asserted below, so stop the timer first or a failing assertion would leave
+  // node running to the 120 s ceiling.
+  const pollWasArmed = ctx.SubsystemApp._waitApprovalTimer !== null;
+  ctx.SubsystemApp._stopWaitForShopAccountPoll();
+  assert.ok(pollWasArmed, 'A successful join did not start waiting for the shop account.');
 
   const createAdminCalls = ctx.calls.filter((c) => c.url === '/api/onboarding/create-admin');
   assert.strictEqual(createAdminCalls.length, 0,
@@ -514,12 +520,62 @@ async function joinSubmitSuccessFlow(shellSrc) {
   assert.ok(overlay, 'The overlay disappeared after a successful join.');
   const card = overlay.querySelector('.auth-card');
   assert.ok(card, 'No .auth-card left in the overlay after a successful join.');
-  const title = card.querySelector('.auth-title');
-  assert.ok(title && title.textContent === 'Connected to your shop',
-    `Expected the "Connected to your shop" state, got: ${title && title.textContent}`);
-  const continueBtn = ctx.doc.getElementById('su-join-continue-btn');
-  assert.ok(continueBtn, 'No continue button rendered after a successful join.');
-  assert.strictEqual(continueBtn.getAttribute('onclick'), 'SubsystemApp._waitForShopAccount()');
+  // REHEARSAL-1007 B10: no "Restart Aura" step any more -- success goes
+  // straight to the wait, which offers "first device" from its first second.
+  try {
+    const title = card.querySelector('.auth-title');
+    assert.ok(title && title.textContent === 'Connecting to your shop…',
+      `Expected the wait screen straight after a join, got: ${title && title.textContent}`);
+    assert.ok(!/restart aura|restarted/i.test(card.textContent),
+      'The joining screens still tell the owner to restart Aura -- no restart is needed.');
+    assert.strictEqual(ctx.doc.getElementById('su-join-continue-btn'), null,
+      'The "I restarted — continue" button is back.');
+    const first = ctx.doc.getElementById('su-wait-first-btn');
+    assert.ok(first, 'No "This is my first device" choice on the wait screen from the start.');
+    assert.strictEqual(first.getAttribute('onclick'), 'SubsystemApp.showSetupModal()');
+    assert.strictEqual(first.textContent, 'This is my first device — set up the shop');
+    assert.ok(ctx.doc.getElementById('su-wait-explain'), 'No one-line explanation of when to use which.');
+  } finally {
+    ctx.SubsystemApp._stopWaitForShopAccountPoll();
+  }
+}
+
+// B10: choosing "first device" must stop the account poll, or its 120 s
+// ceiling redraws the timeout screen over the setup form being typed into.
+async function firstDeviceStopsPollFlow(shellSrc) {
+  const ctx = loadApp({
+    shellSrc,
+    routes: { 'GET /api/licensing/status': () => ACTIVE_LIC, 'GET /api/onboarding/status': () => ({ needs_setup: true }) },
+  });
+  ctx.SubsystemApp._waitForShopAccount(5, 25);
+  try {
+    await ctx.SubsystemApp.showSetupModal();
+    await sleep(80); // well past the 25 ms ceiling
+    const timeoutBtn = ctx.doc.getElementById('su-wait-retry-btn');
+    assert.strictEqual(timeoutBtn, null, 'The wait poll kept running after "first device" and redrew the timeout screen over the setup form.');
+    assert.ok(ctx.doc.getElementById('su-title'), 'The setup form is gone.');
+  } finally {
+    ctx.SubsystemApp._stopWaitForShopAccountPoll();
+  }
+}
+
+async function testFirstDeviceChoiceStopsThePollMutationProved() {
+  await firstDeviceStopsPollFlow();
+  const mutated = mutate(SHELL_SRC, [[
+    `    this._stopWaitForShopAccountPoll();
+    document.getElementById('aura-relogin-modal')?.remove();`,
+    `    document.getElementById('aura-relogin-modal')?.remove();`,
+  ]]);
+  const msg = await provesMutation('first-device poll stop survived a mutant without the stop', () => firstDeviceStopsPollFlow(mutated));
+  console.log('PASS: first-device choice stops the poll; ' + msg);
+}
+
+async function testWaitScreenOffersFirstDeviceImmediatelyMutationProved() {
+  const mutated = mutate(SHELL_SRC, [[
+    `      <button id="su-wait-first-btn"`, `      <button hidden id="su-wait-x-btn"`,
+  ]]);
+  const msg = await provesMutation('wait-screen first-device choice survived its removal', () => joinSubmitSuccessFlow(mutated));
+  console.log('PASS: ' + msg);
 }
 
 async function testJoinSubmitSuccessPostsOnlyActivateAndRendersConnected() {
@@ -768,14 +824,47 @@ async function testWaitForShopAccountTimesOutToTwoButtonState() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// REHEARSAL-1007 B11 -- the sync pill's text is built by t() at paint time, so
+// switching language (launch() re-runs _startSyncHealthPoll) must REPAINT it
+// now; with the timer already running it used to return early and the pill
+// stayed English for up to a poll (30 s) under Arabic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function syncPillRepaintFlow(shellSrc) {
+  const ctx = loadApp({ shellSrc });
+  let polls = 0;
+  ctx.SubsystemApp._pollSyncHealth = () => { polls += 1; };
+  ctx.SubsystemApp._syncHealthTimer = 12345; // a poll is already running (the language-switch case)
+  ctx.SubsystemApp._startSyncHealthPoll();
+  assert.strictEqual(polls, 1, 'Re-running _startSyncHealthPoll with the poll already armed did not repaint the pill.');
+  ctx.SubsystemApp._syncHealthTimer = null;
+  ctx.SubsystemApp._syncPollDisabled = true;
+  ctx.SubsystemApp._startSyncHealthPoll();
+  assert.strictEqual(polls, 1, 'A disabled poll (sync not configured) must stay silent.');
+}
+
+async function testSyncPillRepaintsOnLanguageSwitch() {
+  await syncPillRepaintFlow();
+  const mutated = mutate(SHELL_SRC, [[
+    `    if (this._syncHealthTimer) {
+      // REHEARSAL-1007 B11: launch() re-runs this on every language switch.`,
+    `    if (this._syncHealthTimer) { return;
+      // REHEARSAL-1007 B11: launch() re-runs this on every language switch.`,
+  ]]);
+  const msg = await provesMutation('sync pill repaint survived the early return coming back', () => syncPillRepaintFlow(mutated));
+  console.log('PASS: sync pill repaints on a language switch; ' + msg);
+}
 
 const CHECKS = [
+  ['sync pill repaints on language switch (mutation-proved)', testSyncPillRepaintsOnLanguageSwitch],
   ['join link renders when a key is needed', testJoinLinkRendersWhenKeyNeeded],
   ['join link absent when no Owner is wired up', testJoinLinkAbsentWhenNoOwnerWired],
   ['toggling join mode hides fields and rewires the button', () => testToggleJoinModeHidesFieldsAndRewiresButton()],
   ['toggling back restores the ordinary setup form', testToggleBackRestoresSetupForm],
   ['_joinSubmit success posts only activate and renders connected', testJoinSubmitSuccessPostsOnlyActivateAndRendersConnected],
   ['_joinSubmit no-create-admin check is mutation-proved', testJoinSubmitNoCreateAdminCallIsMutationProved],
+  ['wait screen offers first-device immediately (mutation-proved)', testWaitScreenOffersFirstDeviceImmediatelyMutationProved],
+  ['first-device choice stops the poll (mutation-proved)', testFirstDeviceChoiceStopsThePollMutationProved],
   ['_joinSubmit failure renders the reason, not connected', testJoinSubmitFailureRendersReasonNotConnected],
   ['checkAuthAndSetup waits when already ACTIVE', testCheckAuthAndSetupWaitsWhenAlreadyActive],
   ['checkAuthAndSetup shows setup modal when unactivated', testCheckAuthAndSetupShowsSetupModalWhenUnactivated],

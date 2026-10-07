@@ -2182,6 +2182,11 @@ const SubsystemApp = {
   // The accent vars are applied here the same way launch() applies them, so
   // the very first screen a customer sees already carries the product brand.
   async showSetupModal() {
+    // REHEARSAL-1007 B10: the wait screen now offers "this is my first
+    // device" from its first second, so this can be entered with the account
+    // poll still running -- its 120 s ceiling would redraw the timeout screen
+    // over the form the owner is typing into.
+    this._stopWaitForShopAccountPoll();
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
     // Always render into the ordinary (non-join) layout. _toggleJoinMode()
@@ -2680,20 +2685,15 @@ const SubsystemApp = {
       return showErr(this._activationFailureMessage(activation));
     }
 
-    // Activated -- but the relay address this device just learned only takes
-    // effect at the NEXT launch (read at import, see the design doc), so the
-    // honest instruction is to restart, not to carry on in this process
-    // pretending the new wiring is already live.
-    const overlay = document.getElementById('aura-relogin-modal');
-    if (overlay) {
-      overlay.querySelector('.auth-card').innerHTML = `
-        <div class="auth-head">
-          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
-          <h2 class="auth-title">${t('Connected to your shop')}</h2>
-          <p class="auth-sub">${t("Restart Aura to finish joining. Your account is on its way from your shop's other device.")}</p>
-        </div>
-        <button id="su-join-continue-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount()">${t('I restarted — continue')}</button>`;
-    }
+    // (Arabic for the wait screen's three new strings in locales/ar.json is
+    // written by the assistant, not a native speaker -- native speaker to
+    // confirm: "حساب محلك في الطريق...", "هل هذا أول جهاز...", "هذا أول جهاز لدي".)
+    // REHEARSAL-1007 B10: this used to stop on a "Restart Aura to finish
+    // joining" screen. No restart is needed (the till picks the shop up by
+    // itself, and the owner's live first start sat on the wait for 120 s
+    // because of the extra step), so go straight to the wait, which now
+    // carries the "this is my first device" way out from the first second.
+    this._waitForShopAccount();
   },
 
   // ── Waiting for the owner's account to arrive by sync ───────────────────────
@@ -2736,8 +2736,13 @@ const SubsystemApp = {
       <div class="auth-head">
         <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
         <h2 class="auth-title">${t('Connecting to your shop…')}</h2>
-        <p class="auth-sub">${t('This takes a few seconds once the app has restarted.')}</p>
-      </div>`;
+        <p class="auth-sub">${t("Your shop's account is on its way from your other device. This screen continues by itself once it arrives.")}</p>
+      </div>
+      <!-- REHEARSAL-1007 B10: the way out is offered from the FIRST second, not
+           after the 120 s ceiling. The very first device of a shop has no other
+           device to wait for, and the owner sat here the full two minutes. -->
+      <p class="auth-note" id="su-wait-explain">${t('First device in your shop? Set the shop up here. Already have another device? Just wait; nothing to restart.')}</p>
+      <button id="su-wait-first-btn" class="btn-secondary" style="width:100%;justify-content:center;min-block-size:var(--touch-target-min);margin-top:12px" onclick="SubsystemApp.showSetupModal()">${t('This is my first device — set up the shop')}</button>`;
     this._stopWaitForShopAccountPoll();
     this._waitApprovalTimer = setInterval(() => this._pollShopAccount(interval, ceiling), interval);
   },
@@ -5149,7 +5154,16 @@ const SubsystemApp = {
   LICENSE_CHECKIN_POLL_MS: 5 * 60 * 1000,
 
   _startSyncHealthPoll() {
-    if (this._syncHealthTimer || this._syncPollDisabled) return;
+    if (this._syncPollDisabled) return;
+    if (this._syncHealthTimer) {
+      // REHEARSAL-1007 B11: launch() re-runs this on every language switch.
+      // The pill's text is built by t() at paint time and is NOT a dictionary
+      // key, so the DOM translate sweep cannot fix it afterwards -- it stayed
+      // "Synced 5s ago · 0 pending" in English for up to a whole poll (30 s)
+      // after switching to Arabic. Repaint now, in the new language.
+      this._pollSyncHealth();
+      return;
+    }
     this._pollSyncHealth();                       // immediate first check
     this._syncHealthTimer = setInterval(() => this._pollSyncHealth(), this.SYNC_POLL_MS);
   },
