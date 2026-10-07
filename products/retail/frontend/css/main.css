@@ -2471,10 +2471,20 @@ html[data-theme="light"] {
 
 /* Subsystem Sidebar */
 .sub-sidebar {
-  width: 240px; flex-shrink: 0;
+  /* Wider since 2026-10-07 (owner: "some stuff get compressed"): 264px from
+     1200px up, where "Connected services" + its status and "Email
+     notifications" used to wrap at 240. 240 stays for 921-1199px, where the
+     content area cannot spare the room; the <=920px icon rail and the
+     rail class below set their own inline-size and are unchanged. Logical
+     inline-size, not width, per retail_design_rtl_test.js. */
+  --sub-sidebar-w: 240px;
+  inline-size: var(--sub-sidebar-w); flex-shrink: 0;
   background: var(--surface-panel);
   border-right: 1px solid var(--border-hairline);
   display: flex; flex-direction: column;
+}
+@media (min-width: 1200px) {
+  .sub-sidebar { --sub-sidebar-w: 264px; }
 }
 /* The phone tab bar (docs/design/phone-ui-redesign.md §2/§7 Step 1) that
    replaces this sidebar at ≤640px. Hidden here as the DEFAULT, unconditional
@@ -2501,7 +2511,22 @@ html[data-theme="light"] {
   flex-shrink: 0; transition: transform 160ms cubic-bezier(.4,0,.2,1);
 }
 .sub-sidebar-brand:hover .sub-brand-icon { transform: scale(1.04); }
-.sub-brand-text { display: flex; flex-direction: column; overflow: hidden; }
+.sub-brand-text { display: flex; flex-direction: column; overflow: hidden; min-inline-size: 0; }
+/* Collapse / expand the menu (owner 2026-10-07). Sits at the END of the brand
+   row; the row itself is a "Return to Home" click, so the handler stops
+   propagation (see _toggleSidebarCollapse). On the rail it moves BELOW the
+   mark and stays visible -- otherwise nothing could expand the menu again. */
+.sub-sidebar-collapse-btn {
+  margin-inline-start: auto; flex-shrink: 0;
+  inline-size: 32px; block-size: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: 8px;
+  color: var(--text-tertiary); cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.sub-sidebar-collapse-btn:hover { background: var(--surface-sunken); color: var(--text-primary); }
+.sub-sidebar-collapse-btn:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; }
+.sub-sidebar-collapse-btn[aria-pressed="true"] { color: var(--sub-accent); }
 /* The "Aura <Product>" lockup -- see _renderShell's brand-slot comment.
    aura-wordmark carries the weight; aura-product is intentionally lighter
    and offset, the same "brand word heavier, descriptor lighter" pairing the
@@ -2540,6 +2565,12 @@ html[data-theme="light"] {
 }
 
 .sub-nav { flex: 1; padding: 12px 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
+  /* Owner 2026-10-07 ("not smooth"): the scrollbar used to appear and vanish
+     as groups opened and closed, shifting every row sideways by its own
+     width. A stable gutter reserves that room permanently, thin so it costs
+     little. With groups now independent the list is often taller than the
+     sidebar, so this scrolls more than it used to. */
+  scrollbar-gutter: stable; scrollbar-width: thin;
   /* P1a item 4: a scroll-fade at the fold, so a sidebar with more
      destinations than fit hints "there is more below" instead of ending in
      a hard, ambiguous edge. Applied unconditionally (not only when actually
@@ -2553,8 +2584,11 @@ html[data-theme="light"] {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
 }
 .sub-nav-item {
-  display: flex; align-items: center; gap: 10px;
-  /* P1a item 4: 38px items, down from 47px -- part of the owner's 768px
+  display: flex; align-items: center; gap: 12px;
+  /* 2026-10-07 ("compressed"): 40px, up from 38 -- the wider sidebar and the
+     independent groups (scroll instead of hide) pay for it. Radius 10, gap
+     12. The coarse-pointer 44px floor below is unchanged.
+     P1a item 4: 38px items, down from 47px -- part of the owner's 768px
      sidebar budget (see systems.retail.navGroups' own comment for the
      arithmetic). min-block-size, not a fixed block-size: a longer
      translated label must still be able to wrap without clipping.
@@ -2567,12 +2601,14 @@ html[data-theme="light"] {
      `@media (pointer: coarse)` (see its own comment) -- a genuine
      touchscreen still gets the real 44px floor, a desktop mouse gets this
      38px. */
-  min-block-size: 38px;
-  padding: 8px 12px; border-radius: 9px;
+  min-block-size: 40px;
+  padding: 8px 12px; border-radius: 10px;
   color: var(--text-tertiary); font-size: 13px; font-weight: 500;
   cursor: pointer; text-decoration: none;
   border-left: 3px solid transparent;
-  transition: all 0.2s ease; user-select: none;
+  /* Was `transition: all 0.2s` -- it animated EVERY property on hover,
+     including the layout-adjacent ones. Only the two that change. */
+  transition: background-color 120ms ease, color 120ms ease; user-select: none;
 }
 .sub-nav-item:hover { background: var(--surface-sunken); color: var(--text-primary); }
 /* retail-hardware-viewports: a full-width row, so a small scale rather than
@@ -2591,8 +2627,8 @@ html[data-theme="light"] {
    the body's 1.5 line-height at 16px -- a 24px line box around a 17px glyph,
    so 24 + 16 padding = 40. inline-flex + line-height:1 makes the span exactly
    as tall as the glyph, and the 38px floor is the real height again. */
-.sub-nav-icon { font-size: 16px; display: inline-flex; align-items: center; line-height: 1; }
-.sub-nav-label { font-size: 13px; }
+.sub-nav-icon { font-size: 18px; display: inline-flex; align-items: center; line-height: 1; }
+.sub-nav-label { font-size: 14px; }
 /* F5 (final polish): a device-bound item on a computer that is not the main
    one -- shown, quiet, with its reason PRINTED under the name (a till has no
    hover, so a tooltip alone would explain nothing). Only tokens the contrast
@@ -2609,6 +2645,14 @@ html[data-theme="light"] {
    the END edge in both page directions. */
 .sub-nav-status { display: inline-flex; align-items: center; gap: 5px; margin-inline-start: auto; }
 .sub-nav-status-word { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+/* A Connected-services row is TWO designed lines (see navItemHTML in
+   app-shell.js): the name, then the status dot + word UNDER it, inside
+   .sub-nav-text. Side by side, the name and word competed for one line and
+   lost: at 264px "Shop network" + "Needs attention" wrapped in English and
+   "إشعارات البريد الإلكتروني" in Arabic, and a wider sidebar squeezed the
+   Settings form instead (measured 2026-10-08). Under the name, the status
+   starts at the name's own edge, not the row's far end. */
+.sub-nav-text .sub-nav-status { margin-inline-start: 0; gap: 4px; }
 
 /* Sidebar section headers (launch-readiness 2026-08-29 declutter pass). Quiet
    on purpose -- small, muted, uppercase, clearly subordinate to the nav items
@@ -2622,11 +2666,16 @@ html[data-theme="light"] {
    `button.sub-nav-group-label` specifically so they never leak onto the
    sheet's inert divs. */
 .sub-nav-group-label {
-  margin-block: 14px 4px;
+  /* 2026-10-07: clearly QUIETER than the items under it (11px against the
+     14px item label; 12px against 15px/16px when the screen size is raised).
+     Fixed px rather than --text-size-micro on purpose: that token moves with
+     the screen-size setting and would have let the header catch up with the
+     row text. */
+  margin-block: 12px 2px;
   padding-inline: 12px;
-  font-size: var(--text-size-micro);
-  font-weight: var(--text-weight-semibold);
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-tertiary);
   user-select: none;
@@ -2634,11 +2683,22 @@ html[data-theme="light"] {
 button.sub-nav-group-label {
   display: flex; align-items: center; gap: 8px;
   inline-size: 100%;
-  background: none; border: none; font: inherit; letter-spacing: 0.04em;
+  background: none; border: none; font: inherit; letter-spacing: 0.08em;
+  /* RE-STATED after `font: inherit` on purpose. That shorthand resets
+     font-size/weight, and this selector (element + class) outranks the
+     plain `.sub-nav-group-label` rule above that sets them -- so at Normal
+     size every header silently inherited the row size (14px = 14px, EN and
+     AR; measured 2026-10-08) and the "header is quieter than its rows"
+     hierarchy was gone. The html.ui-large/ui-xlarge header rules are more
+     specific still, so Large/XLarge keep their own 12px. */
+  font-size: var(--text-size-micro); font-weight: var(--text-weight-semibold);
+  min-block-size: 30px;
   text-transform: uppercase; text-align: start; cursor: pointer;
   border-radius: 8px;
-  transition: background 160ms, color 160ms;
+  transition: background-color 120ms ease, color 120ms ease;
 }
+/* The first group sits right under the Home row: less top margin. */
+.sub-nav-group:first-child > button.sub-nav-group-label { margin-block-start: 4px; }
 button.sub-nav-group-label:hover { color: var(--text-secondary); background: var(--surface-sunken); }
 /* H4 (fix round): the group header is a REAL toggle button now (P1a item 4),
    reachable and activatable by keyboard (Enter/Space, per
@@ -2646,7 +2706,19 @@ button.sub-nav-group-label:hover { color: var(--text-secondary); background: var
    discoverable ring every other hoverable control in this file carries. */
 button.sub-nav-group-label:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: -2px; color: var(--text-secondary); background: var(--surface-sunken); }
 .sub-nav-group-label-text { flex: 0 0 auto; }
-.sub-nav-group-chevron { margin-inline-start: auto; font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; }
+.sub-nav-group-chevron {
+  margin-inline-start: auto; font-size: 11px; color: var(--text-tertiary); flex-shrink: 0;
+  display: inline-flex; align-items: center;
+  /* One chevron-down SVG, ROTATED by state (owner 2026-10-07 "not smooth"):
+     the old text glyphs (right/down triangles) were swapped by JS with no
+     motion. Open = pointing down. Closed points right in LTR and left in
+     RTL (the 2026-09 RTL fix). CSS rotate() is clockwise-positive, so a
+     down-pointing tip goes to the RIGHT at -90deg and to the LEFT at +90deg. */
+  transition: transform 160ms ease;
+}
+button.sub-nav-group-label[aria-expanded="false"] .sub-nav-group-chevron { transform: rotate(-90deg); }
+html[dir="rtl"] button.sub-nav-group-label[aria-expanded="false"] .sub-nav-group-chevron,
+body.rtl button.sub-nav-group-label[aria-expanded="false"] .sub-nav-group-chevron { transform: rotate(90deg); }
 /* The group's own status summary (Connected services only) sits between the
    label and the chevron, never pushed all the way to the end -- the chevron
    is always the row's own trailing affordance.
@@ -2677,7 +2749,26 @@ button.sub-nav-group-label .sub-nav-group-label-text { flex: 0 1 auto; min-inlin
    status is present; the chevron keeps its own margin-inline-start:auto
    when there is no status. */
 button.sub-nav-group-label .sub-nav-group-label-text + .sub-nav-status { margin-inline-start: auto; }
+/* Connected services header (2026-10-08): name and status STACKED -- see
+   _renderShell's groupsHTML for the measurement. The stack takes the space
+   before the chevron; the status starts at the name's own edge. Declared
+   after the rule above on purpose (same specificity, later wins). */
+.sub-nav-group-label-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  flex: 1 1 auto; min-inline-size: 0; }
+button.sub-nav-group-label .sub-nav-group-label-stack .sub-nav-status { margin-inline: 0; }
 .sub-nav-group-items { display: flex; flex-direction: column; gap: 3px; }
+/* A group's items fade/slide in when it OPENS (class added by
+   _syncSidebarGroups, removed on animationend). Closing stays instant. */
+@keyframes sub-nav-group-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sub-nav-group-items.is-opening { animation: sub-nav-group-open 160ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .sub-nav-group-items.is-opening { animation: none; }
+  .sub-nav-group-chevron, .sub-nav-item, button.sub-nav-group-label,
+  .sub-sidebar-collapse-btn { transition: none; }
+}
 /* THE COLLAPSE BUG. `[hidden]` is how _renderShell/_toggleSidebarGroup hide
    every group but the open one (a plain HTML boolean attribute, `el.hidden
    = true`, no JS style write) -- but the rule directly above is an ordinary
@@ -2727,6 +2818,25 @@ button.sub-nav-group-label .sub-nav-group-label-text + .sub-nav-status { margin-
   border-top: 1px solid var(--border-hairline);
   display: flex; flex-direction: column; gap: 8px;
 }
+/* ONE ROW for every pointer type (owner 2026-10-07, independent groups): the
+   gear + AI button used to stack, costing ~54px that the sidebar needs when
+   Sell or Stock is open at 1366x768 -- the last group header (Connected
+   services) was covered by this footer. The gear is icon-only (its
+   aria-label/title keep the accessible name) and FIRST in the row so the
+   upward menu still anchors to the gear's inline-start edge. Moved here from
+   the coarse-pointer block so a mouse desktop gets the same budget. The rail
+   (64px) cannot fit two controls side by side, so it stacks them again. */
+.sub-sidebar-bottom { flex-direction: row; align-items: stretch; padding-block: 6px; gap: 6px; }
+/* 40px to match the nav rows (the gear stretches to the AI button's height and
+   counts as a .sub-nav-item). 8px block padding, not 10: Arabic's 15px line is
+   22.5px tall and 10+10+22.5 made this row 44px -- 4px over every other row. */
+.sub-sidebar-bottom .sub-ai-btn { flex: 1 1 auto; min-inline-size: 0; padding-block: 8px; min-block-size: 40px; }
+.sub-sidebar-bottom .sub-settings-menu-wrap { order: -1; flex: 0 0 auto; }
+.sub-sidebar-bottom button.sub-nav-item.sub-settings-gear { inline-size: auto; min-block-size: 100%; padding-inline: 12px; }
+.sub-sidebar-bottom .sub-settings-gear .sub-nav-label { display: none; }
+.sub-sidebar.sub-sidebar-rail .sub-sidebar-bottom { flex-direction: column; }
+.sub-sidebar.sub-sidebar-rail .sub-sidebar-bottom .sub-settings-menu-wrap { order: 0; }
+.sub-sidebar.sub-sidebar-rail .sub-sidebar-bottom button.sub-nav-item.sub-settings-gear { inline-size: 100%; }
 /* OUTLINED, not filled. This used to carry background rgba(accent, 0.08) while
    .sub-nav-item.active carries rgba(accent, 0.12) -- a 4% difference in the same
    hue, which is to say none at all. So the sidebar showed two accent-filled
@@ -2763,6 +2873,18 @@ button.sub-nav-group-label .sub-nav-group-label-text + .sub-nav-status { margin-
    never shows this class' effects -- the sidebar itself is display:none
    there). Logical `inline-size`, not `width`, per retail_design_rtl_test.js. */
 .sub-sidebar.sub-sidebar-rail { inline-size: 64px; }
+/* Rail brand row: the 18px side padding + a 40px mark + a 32px button cannot
+   share 64px, so stack them: mark, then the expand button, both centred. */
+.sub-sidebar.sub-sidebar-rail .sub-sidebar-brand {
+  flex-direction: column; padding-block: 14px; padding-inline: 0; gap: 6px; justify-content: center;
+}
+.sub-sidebar.sub-sidebar-rail .sub-sidebar-collapse-btn { margin-inline-start: 0; }
+/* A thin divider between groups on the rail (2026-10-07). Group headers are
+   hidden there, so the icon clusters otherwise ran together. */
+.sub-sidebar.sub-sidebar-rail .sub-nav-group:not(:first-child)::before {
+  content: ''; display: block; block-size: 1px; margin-inline: 12px; margin-block: 2px;
+  background: var(--border-hairline);
+}
 .sub-sidebar.sub-sidebar-rail .sub-brand-text,
 .sub-sidebar.sub-sidebar-rail .sub-nav-label,
 .sub-sidebar.sub-sidebar-rail .sub-nav-text,
@@ -2952,6 +3074,9 @@ button.sub-nav-item.sub-settings-gear:focus-visible { outline: var(--focus-ring-
   background: none; border: none; font: inherit; text-align: start;
   color: var(--text-primary); cursor: pointer;
 }
+/* `display: flex` above would defeat the UA's [hidden]{display:none}: the
+   native Minimise/Close rows ship hidden until the pywebview bridge is ready. */
+.sub-identity-menu-item[hidden] { display: none; }
 .sub-identity-menu-item:hover { background: var(--surface-sunken); }
 .sub-identity-menu-item:disabled {
   color: var(--text-tertiary); cursor: default;
@@ -4752,17 +4877,10 @@ html[data-theme] .cl-tab:not(.active):focus-visible {
   .sub-nav-item { min-block-size: var(--touch-target-min); }
   /* M5 (fix round 3): 44px rows made the sidebar taller than 768px with the
      Sell or Stock group open, so the Connected services header (the last
-     one) was clipped -- measured at 1366x768 with a coarse pointer. Two
-     changes, both touch-only, neither shrinking a target below 44px:
-     (1) the footer's gear + AI button share ONE row instead of stacking
-     (~54px back), with the gear icon-only (it keeps its aria-label/title)
-     and FIRST in the row so the upward menu still anchors to the gear's
-     inline-start edge; (2) group headers lose their generous top margin. */
-  .sub-sidebar-bottom { flex-direction: row; align-items: stretch; padding-block: 8px; gap: 6px; }
-  .sub-sidebar-bottom .sub-ai-btn { flex: 1 1 auto; min-inline-size: 0; }
-  .sub-sidebar-bottom .sub-settings-menu-wrap { order: -1; flex: 0 0 auto; }
-  .sub-sidebar-bottom .sub-settings-gear { inline-size: auto; min-block-size: 100%; padding-inline: 12px; }
-  .sub-sidebar-bottom .sub-settings-gear .sub-nav-label { display: none; }
+     one) was clipped -- measured at 1366x768 with a coarse pointer. The
+     one-row footer that fixed it is now the base rule for every pointer
+     (see .sub-sidebar-bottom); what stays touch-only is that group headers
+     lose their generous top margin (next block). */
 }
 /* Separate query, not inside the one above: a phone is ALSO a coarse pointer,
    and at <=640px .sub-nav-group-label is a 1px visually-hidden caption whose
@@ -5516,13 +5634,18 @@ html.ui-xlarge {
 }
 html.ui-large body { font-size: 16px; }
 html.ui-xlarge body { font-size: 18px; }
-/* 14px, not 15: the sidebar is a fixed width and its longest label ("Email
-   notifications") wrapped onto two lines at 15px, breaking the 38px-per-row
-   rhythm retail_p1a_shell_e2e.py pins. */
-html.ui-large .sub-nav-label { font-size: 14px; }
-html.ui-xlarge .sub-nav-label { font-size: 15px; }
-html.ui-large .sub-nav-icon { font-size: 18px; }
-html.ui-xlarge .sub-nav-icon { font-size: 20px; }
+/* 15px / 16px since 2026-10-07 (was 14 / 15): that earlier comment said the
+   fixed 240px sidebar wrapped "Email notifications" onto two lines at 15px.
+   The sidebar is 264px from 1200px up now, which is what makes 15px fit; it
+   is still 240px between 921 and 1199px, where Large may wrap that one
+   label (the wrap fallback keeps the full name rather than an ellipsis). */
+html.ui-large .sub-nav-label { font-size: 15px; }
+html.ui-xlarge .sub-nav-label { font-size: 16px; }
+html.ui-large .sub-nav-icon { font-size: 20px; }
+html.ui-xlarge .sub-nav-icon { font-size: 22px; }
+/* Group headers stay quieter than the rows at every size (2026-10-07). */
+html.ui-large .sub-nav-group-label,
+html.ui-xlarge .sub-nav-group-label { font-size: 12px; }
 /* Table cells, labels and form controls on every NON-till screen and in dialogs
    -- the places that hard-code 12-14px and so ignore the tokens above. One broad
    rule at the readable size rather than `zoom`: a first cut zoomed the whole

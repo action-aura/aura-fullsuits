@@ -8584,6 +8584,9 @@ const RetailSystem = {
     // DAY-UI U5: handled by SubsystemApp._onSignOutShortcut (app-shell.js), not
     // by the till's own key handler, because it works on every signed-in screen.
     ['Ctrl+Shift+L', 'Sign out'],
+    // Same shell-level handler family as Ctrl+Shift+L: SubsystemApp._onFullscreenShortcut
+    // (app-shell.js), works on every signed-in screen, not in the till's own key handler.
+    ['Ctrl+Shift+F', 'Full screen'],
     ['P', 'On the receipt: print'],
     ['Shift+F1 – F4', 'Cash drawer: open shift, cash in/out, X report, end shift'],
   ],

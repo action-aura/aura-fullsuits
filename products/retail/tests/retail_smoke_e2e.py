@@ -422,10 +422,12 @@ def _human_click(page, target, *, label: str = "", scroll_list: bool = False,
 
 def _click_nav_item(page, section_id: str, *, timeout: int = DEFAULT_WAIT_MS) -> None:
     """Click a sidebar nav item by its `data-section`, opening its P1a
-    collapsible GROUP first if that group is not the one currently open.
+    collapsible GROUP first if that group is not currently open (groups open
+    independently since 2026-10-07; this only ever clicks a header when the
+    item is hidden, so it never closes a group the item is already in).
 
     P1a item 4 ("a collapsible sidebar that fits 1366x768") made the sidebar
-    a real accordion: only the OPEN group's `.sub-nav-group-items` is in the
+    collapsible groups: only an OPEN group's `.sub-nav-group-items` is in the
     layout at all (every other group's items carry the `hidden` attribute,
     `display:none`) -- see app-shell.js's `_toggleSidebarGroup`. Before this
     item, every nav item was always visible and a bare `.click()` worked
@@ -609,7 +611,11 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         nav_count = page.locator(".sub-nav-item").count()
         assert nav_count >= 1, "sidebar nav rendered with zero items after signup"
         header = page.locator("#sub-header-section").inner_text()
-        assert header == "Dashboard", f"expected to land on Dashboard, header shows {header!r}"
+        # The landing screen's header is "Today" (the Dashboard section was
+        # renamed and its body replaced by today.js). The old pin said
+        # "Dashboard" and went stale with that rename, unrelated to the
+        # sidebar. Still pins WHICH screen we land on (not just "something").
+        assert header == "Today", f"expected to land on Today, header shows {header!r}"
         report.shot(page, shots, "03_dashboard_after_signup")
 
     report.run("02 fresh-install first-run signup surface, and completing it", scenario_first_run_and_signup)
@@ -840,7 +846,14 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
     # screenshot, and requiring zero new console errors per navigation.
     # ------------------------------------------------------------------
     SCREENS = [
-        ("dashboard", ".rdash-answer-value", None),
+        # `.td-big` is today.js's hero revenue figure. The old selector,
+        # `.rdash-answer-value`, belongs to the legacy _renderDashboard that
+        # the Today screen replaced -- it can never appear any more, so this
+        # entry timed out for a reason that has nothing to do with navigation.
+        # today.js renders the hero only AFTER its data has landed (no
+        # placeholder), so visibility of `.td-big` is itself the "figure has
+        # settled" signal the removed r-k-rev wait below used to provide.
+        ("dashboard", ".td-big", None),
         ("products", "#prod-table", "Products"),
         ("customers", "#cust-table", "Customers"),
         ("reports", "#rep-rev", "Reports"),
@@ -873,31 +886,10 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             assert page.locator(must_exist_selector).count() >= 1, (
                 f"'{section_id}' screen did not render its expected element {must_exist_selector!r}"
             )
-            if section_id == "dashboard":
-                # SUITE ROBUSTNESS, not a product fix: `#r-k-rev` (class
-                # `.rdash-answer-value`, this SCREENS entry's own
-                # must_exist_selector) exists with a '-' placeholder the
-                # instant _renderDashboard sets innerHTML SYNCHRONOUSLY --
-                # its `GET /dashboard/stats` settles separately, afterwards,
-                # and writes the real figures into it and #r-k-cust etc.
-                # Moving on to the next screen as soon as the placeholder is
-                # merely VISIBLE (the generic wait above) can click away
-                # while that fetch is still in flight; when it then resolves
-                # against a DOM that has moved on, _renderDashboard's
-                # un-generation-guarded `document.getElementById('r-k-cust')
-                # .textContent = ...` throws on a null element -- observed
-                # here directly, same stack frame subsystem-retail.js:1729,
-                # as the stale-render race scenario 10 exists to investigate.
-                # This scenario's own job is proving plain navigation is
-                # clean, not re-probing that race, so it waits for the real
-                # figure to land before moving on -- a real wait-for-condition,
-                # not a sleep, and not a weakened assertion: the race itself
-                # stays fully assertable on its own terms in scenario 10.
-                page.wait_for_function(
-                    "document.getElementById('r-k-rev') && "
-                    "document.getElementById('r-k-rev').textContent.trim() !== '—'",
-                    timeout=DEFAULT_WAIT_MS,
-                )
+            # (A "wait for r-k-rev to leave its placeholder" step used to sit
+            # here, guarding the legacy dashboard's stats-fetch race. The Today
+            # screen has no placeholder: `.td-big`, awaited above, only exists
+            # once its data landed. Scenario 10 still exercises the revisit.)
             if title_text is not None:
                 actual = page.locator("#sub-header-section").first.inner_text()
                 assert actual == title_text, f"'{section_id}' screen title was {actual!r}, expected {title_text!r}"
@@ -1226,10 +1218,10 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
         _click_nav_item(page, "dashboard")
         # The generic per-section error boundary (app-shell.js's `_navigate`
         # catch block) renders a "Failed to load" heading on the crash path;
-        # a clean load shows the ordinary `.rdash-answer-value` KPI figure.
+        # a clean load shows the ordinary `.td-big` hero figure (today.js).
         # Either is a real, non-blank rendered outcome.
         page.wait_for_function(
-            "document.querySelector('.rdash-answer-value') || "
+            "document.querySelector('.td-big') || "
             "(document.getElementById('sub-content') && "
             " document.getElementById('sub-content').textContent.includes('Failed to load'))",
             timeout=DEFAULT_WAIT_MS,
@@ -1240,18 +1232,7 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             print("       >>> REPRODUCED this run: Dashboard crashed on revisit (stale-render race) -- see docs/testing/e2e-smoke-guide.md")
             report.shot(page, shots, "10_dashboard_stale_render_race_reproduced")
         else:
-            assert page.locator(".rdash-answer-value").count() >= 1, "neither the crash nor a healthy dashboard rendered"
-            # Wait for THIS visit's own stats fetch to actually settle (not
-            # just the synchronous '-' placeholder) before the scenario ends
-            # -- scenario 11 clicks straight to Customers next, and without
-            # this the same race documented above could bleed forward and
-            # surface as a console error under scenario 11 instead of here.
-            # See scenario 4's identical wait for the full mechanism.
-            page.wait_for_function(
-                "document.getElementById('r-k-rev') && "
-                "document.getElementById('r-k-rev').textContent.trim() !== '—'",
-                timeout=DEFAULT_WAIT_MS,
-            )
+            assert page.locator(".td-big").count() >= 1, "neither the crash nor a healthy Today screen rendered"
             print("       >>> did not reproduce this run (known intermittent race, see docs/testing/e2e-smoke-guide.md) -- Dashboard loaded normally")
             report.shot(page, shots, "10_dashboard_after_theme_switch_ok_this_run")
 
@@ -1343,7 +1324,9 @@ def _run_all_scenarios(page, backend: Backend, report: Report, shots: Path) -> N
             assert target, "no sidebar group with items to open"
             sel = f'.sub-nav-item[data-section="{target["section"]}"]'
 
-            page.evaluate("(k) => SubsystemApp._toggleSidebarGroup(k)", target["key"])
+            # Open-only on purpose: _toggleSidebarGroup FLIPS (since 2026-10-07 groups
+            # are independent), so on a group that is already open it would close it.
+            page.evaluate("(k) => SubsystemApp._ensureSidebarGroupOpen(k)", target["key"])
             page.wait_for_timeout(200)
             page.evaluate("(id) => SubsystemApp._navigate(id)", target["section"])
             page.wait_for_timeout(1200)

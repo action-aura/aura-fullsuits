@@ -95,6 +95,7 @@ would notice if the code it describes stopped being true.
 """
 import os
 import sys
+import json
 import time
 import socket
 import threading
@@ -271,11 +272,50 @@ def _open_app_window(url):
     try:
         return subprocess.Popen([
             exe, f'--app={url}', f'--user-data-dir={profile}',
-            '--window-size=1400,900', '--no-first-run', '--no-default-browser-check',
+            # --start-maximized, NOT --start-fullscreen/--kiosk (owner
+            # 2026-10-07: "needs to be fullscreen not just windowed"): a
+            # kiosk window has no title bar and the page could not offer a
+            # way back out here; the shell's own full-screen button uses the
+            # browser Fullscreen API, which Esc/the button can always leave.
+            '--window-size=1400,900', '--start-maximized',
+            '--no-first-run', '--no-default-browser-check',
         ])
     except Exception as exc:
         log.warning(f'Could not open app window via {exe}: {exc}')
         return None
+
+
+def _window_prefs_path() -> Path:
+    """Where the till window's own preferences live (per install, under
+    AURA_APP_DATA -- never the exe's directory, which can be read-only)."""
+    return Path(_app_data) / 'window.json'
+
+
+def _load_fullscreen_pref() -> bool:
+    """Whether the till window should open full screen. DEFAULT TRUE (owner
+    2026-10-07: "it needs to be fullscreen not just windowed"): a missing
+    file, an unreadable file or malformed JSON all mean "the owner never
+    chose", so they get the default rather than an error that would stop
+    the till from opening at all."""
+    try:
+        data = json.loads(_window_prefs_path().read_text(encoding='utf-8'))
+        value = data.get('fullscreen') if isinstance(data, dict) else None
+        return value if isinstance(value, bool) else True
+    except FileNotFoundError:
+        return True
+    except Exception as exc:
+        log.warning(f'Could not read window preference ({exc}); using full screen.')
+        return True
+
+
+def _save_fullscreen_pref(value: bool) -> None:
+    """Remember the owner's last full-screen choice. Never raises: a
+    read-only disk must not break the toggle the owner just pressed."""
+    try:
+        _window_prefs_path().write_text(
+            json.dumps({'fullscreen': bool(value)}), encoding='utf-8')
+    except Exception as exc:
+        log.warning(f'Could not save window preference: {exc}')
 
 
 def _message_box(title, message):
@@ -343,6 +383,60 @@ class CustomerDisplayAPI:
     def __init__(self, base_url: str):
         self._base_url = base_url
         self._window = None
+        # The TILL window and its full-screen state, set by
+        # _run_native_window after create_window(). The leading underscore
+        # is REQUIRED: pywebview walks the PUBLIC attributes of a js_api
+        # object to expose them to JS, and walking a Window object there
+        # recurses / hangs. Private attributes are skipped.
+        self._till_window = None
+        self._is_fullscreen = True
+
+    # ---- till window controls (owner 2026-10-07) -------------------------
+    # Public methods here become window.pywebview.api.* in the shell. Each
+    # one returns a dict and NEVER raises into JS: a failed window call
+    # must show as "nothing happened", not as a broken page.
+
+    def window_mode(self):
+        """Tell the shell it is inside the native app and whether it is
+        currently full screen (the shell uses this to draw its button)."""
+        return {"native": True, "fullscreen": bool(self._is_fullscreen)}
+
+    def toggle_fullscreen(self):
+        if self._till_window is None:
+            return {"ok": False}
+        try:
+            self._till_window.toggle_fullscreen()
+            self._is_fullscreen = not self._is_fullscreen
+            _save_fullscreen_pref(self._is_fullscreen)
+            return {"fullscreen": self._is_fullscreen}
+        except Exception as exc:
+            log.warning(f'toggle_fullscreen failed: {exc}')
+            return {"ok": False, "error": str(exc)}
+
+    def minimize_app(self):
+        """In full screen there is no title bar, so the shell offers
+        Minimise itself."""
+        if self._till_window is None:
+            return {"ok": False}
+        try:
+            self._till_window.minimize()
+            return {"ok": True}
+        except Exception as exc:
+            log.warning(f'minimize_app failed: {exc}')
+            return {"ok": False, "error": str(exc)}
+
+    def quit_app(self):
+        """Close the till. The till window's events.closed is wired to
+        close_display(), so the customer display goes too and the process
+        ends once no windows remain."""
+        if self._till_window is None:
+            return {"ok": False}
+        try:
+            self._till_window.destroy()
+            return {"ok": True}
+        except Exception as exc:
+            log.warning(f'quit_app failed: {exc}')
+            return {"ok": False, "error": str(exc)}
 
     def _on_display_closed(self):
         """Subscribed to the display window's own events.closed the moment
@@ -619,18 +713,28 @@ def _run_native_window(url: str) -> bool:
         # that wants the till to stay signed in anyway, once that is a real
         # decision rather than an accidental side effect.
         remember_login = os.environ.get(REMEMBER_LOGIN_ENV) == '1'
+        # Owner 2026-10-07: the till opens full screen (maximized=True is
+        # the fallback look when the owner has left full screen; 1400x900
+        # stays the restore size). The customer-display window is untouched.
+        start_fullscreen = _load_fullscreen_pref()
         if remember_login:
             log.info(f'{REMEMBER_LOGIN_ENV}=1 -- skipping the launch cookie '
                       'clear; the till will stay signed in across a relaunch.')
             till_window = webview.create_window(APP_NAME, url, width=1400, height=900,
+                                                 fullscreen=start_fullscreen,
+                                                 maximized=True,
                                                  text_select=True, zoomable=True,
                                                  js_api=display_api)
             start_kwargs = {}
         else:
             till_window = webview.create_window(APP_NAME, width=1400, height=900,
+                                                 fullscreen=start_fullscreen,
+                                                 maximized=True,
                                                  text_select=True, zoomable=True,
                                                  js_api=display_api)
             start_kwargs = {'func': _clear_cookies_then_load, 'args': (till_window, url)}
+        display_api._till_window = till_window
+        display_api._is_fullscreen = start_fullscreen
         # Item #11(a) orphan-process fix (Phase 0 review round 2): without
         # this, closing the till while the customer display is still open
         # leaves the process (and the backend it hosts) running with only

@@ -120,6 +120,7 @@ const AuraHelp = {
     'Close, clear the search, cancel': 'إغلاق، مسح البحث، إلغاء',
     'On the receipt: print': 'في الإيصال: طباعة',
     'Sign out': 'تسجيل الخروج',
+    'Full screen': 'ملء الشاشة',
     'Cash drawer: open shift, cash in/out, X report, end shift': 'درج النقد: فتح وردية، إيداع/سحب، تقرير X، إنهاء الوردية',
   },
 

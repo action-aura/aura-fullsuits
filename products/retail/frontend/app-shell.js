@@ -1333,9 +1333,11 @@ const SubsystemApp = {
       // eight buckets from the four above (Sell/Stock/Insight/Admin), on the
       // owner's own height budget: brand 64 + Home 40, 7 group headers x 36,
       // the largest OPEN group's items x 38, footer 96 -- fits 768px only
-      // with groups that collapse to one open at a time (see _renderShell's
-      // sidebar-open-group state) and a shorter Admin no longer occupying a
-      // whole header of its own:
+      // with groups that collapse (see _renderShell's open-groups state; since
+      // 2026-10-07 they open INDEPENDENTLY -- the one-at-a-time accordion closed
+      // the group you had just used, which the owner called "not smooth") and a
+      // shorter Admin no longer occupying a whole header of its own. The tall
+      // list that results from several open groups scrolls inside .sub-nav:
       //
       //   - 'admin-center' (the gear) moved OUT of every group entirely --
       //     it is the sidebar FOOTER now, next to the AI button, exactly
@@ -1971,6 +1973,7 @@ const SubsystemApp = {
 
     this._renderShell(sys, systemId);
     this._ensureSignOutShortcut();   // DAY-UI U5
+    this._ensureFullscreenSupport(); // owner 2026-10-07
     this._navigate(this.currentSection);
     LogoSystem.init();
     this._startSyncHealthPoll();
@@ -3612,8 +3615,15 @@ const SubsystemApp = {
                title="${label}" aria-label="${label}"
                onclick="${action}">
               <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
-              <span class="sub-nav-label">${t(item.label)}</span>
-              ${trailing || ''}
+              ${trailing
+                // A row WITH a status (Connected services) is TWO designed
+                // lines: the name, then the dot + word under it. Side by side
+                // did not fit -- measured 2026-10-08, "Shop network" + "Needs
+                // attention" wrapped at every sidebar width the Settings form
+                // could afford (272px squeezed its shop-name field to 177px).
+                // Same column pattern as the main-only rows' reason line.
+                ? `<span class="sub-nav-text"><span class="sub-nav-label">${t(item.label)}</span>${trailing}</span>`
+                : `<span class="sub-nav-label">${t(item.label)}</span>`}
             </a>
           `;
     };
@@ -3664,25 +3674,28 @@ const SubsystemApp = {
       return `<span class="sub-nav-status"><span class="status-dot ${CONNECTED_STATUS_CLASS[s]}" aria-hidden="true"></span><span class="sub-nav-status-word">${CONNECTED_STATUS_WORD[s]}</span></span>`;
     };
 
-    // ── Collapsible groups, one open at a time (P1a item 4) ─────────────────
-    // The OPEN group is: whichever group holds the current section (so
-    // navigating INTO a group opens it, even from a cold shell render);
-    // failing that, this user's remembered choice (localStorage, wrapped in
-    // try/catch -- see _loadSidebarGroupPreference); failing that, the
-    // first group. _navigate() (below in this file) keeps this in step on
-    // every in-shell navigation without a full _renderShell re-render, via
-    // the SAME _toggleSidebarGroup this header button calls on a manual
-    // click -- one code path for "the active route opened this group" and
-    // "the person clicked this group", so they can never disagree about
-    // what "open" means.
+    // ── Collapsible groups, INDEPENDENT (P1a item 4; owner 2026-10-07) ──────
+    // This used to be an accordion (one open at a time). The owner, testing
+    // the desktop app: "not smooth when working with it" -- opening Stock
+    // closed Sell, the group just used, so Sell -> Stock -> Sell cost extra
+    // clicks and the whole list jumped. Each header now flips only its own
+    // group (_toggleSidebarGroup) and the SET of open groups is remembered
+    // per user. The open set is: this user's stored set; failing that the
+    // default (the first group, e.g. Sell). Whichever group holds the current
+    // section is always added, so navigating INTO a group shows it even from
+    // a cold render. _navigate() keeps this in step on every in-shell
+    // navigation via _ensureSidebarGroupOpen -- it only ever OPENS, never
+    // closes another group.
     const groupKeyOf = (g) => g.key || g.label;
     let activeGroupKey = null;
     for (const g of (sys.navGroups || [])) {
       if (g.items.includes(activeSection)) { activeGroupKey = groupKeyOf(g); break; }
     }
     const firstGroupKey = (sys.navGroups && sys.navGroups[0]) ? groupKeyOf(sys.navGroups[0]) : null;
-    const openGroupKey = activeGroupKey || this._loadSidebarGroupPreference() || firstGroupKey;
-    this._openSidebarGroup = openGroupKey;
+    const storedGroups = this._loadSidebarGroupPreference();
+    const openGroups = new Set(storedGroups || (firstGroupKey ? [firstGroupKey] : []));
+    if (activeGroupKey) openGroups.add(activeGroupKey);
+    this._openSidebarGroups = openGroups;
 
     const groupsHTML = (sys.navGroups || []).map((group) => {
       const gKey = groupKeyOf(group);
@@ -3698,7 +3711,7 @@ const SubsystemApp = {
       // here is exactly the bug that test exists to catch.
       if (!visibleItems.length) return '';
 
-      const isOpen = gKey === openGroupKey;
+      const isOpen = openGroups.has(gKey);
       // The group header shows the WORST member state (design_system /
       // item 5: "the group header shows the worst state"), never the
       // average or the first -- a shop wants to know the one thing that
@@ -3728,9 +3741,15 @@ const SubsystemApp = {
           <div class="sub-nav-group">
             <button type="button" class="sub-nav-group-label" data-group-toggle="${gKey}"
                aria-expanded="${isOpen}" onclick="SubsystemApp._toggleSidebarGroup('${this._esc(gKey)}')">
-              <span class="sub-nav-group-label-text">${t(group.label)}</span>
-              ${headerTrailing}
-              <span class="sub-nav-group-chevron" aria-hidden="true">${this._chevronGlyph(isOpen)}</span>
+              ${headerTrailing
+                // Connected services: name, then its worst-state dot + word UNDER
+                // it -- the same "status sits under its name" rule as its rows.
+                // Side by side, "CONNECTED SERVICES" (uppercase, tracked, ~150px)
+                // got ~134px beside "Off" and was crushed to 4-5 lines beside
+                // "Needs attention" (measured 2026-10-08, 264px sidebar).
+                ? `<span class="sub-nav-group-label-stack"><span class="sub-nav-group-label-text">${t(group.label)}</span>${headerTrailing}</span>`
+                : `<span class="sub-nav-group-label-text">${t(group.label)}</span>`}
+              <span class="sub-nav-group-chevron" aria-hidden="true">${window.AuraIcons ? AuraIcons.render('chevron-down', 14) : '\u25BE'}</span>
             </button>
             <div class="sub-nav-group-items" data-group-items="${gKey}"${isOpen ? '' : ' hidden'}>
               ${itemsHTML}
@@ -3799,6 +3818,8 @@ const SubsystemApp = {
           ${this.role === 'admin' ? `<button type="button" class="sub-identity-menu-item" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.openLicensing()">${t('Plan & devices')}</button>` : ''}
           ${this._hasHelp() ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-action="help" onclick="SubsystemApp._closeIdentityMenu();AuraHelp.open()">${t('Help')}</button>` : ''}
           ${this.role === 'admin' && this._hasSetupGuide() ? `<button type="button" class="sub-identity-menu-item" role="menuitem" data-action="setup-guide" onclick="SubsystemApp._closeIdentityMenu();window.AuraSetupGuide.open()">${t('Setup guide')}</button>` : ''}
+          <button type="button" class="sub-identity-menu-item" role="menuitem" data-action="minimize-app" hidden onclick="SubsystemApp._closeIdentityMenu();SubsystemApp._minimizeApp()">${t('Minimise')}</button>
+          <button type="button" class="sub-identity-menu-item" role="menuitem" data-action="close-app" hidden onclick="SubsystemApp._closeIdentityMenu();SubsystemApp._closeApp()">${t('Close Aura Retail')}</button>
           <button type="button" class="sub-identity-menu-item is-danger" role="menuitem" onclick="SubsystemApp._closeIdentityMenu();SubsystemApp.logout()">${t('Log Out')}</button>
         </div>
       </div>
@@ -3810,7 +3831,11 @@ const SubsystemApp = {
     // there. _navigate() (below) keeps this class in step on an in-shell
     // navigation without a full re-render, the same way it now keeps the
     // open group in step.
-    const isTillRoute = activeSection === 'pos';
+    // Since 2026-10-07 the rule lives in _sidebarIsRail: the till route is
+    // still the automatic default, but the Collapse-menu button can force
+    // the rail (or the full menu) on every route.
+    const isRailSidebar = this._sidebarIsRail(activeSection);
+    const collapseLabel = isRailSidebar ? t('Expand menu') : t('Collapse menu');
 
     shell.innerHTML = `
       <!-- FIRST in the DOM on purpose: a skip link is only useful if it is the
@@ -3834,7 +3859,7 @@ const SubsystemApp = {
          onclick="return SubsystemApp._skipToContent(event)">${t('Skip to main content')}</a>
 
       <!-- Subsystem Sidebar -->
-      <aside class="sub-sidebar${isTillRoute ? ' sub-sidebar-rail' : ''}" id="sub-sidebar">
+      <aside class="sub-sidebar${isRailSidebar ? ' sub-sidebar-rail' : ''}" id="sub-sidebar">
         <div class="sub-sidebar-brand aura-logo" title="${t('Return to Home')}">
           <!-- The Aura mark itself, not a boxed sys.icon emoji -- the owner's
                "shouldn't the logo be where it says aura retail" complaint,
@@ -3859,6 +3884,13 @@ const SubsystemApp = {
                  surfaces can never show a different name for the same shop. -->
             ${this._shopDisplayName() ? `<span class="sub-system-name">${this._esc(this._shopDisplayName())}</span>` : ''}
           </div>
+          <!-- Collapse / expand the menu (owner 2026-10-07). Lives INSIDE the
+               brand row, which has its own "Return to Home" click, so the
+               handler stops propagation. Stays visible on the rail so the
+               menu can be opened again. -->
+          <button type="button" class="sub-sidebar-collapse-btn" id="sub-sidebar-collapse-btn"
+             aria-pressed="${isRailSidebar}" title="${collapseLabel}" aria-label="${collapseLabel}"
+             onclick="SubsystemApp._toggleSidebarCollapse(event)">${window.AuraIcons ? AuraIcons.render('menu', 18) : '\u2630'}</button>
         </div>
 
         <nav class="sub-nav" id="sub-nav" aria-label="${t('Main navigation')}">
@@ -3950,6 +3982,14 @@ const SubsystemApp = {
                  longer produce the historical white-on-white state -- see
                  index.html's boot comment for that postmortem. -->
             <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${t('Change UI theme')}">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
+            <!-- Full screen (owner 2026-10-07: "it needs to be fullscreen not
+                 just windowed"). Icon/title/aria reflect the CURRENT state;
+                 _syncFullscreenButton keeps them in step. -->
+            <button class="sub-header-btn" id="sub-fullscreen-btn" type="button"
+               aria-pressed="${!!this._isFullscreen}"
+               title="${this._isFullscreen ? t('Exit full screen (Ctrl+Shift+F)') : t('Full screen (Ctrl+Shift+F)')}"
+               aria-label="${this._isFullscreen ? t('Exit full screen (Ctrl+Shift+F)') : t('Full screen (Ctrl+Shift+F)')}"
+               onclick="SubsystemApp._toggleFullscreen()">${window.AuraIcons ? AuraIcons.render(this._isFullscreen ? 'minimize' : 'maximize', 18) : '\u26F6'}</button>
           </div>
           ${chipHTML}
         </header>
@@ -4211,6 +4251,143 @@ const SubsystemApp = {
     SubsystemApp.logout();
   },
 
+  // ── Full screen (owner 2026-10-07: "it needs to be fullscreen not just
+  // windowed") ──────────────────────────────────────────────────────────────
+  // Two worlds, one button:
+  //   * the desktop app (pywebview): the launcher exposes toggle_fullscreen /
+  //     window_mode / minimize_app / quit_app on window.pywebview.api;
+  //   * a plain browser (Edge/Chrome --app fallback or a dev tab): the web
+  //     Fullscreen API. It needs a user gesture, which the click or the
+  //     Ctrl+Shift+F keydown both are.
+  _isFullscreen: false,
+
+  // The native bridge, or null. Checked for the METHOD, not just the object,
+  // because pywebview creates window.pywebview before its api is populated.
+  _windowApi() {
+    const api = typeof window !== 'undefined' && window.pywebview && window.pywebview.api;
+    return (api && typeof api.toggle_fullscreen === 'function') ? api : null;
+  },
+
+  async _toggleFullscreen() {
+    const api = this._windowApi();
+    try {
+      if (api) {
+        const r = await api.toggle_fullscreen();
+        if (r && typeof r.fullscreen === 'boolean') this._isFullscreen = r.fullscreen;
+        else if (r && r.ok === false) throw new Error(r.error || 'toggle failed');
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        this._isFullscreen = false;
+      } else {
+        await document.documentElement.requestFullscreen();
+        this._isFullscreen = true;
+      }
+    } catch (e) {
+      this.showToast(t('Could not change full screen.'), 'error');
+    }
+    this._syncFullscreenButton();
+  },
+
+  // Repaints the header button from this._isFullscreen. Safe to call before
+  // the shell exists (the button is simply not there yet).
+  _syncFullscreenButton() {
+    const btn = document.getElementById('sub-fullscreen-btn');
+    if (!btn) return;
+    const on = !!this._isFullscreen;
+    const label = on ? t('Exit full screen (Ctrl+Shift+F)') : t('Full screen (Ctrl+Shift+F)');
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-pressed', String(on));
+    if (window.AuraIcons) btn.innerHTML = AuraIcons.render(on ? 'minimize' : 'maximize', 18);
+  },
+
+  // Once per page: initial state + listeners + the keyboard chord.
+  _ensureFullscreenSupport() {
+    if (this._fullscreenSupportInstalled) { this._readInitialFullscreen(); return; }
+    this._fullscreenSupportInstalled = true;
+    document.addEventListener('fullscreenchange', () => {
+      // Only the browser path: in the native window the Fullscreen API is not
+      // what is in play and the launcher is the source of truth.
+      if (SubsystemApp._windowApi()) return;
+      SubsystemApp._isFullscreen = !!document.fullscreenElement;
+      SubsystemApp._syncFullscreenButton();
+    });
+    window.addEventListener('pywebviewready', () => SubsystemApp._readInitialFullscreen());
+    document.addEventListener('keydown', (e) => SubsystemApp._onFullscreenShortcut(e), true);
+    this._readInitialFullscreen();
+  },
+
+  // Both rows are ALWAYS rendered (hidden): pywebview fills window.pywebview.api
+  // only after its 'pywebviewready' event, which can land AFTER the first
+  // render, so deciding at render time left them missing for good. This runs
+  // on that event and at install, and reveals each row the bridge can serve.
+  _syncWindowRows() {
+    const api = this._windowApi();
+    const set = (action, method) => {
+      document.querySelectorAll('[data-action="' + action + '"]').forEach((el) => {
+        el.hidden = !(api && typeof api[method] === 'function');
+      });
+    };
+    set('minimize-app', 'minimize_app');
+    set('close-app', 'quit_app');
+  },
+
+  async _readInitialFullscreen() {
+    const api = this._windowApi();
+    this._syncWindowRows();
+    try {
+      if (api && typeof api.window_mode === 'function') {
+        const m = await api.window_mode();
+        this._isFullscreen = !!(m && m.fullscreen);
+      } else if (!api) {
+        this._isFullscreen = !!document.fullscreenElement;
+      }
+    } catch (e) { /* keep the last known state */ }
+    this._syncFullscreenButton();
+  },
+
+  // Ctrl+Shift+F anywhere in the shell. Read from the PHYSICAL key (e.code),
+  // layout-independent, so it works on an Arabic keyboard. A chord that emits
+  // no character, so (like Ctrl+Shift+L) it is safe even while typing in a
+  // field. Capture phase so a field's own handler cannot swallow it.
+  _onFullscreenShortcut(e) {
+    if (!e || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+    if (e.code !== 'KeyF') return;
+    if (!document.getElementById('sub-fullscreen-btn')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.repeat) return;
+    SubsystemApp._toggleFullscreen();
+  },
+
+  // Native-window-only rows of the identity menu. In full screen there is no
+  // title bar, and a non-technical shop owner will not know Alt+F4 -- these
+  // are the visible way to minimise or quit.
+  _minimizeApp() {
+    const api = this._windowApi();
+    if (!api || typeof api.minimize_app !== 'function') return;
+    try { api.minimize_app(); } catch (e) { /* the window may already be going away */ }
+  },
+
+  async _closeApp() {
+    const api = this._windowApi();
+    if (!api || typeof api.quit_app !== 'function') return;
+    // Same styled dialog logout uses; falls back to the browser's confirm.
+    let ok = true;
+    if (window.RetailSystem && typeof window.RetailSystem._confirm === 'function') {
+      ok = !!(await window.RetailSystem._confirm({
+        title: t('Close Aura Retail?'),
+        message: t('The program will close on this computer. Sales already saved are kept.'),
+        confirmLabel: t('Close Aura Retail'),
+        danger: true,
+      }));
+    } else if (typeof window.confirm === 'function') {
+      ok = window.confirm(t('Close Aura Retail?'));
+    }
+    if (!ok) return;
+    try { api.quit_app(); } catch (e) { this.showToast(t('Could not close Aura Retail.'), 'error'); }
+  },
+
   _onDropdownKeydown(e) {
     const state = this._dropdownState;
     if (!state) return;
@@ -4218,7 +4395,7 @@ const SubsystemApp = {
     if (!menu) return;
     const items = Array.prototype.filter.call(
       menu.querySelectorAll('.sub-identity-menu-item'),
-      (el) => !el.disabled
+      (el) => !el.disabled && !el.hidden
     );
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -4306,56 +4483,147 @@ const SubsystemApp = {
     this.launch(this.active || 'retail', this.currentSection || 'dashboard');
   },
 
-  // ── Collapsible sidebar groups (P1a item 4) ─────────────────────────────
+  // ── Collapsible sidebar groups (P1a item 4; independent since 2026-10-07) ─
   // Per-USER, not per-device: two people sharing a till should not inherit
-  // each other's open group. Wrapped in try/catch throughout -- a sidebar
+  // each other's open groups. Wrapped in try/catch throughout -- a sidebar
   // preference must never be able to break boot the way ThemeEngine's own
   // persistence never is.
+  //
+  // INDEPENDENT, NOT AN ACCORDION (owner 2026-10-07: "not smooth when working
+  // with it"). The first version kept exactly one group open, so opening
+  // Stock closed Sell -- the group the cashier had just been working in --
+  // and going Sell -> Stock -> Sell cost extra clicks while the whole list
+  // jumped under the pointer. Each header now flips only ITS OWN group, and
+  // the set of open groups is remembered. The tall list is handled by the
+  // nav's own scrolling (see main.css .sub-nav), not by hiding things.
   _sidebarGroupStorageKey() {
+    const uid = (this.currentUser && this.currentUser.id) || 'anon';
+    return 'aura_sidebar_open_groups_' + uid;
+  },
+
+  // The pre-2026-10-07 single-group key. Read ONLY to seed the new set once.
+  _legacySidebarGroupStorageKey() {
     const uid = (this.currentUser && this.currentUser.id) || 'anon';
     return 'aura_sidebar_open_group_' + uid;
   },
 
+  // Returns an array of group keys, or null when there is no stored choice
+  // (caller then applies the default). One-time migration: a user who only
+  // has the OLD single key keeps that group open instead of losing their
+  // setup; the next save writes the new key and the old one is never read
+  // again.
   _loadSidebarGroupPreference() {
-    try { return localStorage.getItem(this._sidebarGroupStorageKey()); } catch (e) { return null; }
+    try {
+      const raw = localStorage.getItem(this._sidebarGroupStorageKey());
+      if (raw !== null && raw !== undefined) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) return arr.map(String);
+      }
+      const legacy = localStorage.getItem(this._legacySidebarGroupStorageKey());
+      if (legacy) return [String(legacy)];
+    } catch (e) { /* private mode / corrupt value: fall through to the default */ }
+    return null;
   },
 
-  _saveSidebarGroupPreference(key) {
-    try { localStorage.setItem(this._sidebarGroupStorageKey(), key); } catch (e) { /* private mode */ }
+  _saveSidebarGroupPreference(keys) {
+    try {
+      localStorage.setItem(this._sidebarGroupStorageKey(), JSON.stringify(Array.from(keys)));
+    } catch (e) { /* private mode */ }
   },
 
-  // LOW (fix round 3): the collapsed-group chevron pointed RIGHT in Arabic,
-  // i.e. away from the mirrored start edge the content opens toward.
-  // Collapsed points toward the row's own inline-start direction of
-  // travel: right in LTR, left in RTL. Open is always down.
-  _chevronGlyph(isOpen) {
-    if (isOpen) return '\u25BE';
-    const de = (typeof document !== 'undefined' && document.documentElement) || null;
-    const rtl = !!((de && de.getAttribute && de.getAttribute('dir') === 'rtl')
-      || (typeof window !== 'undefined' && window.AuraI18n && window.AuraI18n.current === 'ar'));
-    return rtl ? '\u25C2' : '\u25B8';
+  // Collapse-menu preference (B4): 'rail' | 'full' | absent. Absent keeps the
+  // automatic behaviour (icon rail on the till route only).
+  _sidebarModeStorageKey() {
+    const uid = (this.currentUser && this.currentUser.id) || 'anon';
+    return 'aura_sidebar_mode_' + uid;
   },
 
-  // The ONE place that changes which group is open, called both by a
-  // person clicking a group header AND by _navigate() keeping the open
-  // group in step with the active route -- one code path, so a manual
-  // click and an automatic route change can never disagree about what
-  // "open" means. Toggles DOM classes directly rather than a full
-  // _renderShell() re-render, so opening a group does not reset scroll
-  // position or repaint the whole sidebar for a one-element change.
+  _loadSidebarMode() {
+    try {
+      const v = localStorage.getItem(this._sidebarModeStorageKey());
+      return (v === 'rail' || v === 'full') ? v : null;
+    } catch (e) { return null; }
+  },
+
+  // The ONE rule for "is the sidebar the narrow icon rail right now", used by
+  // _renderShell and _navigate so a first paint and an in-shell navigation can
+  // never disagree. An explicit choice (the collapse button) wins on every
+  // route; with none, today's behaviour: rail on the till only.
+  _sidebarIsRail(sectionId) {
+    const mode = this._loadSidebarMode();
+    if (mode === 'rail') return true;
+    if (mode === 'full') return false;
+    return sectionId === 'pos';
+  },
+
+  // Applies _sidebarIsRail to the live DOM and keeps the collapse button's
+  // label/aria in step. No re-render, so scroll position and open groups stay.
+  _applySidebarRail(sectionId) {
+    const rail = this._sidebarIsRail(sectionId);
+    const sidebarEl = document.getElementById('sub-sidebar');
+    if (sidebarEl && sidebarEl.classList) sidebarEl.classList.toggle('sub-sidebar-rail', rail);
+    const btn = document.getElementById('sub-sidebar-collapse-btn');
+    if (btn) {
+      const label = rail ? t('Expand menu') : t('Collapse menu');
+      btn.setAttribute('aria-pressed', String(rail));
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('title', label);
+    }
+  },
+
+  _toggleSidebarCollapse(ev) {
+    // The brand row has its own click ("Return to Home"); this button lives
+    // inside it and must not trigger it.
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    const sidebarEl = document.getElementById('sub-sidebar');
+    const isRail = !!(sidebarEl && sidebarEl.classList.contains('sub-sidebar-rail'));
+    try { localStorage.setItem(this._sidebarModeStorageKey(), isRail ? 'full' : 'rail'); } catch (e) { /* private mode */ }
+    this._applySidebarRail(this.currentSection);
+  },
+
+  // Flips ONLY the named group; every other group is left exactly as it was.
+  // Toggles DOM state directly rather than a full _renderShell() re-render, so
+  // opening a group does not reset scroll position or repaint the sidebar.
   _toggleSidebarGroup(key) {
-    this._openSidebarGroup = key;
-    this._saveSidebarGroupPreference(key);
+    const set = this._openSidebarGroups || (this._openSidebarGroups = new Set());
+    const willOpen = !set.has(key);
+    if (willOpen) set.add(key); else set.delete(key);
+    this._saveSidebarGroupPreference(set);
+    this._syncSidebarGroups(willOpen ? key : null);
+  },
+
+  // Called by _navigate: opening a destination inside a closed group must show
+  // it, but must NEVER close another group (that was the accordion's flaw).
+  _ensureSidebarGroupOpen(key) {
+    const set = this._openSidebarGroups || (this._openSidebarGroups = new Set());
+    if (set.has(key)) return;
+    set.add(key);
+    this._saveSidebarGroupPreference(set);
+    this._syncSidebarGroups(key);
+  },
+
+  // Paints the open set onto the DOM. `justOpened` (a key or null) gets the
+  // `.is-opening` class for the short fade-in; closing is instant on purpose
+  // (the thing you are closing is the thing you stopped looking at).
+  _syncSidebarGroups(justOpened) {
     const nav = document.getElementById('sub-nav');
     if (!nav || typeof nav.querySelectorAll !== 'function') return;
+    const set = this._openSidebarGroups || new Set();
     nav.querySelectorAll('[data-group-items]').forEach((el) => {
-      el.hidden = el.dataset.groupItems !== key;
+      const key = el.dataset.groupItems;
+      const open = set.has(key);
+      el.hidden = !open;
+      if (open && key === justOpened && el.classList) {
+        el.classList.remove('is-opening');
+        // Force a reflow so re-adding the class restarts the animation when a
+        // group is closed and reopened quickly.
+        void el.offsetWidth;
+        el.classList.add('is-opening');
+        el.addEventListener('animationend', () => el.classList.remove('is-opening'), { once: true });
+      }
     });
     nav.querySelectorAll('[data-group-toggle]').forEach((el) => {
-      const isOpen = el.dataset.groupToggle === key;
-      el.setAttribute('aria-expanded', String(isOpen));
-      const chevron = el.querySelector ? el.querySelector('.sub-nav-group-chevron') : null;
-      if (chevron) chevron.textContent = this._chevronGlyph(isOpen);
+      el.setAttribute('aria-expanded', String(set.has(el.dataset.groupToggle)));
     });
   },
 
@@ -4695,20 +4963,20 @@ const SubsystemApp = {
     // initial render) so navigating TO or AWAY FROM the till via an
     // in-shell nav click collapses/restores the rail without a full
     // launch()/_renderShell() round trip.
-    const sidebarEl = document.getElementById('sub-sidebar');
-    if (sidebarEl && sidebarEl.classList) {
-      sidebarEl.classList.toggle('sub-sidebar-rail', sectionId === 'pos');
-    }
+    // _applySidebarRail uses the ONE rule (_sidebarIsRail) _renderShell also
+    // uses, so an explicit Collapse-menu choice survives navigation.
+    this._applySidebarRail(sectionId);
 
     // P1a item 4: opening a destination inside a COLLAPSED group must open
     // that group -- otherwise a click reachable only via keyboard/deep-link
     // (not the header toggle) would leave its own destination hidden under
-    // a closed accordion. Reuses _toggleSidebarGroup, the one place that
-    // changes which group is open (see that method's own comment).
+    // a closed group. Uses _ensureSidebarGroupOpen, which only ever OPENS
+    // (never closes another group -- groups are independent since
+    // 2026-10-07; see _toggleSidebarGroup's comment).
     const activeSys = this.systems[this.active];
     if (activeSys && Array.isArray(activeSys.navGroups)) {
       const grp = activeSys.navGroups.find((g) => g.items.includes(sectionId));
-      if (grp) this._toggleSidebarGroup(grp.key || grp.label);
+      if (grp) this._ensureSidebarGroupOpen(grp.key || grp.label);
     }
 
     // ...and bring it into view. The rail is `overflow-y: auto` and holds more

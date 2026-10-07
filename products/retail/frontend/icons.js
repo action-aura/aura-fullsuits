@@ -702,6 +702,30 @@ window.AuraIcons = (function () {
     ],
     heavy: [1]
   },
+  'maximize': {  // enter full screen: four corners pointing OUT (Lucide v0.469.0 geometry, not hand-drawn). One corner heavy for the same asymmetry as menu; not directional, never mirrored
+    el: [
+      "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\" />",
+      "<path d=\"M21 8V5a2 2 0 0 0-2-2h-3\" />",
+      "<path d=\"M3 16v3a2 2 0 0 0 2 2h3\" />",
+      "<path d=\"M16 21h3a2 2 0 0 0 2-2v-3\" />"
+    ],
+    heavy: [0]
+  },
+  'minimize': {  // exit full screen: four corners pointing IN (Lucide v0.469.0). Pair of maximize; not directional
+    el: [
+      "<path d=\"M8 3v3a2 2 0 0 1-2 2H3\" />",
+      "<path d=\"M21 8h-3a2 2 0 0 1-2-2V3\" />",
+      "<path d=\"M3 16h3a2 2 0 0 1 2 2v3\" />",
+      "<path d=\"M16 21v-3a2 2 0 0 1 2-2h3\" />"
+    ],
+    heavy: [0]
+  },
+  'chevron-down': {  // single-element disclosure chevron for the sidebar groups; CSS rotates it (so open/closed is one glyph with a transition, not two text glyphs swapped). Not data-aura-dir: the rotation is done in CSS per direction
+    el: [
+      "<path d=\"m6 9 6 6 6-6\" />"
+    ],
+    heavy: [0]
+  },
   // ── 2026-09-08, the last raw emoji left in a rendered surface ────────────
   // Twelve more real Lucide v0.469.0 icons, geometry fetched verbatim from
   // unpkg.com/lucide-static and never hand-drawn -- the same rule the six

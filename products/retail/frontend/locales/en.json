@@ -2609,5 +2609,16 @@
   "Save the group first, then add its options and the items it is used on.": "Save the group first, then add its options and the items it is used on.",
   "Saved.": "Saved.",
   "No item matches.": "No item matches.",
-  "Extras (options on items)": "Extras (options on items)"
+  "Extras (options on items)": "Extras (options on items)",
+  "Full screen (Ctrl+Shift+F)": "Full screen (Ctrl+Shift+F)",
+  "Exit full screen (Ctrl+Shift+F)": "Exit full screen (Ctrl+Shift+F)",
+  "Full screen": "Full screen",
+  "Minimise": "Minimise",
+  "Close Aura Retail": "Close Aura Retail",
+  "Close Aura Retail?": "Close Aura Retail?",
+  "The program will close on this computer. Sales already saved are kept.": "The program will close on this computer. Sales already saved are kept.",
+  "Collapse menu": "Collapse menu",
+  "Expand menu": "Expand menu",
+  "Could not change full screen.": "Could not change full screen.",
+  "Could not close Aura Retail.": "Could not close Aura Retail."
 }

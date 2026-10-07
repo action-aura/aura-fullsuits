@@ -275,12 +275,16 @@ async function testHeaderAIButtonMutationIsCaught() {
   // longer adjacent. Re-anchored to stop right after .sub-header-right's own
   // closing </div>, which is still unique in the file and still sits
   // immediately after the theme button either way.
+  // Anchor re-stated a THIRD time, 2026-10-07: the full-screen button now sits
+  // between the theme button and .sub-header-right's closing </div>, so the
+  // two are no longer adjacent. The anchor is now the theme button's own line
+  // alone and the mutant still injects the same duplicate header AI button
+  // right after it -- an ANCHOR update, not an assertion change; the check
+  // below still has to catch exactly the same mutant.
   const mutated = mutate(SHELL_SRC, [[
+    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>`,
     `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
-          </div>`,
-    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
-            <button class="sub-header-btn" onclick="SubAI.open('${'${systemId}'}')" title="AI Assistant">🤖</button>
-          </div>`,
+            <button class="sub-header-btn" onclick="SubAI.open('${'${systemId}'}')" title="AI Assistant">🤖</button>`,
   ]]);
   const msg = await provesMutation(
     'the "exactly one AI button in the shell" check survived a mutant that re-adds the header AI button',

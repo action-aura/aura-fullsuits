@@ -24,7 +24,8 @@
  *      capabilities FAIL OPEN to the dashboard.
  *   5. LOW: the phone More sheet offers "License" only to the population
  *      that also sees the desktop gear (never to a cashier).
- *   6. LOW: the collapsed-group chevron points LEFT in Arabic/RTL.
+ *   6. LOW: the collapsed-group chevron points LEFT in Arabic/RTL (now a
+ *      CSS rotation of one chevron-down SVG -- see testChevronMirrorsInArabic).
  *
  * What this cannot catch: anything that needs real layout (the gear menu's
  * placement, the header status being painted, the 44px touch floor, the rail
@@ -41,6 +42,8 @@ const vm = require('vm');
 
 const SHELL_FILE = path.join(__dirname, '..', 'frontend', 'app-shell.js');
 const SHELL_SRC = fs.readFileSync(SHELL_FILE, 'utf8');
+const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
+const CSS_SRC = fs.readFileSync(CSS_FILE, 'utf8');
 
 const CASHIER_CAPS = ['retail.cash.close', 'retail.refund', 'retail.sell'];
 const MANAGER_CAPS = [...CASHIER_CAPS, 'retail.discount', 'retail.reports', 'retail.stock.adjust'];
@@ -260,14 +263,25 @@ function testMoreSheetLicenseGating(src) {
 
 // ── 6. chevron ───────────────────────────────────────────────────────────────
 
-function testChevronMirrorsInArabic(src) {
-  const ltr = appFor(src, { ...OWNER, opts: { dir: 'ltr', lang: 'en' } }).App;
-  const rtl = appFor(src, { ...OWNER, opts: { dir: 'rtl', lang: 'ar' } }).App;
-  assert.strictEqual(ltr._chevronGlyph(false), '▸', 'collapsed chevron in English must point right');
-  assert.strictEqual(rtl._chevronGlyph(false), '◂', 'collapsed chevron in Arabic must point LEFT');
-  assert.strictEqual(ltr._chevronGlyph(true), '▾');
-  assert.strictEqual(rtl._chevronGlyph(true), '▾', 'an open chevron points down in both directions');
-  console.log('PASS: chevron -- collapsed points right in EN and left in AR; open points down in both');
+// 2026-10-07: the chevron is no longer two text glyphs swapped by
+// _chevronGlyph (deleted). It is ONE chevron-down SVG that main.css rotates
+// by aria-expanded, so this check moved from "the JS returns the right
+// glyph" to "the stylesheet rotates it to the right side". What it still
+// catches: a closed group's chevron pointing the wrong way in Arabic (the
+// 2026-09 LOW this guarded). What it can no longer catch: the glyph the JS
+// writes (there is none) -- the real-browser probe measures the painted
+// rotation.
+function testChevronMirrorsInArabic(css) {
+  const closed = /button\.sub-nav-group-label\[aria-expanded="false"\]\s+\.sub-nav-group-chevron\s*\{\s*transform:\s*rotate\((-?\d+)deg\)/.exec(css);
+  assert.ok(closed, 'no closed-state rotation rule for the group chevron');
+  assert.strictEqual(closed[1], '-90', 'a collapsed chevron in English must point right (rotate -90deg from chevron-down)');
+  const rtl = /(?:html\[dir="rtl"\]|body\.rtl)\s+button\.sub-nav-group-label\[aria-expanded="false"\]\s+\.sub-nav-group-chevron\s*(?:,[^{]*)?\{\s*transform:\s*rotate\((-?\d+)deg\)/.exec(css);
+  assert.ok(rtl, 'no RTL override for the closed chevron');
+  assert.strictEqual(rtl[1], '90', 'a collapsed chevron in Arabic must point LEFT (rotate 90deg)');
+  assert.ok(!/button\.sub-nav-group-label\[aria-expanded="true"\][^{]*chevron[^{]*\{[^}]*rotate/.test(css),
+    'an open chevron must not be rotated: it points down in both directions');
+  assert.ok(/AuraIcons\.render\('chevron-down'/.test(SHELL_SRC), 'the group header no longer renders the chevron-down icon');
+  console.log('PASS: chevron -- collapsed rotates to point right in EN and left in AR; open stays down');
 }
 
 // ── 7. rendered header before the first poll ─────────────────────────────────
@@ -306,7 +320,7 @@ async function run(name, fn) {
   await run('logo goes to the till for a cashier only', () => testLogoGoesToTillForCashierOnly(SHELL_SRC));
   await run('phone Home tab', () => testPhoneHomeTab(SHELL_SRC));
   await run('More sheet License gating', () => testMoreSheetLicenseGating(SHELL_SRC));
-  await run('chevron mirrors in Arabic', () => testChevronMirrorsInArabic(SHELL_SRC));
+  await run('chevron mirrors in Arabic', () => testChevronMirrorsInArabic(CSS_SRC));
   await run('header neutral before the first poll', () => testHeaderNeutralBeforePoll(SHELL_SRC));
 
   await run('M1: FAILED_PERMANENT dropped from the failed count => classifier RED', async () => {
@@ -346,9 +360,9 @@ async function run(name, fn) {
     return provesMutation('M5 License for a cashier', b, testMoreSheetLicenseGating);
   });
   await run('M6: chevron never mirrors => RED', async () => {
-    const b = mutateSource(SHELL_SRC,
-      "return rtl ? '\\u25C2' : '\\u25B8';",
-      "return '\\u25B8';");
+    const b = mutateSource(CSS_SRC,
+      'body.rtl button.sub-nav-group-label[aria-expanded="false"] .sub-nav-group-chevron { transform: rotate(90deg); }',
+      'body.rtl button.sub-nav-group-label[aria-expanded="false"] .sub-nav-group-chevron { transform: rotate(-90deg); }');
     return provesMutation('M6 chevron does not mirror', b, testChevronMirrorsInArabic);
   });
   await run('M7: neutral state removed (unknown before the first poll) => RED', async () => {

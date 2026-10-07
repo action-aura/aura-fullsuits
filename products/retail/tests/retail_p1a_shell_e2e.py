@@ -346,6 +346,37 @@ def human_click(page, sel: str, label: str | None = None, text: str | None = Non
     return p
 
 
+# Sidebar groups open INDEPENDENTLY since 2026-10-07 (SubsystemApp._openSidebarGroups
+# is a Set; _toggleSidebarGroup FLIPS exactly one key). The helpers below put the
+# sidebar into a KNOWN state first, because a group may already be open from the
+# default/seeded state and a toggle on it would CLOSE it. They go through the
+# product's own toggle, so the stored preference stays consistent with the DOM.
+def open_groups(page) -> list[str]:
+    return page.evaluate("() => [...(SubsystemApp._openSidebarGroups || [])]")
+
+
+def close_all_groups(page) -> None:
+    page.evaluate(
+        "() => { for (const g of [...(SubsystemApp._openSidebarGroups || [])]) SubsystemApp._toggleSidebarGroup(g); }")
+    page.wait_for_timeout(60)
+    assert open_groups(page) == [], f"close_all_groups left {open_groups(page)} open"
+
+
+def only_group_open(page, key: str) -> None:
+    page.evaluate(
+        """(k) => { const S = SubsystemApp;
+          for (const g of [...(S._openSidebarGroups || [])]) if (g !== k) S._toggleSidebarGroup(g);
+          if (!S._openSidebarGroups.has(k)) S._toggleSidebarGroup(k); }""", key)
+    page.wait_for_timeout(60)
+    assert open_groups(page) == [key], f"only_group_open({key!r}) left {open_groups(page)}"
+
+
+def group_is_open(page, key: str) -> bool:
+    return page.evaluate(
+        "(k) => { const el = document.querySelector(`.sub-nav-group-items[data-group-items=\"${k}\"]`); "
+        "return el ? !el.hasAttribute('hidden') : null; }", key)
+
+
 OWNER_EMAIL = "p1a-owner@example.test"
 OWNER_PASSWORD = "P1aOwner123!"
 
@@ -465,9 +496,17 @@ def main() -> int:
                 )
                 assert len(keys) >= 5, f"only {len(keys)} group headers found ({lang_tag}) -- expected at least 5"
                 vp = owner_page.viewport_size
+                # Groups open independently now (2026-10-07), so "every group
+                # open" is measured ONE AT A TIME, as before: start from all
+                # closed, REAL-click a header open, measure, REAL-click it shut.
+                # Without the reset a group left open by the previous run (the
+                # default/stored set) would be toggled CLOSED by the click and
+                # the measurement would be of a different layout.
+                close_all_groups(owner_page)
                 for k in keys:
                     human_click(owner_page, f'button[data-group-toggle="{k}"]', f"[{lang_tag}] group header {k}")
                     owner_page.wait_for_timeout(200)
+                    assert open_groups(owner_page) == [k], f"[{lang_tag}] clicking {k} left {open_groups(owner_page)} open"
                     result = owner_page.evaluate(
                         """() => {
                           const out = [];
@@ -500,6 +539,8 @@ def main() -> int:
                             f"container, which can be shorter than the page even when the header's Y "
                             f"coordinate looks fine)"
                         )
+                    human_click(owner_page, f'button[data-group-toggle="{k}"]', f"[{lang_tag}] close group header {k}")
+                    owner_page.wait_for_timeout(120)
                 owner_page.screenshot(path=str(shots / f"01_owner_sidebar_1366x768_{lang_tag}.png"), full_page=False)
 
             def owner_headers_hit_test_en():
@@ -531,46 +572,87 @@ def main() -> int:
             check("1366x768: every owner group header is genuinely visible (elementFromPoint) for every group open (AR)", owner_headers_hit_test_ar)
 
             # ================================================================
-            # 1c-bis -- the accordion is genuinely one-open-at-a-time: opening
-            #      group B must hide group A's items, on the REAL rendered
-            #      sidebar (mut.py's `one_open` mutation survived the old
-            #      5-check suite here at 5/5 -- this is the check that closes
-            #      that gap).
+            # 1c-bis -- sidebar groups open INDEPENDENTLY (REQUIREMENT CHANGED
+            #      2026-10-07; this replaces "only one sidebar group is open at
+            #      a time").
+            #
+            #      What the OLD check guarded: the accordion -- opening group B
+            #      had to hide group A's items -- because every open group
+            #      stacked and pushed later headers off a 768px screen (Money's
+            #      header at y>768). It was the check that closed the gap mut.py's
+            #      `one_open` mutation slipped through.
+            #
+            #      Why it changed: the owner said the menu was "not smooth when
+            #      working with it" -- the accordion closed the group they had
+            #      JUST been using the moment they peeked at another one. Groups
+            #      are independent now, and scrolling (plus the 40px rows / 30px
+            #      headers) carries the height budget instead.
+            #
+            #      What the NEW checks catch: (1) any code path that makes
+            #      opening/closing one group touch another (the accordion coming
+            #      back, in EITHER direction -- opening B must not close A, and
+            #      closing B must not close A); (2) the open SET not surviving a
+            #      reload (the preference saved/loaded as one value again, or
+            #      not saved at all). Both go through REAL header clicks.
             # ================================================================
-            def one_group_open_at_a_time():
+            def groups_open_independently():
                 owner_page.evaluate("() => SubsystemApp._navigate('dashboard')")
                 owner_page.wait_for_timeout(200)
                 keys = owner_page.evaluate(
                     "() => [...document.querySelectorAll('button.sub-nav-group-label')].map(b => b.dataset.groupToggle)"
                 )
-                assert len(keys) >= 2, f"only {len(keys)} group headers found -- need at least 2 to prove exclusivity"
+                assert len(keys) >= 2, f"only {len(keys)} group headers found -- need at least 2 to prove independence"
                 key_a, key_b = keys[0], keys[1]
+                close_all_groups(owner_page)
 
                 human_click(owner_page, f'button[data-group-toggle="{key_a}"]', f"group header {key_a}")
                 owner_page.wait_for_timeout(200)
-                a_open_after_a = owner_page.evaluate(
-                    "(k) => { const el = document.querySelector(`.sub-nav-group-items[data-group-items=\"${k}\"]`); "
-                    "return el ? !el.hasAttribute('hidden') : null; }", key_a
-                )
-                assert a_open_after_a, f"group '{key_a}' did not open on its own click"
+                assert group_is_open(owner_page, key_a), f"group '{key_a}' did not open on its own click"
 
                 human_click(owner_page, f'button[data-group-toggle="{key_b}"]', f"group header {key_b}")
                 owner_page.wait_for_timeout(200)
-                a_open_after_b, b_open_after_b = owner_page.evaluate(
-                    "(ks) => { const [ka, kb] = ks; "
-                    "const ea = document.querySelector(`.sub-nav-group-items[data-group-items=\"${ka}\"]`); "
-                    "const eb = document.querySelector(`.sub-nav-group-items[data-group-items=\"${kb}\"]`); "
-                    "return [ea ? !ea.hasAttribute('hidden') : null, eb ? !eb.hasAttribute('hidden') : null]; }",
-                    [key_a, key_b],
+                assert group_is_open(owner_page, key_b), f"group '{key_b}' did not open on its own click"
+                assert group_is_open(owner_page, key_a), (
+                    f"group '{key_a}' was CLOSED by opening '{key_b}' -- the sidebar is an accordion again "
+                    f"(owner asked for independent groups on 2026-10-07)"
                 )
-                assert b_open_after_b, f"group '{key_b}' did not open on its own click"
-                assert not a_open_after_b, (
-                    f"group '{key_a}' is STILL open after '{key_b}' was clicked -- the sidebar allows more "
-                    f"than one group open at a time, which is exactly how Money's header sat past y=768 "
-                    f"in the pre-fix measurement (every group's items stacked and pushed later ones down)"
+                assert owner_page.get_attribute(f'button[data-group-toggle="{key_a}"]', "aria-expanded") == "true", (
+                    f"group '{key_a}' items are visible but its header says aria-expanded != true"
                 )
 
-            check("only one sidebar group is open at a time", one_group_open_at_a_time)
+                human_click(owner_page, f'button[data-group-toggle="{key_b}"]', f"group header {key_b} (close)")
+                owner_page.wait_for_timeout(200)
+                assert not group_is_open(owner_page, key_b), f"group '{key_b}' did not close on its own click"
+                assert group_is_open(owner_page, key_a), (
+                    f"group '{key_a}' was closed by CLOSING '{key_b}' -- closing one group must touch only that group"
+                )
+                assert owner_page.get_attribute(f'button[data-group-toggle="{key_b}"]', "aria-expanded") == "false", (
+                    f"group '{key_b}' is hidden but its header does not say aria-expanded=false"
+                )
+
+            check("opening group B leaves group A open, and closing B leaves A open (real clicks, both directions)",
+                  groups_open_independently)
+
+            def open_groups_survive_reload():
+                with session(browser, backend.base_url, VIEWPORT) as pg:
+                    keys = pg.evaluate(
+                        "() => [...document.querySelectorAll('button.sub-nav-group-label')].map(b => b.dataset.groupToggle)")
+                    assert len(keys) >= 3, f"need 3 groups to prove a SET (not one key) is remembered, found {keys}"
+                    key_a, key_b, key_c = keys[0], keys[1], keys[2]
+                    close_all_groups(pg)
+                    human_click(pg, f'button[data-group-toggle="{key_a}"]', f"group header {key_a}")
+                    human_click(pg, f'button[data-group-toggle="{key_c}"]', f"group header {key_c}")
+                    pg.wait_for_timeout(150)
+                    assert sorted(open_groups(pg)) == sorted([key_a, key_c]), f"precondition: open set is {open_groups(pg)}"
+                    pg.reload(wait_until="domcontentloaded")
+                    pg.locator("#sub-header-section").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+                    pg.wait_for_timeout(400)
+                    assert group_is_open(pg, key_a) and group_is_open(pg, key_c), (
+                        f"after a reload the open set is {open_groups(pg)}, expected both '{key_a}' and '{key_c}' kept")
+                    assert not group_is_open(pg, key_b), f"after a reload the never-opened group '{key_b}' is open"
+
+            check("a reload keeps the SET of open groups (two groups opened, both still open, a third still shut)",
+                  open_groups_survive_reload)
 
             # ================================================================
             # M2 (fix round) -- keyboard menu nav on the REAL dropdown
@@ -591,7 +673,7 @@ def main() -> int:
                 assert menu.count() == 1 and menu.is_visible(), f"[{label}] menu #{menu_id} did not open on click"
 
                 item_count = owner_page.evaluate(
-                    "(id) => document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled])').length",
+                    "(id) => document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled]):not([hidden])').length",
                     menu_id,
                 )
                 assert item_count >= 2, f"[{label}] only {item_count} enabled item(s) -- need >=2 to prove ArrowDown/Up movement"
@@ -602,14 +684,14 @@ def main() -> int:
                 owner_page.keyboard.press("ArrowDown")
                 owner_page.wait_for_timeout(80)
                 first_focused = owner_page.evaluate(
-                    "(id) => { const items = [...document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled])')]; "
+                    "(id) => { const items = [...document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled]):not([hidden])')]; "
                     "return items.indexOf(document.activeElement); }",
                     menu_id,
                 )
                 owner_page.keyboard.press("ArrowDown")
                 owner_page.wait_for_timeout(80)
                 second_focused = owner_page.evaluate(
-                    "(id) => { const items = [...document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled])')]; "
+                    "(id) => { const items = [...document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled]):not([hidden])')]; "
                     "return items.indexOf(document.activeElement); }",
                     menu_id,
                 )
@@ -622,7 +704,7 @@ def main() -> int:
                 owner_page.keyboard.press("ArrowUp")
                 owner_page.wait_for_timeout(80)
                 back_to_first = owner_page.evaluate(
-                    "(id) => { const items = [...document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled])')]; "
+                    "(id) => { const items = [...document.getElementById(id).querySelectorAll('.sub-identity-menu-item:not([disabled]):not([hidden])')]; "
                     "return items.indexOf(document.activeElement); }",
                     menu_id,
                 )
@@ -794,6 +876,18 @@ def main() -> int:
                     f"the sell-only cashier landed on {cashier_section!r} at shell start, expected "
                     f"'pos' (the till) -- P1a item 2's home routing"
                 )
+                # WAIT for the till to paint before counting it (2026-10-07: this
+                # failed on ~1 run in 3 -- the shell reports currentSection 'pos' a
+                # beat before the till's DOM exists, and the count below ran
+                # instantly). A real wait-for-condition on the same selectors the
+                # assertion uses; the assertion itself is unchanged, so a till that
+                # NEVER paints still fails with the same message after 15s.
+                try:
+                    cashier_page.wait_for_selector(
+                        "#pos-cart, .pos-grid, #ret-pos-root, [id^='pos-'], [class^='pos-']",
+                        state="attached", timeout=DEFAULT_WAIT_MS)
+                except Exception:  # noqa: BLE001 -- the assertion below reports it
+                    pass
                 assert cashier_page.locator("#pos-cart, .pos-grid, #ret-pos-root").count() >= 1 or \
                     cashier_page.locator("[id^='pos-'], [class^='pos-']").count() >= 1, (
                     "SubsystemApp.currentSection reports 'pos' but no recognisable till DOM landed"
@@ -1081,9 +1175,14 @@ def main() -> int:
                 with session(browser, BASE, VIEWPORT, lang=lang, coarse=True) as pg:
                     keys = pg.evaluate("() => [...document.querySelectorAll('button.sub-nav-group-label')].map(b => b.dataset.groupToggle)")
                     assert len(keys) >= 5, f"[coarse {lang}] only {len(keys)} group headers"
+                    # One group at a time, as before the groups became independent
+                    # (2026-10-07): start from all closed, REAL-click one open,
+                    # measure, REAL-click it shut (see the header-hit check above).
+                    close_all_groups(pg)
                     for k in keys:
                         human_click(pg, f'button[data-group-toggle="{k}"]', f"[coarse {lang}] header {k}")
                         pg.wait_for_timeout(200)
+                        assert open_groups(pg) == [k], f"[coarse {lang}] clicking {k} left {open_groups(pg)} open"
                         for j in keys:
                             assert_reachable(pg, f'button[data-group-toggle="{j}"]', f"[coarse {lang}, '{k}' open] header {j}")
                         heights = pg.evaluate(
@@ -1107,6 +1206,8 @@ def main() -> int:
                         )
                         assert slack >= 0, f"[coarse {lang}, '{k}' open] the rail overflows by {-slack}px, so a header can be clipped"
                         print(f"       (report only) [coarse {lang}, '{k}' open] header {k} is {hb:.1f}px tall, nav rows min {min(heights):.1f}px, rail slack {slack}px")
+                        human_click(pg, f'button[data-group-toggle="{k}"]', f"[coarse {lang}] close header {k}")
+                        pg.wait_for_timeout(120)
                     assert_reachable(pg, "#sub-settings-gear-btn", f"[coarse {lang}] settings gear")
                     if pg.locator("#sub-ai-sidebar-btn").count():
                         assert_reachable(pg, "#sub-ai-sidebar-btn", f"[coarse {lang}] AI button")
@@ -1118,42 +1219,268 @@ def main() -> int:
                 check(f"touch screen 1366x768: gear menu opens fully on screen ({lg})",
                       lambda lg=lg: gear_menu_is_fully_on_screen(1366, 768, lg, coarse=True))
 
-            # ---- M5: with a MOUSE the rows are the 38px the height budget assumes (not 40) ----
+            # ---- M5: with a MOUSE the rows are the 40px the height budget assumes (not 44) ----
             def mouse_rows_are_38px(lang):
                 with session(browser, BASE, VIEWPORT, lang=lang) as pg:
                     keys = pg.evaluate("() => [...document.querySelectorAll('button.sub-nav-group-label')].map(b => b.dataset.groupToggle)")
                     for k in keys:
-                        pg.evaluate("(k) => SubsystemApp._toggleSidebarGroup(k)", k)
+                        only_group_open(pg, k)
                         pg.wait_for_timeout(120)
                         rows = pg.evaluate(
                             "(k) => [...document.querySelectorAll(`.sub-nav-group-items[data-group-items=\"${k}\"] .sub-nav-item`)]"
                             ".map(e => { const l = e.querySelector('.sub-nav-label');"
                             " return {sec: e.dataset.section, h: e.getBoundingClientRect().height,"
                             " lines: l ? Math.round(l.getBoundingClientRect().height / parseFloat(getComputedStyle(l).lineHeight || 19)) : 1,"
+                            " status: !!e.querySelector('.sub-nav-status'),"
                             " clipped: e.scrollHeight > e.clientHeight + 1}; })", k)
                         assert rows, f"[{lang}] group {k!r} has no rows"
-                        # A row whose LABEL fits on one line is the 38px this test guards (the
-                        # 40px icon line-height bug). A row whose translated label genuinely
+                        # PIN CHANGED 38 -> 40 (2026-10-07 left-menu redesign): the mouse row
+                        # is now deliberately 40px (the owner found 38px rows too tight to
+                        # hit; headers shrank to 30px and the sidebar grew to 264px to pay
+                        # for it, and groups scroll instead of fitting). 40 is the NEW
+                        # intended value, still BELOW the 44px coarse-pointer floor, so the
+                        # same two regressions stay catchable: a row inflated by the icon
+                        # line-height bug (40px glyph box, measured 44+) and a row that
+                        # fell back to the coarse floor on a mouse. It can no longer catch
+                        # a row drifting back to 38 by itself -- the 37.5..38.5 window
+                        # is gone on purpose -- only 39.5..40.5 passes.
+                        # A row whose LABEL fits on one line is the height this test guards (the
+                        # icon line-height bug). A row whose translated label genuinely
                         # needs a second line (Arabic 'Email Notifications' beside its status
-                        # word in a 219px sidebar) is allowed to be taller -- 'a longer
+                        # word in the sidebar) is allowed to be taller -- 'a longer
                         # translated label must still be able to wrap without clipping' is the
                         # designed behaviour in main.css -- but must not clip and must stay
                         # within one extra line. What this can no longer catch: a 40px
                         # regression on a row that ALSO wraps; the single-line rows in the
                         # same run still catch the regression itself.
-                        one = [r for r in rows if r["lines"] <= 1]
+                        # STATUS ROWS (Connected services) are TWO designed lines since
+                        # 2026-10-08 -- the name, then the status dot + word under it
+                        # (app-shell.js navItemHTML) -- because side by side they did not
+                        # fit. They are measured by their own rule below, not held to 40px.
+                        # What the 40px pin can no longer catch: a height regression that
+                        # hits ONLY status rows; status_rows_are_one_shape catches those.
+                        one = [r for r in rows if r["lines"] <= 1 and not r["status"]]
+                        status_rows = [r for r in rows if r["status"]]
+                        if status_rows:
+                            # 58 = the designed two-line row as MEASURED 2026-10-08 (57px:
+                            # 14px name line + 2px gap + 11px status line + 16px padding)
+                            # with 1px of rounding slack. A row that grows a third line or
+                            # inflates its padding goes past it.
+                            assert all(r["lines"] <= 1 and not r["clipped"] and r["h"] <= 58 for r in status_rows), (
+                                f"[{lang}, '{k}' open] a status row's name wraps, clips or grew past 58px: "
+                                f"{[(r['sec'], round(r['h'], 1), r['lines'], r['clipped']) for r in status_rows]}")
+                            hs = sorted({round(r["h"], 1) for r in status_rows})
+                            assert hs[-1] - hs[0] <= 1.0, f"[{lang}, '{k}' open] status rows differ in height: {hs}"
+                            if not one:
+                                continue
                         assert one, f"[{lang}, '{k}' open] no single-line rows to measure"
-                        assert all(37.5 <= r["h"] <= 38.5 for r in one), (
-                            f"[{lang}, '{k}' open] mouse rows must be 38px, measured {sorted(set(round(r['h'], 1) for r in one))}"
+                        assert all(39.5 <= r["h"] <= 40.5 for r in one), (
+                            f"[{lang}, '{k}' open] mouse rows must be 40px, measured {sorted(set(round(r['h'], 1) for r in one))}"
                         )
                         for r in rows:
                             if r["lines"] > 1:
-                                assert r["h"] <= 38 + 20 * (r["lines"] - 1) and not r["clipped"], (
+                                assert r["h"] <= 40 + 20 * (r["lines"] - 1) and not r["clipped"], (
                                     f"[{lang}, '{k}' open] wrapped row {r['sec']} is {r['h']:.0f}px / clipped={r['clipped']}")
 
             for lg in ("en", "ar"):
-                check(f"mouse 1366x768: every sidebar row is 38px tall in every group ({lg})",
+                check(f"mouse 1366x768: every sidebar row is 40px tall in every group ({lg})",
                       lambda lg=lg: mouse_rows_are_38px(lg))
+
+            # ---- 2026-10-07 menu redesign: no row or header wraps, at either screen size ----
+            # What this catches: a label that no longer fits on ONE line (a wider
+            # status word, a longer translation, a bigger font at the Large screen
+            # size, a narrower sidebar) -- the failure shows as a taller row that
+            # shoves every row below it, and the height budget quietly breaks.
+            # Lines are counted from the text's own client rects, not from a
+            # height-over-line-height guess. The last assertion is the hierarchy
+            # the redesign promised: a group header reads SMALLER than the rows
+            # beneath it, so the eye can tell a header from an item.
+            WRAP_JS = """() => {
+              const lines = (el) => {
+                const r = document.createRange(); r.selectNodeContents(el);
+                return new Set([...r.getClientRects()].filter(x => x.width > 0).map(x => Math.round(x.top))).size;
+              };
+              const rows = [...document.querySelectorAll('.sub-nav-item')].filter(e => e.offsetParent).map(e => {
+                const l = e.querySelector('.sub-nav-label') || e;
+                return { sec: e.dataset.section, h: e.getBoundingClientRect().height, lines: lines(l),
+                         status: !!e.querySelector('.sub-nav-status'),
+                         font: parseFloat(getComputedStyle(l).fontSize), text: l.textContent.trim(),
+                         full: e.innerText.replace(/\s+/g, ' ').trim(), rowW: Math.round(e.getBoundingClientRect().width),
+                         labelW: Math.round(l.getBoundingClientRect().width) };
+              });
+              const heads = [...document.querySelectorAll('button.sub-nav-group-label')].map(b => {
+                const t = b.querySelector('.sub-nav-group-label-text') || b;
+                return { key: b.dataset.groupToggle, h: b.getBoundingClientRect().height, lines: lines(t),
+                         font: parseFloat(getComputedStyle(t).fontSize), text: t.textContent.trim() };
+              });
+              return { rows, heads, sidebarW: document.getElementById('sub-sidebar').getBoundingClientRect().width };
+            }"""
+
+            def no_row_or_header_wraps(vp, lang, size):
+                with session(browser, backend.base_url, vp, lang=lang) as pg:
+                    pg.evaluate("(s) => AuraUiScale.set(s)", size)
+                    pg.wait_for_timeout(300)
+                    assert pg.evaluate("() => AuraUiScale.get()") == size, f"the {size!r} screen size did not take"
+                    pg.evaluate(
+                        "() => { const S = SubsystemApp; for (const g of [...document.querySelectorAll('button.sub-nav-group-label')]"
+                        ".map(b => b.dataset.groupToggle)) if (!S._openSidebarGroups.has(g)) S._toggleSidebarGroup(g); }")
+                    pg.wait_for_timeout(200)
+                    m = pg.evaluate(WRAP_JS)
+                    tag = f"[{vp['width']}x{vp['height']} {lang} {size}, sidebar {m['sidebarW']:.0f}px]"
+                    assert len(m["rows"]) >= 10 and len(m["heads"]) >= 5, f"{tag} measured too little: {len(m['rows'])} rows, {len(m['heads'])} headers"
+                    wrapped = [r for r in m["rows"] if r["lines"] > 1]
+                    assert not wrapped, f"{tag} rows wrap to 2+ lines: " + "; ".join(
+                        f"{r['sec']} {r['full']!r} {r['lines']} lines, row {r['h']:.0f}px, row width {r['rowW']}px, label box {r['labelW']}px" for r in wrapped)
+                    wrapped_h = [h for h in m["heads"] if h["lines"] > 1]
+                    assert not wrapped_h, f"{tag} headers wrap to 2+ lines: " + "; ".join(
+                        f"{h['key']} {h['text']!r} {h['lines']} lines" for h in wrapped_h)
+                    # Status rows (Connected services) are two DESIGNED lines -- name,
+                    # then status under it -- so they form their own height class.
+                    # Each class must be uniform; this no longer requires a status row
+                    # to match an ordinary row, which is the point of the 2026-10-08
+                    # change. A status row whose NAME wraps is still caught above.
+                    for cls, rs in (("ordinary", [r for r in m["rows"] if not r["status"]]),
+                                    ("status", [r for r in m["rows"] if r["status"]])):
+                        if not rs:
+                            continue
+                        heights = sorted({round(r["h"], 1) for r in rs})
+                        assert heights[-1] - heights[0] <= 1.0, f"{tag} {cls} row heights differ although none wraps: {heights}"
+                    row_font = min(r["font"] for r in m["rows"])
+                    head_font = max(h["font"] for h in m["heads"])
+                    assert head_font < row_font, (
+                        f"{tag} a group header ({head_font}px) is not smaller than the smallest row label ({row_font}px) -- "
+                        f"headers no longer read as headers")
+
+            for vp in ({"width": 1366, "height": 768}, {"width": 1920, "height": 1080}):
+                for lg in ("en", "ar"):
+                    for size in ("normal", "large"):
+                        check(f"left menu {vp['width']}x{vp['height']} {lg} {size}: no row or header wraps, header text smaller than row text",
+                              lambda vp=vp, lg=lg, size=size: no_row_or_header_wraps(vp, lg, size))
+
+            # ---- 2026-10-07: NOTHING is permanently unreachable once groups scroll ----
+            # The strict "every header visible without scrolling" checks above are the
+            # P1a height budget and are kept as they were. This one is the weaker,
+            # separate guarantee the independent-groups design leans on: with ANY single
+            # group open, the nav scrolls, and every header and every row of the open
+            # group can be brought into view and is then really clickable (not covered
+            # by the footer block, not clipped). It cannot catch a header that needs a
+            # scroll to be seen -- that is what the strict checks are for.
+            def everything_reachable_by_scrolling(lang):
+                with session(browser, backend.base_url, VIEWPORT, lang=lang) as pg:
+                    keys = pg.evaluate(
+                        "() => [...document.querySelectorAll('button.sub-nav-group-label')].map(b => b.dataset.groupToggle)")
+                    for k in keys:
+                        only_group_open(pg, k)
+                        pg.wait_for_timeout(80)
+                        targets = [f'button[data-group-toggle="{j}"]' for j in keys] + [
+                            f'.sub-nav-group-items[data-group-items="{k}"] .sub-nav-item:nth-of-type({i + 1})'
+                            for i in range(pg.locator(f'.sub-nav-group-items[data-group-items="{k}"] .sub-nav-item').count())]
+                        for sel in targets:
+                            pg.evaluate("(s) => { const e = document.querySelector(s); if (e) e.scrollIntoView({ block: 'nearest' }); }", sel)
+                            pg.wait_for_timeout(30)
+                            assert_reachable(pg, sel, f"[{lang}, '{k}' open] {sel}")
+
+            for lg in ("en", "ar"):
+                check(f"left menu 1366x768 {lg}: with any one group open, every header and every row of it is reachable by scrolling the menu",
+                      lambda lg=lg: everything_reachable_by_scrolling(lg))
+
+            # ---- 2026-10-07: the collapse-menu button (rail on Today, survives reload, Expand, back to auto) ----
+            def collapse_button_contract():
+                with session(browser, backend.base_url, VIEWPORT) as pg:
+                    pg.evaluate("() => SubsystemApp._navigate('dashboard')")
+                    pg.wait_for_timeout(300)
+
+                    def is_rail():
+                        return pg.evaluate("() => document.getElementById('sub-sidebar').classList.contains('sub-sidebar-rail')")
+
+                    def stored():
+                        return pg.evaluate(
+                            "() => { const k = Object.keys(localStorage).find(x => x.startsWith('aura_sidebar_mode_')); return k ? localStorage.getItem(k) : null; }")
+
+                    def reload():
+                        pg.reload(wait_until="domcontentloaded")
+                        pg.locator("#sub-header-section").wait_for(state="visible", timeout=DEFAULT_WAIT_MS)
+                        pg.wait_for_timeout(400)
+
+                    # Auto: the full menu on Today, the rail only on the till.
+                    assert not is_rail() and stored() is None, f"precondition: Today starts as the full menu (rail={is_rail()}, stored={stored()!r})"
+                    assert pg.get_attribute("#sub-sidebar-collapse-btn", "aria-label") == "Collapse menu"
+                    human_click(pg, "#sub-sidebar-collapse-btn", "collapse menu button")
+                    pg.wait_for_timeout(200)
+                    assert is_rail(), "clicking Collapse on Today did not make the sidebar a rail"
+                    assert stored() == "rail", f"the choice was not stored: {stored()!r}"
+                    assert pg.get_attribute("#sub-sidebar-collapse-btn", "aria-label") == "Expand menu"
+                    reload()
+                    assert is_rail(), "the collapsed menu did not SURVIVE a reload (the stored choice is not read back)"
+                    human_click(pg, "#sub-sidebar-collapse-btn", "expand menu button")
+                    pg.wait_for_timeout(200)
+                    assert not is_rail(), "clicking Expand did not restore the full menu"
+                    assert stored() == "full", f"Expand must store an explicit 'full', got {stored()!r}"
+                    pg.evaluate("() => SubsystemApp._navigate('pos')")
+                    pg.wait_for_timeout(300)
+                    assert not is_rail(), "an explicit 'full' choice must beat the till's automatic rail"
+                    # Removing the stored choice returns to AUTO: full on Today, rail on the till.
+                    pg.evaluate("() => { const k = Object.keys(localStorage).find(x => x.startsWith('aura_sidebar_mode_')); localStorage.removeItem(k); }")
+                    pg.evaluate("() => SubsystemApp._navigate('dashboard')")
+                    reload()
+                    assert not is_rail(), "with no stored choice Today must be the full menu"
+                    pg.evaluate("() => SubsystemApp._navigate('pos')")
+                    pg.wait_for_timeout(300)
+                    assert is_rail(), "with no stored choice the till must be the rail (the automatic behaviour)"
+
+            check("collapse menu button: rail on Today, survives reload, Expand restores, no stored choice = auto (rail only on the till)",
+                  collapse_button_contract)
+
+            # ---- 2026-10-07: Ctrl+Shift+F toggles full screen in a plain browser ----
+            def fullscreen_shortcut_browser_path():
+                with session(browser, backend.base_url, VIEWPORT) as pg:
+                    pg.evaluate(
+                        "() => { window.__fsCalls = 0; document.documentElement.requestFullscreen = () => { window.__fsCalls++; return Promise.resolve(); }; }")
+
+                    def label():
+                        return pg.get_attribute("#sub-fullscreen-btn", "aria-label")
+
+                    assert label().startswith("Full screen"), f"precondition: the button offers 'Full screen', got {label()!r}"
+                    # Wrong chords must NOT toggle (a chord that is too greedy would eat Ctrl+F).
+                    pg.keyboard.press("Control+F")
+                    pg.keyboard.press("Shift+F")
+                    pg.wait_for_timeout(150)
+                    assert pg.evaluate("() => window.__fsCalls") == 0, "Ctrl+F or Shift+F alone called requestFullscreen"
+                    pg.keyboard.press("Control+Shift+F")
+                    pg.wait_for_timeout(300)
+                    calls = pg.evaluate("() => window.__fsCalls")
+                    assert calls == 1, f"Ctrl+Shift+F called requestFullscreen {calls} time(s), expected exactly 1"
+                    assert label().startswith("Exit full screen"), f"the button did not flip to 'Exit full screen': {label()!r}"
+                    assert pg.get_attribute("#sub-fullscreen-btn", "title") == label(), "title and aria-label disagree"
+
+            check("Ctrl+Shift+F in a plain browser calls requestFullscreen exactly once and the button flips to 'Exit full screen'",
+                  fullscreen_shortcut_browser_path)
+
+            # ---- 2026-10-08: native Minimise/Close rows survive a LATE pywebview bridge ----
+            # pywebview fills window.pywebview.api only after 'pywebviewready',
+            # which can land after the first render. The rows used to be decided
+            # at render time, so a late bridge meant they never appeared.
+            def native_rows_follow_late_bridge():
+                with session(browser, backend.base_url, VIEWPORT) as pg:
+                    rows = "[...document.querySelectorAll('#sub-identity-menu [data-action=\"minimize-app\"], #sub-identity-menu [data-action=\"close-app\"]')]"
+                    state = pg.evaluate("() => " + rows + ".map(e => e.hidden)")
+                    assert state == [True, True], f"with no pywebview both native rows must exist and be hidden, got {state}"
+                    pg.evaluate(
+                        "() => { window.__min = 0; window.pywebview = { api: { toggle_fullscreen() {}, "
+                        "window_mode() { return { native: true, fullscreen: true }; }, "
+                        "minimize_app() { window.__min = (window.__min || 0) + 1; }, quit_app() {} } }; "
+                        "window.dispatchEvent(new Event('pywebviewready')); }")
+                    pg.wait_for_timeout(300)
+                    state = pg.evaluate("() => " + rows + ".map(e => e.hidden)")
+                    assert state == [False, False], f"after pywebviewready both native rows must be visible, got hidden={state}"
+                    pg.click("#sub-identity-chip-btn")
+                    pg.locator('#sub-identity-menu [data-action="minimize-app"]').click()
+                    pg.wait_for_timeout(200)
+                    n = pg.evaluate("() => window.__min")
+                    assert n == 1, f"clicking Minimise called minimize_app {n} time(s), expected exactly 1"
+
+            check("native Minimise/Close rows are hidden without pywebview and appear after a late 'pywebviewready'; Minimise calls the bridge once",
+                  native_rows_follow_late_bridge)
 
             # ---- HIGH 4: the rail scrolls the active item into view (it STARTS out of view) ----
             def rail_scrolls_active_item_into_view():
@@ -1170,7 +1497,7 @@ def main() -> int:
                         }"""
                     )
                     assert target, "no group with items"
-                    pg.evaluate("(k) => SubsystemApp._toggleSidebarGroup(k)", target["key"])
+                    only_group_open(pg, target["key"])
                     pg.evaluate("() => { const r = document.getElementById('sub-nav'); r.scrollTop = 0; }")
                     pg.wait_for_timeout(200)
                     sel = f'.sub-nav-item[data-section="{target["section"]}"]'

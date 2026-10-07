@@ -2609,5 +2609,16 @@
   "Save the group first, then add its options and the items it is used on.": "احفظ المجموعة أولًا، ثم أضف خياراتها والأصناف التي تُستخدم عليها.",
   "Saved.": "تم الحفظ.",
   "No item matches.": "لا يوجد صنف مطابق.",
-  "Extras (options on items)": "الإضافات (خيارات على الأصناف)"
+  "Extras (options on items)": "الإضافات (خيارات على الأصناف)",
+  "Full screen (Ctrl+Shift+F)": "ملء الشاشة (Ctrl+Shift+F)",
+  "Exit full screen (Ctrl+Shift+F)": "الخروج من ملء الشاشة (Ctrl+Shift+F)",
+  "Full screen": "ملء الشاشة",
+  "Minimise": "تصغير",
+  "Close Aura Retail": "إغلاق Aura Retail",
+  "Close Aura Retail?": "إغلاق Aura Retail؟",
+  "The program will close on this computer. Sales already saved are kept.": "سيُغلق البرنامج على هذا الجهاز. المبيعات المحفوظة تبقى كما هي.",
+  "Collapse menu": "طي القائمة",
+  "Expand menu": "توسيع القائمة",
+  "Could not change full screen.": "تعذّر تغيير وضع ملء الشاشة.",
+  "Could not close Aura Retail.": "تعذّر إغلاق Aura Retail."
 }
