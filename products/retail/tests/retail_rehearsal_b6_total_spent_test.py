@@ -14,7 +14,7 @@ WHAT IS PROVEN HERE
      figure (the actual defect), and so does a synced return.
   3. Applying the same events twice does not double it (a cache is replaced, never added to).
   4. No row_version bump and no customer outbox event, on either path.
-  5. A customer with no sale rows keeps an imported/hand-set figure.
+  5. A customer with no sale rows keeps an imported figure (its baseline, v49/B6b).
   6. The sync twin of the SQL equals the core one (the W2a/W4a twin pattern).
 
 Run (one pytest process per file):
@@ -202,13 +202,22 @@ def test_refresh_never_bumps_row_version_or_queues_a_customer_event():
 
 
 def test_a_customer_with_no_sales_keeps_an_imported_figure():
+    # B6b (schema v49) UPDATE: the "no sale row keeps whatever the column holds" exception
+    # this test used to pin is GONE -- it lasted only until the first sale. An imported
+    # history now lives in `total_spent_baseline` and the cache is baseline + derived, so a
+    # no-sales customer keeps the figure BECAUSE it is the baseline. What this can no
+    # longer catch: a refresh preserving a bare `total_spent` that has no baseline behind
+    # it (that is now, deliberately, replaced by 0); the baseline half is pinned by
+    # retail_rehearsal_b6b_baseline_test.py, including the first-sale case.
     client, cid, pid, cust = _make_shop()
     conn = get_retail_conn()
-    conn.execute("UPDATE customers SET total_spent=2400 WHERE id=?", (cust,))
+    conn.execute("UPDATE customers SET total_spent_baseline=2400 WHERE id=?", (cust,))
     conn.commit()
     customer_spend.refresh_total_spent(conn, cid, cust)
     conn.commit(); conn.close()
     assert _row(cid, cust)['total_spent'] == 2400.0
+    _sell(client, cust, pid)
+    assert _row(cid, cust)['total_spent'] == 2650.0
 
 
 def test_sync_twin_sql_equals_the_core_statement():

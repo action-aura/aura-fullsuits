@@ -1298,7 +1298,29 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     `_ensure_credit_schema` also adds it lazily; whichever runs first wins).
 #
 # Appended LAST and shape-gated. See `_migrate_add_loyalty_sync`.
-RETAIL_SCHEMA_VERSION = 48
+#
+# v49 (2026-10-07, REHEARSAL-1007 B6b -- HISTORY FROM A PREVIOUS SYSTEM SURVIVES THE FIRST
+# SALE; claimed in ROADMAP.md "retail schema v49"). B6 made `customers.total_spent` a cache
+# of this system's sales less refunds, and let a customer with NO sale row keep whatever the
+# column held. That only lasted until the first sale here: an imported "total spent 500"
+# was then replaced by the new sale alone (RED, measured on 005d0494: 500 became 250).
+#
+#   * `customers.total_spent_baseline` -- the part of the total THIS system's rows do not
+#     explain. The importer writes it (the figure the person typed IS the history before
+#     this system); the cache is baseline + MAX(0, sales - refunds), the MAX wrapping only
+#     the derived part so a refund bigger than what was sold here can never eat history.
+#     It syncs in the customer events (only when the payload carries the key).
+#   * for every customer existing at upgrade: baseline = MAX(0, total_spent - derived_now),
+#     derived_now being the exact figure `core.retail.customer_spend.DERIVED_SPEND_SQL`
+#     computes. Set ONLY in the step that adds the column, so a replay of the chain can
+#     never re-arm it over a baseline a later import changed.
+#
+# Known gap (recorded, not fixed): the baselines this step derives for customers that
+# already exist are local -- no customer event is queued for them, so another computer
+# learns an existing customer's history only when that customer is next imported/edited.
+#
+# Appended LAST and shape-gated. See `_migrate_add_total_spent_baseline`.
+RETAIL_SCHEMA_VERSION = 49
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -2470,6 +2492,48 @@ def _migrate_retail_schema(conn):
     # It reads `loyalty_ledger` (v27) and `sales` and nothing a step above may
     # still be changing. See the v48 comment on RETAIL_SCHEMA_VERSION.
     _migrate_add_loyalty_sync(conn)
+    # v48 -> v49 (a total spent brought from a previous system, B6b): appended LAST.
+    # It reads `customers`, `sales` and `returns` and nothing a step above may still
+    # be changing. See the v49 comment on RETAIL_SCHEMA_VERSION.
+    _migrate_add_total_spent_baseline(conn)
+
+
+def _migrate_add_total_spent_baseline(conn):
+    """One-time migration (schema v48 -> v49). See the v49 comment on
+    RETAIL_SCHEMA_VERSION for the why; this docstring is the mechanics.
+
+    Shape-gated (`PRAGMA table_info`), so the whole chain replaying is byte-identical.
+    THE BASELINE IS SET ONLY WHEN THE COLUMN IS JUST ADDED: once it exists a replay never
+    touches it, so a baseline a later import replaced cannot be re-derived over.
+
+    `derived_now` is `customer_spend.DERIVED_SPEND_SQL` itself (not a copy), so the split
+    between "explained here" and "history" uses the very figure the cache will use next.
+    A hand-built minimal fixture without `sales`/`returns` has nothing explained, so every
+    customer's whole total is history. Positional row access (this may run on a connection
+    without sqlite3.Row). Differences under a millionth are float noise, not history."""
+    live = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if 'customers' not in live:
+        return
+    cols = {row[1] for row in conn.execute('PRAGMA table_info("customers")').fetchall()}
+    if 'total_spent_baseline' in cols:
+        return
+    conn.execute('ALTER TABLE customers ADD COLUMN total_spent_baseline REAL DEFAULT 0')
+    if 'total_spent' not in cols:
+        return
+    from core.retail import customer_spend as _cs
+    has_ledgers = 'sales' in live and 'returns' in live
+    for company_id, customer_id, spent in conn.execute(
+            "SELECT company_id, id, COALESCE(total_spent, 0) FROM customers").fetchall():
+        derived = 0.0
+        if has_ledgers:
+            derived = conn.execute(
+                "SELECT " + _cs.DERIVED_SPEND_SQL,
+                (company_id, customer_id, company_id, customer_id)).fetchone()[0] or 0.0
+        history = round(spent - derived, 6)
+        if history > 0:
+            conn.execute("UPDATE customers SET total_spent_baseline = ? WHERE id = ?",
+                         (history, customer_id))
 
 
 def _migrate_add_loyalty_sync(conn):

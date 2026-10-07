@@ -2925,6 +2925,16 @@ class SyncService:
                 # none/0" would wipe terms the shop set here. The same
                 # row_version/LWW gate and delta list as every other column.
                 credit_cols = [c for c in ("credit_mode", "credit_limit") if c in p]
+                # REHEARSAL-1007 B6b (v49): `total_spent_baseline` -- the history a customer
+                # brought from a previous system -- travels the same way (only when the
+                # payload carries the key, under the same row_version/LWW gate and delta
+                # list). `total_spent` itself never travels: it is a cache the receiver
+                # re-derives right after this upsert. A device not yet migrated to v49 has
+                # no such column, so the key is skipped there rather than failing the page.
+                if "total_spent_baseline" in p and any(
+                        r[1] == "total_spent_baseline"
+                        for r in conn.execute('PRAGMA table_info("customers")').fetchall()):
+                    credit_cols.append("total_spent_baseline")
                 cust_cols = ["name", "phone", "email", "address", "status", "deleted_at_utc"] + credit_cols
                 changed_fields = p.get("_changed_fields")
                 delta_frag, delta_binds = self._delta_set_clause("customers", cust_cols, changed_fields)
@@ -2947,6 +2957,8 @@ class SyncService:
                      *delta_binds,
                      raw_row_version, raw_row_version),
                 )
+                if "total_spent_baseline" in credit_cols:
+                    self._refresh_total_spent(conn, local_company_id, p.get("id"))
                 if cur.rowcount == 0:
                     local_row_version = self._local_row_version(conn, "customers", p.get("id"))
                     if local_row_version is not None:
@@ -6110,30 +6122,30 @@ class SyncService:
     #: REHEARSAL-1007 B6 -- twin of `core/retail/customer_spend.py::
     #: REFRESH_TOTAL_SPENT_SQL` (this module cannot import products code); a test
     #: pins the two equal. `customers.total_spent` is a CACHE of the customer's
-    #: sales less its returns' refunds, refreshed after every applied sale/return so
-    #: every computer shows the same figure for the same rows.
+    #: sales less its returns' refunds PLUS `total_spent_baseline` (history from a previous
+    #: system, schema v49), refreshed after every applied sale/return so every computer
+    #: shows the same figure for the same rows.
     _REFRESH_TOTAL_SPENT_SQL = (
-        "UPDATE customers SET total_spent = MAX(0, "
+        "UPDATE customers SET total_spent = COALESCE(total_spent_baseline, 0) + "
+        "MAX(0, "
         "COALESCE((SELECT SUM(total) FROM sales WHERE company_id=? AND customer_id=?), 0) "
         "- COALESCE((SELECT SUM(r.refund_amount) FROM returns r JOIN sales s ON s.id=r.sale_id "
-        "WHERE s.company_id=? AND s.customer_id=? AND COALESCE(r.status,'completed')='completed'), 0)) "
-        "WHERE company_id=? AND id=? "
-        "AND EXISTS (SELECT 1 FROM sales WHERE company_id=? AND customer_id=?)"
+        "WHERE s.company_id=? AND s.customer_id=? AND COALESCE(r.status,'completed')='completed'), 0))"
+        " WHERE company_id=? AND id=?"
     )
 
     @classmethod
     def _refresh_total_spent(cls, conn, company_id, customer_id) -> None:
-        """Replace `customers.total_spent` with the derived figure. Never bumps
-        row_version and queues no customer event (see the SQL constant above).
-        A walk-in (no customer) and a customer this device has no sale row for
-        are no-ops, and so is a device whose `customers`/`sales` shape predates
+        """Replace `customers.total_spent` with baseline + the derived figure. Never
+        bumps row_version and queues no customer event (see the SQL constant above).
+        A walk-in (no customer) is a no-op, and so is a device whose `customers`/`sales` shape predates
         the columns -- an apply must never fail over a display cache."""
         if not customer_id:
             return
         try:
             conn.execute(cls._REFRESH_TOTAL_SPENT_SQL,
                          (company_id, customer_id, company_id, customer_id,
-                          company_id, customer_id, company_id, customer_id))
+                          company_id, customer_id))
         except sqlite3.OperationalError:
             # A minimal test/legacy schema without total_spent or returns.refund_amount.
             logger.debug("total_spent refresh skipped: schema lacks a column", exc_info=True)

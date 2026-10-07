@@ -3012,6 +3012,8 @@ def create_customer():
         # REHEARSAL-1007 B2: a new customer starts with no credit terms; sent
         # explicitly so the receiver's row matches the column defaults here.
         'credit_mode': 'none', 'credit_limit': 0,
+        # REHEARSAL-1007 B6b (v49): a new customer has no history from a previous system.
+        'total_spent_baseline': 0,
         'row_version': 1, 'updated_at_utc': now,
     })
     conn.commit(); conn.close()

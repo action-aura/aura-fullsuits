@@ -15,10 +15,18 @@ every computer converges on the same figure for the same rows -- exactly the rul
 bumps `row_version`, queues no customer event (the figure is derived from rows that sync on
 their own, so shipping it as a customer edit would be a second, conflicting source).
 
-ONE DELIBERATE EXCEPTION: a customer with NO sale row at all keeps whatever the column
-holds. The importer writes a historical `total_spent` for customers that have no sales on
-this system yet (a figure that only ever lived in the column), and a refresh must not wipe
-it. Once the customer has a sale here, the figure is the derived one.
+B6b (schema v49) -- HISTORY FROM A PREVIOUS SYSTEM. B6 first handled an imported total with
+"a customer with NO sale row keeps whatever the column holds", which only lasted until the
+customer's first sale here, when the derived figure replaced it. The history now has its own
+column, `customers.total_spent_baseline` (written by the importer: the figure the person typed
+IS the history before this system), and the cache is
+
+    total_spent = total_spent_baseline + MAX(0, sales - refunds)
+
+The MAX(0, ...) wraps ONLY the derived part, on purpose: a refund larger than what this system
+sold (the sale being in the old system) floors that part at zero and can never eat the
+imported history. With no baseline (the default 0) this is exactly the B6 figure, and a
+customer with no sale rows now shows their baseline -- no special case needed.
 
 sync_service cannot import products code, so it carries a duplicate of the ONE statement
 below (`REFRESH_TOTAL_SPENT_SQL`); retail_rehearsal_b6_total_spent_test pins the two equal.
@@ -27,23 +35,31 @@ NO IMPORT OF api/ OR general_ledger: nothing here posts or queues anything.
 """
 from __future__ import annotations
 
-#: Parameters, in order: (cid, customer) for the sales sum, (cid, customer) for the
-#: returns sum, (cid, customer) for the target row, (cid, customer) for the EXISTS guard.
-REFRESH_TOTAL_SPENT_SQL = (
-    "UPDATE customers SET total_spent = MAX(0, "
+#: What THIS system's rows explain for one customer: sales less the completed-return refunds,
+#: floored at zero. Parameters, in order: (cid, customer) for the sales sum, (cid, customer)
+#: for the returns sum. The v49 migration reuses it to split an existing total into
+#: "explained here" and "history".
+DERIVED_SPEND_SQL = (
+    "MAX(0, "
     "COALESCE((SELECT SUM(total) FROM sales WHERE company_id=? AND customer_id=?), 0) "
     "- COALESCE((SELECT SUM(r.refund_amount) FROM returns r JOIN sales s ON s.id=r.sale_id "
-    "WHERE s.company_id=? AND s.customer_id=? AND COALESCE(r.status,'completed')='completed'), 0)) "
-    "WHERE company_id=? AND id=? "
-    "AND EXISTS (SELECT 1 FROM sales WHERE company_id=? AND customer_id=?)"
+    "WHERE s.company_id=? AND s.customer_id=? AND COALESCE(r.status,'completed')='completed'), 0))"
+)
+
+#: Parameters, in order: (cid, customer) for the sales sum, (cid, customer) for the returns
+#: sum, (cid, customer) for the target row.
+REFRESH_TOTAL_SPENT_SQL = (
+    "UPDATE customers SET total_spent = COALESCE(total_spent_baseline, 0) + " + DERIVED_SPEND_SQL
+    + " WHERE company_id=? AND id=?"
 )
 
 
 def refresh_total_spent(conn, company_id, customer_id):
-    """Recompute `customers.total_spent` for one customer from its sales and returns.
-    No-op for a falsy `customer_id` (a walk-in) and for a customer with no sale rows."""
+    """Recompute `customers.total_spent` for one customer: its baseline (history from a
+    previous system) plus what its sales and returns here explain. No-op for a falsy
+    `customer_id` (a walk-in)."""
     if not customer_id:
         return
     conn.execute(REFRESH_TOTAL_SPENT_SQL,
                  (company_id, customer_id, company_id, customer_id,
-                  company_id, customer_id, company_id, customer_id))
+                  company_id, customer_id))

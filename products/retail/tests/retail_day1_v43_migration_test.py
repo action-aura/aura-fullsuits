@@ -103,8 +103,8 @@ def _check(sch, db):
         # the tripwire now lives with retail_v45_po_sync_migration_test.py.
         # v46 UPDATE: head moved to 46 (W4a-2 partial receipts); same caveat, the
         # tripwire now lives with retail_v46_po_receipts_migration_test.py.
-        assert sch.RETAIL_SCHEMA_VERSION == 48  # v48 UPDATE: head moved 47 -> 48 (W2a); v48's own shape is pinned by retail_v48_loyalty_sync_migration_test.py
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 48  # v48 UPDATE: head moved 47 -> 48 (W2a); v48's own shape is pinned by retail_v48_loyalty_sync_migration_test.py
+        assert sch.RETAIL_SCHEMA_VERSION == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         assert 'cash_session_id' in _cols(conn)
         row = conn.execute('SELECT amount, cash_session_id FROM payments').fetchone()
@@ -175,7 +175,7 @@ def test_a_database_already_at_v43_without_returns_tax_refunded_gains_it_on_boot
         # v44 UPDATE: a v43 database booted by this build now continues to v44.
         # v45 UPDATE: ... and on to v45 (W4a purchase-order sync).
         # v46 UPDATE: ... and on to v46 (W4a-2 partial receipts).
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 48  # v48 UPDATE: head moved 47 -> 48 (W2a); v48's own shape is pinned by retail_v48_loyalty_sync_migration_test.py
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 49  # v49 UPDATE: head moved 48 -> 49 (B6b); v49's own shape is pinned by retail_v49_total_spent_baseline_migration_test.py
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
         before = _rcols(conn)
         sch._migrate_add_return_tax_refunded(conn)       # replay: no-op

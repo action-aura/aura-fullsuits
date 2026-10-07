@@ -251,6 +251,10 @@ CUSTOMERS_TABLE_COLUMNS = [
     # tables already carry a client-generated UUID primary key (see
     # _migrate_customers_to_uuid), so their `id` IS already wire-safe.
     'row_version', 'updated_at_utc', 'deleted_at_utc',
+    # schema v49 (B6b): history a customer brought from a previous system. A real,
+    # reviewed column unrelated to e-invoicing; appended by the v49 migration step, so
+    # it comes last. This pin still catches any OTHER customers column drifting in.
+    'total_spent_baseline',
 ]
 RETURNS_TABLE_COLUMNS = [
     'id', 'company_id', 'return_number', 'sale_id', 'branch_id', 'cashier',

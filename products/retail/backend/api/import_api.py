@@ -104,6 +104,7 @@ from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
 from core.retail import general_ledger as _gl
 from core.retail import stock_books as _stock_books
 from core.retail import loyalty as _loyalty   # W2a: opening uid + cache refresh
+from core.retail import customer_spend  # B6b: total_spent = baseline + derived
 from core.retail import metrics as _metrics   # W2a verify F1: the shop's business day
 from core.retail import pricing as _tax_engine
 from commercial_runtime.currency import quantize_money as _quantize_money
@@ -2116,7 +2117,13 @@ def _handle_retail_customers(records):
         lp = rec.get('loyalty_points')
         lp = float(lp) if lp is not None else 0
         ts = rec.get('total_spent')
-        ts = float(ts) if ts is not None else 0
+        # REHEARSAL-1007 B6b (v49): the figure typed here is the customer's history from
+        # BEFORE this system -> `total_spent_baseline`; `total_spent` is then a cache
+        # refreshed from it (customer_spend). A file with no total-spent column (None)
+        # must not reset a baseline an earlier import set, so the update branch only
+        # touches it when the row actually carried one.
+        has_ts = ts is not None
+        ts = float(ts) if has_ts else 0
         if existing:
             resurrecting = existing['deleted_at_utc'] is not None
             # `name`/`phone`/`address` are unconditionally written every
@@ -2143,12 +2150,17 @@ def _handle_retail_customers(records):
             # written. Writing the imported figure straight into it would leave
             # the column and the ledger disagreeing until something else
             # refreshed it.
-            set_clause = "name=?,phone=?,address=?,total_spent=?,row_version=row_version+1,updated_at_utc=?"
+            set_clause = "name=?,phone=?,address=?,row_version=row_version+1,updated_at_utc=?"
+            set_params = [name, rec.get('phone', ''), rec.get('address', ''), utc_now]
+            if has_ts:
+                set_clause += ",total_spent_baseline=?"
+                set_params.append(ts)
             if resurrecting:
                 set_clause += ",deleted_at_utc=NULL"
             cur.execute(
                 f"UPDATE customers SET {set_clause} WHERE id=?",
-                (name, rec.get('phone',''), rec.get('address',''), ts, utc_now, existing['id']))
+                (*set_params, existing['id']))
+            customer_spend.refresh_total_spent(cur, cid, existing['id'])
             # Same re-SELECTed payload update_customer queues. loyalty_points/
             # total_spent stay local-only (not in the normal route's payload
             # either -- the apply side never writes them).
@@ -2166,9 +2178,12 @@ def _handle_retail_customers(records):
             # clobber the product branch's own stage 6b-iii-b comment
             # describes, reproduced here for customers.
             crow = conn.execute(
-                "SELECT name,phone,email,address,deleted_at_utc,row_version,updated_at_utc FROM customers WHERE id=?",
+                "SELECT name,phone,email,address,deleted_at_utc,total_spent_baseline,row_version,updated_at_utc "
+                "FROM customers WHERE id=?",
                 (existing['id'],)).fetchone()
             changed = {'name', 'phone', 'address'}
+            if has_ts:
+                changed.add('total_spent_baseline')
             if resurrecting:
                 changed.add('deleted_at_utc')
             _queue_sync_event(cur, 'customer', existing['id'], 'update',
@@ -2179,10 +2194,12 @@ def _handle_retail_customers(records):
             nid = str(_uuid.uuid4())
             cur.execute(
                 "INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent,"
-                "row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "total_spent_baseline,row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 # W2a: starts at 0; the ledger delta below and its cache refresh
                 # set the real figure (never a figure the ledger cannot explain).
-                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), 0, ts, 1, utc_now))
+                # B6b: the typed total is the baseline; the new row has no sales yet, so
+                # the cache equals it.
+                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), 0, ts, ts, 1, utc_now))
             # Mirrors create_customer's payload key-for-key (see the
             # loyalty_points/total_spent note on the update branch above).
             _queue_sync_event(cur, 'customer', nid, 'create', {
@@ -2192,6 +2209,9 @@ def _handle_retail_customers(records):
                 # (payload-coverage ratchet); an imported customer starts at the
                 # column defaults, same as create_customer.
                 'credit_mode': 'none', 'credit_limit': 0,
+                # REHEARSAL-1007 B6b (v49): the history typed into the import travels so
+                # every computer shows the same total spent.
+                'total_spent_baseline': ts,
                 'row_version': 1, 'updated_at_utc': utc_now,
             })
             _sync_loyalty_ledger_to_column(cur, cid, nid, lp)

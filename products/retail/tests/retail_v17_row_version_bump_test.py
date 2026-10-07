@@ -285,13 +285,17 @@ def test_update_customer_synced_field_bumps_and_emits(client, db_conn):
     assert payload['phone'] == '+1-555-9999'
 
 
-def test_update_customer_credit_only_patch_does_not_bump_or_emit(client, db_conn):
-    """THE RULE, applied to update_customer: credit_mode/credit_limit are
-    NOT in SYNCED_CUSTOMER_FIELDS (they have no apply-side column at all --
-    sync_service.py's customer branch never reads them), so a PATCH that
-    touches ONLY those two fields must bump nothing and emit nothing --
-    exactly the shape of the loyalty-accumulator trap, reproduced on a
-    second route."""
+def test_update_customer_credit_only_patch_bumps_and_emits(client, db_conn):
+    """THE RULE, applied to update_customer -- INVERTED 2026-10-07 (rehearsal
+    fix B2, cfbf883f). This test used to pin that a credit-only PATCH bumps
+    nothing and emits nothing, because credit_mode/credit_limit were NOT in
+    SYNCED_CUSTOMER_FIELDS. The two-till rehearsal proved that wrong for a
+    shop: credit allowed on A, refused on B ("not allowed to buy on credit").
+    They now ARE synced fields, so a PATCH that touches only them is a real
+    customer edit: it must bump row_version once and queue exactly one
+    customer event, or B never learns the terms. WHAT THIS CAN NO LONGER
+    CATCH: nothing it used to catch still matters -- the loyalty-accumulator
+    trap it mirrored is pinned on its own route elsewhere in this file."""
     cust_id = client.post('/api/sub/retail/customers', json={'name': 'Credit Only'}).get_json()['data']['id']
     v1, u1 = _row_version(db_conn, 'customers', cust_id)
     events_before = len(_sync_events(db_conn, 'customer', cust_id))
@@ -301,10 +305,10 @@ def test_update_customer_credit_only_patch_does_not_bump_or_emit(client, db_conn
     assert resp.status_code == 200, resp.get_json()
 
     v2, u2 = _row_version(db_conn, 'customers', cust_id)
-    assert v2 == v1, 'a credit-only PATCH must not bump row_version'
-    assert u2 == u1, 'a credit-only PATCH must not stamp updated_at_utc'
+    assert v2 == v1 + 1, 'a credit-only PATCH must bump row_version exactly once'
+    assert u2 != u1, 'a credit-only PATCH must stamp updated_at_utc'
     events_after = len(_sync_events(db_conn, 'customer', cust_id))
-    assert events_after == events_before, 'a credit-only PATCH must not queue a sync event'
+    assert events_after == events_before + 1, 'a credit-only PATCH must queue exactly one customer event'
 
 
 def test_delete_customer_soft_delete_bumps_row_version_and_emits(client, db_conn):
